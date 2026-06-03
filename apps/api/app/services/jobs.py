@@ -476,6 +476,24 @@ class JobLeaseService:
         job_row,
         result: dict[str, Any],
     ) -> dict[str, Any]:
+        if job_row["kind"] == "openai.plan":
+            return {
+                "artifact_id": result.get("artifact_id"),
+                "decision_id": result.get("decision_id"),
+                "receipt_id": result.get("receipt_id"),
+            }
+
+        if job_row["kind"] in {"software_factory.propose_pr", "github.pull_request"}:
+            return {
+                "artifact_id": result.get("artifact_id"),
+                "diff_artifact_id": result.get("diff_artifact_id"),
+                "test_report_artifact_id": result.get("test_report_artifact_id"),
+                "decision_id": result.get("decision_id"),
+                "receipt_id": result.get("receipt_id"),
+                "pull_request_url": result.get("pull_request_url"),
+                "branch_name": result.get("branch_name"),
+            }
+
         if job_row["kind"] not in {"plan.command", "plan.generate"}:
             return {}
 

@@ -11,7 +11,12 @@ LOGGER = logging.getLogger("boss.worker")
 
 
 def capabilities() -> list[str]:
-    return ["plan.command", "plan.generate"]
+    return [
+        "plan.command",
+        "plan.generate",
+        "openai.plan",
+        "software_factory.propose_pr",
+    ]
 
 
 def build_plan_result(job: LeasedJob) -> dict[str, Any]:
@@ -44,9 +49,39 @@ def build_plan_result(job: LeasedJob) -> dict[str, Any]:
     }
 
 
-def execute_job(job: LeasedJob) -> dict[str, Any]:
+def execute_job(job: LeasedJob, client: ControlPlaneClient) -> dict[str, Any]:
     if job.kind in {"plan.command", "plan.generate"}:
         return build_plan_result(job)
+    if job.kind == "openai.plan":
+        result = client.create_openai_plan(
+            {
+                "project_id": job.project_id,
+                "reservation_id": job.payload["reservation_id"],
+                "dedupe_key": job.payload["dedupe_key"],
+                "prompt": job.payload["prompt"],
+                "system_prompt": job.payload.get("system_prompt"),
+            }
+        )
+        if result.get("status") == "failed":
+            raise RuntimeError(result.get("message") or "OpenAI plan job failed.")
+        return result
+    if job.kind == "software_factory.propose_pr":
+        result = client.create_pull_request_proposal(
+            {
+                "project_id": job.project_id,
+                "reservation_id": job.payload["reservation_id"],
+                "dedupe_key": job.payload["dedupe_key"],
+                "title": job.payload["title"],
+                "branch_name": job.payload["branch_name"],
+                "summary": job.payload["summary"],
+                "files": job.payload["files"],
+            }
+        )
+        if result.get("status") == "failed":
+            raise RuntimeError(
+                result.get("message") or "Software-factory proposal job failed."
+            )
+        return result
     raise ValueError(f"Unsupported job kind: {job.kind}")
 
 
@@ -75,7 +110,7 @@ def run_worker_cycle(client: ControlPlaneClient, settings: WorkerSettings) -> bo
     )
 
     try:
-        result = execute_job(job)
+        result = execute_job(job, client)
     except Exception as error:
         LOGGER.exception(
             "job_execution_failed worker_id=%s job_id=%s kind=%s",

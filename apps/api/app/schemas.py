@@ -134,9 +134,17 @@ class PullRequestProposalRequest(BaseModel):
     files: list[FileChange]
 
 
+class PullRequestProposalJobRequest(PullRequestProposalRequest):
+    task_id: Optional[str] = None
+    priority: int = Field(default=50, ge=0)
+    max_attempts: int = Field(default=3, ge=1, le=20)
+
+
 class PullRequestProposalResponse(BaseModel):
     status: str
     artifact_id: Optional[str] = None
+    diff_artifact_id: Optional[str] = None
+    test_report_artifact_id: Optional[str] = None
     receipt_id: Optional[str] = None
     decision_id: Optional[str] = None
     pull_request_url: Optional[str] = None
@@ -226,7 +234,12 @@ class WorkerCompleteResponse(BaseModel):
     job_id: str
     status: str
     artifact_id: Optional[str] = None
+    diff_artifact_id: Optional[str] = None
+    test_report_artifact_id: Optional[str] = None
     decision_id: Optional[str] = None
+    receipt_id: Optional[str] = None
+    pull_request_url: Optional[str] = None
+    branch_name: Optional[str] = None
 
 
 class WorkerFailRequest(BaseModel):

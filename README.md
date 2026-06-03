@@ -64,7 +64,7 @@ If a required credential is missing, the API must fail closed and create visible
 - `make seed`: apply schema and seed the dogfood org/workspace/project
 - `make smoke`: run a local schema/bootstrap smoke check
 - `make real-smoke-plan`: run a real reservation -> OpenAI plan flow against local Postgres
-- `make real-smoke-pr`: run a real reservation -> OpenAI plan -> sandbox PR proposal flow
+- `make real-smoke-pr`: run a real reservation -> queued PR job -> leased worker -> sandbox PR proposal flow
 - `make worker-drain-once`: poll the control plane once and execute at most one leased job
 
 ## Current control-plane endpoints
@@ -74,6 +74,7 @@ If a required credential is missing, the API must fail closed and create visible
 - `POST /v1/commands/propose`
 - `GET /v1/tasks`
 - `POST /v1/tasks`
+- `GET /v1/jobs/{job_id}`
 - `GET /v1/tasks/{task_id}`
 - `POST /v1/jobs`
 - `POST /v1/worker/poll`
@@ -88,6 +89,7 @@ If a required credential is missing, the API must fail closed and create visible
 - `GET /v1/events`
 - `POST /v1/openai/plans`
 - `POST /v1/software-factory/proposals`
+- `POST /v1/software-factory/proposals/queue`
 - `GET /v1/receipts/{dedupe_key}`
 
 ## Budget-governor behavior
@@ -95,6 +97,7 @@ If a required credential is missing, the API must fail closed and create visible
 - Spendy work should follow `quote -> reserve -> execute -> consume/release`.
 - Reused or blocked spendy effects release their reservation instead of leaving budget locked.
 - Spend-gated jobs without an active reservation are not leased; they create a visible decision and are cancelled explicitly rather than running silently.
+- Real sandbox PR proposals can now be queued as leased jobs so GitHub/OpenAI execution runs through `reservation -> job -> lease -> receipt -> artifact -> decision`.
 
 ## GitHub bootstrap
 

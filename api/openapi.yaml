@@ -48,6 +48,17 @@ paths:
       summary: Create task
       responses:
         '201': { description: Created }
+  /v1/jobs/{job_id}:
+    get:
+      summary: Get job
+      parameters:
+        - name: job_id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Job }
+        '404': { description: Job not found }
   /v1/tasks/{task_id}:
     get:
       summary: Get task
@@ -314,6 +325,37 @@ paths:
                       content: { type: string }
       responses:
         '200': { description: Sandbox PR created, reused, or blocked }
+  /v1/software-factory/proposals/queue:
+    post:
+      summary: Queue a real sandbox PR proposal for leased worker execution
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                [project_id, reservation_id, dedupe_key, title, branch_name, summary, files]
+              properties:
+                project_id: { type: string }
+                task_id: { type: string }
+                reservation_id: { type: string }
+                dedupe_key: { type: string }
+                title: { type: string }
+                branch_name: { type: string }
+                summary: { type: string }
+                priority: { type: integer, default: 50 }
+                max_attempts: { type: integer, default: 3 }
+                files:
+                  type: array
+                  items:
+                    type: object
+                    required: [path, content]
+                    properties:
+                      path: { type: string }
+                      content: { type: string }
+      responses:
+        '201': { description: Proposal job queued }
   /v1/receipts/{dedupe_key}:
     get:
       summary: Get receipt by dedupe key

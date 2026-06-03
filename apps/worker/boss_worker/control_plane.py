@@ -89,6 +89,16 @@ class ControlPlaneClient:
         response.raise_for_status()
         return response.json()
 
+    def create_openai_plan(self, payload: dict[str, Any]) -> dict[str, Any]:
+        response = self._client.post("/v1/openai/plans", json=payload)
+        response.raise_for_status()
+        return response.json()
+
+    def create_pull_request_proposal(self, payload: dict[str, Any]) -> dict[str, Any]:
+        response = self._client.post("/v1/software-factory/proposals", json=payload)
+        response.raise_for_status()
+        return response.json()
+
     def fail(
         self,
         worker_id: str,

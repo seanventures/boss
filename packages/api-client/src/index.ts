@@ -131,7 +131,12 @@ export type WorkerCompleteResponse = {
   job_id: string;
   status: string;
   artifact_id?: string;
+  diff_artifact_id?: string;
+  test_report_artifact_id?: string;
   decision_id?: string;
+  receipt_id?: string;
+  pull_request_url?: string;
+  branch_name?: string;
 };
 
 export type WorkerFailRequest = {
@@ -276,9 +281,17 @@ export type PullRequestProposalRequest = {
   files: FileChange[];
 };
 
+export type PullRequestProposalJobRequest = PullRequestProposalRequest & {
+  task_id?: string;
+  priority?: number;
+  max_attempts?: number;
+};
+
 export type PullRequestProposalResponse = {
   status: string;
   artifact_id?: string;
+  diff_artifact_id?: string;
+  test_report_artifact_id?: string;
   receipt_id?: string;
   decision_id?: string;
   pull_request_url?: string;
@@ -413,6 +426,9 @@ export function createBossApiClient(config: BossApiClientConfig) {
         body: payload,
       });
     },
+    getJob(jobId: string) {
+      return request<JobSummary>("GET", `/v1/jobs/${encodeURIComponent(jobId)}`);
+    },
     getTask(taskId: string) {
       return request<TaskSummary>("GET", `/v1/tasks/${encodeURIComponent(taskId)}`);
     },
@@ -488,6 +504,11 @@ export function createBossApiClient(config: BossApiClientConfig) {
           body: payload,
         },
       );
+    },
+    queuePullRequestProposalJob(payload: PullRequestProposalJobRequest) {
+      return request<JobSummary>("POST", "/v1/software-factory/proposals/queue", {
+        body: payload,
+      });
     },
     getReceipt(dedupeKey: string) {
       return request<ReceiptResponse>(

@@ -55,6 +55,89 @@ def reserve_budget(client: TestClient, project_id: str, category: str, amount: i
     return payload["reservation_id"]
 
 
+def drain_worker_once(client: TestClient) -> dict | None:
+    poll = client.post(
+        "/v1/worker/poll",
+        json={
+            "worker_id": "smoke-worker",
+            "capabilities": ["plan.command", "plan.generate", "openai.plan", "software_factory.propose_pr"],
+            "lease_ttl_seconds": 60,
+        },
+    )
+    poll.raise_for_status()
+    leased = poll.json()
+    if leased["status"] == "idle" or leased.get("job") is None:
+        return None
+
+    job = leased["job"]
+    heartbeat = client.post(
+        "/v1/worker/heartbeat",
+        json={
+            "worker_id": "smoke-worker",
+            "job_id": job["id"],
+            "lease_token": job["lease_token"],
+            "lease_ttl_seconds": 60,
+        },
+    )
+    heartbeat.raise_for_status()
+
+    if job["kind"] == "openai.plan":
+        result = client.post(
+            "/v1/openai/plans",
+            json={
+                "project_id": job["project_id"],
+                "reservation_id": job["payload"]["reservation_id"],
+                "dedupe_key": job["payload"]["dedupe_key"],
+                "prompt": job["payload"]["prompt"],
+                "system_prompt": job["payload"].get("system_prompt"),
+            },
+        )
+    elif job["kind"] == "software_factory.propose_pr":
+        result = client.post(
+            "/v1/software-factory/proposals",
+            json={
+                "project_id": job["project_id"],
+                "reservation_id": job["payload"]["reservation_id"],
+                "dedupe_key": job["payload"]["dedupe_key"],
+                "title": job["payload"]["title"],
+                "branch_name": job["payload"]["branch_name"],
+                "summary": job["payload"]["summary"],
+                "files": job["payload"]["files"],
+            },
+        )
+    else:
+        raise SystemExit(f"Unsupported smoke worker job kind: {job['kind']}")
+    result.raise_for_status()
+    result_payload = result.json()
+
+    if result_payload.get("status") == "failed":
+        failure = client.post(
+            "/v1/worker/fail",
+            json={
+                "worker_id": "smoke-worker",
+                "job_id": job["id"],
+                "lease_token": job["lease_token"],
+                "error": {"message": result_payload.get("message", "worker execution failed")},
+                "retryable": False,
+                "retry_delay_seconds": 0,
+            },
+        )
+        failure.raise_for_status()
+        return failure.json()
+
+    completion = client.post(
+        "/v1/worker/complete",
+        json={
+            "worker_id": "smoke-worker",
+            "job_id": job["id"],
+            "lease_token": job["lease_token"],
+            "result": result_payload,
+        },
+    )
+    completion.raise_for_status()
+    return completion.json()
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description=(
@@ -133,7 +216,7 @@ def main() -> None:
             "real control-plane smoke: sandbox PR proposal",
         )
         pr_response = client.post(
-            "/v1/software-factory/proposals",
+            "/v1/software-factory/proposals/queue",
             json={
                 "project_id": project_id,
                 "reservation_id": pr_reservation_id,
@@ -158,8 +241,11 @@ def main() -> None:
             },
         )
         pr_response.raise_for_status()
-        print("PR result:")
+        print("Queued PR job:")
         print(json.dumps(pr_response.json(), indent=2))
+        completion_payload = drain_worker_once(client)
+        print("Worker completion:")
+        print(json.dumps(completion_payload, indent=2))
 
 
 if __name__ == "__main__":

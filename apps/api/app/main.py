@@ -27,6 +27,7 @@ from .schemas import (
     LeasedJob,
     OpenAIPlanRequest,
     OpenAIPlanResponse,
+    PullRequestProposalJobRequest,
     PullRequestProposalRequest,
     PullRequestProposalResponse,
     ReceiptResponse,
@@ -252,6 +253,25 @@ def create_task(payload: TaskCreateRequest) -> TaskSummary:
             {"task_id": result["task_id"]},
         ).mappings().one()
         return task_summary_from_row(row)
+
+
+@app.get("/v1/jobs/{job_id}", response_model=JobSummary)
+def get_job(job_id: str) -> JobSummary:
+    with begin(engine) as connection:
+        row = connection.execute(
+            text(
+                """
+                SELECT id, project_id, task_id, kind, status, priority, max_attempts,
+                       attempt, run_after
+                FROM jobs
+                WHERE id = :job_id
+                """
+            ),
+            {"job_id": job_id},
+        ).mappings().first()
+        if not row:
+            raise HTTPException(status_code=404, detail="Job not found")
+        return job_summary_from_row(row)
 
 
 @app.get("/v1/tasks/{task_id}", response_model=TaskSummary)
@@ -531,6 +551,32 @@ def create_pull_request_proposal(
             payload.files,
         )
         return PullRequestProposalResponse(**result)
+
+
+@app.post("/v1/software-factory/proposals/queue", response_model=JobSummary, status_code=201)
+def queue_pull_request_proposal(
+    payload: PullRequestProposalJobRequest,
+) -> JobSummary:
+    with begin(engine) as connection:
+        result = jobs.create_job(
+            connection,
+            project_id=payload.project_id,
+            task_id=payload.task_id,
+            kind="software_factory.propose_pr",
+            payload={
+                "project_id": payload.project_id,
+                "reservation_id": payload.reservation_id,
+                "dedupe_key": payload.dedupe_key,
+                "title": payload.title,
+                "branch_name": payload.branch_name,
+                "summary": payload.summary,
+                "files": [file.model_dump() for file in payload.files],
+                "requires_reservation": True,
+            },
+            priority=payload.priority,
+            max_attempts=payload.max_attempts,
+        )
+        return JobSummary(**result)
 
 
 @app.get("/v1/events", response_model=EventFeedResponse)

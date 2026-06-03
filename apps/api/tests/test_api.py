@@ -380,6 +380,26 @@ def test_two_workers_cannot_claim_same_job(client):
     assert worker_b.json()["job"] is None
 
 
+def test_get_job_returns_created_job(client):
+    created = client.post(
+        "/v1/jobs",
+        json={
+            "project_id": "boss-dogfood",
+            "kind": "plan.generate",
+            "payload": {"command": "Create a draft plan."},
+        },
+    )
+    assert created.status_code == 201
+    job_id = created.json()["id"]
+
+    fetched = client.get(f"/v1/jobs/{job_id}")
+    assert fetched.status_code == 200
+    payload = fetched.json()
+    assert payload["id"] == job_id
+    assert payload["kind"] == "plan.generate"
+    assert payload["status"] == "queued"
+
+
 def test_expired_lease_can_be_reclaimed(client, engine):
     created = client.post(
         "/v1/jobs",
@@ -665,3 +685,77 @@ def test_spend_gated_job_with_reservation_can_be_leased(client):
     payload = poll.json()
     assert payload["status"] == "leased"
     assert payload["job"]["kind"] == "openai.plan"
+
+
+def test_queue_pr_proposal_job_is_leasable_and_completion_passes_through(client):
+    reserve = client.post(
+        "/v1/budget/reserve",
+        json={
+            "project_id": "boss-dogfood",
+            "category": "tool",
+            "amount_usd_micros": 500_000,
+            "reason": "Queue a PR proposal job.",
+        },
+    )
+    assert reserve.status_code == 201
+    reservation_id = reserve.json()["reservation_id"]
+
+    queued = client.post(
+        "/v1/software-factory/proposals/queue",
+        json={
+            "project_id": "boss-dogfood",
+            "reservation_id": reservation_id,
+            "dedupe_key": "queued-pr-proposal",
+            "title": "Sandbox PR",
+            "branch_name": "boss/test-queued-pr",
+            "summary": "Create a queued sandbox PR proposal.",
+            "files": [{"path": "README.md", "content": "hello"}],
+        },
+    )
+    assert queued.status_code == 201
+    job_id = queued.json()["id"]
+
+    fetched = client.get(f"/v1/jobs/{job_id}")
+    assert fetched.status_code == 200
+    assert fetched.json()["kind"] == "software_factory.propose_pr"
+
+    poll = client.post(
+        "/v1/worker/poll",
+        json={
+            "worker_id": "worker-pr",
+            "capabilities": ["software_factory.propose_pr"],
+            "lease_ttl_seconds": 60,
+        },
+    )
+    assert poll.status_code == 200
+    leased = poll.json()
+    assert leased["status"] == "leased"
+    assert leased["job"]["id"] == job_id
+
+    complete = client.post(
+        "/v1/worker/complete",
+        json={
+            "worker_id": "worker-pr",
+            "job_id": job_id,
+            "lease_token": leased["job"]["lease_token"],
+            "result": {
+                "status": "created",
+                "artifact_id": "art_review",
+                "diff_artifact_id": "art_diff",
+                "test_report_artifact_id": "art_test_report",
+                "receipt_id": "rcpt_pr",
+                "decision_id": "dec_pr",
+                "pull_request_url": "https://github.com/seanheiney/boss-sandbox/pull/1",
+                "branch_name": "boss/test-queued-pr",
+            },
+        },
+    )
+    assert complete.status_code == 200
+    payload = complete.json()
+    assert payload["status"] == "succeeded"
+    assert payload["artifact_id"] == "art_review"
+    assert payload["diff_artifact_id"] == "art_diff"
+    assert payload["test_report_artifact_id"] == "art_test_report"
+    assert payload["receipt_id"] == "rcpt_pr"
+    assert payload["decision_id"] == "dec_pr"
+    assert payload["pull_request_url"].endswith("/pull/1")

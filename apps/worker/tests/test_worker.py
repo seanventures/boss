@@ -46,6 +46,27 @@ class FakeControlPlaneClient:
         )
         return {"job_id": job_id, "status": "deadlettered", "deadletter_id": "dlq_test"}
 
+    def create_openai_plan(self, payload):
+        self.calls.append(("create_openai_plan", payload))
+        return {
+            "status": "created",
+            "artifact_id": "art_plan",
+            "receipt_id": "rcpt_plan",
+        }
+
+    def create_pull_request_proposal(self, payload):
+        self.calls.append(("create_pull_request_proposal", payload))
+        return {
+            "status": "created",
+            "artifact_id": "art_review",
+            "diff_artifact_id": "art_diff",
+            "test_report_artifact_id": "art_test_report",
+            "receipt_id": "rcpt_pr",
+            "decision_id": "dec_pr",
+            "pull_request_url": "https://github.com/seanheiney/boss-sandbox/pull/1",
+            "branch_name": payload["branch_name"],
+        }
+
 
 def test_worker_starts_and_exits_cleanly():
     result = subprocess.run(
@@ -127,3 +148,75 @@ def test_run_worker_cycle_deadletters_unsupported_job():
 
     assert ran_job is True
     assert [call[0] for call in client.calls] == ["poll", "heartbeat", "fail"]
+
+
+def test_run_worker_cycle_executes_queued_openai_plan_job():
+    leased_job = LeasedJob(
+        id="job_openai",
+        project_id="boss-dogfood",
+        task_id="tsk_test",
+        kind="openai.plan",
+        payload={
+            "reservation_id": "res_test",
+            "dedupe_key": "plan-test",
+            "prompt": "Create a plan.",
+            "system_prompt": "Return markdown.",
+        },
+        attempt=1,
+        max_attempts=3,
+        lease_token="lease_token",
+        lease_expires_at="future",
+    )
+    client = FakeControlPlaneClient(leased_job)
+    settings = SimpleNamespace(
+        worker_id="worker-test",
+        lease_ttl_seconds=60,
+        poll_interval_seconds=1,
+    )
+
+    ran_job = run_worker_cycle(client, settings)
+
+    assert ran_job is True
+    assert [call[0] for call in client.calls] == [
+        "poll",
+        "heartbeat",
+        "create_openai_plan",
+        "complete",
+    ]
+
+
+def test_run_worker_cycle_executes_queued_pr_proposal_job():
+    leased_job = LeasedJob(
+        id="job_pr",
+        project_id="boss-dogfood",
+        task_id="tsk_test",
+        kind="software_factory.propose_pr",
+        payload={
+            "reservation_id": "res_test",
+            "dedupe_key": "pr-test",
+            "title": "Sandbox PR",
+            "branch_name": "boss/pr-test",
+            "summary": "Create a sandbox PR proposal.",
+            "files": [{"path": "README.md", "content": "hello"}],
+        },
+        attempt=1,
+        max_attempts=3,
+        lease_token="lease_token",
+        lease_expires_at="future",
+    )
+    client = FakeControlPlaneClient(leased_job)
+    settings = SimpleNamespace(
+        worker_id="worker-test",
+        lease_ttl_seconds=60,
+        poll_interval_seconds=1,
+    )
+
+    ran_job = run_worker_cycle(client, settings)
+
+    assert ran_job is True
+    assert [call[0] for call in client.calls] == [
+        "poll",
+        "heartbeat",
+        "create_pull_request_proposal",
+        "complete",
+    ]

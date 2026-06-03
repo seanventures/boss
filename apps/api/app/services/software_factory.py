@@ -236,6 +236,8 @@ class SoftwareFactoryService:
             return {
                 "status": "reused",
                 "artifact_id": result.get("artifact_id"),
+                "diff_artifact_id": result.get("diff_artifact_id"),
+                "test_report_artifact_id": result.get("test_report_artifact_id"),
                 "receipt_id": pr_receipt["id"],
                 "decision_id": result.get("decision_id"),
                 "pull_request_url": result.get("pull_request_url"),
@@ -376,6 +378,38 @@ class SoftwareFactoryService:
                 "message": str(error),
             }
 
+        diff_artifact_id = create_artifact(
+            connection,
+            self.settings,
+            project_id,
+            None,
+            "diff_manifest",
+            f"Diff manifest for {title}",
+            {
+                "title": title,
+                "branch_name": branch_name,
+                "files_changed": [file.path for file in files],
+                "github_commits": commit_shas,
+            },
+        )
+        test_report_artifact_id = create_artifact(
+            connection,
+            self.settings,
+            project_id,
+            None,
+            "test_report",
+            f"Test report for {title}",
+            {
+                "title": title,
+                "status": "not_run",
+                "tests_added_or_run": [],
+                "required_follow_up": [
+                    "Execute repository CI in the sandbox before merge approval.",
+                    "Add or update focused tests if the reviewer flags gaps.",
+                ],
+                "notes": review_text,
+            },
+        )
         artifact_id = create_artifact(
             connection,
             self.settings,
@@ -407,6 +441,8 @@ class SoftwareFactoryService:
         )
         result = {
             "artifact_id": artifact_id,
+            "diff_artifact_id": diff_artifact_id,
+            "test_report_artifact_id": test_report_artifact_id,
             "decision_id": decision_id,
             "pull_request_url": pr.url,
             "branch_name": branch_name,
