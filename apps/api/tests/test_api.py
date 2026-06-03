@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import text
 
 from apps.api.app import main as api_main
+from apps.api.app.services.github_adapter import PullRequestMergeResult, PullRequestResult
 
 
 def test_health_returns_service_status(client):
@@ -1256,3 +1257,268 @@ def test_merge_blocks_without_github_credentials(client, engine):
 
     assert decision_question == "GitHub integration is not configured"
     assert merge_artifact_count == 0
+
+
+def test_command_to_merge_flow_completes_task_when_merge_policy_enabled(
+    client, engine, monkeypatch
+):
+    previous = api_main.decisions.settings.enable_sandbox_merge
+    api_main.decisions.settings.enable_sandbox_merge = True
+    monkeypatch.setattr(
+        api_main.software_factory.openai,
+        "create_text_response",
+        lambda prompt, system_prompt=None: (
+            "resp_review_packet",
+            "## Implementation summary\n- Review packet generated for test coverage.",
+        ),
+    )
+    monkeypatch.setattr(
+        api_main.software_factory.github,
+        "ensure_branch",
+        lambda branch_name: "sha-base",
+    )
+    monkeypatch.setattr(
+        api_main.software_factory.github,
+        "upsert_file",
+        lambda branch_name, path, content, message: f"commit-{path}",
+    )
+    monkeypatch.setattr(
+        api_main.software_factory.github,
+        "create_pull_request",
+        lambda branch_name, title, body: PullRequestResult(
+            url="https://github.com/seanheiney/boss-sandbox/pull/99",
+            number=99,
+        ),
+    )
+    monkeypatch.setattr(
+        api_main.software_factory.github,
+        "merge_pull_request",
+        lambda pull_request_number, commit_title: PullRequestMergeResult(
+            sha="merge-sha-99",
+            merged=True,
+            message="Pull request successfully merged",
+        ),
+    )
+
+    try:
+        created = client.post(
+            "/v1/commands/propose",
+            json={
+                "project_id": "boss-dogfood",
+                "command": "Ship the next sandbox merge audit improvement.",
+                "constraints": {"deadline": "this week"},
+            },
+        )
+        assert created.status_code == 201
+        payload = created.json()
+        task_id = payload["task_id"]
+        command_job_id = payload["job_id"]
+
+        leased_plan = client.post(
+            "/v1/worker/poll",
+            json={
+                "worker_id": "worker-e2e-plan",
+                "capabilities": ["plan.command"],
+                "lease_ttl_seconds": 60,
+            },
+        )
+        assert leased_plan.status_code == 200
+        leased_plan_job = leased_plan.json()["job"]
+        assert leased_plan_job["id"] == command_job_id
+
+        heartbeat_plan = client.post(
+            "/v1/worker/heartbeat",
+            json={
+                "worker_id": "worker-e2e-plan",
+                "job_id": command_job_id,
+                "lease_token": leased_plan_job["lease_token"],
+                "lease_ttl_seconds": 60,
+            },
+        )
+        assert heartbeat_plan.status_code == 200
+
+        completed_plan = client.post(
+            "/v1/worker/complete",
+            json={
+                "worker_id": "worker-e2e-plan",
+                "job_id": command_job_id,
+                "lease_token": leased_plan_job["lease_token"],
+                "result": {
+                    "summary": "Ship the next sandbox merge audit improvement.",
+                    "objectives": ["Ship the next sandbox merge audit improvement."],
+                    "steps": [
+                        "Prepare a reviewable proposal.",
+                        "Review the sandbox PR.",
+                        "Merge after approval.",
+                    ],
+                    "risks": ["Budget or provider credentials could block progress."],
+                    "done_when": ["The sandbox PR is merged and the task is completed."],
+                },
+            },
+        )
+        assert completed_plan.status_code == 200
+        plan_decision_id = completed_plan.json()["decision_id"]
+
+        approve_plan = client.post(
+            f"/v1/decisions/{plan_decision_id}/approve",
+            json={"actor": "ceo", "note": "Proceed to PR proposal."},
+        )
+        assert approve_plan.status_code == 200
+        assert approve_plan.json()["status"] == "approved"
+
+        leased_pr = client.post(
+            "/v1/worker/poll",
+            json={
+                "worker_id": "worker-e2e-pr",
+                "capabilities": ["software_factory.propose_pr"],
+                "lease_ttl_seconds": 60,
+            },
+        )
+        assert leased_pr.status_code == 200
+        leased_pr_job = leased_pr.json()["job"]
+        assert leased_pr_job["kind"] == "software_factory.propose_pr"
+
+        heartbeat_pr = client.post(
+            "/v1/worker/heartbeat",
+            json={
+                "worker_id": "worker-e2e-pr",
+                "job_id": leased_pr_job["id"],
+                "lease_token": leased_pr_job["lease_token"],
+                "lease_ttl_seconds": 60,
+            },
+        )
+        assert heartbeat_pr.status_code == 200
+
+        proposal_run = client.post(
+            "/v1/software-factory/proposals",
+            json={
+                "project_id": leased_pr_job["project_id"],
+                "task_id": leased_pr_job["task_id"],
+                "reservation_id": leased_pr_job["payload"]["reservation_id"],
+                "dedupe_key": leased_pr_job["payload"]["dedupe_key"],
+                "title": leased_pr_job["payload"]["title"],
+                "branch_name": leased_pr_job["payload"]["branch_name"],
+                "summary": leased_pr_job["payload"]["summary"],
+                "files": leased_pr_job["payload"]["files"],
+            },
+        )
+        assert proposal_run.status_code == 200
+        proposal_result = proposal_run.json()
+        assert proposal_result["status"] == "created"
+        pr_decision_id = proposal_result["decision_id"]
+
+        complete_pr = client.post(
+            "/v1/worker/complete",
+            json={
+                "worker_id": "worker-e2e-pr",
+                "job_id": leased_pr_job["id"],
+                "lease_token": leased_pr_job["lease_token"],
+                "result": proposal_result,
+            },
+        )
+        assert complete_pr.status_code == 200
+        assert complete_pr.json()["status"] == "succeeded"
+
+        approve_pr = client.post(
+            f"/v1/decisions/{pr_decision_id}/approve",
+            json={"actor": "ceo", "note": "Merge the approved sandbox PR."},
+        )
+        assert approve_pr.status_code == 200
+        assert approve_pr.json()["status"] == "approved"
+
+        leased_merge = client.post(
+            "/v1/worker/poll",
+            json={
+                "worker_id": "worker-e2e-merge",
+                "capabilities": ["github.pull_request.merge"],
+                "lease_ttl_seconds": 60,
+            },
+        )
+        assert leased_merge.status_code == 200
+        leased_merge_job = leased_merge.json()["job"]
+        assert leased_merge_job["kind"] == "github.pull_request.merge"
+
+        heartbeat_merge = client.post(
+            "/v1/worker/heartbeat",
+            json={
+                "worker_id": "worker-e2e-merge",
+                "job_id": leased_merge_job["id"],
+                "lease_token": leased_merge_job["lease_token"],
+                "lease_ttl_seconds": 60,
+            },
+        )
+        assert heartbeat_merge.status_code == 200
+
+        merge_run = client.post(
+            "/v1/software-factory/merges",
+            json={
+                "project_id": leased_merge_job["project_id"],
+                "decision_id": leased_merge_job["payload"]["decision_id"],
+                "dedupe_key": leased_merge_job["payload"]["dedupe_key"],
+                "pull_request_number": leased_merge_job["payload"]["pull_request_number"],
+                "pull_request_url": leased_merge_job["payload"]["pull_request_url"],
+                "title": leased_merge_job["payload"]["title"],
+                "branch_name": leased_merge_job["payload"].get("branch_name"),
+            },
+        )
+        assert merge_run.status_code == 200
+        merge_result = merge_run.json()
+        assert merge_result["status"] == "created"
+        assert merge_result["merged_sha"] == "merge-sha-99"
+
+        complete_merge = client.post(
+            "/v1/worker/complete",
+            json={
+                "worker_id": "worker-e2e-merge",
+                "job_id": leased_merge_job["id"],
+                "lease_token": leased_merge_job["lease_token"],
+                "result": merge_result,
+            },
+        )
+        assert complete_merge.status_code == 200
+        assert complete_merge.json()["status"] == "succeeded"
+
+        with engine.begin() as connection:
+            task_status = connection.execute(
+                text("SELECT status FROM tasks WHERE id = :task_id"),
+                {"task_id": task_id},
+            ).scalar_one()
+            merge_decision_status = connection.execute(
+                text("SELECT status FROM decisions WHERE id = :decision_id"),
+                {"decision_id": pr_decision_id},
+            ).scalar_one()
+            artifact_types = [
+                row["artifact_type"]
+                for row in connection.execute(
+                    text(
+                        """
+                        SELECT artifact_type
+                        FROM artifacts
+                        WHERE project_id = 'boss-dogfood'
+                        ORDER BY created_at ASC
+                        """
+                    )
+                ).mappings().all()
+            ]
+            receipt_count = connection.execute(
+                text("SELECT COUNT(*) FROM receipts WHERE project_id = 'boss-dogfood'")
+            ).scalar_one()
+
+        assert task_status == "completed"
+        assert merge_decision_status == "executed"
+        assert "command_brief" in artifact_types
+        assert "plan_draft" in artifact_types
+        assert "review_packet" in artifact_types
+        assert "diff_manifest" in artifact_types
+        assert "test_report" in artifact_types
+        assert "merge_result" in artifact_types
+        assert receipt_count == 2
+
+        events = client.get("/v1/events", params={"project_id": "boss-dogfood"})
+        assert events.status_code == 200
+        event_types = [item["event_type"] for item in events.json()["items"]]
+        assert "software_factory.pull_request_proposed" in event_types
+        assert "software_factory.pull_request_merged" in event_types
+        assert "task.completed" in event_types
+    finally:
+        api_main.decisions.settings.enable_sandbox_merge = previous

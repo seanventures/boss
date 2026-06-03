@@ -274,6 +274,7 @@ export type FileChange = {
 
 export type PullRequestProposalRequest = {
   project_id: string;
+  task_id?: string;
   reservation_id: string;
   dedupe_key: string;
   title: string;

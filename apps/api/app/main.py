@@ -546,6 +546,7 @@ def create_pull_request_proposal(
         result = software_factory.propose_pull_request(
             connection,
             payload.project_id,
+            payload.task_id,
             payload.reservation_id,
             payload.dedupe_key,
             payload.title,
@@ -585,6 +586,7 @@ def queue_pull_request_proposal(
             kind="software_factory.propose_pr",
             payload={
                 "project_id": payload.project_id,
+                "task_id": payload.task_id,
                 "reservation_id": payload.reservation_id,
                 "dedupe_key": payload.dedupe_key,
                 "title": payload.title,

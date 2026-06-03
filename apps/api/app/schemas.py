@@ -126,6 +126,7 @@ class FileChange(BaseModel):
 
 class PullRequestProposalRequest(BaseModel):
     project_id: str
+    task_id: Optional[str] = None
     reservation_id: str
     dedupe_key: str
     title: str

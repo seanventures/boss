@@ -265,6 +265,7 @@ class DecisionService:
             priority=40,
             payload={
                 "project_id": row["project_id"],
+                "task_id": row["task_id"],
                 "reservation_id": reservation["reservation_id"],
                 "dedupe_key": f"approved-plan-proposal-{row['id']}",
                 "title": title,

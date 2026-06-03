@@ -241,6 +241,7 @@ class SoftwareFactoryService:
         self,
         connection: Connection,
         project_id: str,
+        task_id: Optional[str],
         reservation_id: str,
         dedupe_key: str,
         title: str,
@@ -255,7 +256,7 @@ class SoftwareFactoryService:
             decision_id = create_blocking_decision(
                 connection,
                 project_id,
-                None,
+                task_id,
                 "Missing active reservation for PR proposal",
                 {"action": "create_budget_reservation"},
                 {},
@@ -326,7 +327,7 @@ class SoftwareFactoryService:
             decision_id = create_blocking_decision(
                 connection,
                 project_id,
-                None,
+                task_id,
                 "OpenAI integration is required before PR proposals can run",
                 {"action": "provide_openai_api_key"},
                 {},
@@ -397,7 +398,7 @@ class SoftwareFactoryService:
             decision_id = create_blocking_decision(
                 connection,
                 project_id,
-                None,
+                task_id,
                 "GitHub integration is not configured",
                 {"action": "provide_github_token"},
                 {},
@@ -437,7 +438,7 @@ class SoftwareFactoryService:
             connection,
             self.settings,
             project_id,
-            None,
+            task_id,
             "diff_manifest",
             f"Diff manifest for {title}",
             {
@@ -451,7 +452,7 @@ class SoftwareFactoryService:
             connection,
             self.settings,
             project_id,
-            None,
+            task_id,
             "test_report",
             f"Test report for {title}",
             {
@@ -469,7 +470,7 @@ class SoftwareFactoryService:
             connection,
             self.settings,
             project_id,
-            None,
+            task_id,
             "review_packet",
             f"Review packet for {title}",
             {
@@ -488,7 +489,7 @@ class SoftwareFactoryService:
         decision_id = create_blocking_decision(
             connection,
             project_id,
-            None,
+            task_id,
             f"Review and approve sandbox PR: {title}",
             {
                 "action": "review_pull_request",
@@ -554,6 +555,18 @@ class SoftwareFactoryService:
         title: str,
         branch_name: Optional[str],
     ) -> dict:
+        if task_id is None:
+            task_id = connection.execute(
+                text(
+                    """
+                    SELECT task_id
+                    FROM decisions
+                    WHERE id = :decision_id AND project_id = :project_id
+                    """
+                ),
+                {"decision_id": decision_id, "project_id": project_id},
+            ).scalar_one_or_none()
+
         scope = self._scope(connection, project_id)
         merge_receipt, created = self.receipts.create_or_reuse(
             connection,

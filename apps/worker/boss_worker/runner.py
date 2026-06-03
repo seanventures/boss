@@ -70,6 +70,7 @@ def execute_job(job: LeasedJob, client: ControlPlaneClient) -> dict[str, Any]:
         result = client.create_pull_request_proposal(
             {
                 "project_id": job.project_id,
+                "task_id": job.task_id,
                 "reservation_id": job.payload["reservation_id"],
                 "dedupe_key": job.payload["dedupe_key"],
                 "title": job.payload["title"],

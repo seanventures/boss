@@ -310,6 +310,7 @@ paths:
                 [project_id, reservation_id, dedupe_key, title, branch_name, summary, files]
               properties:
                 project_id: { type: string }
+                task_id: { type: string }
                 reservation_id: { type: string }
                 dedupe_key: { type: string }
                 title: { type: string }
