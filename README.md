@@ -19,6 +19,13 @@ This repo does not use fake providers or synthetic side effects. The first real 
 
 If a required credential is missing, the API must fail closed and create visible decisions and events rather than silently degrading to a mock path.
 
+## API-first rule
+
+- The control plane API is the primary product surface.
+- `apps/web` is a client of that API, not a second source of business logic.
+- New product capabilities should land in `apps/api` and `api/openapi.yaml` first, then be consumed by UI through the shared client in `packages/api-client`.
+- This keeps UI swappable and makes customer/API access a first-class path rather than an afterthought.
+
 ## Repo layout
 
 - `AGENTS.md`: active repository rules
@@ -28,6 +35,7 @@ If a required credential is missing, the API must fail closed and create visible
 - `apps/web`: Next.js executive console shell
 - `apps/api`: FastAPI control plane
 - `apps/worker`: Python worker shell
+- `packages/api-client`: shared TypeScript client for the control-plane API
 - `packages/specpack`: active spec objects, workflows, and policies
 - `templates/boss-sandbox`: starter contents for the real sandbox target repository
 - `reference/boss_build_spec_pack`: original imported build pack
