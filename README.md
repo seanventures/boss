@@ -38,9 +38,8 @@ If a required credential is missing, the API must fail closed and create visible
 - `pnpm` `9.x`
 - Python `3.9+`
 - Docker with Compose
-- GitHub CLI authentication for remote bootstrap
+- GitHub credentials available through `BOSS_GITHUB_TOKEN`, `GITHUB_TOKEN`, or the macOS keychain
 - `OPENAI_API_KEY`
-- A GitHub token with repo scope in `BOSS_GITHUB_TOKEN`
 
 ## Setup
 
@@ -59,7 +58,7 @@ If a required credential is missing, the API must fail closed and create visible
 
 ## GitHub bootstrap
 
-Local repo creation is complete. Remote repo creation still requires GitHub auth because the local `gh` CLI is not logged in and the GitHub connector does not expose repository creation. Once authenticated, run:
+The bootstrap script can use either an explicit GitHub token or the machine's stored macOS Git credentials:
 
 ```bash
 scripts/bootstrap_github_repos.sh
@@ -70,5 +69,4 @@ That script creates:
 - `seanheiney/boss`
 - `seanheiney/boss-sandbox`
 
-It also pushes the sandbox template and applies branch protection to `boss-sandbox/main`.
-
+It also pushes the sandbox template and attempts to apply branch protection to `boss-sandbox/main`. If the GitHub account tier does not allow branch protection on private repositories, the script reports that entitlement limit explicitly and stops short of bypassing it.
