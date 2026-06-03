@@ -23,6 +23,43 @@ CREATE TABLE IF NOT EXISTS projects (
   UNIQUE(workspace_id, slug)
 );
 
+CREATE TABLE IF NOT EXISTS project_members (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id),
+  member_id TEXT NOT NULL,
+  display_name TEXT NOT NULL,
+  member_type TEXT NOT NULL DEFAULT 'human',
+  role_keys JSONB NOT NULL DEFAULT '[]'::jsonb,
+  permissions JSONB NOT NULL DEFAULT '[]'::jsonb,
+  status TEXT NOT NULL DEFAULT 'active',
+  created_by TEXT NOT NULL DEFAULT 'bootstrap',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(project_id, member_id)
+);
+CREATE INDEX IF NOT EXISTS idx_project_members_project
+  ON project_members(project_id, member_id);
+
+CREATE TABLE IF NOT EXISTS break_glass_grants (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id),
+  target_member_id TEXT NOT NULL,
+  requested_by TEXT NOT NULL,
+  reason TEXT NOT NULL,
+  scope JSONB NOT NULL DEFAULT '{}'::jsonb,
+  granted_permissions JSONB NOT NULL DEFAULT '[]'::jsonb,
+  status TEXT NOT NULL DEFAULT 'active',
+  expires_at TIMESTAMPTZ NOT NULL,
+  postmortem_task_id TEXT,
+  revoked_by TEXT,
+  revoked_reason TEXT,
+  revoked_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_break_glass_grants_project_target
+  ON break_glass_grants(project_id, target_member_id, status, expires_at);
+
 CREATE TABLE IF NOT EXISTS roles (
   id TEXT PRIMARY KEY,
   project_id TEXT NOT NULL REFERENCES projects(id),
@@ -115,6 +152,7 @@ CREATE TABLE IF NOT EXISTS routing_logs (
   task_kind TEXT NOT NULL,
   workload_class TEXT NOT NULL,
   risk_tier INTEGER NOT NULL,
+  data_boundary TEXT NOT NULL DEFAULT 'internal',
   budget_state TEXT NOT NULL,
   selected_source_id TEXT,
   selected_provider TEXT,
@@ -124,6 +162,7 @@ CREATE TABLE IF NOT EXISTS routing_logs (
   decision JSONB NOT NULL DEFAULT '{}'::jsonb,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+ALTER TABLE routing_logs ADD COLUMN IF NOT EXISTS data_boundary TEXT NOT NULL DEFAULT 'internal';
 
 CREATE TABLE IF NOT EXISTS tasks (
   id TEXT PRIMARY KEY,
@@ -132,15 +171,77 @@ CREATE TABLE IF NOT EXISTS tasks (
   description TEXT,
   status TEXT NOT NULL DEFAULT 'open',
   owner_role_id TEXT,
+  parent_task_id TEXT REFERENCES tasks(id),
+  dependency_task_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
+  due_at TIMESTAMPTZ,
   priority TEXT NOT NULL DEFAULT 'p2',
   risk_tier INTEGER NOT NULL DEFAULT 0,
   inputs JSONB NOT NULL DEFAULT '{}'::jsonb,
   required_artifacts JSONB NOT NULL DEFAULT '[]'::jsonb,
   budget_allocation_id TEXT,
+  data_boundary TEXT NOT NULL DEFAULT 'internal',
   dedupe_key TEXT NOT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE(project_id, dedupe_key)
+);
+
+CREATE TABLE IF NOT EXISTS departments (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id),
+  department_key TEXT NOT NULL,
+  name TEXT NOT NULL,
+  mission TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'active',
+  created_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(project_id, department_key)
+);
+
+CREATE TABLE IF NOT EXISTS policy_records (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id),
+  policy_key TEXT NOT NULL,
+  version INTEGER NOT NULL DEFAULT 1,
+  title TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'active',
+  body JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(project_id, policy_key, version)
+);
+
+CREATE TABLE IF NOT EXISTS plans (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id),
+  task_id TEXT REFERENCES tasks(id),
+  title TEXT NOT NULL,
+  objective TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'draft',
+  phases JSONB NOT NULL DEFAULT '[]'::jsonb,
+  success_criteria JSONB NOT NULL DEFAULT '[]'::jsonb,
+  risks JSONB NOT NULL DEFAULT '[]'::jsonb,
+  artifact_id TEXT,
+  created_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS meetings (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id),
+  title TEXT NOT NULL,
+  purpose TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'scheduled',
+  participants JSONB NOT NULL DEFAULT '[]'::jsonb,
+  agenda JSONB NOT NULL DEFAULT '[]'::jsonb,
+  minutes_artifact_id TEXT,
+  decisions JSONB NOT NULL DEFAULT '[]'::jsonb,
+  created_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 CREATE TABLE IF NOT EXISTS artifacts (
@@ -153,8 +254,10 @@ CREATE TABLE IF NOT EXISTS artifacts (
   content JSONB,
   content_hash TEXT,
   created_by_job_id TEXT,
+  data_boundary TEXT NOT NULL DEFAULT 'internal',
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+ALTER TABLE artifacts ADD COLUMN IF NOT EXISTS data_boundary TEXT NOT NULL DEFAULT 'internal';
 
 CREATE TABLE IF NOT EXISTS decisions (
   id TEXT PRIMARY KEY,
@@ -288,6 +391,7 @@ CREATE TABLE IF NOT EXISTS jobs (
   priority INTEGER NOT NULL DEFAULT 100,
   status TEXT NOT NULL DEFAULT 'queued',
   payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+  data_boundary TEXT NOT NULL DEFAULT 'internal',
   max_attempts INTEGER NOT NULL DEFAULT 3,
   attempt INTEGER NOT NULL DEFAULT 0,
   lease_owner TEXT,
@@ -315,10 +419,75 @@ CREATE TABLE IF NOT EXISTS receipts (
   result JSONB,
   error JSONB,
   created_by_job_id TEXT REFERENCES jobs(id),
+  data_boundary TEXT NOT NULL DEFAULT 'internal',
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE(org_id, dedupe_key)
 );
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS data_boundary TEXT NOT NULL DEFAULT 'internal';
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS parent_task_id TEXT REFERENCES tasks(id);
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS dependency_task_ids JSONB NOT NULL DEFAULT '[]'::jsonb;
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS due_at TIMESTAMPTZ;
+CREATE INDEX IF NOT EXISTS idx_tasks_project_parent ON tasks(project_id, parent_task_id);
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS data_boundary TEXT NOT NULL DEFAULT 'internal';
+ALTER TABLE receipts ADD COLUMN IF NOT EXISTS data_boundary TEXT NOT NULL DEFAULT 'internal';
+
+CREATE TABLE IF NOT EXISTS deployment_rollouts (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id),
+  task_id TEXT REFERENCES tasks(id),
+  decision_id TEXT REFERENCES decisions(id),
+  deployment_receipt_id TEXT REFERENCES receipts(id),
+  deployment_artifact_id TEXT REFERENCES artifacts(id),
+  rollout_artifact_id TEXT REFERENCES artifacts(id),
+  title TEXT NOT NULL,
+  environment TEXT NOT NULL,
+  merged_sha TEXT NOT NULL,
+  pull_request_url TEXT NOT NULL,
+  branch_name TEXT,
+  status TEXT NOT NULL,
+  current_stage TEXT NOT NULL,
+  health_verification_status TEXT,
+  rollback_decision_id TEXT REFERENCES decisions(id),
+  stages JSONB NOT NULL DEFAULT '[]'::jsonb,
+  created_by_job_id TEXT REFERENCES jobs(id),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_deployment_rollouts_project
+  ON deployment_rollouts(project_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS infra_resources (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id),
+  task_id TEXT REFERENCES tasks(id),
+  decision_id TEXT REFERENCES decisions(id),
+  provider TEXT NOT NULL,
+  resource_type TEXT NOT NULL,
+  resource_name TEXT NOT NULL,
+  external_resource_id TEXT NOT NULL,
+  region TEXT NOT NULL,
+  size TEXT NOT NULL,
+  image TEXT NOT NULL,
+  tags JSONB NOT NULL DEFAULT '[]'::jsonb,
+  status TEXT NOT NULL DEFAULT 'active',
+  ttl_minutes INTEGER NOT NULL,
+  expires_at TIMESTAMPTZ NOT NULL,
+  terminated_at TIMESTAMPTZ,
+  termination_reason TEXT,
+  provision_receipt_id TEXT REFERENCES receipts(id),
+  provision_artifact_id TEXT REFERENCES artifacts(id),
+  termination_receipt_id TEXT REFERENCES receipts(id),
+  termination_artifact_id TEXT REFERENCES artifacts(id),
+  data_boundary TEXT NOT NULL DEFAULT 'internal',
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_by_job_id TEXT REFERENCES jobs(id),
+  updated_by_job_id TEXT REFERENCES jobs(id),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_infra_resources_project
+  ON infra_resources(project_id, status, expires_at, created_at DESC);
 
 CREATE TABLE IF NOT EXISTS budget_policies (
   id TEXT PRIMARY KEY,
@@ -341,6 +510,7 @@ CREATE TABLE IF NOT EXISTS budget_policies (
 CREATE TABLE IF NOT EXISTS budget_allocations (
   id TEXT PRIMARY KEY,
   parent_allocation_id TEXT REFERENCES budget_allocations(id),
+  project_id TEXT NOT NULL REFERENCES projects(id),
   scope_type TEXT NOT NULL,
   scope_id TEXT NOT NULL,
   amount_usd_micros BIGINT NOT NULL,
@@ -349,6 +519,9 @@ CREATE TABLE IF NOT EXISTS budget_allocations (
   status TEXT NOT NULL DEFAULT 'active',
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+ALTER TABLE budget_allocations ADD COLUMN IF NOT EXISTS project_id TEXT REFERENCES projects(id);
+CREATE INDEX IF NOT EXISTS idx_budget_allocations_project
+  ON budget_allocations(project_id, status, period_end);
 
 CREATE TABLE IF NOT EXISTS budget_reservations (
   id TEXT PRIMARY KEY,
@@ -384,12 +557,14 @@ CREATE TABLE IF NOT EXISTS outbox_messages (
   subject TEXT,
   body TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'draft',
+  data_boundary TEXT NOT NULL DEFAULT 'internal',
   dedupe_key TEXT NOT NULL,
   receipt_id TEXT REFERENCES receipts(id),
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE(project_id, dedupe_key)
 );
+ALTER TABLE outbox_messages ADD COLUMN IF NOT EXISTS data_boundary TEXT NOT NULL DEFAULT 'internal';
 
 CREATE TABLE IF NOT EXISTS inbox_messages (
   id TEXT PRIMARY KEY,
@@ -399,10 +574,12 @@ CREATE TABLE IF NOT EXISTS inbox_messages (
   subject TEXT,
   body TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'received',
+  data_boundary TEXT NOT NULL DEFAULT 'internal',
   parsed JSONB NOT NULL DEFAULT '{}'::jsonb,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+ALTER TABLE inbox_messages ADD COLUMN IF NOT EXISTS data_boundary TEXT NOT NULL DEFAULT 'internal';
 
 CREATE TABLE IF NOT EXISTS deadletters (
   id TEXT PRIMARY KEY,

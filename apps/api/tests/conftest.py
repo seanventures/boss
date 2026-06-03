@@ -8,6 +8,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from apps.api.app.bootstrap import seed
 from apps.api.app.config import get_settings
 from apps.api.app.main import app
+from apps.api.app.services.members import MemberDirectoryService
 from apps.api.app.services.specpack import SpecPackService
 
 
@@ -36,10 +37,12 @@ def seeded_database(engine):
 @pytest.fixture(autouse=True)
 def clean_tables(engine):
     settings = get_settings()
+    members = MemberDirectoryService(settings)
     specpack = SpecPackService(settings)
     with engine.begin() as connection:
         connection.execute(text("DELETE FROM cost_receipts"))
         connection.execute(text("DELETE FROM budget_reservations"))
+        connection.execute(text("DELETE FROM budget_allocations"))
         connection.execute(text("DELETE FROM health_snapshots"))
         connection.execute(text("DELETE FROM inbox_messages"))
         connection.execute(text("DELETE FROM outbox_messages"))
@@ -47,9 +50,17 @@ def clean_tables(engine):
         connection.execute(text("DELETE FROM role_reviews"))
         connection.execute(text("DELETE FROM autonomy_changes"))
         connection.execute(text("DELETE FROM agent_module_installs"))
+        connection.execute(text("DELETE FROM break_glass_grants"))
+        connection.execute(text("DELETE FROM project_members"))
+        connection.execute(text("DELETE FROM deployment_rollouts"))
+        connection.execute(text("DELETE FROM infra_resources"))
         connection.execute(text("DELETE FROM receipts"))
         connection.execute(text("DELETE FROM deadletters"))
         connection.execute(text("DELETE FROM routing_logs"))
+        connection.execute(text("DELETE FROM meetings"))
+        connection.execute(text("DELETE FROM plans"))
+        connection.execute(text("DELETE FROM policy_records"))
+        connection.execute(text("DELETE FROM departments"))
         connection.execute(text("DELETE FROM artifacts"))
         connection.execute(text("DELETE FROM decisions"))
         connection.execute(text("DELETE FROM jobs"))
@@ -72,6 +83,11 @@ def clean_tables(engine):
             "codex_software_engineer_v1",
             "test-reset",
         )
+        members.seed_default_members(
+            connection,
+            settings.default_project_id,
+            "test-reset",
+        )
         connection.execute(
             text(
                 """
@@ -89,6 +105,30 @@ def clean_tables(engine):
                 """
             ),
             {"project_id": settings.default_project_id},
+        )
+        connection.execute(
+            text(
+                """
+                UPDATE budget_policies
+                SET daily_cap_usd_micros = :daily_cap,
+                    monthly_cap_usd_micros = :monthly_cap,
+                    burst_cap_usd_micros_per_min = :burst_cap,
+                    max_concurrent_jobs = 3,
+                    max_workers_total = 2,
+                    allowed_model_tiers = '["gpt-5.2-codex"]'::jsonb,
+                    soft_cap_pct = 0.70,
+                    auto_lite_mode_pct = 0.85,
+                    freeze_provisioning_pct = 0.90,
+                    freeze_tier2_pct = 0.95
+                WHERE scope_type = 'project' AND scope_id = :project_id
+                """
+            ),
+            {
+                "project_id": settings.default_project_id,
+                "daily_cap": settings.daily_cap_usd_micros,
+                "monthly_cap": settings.monthly_cap_usd_micros,
+                "burst_cap": settings.burst_cap_usd_micros_per_min,
+            },
         )
         connection.execute(text("DELETE FROM events"))
     yield

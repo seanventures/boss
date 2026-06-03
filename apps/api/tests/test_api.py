@@ -1,9 +1,16 @@
 import json
+import subprocess
 from datetime import datetime, timedelta, timezone
+from typing import Optional
 
+import pytest
 from sqlalchemy import text
 
 from apps.api.app import main as api_main
+from apps.api.app.services.digitalocean_adapter import (
+    DropletProvisionResult,
+    DropletTerminationResult,
+)
 from apps.api.app.services.github_adapter import (
     DeploymentResult,
     DeploymentStatusResult,
@@ -14,6 +21,241 @@ from apps.api.app.services.github_adapter import (
 )
 
 
+def create_local_validation_repo(tmp_path, branch_name: str):
+    repo = tmp_path / "sandbox-validation"
+    repo.mkdir()
+    for args in (
+        ["git", "init"],
+        ["git", "config", "user.email", "boss@example.com"],
+        ["git", "config", "user.name", "BOSS Test"],
+    ):
+        subprocess.run(args, cwd=repo, check=True, capture_output=True, text=True)
+    (repo / "README.md").write_text("# Sandbox validation\n", encoding="utf-8")
+    subprocess.run(
+        ["git", "add", "README.md"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    subprocess.run(
+        ["git", "commit", "-m", "Initial sandbox validation fixture"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    subprocess.run(
+        ["git", "checkout", "-b", branch_name],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return repo
+
+
+def configure_pr_proposal_integrations(monkeypatch):
+    api_main.software_factory.settings.openai_api_key = "test-openai-key"
+    monkeypatch.setattr(
+        api_main.software_factory.openai,
+        "create_text_response",
+        lambda prompt, system_prompt=None, model=None: (
+            "resp_review_packet",
+            "## Implementation summary\n- Review packet generated for test coverage.",
+        ),
+    )
+    monkeypatch.setattr(
+        api_main.software_factory.github,
+        "ensure_branch",
+        lambda branch_name: "sha-base",
+    )
+    monkeypatch.setattr(
+        api_main.software_factory.github,
+        "upsert_file",
+        lambda branch_name, path, content, message: f"commit-{path}",
+    )
+    monkeypatch.setattr(
+        api_main.software_factory.github,
+        "create_pull_request",
+        lambda branch_name, title, body: PullRequestResult(
+            url="https://github.com/seanheiney/boss-sandbox/pull/77",
+            number=77,
+        ),
+    )
+    monkeypatch.setattr(
+        api_main.software_factory.github,
+        "wait_for_commit_checks",
+        lambda head_sha, timeout_seconds, poll_interval_seconds: PullRequestValidationResult(
+            status="passed",
+            summary="GitHub validation passed: CI.",
+            head_sha=head_sha,
+            completed=True,
+            checks=[
+                PullRequestValidationCheck(
+                    name="CI",
+                    status="completed",
+                    conclusion="success",
+                    html_url="https://github.com/seanheiney/boss-sandbox/actions/runs/77",
+                    started_at="2026-06-02T12:00:00Z",
+                    completed_at="2026-06-02T12:01:00Z",
+                )
+            ],
+        ),
+    )
+
+
+def reserve_for_pr_proposal(client) -> str:
+    reserve = client.post(
+        "/v1/budget/reserve",
+        json={
+            "project_id": "boss-dogfood",
+            "category": "tool",
+            "amount_usd_micros": 100_000,
+            "reason": "Run sandbox PR proposal validation.",
+        },
+    )
+    assert reserve.status_code == 201
+    return reserve.json()["reservation_id"]
+
+
+def reserve_for_infra_provision(client, reason: str = "Reserve infra budget.") -> str:
+    reserve = client.post(
+        "/v1/budget/reserve",
+        json={
+            "project_id": "boss-dogfood",
+            "category": "infra",
+            "amount_usd_micros": 250_000,
+            "reason": reason,
+        },
+    )
+    assert reserve.status_code == 201
+    return reserve.json()["reservation_id"]
+
+
+def insert_approved_infra_decision(
+    engine,
+    *,
+    decision_id: str,
+    reservation_id: str,
+    task_id: Optional[str] = None,
+    title: str = "Provision preview droplet",
+    region: str = "nyc3",
+    size: str = "s-1vcpu-1gb",
+    ttl_minutes: int = 60,
+    data_boundary: str = "internal",
+):
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                """
+                INSERT INTO decisions (
+                    id, project_id, task_id, question, recommendation, options, risk_tier,
+                    cost_summary, deadline_at, default_action, status, approved_by, approved_at
+                )
+                VALUES (
+                    :decision_id,
+                    'boss-dogfood',
+                    :task_id,
+                    :question,
+                    CAST(:recommendation AS JSONB),
+                    '[{"label":"Provision","action":"approve"}]'::jsonb,
+                    3,
+                    CAST(:cost_summary AS JSONB),
+                    now() + interval '1 day',
+                    'hold',
+                    'approved',
+                    'ceo',
+                    now()
+                )
+                """
+            ),
+            {
+                "decision_id": decision_id,
+                "task_id": task_id,
+                "question": f"Approve infrastructure provisioning: {title}",
+                "recommendation": json.dumps(
+                    {
+                        "action": "review_infra_provisioning",
+                        "reservation_id": reservation_id,
+                        "title": title,
+                        "region": region,
+                        "size": size,
+                        "ttl_minutes": ttl_minutes,
+                        "tags": ["dogfood", "preview"],
+                        "data_boundary": data_boundary,
+                    }
+                ),
+                "cost_summary": json.dumps(
+                    {
+                        "reservation_id": reservation_id,
+                        "region": region,
+                        "size": size,
+                        "ttl_minutes": ttl_minutes,
+                    }
+                ),
+            },
+        )
+
+
+def assert_complete_rolespec(spec: dict) -> None:
+    for key in (
+        "role_id",
+        "display_name",
+        "mission",
+        "primary_outcomes",
+        "boundaries",
+        "decision_rights",
+        "cadence",
+        "permissions",
+        "comms_contract",
+        "output_contracts",
+        "eval_rubric",
+        "autonomy",
+    ):
+        assert key in spec
+    assert spec["primary_outcomes"]
+    assert spec["output_contracts"]
+    assert spec["boundaries"]["must"]
+    assert spec["boundaries"]["must_not"]
+    assert spec["decision_rights"]["can_decide"]
+    assert spec["decision_rights"]["must_escalate"]
+    assert spec["permissions"]["allowed_skills"]
+    assert spec["permissions"]["forbidden_skills"]
+    assert isinstance(spec["autonomy"]["level"], int)
+
+
+def assert_complete_skill_spec(skill: dict) -> None:
+    for key in (
+        "id",
+        "kind",
+        "risk_tier",
+        "description",
+        "mock_mode",
+        "input_schema",
+        "output_schema",
+        "cost",
+        "retry",
+        "permissions",
+        "data_boundary",
+        "policy",
+    ):
+        assert key in skill
+    assert skill["mock_mode"] is False
+    assert skill["input_schema"]
+    assert skill["output_schema"]
+    assert skill["cost"]["estimator"]
+    assert skill["cost"]["category"]
+    assert skill["retry"]["max_attempts"] >= 1
+    assert skill["retry"]["backoff"]
+    assert skill["permissions"]["allowed_callers"]
+    assert skill["permissions"]["required_permissions"]
+
+
+def auth_headers(token: str) -> dict[str, str]:
+    return {"Authorization": f"Bearer {token}"}
+
+
 def test_health_returns_service_status(client):
     response = client.get("/health")
 
@@ -21,6 +263,166 @@ def test_health_returns_service_status(client):
     payload = response.json()
     assert payload["status"] == "ok"
     assert payload["database_connected"] is True
+
+
+def test_v1_routes_can_require_api_key_without_hiding_health(client):
+    previous_required = api_main.settings.require_api_auth
+    previous_keys = api_main.settings.api_keys
+    api_main.settings.require_api_auth = True
+    api_main.settings.api_keys = "secret-one,secret-two"
+    try:
+        health = client.get("/health")
+        assert health.status_code == 200
+
+        missing = client.get("/v1/projects")
+        assert missing.status_code == 401
+
+        wrong = client.get("/v1/projects", headers={"Authorization": "Bearer wrong"})
+        assert wrong.status_code == 401
+
+        bearer = client.get(
+            "/v1/projects", headers={"Authorization": "Bearer secret-one"}
+        )
+        assert bearer.status_code == 200
+
+        explicit_header = client.get(
+            "/v1/projects", headers={"X-BOSS-API-Key": "secret-two"}
+        )
+        assert explicit_header.status_code == 200
+    finally:
+        api_main.settings.require_api_auth = previous_required
+        api_main.settings.api_keys = previous_keys
+
+
+def test_v1_routes_fail_closed_when_auth_required_without_configured_keys(client):
+    previous_required = api_main.settings.require_api_auth
+    previous_keys = api_main.settings.api_keys
+    api_main.settings.require_api_auth = True
+    api_main.settings.api_keys = ""
+    try:
+        response = client.get("/v1/projects", headers={"Authorization": "Bearer any"})
+        assert response.status_code == 503
+        assert "no BOSS_API_KEYS" in response.json()["detail"]
+    finally:
+        api_main.settings.require_api_auth = previous_required
+        api_main.settings.api_keys = previous_keys
+
+
+def test_api_key_principal_binding_reports_session_and_blocks_impersonation(client):
+    previous_required = api_main.settings.require_api_auth
+    previous_keys = api_main.settings.api_keys
+    previous_principals = api_main.settings.api_key_principals
+    api_main.settings.require_api_auth = True
+    api_main.settings.api_keys = "ceo-key,release-key"
+    api_main.settings.api_key_principals = "ceo-key:ceo,release-key:release_manager"
+    try:
+        session = client.get(
+            "/v1/auth/session",
+            headers=auth_headers("ceo-key"),
+        )
+        assert session.status_code == 200
+        assert session.json()["principal_member_id"] == "ceo"
+        assert session.json()["actor_binding_required"] is True
+
+        denied = client.post(
+            "/v1/commands/propose",
+            headers=auth_headers("release-key"),
+            json={
+                "project_id": "boss-dogfood",
+                "command": "Attempt to act as the CEO with the release key.",
+                "actor": "ceo",
+            },
+        )
+        assert denied.status_code == 403
+        assert "release_manager" in denied.json()["detail"]
+
+        allowed = client.post(
+            "/v1/commands/propose",
+            headers=auth_headers("ceo-key"),
+            json={
+                "project_id": "boss-dogfood",
+                "command": "Create a principal-bound command intake record.",
+                "actor": "ceo",
+            },
+        )
+        assert allowed.status_code == 201
+    finally:
+        api_main.settings.require_api_auth = previous_required
+        api_main.settings.api_keys = previous_keys
+        api_main.settings.api_key_principals = previous_principals
+
+
+def test_unbound_api_key_fails_closed_when_principal_binding_is_configured(client):
+    previous_required = api_main.settings.require_api_auth
+    previous_keys = api_main.settings.api_keys
+    previous_principals = api_main.settings.api_key_principals
+    api_main.settings.require_api_auth = True
+    api_main.settings.api_keys = "ceo-key,unbound-key"
+    api_main.settings.api_key_principals = "ceo-key:ceo"
+    try:
+        response = client.get(
+            "/v1/projects",
+            headers=auth_headers("unbound-key"),
+        )
+
+        assert response.status_code == 401
+        assert "not bound to a project member principal" in response.json()["detail"]
+    finally:
+        api_main.settings.require_api_auth = previous_required
+        api_main.settings.api_keys = previous_keys
+        api_main.settings.api_key_principals = previous_principals
+
+
+def test_api_key_principal_binding_applies_to_decision_transitions(client, engine):
+    previous_required = api_main.settings.require_api_auth
+    previous_keys = api_main.settings.api_keys
+    previous_principals = api_main.settings.api_key_principals
+    api_main.settings.require_api_auth = True
+    api_main.settings.api_keys = "ceo-key,release-key"
+    api_main.settings.api_key_principals = "ceo-key:ceo,release-key:release_manager"
+    decision_id = "dec_auth_principal_binding"
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                """
+                INSERT INTO decisions (
+                    id, project_id, question, recommendation, options,
+                    risk_tier, default_action, status
+                )
+                VALUES (
+                    :decision_id,
+                    'boss-dogfood',
+                    'Approve a principal-bound decision transition?',
+                    '{"action":"approve"}'::jsonb,
+                    '[{"label":"Approve","action":"approve"}]'::jsonb,
+                    1,
+                    'hold',
+                    'pending'
+                )
+                """
+            ),
+            {"decision_id": decision_id},
+        )
+    try:
+        denied = client.post(
+            f"/v1/decisions/{decision_id}/approve",
+            headers=auth_headers("release-key"),
+            json={"actor": "ceo"},
+        )
+        assert denied.status_code == 403
+        assert "release_manager" in denied.json()["detail"]
+
+        allowed = client.post(
+            f"/v1/decisions/{decision_id}/approve",
+            headers=auth_headers("ceo-key"),
+            json={"actor": "ceo"},
+        )
+        assert allowed.status_code == 200
+        assert allowed.json()["status"] == "approved"
+    finally:
+        api_main.settings.require_api_auth = previous_required
+        api_main.settings.api_keys = previous_keys
+        api_main.settings.api_key_principals = previous_principals
 
 
 def test_status_returns_seeded_project(client):
@@ -41,9 +443,238 @@ def test_list_projects_returns_seeded_project_scope(client):
     assert response.status_code == 200
     payload = response.json()
     assert payload["items"]
-    assert payload["items"][0]["id"] == "boss-dogfood"
-    assert payload["items"][0]["workspace_name"] == "Dogfood"
-    assert payload["items"][0]["org_name"] == "BOSS"
+    projects = {item["id"]: item for item in payload["items"]}
+    assert projects["boss-dogfood"]["workspace_name"] == "Dogfood"
+    assert projects["boss-dogfood"]["org_name"] == "BOSS"
+
+
+def test_list_project_members_returns_seeded_actor_directory(client):
+    response = client.get("/v1/members", params={"project_id": "boss-dogfood"})
+
+    assert response.status_code == 200
+    payload = response.json()
+    member_ids = {item["member_id"] for item in payload["items"]}
+    assert {"ceo", "executive_console", "release_manager", "vp_agents", "system"}.issubset(
+        member_ids
+    )
+    executive_console = next(
+        item for item in payload["items"] if item["member_id"] == "executive_console"
+    )
+    assert "command_submit" in executive_console["permissions"]
+    assert "ceo" in executive_console["role_keys"]
+
+
+def test_project_member_upsert_requires_member_manage_permission(client):
+    denied = client.post(
+        "/v1/members",
+        json={
+            "project_id": "boss-dogfood",
+            "member_id": "operator",
+            "display_name": "Operator",
+            "member_type": "human",
+            "role_keys": ["operator"],
+            "permissions": ["health_refresh"],
+            "actor": "release_manager",
+        },
+    )
+    assert denied.status_code == 403
+
+    created = client.post(
+        "/v1/members",
+        json={
+            "project_id": "boss-dogfood",
+            "member_id": "operator",
+            "display_name": "Operator",
+            "member_type": "human",
+            "role_keys": ["operator"],
+            "permissions": ["health_refresh"],
+            "actor": "ceo",
+        },
+    )
+    assert created.status_code == 201
+    payload = created.json()
+    assert payload["member_id"] == "operator"
+    assert payload["created_by"] == "ceo"
+
+
+def test_break_glass_grant_enables_temporary_permission_and_postmortem(client):
+    grant = client.post(
+        "/v1/break-glass/grants",
+        json={
+            "project_id": "boss-dogfood",
+            "target_member_id": "release_manager",
+            "reason": "Emergency member directory repair for an incident.",
+            "scope": {"incident_id": "inc-break-glass-test"},
+            "granted_permissions": ["member_manage"],
+            "ttl_minutes": 30,
+            "actor": "ceo",
+        },
+    )
+    assert grant.status_code == 201
+    grant_payload = grant.json()
+    assert grant_payload["id"].startswith("bg_")
+    assert grant_payload["status"] == "active"
+    assert grant_payload["postmortem_task_id"].startswith("tsk_")
+
+    created = client.post(
+        "/v1/members",
+        json={
+            "project_id": "boss-dogfood",
+            "member_id": "emergency_operator",
+            "display_name": "Emergency Operator",
+            "member_type": "human",
+            "role_keys": ["operator"],
+            "permissions": ["health_refresh"],
+            "actor": "release_manager",
+        },
+    )
+    assert created.status_code == 201
+
+    events = client.get("/v1/events", params={"project_id": "boss-dogfood"})
+    event_types = [item["event_type"] for item in events.json()["items"]]
+    assert "break_glass.granted" in event_types
+    assert "break_glass.postmortem_task_created" in event_types
+    assert "break_glass.used" in event_types
+
+
+def test_break_glass_revoke_removes_temporary_permission(client):
+    grant = client.post(
+        "/v1/break-glass/grants",
+        json={
+            "project_id": "boss-dogfood",
+            "target_member_id": "release_manager",
+            "reason": "Temporary escalation for revoke test.",
+            "granted_permissions": ["member_manage"],
+            "ttl_minutes": 30,
+            "actor": "ceo",
+        },
+    )
+    assert grant.status_code == 201
+    grant_id = grant.json()["id"]
+
+    revoked = client.post(
+        f"/v1/break-glass/grants/{grant_id}/revoke",
+        json={"actor": "ceo", "reason": "Emergency ended."},
+    )
+    assert revoked.status_code == 200
+    assert revoked.json()["status"] == "revoked"
+
+    denied = client.post(
+        "/v1/members",
+        json={
+            "project_id": "boss-dogfood",
+            "member_id": "blocked_operator",
+            "display_name": "Blocked Operator",
+            "member_type": "human",
+            "role_keys": ["operator"],
+            "permissions": ["health_refresh"],
+            "actor": "release_manager",
+        },
+    )
+    assert denied.status_code == 403
+
+
+def test_expired_break_glass_grant_is_visible_and_not_usable(client, engine):
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                """
+                INSERT INTO break_glass_grants (
+                    id, project_id, target_member_id, requested_by, reason,
+                    scope, granted_permissions, status, expires_at
+                )
+                VALUES (
+                    'bg_expired_test',
+                    'boss-dogfood',
+                    'release_manager',
+                    'ceo',
+                    'Expired test grant.',
+                    '{}'::jsonb,
+                    '["member_manage"]'::jsonb,
+                    'active',
+                    now() - interval '1 minute'
+                )
+                """
+            )
+        )
+
+    denied = client.post(
+        "/v1/members",
+        json={
+            "project_id": "boss-dogfood",
+            "member_id": "expired_operator",
+            "display_name": "Expired Operator",
+            "member_type": "human",
+            "role_keys": ["operator"],
+            "permissions": ["health_refresh"],
+            "actor": "release_manager",
+        },
+    )
+    assert denied.status_code == 403
+
+    grants = client.get(
+        "/v1/break-glass/grants",
+        params={"project_id": "boss-dogfood", "include_expired": True},
+    )
+    expired = next(item for item in grants.json()["items"] if item["id"] == "bg_expired_test")
+    assert expired["status"] == "expired"
+
+    events = client.get("/v1/events", params={"project_id": "boss-dogfood"})
+    event_types = [item["event_type"] for item in events.json()["items"]]
+    assert "break_glass.expired" in event_types
+
+
+def test_compliance_evidence_bundle_captures_controls_and_access_evidence(client):
+    grant = client.post(
+        "/v1/break-glass/grants",
+        json={
+            "project_id": "boss-dogfood",
+            "target_member_id": "release_manager",
+            "reason": "Seed compliance evidence with emergency access.",
+            "scope": {"incident_id": "inc-compliance-test"},
+            "granted_permissions": ["member_manage"],
+            "ttl_minutes": 30,
+            "actor": "ceo",
+        },
+    )
+    assert grant.status_code == 201
+
+    response = client.post(
+        "/v1/compliance/evidence-bundles",
+        json={"project_id": "boss-dogfood", "actor": "ceo"},
+    )
+    assert response.status_code == 201
+    payload = response.json()
+    assert payload["artifact_type"] == "compliance_evidence_bundle"
+    assert payload["counts"]["project_members"] >= 1
+    assert payload["counts"]["break_glass_grants"] == 1
+
+    artifact = client.get(f"/v1/artifacts/{payload['artifact_id']}")
+    assert artifact.status_code == 200
+    content = artifact.json()["content"]
+    assert content["bundle_type"] == "compliance_evidence"
+    assert "break_glass" in content["controls"]
+    assert content["break_glass_grants"][0]["id"] == grant.json()["id"]
+
+    events = client.get("/v1/events", params={"project_id": "boss-dogfood"})
+    event_types = [item["event_type"] for item in events.json()["items"]]
+    assert "compliance.evidence_bundle_created" in event_types
+
+
+def test_command_proposal_requires_known_project_actor(client):
+    response = client.post(
+        "/v1/commands/propose",
+        json={
+            "project_id": "boss-dogfood",
+            "command": "Create a plan for member-gated command intake.",
+            "actor": "not_a_member",
+        },
+    )
+
+    assert response.status_code == 403
+    events = client.get("/v1/events", params={"project_id": "boss-dogfood"})
+    event_types = [item["event_type"] for item in events.json()["items"]]
+    assert "policy.denied" in event_types
 
 
 def test_metatron_status_query_returns_fresh_answer_and_references(client):
@@ -271,6 +902,44 @@ def test_role_detail_returns_loaded_spec(client):
     assert "StatusAnswer" in payload["spec"]["output_contracts"]
 
 
+def test_installed_roles_have_complete_rolespec_contract(client):
+    response = client.get("/v1/roles", params={"project_id": "boss-dogfood"})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["items"]
+    for role in payload["items"]:
+        detail = client.get(
+            f"/v1/roles/{role['role_key']}",
+            params={"project_id": "boss-dogfood"},
+        )
+        assert detail.status_code == 200
+        assert_complete_rolespec(detail.json()["spec"])
+
+
+def test_rolespec_validator_rejects_incomplete_specs():
+    with pytest.raises(ValueError, match="decision_rights"):
+        api_main.specpack.validate_role_spec(
+            {
+                "role_id": "unsafe_role",
+                "display_name": "Unsafe Role",
+                "mission": "Do unsafe work.",
+                "primary_outcomes": ["Output"],
+                "boundaries": {
+                    "must": ["Follow policy."],
+                    "must_not": ["Bypass approvals."],
+                },
+                "permissions": {
+                    "allowed_skills": ["artifact.create"],
+                    "forbidden_skills": ["github.merge_pr_real"],
+                },
+                "output_contracts": ["Report"],
+                "autonomy": {"level": 1},
+            },
+            "test role",
+        )
+
+
 def test_seed_installs_default_agent_modules(client):
     response = client.get("/v1/agent-modules", params={"project_id": "boss-dogfood"})
 
@@ -397,6 +1066,141 @@ def test_approved_role_autonomy_change_updates_role_level(client):
     assert payload["recent_autonomy_changes"][0]["to_level"] == 2
 
 
+def test_role_autonomy_check_denies_unearned_real_execution(client):
+    response = client.post(
+        "/v1/roles/software_engineer/autonomy/check",
+        json={
+            "project_id": "boss-dogfood",
+            "actor": "vp_agents",
+            "action": "execute",
+            "risk_tier": 1,
+            "sandboxed": False,
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["allowed"] is False
+    assert payload["current_level"] == 1
+    assert payload["required_capability"] == "execute_tier1_real"
+    assert payload["required_level"] == 3
+    assert payload["reason"] == "autonomy_level_too_low"
+
+    events = client.get("/v1/events", params={"project_id": "boss-dogfood"})
+    assert events.status_code == 200
+    assert "role.autonomy_denied" in [
+        item["event_type"] for item in events.json()["items"]
+    ]
+
+
+def test_role_autonomy_check_allows_sandbox_execution_at_level_two(client, engine):
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                """
+                UPDATE roles
+                SET autonomy_level = 2
+                WHERE project_id = 'boss-dogfood'
+                  AND role_key = 'software_engineer'
+                """
+            )
+        )
+
+    response = client.post(
+        "/v1/roles/software_engineer/autonomy/check",
+        json={
+            "project_id": "boss-dogfood",
+            "actor": "vp_agents",
+            "action": "execute",
+            "risk_tier": 1,
+            "sandboxed": True,
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["allowed"] is True
+    assert payload["current_level"] == 2
+    assert payload["required_capability"] == "execute_tier1_sandbox"
+    assert payload["required_level"] == 2
+    assert "execute_tier1_sandbox" in payload["allowed_capabilities"]
+
+
+def test_role_scope_check_allows_rolespec_skill_without_trust_change(client):
+    response = client.post(
+        "/v1/roles/software_engineer/scope/check",
+        json={
+            "project_id": "boss-dogfood",
+            "actor": "vp_agents",
+            "action": "github.create_pr_sandbox",
+            "evidence_ref": "job:software-factory-allowed",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["allowed"] is True
+    assert payload["reason"] == "allowed_by_rolespec"
+    assert payload["trust_score_before"] == 50
+    assert payload["trust_score_after"] == 50
+    assert payload["autonomy_level_before"] == payload["autonomy_level_after"]
+    assert payload["scope_violation_count"] == 0
+    assert payload["artifact_id"] is None
+
+    events = client.get("/v1/events", params={"project_id": "boss-dogfood"})
+    assert events.status_code == 200
+    assert "role.scope_allowed" in [
+        item["event_type"] for item in events.json()["items"]
+    ]
+
+
+def test_role_scope_check_blocks_forbidden_skill_and_records_drift(client):
+    response = client.post(
+        "/v1/roles/software_engineer/scope/check",
+        json={
+            "project_id": "boss-dogfood",
+            "actor": "vp_agents",
+            "action": "infra.create_node_real",
+            "skill_id": "infra.create_node_real",
+            "evidence_ref": "event:out-of-scope-infra",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["allowed"] is False
+    assert payload["reason"] == "forbidden_by_rolespec"
+    assert payload["trust_score_before"] == 50
+    assert payload["trust_score_after"] == 40
+    assert payload["autonomy_level_before"] == 1
+    assert payload["autonomy_level_after"] == 0
+    assert payload["scope_violation_count"] == 1
+    assert payload["artifact_id"].startswith("art_")
+    assert payload["autonomy_change_id"].startswith("rac_")
+
+    role = client.get(
+        "/v1/roles/software_engineer",
+        params={"project_id": "boss-dogfood"},
+    )
+    assert role.status_code == 200
+    assert role.json()["trust_score"] == 40
+    assert role.json()["autonomy_level"] == 0
+    assert role.json()["scope_violation_count"] == 1
+
+    artifact = client.get(f"/v1/artifacts/{payload['artifact_id']}")
+    assert artifact.status_code == 200
+    assert artifact.json()["artifact_type"] == "role_scope_violation"
+    assert artifact.json()["content"]["skill_id"] == "infra.create_node_real"
+    assert artifact.json()["content"]["matched_forbidden_pattern"] == "infra.*"
+
+    events = client.get("/v1/events", params={"project_id": "boss-dogfood"})
+    assert events.status_code == 200
+    event_types = [item["event_type"] for item in events.json()["items"]]
+    assert "role.scope_violation" in event_types
+    assert "role.trust_changed" in event_types
+    assert "role.autonomy_changed" in event_types
+
+
 def test_pack_install_is_idempotent_for_new_project(client, engine):
     with engine.begin() as connection:
         connection.execute(text("DELETE FROM events WHERE project_id = 'boss-lab'"))
@@ -416,6 +1220,7 @@ def test_pack_install_is_idempotent_for_new_project(client, engine):
                 """
             )
         )
+        api_main.members.seed_default_members(connection, "boss-lab", "test")
 
     first = client.post(
         "/v1/packs/install",
@@ -474,6 +1279,7 @@ def test_agent_module_install_is_idempotent_and_updates_role_lineage(client, eng
                 """
             )
         )
+        api_main.members.seed_default_members(connection, "boss-lab", "test")
 
     first = client.post(
         "/v1/agent-modules/install",
@@ -596,9 +1402,13 @@ def test_agent_module_install_is_idempotent_and_updates_role_lineage(client, eng
 def test_skill_registry_and_seeded_entitlement_sources_are_visible(client):
     skills = client.get("/v1/skills")
     assert skills.status_code == 200
-    skill_ids = [item["id"] for item in skills.json()["items"]]
+    skill_payload = skills.json()
+    skill_ids = [item["id"] for item in skill_payload["items"]]
     assert "model.route_via_entitlement_broker" in skill_ids
     assert "model.generate_text" in skill_ids
+    assert "software_factory.openhands_run" not in skill_ids
+    for skill in skill_payload["items"]:
+        assert_complete_skill_spec(skill)
 
     sources = client.get(
         "/v1/entitlements/sources",
@@ -612,9 +1422,33 @@ def test_skill_registry_and_seeded_entitlement_sources_are_visible(client):
     assert openai_api["effective_status"] in {"active", "missing_credentials"}
 
 
+def test_skill_spec_validator_rejects_mock_or_incomplete_specs():
+    with pytest.raises(ValueError, match="mock_mode"):
+        api_main.entitlements.validate_skill_spec(
+            {
+                "id": "model.fake",
+                "kind": "model",
+                "risk_tier": 1,
+                "mock_mode": True,
+                "description": "Invalid mock skill.",
+                "input_schema": {"prompt": "string"},
+                "output_schema": {"text": "string"},
+                "data_boundary": "internal",
+                "cost": {"estimator": "fixed", "category": "model"},
+                "retry": {"max_attempts": 1, "backoff": "none"},
+                "permissions": {
+                    "allowed_callers": ["worker"],
+                    "required_permissions": ["model_invoke"],
+                },
+                "policy": {"requires_budget_reservation": True},
+            },
+            "test skill",
+        )
+
+
 def test_router_preview_selects_openai_api_and_writes_log(client):
-    previous = api_main.software_factory.settings.openai_api_key
-    api_main.software_factory.settings.openai_api_key = "test-openai-key"
+    previous = api_main.entitlements.settings.openai_api_key
+    api_main.entitlements.settings.openai_api_key = "test-openai-key"
     try:
         preview = client.post(
             "/v1/router/preview",
@@ -624,24 +1458,95 @@ def test_router_preview_selects_openai_api_and_writes_log(client):
                 "task_kind": "planning",
                 "workload_class": "owner_sandbox",
                 "risk_tier": 1,
+                "data_boundary": "internal",
                 "preferred_capabilities": ["planning", "summarization"],
                 "actor": "ceo",
             },
         )
     finally:
-        api_main.software_factory.settings.openai_api_key = previous
+        api_main.entitlements.settings.openai_api_key = previous
 
     assert preview.status_code == 200
     payload = preview.json()
     assert payload["source_id"] == "openai_api"
     assert payload["provider"] == "openai"
     assert payload["model_id"].startswith("openai:")
+    assert payload["data_boundary"] == "internal"
     assert payload["denial_reason"] is None
 
     logs = client.get("/v1/router/logs", params={"project_id": "boss-dogfood"})
     assert logs.status_code == 200
-    log_ids = [item["id"] for item in logs.json()["items"]]
-    assert payload["route_decision_log_id"] in log_ids
+    log = next(
+        item
+        for item in logs.json()["items"]
+        if item["id"] == payload["route_decision_log_id"]
+    )
+    assert log["data_boundary"] == "internal"
+
+
+def test_router_preview_denies_restricted_boundary_for_unapproved_external_sources(client):
+    previous = api_main.entitlements.settings.openai_api_key
+    api_main.entitlements.settings.openai_api_key = "test-openai-key"
+    try:
+        preview = client.post(
+            "/v1/router/preview",
+            json={
+                "project_id": "boss-dogfood",
+                "skill_id": "model.generate_text",
+                "task_kind": "planning",
+                "workload_class": "owner_sandbox",
+                "risk_tier": 1,
+                "data_boundary": "restricted",
+                "preferred_capabilities": ["planning"],
+                "actor": "ceo",
+            },
+        )
+    finally:
+        api_main.entitlements.settings.openai_api_key = previous
+
+    assert preview.status_code == 200
+    payload = preview.json()
+    assert payload["source_id"] is None
+    assert payload["data_boundary"] == "restricted"
+    assert payload["denial_reason"] == "no_eligible_source"
+    assert any(
+        item["source_id"] == "openai_api"
+        and item["reason"] == "data_boundary_not_allowed"
+        for item in payload["rejected_sources"]
+    )
+    assert payload["decision"]["data_boundary"] == "restricted"
+
+
+def test_router_preview_allows_local_only_data_on_approved_local_model_source(client):
+    previous_enabled = api_main.entitlements.settings.local_model_enabled
+    previous_model_id = api_main.entitlements.settings.local_model_id
+    api_main.entitlements.settings.local_model_enabled = True
+    api_main.entitlements.settings.local_model_id = "approved-local-test"
+    try:
+        preview = client.post(
+            "/v1/router/preview",
+            json={
+                "project_id": "boss-dogfood",
+                "skill_id": "model.generate_text",
+                "task_kind": "privacy_sensitive",
+                "workload_class": "internal_batch",
+                "risk_tier": 1,
+                "data_boundary": "local-only",
+                "preferred_capabilities": ["privacy_sensitive"],
+                "actor": "ceo",
+            },
+        )
+    finally:
+        api_main.entitlements.settings.local_model_enabled = previous_enabled
+        api_main.entitlements.settings.local_model_id = previous_model_id
+
+    assert preview.status_code == 200
+    payload = preview.json()
+    assert payload["source_id"] == "approved_local_model_host"
+    assert payload["provider"] == "local"
+    assert payload["model_id"] is None
+    assert payload["data_boundary"] == "local-only"
+    assert payload["denial_reason"] is None
 
 
 def test_router_preview_denies_multi_tenant_cli_source(client, engine):
@@ -660,6 +1565,7 @@ def test_router_preview_denies_multi_tenant_cli_source(client, engine):
                 """
             )
         )
+        api_main.members.seed_default_members(connection, "boss-router", "test")
 
     source = client.post(
         "/v1/entitlements/sources",
@@ -752,6 +1658,186 @@ def test_command_proposal_creates_task_job_artifact_and_task_lookup(client, engi
     assert artifact_type == "command_brief"
 
 
+def test_task_create_supports_hierarchy_dependencies_owner_and_due_date(client):
+    parent = client.post(
+        "/v1/tasks",
+        json={
+            "project_id": "boss-dogfood",
+            "title": "Parent initiative",
+            "dedupe_key": "task-lineage-parent",
+            "owner_role_id": "pm",
+        },
+    )
+    assert parent.status_code == 201
+    parent_id = parent.json()["id"]
+
+    dependency = client.post(
+        "/v1/tasks",
+        json={
+            "project_id": "boss-dogfood",
+            "title": "Dependency task",
+            "dedupe_key": "task-lineage-dependency",
+            "owner_role_id": "cto",
+        },
+    )
+    assert dependency.status_code == 201
+    dependency_id = dependency.json()["id"]
+
+    child = client.post(
+        "/v1/tasks",
+        json={
+            "project_id": "boss-dogfood",
+            "title": "Child implementation task",
+            "description": "Depends on a prerequisite and belongs to the parent.",
+            "dedupe_key": "task-lineage-child",
+            "owner_role_id": "software_engineer",
+            "parent_task_id": parent_id,
+            "dependency_task_ids": [dependency_id],
+            "due_at": "2026-06-30T12:00:00Z",
+        },
+    )
+    assert child.status_code == 201
+    payload = child.json()
+    assert payload["owner_role_id"] == "software_engineer"
+    assert payload["parent_task_id"] == parent_id
+    assert payload["dependency_task_ids"] == [dependency_id]
+    assert payload["due_at"].startswith("2026-06-30T12:00:00")
+
+    fetched = client.get(f"/v1/tasks/{payload['id']}")
+    assert fetched.status_code == 200
+    assert fetched.json()["parent_task_id"] == parent_id
+
+    listed = client.get("/v1/tasks", params={"project_id": "boss-dogfood"})
+    assert listed.status_code == 200
+    child_from_list = next(
+        item for item in listed.json()["items"] if item["id"] == payload["id"]
+    )
+    assert child_from_list["dependency_task_ids"] == [dependency_id]
+
+    events = client.get("/v1/events", params={"project_id": "boss-dogfood"})
+    assert events.status_code == 200
+    child_created = next(
+        item
+        for item in events.json()["items"]
+        if item["event_type"] == "task.created" and item["entity_id"] == payload["id"]
+    )
+    assert child_created["data"]["parent_task_id"] == parent_id
+    assert child_created["data"]["dependency_task_ids"] == [dependency_id]
+
+
+def test_task_create_rejects_unknown_parent_dependency_and_owner(client):
+    bad_parent = client.post(
+        "/v1/tasks",
+        json={
+            "project_id": "boss-dogfood",
+            "title": "Bad parent",
+            "dedupe_key": "task-lineage-bad-parent",
+            "parent_task_id": "tsk_missing_parent",
+        },
+    )
+    assert bad_parent.status_code == 400
+    assert "parent_task_id" in bad_parent.json()["detail"]
+
+    bad_dependency = client.post(
+        "/v1/tasks",
+        json={
+            "project_id": "boss-dogfood",
+            "title": "Bad dependency",
+            "dedupe_key": "task-lineage-bad-dependency",
+            "dependency_task_ids": ["tsk_missing_dependency"],
+        },
+    )
+    assert bad_dependency.status_code == 400
+    assert "dependency_task_ids" in bad_dependency.json()["detail"]
+
+    bad_owner = client.post(
+        "/v1/tasks",
+        json={
+            "project_id": "boss-dogfood",
+            "title": "Bad owner",
+            "dedupe_key": "task-lineage-bad-owner",
+            "owner_role_id": "unknown_role",
+        },
+    )
+    assert bad_owner.status_code == 400
+    assert "owner_role_id" in bad_owner.json()["detail"]
+
+
+def test_canonical_work_objects_have_stable_ids_lifecycles_and_events(client):
+    department = client.post(
+        "/v1/departments",
+        json={
+            "project_id": "boss-dogfood",
+            "department_key": "engineering",
+            "name": "Engineering",
+            "mission": "Ship tested BOSS software changes.",
+            "actor": "ceo",
+        },
+    )
+    assert department.status_code == 201
+    assert department.json()["id"].startswith("dept_")
+    assert department.json()["status"] == "active"
+
+    policy = client.post(
+        "/v1/policies",
+        json={
+            "project_id": "boss-dogfood",
+            "policy_key": "default_safety",
+            "version": 1,
+            "title": "Default Safety Policy",
+            "body": {"no_external_effect_without_receipt": True},
+            "actor": "ceo",
+        },
+    )
+    assert policy.status_code == 201
+    assert policy.json()["id"].startswith("pol_")
+    assert policy.json()["status"] == "active"
+
+    plan = client.post(
+        "/v1/plans",
+        json={
+            "project_id": "boss-dogfood",
+            "title": "Canonical object plan",
+            "objective": "Represent plans as first-class canonical objects.",
+            "phases": ["schema", "api", "tests"],
+            "success_criteria": ["objects are listable"],
+            "risks": ["schema drift"],
+            "actor": "ceo",
+        },
+    )
+    assert plan.status_code == 201
+    assert plan.json()["id"].startswith("plan_")
+    assert plan.json()["status"] == "draft"
+
+    meeting = client.post(
+        "/v1/meetings",
+        json={
+            "project_id": "boss-dogfood",
+            "title": "Canonical object review",
+            "purpose": "Review stable object coverage.",
+            "participants": ["ceo", "cao"],
+            "agenda": ["coverage", "risks"],
+            "actor": "ceo",
+        },
+    )
+    assert meeting.status_code == 201
+    assert meeting.json()["id"].startswith("mtg_")
+    assert meeting.json()["status"] == "scheduled"
+
+    for path in ("/v1/departments", "/v1/policies", "/v1/plans", "/v1/meetings"):
+        response = client.get(path, params={"project_id": "boss-dogfood"})
+        assert response.status_code == 200
+        assert response.json()["items"]
+
+    events = client.get("/v1/events", params={"project_id": "boss-dogfood"})
+    assert events.status_code == 200
+    event_types = [item["event_type"] for item in events.json()["items"]]
+    assert "department.upserted" in event_types
+    assert "policy.upserted" in event_types
+    assert "plan.created" in event_types
+    assert "meeting.created" in event_types
+
+
 def test_artifact_list_and_detail_return_created_artifacts(client):
     response = client.post(
         "/v1/commands/propose",
@@ -779,6 +1865,183 @@ def test_artifact_list_and_detail_return_created_artifacts(client):
     assert detail["artifact_type"] == "command_brief"
     assert detail["content"]["command"] == "Capture artifact visibility in the console."
     assert detail["content"]["constraints"]["deadline"] == "today"
+
+
+def test_change_journal_lists_and_details_change_artifacts(client, engine):
+    task = client.post(
+        "/v1/tasks",
+        json={
+            "project_id": "boss-dogfood",
+            "title": "Change journal task",
+            "dedupe_key": "change-journal-task",
+        },
+    )
+    assert task.status_code == 201
+    task_id = task.json()["id"]
+    content = {
+        "summary": "Opened a sandbox PR with a tested UI change.",
+        "diff_summary": "Adds a decision inbox default action panel.",
+        "files_changed": ["apps/web/app/page.tsx", "apps/api/app/main.py"],
+        "rollback_plan": "Close the sandbox PR branch.",
+    }
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                """
+                INSERT INTO artifacts (
+                    id, project_id, task_id, artifact_type, title, uri, content,
+                    content_hash, data_boundary
+                )
+                VALUES (
+                    'art_change_journal_diff', 'boss-dogfood', :task_id,
+                    'diff_manifest', 'Diff manifest for change journal',
+                    'file://artifacts/change-journal.json',
+                    CAST(:content AS JSONB), 'hash-change-journal', 'internal'
+                )
+                """
+            ),
+            {"task_id": task_id, "content": json.dumps(content)},
+        )
+
+    journal = client.get(
+        "/v1/change-journal",
+        params={"project_id": "boss-dogfood", "limit": 5},
+    )
+    assert journal.status_code == 200
+    payload = journal.json()
+    item = next(
+        item for item in payload["items"] if item["id"] == "art_change_journal_diff"
+    )
+    assert item["change_kind"] == "software_factory"
+    assert item["diff_summary"] == "Adds a decision inbox default action panel."
+    assert item["files_changed"] == [
+        "apps/web/app/page.tsx",
+        "apps/api/app/main.py",
+    ]
+    assert item["rollback_plan"] == "Close the sandbox PR branch."
+
+    detail = client.get(
+        "/v1/change-journal/art_change_journal_diff",
+        params={"project_id": "boss-dogfood"},
+    )
+    assert detail.status_code == 200
+    assert detail.json()["content"]["summary"] == content["summary"]
+
+    wrong_project = client.get(
+        "/v1/change-journal/art_change_journal_diff",
+        params={"project_id": "boss-lab"},
+    )
+    assert wrong_project.status_code == 404
+
+
+def test_data_boundary_propagates_to_work_objects_receipts_and_audit(client, engine):
+    response = client.post(
+        "/v1/commands/propose",
+        json={
+            "project_id": "boss-dogfood",
+            "command": "Handle restricted customer support export.",
+            "constraints": {"data_boundary": "restricted"},
+        },
+    )
+    assert response.status_code == 201
+    created = response.json()
+
+    task = client.get(f"/v1/tasks/{created['task_id']}")
+    assert task.status_code == 200
+    assert task.json()["data_boundary"] == "restricted"
+
+    job = client.get(f"/v1/jobs/{created['job_id']}")
+    assert job.status_code == 200
+    assert job.json()["data_boundary"] == "restricted"
+
+    artifact = client.get(f"/v1/artifacts/{created['artifact_id']}")
+    assert artifact.status_code == 200
+    assert artifact.json()["data_boundary"] == "restricted"
+
+    poll = client.post(
+        "/v1/worker/poll",
+        json={
+            "worker_id": "worker-boundary",
+            "capabilities": ["plan.command"],
+            "lease_ttl_seconds": 60,
+        },
+    )
+    assert poll.status_code == 200
+    leased = poll.json()["job"]
+    assert leased["id"] == created["job_id"]
+    assert leased["data_boundary"] == "restricted"
+
+    with engine.begin() as connection:
+        api_main.receipts.create_or_reuse(
+            connection,
+            api_main.settings.default_org_id,
+            api_main.settings.default_workspace_id,
+            "boss-dogfood",
+            "boundary-receipt-1",
+            "github.pr.create",
+            {
+                "target_repo": "boss-sandbox",
+                "task_id": created["task_id"],
+                "data_boundary": "restricted",
+            },
+            {"pull_request": {"title": "Boundary proof"}},
+            created_by_job_id=created["job_id"],
+        )
+
+    receipts = client.get("/v1/receipts", params={"project_id": "boss-dogfood"})
+    assert receipts.status_code == 200
+    receipt = next(
+        item
+        for item in receipts.json()["items"]
+        if item["dedupe_key"] == "boundary-receipt-1"
+    )
+    assert receipt["data_boundary"] == "restricted"
+
+    audit = client.get(
+        "/v1/audit/export",
+        params={"project_id": "boss-dogfood", "task_id": created["task_id"]},
+    )
+    assert audit.status_code == 200
+    payload = audit.json()
+    assert payload["tasks"][0]["data_boundary"] == "restricted"
+    assert payload["jobs"][0]["data_boundary"] == "restricted"
+    assert payload["artifacts"][0]["data_boundary"] == "restricted"
+    assert payload["receipts"][0]["data_boundary"] == "restricted"
+
+
+def test_invalid_data_boundary_is_rejected_without_creating_work(client):
+    task = client.post(
+        "/v1/tasks",
+        json={
+            "project_id": "boss-dogfood",
+            "title": "Invalid boundary task",
+            "dedupe_key": "invalid-boundary-task",
+            "data_boundary": "secret",
+        },
+    )
+    assert task.status_code == 422
+
+    command = client.post(
+        "/v1/commands/propose",
+        json={
+            "project_id": "boss-dogfood",
+            "command": "Use an invalid data boundary.",
+            "constraints": {"data_boundary": "secret"},
+        },
+    )
+    assert command.status_code == 400
+    assert "data_boundary" in command.json()["detail"]
+
+    job = client.post(
+        "/v1/jobs",
+        json={
+            "project_id": "boss-dogfood",
+            "kind": "plan.command",
+            "payload": {"data_boundary": "secret"},
+        },
+    )
+    assert job.status_code == 400
+    assert "data_boundary" in job.json()["detail"]
 
 
 def test_comms_outbox_and_inbox_are_visible(client):
@@ -821,6 +2084,452 @@ def test_comms_outbox_and_inbox_are_visible(client):
     )
     assert inbox_list.status_code == 200
     assert inbox_payload["id"] in [item["id"] for item in inbox_list.json()["items"]]
+
+
+def test_decision_digest_creates_artifact_and_optional_outbox_draft(client, engine):
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                """
+                INSERT INTO decisions (
+                    id, project_id, question, recommendation, options,
+                    risk_tier, cost_summary, deadline_at, default_action, status
+                )
+                VALUES
+                    (
+                        'dec_digest_urgent',
+                        'boss-dogfood',
+                        'Approve a high-risk sandbox release?',
+                        '{"action":"approve_release"}'::jsonb,
+                        '[{"label":"Approve","action":"approve"}]'::jsonb,
+                        3,
+                        '{"estimated_usd_micros": 50000}'::jsonb,
+                        now() + interval '2 hours',
+                        'hold',
+                        'pending'
+                    ),
+                    (
+                        'dec_digest_batch',
+                        'boss-dogfood',
+                        'Approve low-risk copy update?',
+                        '{"action":"approve_copy"}'::jsonb,
+                        '[{"label":"Approve","action":"approve"}]'::jsonb,
+                        1,
+                        '{"estimated_usd_micros": 1000}'::jsonb,
+                        now() + interval '1 day',
+                        'hold',
+                        'pending'
+                    )
+                """
+            )
+        )
+
+    digest = client.post(
+        "/v1/decisions/digests",
+        json={
+            "project_id": "boss-dogfood",
+            "actor": "ceo",
+            "channel": "email:founder@example.com",
+            "dedupe_key": "decision-digest-outbox-1",
+        },
+    )
+    assert digest.status_code == 201
+    payload = digest.json()
+    assert payload["status"] == "created"
+    assert payload["decision_count"] >= 2
+    assert payload["urgent_count"] >= 1
+    assert payload["batched_count"] >= 1
+    assert "dec_digest_urgent" in payload["body"]
+    assert "dec_digest_batch" in payload["body"]
+    assert payload["outbox_message_id"]
+
+    with engine.begin() as connection:
+        artifact = connection.execute(
+            text(
+                """
+                SELECT artifact_type, content
+                FROM artifacts
+                WHERE id = :artifact_id
+                """
+            ),
+            {"artifact_id": payload["artifact_id"]},
+        ).mappings().one()
+        outbox = connection.execute(
+            text(
+                """
+                SELECT status, subject, body
+                FROM outbox_messages
+                WHERE id = :message_id
+                """
+            ),
+            {"message_id": payload["outbox_message_id"]},
+        ).mappings().one()
+        event_count = connection.execute(
+            text(
+                """
+                SELECT COUNT(*)
+                FROM events
+                WHERE event_type = 'decision.digest_created'
+                  AND entity_id = :artifact_id
+                """
+            ),
+            {"artifact_id": payload["artifact_id"]},
+        ).scalar_one()
+
+    assert artifact["artifact_type"] == "decision_digest"
+    assert artifact["content"]["urgent"]
+    assert artifact["content"]["batched_low_risk"]
+    assert outbox["status"] == "draft"
+    assert outbox["subject"] == "BOSS decision digest"
+    assert "dec_digest_urgent" in outbox["body"]
+    assert event_count == 1
+
+
+def test_inbox_decision_reply_approves_decision(client, engine):
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                """
+                INSERT INTO decisions (
+                    id, project_id, question, recommendation, options,
+                    risk_tier, cost_summary, deadline_at, default_action, status
+                )
+                VALUES (
+                    'dec_inbox_reply_approve',
+                    'boss-dogfood',
+                    'Approve from inbound email?',
+                    '{"action":"approve"}'::jsonb,
+                    '[{"label":"Approve","action":"approve"}]'::jsonb,
+                    1,
+                    '{}'::jsonb,
+                    now() + interval '1 day',
+                    'hold',
+                    'pending'
+                )
+                """
+            )
+        )
+
+    inbox = client.post(
+        "/v1/comms/inbox/ingest",
+        json={
+            "project_id": "boss-dogfood",
+            "channel": "email:founder@example.com",
+            "subject": "Approve decision dec_inbox_reply_approve",
+            "body": "Approved. Ship the safe change.",
+            "raw_ref": "email-thread-approve-1",
+            "actor": "ceo",
+        },
+    )
+    assert inbox.status_code == 201
+    payload = inbox.json()
+    assert payload["status"] == "actioned"
+    assert payload["parsed"]["action_result"]["decision_id"] == "dec_inbox_reply_approve"
+    assert payload["parsed"]["action_result"]["status"] == "approved"
+
+    with engine.begin() as connection:
+        decision_status = connection.execute(
+            text(
+                """
+                SELECT status
+                FROM decisions
+                WHERE id = 'dec_inbox_reply_approve'
+                """
+            )
+        ).scalar_one()
+        actioned_event = connection.execute(
+            text(
+                """
+                SELECT COUNT(*)
+                FROM events
+                WHERE event_type = 'inbox.actioned'
+                  AND entity_id = :message_id
+                """
+            ),
+            {"message_id": payload["id"]},
+        ).scalar_one()
+
+    assert decision_status == "approved"
+    assert actioned_event == 1
+
+
+def test_inbox_unparseable_decision_reply_deadletters(client, engine):
+    inbox = client.post(
+        "/v1/comms/inbox/ingest",
+        json={
+            "project_id": "boss-dogfood",
+            "channel": "email:founder@example.com",
+            "subject": "Decision approval",
+            "body": "Approve this decision, but no ID is included.",
+            "raw_ref": "email-thread-missing-id-1",
+            "actor": "ceo",
+        },
+    )
+    assert inbox.status_code == 201
+    payload = inbox.json()
+    assert payload["status"] == "deadlettered"
+    assert payload["parsed"]["deadletter"]["reason"] == (
+        "decision_reply_missing_id_or_action"
+    )
+
+    with engine.begin() as connection:
+        deadletter = connection.execute(
+            text(
+                """
+                SELECT source_kind, source_id, reason
+                FROM deadletters
+                WHERE source_id = :message_id
+                """
+            ),
+            {"message_id": payload["id"]},
+        ).mappings().one()
+
+    assert deadletter["source_kind"] == "inbox_message"
+    assert deadletter["reason"] == "decision_reply_missing_id_or_action"
+
+
+def test_comms_messages_carry_data_boundaries_and_delivery_jobs_inherit_them(client):
+    outbox = client.post(
+        "/v1/comms/outbox",
+        json={
+            "project_id": "boss-dogfood",
+            "channel": "slack:#ops",
+            "body": "Confidential delivery job.",
+            "data_boundary": "confidential",
+            "dedupe_key": "outbox-boundary-1",
+        },
+    )
+    assert outbox.status_code == 201
+    outbox_payload = outbox.json()
+    assert outbox_payload["data_boundary"] == "confidential"
+
+    inbox = client.post(
+        "/v1/comms/inbox/ingest",
+        json={
+            "project_id": "boss-dogfood",
+            "channel": "email:founder",
+            "body": "Restricted inbound request.",
+            "raw_ref": "restricted-mail-1",
+            "data_boundary": "restricted",
+        },
+    )
+    assert inbox.status_code == 201
+    assert inbox.json()["data_boundary"] == "restricted"
+
+    reserve = client.post(
+        "/v1/budget/reserve",
+        json={
+            "project_id": "boss-dogfood",
+            "category": "comms",
+            "amount_usd_micros": 50_000,
+            "reason": "Queue boundary-aware outbound delivery.",
+        },
+    )
+    assert reserve.status_code == 201
+    queued = client.post(
+        f"/v1/comms/outbox/{outbox_payload['id']}/queue",
+        json={
+            "project_id": "boss-dogfood",
+            "reservation_id": reserve.json()["reservation_id"],
+            "dedupe_key": "outbox-boundary-job-1",
+        },
+    )
+    assert queued.status_code == 201
+    assert queued.json()["data_boundary"] == "confidential"
+
+    poll = client.post(
+        "/v1/worker/poll",
+        json={
+            "worker_id": "worker-comms-boundary",
+            "capabilities": ["comms.outbox.deliver"],
+            "lease_ttl_seconds": 60,
+        },
+    )
+    assert poll.status_code == 200
+    assert poll.json()["job"]["data_boundary"] == "confidential"
+
+    outbox_list = client.get(
+        "/v1/comms/outbox", params={"project_id": "boss-dogfood", "limit": 10}
+    )
+    assert outbox_list.status_code == 200
+    listed_outbox = next(
+        item for item in outbox_list.json()["items"] if item["id"] == outbox_payload["id"]
+    )
+    assert listed_outbox["data_boundary"] == "confidential"
+
+    inbox_list = client.get(
+        "/v1/comms/inbox", params={"project_id": "boss-dogfood", "limit": 10}
+    )
+    assert inbox_list.status_code == 200
+    listed_inbox = next(
+        item for item in inbox_list.json()["items"] if item["id"] == inbox.json()["id"]
+    )
+    assert listed_inbox["data_boundary"] == "restricted"
+
+
+def test_slack_delivery_blocks_restricted_boundary_before_receipt(client, engine):
+    outbox = client.post(
+        "/v1/comms/outbox",
+        json={
+            "project_id": "boss-dogfood",
+            "channel": "slack:#ops",
+            "body": "Restricted outbound message.",
+            "data_boundary": "restricted",
+            "dedupe_key": "outbox-restricted-1",
+        },
+    )
+    assert outbox.status_code == 201
+    message_id = outbox.json()["id"]
+
+    reserve = client.post(
+        "/v1/budget/reserve",
+        json={
+            "project_id": "boss-dogfood",
+            "category": "comms",
+            "amount_usd_micros": 50_000,
+            "reason": "Restricted Slack send should be blocked before receipt.",
+        },
+    )
+    assert reserve.status_code == 201
+    reservation_id = reserve.json()["reservation_id"]
+
+    delivery = client.post(
+        f"/v1/comms/outbox/{message_id}/deliver",
+        json={
+            "project_id": "boss-dogfood",
+            "reservation_id": reservation_id,
+            "dedupe_key": "restricted-slack-delivery",
+        },
+    )
+    assert delivery.status_code == 200
+    payload = delivery.json()
+    assert payload["status"] == "blocked"
+    assert payload["data_boundary"] == "restricted"
+    assert "Slack" in payload["message"]
+
+    with engine.begin() as connection:
+        reservation_status = connection.execute(
+            text(
+                """
+                SELECT status
+                FROM budget_reservations
+                WHERE id = :reservation_id
+                """
+            ),
+            {"reservation_id": reservation_id},
+        ).scalar_one()
+        receipt_count = connection.execute(
+            text(
+                """
+                SELECT COUNT(*)
+                FROM receipts
+                WHERE dedupe_key = 'restricted-slack-delivery'
+                """
+            )
+        ).scalar_one()
+        outbox_status = connection.execute(
+            text("SELECT status FROM outbox_messages WHERE id = :message_id"),
+            {"message_id": message_id},
+        ).scalar_one()
+
+    assert reservation_status == "released"
+    assert receipt_count == 0
+    assert outbox_status == "blocked"
+
+
+def test_email_delivery_blocks_restricted_boundary_before_receipt(client, engine):
+    outbox = client.post(
+        "/v1/comms/outbox",
+        json={
+            "project_id": "boss-dogfood",
+            "channel": "email:founder@example.com",
+            "body": "Restricted outbound email.",
+            "data_boundary": "restricted",
+            "dedupe_key": "outbox-email-restricted-1",
+        },
+    )
+    assert outbox.status_code == 201
+    message_id = outbox.json()["id"]
+
+    reserve = client.post(
+        "/v1/budget/reserve",
+        json={
+            "project_id": "boss-dogfood",
+            "category": "comms",
+            "amount_usd_micros": 50_000,
+            "reason": "Restricted email send should be blocked before receipt.",
+        },
+    )
+    assert reserve.status_code == 201
+    reservation_id = reserve.json()["reservation_id"]
+
+    delivery = client.post(
+        f"/v1/comms/outbox/{message_id}/deliver",
+        json={
+            "project_id": "boss-dogfood",
+            "reservation_id": reservation_id,
+            "dedupe_key": "restricted-email-delivery",
+        },
+    )
+    assert delivery.status_code == 200
+    payload = delivery.json()
+    assert payload["status"] == "blocked"
+    assert payload["data_boundary"] == "restricted"
+    assert "Email" in payload["message"]
+
+    with engine.begin() as connection:
+        reservation_status = connection.execute(
+            text(
+                """
+                SELECT status
+                FROM budget_reservations
+                WHERE id = :reservation_id
+                """
+            ),
+            {"reservation_id": reservation_id},
+        ).scalar_one()
+        receipt_count = connection.execute(
+            text(
+                """
+                SELECT COUNT(*)
+                FROM receipts
+                WHERE dedupe_key = 'restricted-email-delivery'
+                """
+            )
+        ).scalar_one()
+        outbox_status = connection.execute(
+            text("SELECT status FROM outbox_messages WHERE id = :message_id"),
+            {"message_id": message_id},
+        ).scalar_one()
+
+    assert reservation_status == "released"
+    assert receipt_count == 0
+    assert outbox_status == "blocked"
+
+
+def test_comms_invalid_data_boundary_is_rejected(client):
+    outbox = client.post(
+        "/v1/comms/outbox",
+        json={
+            "project_id": "boss-dogfood",
+            "channel": "slack:#ops",
+            "body": "Invalid boundary.",
+            "dedupe_key": "outbox-invalid-boundary",
+            "data_boundary": "secret",
+        },
+    )
+    assert outbox.status_code == 422
+
+    inbox = client.post(
+        "/v1/comms/inbox/ingest",
+        json={
+            "project_id": "boss-dogfood",
+            "channel": "email:founder",
+            "body": "Invalid boundary.",
+            "data_boundary": "secret",
+        },
+    )
+    assert inbox.status_code == 422
 
 
 def test_queue_outbox_delivery_creates_job_and_marks_message_queued(client, engine):
@@ -874,6 +2583,332 @@ def test_queue_outbox_delivery_creates_job_and_marks_message_queued(client, engi
 
     assert message_status == "queued"
     assert attached_job_id == payload["id"]
+
+
+def test_outbox_queue_defers_during_quiet_hours_and_urgent_bypasses(
+    client, engine
+):
+    previous_enabled = api_main.comms.settings.comms_quiet_hours_enabled
+    previous_start = api_main.comms.settings.comms_quiet_hours_start_utc
+    previous_end = api_main.comms.settings.comms_quiet_hours_end_utc
+    api_main.comms.settings.comms_quiet_hours_enabled = True
+    api_main.comms.settings.comms_quiet_hours_start_utc = "00:00"
+    api_main.comms.settings.comms_quiet_hours_end_utc = "23:59"
+    try:
+        normal_outbox = client.post(
+            "/v1/comms/outbox",
+            json={
+                "project_id": "boss-dogfood",
+                "channel": "slack:#ops",
+                "body": "Normal delivery should wait for quiet hours.",
+                "dedupe_key": "outbox-quiet-normal-1",
+            },
+        )
+        assert normal_outbox.status_code == 201
+        normal_reserve = client.post(
+            "/v1/budget/reserve",
+            json={
+                "project_id": "boss-dogfood",
+                "category": "comms",
+                "amount_usd_micros": 50_000,
+                "reason": "Quiet-hours normal delivery.",
+            },
+        )
+        assert normal_reserve.status_code == 201
+        normal_queued = client.post(
+            f"/v1/comms/outbox/{normal_outbox.json()['id']}/queue",
+            json={
+                "project_id": "boss-dogfood",
+                "reservation_id": normal_reserve.json()["reservation_id"],
+                "dedupe_key": "outbox-quiet-normal-job-1",
+                "urgency": "normal",
+            },
+        )
+        assert normal_queued.status_code == 201
+
+        urgent_outbox = client.post(
+            "/v1/comms/outbox",
+            json={
+                "project_id": "boss-dogfood",
+                "channel": "slack:#ops",
+                "body": "Urgent delivery can bypass quiet hours.",
+                "dedupe_key": "outbox-quiet-urgent-1",
+            },
+        )
+        assert urgent_outbox.status_code == 201
+        urgent_reserve = client.post(
+            "/v1/budget/reserve",
+            json={
+                "project_id": "boss-dogfood",
+                "category": "comms",
+                "amount_usd_micros": 50_000,
+                "reason": "Quiet-hours urgent delivery.",
+            },
+        )
+        assert urgent_reserve.status_code == 201
+        urgent_queued = client.post(
+            f"/v1/comms/outbox/{urgent_outbox.json()['id']}/queue",
+            json={
+                "project_id": "boss-dogfood",
+                "reservation_id": urgent_reserve.json()["reservation_id"],
+                "dedupe_key": "outbox-quiet-urgent-job-1",
+                "urgency": "urgent",
+            },
+        )
+        assert urgent_queued.status_code == 201
+
+        with engine.begin() as connection:
+            normal_job = connection.execute(
+                text(
+                    """
+                    SELECT run_after, created_at, payload
+                    FROM jobs
+                    WHERE id = :job_id
+                    """
+                ),
+                {"job_id": normal_queued.json()["id"]},
+            ).mappings().one()
+            urgent_job = connection.execute(
+                text(
+                    """
+                    SELECT run_after, created_at, payload
+                    FROM jobs
+                    WHERE id = :job_id
+                    """
+                ),
+                {"job_id": urgent_queued.json()["id"]},
+            ).mappings().one()
+            deferred_event_count = connection.execute(
+                text(
+                    """
+                    SELECT COUNT(*)
+                    FROM events
+                    WHERE event_type = 'outbox.deferred'
+                      AND entity_id = :job_id
+                      AND data->>'reason' = 'quiet_hours'
+                    """
+                ),
+                {"job_id": normal_queued.json()["id"]},
+            ).scalar_one()
+            urgent_deferred_count = connection.execute(
+                text(
+                    """
+                    SELECT COUNT(*)
+                    FROM events
+                    WHERE event_type = 'outbox.deferred'
+                      AND entity_id = :job_id
+                    """
+                ),
+                {"job_id": urgent_queued.json()["id"]},
+            ).scalar_one()
+
+        assert normal_job["run_after"] > normal_job["created_at"]
+        assert normal_job["payload"]["urgency"] == "normal"
+        assert urgent_job["run_after"] <= urgent_job["created_at"] + timedelta(seconds=1)
+        assert urgent_job["payload"]["urgency"] == "urgent"
+        assert deferred_event_count == 1
+        assert urgent_deferred_count == 0
+    finally:
+        api_main.comms.settings.comms_quiet_hours_enabled = previous_enabled
+        api_main.comms.settings.comms_quiet_hours_start_utc = previous_start
+        api_main.comms.settings.comms_quiet_hours_end_utc = previous_end
+
+
+def test_outbox_queue_throttles_nonurgent_delivery(client, engine):
+    previous_limit = api_main.comms.settings.comms_throttle_max_queued_per_hour
+    previous_defer = api_main.comms.settings.comms_throttle_defer_minutes
+    previous_quiet = api_main.comms.settings.comms_quiet_hours_enabled
+    api_main.comms.settings.comms_quiet_hours_enabled = False
+    api_main.comms.settings.comms_throttle_max_queued_per_hour = 1
+    api_main.comms.settings.comms_throttle_defer_minutes = 10
+    try:
+        first_outbox = client.post(
+            "/v1/comms/outbox",
+            json={
+                "project_id": "boss-dogfood",
+                "channel": "email:founder@example.com",
+                "body": "First throttled-channel message.",
+                "dedupe_key": "outbox-throttle-first-1",
+            },
+        )
+        second_outbox = client.post(
+            "/v1/comms/outbox",
+            json={
+                "project_id": "boss-dogfood",
+                "channel": "email:founder@example.com",
+                "body": "Second throttled-channel message.",
+                "dedupe_key": "outbox-throttle-second-1",
+            },
+        )
+        assert first_outbox.status_code == 201
+        assert second_outbox.status_code == 201
+
+        first_reserve = client.post(
+            "/v1/budget/reserve",
+            json={
+                "project_id": "boss-dogfood",
+                "category": "comms",
+                "amount_usd_micros": 50_000,
+                "reason": "First throttle delivery.",
+            },
+        )
+        second_reserve = client.post(
+            "/v1/budget/reserve",
+            json={
+                "project_id": "boss-dogfood",
+                "category": "comms",
+                "amount_usd_micros": 50_000,
+                "reason": "Second throttle delivery.",
+            },
+        )
+        assert first_reserve.status_code == 201
+        assert second_reserve.status_code == 201
+
+        first_queued = client.post(
+            f"/v1/comms/outbox/{first_outbox.json()['id']}/queue",
+            json={
+                "project_id": "boss-dogfood",
+                "reservation_id": first_reserve.json()["reservation_id"],
+                "dedupe_key": "outbox-throttle-first-job-1",
+            },
+        )
+        assert first_queued.status_code == 201
+        second_queued = client.post(
+            f"/v1/comms/outbox/{second_outbox.json()['id']}/queue",
+            json={
+                "project_id": "boss-dogfood",
+                "reservation_id": second_reserve.json()["reservation_id"],
+                "dedupe_key": "outbox-throttle-second-job-1",
+            },
+        )
+        assert second_queued.status_code == 201
+
+        with engine.begin() as connection:
+            first_job = connection.execute(
+                text(
+                    """
+                    SELECT run_after, created_at
+                    FROM jobs
+                    WHERE id = :job_id
+                    """
+                ),
+                {"job_id": first_queued.json()["id"]},
+            ).mappings().one()
+            second_job = connection.execute(
+                text(
+                    """
+                    SELECT run_after, created_at
+                    FROM jobs
+                    WHERE id = :job_id
+                    """
+                ),
+                {"job_id": second_queued.json()["id"]},
+            ).mappings().one()
+            throttle_event_count = connection.execute(
+                text(
+                    """
+                    SELECT COUNT(*)
+                    FROM events
+                    WHERE event_type = 'outbox.deferred'
+                      AND entity_id = :job_id
+                      AND data->>'reason' = 'throttled'
+                    """
+                ),
+                {"job_id": second_queued.json()["id"]},
+            ).scalar_one()
+
+        assert first_job["run_after"] <= first_job["created_at"] + timedelta(seconds=1)
+        assert second_job["run_after"] >= second_job["created_at"] + timedelta(
+            minutes=9
+        )
+        assert throttle_event_count == 1
+    finally:
+        api_main.comms.settings.comms_throttle_max_queued_per_hour = previous_limit
+        api_main.comms.settings.comms_throttle_defer_minutes = previous_defer
+        api_main.comms.settings.comms_quiet_hours_enabled = previous_quiet
+
+
+def test_outbox_delivery_missing_reservation_creates_visible_blocker(client, engine):
+    outbox = client.post(
+        "/v1/comms/outbox",
+        json={
+            "project_id": "boss-dogfood",
+            "channel": "slack:#ops",
+            "body": "Missing reservation should block visibly.",
+            "dedupe_key": "outbox-missing-reservation-1",
+        },
+    )
+    assert outbox.status_code == 201
+    message_id = outbox.json()["id"]
+
+    response = client.post(
+        f"/v1/comms/outbox/{message_id}/deliver",
+        json={
+            "project_id": "boss-dogfood",
+            "reservation_id": "budget_reservation_missing",
+            "dedupe_key": "outbox-missing-reservation-delivery-1",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "blocked"
+    assert payload["decision_id"]
+
+    with engine.begin() as connection:
+        outbox_status = connection.execute(
+            text("SELECT status FROM outbox_messages WHERE id = :message_id"),
+            {"message_id": message_id},
+        ).scalar_one()
+    assert outbox_status == "blocked"
+
+    events = client.get("/v1/events", params={"project_id": "boss-dogfood"})
+    assert events.status_code == 200
+    assert "outbox.blocked" in [
+        item["event_type"] for item in events.json()["items"]
+    ]
+
+
+def test_outbox_queue_rejects_cross_project_message_reference(client, engine):
+    lab_project_id = "boss-comms-lab"
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                """
+                INSERT INTO projects (id, workspace_id, name, slug)
+                VALUES (
+                    :project_id, 'ws_boss', 'BOSS Comms Lab', 'boss-comms-lab'
+                )
+                ON CONFLICT (id) DO NOTHING
+                """
+            ),
+            {"project_id": lab_project_id},
+        )
+        api_main.members.seed_default_members(connection, lab_project_id, "test")
+
+    outbox = client.post(
+        "/v1/comms/outbox",
+        json={
+            "project_id": "boss-dogfood",
+            "channel": "slack:#ops",
+            "body": "This belongs to the dogfood project.",
+            "dedupe_key": "outbox-cross-project-1",
+        },
+    )
+    assert outbox.status_code == 201
+    message_id = outbox.json()["id"]
+
+    response = client.post(
+        f"/v1/comms/outbox/{message_id}/queue",
+        json={
+            "project_id": lab_project_id,
+            "reservation_id": "reservation_not_reached",
+            "dedupe_key": "outbox-cross-project-queue-1",
+        },
+    )
+
+    assert response.status_code == 404
+    assert "not found for project" in response.json()["detail"]
 
 
 def test_outbox_delivery_blocks_when_slack_delivery_is_disabled(client, engine):
@@ -998,6 +3033,170 @@ def test_outbox_delivery_succeeds_and_creates_receipt(client, engine, monkeypatc
     assert receipts.status_code == 200
     receipt = receipts.json()["items"][0]
     assert receipt["effect_kind"] == "slack.message.post"
+    assert receipt["created_by_job_id"] is None
+
+    with engine.begin() as connection:
+        outbox_row = connection.execute(
+            text(
+                """
+                SELECT status, receipt_id
+                FROM outbox_messages
+                WHERE id = :message_id
+                """
+            ),
+            {"message_id": message_id},
+        ).mappings().one()
+
+    assert outbox_row["status"] == "acked"
+    assert outbox_row["receipt_id"] == payload["receipt_id"]
+
+
+def test_outbox_email_delivery_blocks_when_email_delivery_is_disabled(client, engine):
+    outbox = client.post(
+        "/v1/comms/outbox",
+        json={
+            "project_id": "boss-dogfood",
+            "channel": "email:founder@example.com",
+            "subject": "Founder update",
+            "body": "Email delivery should be blocked without SMTP config.",
+            "dedupe_key": "outbox-email-blocked-1",
+        },
+    )
+    assert outbox.status_code == 201
+    message_id = outbox.json()["id"]
+
+    reserve = client.post(
+        "/v1/budget/reserve",
+        json={
+            "project_id": "boss-dogfood",
+            "category": "comms",
+            "amount_usd_micros": 50_000,
+            "reason": "Attempt blocked email delivery.",
+        },
+    )
+    assert reserve.status_code == 201
+    reservation_id = reserve.json()["reservation_id"]
+
+    previous_allowed = api_main.comms.settings.email_real_send_allowed
+    previous_host = api_main.comms.settings.email_smtp_host
+    previous_from = api_main.comms.settings.email_from_address
+    api_main.comms.settings.email_real_send_allowed = False
+    api_main.comms.settings.email_smtp_host = None
+    api_main.comms.settings.email_from_address = None
+    try:
+        response = client.post(
+            f"/v1/comms/outbox/{message_id}/deliver",
+            json={
+                "project_id": "boss-dogfood",
+                "reservation_id": reservation_id,
+                "dedupe_key": "outbox-email-blocked-delivery-1",
+            },
+        )
+    finally:
+        api_main.comms.settings.email_real_send_allowed = previous_allowed
+        api_main.comms.settings.email_smtp_host = previous_host
+        api_main.comms.settings.email_from_address = previous_from
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "blocked"
+    assert payload["decision_id"]
+    assert payload["receipt_id"]
+    assert "BOSS_EMAIL_REAL_SEND_ALLOWED is false" in payload["message"]
+
+    with engine.begin() as connection:
+        reservation_status = connection.execute(
+            text("SELECT status FROM budget_reservations WHERE id = :reservation_id"),
+            {"reservation_id": reservation_id},
+        ).scalar_one()
+        outbox_status = connection.execute(
+            text("SELECT status FROM outbox_messages WHERE id = :message_id"),
+            {"message_id": message_id},
+        ).scalar_one()
+        receipt = connection.execute(
+            text(
+                """
+                SELECT effect_kind, status
+                FROM receipts
+                WHERE dedupe_key = 'outbox-email-blocked-delivery-1'
+                """
+            )
+        ).mappings().one()
+
+    assert reservation_status == "released"
+    assert outbox_status == "blocked"
+    assert receipt["effect_kind"] == "email.message.send"
+    assert receipt["status"] == "failed"
+
+
+def test_outbox_email_delivery_succeeds_and_creates_receipt(
+    client, engine, monkeypatch
+):
+    outbox = client.post(
+        "/v1/comms/outbox",
+        json={
+            "project_id": "boss-dogfood",
+            "channel": "email:founder@example.com",
+            "subject": "Deployment",
+            "body": "The sandbox change is ready for email review.",
+            "dedupe_key": "outbox-email-success-1",
+        },
+    )
+    assert outbox.status_code == 201
+    message_id = outbox.json()["id"]
+
+    reserve = client.post(
+        "/v1/budget/reserve",
+        json={
+            "project_id": "boss-dogfood",
+            "category": "comms",
+            "amount_usd_micros": 50_000,
+            "reason": "Send real email message.",
+        },
+    )
+    assert reserve.status_code == 201
+    reservation_id = reserve.json()["reservation_id"]
+
+    previous_allowed = api_main.comms.settings.email_real_send_allowed
+    previous_host = api_main.comms.settings.email_smtp_host
+    previous_from = api_main.comms.settings.email_from_address
+    previous_tls = api_main.comms.settings.email_smtp_use_tls
+    api_main.comms.settings.email_real_send_allowed = True
+    api_main.comms.settings.email_smtp_host = "smtp.example.com"
+    api_main.comms.settings.email_from_address = "boss@example.com"
+    api_main.comms.settings.email_smtp_use_tls = True
+    monkeypatch.setattr(
+        api_main.comms.email,
+        "send_message",
+        lambda channel, subject, body: f"smtp:{channel.split(':', 1)[1]}",
+    )
+    try:
+        response = client.post(
+            f"/v1/comms/outbox/{message_id}/deliver",
+            json={
+                "project_id": "boss-dogfood",
+                "reservation_id": reservation_id,
+                "dedupe_key": "outbox-email-success-delivery-1",
+            },
+        )
+    finally:
+        api_main.comms.settings.email_real_send_allowed = previous_allowed
+        api_main.comms.settings.email_smtp_host = previous_host
+        api_main.comms.settings.email_from_address = previous_from
+        api_main.comms.settings.email_smtp_use_tls = previous_tls
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "created"
+    assert payload["receipt_id"]
+    assert payload["provider_ref"] == "smtp:founder@example.com"
+
+    receipts = client.get(
+        "/v1/receipts", params={"project_id": "boss-dogfood", "limit": 10}
+    )
+    assert receipts.status_code == 200
+    receipt = receipts.json()["items"][0]
+    assert receipt["effect_kind"] == "email.message.send"
     assert receipt["created_by_job_id"] is None
 
     with engine.begin() as connection:
@@ -1157,8 +3356,57 @@ def test_budget_status_returns_project_snapshot(client):
     assert payload["cap_usd_micros"] > 0
     assert payload["available_usd_micros"] == payload["cap_usd_micros"]
     assert payload["committed_usd_micros"] == 0
+    assert payload["burn_window_hours"] == 24
+    assert payload["burn_rate_usd_micros_per_hour"] == 0
+    assert payload["forecasted_24h_usd_micros"] == 0
+    assert payload["time_to_cap_seconds"] is None
     assert payload["active_reservations_count"] == 0
     assert payload["top_cost_drivers"] == []
+
+
+def test_budget_status_reports_forecast_and_time_to_cap(client, engine):
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                """
+                UPDATE budget_policies
+                SET daily_cap_usd_micros = 1_000_000
+                WHERE scope_type = 'project' AND scope_id = 'boss-dogfood'
+                """
+            )
+        )
+        connection.execute(
+            text(
+                """
+                INSERT INTO cost_receipts (
+                    id, project_id, category, skill_or_model_id,
+                    estimated_usd_micros, actual_usd_micros, status, created_at
+                )
+                VALUES (
+                    'cost_budget_forecast', 'boss-dogfood', 'model',
+                    'gpt-5.2-codex', 240000, 240000, 'actual', :created_at
+                )
+                """
+            ),
+            {"created_at": datetime.now(timezone.utc)},
+        )
+
+    response = client.get(
+        "/v1/budget/status",
+        params={"scope_type": "project", "scope_id": "boss-dogfood"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["actual_usd_micros"] == 240_000
+    assert payload["committed_usd_micros"] == 240_000
+    assert payload["burn_window_hours"] == 24
+    assert payload["burn_rate_usd_micros_per_hour"] == 10_000
+    assert payload["forecasted_24h_usd_micros"] == 240_000
+    assert payload["time_to_cap_seconds"] == 273_600
+    assert payload["top_cost_drivers"] == [
+        {"skill_or_model_id": "gpt-5.2-codex", "amount_usd_micros": 240_000}
+    ]
 
 
 def test_budget_quote_returns_allowed_projection(client):
@@ -1178,6 +3426,99 @@ def test_budget_quote_returns_allowed_projection(client):
     assert payload["requested_usd_micros"] == 250_000
     assert payload["budget_state"] == "green"
     assert payload["post_reservation_available_usd_micros"] < payload["available_usd_micros"]
+
+
+def test_budget_allocations_enforce_parent_limits_and_reservation_capacity(client):
+    start = datetime.now(timezone.utc)
+    end = start + timedelta(days=1)
+
+    root = client.post(
+        "/v1/budget/allocations",
+        json={
+            "project_id": "boss-dogfood",
+            "scope_type": "project",
+            "scope_id": "boss-dogfood",
+            "amount_usd_micros": 1_000_000,
+            "period_start": start.isoformat(),
+            "period_end": end.isoformat(),
+            "actor": "ceo",
+        },
+    )
+    assert root.status_code == 201
+    root_payload = root.json()
+    assert root_payload["available_usd_micros"] == 1_000_000
+
+    child = client.post(
+        "/v1/budget/allocations",
+        json={
+            "project_id": "boss-dogfood",
+            "parent_allocation_id": root_payload["id"],
+            "scope_type": "department",
+            "scope_id": "software_factory",
+            "amount_usd_micros": 700_000,
+            "period_start": start.isoformat(),
+            "period_end": end.isoformat(),
+            "actor": "ceo",
+        },
+    )
+    assert child.status_code == 201
+    child_payload = child.json()
+
+    over_child = client.post(
+        "/v1/budget/allocations",
+        json={
+            "project_id": "boss-dogfood",
+            "parent_allocation_id": root_payload["id"],
+            "scope_type": "department",
+            "scope_id": "growth",
+            "amount_usd_micros": 400_000,
+            "period_start": start.isoformat(),
+            "period_end": end.isoformat(),
+            "actor": "ceo",
+        },
+    )
+    assert over_child.status_code == 409
+
+    reserve = client.post(
+        "/v1/budget/reserve",
+        json={
+            "project_id": "boss-dogfood",
+            "allocation_id": child_payload["id"],
+            "category": "tool",
+            "amount_usd_micros": 650_000,
+            "reason": "reserve against software factory allocation",
+        },
+    )
+    assert reserve.status_code == 201
+    assert reserve.json()["status"] == "reserved"
+
+    over_reserve = client.post(
+        "/v1/budget/reserve",
+        json={
+            "project_id": "boss-dogfood",
+            "allocation_id": child_payload["id"],
+            "category": "tool",
+            "amount_usd_micros": 100_000,
+            "reason": "force allocation denial",
+        },
+    )
+    assert over_reserve.status_code == 201
+    assert over_reserve.json()["status"] == "denied"
+    assert over_reserve.json()["decision_id"]
+
+    allocations = client.get(
+        "/v1/budget/allocations", params={"project_id": "boss-dogfood"}
+    )
+    assert allocations.status_code == 200
+    items = {item["id"]: item for item in allocations.json()["items"]}
+    assert items[root_payload["id"]]["child_allocated_usd_micros"] == 700_000
+    assert items[child_payload["id"]]["reserved_usd_micros"] == 650_000
+    assert items[child_payload["id"]]["available_usd_micros"] == 50_000
+
+    events = client.get("/v1/events", params={"project_id": "boss-dogfood"})
+    event_types = [item["event_type"] for item in events.json()["items"]]
+    assert "budget.allocation_denied" in event_types
+    assert "budget.allocation_reservation_denied" in event_types
 
 
 def test_budget_release_frees_active_reservation(client):
@@ -1310,6 +3651,37 @@ def test_decision_can_be_rejected_and_cannot_be_reapproved(client):
     assert events.status_code == 200
     event_types = [item["event_type"] for item in events.json()["items"]]
     assert "decision.rejected" in event_types
+
+
+def test_tier_two_decision_approval_requires_configured_approver_role(client):
+    denial = client.post(
+        "/v1/budget/reserve",
+        json={
+            "project_id": "boss-dogfood",
+            "category": "model",
+            "amount_usd_micros": 100_000_000,
+            "reason": "force denial",
+        },
+    )
+    assert denial.status_code == 201
+    decision_id = denial.json()["decision_id"]
+
+    approve = client.post(
+        f"/v1/decisions/{decision_id}/approve",
+        json={
+            "actor": "release_manager",
+            "note": "Trying to approve without delegation.",
+        },
+    )
+
+    assert approve.status_code == 403
+    assert "not allowed to approve" in approve.json()["detail"]
+    events = client.get("/v1/events", params={"project_id": "boss-dogfood"})
+    policy_events = [
+        item for item in events.json()["items"] if item["event_type"] == "policy.denied"
+    ]
+    assert policy_events
+    assert policy_events[0]["entity_id"] == decision_id
 
 
 def test_decision_can_be_delegated_and_then_approved(client):
@@ -2471,6 +4843,201 @@ def test_approving_pr_review_decision_creates_merge_gate_block_artifact(client, 
     assert "decision.follow_on_blocked" in event_types
 
 
+def test_pr_proposal_runs_receipt_backed_local_sandbox_validation(
+    client, engine, monkeypatch, tmp_path
+):
+    branch_name = "boss/local-validation-pass"
+    repo = create_local_validation_repo(tmp_path, branch_name)
+    settings = api_main.software_factory.settings
+    previous = {
+        "openai_api_key": settings.openai_api_key,
+        "sandbox_local_validation_enabled": settings.sandbox_local_validation_enabled,
+        "sandbox_validation_repo_path": settings.sandbox_validation_repo_path,
+        "sandbox_validation_commands": settings.sandbox_validation_commands,
+        "sandbox_validation_fetch_remote": settings.sandbox_validation_fetch_remote,
+    }
+    configure_pr_proposal_integrations(monkeypatch)
+    settings.sandbox_local_validation_enabled = True
+    settings.sandbox_validation_repo_path = repo
+    settings.sandbox_validation_commands = "python3 -c \"print('local validation ok')\""
+    settings.sandbox_validation_fetch_remote = False
+
+    try:
+        reservation_id = reserve_for_pr_proposal(client)
+        proposal = client.post(
+            "/v1/software-factory/proposals",
+            json={
+                "project_id": "boss-dogfood",
+                "reservation_id": reservation_id,
+                "dedupe_key": "local-validation-pass",
+                "title": "Local validation pass",
+                "branch_name": branch_name,
+                "summary": "Validate the sandbox branch locally before merge.",
+                "files": [
+                    {
+                        "path": "proposals/local-validation-pass.md",
+                        "content": "# Local validation pass\n",
+                    }
+                ],
+            },
+        )
+        assert proposal.status_code == 200
+        payload = proposal.json()
+        assert payload["status"] == "created"
+        assert payload["validation_status"] == "passed"
+        assert payload["validation_sources"] == [
+            "github.check_runs",
+            "local.sandbox_commands",
+        ]
+        assert payload["local_validation_receipt_id"]
+
+        report = client.get(f"/v1/artifacts/{payload['test_report_artifact_id']}")
+        assert report.status_code == 200
+        content = report.json()["content"]
+        assert content["status"] == "passed"
+        assert content["local_validation"]["status"] == "passed"
+        assert content["local_validation_receipt_status"] == "succeeded"
+        assert "python3 -c \"print('local validation ok')\"" in content[
+            "tests_added_or_run"
+        ]
+
+        with engine.begin() as connection:
+            receipts = connection.execute(
+                text(
+                    """
+                    SELECT effect_kind, status
+                    FROM receipts
+                    WHERE project_id = 'boss-dogfood'
+                    ORDER BY created_at ASC
+                    """
+                )
+            ).mappings().all()
+        receipt_status_by_kind = {row["effect_kind"]: row["status"] for row in receipts}
+        assert receipt_status_by_kind == {
+            "github.pull_request.create": "succeeded",
+            "sandbox.validation.run": "succeeded",
+        }
+
+        events = client.get("/v1/events", params={"project_id": "boss-dogfood"})
+        assert events.status_code == 200
+        event_types = [item["event_type"] for item in events.json()["items"]]
+        assert "software_factory.local_validation_passed" in event_types
+    finally:
+        for key, value in previous.items():
+            setattr(settings, key, value)
+
+
+def test_pr_proposal_local_sandbox_validation_failure_blocks_merge_gate(
+    client, engine, monkeypatch, tmp_path
+):
+    branch_name = "boss/local-validation-fail"
+    repo = create_local_validation_repo(tmp_path, branch_name)
+    settings = api_main.software_factory.settings
+    previous_factory = {
+        "openai_api_key": settings.openai_api_key,
+        "sandbox_local_validation_enabled": settings.sandbox_local_validation_enabled,
+        "sandbox_validation_repo_path": settings.sandbox_validation_repo_path,
+        "sandbox_validation_commands": settings.sandbox_validation_commands,
+        "sandbox_validation_fetch_remote": settings.sandbox_validation_fetch_remote,
+    }
+    previous_merge = api_main.decisions.settings.enable_sandbox_merge
+    configure_pr_proposal_integrations(monkeypatch)
+    settings.sandbox_local_validation_enabled = True
+    settings.sandbox_validation_repo_path = repo
+    settings.sandbox_validation_commands = "python3 -c \"raise SystemExit(3)\""
+    settings.sandbox_validation_fetch_remote = False
+    api_main.decisions.settings.enable_sandbox_merge = True
+
+    try:
+        reservation_id = reserve_for_pr_proposal(client)
+        proposal = client.post(
+            "/v1/software-factory/proposals",
+            json={
+                "project_id": "boss-dogfood",
+                "reservation_id": reservation_id,
+                "dedupe_key": "local-validation-fail",
+                "title": "Local validation fail",
+                "branch_name": branch_name,
+                "summary": "Block merge when local sandbox validation fails.",
+                "files": [
+                    {
+                        "path": "proposals/local-validation-fail.md",
+                        "content": "# Local validation fail\n",
+                    }
+                ],
+            },
+        )
+        assert proposal.status_code == 200
+        payload = proposal.json()
+        assert payload["status"] == "created"
+        assert payload["validation_status"] == "failed"
+        assert "exited 3" in payload["validation_summary"]
+
+        report = client.get(f"/v1/artifacts/{payload['test_report_artifact_id']}")
+        assert report.status_code == 200
+        content = report.json()["content"]
+        assert content["status"] == "failed"
+        assert content["local_validation"]["status"] == "failed"
+        assert content["local_validation_receipt_status"] == "failed"
+
+        approve = client.post(
+            f"/v1/decisions/{payload['decision_id']}/approve",
+            json={"actor": "ceo", "note": "Try to merge despite local failure."},
+        )
+        assert approve.status_code == 200
+        assert approve.json()["status"] == "approved"
+
+        with engine.begin() as connection:
+            merge_jobs = connection.execute(
+                text(
+                    """
+                    SELECT COUNT(*)
+                    FROM jobs
+                    WHERE project_id = 'boss-dogfood'
+                      AND kind = 'github.pull_request.merge'
+                      AND payload->>'decision_id' = :decision_id
+                    """
+                ),
+                {"decision_id": payload["decision_id"]},
+            ).scalar_one()
+            merge_gate = connection.execute(
+                text(
+                    """
+                    SELECT content
+                    FROM artifacts
+                    WHERE project_id = 'boss-dogfood' AND artifact_type = 'merge_gate'
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                    """
+                )
+            ).mappings().one()
+            validation_receipt_status = connection.execute(
+                text(
+                    """
+                    SELECT status
+                    FROM receipts
+                    WHERE id = :receipt_id
+                    """
+                ),
+                {"receipt_id": payload["local_validation_receipt_id"]},
+            ).scalar_one()
+
+        assert merge_jobs == 0
+        assert merge_gate["content"]["status"] == "blocked_ci_validation_failed"
+        assert merge_gate["content"]["ci_validation_status"] == "failed"
+        assert validation_receipt_status == "failed"
+
+        events = client.get("/v1/events", params={"project_id": "boss-dogfood"})
+        assert events.status_code == 200
+        event_types = [item["event_type"] for item in events.json()["items"]]
+        assert "software_factory.local_validation_failed" in event_types
+        assert "decision.follow_on_blocked" in event_types
+    finally:
+        for key, value in previous_factory.items():
+            setattr(settings, key, value)
+        api_main.decisions.settings.enable_sandbox_merge = previous_merge
+
+
 def test_approving_pr_review_decision_queues_merge_job_when_policy_enabled(client, engine):
     previous = api_main.decisions.settings.enable_sandbox_merge
     api_main.decisions.settings.enable_sandbox_merge = True
@@ -2655,7 +5222,7 @@ def test_approving_pr_review_decision_blocks_merge_when_ci_failed(client, engine
         assert merge_jobs == 0
         assert merge_gate["content"]["status"] == "blocked_ci_validation_failed"
         assert merge_gate["content"]["ci_validation_status"] == "failed"
-        assert "GitHub validation failed" in merge_gate["content"]["reason"]
+        assert "Sandbox validation failed" in merge_gate["content"]["reason"]
 
         events = client.get("/v1/events", params={"project_id": "boss-dogfood"})
         assert events.status_code == 200
@@ -3039,6 +5606,645 @@ def test_red_budget_halts_non_p0_job_and_freezes_tier2_merge(client, engine):
     assert deferred_merge["last_error"]["reason"] == "red_freezes_tier2_effects"
 
 
+def test_infra_provision_review_request_creates_decision_and_artifact(client):
+    reservation_id = reserve_for_infra_provision(
+        client,
+        "Reserve budget for infrastructure provisioning review.",
+    )
+
+    response = client.post(
+        "/v1/infra/droplets/requests",
+        json={
+            "project_id": "boss-dogfood",
+            "reservation_id": reservation_id,
+            "title": "Preview worker droplet",
+            "region": "nyc3",
+            "size": "s-1vcpu-1gb",
+            "ttl_minutes": 90,
+            "tags": ["preview", "dogfood"],
+            "actor": "ceo",
+        },
+    )
+
+    assert response.status_code == 201
+    payload = response.json()
+    assert payload["status"] == "pending_approval"
+    assert payload["artifact_id"]
+    assert payload["decision_id"]
+
+    artifact = client.get(f"/v1/artifacts/{payload['artifact_id']}")
+    assert artifact.status_code == 200
+    assert artifact.json()["artifact_type"] == "infra_provision_request"
+
+    inbox = client.get("/v1/decisions/inbox", params={"project_id": "boss-dogfood"})
+    assert inbox.status_code == 200
+    decision = next(
+        item for item in inbox.json()["items"] if item["id"] == payload["decision_id"]
+    )
+    assert decision["risk_tier"] == 3
+    assert decision["recommendation"]["action"] == "review_infra_provisioning"
+
+
+def test_approving_infra_review_decision_queues_job_when_enabled(client, engine):
+    reservation_id = reserve_for_infra_provision(
+        client,
+        "Reserve budget for approved infra queue.",
+    )
+    request = client.post(
+        "/v1/infra/droplets/requests",
+        json={
+            "project_id": "boss-dogfood",
+            "reservation_id": reservation_id,
+            "title": "Queued preview worker droplet",
+            "region": "nyc3",
+            "size": "s-1vcpu-1gb",
+            "ttl_minutes": 60,
+            "tags": ["preview"],
+            "actor": "ceo",
+        },
+    )
+    assert request.status_code == 201
+    decision_id = request.json()["decision_id"]
+
+    previous_flag = api_main.decisions.settings.infra_real_provision_allowed
+    api_main.decisions.settings.infra_real_provision_allowed = True
+    try:
+        approve = client.post(
+            f"/v1/decisions/{decision_id}/approve",
+            json={"actor": "ceo", "note": "Provision the preview worker."},
+        )
+    finally:
+        api_main.decisions.settings.infra_real_provision_allowed = previous_flag
+
+    assert approve.status_code == 200
+
+    with engine.begin() as connection:
+        job = connection.execute(
+            text(
+                """
+                SELECT kind, payload
+                FROM jobs
+                WHERE project_id = 'boss-dogfood'
+                  AND kind = 'infra.droplet.create'
+                ORDER BY created_at DESC
+                LIMIT 1
+                """
+            )
+        ).mappings().one()
+
+    assert job["kind"] == "infra.droplet.create"
+    assert job["payload"]["decision_id"] == decision_id
+    assert job["payload"]["reservation_id"] == reservation_id
+
+
+def test_approving_infra_review_decision_creates_gate_when_disabled(client, engine):
+    reservation_id = reserve_for_infra_provision(
+        client,
+        "Reserve budget for blocked infra gate.",
+    )
+    request = client.post(
+        "/v1/infra/droplets/requests",
+        json={
+            "project_id": "boss-dogfood",
+            "reservation_id": reservation_id,
+            "title": "Blocked preview worker droplet",
+            "region": "nyc3",
+            "size": "s-1vcpu-1gb",
+            "ttl_minutes": 60,
+            "tags": ["preview"],
+            "actor": "ceo",
+        },
+    )
+    assert request.status_code == 201
+    decision_id = request.json()["decision_id"]
+
+    previous_flag = api_main.decisions.settings.infra_real_provision_allowed
+    api_main.decisions.settings.infra_real_provision_allowed = False
+    try:
+        approve = client.post(
+            f"/v1/decisions/{decision_id}/approve",
+            json={"actor": "ceo", "note": "Keep infra gated."},
+        )
+    finally:
+        api_main.decisions.settings.infra_real_provision_allowed = previous_flag
+
+    assert approve.status_code == 200
+
+    with engine.begin() as connection:
+        gate = connection.execute(
+            text(
+                """
+                SELECT artifact_type, content
+                FROM artifacts
+                WHERE project_id = 'boss-dogfood'
+                  AND artifact_type = 'infra_provision_gate'
+                ORDER BY created_at DESC
+                LIMIT 1
+                """
+            )
+        ).mappings().one()
+
+    assert gate["artifact_type"] == "infra_provision_gate"
+    assert gate["content"]["status"] == "blocked_manual_provision_required"
+
+
+def test_red_budget_freezes_infra_provisioning_job(client, engine):
+    reservation_id = reserve_for_infra_provision(
+        client,
+        "Reserve budget for red infra freeze.",
+    )
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                """
+                UPDATE budget_policies
+                SET daily_cap_usd_micros = 1_000_000,
+                    soft_cap_pct = 0.70,
+                    auto_lite_mode_pct = 0.80,
+                    freeze_provisioning_pct = 0.90
+                WHERE scope_type = 'project' AND scope_id = 'boss-dogfood'
+                """
+            )
+        )
+        connection.execute(
+            text(
+                """
+                INSERT INTO cost_receipts (
+                    id, project_id, category, skill_or_model_id, estimated_usd_micros,
+                    actual_usd_micros, status
+                )
+                VALUES (
+                    'cost_red_infra', 'boss-dogfood', 'infra', 'infra.do.create_droplet_real',
+                    960000, 960000, 'actual'
+                )
+                """
+            )
+        )
+        connection.execute(
+            text(
+                """
+                INSERT INTO tasks (
+                    id, project_id, title, description, status, owner_role_id, priority,
+                    risk_tier, inputs, required_artifacts, budget_allocation_id, data_boundary,
+                    dedupe_key
+                )
+                VALUES (
+                    'task_red_infra', 'boss-dogfood', 'Red infra task', 'freeze provisioning',
+                    'open', NULL, 'p0', 1, '{}'::jsonb, '[]'::jsonb, NULL, 'internal',
+                    'task_red_infra'
+                )
+                """
+            )
+        )
+    insert_approved_infra_decision(
+        engine,
+        decision_id="dec_red_infra",
+        reservation_id=reservation_id,
+        task_id="task_red_infra",
+        title="Red infra",
+    )
+
+    queued = client.post(
+        "/v1/infra/droplets/queue",
+        json={
+            "project_id": "boss-dogfood",
+            "task_id": "task_red_infra",
+            "decision_id": "dec_red_infra",
+            "reservation_id": reservation_id,
+            "dedupe_key": "red-infra-job",
+            "title": "Red infra",
+            "region": "nyc3",
+            "size": "s-1vcpu-1gb",
+            "ttl_minutes": 60,
+            "tags": ["preview"],
+            "actor": "ceo",
+        },
+    )
+    assert queued.status_code == 201
+
+    poll = client.post(
+        "/v1/worker/poll",
+        json={
+            "worker_id": "worker-red-infra",
+            "capabilities": ["infra.droplet.create"],
+            "lease_ttl_seconds": 60,
+        },
+    )
+    assert poll.status_code == 200
+    assert poll.json()["status"] == "idle"
+
+    with engine.begin() as connection:
+        job = connection.execute(
+            text(
+                """
+                SELECT status, last_error
+                FROM jobs
+                WHERE id = :job_id
+                """
+            ),
+            {"job_id": queued.json()["id"]},
+        ).mappings().one()
+
+    assert job["status"] == "queued"
+    assert job["last_error"]["reason"] == "red_freezes_infra_provisioning"
+
+
+def test_queue_infra_job_is_leasable_and_completion_passes_through(client, engine):
+    reservation_id = reserve_for_infra_provision(
+        client,
+        "Reserve budget for queued infra job.",
+    )
+    insert_approved_infra_decision(
+        engine,
+        decision_id="dec_queue_infra",
+        reservation_id=reservation_id,
+    )
+
+    queued = client.post(
+        "/v1/infra/droplets/queue",
+        json={
+            "project_id": "boss-dogfood",
+            "decision_id": "dec_queue_infra",
+            "reservation_id": reservation_id,
+            "dedupe_key": "queued-infra-job",
+            "title": "Queued infra",
+            "region": "nyc3",
+            "size": "s-1vcpu-1gb",
+            "ttl_minutes": 60,
+            "tags": ["preview"],
+            "actor": "ceo",
+        },
+    )
+    assert queued.status_code == 201
+    job_id = queued.json()["id"]
+
+    poll = client.post(
+        "/v1/worker/poll",
+        json={
+            "worker_id": "worker-infra",
+            "capabilities": ["infra.droplet.create"],
+            "lease_ttl_seconds": 60,
+        },
+    )
+    assert poll.status_code == 200
+    leased = poll.json()
+    assert leased["status"] == "leased"
+    assert leased["job"]["id"] == job_id
+
+    complete = client.post(
+        "/v1/worker/complete",
+        json={
+            "worker_id": "worker-infra",
+            "job_id": job_id,
+            "lease_token": leased["job"]["lease_token"],
+            "result": {
+                "status": "created",
+                "artifact_id": "art_infra",
+                "receipt_id": "rcpt_infra",
+                "decision_id": "dec_queue_infra",
+                "resource_id": "infra_123",
+                "provider_ref": "https://api.digitalocean.com/v2/droplets/123",
+                "provider_resource_id": "123",
+                "resource_name": "boss-preview",
+                "expires_at": "2026-06-03T12:00:00+00:00",
+            },
+        },
+    )
+    assert complete.status_code == 200
+    payload = complete.json()
+    assert payload["status"] == "succeeded"
+    assert payload["resource_id"] == "infra_123"
+    assert payload["provider_resource_id"] == "123"
+
+
+def test_infra_provision_blocks_without_credentials_and_releases_reservation(
+    client, engine
+):
+    reservation_id = reserve_for_infra_provision(
+        client,
+        "Reserve budget for blocked infra provisioning.",
+    )
+    insert_approved_infra_decision(
+        engine,
+        decision_id="dec_infra_missing_creds",
+        reservation_id=reservation_id,
+    )
+
+    previous_flag = api_main.infrastructure.settings.infra_real_provision_allowed
+    previous_token = api_main.infrastructure.settings.digitalocean_token
+    api_main.infrastructure.settings.infra_real_provision_allowed = False
+    api_main.infrastructure.settings.digitalocean_token = None
+    try:
+        response = client.post(
+            "/v1/infra/droplets",
+            json={
+                "project_id": "boss-dogfood",
+                "decision_id": "dec_infra_missing_creds",
+                "reservation_id": reservation_id,
+                "dedupe_key": "infra-missing-creds",
+                "title": "Blocked infra",
+                "region": "nyc3",
+                "size": "s-1vcpu-1gb",
+                "ttl_minutes": 60,
+                "tags": ["preview"],
+            },
+        )
+    finally:
+        api_main.infrastructure.settings.infra_real_provision_allowed = previous_flag
+        api_main.infrastructure.settings.digitalocean_token = previous_token
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "blocked"
+    assert payload["decision_id"]
+    assert payload["receipt_id"]
+    assert "BOSS_INFRA_REAL_PROVISION_ALLOWED is false" in payload["message"]
+
+    with engine.begin() as connection:
+        reservation_status = connection.execute(
+            text("SELECT status FROM budget_reservations WHERE id = :reservation_id"),
+            {"reservation_id": reservation_id},
+        ).scalar_one()
+        receipt = connection.execute(
+            text(
+                """
+                SELECT effect_kind, status
+                FROM receipts
+                WHERE dedupe_key = 'infra-missing-creds'
+                """
+            )
+        ).mappings().one()
+
+    assert reservation_status == "released"
+    assert receipt["effect_kind"] == "infra.digitalocean.droplet.create"
+    assert receipt["status"] == "failed"
+
+
+def test_infra_provision_succeeds_and_records_resource(client, engine, monkeypatch):
+    reservation_id = reserve_for_infra_provision(
+        client,
+        "Reserve budget for successful infra provisioning.",
+    )
+    insert_approved_infra_decision(
+        engine,
+        decision_id="dec_infra_success",
+        reservation_id=reservation_id,
+        title="Successful infra",
+    )
+
+    previous_flag = api_main.infrastructure.settings.infra_real_provision_allowed
+    previous_token = api_main.infrastructure.settings.digitalocean_token
+    api_main.infrastructure.settings.infra_real_provision_allowed = True
+    api_main.infrastructure.settings.digitalocean_token = "do-test-token"
+    monkeypatch.setattr(
+        api_main.infrastructure.digitalocean,
+        "create_droplet",
+        lambda **kwargs: DropletProvisionResult(
+            droplet_id="123456",
+            name=kwargs["name"],
+            region=kwargs["region"],
+            size=kwargs["size"],
+            status="new",
+            api_url="https://api.digitalocean.com/v2/droplets/123456",
+        ),
+    )
+    try:
+        response = client.post(
+            "/v1/infra/droplets",
+            json={
+                "project_id": "boss-dogfood",
+                "decision_id": "dec_infra_success",
+                "reservation_id": reservation_id,
+                "dedupe_key": "infra-success",
+                "title": "Successful infra",
+                "region": "nyc3",
+                "size": "s-1vcpu-1gb",
+                "ttl_minutes": 60,
+                "tags": ["preview"],
+            },
+        )
+    finally:
+        api_main.infrastructure.settings.infra_real_provision_allowed = previous_flag
+        api_main.infrastructure.settings.digitalocean_token = previous_token
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "created"
+    assert payload["resource_id"]
+    assert payload["provider_resource_id"] == "123456"
+    assert payload["provider_ref"].endswith("/123456")
+
+    resources = client.get(
+        "/v1/infra/resources", params={"project_id": "boss-dogfood", "limit": 10}
+    )
+    assert resources.status_code == 200
+    resource = next(
+        item for item in resources.json()["items"] if item["id"] == payload["resource_id"]
+    )
+    assert resource["status"] == "active"
+    assert resource["external_resource_id"] == "123456"
+    assert resource["provision_receipt_id"] == payload["receipt_id"]
+
+    with engine.begin() as connection:
+        reservation_status = connection.execute(
+            text("SELECT status FROM budget_reservations WHERE id = :reservation_id"),
+            {"reservation_id": reservation_id},
+        ).scalar_one()
+        cost = connection.execute(
+            text(
+                """
+                SELECT category, skill_or_model_id, status
+                FROM cost_receipts
+                WHERE receipt_id = :receipt_id
+                """
+            ),
+            {"receipt_id": payload["receipt_id"]},
+        ).mappings().one()
+
+    assert reservation_status == "consumed"
+    assert cost["category"] == "infra"
+    assert cost["skill_or_model_id"] == "infra.do.create_droplet_real"
+    assert cost["status"] == "estimated"
+
+
+def test_infra_provision_blocks_restricted_data_boundary_before_receipt(client, engine):
+    task = client.post(
+        "/v1/tasks",
+        json={
+            "project_id": "boss-dogfood",
+            "title": "Restricted infra task",
+            "dedupe_key": "restricted-infra-task",
+            "data_boundary": "restricted",
+        },
+    )
+    assert task.status_code == 201
+    task_id = task.json()["id"]
+    reservation_id = reserve_for_infra_provision(
+        client,
+        "Reserve budget for restricted infra provisioning.",
+    )
+    insert_approved_infra_decision(
+        engine,
+        decision_id="dec_infra_restricted",
+        reservation_id=reservation_id,
+        task_id=task_id,
+        title="Restricted infra",
+        data_boundary="restricted",
+    )
+
+    response = client.post(
+        "/v1/infra/droplets",
+        json={
+            "project_id": "boss-dogfood",
+            "task_id": task_id,
+            "decision_id": "dec_infra_restricted",
+            "reservation_id": reservation_id,
+            "dedupe_key": "infra-restricted",
+            "title": "Restricted infra",
+            "region": "nyc3",
+            "size": "s-1vcpu-1gb",
+            "ttl_minutes": 60,
+            "tags": ["preview"],
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "blocked"
+    assert payload["data_boundary"] == "restricted"
+    assert "external infrastructure providers" in payload["message"]
+
+    with engine.begin() as connection:
+        reservation_status = connection.execute(
+            text("SELECT status FROM budget_reservations WHERE id = :reservation_id"),
+            {"reservation_id": reservation_id},
+        ).scalar_one()
+        receipt_count = connection.execute(
+            text(
+                """
+                SELECT COUNT(*)
+                FROM receipts
+                WHERE dedupe_key = 'infra-restricted'
+                """
+            )
+        ).scalar_one()
+        denied_event_count = connection.execute(
+            text(
+                """
+                SELECT COUNT(*)
+                FROM events
+                WHERE event_type = 'policy.denied'
+                  AND entity_type = 'infra_effect'
+                  AND entity_id = 'infra.digitalocean.droplet.create'
+                """
+            )
+        ).scalar_one()
+
+    assert reservation_status == "released"
+    assert receipt_count == 0
+    assert denied_event_count == 1
+
+
+def test_infra_termination_and_janitor_queue_are_visible(client, engine, monkeypatch):
+    reservation_id = reserve_for_infra_provision(
+        client,
+        "Reserve budget for infra termination setup.",
+    )
+    insert_approved_infra_decision(
+        engine,
+        decision_id="dec_infra_terminate",
+        reservation_id=reservation_id,
+        title="Terminated infra",
+    )
+
+    previous_flag = api_main.infrastructure.settings.infra_real_provision_allowed
+    previous_token = api_main.infrastructure.settings.digitalocean_token
+    api_main.infrastructure.settings.infra_real_provision_allowed = True
+    api_main.infrastructure.settings.digitalocean_token = "do-test-token"
+    monkeypatch.setattr(
+        api_main.infrastructure.digitalocean,
+        "create_droplet",
+        lambda **kwargs: DropletProvisionResult(
+            droplet_id="654321",
+            name=kwargs["name"],
+            region=kwargs["region"],
+            size=kwargs["size"],
+            status="active",
+            api_url="https://api.digitalocean.com/v2/droplets/654321",
+        ),
+    )
+    create = client.post(
+        "/v1/infra/droplets",
+        json={
+            "project_id": "boss-dogfood",
+            "decision_id": "dec_infra_terminate",
+            "reservation_id": reservation_id,
+            "dedupe_key": "infra-terminate-setup",
+            "title": "Terminated infra",
+            "region": "nyc3",
+            "size": "s-1vcpu-1gb",
+            "ttl_minutes": 10,
+            "tags": ["preview"],
+        },
+    )
+    assert create.status_code == 200
+    resource_id = create.json()["resource_id"]
+    monkeypatch.setattr(
+        api_main.infrastructure.digitalocean,
+        "delete_droplet",
+        lambda droplet_id: DropletTerminationResult(
+            droplet_id=droplet_id,
+            api_url=f"https://api.digitalocean.com/v2/droplets/{droplet_id}",
+        ),
+    )
+    try:
+        terminate = client.post(
+            f"/v1/infra/resources/{resource_id}/terminate",
+            json={
+                "project_id": "boss-dogfood",
+                "dedupe_key": "infra-terminate-direct",
+                "actor": "release_manager",
+                "reason": "cleanup",
+            },
+        )
+    finally:
+        api_main.infrastructure.settings.infra_real_provision_allowed = previous_flag
+        api_main.infrastructure.settings.digitalocean_token = previous_token
+
+    assert terminate.status_code == 200
+    assert terminate.json()["status"] == "terminated"
+
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                """
+                UPDATE infra_resources
+                SET status = 'active',
+                    terminated_at = NULL,
+                    termination_reason = NULL,
+                    termination_receipt_id = NULL,
+                    termination_artifact_id = NULL,
+                    expires_at = now() - interval '5 minutes'
+                WHERE id = :resource_id
+                """
+            ),
+            {"resource_id": resource_id},
+        )
+
+    janitor = client.post(
+        "/v1/infra/janitor/run",
+        json={
+            "project_id": "boss-dogfood",
+            "actor": "system",
+            "limit": 10,
+        },
+    )
+    assert janitor.status_code == 200
+    janitor_payload = janitor.json()
+    assert janitor_payload["status"] == "queued"
+    assert resource_id in janitor_payload["resource_ids"]
+    assert janitor_payload["queued_job_ids"]
+
 def test_queue_pr_proposal_job_is_leasable_and_completion_passes_through(client):
     reserve = client.post(
         "/v1/budget/reserve",
@@ -3187,6 +6393,94 @@ def test_pr_proposal_blocks_without_github_credentials_and_releases_reservation(
 
     assert reservation_status == "released"
     assert decision_question == "GitHub integration is not configured"
+
+
+def test_pr_proposal_blocks_restricted_data_boundary_before_github_effect(
+    client, engine
+):
+    task = client.post(
+        "/v1/tasks",
+        json={
+            "project_id": "boss-dogfood",
+            "title": "Restricted PR proposal",
+            "dedupe_key": "restricted-pr-task",
+            "data_boundary": "restricted",
+        },
+    )
+    assert task.status_code == 201
+    task_id = task.json()["id"]
+
+    reserve = client.post(
+        "/v1/budget/reserve",
+        json={
+            "project_id": "boss-dogfood",
+            "category": "tool",
+            "amount_usd_micros": 500_000,
+            "reason": "Restricted PR proposal should be blocked before GitHub.",
+        },
+    )
+    assert reserve.status_code == 201
+    reservation_id = reserve.json()["reservation_id"]
+
+    response = client.post(
+        "/v1/software-factory/proposals",
+        json={
+            "project_id": "boss-dogfood",
+            "task_id": task_id,
+            "reservation_id": reservation_id,
+            "dedupe_key": "restricted-github-pr",
+            "title": "Restricted Sandbox PR",
+            "branch_name": "boss/restricted-pr",
+            "summary": "This must not be sent to GitHub.",
+            "files": [{"path": "README.md", "content": "restricted"}],
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "blocked"
+    assert payload["data_boundary"] == "restricted"
+    assert "GitHub" in payload["message"]
+
+    with engine.begin() as connection:
+        reservation_status = connection.execute(
+            text(
+                """
+                SELECT status
+                FROM budget_reservations
+                WHERE id = :reservation_id
+                """
+            ),
+            {"reservation_id": reservation_id},
+        ).scalar_one()
+        receipt_count = connection.execute(
+            text(
+                """
+                SELECT COUNT(*)
+                FROM receipts
+                WHERE dedupe_key = 'restricted-github-pr'
+                """
+            )
+        ).scalar_one()
+        decision_question = connection.execute(
+            text("SELECT question FROM decisions WHERE id = :decision_id"),
+            {"decision_id": payload["decision_id"]},
+        ).scalar_one()
+        denied_event_count = connection.execute(
+            text(
+                """
+                SELECT COUNT(*)
+                FROM events
+                WHERE event_type = 'policy.denied'
+                  AND entity_type = 'github_effect'
+                  AND entity_id = 'github.pull_request.create'
+                """
+            )
+        ).scalar_one()
+
+    assert reservation_status == "released"
+    assert receipt_count == 0
+    assert decision_question == "Data boundary blocks GitHub external effect"
+    assert denied_event_count == 1
 
 
 def test_pr_proposal_records_github_validation_evidence(client, monkeypatch):
@@ -3623,6 +6917,10 @@ def test_deployment_healthcheck_failure_creates_blocking_decision(client, engine
     assert payload["health_decision_id"]
     assert payload["health_verification_artifact_id"]
     assert payload["deployment_status"] == "failure"
+    assert payload["rollout_id"]
+    assert payload["rollout_artifact_id"]
+    assert payload["rollout_status"] == "blocked"
+    assert payload["rollout_stage"] == "post_deploy_health"
 
     with engine.begin() as connection:
         original_decision_status = connection.execute(
@@ -3648,17 +6946,53 @@ def test_deployment_healthcheck_failure_creates_blocking_decision(client, engine
             ),
             {"artifact_id": payload["health_verification_artifact_id"]},
         ).mappings().one()
+        rollout = connection.execute(
+            text(
+                """
+                SELECT status, current_stage, rollback_decision_id, stages
+                FROM deployment_rollouts
+                WHERE id = :rollout_id
+                """
+            ),
+            {"rollout_id": payload["rollout_id"]},
+        ).mappings().one()
+        rollout_artifact = connection.execute(
+            text(
+                """
+                SELECT artifact_type, content
+                FROM artifacts
+                WHERE id = :artifact_id
+                """
+            ),
+            {"artifact_id": payload["rollout_artifact_id"]},
+        ).mappings().one()
 
     assert original_decision_status == "approved"
     assert "Review failed sandbox deployment health check" in health_decision["question"]
     assert health_decision["recommendation"]["action"] == "review_deployment_health"
     assert health_artifact["artifact_type"] == "deployment_health_check"
     assert health_artifact["content"]["verification"]["http_status"] == 503
+    assert rollout["status"] == "blocked"
+    assert rollout["current_stage"] == "post_deploy_health"
+    assert rollout["rollback_decision_id"] == payload["health_decision_id"]
+    assert rollout["stages"][1]["status"] == "failed"
+    assert rollout_artifact["artifact_type"] == "deployment_rollout"
+    assert rollout_artifact["content"]["status"] == "blocked"
+
+    rollouts = client.get(
+        "/v1/software-factory/rollouts",
+        params={"project_id": "boss-dogfood"},
+    )
+    assert rollouts.status_code == 200
+    rollout_items = rollouts.json()["items"]
+    assert rollout_items[0]["id"] == payload["rollout_id"]
+    assert rollout_items[0]["status"] == "blocked"
 
     events = client.get("/v1/events", params={"project_id": "boss-dogfood"})
     assert events.status_code == 200
     event_types = [item["event_type"] for item in events.json()["items"]]
     assert "software_factory.deployment_health_blocked" in event_types
+    assert "software_factory.deployment_rollout_recorded" in event_types
 
 
 def test_merge_blocks_without_github_credentials(client, engine):
@@ -3709,6 +7043,100 @@ def test_merge_blocks_without_github_credentials(client, engine):
 
     assert decision_question == "GitHub integration is not configured"
     assert merge_artifact_count == 0
+
+
+def test_merge_and_deployment_block_restricted_data_boundary_before_github_receipts(
+    client, engine
+):
+    task = client.post(
+        "/v1/tasks",
+        json={
+            "project_id": "boss-dogfood",
+            "title": "Restricted release",
+            "dedupe_key": "restricted-release-task",
+            "data_boundary": "restricted",
+        },
+    )
+    assert task.status_code == 201
+    task_id = task.json()["id"]
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                """
+                INSERT INTO decisions (
+                    id, project_id, task_id, question, recommendation, options,
+                    risk_tier, cost_summary, default_action, status
+                )
+                VALUES (
+                    'dec_restricted_release', 'boss-dogfood', :task_id,
+                    'Restricted release decision',
+                    '{}'::jsonb, '[]'::jsonb, 2, '{}'::jsonb, 'hold', 'approved'
+                )
+                """
+            ),
+            {"task_id": task_id},
+        )
+
+    merge = client.post(
+        "/v1/software-factory/merges",
+        json={
+            "project_id": "boss-dogfood",
+            "decision_id": "dec_restricted_release",
+            "dedupe_key": "restricted-merge-effect",
+            "pull_request_number": 42,
+            "pull_request_url": "https://github.com/seanheiney/boss-sandbox/pull/42",
+            "title": "Restricted Merge",
+            "branch_name": "boss/restricted-release",
+        },
+    )
+    assert merge.status_code == 200
+    merge_payload = merge.json()
+    assert merge_payload["status"] == "blocked"
+    assert merge_payload["data_boundary"] == "restricted"
+
+    deploy = client.post(
+        "/v1/software-factory/deployments",
+        json={
+            "project_id": "boss-dogfood",
+            "decision_id": "dec_restricted_release",
+            "dedupe_key": "restricted-deploy-effect",
+            "merged_sha": "abc123",
+            "pull_request_url": "https://github.com/seanheiney/boss-sandbox/pull/42",
+            "title": "Restricted Deploy",
+            "branch_name": "boss/restricted-release",
+            "environment": "staging",
+        },
+    )
+    assert deploy.status_code == 200
+    deploy_payload = deploy.json()
+    assert deploy_payload["status"] == "blocked"
+    assert deploy_payload["data_boundary"] == "restricted"
+
+    with engine.begin() as connection:
+        receipt_count = connection.execute(
+            text(
+                """
+                SELECT COUNT(*)
+                FROM receipts
+                WHERE dedupe_key IN ('restricted-merge-effect', 'restricted-deploy-effect')
+                """
+            )
+        ).scalar_one()
+        denied_effects = connection.execute(
+            text(
+                """
+                SELECT entity_id
+                FROM events
+                WHERE event_type = 'policy.denied'
+                  AND entity_type = 'github_effect'
+                ORDER BY entity_id
+                """
+            )
+        ).scalars().all()
+
+    assert receipt_count == 0
+    assert "github.pull_request.merge" in denied_effects
+    assert "github.deployment.create" in denied_effects
 
 
 def test_command_to_merge_flow_completes_task_when_merge_policy_enabled(
@@ -4411,6 +7839,8 @@ def test_command_to_deploy_flow_completes_task_when_deploy_policy_enabled(
         assert deploy_result["deployment_status"] == "success"
         assert deploy_result["health_verification_status"] == "passed"
         assert deploy_result["healthcheck_url"] == "https://example.com/staging/777"
+        assert deploy_result["rollout_status"] == "completed"
+        assert deploy_result["rollout_stage"] == "release_readiness"
 
         complete_deploy = client.post(
             "/v1/worker/complete",
@@ -4423,6 +7853,7 @@ def test_command_to_deploy_flow_completes_task_when_deploy_policy_enabled(
         )
         assert complete_deploy.status_code == 200
         assert complete_deploy.json()["status"] == "succeeded"
+        assert complete_deploy.json()["rollout_id"] == deploy_result["rollout_id"]
 
         with engine.begin() as connection:
             task_status = connection.execute(
@@ -4463,22 +7894,45 @@ def test_command_to_deploy_flow_completes_task_when_deploy_policy_enabled(
                     )
                 ).mappings().all()
             ]
+            rollout = connection.execute(
+                text(
+                    """
+                    SELECT status, current_stage, health_verification_status, stages
+                    FROM deployment_rollouts
+                    WHERE id = :rollout_id
+                    """
+                ),
+                {"rollout_id": deploy_result["rollout_id"]},
+            ).mappings().one()
 
         assert task_status == "completed"
         assert review_decision_status == "executed"
         assert deployment_decision_status == "executed"
         assert "deployment_result" in artifact_types
+        assert "deployment_rollout" in artifact_types
+        assert rollout["status"] == "completed"
+        assert rollout["current_stage"] == "release_readiness"
+        assert rollout["health_verification_status"] == "passed"
+        assert rollout["stages"][2]["status"] == "passed"
         assert receipt_kinds == [
             "github.pull_request.create",
             "github.pull_request.merge",
             "github.deployment.create",
         ]
 
+        rollouts = client.get(
+            "/v1/software-factory/rollouts",
+            params={"project_id": "boss-dogfood"},
+        )
+        assert rollouts.status_code == 200
+        assert rollouts.json()["items"][0]["id"] == deploy_result["rollout_id"]
+
         events = client.get("/v1/events", params={"project_id": "boss-dogfood"})
         assert events.status_code == 200
         event_types = [item["event_type"] for item in events.json()["items"]]
         assert "software_factory.deployment_review_requested" in event_types
         assert "software_factory.deployment_created" in event_types
+        assert "software_factory.deployment_rollout_recorded" in event_types
         assert "task.completed" in event_types
     finally:
         api_main.decisions.settings.enable_sandbox_merge = previous_merge

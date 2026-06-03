@@ -63,7 +63,86 @@ class SpecPackService:
             raise RoleNotFoundError(f"Role '{role_key}' not found") from error
         payload.setdefault("role_id", role_key)
         payload.setdefault("display_name", role_key.replace("_", " ").title())
+        self.validate_role_spec(payload, f"roles/{role_key}.yaml")
         return payload
+
+    def validate_role_spec(
+        self, role_spec: dict[str, Any], source: str = "RoleSpec"
+    ) -> None:
+        errors: list[str] = []
+        for key in ("role_id", "display_name", "mission"):
+            if not isinstance(role_spec.get(key), str) or not role_spec[key].strip():
+                errors.append(f"{key} must be a non-empty string")
+
+        self._require_string_list(
+            role_spec, "primary_outcomes", errors, allow_empty=False
+        )
+        self._require_string_list(
+            role_spec, "output_contracts", errors, allow_empty=False
+        )
+
+        boundaries = role_spec.get("boundaries")
+        if not isinstance(boundaries, dict):
+            errors.append("boundaries must be an object")
+        else:
+            self._require_string_list(boundaries, "must", errors, "boundaries")
+            self._require_string_list(boundaries, "must_not", errors, "boundaries")
+
+        decision_rights = role_spec.get("decision_rights")
+        if not isinstance(decision_rights, dict):
+            errors.append("decision_rights must be an object")
+        else:
+            self._require_string_list(
+                decision_rights, "can_decide", errors, "decision_rights"
+            )
+            self._require_string_list(
+                decision_rights, "must_escalate", errors, "decision_rights"
+            )
+
+        permissions = role_spec.get("permissions")
+        if not isinstance(permissions, dict):
+            errors.append("permissions must be an object")
+        else:
+            self._require_string_list(permissions, "allowed_skills", errors, "permissions")
+            self._require_string_list(
+                permissions, "forbidden_skills", errors, "permissions"
+            )
+
+        for key in ("cadence", "comms_contract", "eval_rubric"):
+            value = role_spec.get(key)
+            if not isinstance(value, dict) or not value:
+                errors.append(f"{key} must be a non-empty object")
+
+        autonomy = role_spec.get("autonomy")
+        if not isinstance(autonomy, dict):
+            errors.append("autonomy must be an object")
+        else:
+            level = autonomy.get("level")
+            if not isinstance(level, int) or level < 0:
+                errors.append("autonomy.level must be a non-negative integer")
+
+        if errors:
+            raise ValueError(f"{source} is invalid: {'; '.join(errors)}")
+
+    def _require_string_list(
+        self,
+        payload: dict[str, Any],
+        key: str,
+        errors: list[str],
+        namespace: str | None = None,
+        *,
+        allow_empty: bool = True,
+    ) -> None:
+        label = f"{namespace}.{key}" if namespace else key
+        value = payload.get(key)
+        if not isinstance(value, list):
+            errors.append(f"{label} must be a list")
+            return
+        if not allow_empty and not value:
+            errors.append(f"{label} must not be empty")
+            return
+        if any(not isinstance(item, str) or not item.strip() for item in value):
+            errors.append(f"{label} must contain only non-empty strings")
 
     def load_agent_module_spec(self, module_id: str) -> dict[str, Any]:
         try:
@@ -114,6 +193,10 @@ class SpecPackService:
             "prompt_bundle": module_spec.get("prompt_bundle") or {},
             "runtime": module_spec.get("runtime") or {},
         }
+        self.validate_role_spec(
+            role_spec,
+            f"modules/{module_spec['id']}.yaml role",
+        )
         return role_key, role_spec
 
     def _upsert_role_spec(

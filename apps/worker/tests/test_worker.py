@@ -2,8 +2,8 @@ import subprocess
 import sys
 from types import SimpleNamespace
 
-from apps.worker.boss_worker.control_plane import LeasedJob
-from apps.worker.boss_worker.runner import build_plan_result, run_worker_cycle
+from apps.worker.boss_worker.control_plane import ControlPlaneClient, LeasedJob
+from apps.worker.boss_worker.runner import build_plan_result, capabilities, run_worker_cycle
 
 
 class FakeControlPlaneClient:
@@ -93,6 +93,30 @@ class FakeControlPlaneClient:
             "merged_sha": payload["merged_sha"],
         }
 
+    def create_infra_droplet(self, payload):
+        self.calls.append(("create_infra_droplet", payload))
+        return {
+            "status": "created",
+            "artifact_id": "art_infra",
+            "receipt_id": "rcpt_infra",
+            "decision_id": payload["decision_id"],
+            "resource_id": "infra_test",
+            "provider_ref": "https://api.digitalocean.com/v2/droplets/123",
+            "provider_resource_id": "123",
+            "resource_name": "boss-test",
+            "expires_at": "future",
+        }
+
+    def terminate_infra_resource(self, resource_id, payload):
+        self.calls.append(("terminate_infra_resource", resource_id, payload))
+        return {
+            "status": "terminated",
+            "resource_id": resource_id,
+            "artifact_id": "art_infra_term",
+            "receipt_id": "rcpt_infra_term",
+            "provider_ref": "https://api.digitalocean.com/v2/droplets/123",
+        }
+
     def deliver_outbox_message(self, message_id, payload):
         self.calls.append(("deliver_outbox_message", message_id, payload))
         return {
@@ -113,6 +137,20 @@ def test_worker_starts_and_exits_cleanly():
 
     assert result.returncode == 0
     assert "worker_started" in result.stderr
+
+
+def test_control_plane_client_sends_bearer_api_key():
+    client = ControlPlaneClient("http://127.0.0.1:8000", api_key="worker-secret")
+    try:
+        assert client._client.headers["Authorization"] == "Bearer worker-secret"
+    finally:
+        client.close()
+
+
+def test_worker_capabilities_include_infra_job_kinds():
+    supported = capabilities()
+    assert "infra.droplet.create" in supported
+    assert "infra.droplet.delete" in supported
 
 
 def test_build_plan_result_contains_command_context():
@@ -362,5 +400,78 @@ def test_run_worker_cycle_executes_queued_deployment_job():
         "poll",
         "heartbeat",
         "create_deployment",
+        "complete",
+    ]
+
+
+def test_run_worker_cycle_executes_queued_infra_create_job():
+    leased_job = LeasedJob(
+        id="job_infra",
+        project_id="boss-dogfood",
+        task_id="tsk_test",
+        kind="infra.droplet.create",
+        payload={
+            "decision_id": "dec_infra",
+            "reservation_id": "res_infra",
+            "dedupe_key": "infra-test",
+            "title": "Provision infra",
+            "region": "nyc3",
+            "size": "s-1vcpu-1gb",
+            "ttl_minutes": 60,
+            "tags": ["preview"],
+        },
+        attempt=1,
+        max_attempts=1,
+        lease_token="lease_token",
+        lease_expires_at="future",
+    )
+    client = FakeControlPlaneClient(leased_job)
+    settings = SimpleNamespace(
+        worker_id="worker-test",
+        lease_ttl_seconds=60,
+        poll_interval_seconds=1,
+    )
+
+    ran_job = run_worker_cycle(client, settings)
+
+    assert ran_job is True
+    assert [call[0] for call in client.calls] == [
+        "poll",
+        "heartbeat",
+        "create_infra_droplet",
+        "complete",
+    ]
+
+
+def test_run_worker_cycle_executes_queued_infra_delete_job():
+    leased_job = LeasedJob(
+        id="job_infra_delete",
+        project_id="boss-dogfood",
+        task_id="tsk_test",
+        kind="infra.droplet.delete",
+        payload={
+            "resource_id": "infra_test",
+            "dedupe_key": "infra-delete-test",
+            "reason": "ttl_expired",
+        },
+        attempt=1,
+        max_attempts=1,
+        lease_token="lease_token",
+        lease_expires_at="future",
+    )
+    client = FakeControlPlaneClient(leased_job)
+    settings = SimpleNamespace(
+        worker_id="worker-test",
+        lease_ttl_seconds=60,
+        poll_interval_seconds=1,
+    )
+
+    ran_job = run_worker_cycle(client, settings)
+
+    assert ran_job is True
+    assert [call[0] for call in client.calls] == [
+        "poll",
+        "heartbeat",
+        "terminate_infra_resource",
         "complete",
     ]

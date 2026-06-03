@@ -6,6 +6,10 @@ export type TaskFeedItem = {
   id: string;
   title: string;
   status: string;
+  ownerRoleId?: string;
+  parentTaskId?: string;
+  dependencyTaskIds: string[];
+  dueAt?: string;
   priority: string;
   riskTier: number;
   updatedAt: string;
@@ -23,6 +27,10 @@ function mapTask(payload: TaskSummary): TaskFeedItem {
     id: payload.id,
     title: payload.title,
     status: payload.status,
+    ownerRoleId: payload.owner_role_id,
+    parentTaskId: payload.parent_task_id,
+    dependencyTaskIds: payload.dependency_task_ids ?? [],
+    dueAt: payload.due_at,
     priority: payload.priority,
     riskTier: payload.risk_tier,
     updatedAt: payload.updated_at,

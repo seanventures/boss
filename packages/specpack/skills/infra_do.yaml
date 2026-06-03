@@ -4,6 +4,7 @@ skills:
     risk_tier: 3
     mock_mode: false
     description: Provision a real DigitalOcean droplet only after budget, TTL, and approval checks pass.
+    data_boundary: confidential
     input_schema:
       size: string
       region: string
@@ -16,6 +17,12 @@ skills:
     cost:
       estimator: hourly_commitment
       category: infra
+    retry:
+      max_attempts: 1
+      backoff: none
+    permissions:
+      allowed_callers: [infra_worker, release_manager]
+      required_permissions: [infra_provision]
     policy:
       requires_budget_reservation: true
       requires_receipt: true

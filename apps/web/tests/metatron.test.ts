@@ -12,7 +12,7 @@ vi.mock("../lib/client", () => ({
 
 describe("metatron feed", async () => {
   const { client } = await import("../lib/client");
-  const { fetchMetatronQuery, placeholderMetatron } = await import(
+  const { fetchMetatronQuery, unavailableMetatron } = await import(
     "../lib/metatron"
   );
 
@@ -49,7 +49,7 @@ describe("metatron feed", async () => {
     expect(card?.suggestedActions).toEqual(["Review pending decisions."]);
   });
 
-  it("returns an unavailable placeholder when the API fails", async () => {
+  it("returns an unavailable control-plane state when the API fails", async () => {
     vi.mocked(client.queryMetatron).mockRejectedValueOnce(
       new BossApiError("request failed", 503, {}),
     );
@@ -60,8 +60,8 @@ describe("metatron feed", async () => {
     expect(card?.blockedReason).toBe("API returned 503");
   });
 
-  it("returns a direct placeholder helper", () => {
-    const card = placeholderMetatron("What changed?", "metatron offline");
+  it("returns a direct unavailable helper", () => {
+    const card = unavailableMetatron("What changed?", "metatron offline");
 
     expect(card.question).toBe("What changed?");
     expect(card.apiReachable).toBe(false);

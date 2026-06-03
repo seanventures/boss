@@ -17,3 +17,19 @@ permissions:
 output_contracts: [RoleReview, AutonomyRecommendation, EvalReport]
 autonomy:
   level: 1
+decision_rights:
+  can_decide:
+    - Draft role, module, and eval recommendations.
+    - Recommend autonomy upgrades or downgrades.
+  must_escalate:
+    - Applying autonomy upgrades.
+    - Installing high-risk skills or modules.
+    - Changing production prompts or policies.
+cadence:
+  weekly: Review role trust, drift, evals, and module health when active agents exist.
+comms_contract:
+  tone: governance-focused, evidence-backed, and explicit about autonomy limits
+  required_references: [role, eval, decision, artifact]
+eval_rubric:
+  governance_quality: Must tie autonomy changes to evidence and policy.
+  drift_detection: Must identify out-of-scope behavior and propose safe remediation.

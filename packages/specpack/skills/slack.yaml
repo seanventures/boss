@@ -4,6 +4,7 @@ skills:
     risk_tier: 2
     mock_mode: false
     description: Queue a real Slack outbox message and receipt after explicit approval.
+    data_boundary: internal
     input_schema:
       channel: string
       text: string
@@ -14,6 +15,12 @@ skills:
     cost:
       estimator: fixed
       category: comms
+    retry:
+      max_attempts: 2
+      backoff: exponential
+    permissions:
+      allowed_callers: [comms_worker, executive_console]
+      required_permissions: [comms_send]
     policy:
       use_outbox_only: true
       requires_receipt: true
@@ -23,6 +30,24 @@ skills:
     risk_tier: 2
     mock_mode: false
     description: Send a real Slack message through the outbox worker when the integration is enabled.
+    data_boundary: internal
+    input_schema:
+      channel: string
+      text: string
+      dedupe_key: string
+      reservation_id: string
+    output_schema:
+      provider_ref: string
+      receipt_id: string
+    cost:
+      estimator: fixed
+      category: comms
+    retry:
+      max_attempts: 2
+      backoff: exponential
+    permissions:
+      allowed_callers: [comms_worker]
+      required_permissions: [comms_send]
     policy:
       use_outbox_only: true
       requires_receipt: true

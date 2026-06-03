@@ -1,0 +1,55 @@
+skills:
+  - id: email.send_real_guarded
+    kind: comms
+    risk_tier: 2
+    mock_mode: false
+    description: Queue a real email outbox message and receipt after explicit approval.
+    data_boundary: internal
+    input_schema:
+      to: string
+      subject: string?
+      text: string
+    output_schema:
+      provider_ref: string
+      receipt_id: string
+    cost:
+      estimator: fixed
+      category: comms
+    retry:
+      max_attempts: 2
+      backoff: exponential
+    permissions:
+      allowed_callers: [comms_worker, executive_console]
+      required_permissions: [comms_send]
+    policy:
+      use_outbox_only: true
+      requires_receipt: true
+      requires_approval: ceo
+  - id: email.send_real
+    kind: comms
+    risk_tier: 2
+    mock_mode: false
+    description: Send a real email through the outbox worker when the integration is enabled.
+    data_boundary: internal
+    input_schema:
+      to: string
+      subject: string?
+      text: string
+      dedupe_key: string
+      reservation_id: string
+    output_schema:
+      provider_ref: string
+      receipt_id: string
+    cost:
+      estimator: fixed
+      category: comms
+    retry:
+      max_attempts: 2
+      backoff: exponential
+    permissions:
+      allowed_callers: [comms_worker]
+      required_permissions: [comms_send]
+    policy:
+      use_outbox_only: true
+      requires_receipt: true
+      rate_limit_per_recipient_per_hour: 10

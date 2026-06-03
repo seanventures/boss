@@ -11,6 +11,13 @@ function getProjectId(formData: FormData): string {
     : resolveProjectId(PROJECT_ID);
 }
 
+function getActor(formData: FormData): string {
+  const value = formData.get("actor");
+  return typeof value === "string" && value.trim()
+    ? value.trim()
+    : "executive_console";
+}
+
 function parseLines(value: FormDataEntryValue | null): string[] {
   if (typeof value !== "string") {
     return [];
@@ -42,6 +49,24 @@ function parseRequiredMetrics(
   return parsed as Record<string, unknown>;
 }
 
+function parseOptionalJsonObject(
+  value: FormDataEntryValue | null,
+): Record<string, unknown> {
+  if (typeof value !== "string" || !value.trim()) {
+    return {};
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    throw new Error("scope_json must be valid JSON");
+  }
+  if (!parsed || Array.isArray(parsed) || typeof parsed !== "object") {
+    throw new Error("scope_json must be a JSON object");
+  }
+  return parsed as Record<string, unknown>;
+}
+
 export async function resolveDecisionAction(formData: FormData): Promise<void> {
   const decisionId = formData.get("decision_id");
   const action = formData.get("action");
@@ -63,7 +88,7 @@ export async function resolveDecisionAction(formData: FormData): Promise<void> {
   }
 
   const payload = {
-    actor: "executive_console",
+    actor: getActor(formData),
     note:
       typeof note === "string" && note.trim()
         ? note.trim()
@@ -98,6 +123,7 @@ export async function submitCommandAction(formData: FormData): Promise<void> {
     formData.get("command"),
     formData.get("deadline"),
     projectId,
+    getActor(formData),
   );
   await client.proposeCommand(payload);
   revalidatePath("/");
@@ -106,7 +132,49 @@ export async function submitCommandAction(formData: FormData): Promise<void> {
 export async function refreshHealthSnapshotAction(formData: FormData): Promise<void> {
   await client.refreshHealthSnapshot({
     project_id: getProjectId(formData),
-    actor: "executive_console",
+    actor: getActor(formData),
+  });
+  revalidatePath("/");
+}
+
+export async function createBreakGlassGrantAction(
+  formData: FormData,
+): Promise<void> {
+  const targetMemberId = formData.get("target_member_id");
+  const reason = formData.get("reason");
+  const ttlMinutes = Number(formData.get("ttl_minutes") ?? 60);
+  if (typeof targetMemberId !== "string" || !targetMemberId.trim()) {
+    throw new Error("target_member_id is required");
+  }
+  if (typeof reason !== "string" || !reason.trim()) {
+    throw new Error("reason is required");
+  }
+  await client.createBreakGlassGrant({
+    project_id: getProjectId(formData),
+    target_member_id: targetMemberId.trim(),
+    reason: reason.trim(),
+    scope: parseOptionalJsonObject(formData.get("scope_json")),
+    granted_permissions: parseLines(formData.get("granted_permissions")),
+    ttl_minutes: Number.isFinite(ttlMinutes) ? ttlMinutes : 60,
+    actor: getActor(formData),
+  });
+  revalidatePath("/");
+}
+
+export async function revokeBreakGlassGrantAction(
+  formData: FormData,
+): Promise<void> {
+  const grantId = formData.get("grant_id");
+  const reason = formData.get("reason");
+  if (typeof grantId !== "string" || !grantId.trim()) {
+    throw new Error("grant_id is required");
+  }
+  if (typeof reason !== "string" || !reason.trim()) {
+    throw new Error("reason is required");
+  }
+  await client.revokeBreakGlassGrant(grantId.trim(), {
+    actor: getActor(formData),
+    reason: reason.trim(),
   });
   revalidatePath("/");
 }
@@ -119,7 +187,7 @@ export async function installPackAction(formData: FormData): Promise<void> {
   await client.installPack({
     project_id: getProjectId(formData),
     pack_id: packId,
-    actor: "executive_console",
+    actor: getActor(formData),
   });
   revalidatePath("/");
 }
@@ -132,7 +200,7 @@ export async function installAgentModuleAction(formData: FormData): Promise<void
   await client.installAgentModule({
     project_id: getProjectId(formData),
     module_id: moduleId,
-    actor: "executive_console",
+    actor: getActor(formData),
   });
   revalidatePath("/");
 }
@@ -140,7 +208,17 @@ export async function installAgentModuleAction(formData: FormData): Promise<void
 export async function createReplayBundleAction(formData: FormData): Promise<void> {
   await client.createReplayBundle({
     project_id: getProjectId(formData),
-    actor: "executive_console",
+    actor: getActor(formData),
+  });
+  revalidatePath("/");
+}
+
+export async function createComplianceEvidenceBundleAction(
+  formData: FormData,
+): Promise<void> {
+  await client.createComplianceEvidenceBundle({
+    project_id: getProjectId(formData),
+    actor: getActor(formData),
   });
   revalidatePath("/");
 }
@@ -164,13 +242,14 @@ export async function submitOutboxDraftAction(formData: FormData): Promise<void>
     subject: typeof subject === "string" && subject.trim() ? subject.trim() : undefined,
     body: body.trim(),
     dedupe_key: dedupeKey,
-    actor: "executive_console",
+    actor: getActor(formData),
   });
   revalidatePath("/");
 }
 
 export async function queueOutboxMessageAction(formData: FormData): Promise<void> {
   const messageId = formData.get("message_id");
+  const urgency = formData.get("urgency");
   if (typeof messageId !== "string" || !messageId) {
     throw new Error("message_id is required");
   }
@@ -190,7 +269,31 @@ export async function queueOutboxMessageAction(formData: FormData): Promise<void
     project_id: projectId,
     reservation_id: reservation.reservation_id,
     dedupe_key: `outbox-queue-${messageId}-${Date.now()}`,
-    actor: "executive_console",
+    actor: getActor(formData),
+    urgency:
+      urgency === "low" || urgency === "normal" || urgency === "urgent"
+        ? urgency
+        : "normal",
+  });
+  revalidatePath("/");
+}
+
+export async function createDecisionDigestAction(
+  formData: FormData,
+): Promise<void> {
+  const channel = formData.get("channel");
+  const maxItems = Number(formData.get("max_items") ?? 20);
+  await client.createDecisionDigest({
+    project_id: getProjectId(formData),
+    actor: getActor(formData),
+    channel:
+      typeof channel === "string" && channel.trim()
+        ? channel.trim()
+        : undefined,
+    max_items: Number.isFinite(maxItems) ? maxItems : 20,
+    low_risk_max: 1,
+    urgent_risk_min: 2,
+    dedupe_key: `decision-digest-${Date.now()}`,
   });
   revalidatePath("/");
 }
@@ -228,7 +331,7 @@ export async function submitSelfImprovementProposalAction(
     canary_scope: parseLines(formData.get("canary_scope")),
     rollback_plan: parseLines(formData.get("rollback_plan")),
     success_metrics: parseLines(formData.get("success_metrics")),
-    actor: "executive_console",
+    actor: getActor(formData),
     risk_tier: 2,
   });
   revalidatePath("/");
@@ -250,7 +353,7 @@ export async function recordSelfImprovementCanaryAction(
     throw new Error("summary is required");
   }
   await client.recordSelfImprovementCanary(proposalId, {
-    actor: "executive_console",
+    actor: getActor(formData),
     outcome,
     summary: summary.trim(),
     metrics: parseRequiredMetrics(formData.get("metrics_json")),
@@ -271,7 +374,7 @@ export async function recordSelfImprovementRolloutAction(
     throw new Error("summary is required");
   }
   await client.recordSelfImprovementRollout(proposalId, {
-    actor: "executive_console",
+    actor: getActor(formData),
     summary: summary.trim(),
     external_ref:
       typeof formData.get("external_ref") === "string" &&
@@ -296,7 +399,7 @@ export async function rollbackSelfImprovementProposalAction(
     throw new Error("reason is required");
   }
   await client.rollbackSelfImprovementProposal(proposalId, {
-    actor: "executive_console",
+    actor: getActor(formData),
     reason: reason.trim(),
     external_ref:
       typeof formData.get("external_ref") === "string" &&

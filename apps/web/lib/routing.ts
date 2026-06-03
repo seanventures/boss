@@ -7,6 +7,7 @@ export type RoutingLogFeedItem = {
   skillId?: string;
   taskKind: string;
   workloadClass: string;
+  dataBoundary: string;
   selectedSourceId?: string;
   selectedModelId?: string;
   denialReason?: string;
@@ -26,6 +27,7 @@ function mapLog(payload: RoutingLogItem): RoutingLogFeedItem {
     skillId: payload.skill_id,
     taskKind: payload.task_kind,
     workloadClass: payload.workload_class,
+    dataBoundary: payload.data_boundary,
     selectedSourceId: payload.selected_source_id,
     selectedModelId: payload.selected_model_id,
     denialReason: payload.denial_reason,

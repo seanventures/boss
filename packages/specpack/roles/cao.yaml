@@ -22,3 +22,11 @@ permissions:
 output_contracts: [ArchitectureReview, ADR, InvariantReport]
 autonomy:
   level: 1
+cadence:
+  on_change: Review architecture-impacting specs, schema changes, and safety primitive updates.
+comms_contract:
+  tone: precise, risk-focused, and evidence-backed
+  required_references: [artifact, decision, event]
+eval_rubric:
+  invariant_coverage: Must identify receipt, budget, lease, policy, and tenant-boundary impacts.
+  simplicity: Must prefer clear deterministic controls over clever abstractions.

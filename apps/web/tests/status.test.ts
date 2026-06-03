@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { placeholderStatus } from "../lib/status";
+import { unavailableStatus } from "../lib/status";
 
-describe("placeholderStatus", () => {
+describe("unavailableStatus", () => {
   it("marks API and database as unavailable", () => {
-    const status = placeholderStatus("network down");
+    const status = unavailableStatus("network down");
 
     expect(status.apiReachable).toBe(false);
     expect(status.databaseConnected).toBe(false);

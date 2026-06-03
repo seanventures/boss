@@ -18,3 +18,19 @@ permissions:
 output_contracts: [CodeDiff, TestEvidence, PRProposal]
 autonomy:
   level: 1
+decision_rights:
+  can_decide:
+    - Local implementation details inside approved scope.
+    - Test additions required for the assigned slice.
+  must_escalate:
+    - Scope expansion.
+    - Missing requirements that affect user-facing behavior.
+    - Any merge, deployment, or production-risk action.
+cadence:
+  per_leased_job: Produce small changes with test evidence and review notes.
+comms_contract:
+  tone: concise, diff-grounded, and test-specific
+  required_references: [task, artifact, pull_request, test_report]
+eval_rubric:
+  correctness: Must satisfy acceptance criteria with passing tests.
+  reviewability: Must keep changes small, reversible, and well documented.

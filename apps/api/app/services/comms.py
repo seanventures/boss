@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import re
+from datetime import datetime, time, timedelta
 from typing import Optional
 
 from sqlalchemy import text
@@ -8,8 +10,15 @@ from sqlalchemy.engine import Connection
 
 from ..config import Settings
 from .budget import BudgetGovernor
-from .core import create_blocking_decision, emit_event, make_id, now_utc
+from .core import (
+    create_blocking_decision,
+    emit_event,
+    make_id,
+    normalize_data_boundary,
+    now_utc,
+)
 from .receipts import ReceiptService
+from .email_adapter import EmailAdapter
 from .slack_adapter import SlackAdapter
 from .github_adapter import IntegrationConfigurationError
 
@@ -28,6 +37,7 @@ class CommsService:
         self.budget = BudgetGovernor(settings)
         self.receipts = ReceiptService()
         self.slack = SlackAdapter(settings)
+        self.email = EmailAdapter(settings)
 
     def create_outbox_message(
         self,
@@ -38,16 +48,20 @@ class CommsService:
         body: str,
         dedupe_key: str,
         actor: str,
+        data_boundary: str = "internal",
     ) -> dict:
         message_id = make_id("out")
+        boundary = normalize_data_boundary(data_boundary)
         connection.execute(
             text(
                 """
                 INSERT INTO outbox_messages (
-                    id, project_id, channel, subject, body, status, dedupe_key
+                    id, project_id, channel, subject, body, status, data_boundary,
+                    dedupe_key
                 )
                 VALUES (
-                    :id, :project_id, :channel, :subject, :body, 'draft', :dedupe_key
+                    :id, :project_id, :channel, :subject, :body, 'draft',
+                    :data_boundary, :dedupe_key
                 )
                 """
             ),
@@ -57,6 +71,7 @@ class CommsService:
                 "channel": channel,
                 "subject": subject,
                 "body": body,
+                "data_boundary": boundary,
                 "dedupe_key": dedupe_key,
             },
         )
@@ -67,7 +82,7 @@ class CommsService:
             actor,
             "outbox_message",
             message_id,
-            {"channel": channel},
+            {"channel": channel, "data_boundary": boundary},
         )
         return self.get_outbox_message(connection, message_id)
 
@@ -78,7 +93,7 @@ class CommsService:
             text(
                 """
                 SELECT id, project_id, channel, subject, body, status, dedupe_key,
-                       receipt_id, created_at, updated_at
+                       data_boundary, receipt_id, created_at, updated_at
                 FROM outbox_messages
                 WHERE project_id = :project_id
                 ORDER BY created_at DESC
@@ -94,7 +109,7 @@ class CommsService:
             text(
                 """
                 SELECT id, project_id, channel, subject, body, status, dedupe_key,
-                       receipt_id, created_at, updated_at
+                       data_boundary, receipt_id, created_at, updated_at
                 FROM outbox_messages
                 WHERE id = :message_id
                 """
@@ -115,20 +130,30 @@ class CommsService:
         actor: str,
         priority: int,
         max_attempts: int,
+        urgency: str = "normal",
     ) -> dict:
         message = self.get_outbox_message(connection, message_id)
+        self._assert_message_project(message, project_id)
+        boundary = normalize_data_boundary(message.get("data_boundary"))
+        normalized_urgency = self._normalize_urgency(urgency)
         job_id = make_id("job")
-        run_after = now_utc()
+        run_after, queue_policy = self._delivery_queue_policy(
+            connection,
+            project_id,
+            channel=message["channel"],
+            urgency=normalized_urgency,
+        )
         connection.execute(
             text(
                 """
                 INSERT INTO jobs (
                     id, project_id, task_id, kind, priority, status, payload,
-                    max_attempts, attempt, run_after
+                    data_boundary, max_attempts, attempt, run_after
                 )
                 VALUES (
                     :id, :project_id, NULL, 'comms.outbox.deliver', :priority, 'queued',
-                    CAST(:payload AS JSONB), :max_attempts, 0, :run_after
+                    CAST(:payload AS JSONB), :data_boundary, :max_attempts, 0,
+                    :run_after
                 )
                 """
             ),
@@ -145,9 +170,12 @@ class CommsService:
                         "channel": message["channel"],
                         "subject": message.get("subject"),
                         "body": message["body"],
+                        "data_boundary": boundary,
+                        "urgency": normalized_urgency,
                         "requires_reservation": True,
                     }
                 ),
+                "data_boundary": boundary,
                 "max_attempts": max_attempts,
                 "run_after": run_after,
             },
@@ -159,7 +187,13 @@ class CommsService:
             "control_plane",
             "job",
             job_id,
-            {"kind": "comms.outbox.deliver", "task_id": None},
+            {
+                "kind": "comms.outbox.deliver",
+                "task_id": None,
+                "data_boundary": boundary,
+                "urgency": normalized_urgency,
+                **queue_policy,
+            },
         )
         job = {
             "id": job_id,
@@ -167,6 +201,7 @@ class CommsService:
             "task_id": None,
             "kind": "comms.outbox.deliver",
             "status": "queued",
+            "data_boundary": boundary,
             "priority": priority,
             "max_attempts": max_attempts,
             "attempt": 0,
@@ -184,14 +219,23 @@ class CommsService:
             ),
             {"message_id": message_id},
         )
+        event_type = "outbox.deferred" if queue_policy else "outbox.queued"
+        event_data = {
+            "outbox_message_id": message_id,
+            "reservation_id": reservation_id,
+            "urgency": normalized_urgency,
+        }
+        if queue_policy:
+            event_data.update(queue_policy)
+            event_data["run_after"] = run_after.isoformat()
         emit_event(
             connection,
             project_id,
-            "outbox.queued",
+            event_type,
             actor,
             "job",
             job["id"],
-            {"outbox_message_id": message_id, "reservation_id": reservation_id},
+            event_data,
         )
         return job
 
@@ -205,6 +249,9 @@ class CommsService:
         created_by_job_id: Optional[str] = None,
     ) -> dict:
         message = self.get_outbox_message(connection, message_id)
+        self._assert_message_project(message, project_id)
+        boundary = normalize_data_boundary(message.get("data_boundary"))
+        provider = self._provider_for_channel(message["channel"])
         if created_by_job_id and not self._job_exists(connection, created_by_job_id):
             raise InvalidCreatedByJobError(
                 "created_by_job_id does not reference a known job."
@@ -223,9 +270,18 @@ class CommsService:
                 {"outbox_message_id": message_id},
                 "missing_reservation",
             )
+            emit_event(
+                connection,
+                project_id,
+                "outbox.blocked",
+                "comms_worker",
+                "outbox_message",
+                message_id,
+                {"decision_id": decision_id, "reason": "missing_reservation"},
+            )
             return {"status": "blocked", "decision_id": decision_id}
 
-        if not message["channel"].startswith("slack:"):
+        if provider is None:
             self.budget.release(
                 connection,
                 project_id,
@@ -242,10 +298,68 @@ class CommsService:
                 {"channel": message["channel"], "outbox_message_id": message_id},
                 "unsupported_comms_channel",
             )
+            emit_event(
+                connection,
+                project_id,
+                "outbox.blocked",
+                "comms_worker",
+                "outbox_message",
+                message_id,
+                {
+                    "decision_id": decision_id,
+                    "reason": "unsupported_channel",
+                    "channel": message["channel"],
+                },
+            )
             return {
                 "status": "blocked",
                 "decision_id": decision_id,
                 "message": f"Unsupported channel: {message['channel']}",
+            }
+
+        if boundary in {"restricted", "local-only"}:
+            self.budget.release(
+                connection,
+                project_id,
+                reservation_id,
+                "Released reservation because data-boundary policy blocked the "
+                f"{provider['label']} effect.",
+            )
+            self._set_outbox_status(connection, message_id, "blocked")
+            decision_id = create_blocking_decision(
+                connection,
+                project_id,
+                None,
+                f"Data boundary blocks {provider['label']} external message",
+                {
+                    "action": "reclassify_or_configure_approved_boundary_adapter",
+                    "channel": message["channel"],
+                    "data_boundary": boundary,
+                },
+                {"outbox_message_id": message_id},
+                "data_boundary_blocks_external_effect",
+            )
+            emit_event(
+                connection,
+                project_id,
+                "policy.denied",
+                "comms_worker",
+                "outbox_message",
+                message_id,
+                {
+                    "reason": f"data_boundary_not_allowed_for_{provider['key']}",
+                    "data_boundary": boundary,
+                    "decision_id": decision_id,
+                },
+            )
+            return {
+                "status": "blocked",
+                "decision_id": decision_id,
+                "data_boundary": boundary,
+                "message": (
+                    f"{boundary} data cannot be sent to {provider['label']} without an "
+                    "approved boundary adapter."
+                ),
             }
 
         scope = self._scope(connection, project_id)
@@ -255,14 +369,20 @@ class CommsService:
             scope["workspace_id"],
             project_id,
             dedupe_key,
-            "slack.message.post",
-            {"channel": message["channel"], "outbox_message_id": message_id},
+            provider["effect_kind"],
+            {
+                "channel": message["channel"],
+                "outbox_message_id": message_id,
+                "data_boundary": boundary,
+            },
             {
                 "channel": message["channel"],
                 "subject": message.get("subject"),
                 "body": message["body"],
+                "data_boundary": boundary,
             },
             created_by_job_id=created_by_job_id,
+            data_boundary=boundary,
         )
         if not created and receipt["status"] == "succeeded":
             self.budget.release(
@@ -290,10 +410,8 @@ class CommsService:
 
         self._set_outbox_status(connection, message_id, "sending", receipt["id"])
         try:
-            provider_ref = self.slack.post_message(
-                message["channel"],
-                message.get("subject"),
-                message["body"],
+            provider_ref = self._send_message(
+                provider, message["channel"], message.get("subject"), message["body"]
             )
         except IntegrationConfigurationError as error:
             self.receipts.mark_failed(connection, receipt["id"], {"message": str(error)})
@@ -301,17 +419,18 @@ class CommsService:
                 connection,
                 project_id,
                 reservation_id,
-                "Released reservation because Slack delivery is disabled or unconfigured.",
+                "Released reservation because "
+                f"{provider['label']} delivery is disabled or unconfigured.",
             )
             self._set_outbox_status(connection, message_id, "blocked", receipt["id"])
             decision_id = create_blocking_decision(
                 connection,
                 project_id,
                 None,
-                "Slack delivery is blocked by policy or missing configuration",
-                {"action": "configure_or_enable_slack_delivery"},
+                f"{provider['label']} delivery is blocked by policy or missing configuration",
+                {"action": f"configure_or_enable_{provider['key']}_delivery"},
                 {"outbox_message_id": message_id, "channel": message["channel"]},
-                "slack_delivery_blocked",
+                f"{provider['key']}_delivery_blocked",
             )
             emit_event(
                 connection,
@@ -334,7 +453,8 @@ class CommsService:
                 connection,
                 project_id,
                 reservation_id,
-                "Released reservation because Slack delivery failed before acknowledgement.",
+                "Released reservation because "
+                f"{provider['label']} delivery failed before acknowledgement.",
             )
             self._set_outbox_status(connection, message_id, "retrying", receipt["id"])
             emit_event(
@@ -364,7 +484,7 @@ class CommsService:
             reservation_id,
             receipt["id"],
             "comms",
-            "slack.post_real",
+            provider["skill_id"],
             int(reservation["amount_usd_micros"]),
             None,
         )
@@ -385,6 +505,32 @@ class CommsService:
             "message_id": message_id,
         }
 
+    def _provider_for_channel(self, channel: str) -> Optional[dict[str, str]]:
+        if channel.startswith("slack:"):
+            return {
+                "key": "slack",
+                "label": "Slack",
+                "effect_kind": "slack.message.post",
+                "skill_id": "slack.post_real",
+            }
+        if channel.startswith("email:"):
+            return {
+                "key": "email",
+                "label": "Email",
+                "effect_kind": "email.message.send",
+                "skill_id": "email.send_real",
+            }
+        return None
+
+    def _send_message(
+        self, provider: dict[str, str], channel: str, subject: Optional[str], body: str
+    ) -> str:
+        if provider["key"] == "slack":
+            return self.slack.post_message(channel, subject, body)
+        if provider["key"] == "email":
+            return self.email.send_message(channel, subject, body)
+        raise RuntimeError(f"Unsupported provider key: {provider['key']}")
+
     def list_inbox_messages(
         self, connection: Connection, project_id: str, limit: int
     ) -> list[dict]:
@@ -392,7 +538,7 @@ class CommsService:
             text(
                 """
                 SELECT id, project_id, channel, raw_ref, subject, body, status, parsed,
-                       created_at, updated_at
+                       data_boundary, created_at, updated_at
                 FROM inbox_messages
                 WHERE project_id = :project_id
                 ORDER BY created_at DESC
@@ -412,18 +558,23 @@ class CommsService:
         actor: str,
         subject: Optional[str] = None,
         raw_ref: Optional[str] = None,
+        data_boundary: str = "internal",
     ) -> dict:
         message_id = make_id("in")
-        parsed = {"channel": channel, "ingested_at": now_utc().isoformat()}
+        boundary = normalize_data_boundary(data_boundary)
+        parsed = self._parse_inbound_message(channel, subject, body, raw_ref)
+        parsed["channel"] = channel
+        parsed["ingested_at"] = now_utc().isoformat()
         connection.execute(
             text(
                 """
                 INSERT INTO inbox_messages (
-                    id, project_id, channel, raw_ref, subject, body, status, parsed
+                    id, project_id, channel, raw_ref, subject, body, status,
+                    data_boundary, parsed
                 )
                 VALUES (
                     :id, :project_id, :channel, :raw_ref, :subject, :body, 'received',
-                    CAST(:parsed AS JSONB)
+                    :data_boundary, CAST(:parsed AS JSONB)
                 )
                 """
             ),
@@ -434,6 +585,7 @@ class CommsService:
                 "raw_ref": raw_ref,
                 "subject": subject,
                 "body": body,
+                "data_boundary": boundary,
                 "parsed": json.dumps(parsed),
             },
         )
@@ -444,13 +596,13 @@ class CommsService:
             actor,
             "inbox_message",
             message_id,
-            {"channel": channel, "raw_ref": raw_ref},
+            {"channel": channel, "raw_ref": raw_ref, "data_boundary": boundary},
         )
         row = connection.execute(
             text(
                 """
                 SELECT id, project_id, channel, raw_ref, subject, body, status, parsed,
-                       created_at, updated_at
+                       data_boundary, created_at, updated_at
                 FROM inbox_messages
                 WHERE id = :message_id
                 """
@@ -458,6 +610,111 @@ class CommsService:
             {"message_id": message_id},
         ).mappings().one()
         return dict(row)
+
+    def mark_inbox_actioned(
+        self,
+        connection: Connection,
+        project_id: str,
+        message_id: str,
+        *,
+        actor: str,
+        decision_id: str,
+        outcome_status: str,
+    ) -> None:
+        payload = {
+            "action_result": {
+                "decision_id": decision_id,
+                "status": outcome_status,
+                "actor": actor,
+                "actioned_at": now_utc().isoformat(),
+            }
+        }
+        connection.execute(
+            text(
+                """
+                UPDATE inbox_messages
+                SET status = 'actioned',
+                    parsed = COALESCE(parsed, '{}'::jsonb) || CAST(:parsed AS JSONB),
+                    updated_at = now()
+                WHERE id = :message_id AND project_id = :project_id
+                """
+            ),
+            {
+                "message_id": message_id,
+                "project_id": project_id,
+                "parsed": json.dumps(payload),
+            },
+        )
+        emit_event(
+            connection,
+            project_id,
+            "inbox.actioned",
+            actor,
+            "inbox_message",
+            message_id,
+            {"decision_id": decision_id, "status": outcome_status},
+        )
+
+    def deadletter_inbox_message(
+        self,
+        connection: Connection,
+        project_id: str,
+        message_id: str,
+        *,
+        actor: str,
+        reason: str,
+        payload: dict,
+    ) -> str:
+        deadletter_id = make_id("dlq")
+        connection.execute(
+            text(
+                """
+                INSERT INTO deadletters (id, project_id, source_kind, source_id, reason, payload)
+                VALUES (:id, :project_id, 'inbox_message', :message_id, :reason, CAST(:payload AS JSONB))
+                """
+            ),
+            {
+                "id": deadletter_id,
+                "project_id": project_id,
+                "message_id": message_id,
+                "reason": reason,
+                "payload": json.dumps(payload),
+            },
+        )
+        connection.execute(
+            text(
+                """
+                UPDATE inbox_messages
+                SET status = 'deadlettered',
+                    parsed = COALESCE(parsed, '{}'::jsonb) || CAST(:parsed AS JSONB),
+                    updated_at = now()
+                WHERE id = :message_id AND project_id = :project_id
+                """
+            ),
+            {
+                "message_id": message_id,
+                "project_id": project_id,
+                "parsed": json.dumps(
+                    {
+                        "deadletter": {
+                            "id": deadletter_id,
+                            "reason": reason,
+                            "created_at": now_utc().isoformat(),
+                        }
+                    }
+                ),
+            },
+        )
+        emit_event(
+            connection,
+            project_id,
+            "inbox.deadlettered",
+            actor,
+            "inbox_message",
+            message_id,
+            {"deadletter_id": deadletter_id, "reason": reason},
+        )
+        return deadletter_id
 
     def mark_outbox_retrying(
         self,
@@ -506,6 +763,10 @@ class CommsService:
         ).mappings().one()
         return dict(row)
 
+    def _assert_message_project(self, message: dict, project_id: str) -> None:
+        if message["project_id"] != project_id:
+            raise OutboxMessageNotFoundError("Outbox message not found for project.")
+
     def _job_exists(self, connection: Connection, job_id: str) -> bool:
         return (
             connection.execute(
@@ -534,3 +795,133 @@ class CommsService:
             ),
             {"message_id": message_id, "status": status, "receipt_id": receipt_id},
         )
+
+    def _normalize_urgency(self, urgency: str) -> str:
+        normalized = urgency.strip().lower() if isinstance(urgency, str) else "normal"
+        if normalized not in {"low", "normal", "urgent"}:
+            raise ValueError("urgency must be low, normal, or urgent.")
+        return normalized
+
+    def _delivery_queue_policy(
+        self,
+        connection: Connection,
+        project_id: str,
+        *,
+        channel: str,
+        urgency: str,
+    ) -> tuple[datetime, dict]:
+        requested_at = now_utc()
+        if urgency == "urgent":
+            return requested_at, {}
+
+        quiet_until = self._quiet_hours_until(requested_at)
+        if quiet_until:
+            return quiet_until, {
+                "reason": "quiet_hours",
+                "quiet_hours_end_at": quiet_until.isoformat(),
+            }
+
+        throttle_limit = self.settings.comms_throttle_max_queued_per_hour
+        if throttle_limit > 0:
+            recent_count = connection.execute(
+                text(
+                    """
+                    SELECT COUNT(*)
+                    FROM jobs
+                    WHERE project_id = :project_id
+                      AND kind = 'comms.outbox.deliver'
+                      AND created_at >= :window_start
+                      AND payload->>'channel' = :channel
+                      AND status IN ('queued', 'leased', 'running', 'succeeded')
+                    """
+                ),
+                {
+                    "project_id": project_id,
+                    "channel": channel,
+                    "window_start": requested_at - timedelta(hours=1),
+                },
+            ).scalar_one()
+            if int(recent_count) >= throttle_limit:
+                defer_minutes = max(self.settings.comms_throttle_defer_minutes, 1)
+                run_after = requested_at + timedelta(minutes=defer_minutes)
+                return run_after, {
+                    "reason": "throttled",
+                    "throttle_limit_per_hour": throttle_limit,
+                    "recent_delivery_jobs": int(recent_count),
+                }
+
+        return requested_at, {}
+
+    def _quiet_hours_until(self, value: datetime) -> Optional[datetime]:
+        if not self.settings.comms_quiet_hours_enabled:
+            return None
+        start = self._parse_utc_hhmm(self.settings.comms_quiet_hours_start_utc)
+        end = self._parse_utc_hhmm(self.settings.comms_quiet_hours_end_utc)
+        current = value.timetz().replace(tzinfo=None)
+        current_date = value.date()
+
+        if start < end:
+            if start <= current < end:
+                return datetime.combine(current_date, end, tzinfo=value.tzinfo)
+            return None
+
+        if current >= start:
+            return datetime.combine(
+                current_date + timedelta(days=1),
+                end,
+                tzinfo=value.tzinfo,
+            )
+        if current < end:
+            return datetime.combine(current_date, end, tzinfo=value.tzinfo)
+        return None
+
+    def _parse_utc_hhmm(self, value: str) -> time:
+        match = re.fullmatch(r"([01]\d|2[0-3]):([0-5]\d)", value.strip())
+        if not match:
+            raise ValueError("quiet-hour values must use HH:MM 24-hour UTC format.")
+        return time(int(match.group(1)), int(match.group(2)))
+
+    def _parse_inbound_message(
+        self,
+        channel: str,
+        subject: Optional[str],
+        body: str,
+        raw_ref: Optional[str],
+    ) -> dict:
+        text_blob = "\n".join(
+            item for item in [subject or "", body or "", raw_ref or ""] if item
+        )
+        if not re.search(r"\bdecision\b|\bdecision_id\b|\bdec_", text_blob, re.I):
+            return {"kind": "message"}
+
+        decision_match = re.search(r"\b(dec_[A-Za-z0-9_]+)\b", text_blob)
+        action_match = re.search(
+            r"\b(approve|approved|reject|rejected|revise|revision|execute|executed|delegate)\b",
+            text_blob,
+            re.I,
+        )
+        parsed: dict[str, object] = {
+            "kind": "decision_reply",
+            "source_channel": channel,
+            "note": body.strip()[:1000],
+        }
+        if decision_match:
+            parsed["decision_id"] = decision_match.group(1)
+        if action_match:
+            raw_action = action_match.group(1).lower()
+            parsed["action"] = {
+                "approved": "approve",
+                "rejected": "reject",
+                "revision": "revise",
+                "executed": "execute",
+            }.get(raw_action, raw_action)
+        delegate_match = re.search(
+            r"\bdelegate(?:\s+to|_to:?)\s+([A-Za-z0-9_.-]+)",
+            text_blob,
+            re.I,
+        )
+        if delegate_match:
+            parsed["delegate_to"] = delegate_match.group(1)
+        if "decision_id" not in parsed or "action" not in parsed:
+            parsed["parse_error"] = "decision_reply_missing_id_or_action"
+        return parsed

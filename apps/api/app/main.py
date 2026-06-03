@@ -1,7 +1,10 @@
 from contextlib import asynccontextmanager
+from contextvars import ContextVar
+from secrets import compare_digest
 from typing import Optional
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
 from .bootstrap import seed
@@ -15,9 +18,17 @@ from .schemas import (
     ArtifactDetail,
     ArtifactListResponse,
     ArtifactSummary,
+    AuthSessionResponse,
     AuditExportCounts,
     AuditExportResponse,
     AuditExportScope,
+    BreakGlassGrantCreateRequest,
+    BreakGlassGrantListResponse,
+    BreakGlassGrantRevokeRequest,
+    BreakGlassGrantSummary,
+    BudgetAllocationCreateRequest,
+    BudgetAllocationListResponse,
+    BudgetAllocationSummary,
     BudgetQuoteRequest,
     BudgetQuoteResponse,
     BudgetReservationSummary,
@@ -26,11 +37,23 @@ from .schemas import (
     BudgetStatusResponse,
     BudgetReserveRequest,
     BudgetReserveResponse,
+    ChangeJournalDetail,
+    ChangeJournalResponse,
     CommandProposeRequest,
     CommandProposeResponse,
+    ComplianceEvidenceBundleRequest,
+    ComplianceEvidenceBundleResponse,
+    ComplianceEvidenceCounts,
+    DepartmentCreateRequest,
+    DepartmentListResponse,
+    DepartmentSummary,
+    DeploymentRolloutListResponse,
+    DeploymentRolloutSummary,
     CostReceiptSummary,
     DecisionActionRequest,
     DecisionCard,
+    DecisionDigestRequest,
+    DecisionDigestResponse,
     DecisionInboxResponse,
     DeadletterItem,
     DeadletterListResponse,
@@ -43,6 +66,18 @@ from .schemas import (
     HealthSnapshotListResponse,
     HealthSnapshotRefreshRequest,
     HealthSnapshotSummary,
+    InfraJanitorRunRequest,
+    InfraJanitorRunResponse,
+    InfraProvisionJobRequest,
+    InfraProvisionRequest,
+    InfraProvisionResponse,
+    InfraProvisionReviewRequest,
+    InfraProvisionReviewResponse,
+    InfraResourceListResponse,
+    InfraResourceSummary,
+    InfraTerminationJobRequest,
+    InfraTerminationRequest,
+    InfraTerminationResponse,
     InboxMessageIngestRequest,
     InboxMessageListResponse,
     InboxMessageSummary,
@@ -53,6 +88,9 @@ from .schemas import (
     MetatronQueryResponse,
     OpenAIPlanRequest,
     OpenAIPlanResponse,
+    MeetingCreateRequest,
+    MeetingListResponse,
+    MeetingSummary,
     OutboxDeliveryResponse,
     OutboxMessageCreateRequest,
     OutboxMessageListResponse,
@@ -62,8 +100,17 @@ from .schemas import (
     PackInstallRequest,
     PackListResponse,
     PackSummary,
+    ProjectMemberListResponse,
+    ProjectMemberSummary,
+    ProjectMemberUpsertRequest,
     ProjectListResponse,
     ProjectSummary,
+    PlanCreateRequest,
+    PlanListResponse,
+    PlanSummary,
+    PolicyRecordCreateRequest,
+    PolicyRecordListResponse,
+    PolicyRecordSummary,
     PullRequestMergeJobRequest,
     PullRequestMergeRequest,
     PullRequestMergeResponse,
@@ -74,10 +121,14 @@ from .schemas import (
     ReceiptResponse,
     ReplayBundleRequest,
     ReplayBundleResponse,
+    RoleAutonomyCheckRequest,
+    RoleAutonomyCheckResponse,
     RoleGovernanceDetail,
     RoleReviewRequest,
     RoleDetail,
     RoleListResponse,
+    RoleScopeCheckRequest,
+    RoleScopeCheckResponse,
     RoleSummary,
     RoutingLogItem,
     RoutingLogListResponse,
@@ -110,11 +161,14 @@ from .schemas import (
 )
 from .services.audit import AuditTrailService
 from .services.budget import BudgetGovernor
+from .services.break_glass import BreakGlassGrantNotFoundError, BreakGlassService
+from .services.canonical import CanonicalObjectService
 from .services.comms import (
     CommsService,
     InvalidCreatedByJobError,
     OutboxMessageNotFoundError,
 )
+from .services.core import emit_event
 from .services.decisions import (
     DecisionNotFoundError,
     DecisionService,
@@ -122,8 +176,17 @@ from .services.decisions import (
 )
 from .services.entitlements import EntitlementBrokerService, SkillNotFoundError
 from .services.health import HealthSnapshotService
+from .services.infrastructure import (
+    InfraResourceNotFoundError,
+    InfrastructureService,
+)
 from .services.intake import CommandIntakeService
 from .services.jobs import JobLeaseService, LeaseNotFoundError
+from .services.members import (
+    MemberDirectoryService,
+    ProjectMemberNotFoundError,
+    ProjectMemberPermissionError,
+)
 from .services.metatron import MetatronScopeNotFoundError, MetatronService
 from .services.receipts import ReceiptService
 from .services.role_governance import RoleGovernanceService
@@ -152,10 +215,22 @@ specpack = SpecPackService(settings)
 entitlements = EntitlementBrokerService(settings)
 audit = AuditTrailService(settings)
 comms = CommsService(settings)
+infrastructure = InfrastructureService(settings)
 self_improvement = SelfImprovementService(settings)
 health_snapshots = HealthSnapshotService(settings)
 metatron = MetatronService(settings)
 role_governance = RoleGovernanceService(settings)
+members = MemberDirectoryService(settings)
+canonical = CanonicalObjectService()
+break_glass = BreakGlassService()
+current_api_principal: ContextVar[Optional[str]] = ContextVar(
+    "current_api_principal",
+    default=None,
+)
+current_transport_authenticated: ContextVar[bool] = ContextVar(
+    "current_transport_authenticated",
+    default=False,
+)
 
 
 @asynccontextmanager
@@ -164,7 +239,76 @@ async def lifespan(_: FastAPI):
     yield
 
 
-app = FastAPI(title="BOSS Control Plane", version="0.2.0", lifespan=lifespan)
+app = FastAPI(title="BOSS Control Plane", version="0.2.1", lifespan=lifespan)
+
+
+def extract_api_token(request: Request) -> Optional[str]:
+    header_value = request.headers.get("x-boss-api-key")
+    if header_value and header_value.strip():
+        return header_value.strip()
+
+    auth_value = request.headers.get("authorization")
+    if not auth_value:
+        return None
+    scheme, _, token = auth_value.partition(" ")
+    if scheme.lower() != "bearer" or not token.strip():
+        return None
+    return token.strip()
+
+
+def api_token_allowed(token: str, allowed_tokens: tuple[str, ...]) -> bool:
+    return any(compare_digest(token, allowed) for allowed in allowed_tokens)
+
+
+@app.middleware("http")
+async def require_api_key_for_v1(request: Request, call_next):
+    if not request.url.path.startswith("/v1/") or not settings.require_api_auth:
+        principal_token = current_api_principal.set(None)
+        authenticated_token = current_transport_authenticated.set(False)
+        try:
+            return await call_next(request)
+        finally:
+            current_api_principal.reset(principal_token)
+            current_transport_authenticated.reset(authenticated_token)
+
+    allowed_tokens = settings.api_key_values
+    if not allowed_tokens:
+        return JSONResponse(
+            status_code=503,
+            content={
+                "detail": "API authentication is required but no BOSS_API_KEYS are configured."
+            },
+        )
+
+    token = extract_api_token(request)
+    if not token or not api_token_allowed(token, allowed_tokens):
+        return JSONResponse(
+            status_code=401,
+            content={"detail": "Valid BOSS API key required."},
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    principal_map = settings.api_key_principal_map
+    principal = principal_map.get(token)
+    if principal_map and not principal:
+        return JSONResponse(
+            status_code=401,
+            content={
+                "detail": (
+                    "API key is valid for transport authentication but is not "
+                    "bound to a project member principal."
+                )
+            },
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    principal_token = current_api_principal.set(principal)
+    authenticated_token = current_transport_authenticated.set(True)
+    try:
+        return await call_next(request)
+    finally:
+        current_api_principal.reset(principal_token)
+        current_transport_authenticated.reset(authenticated_token)
 
 
 def project_summary_from_row(row) -> ProjectSummary:
@@ -180,6 +324,172 @@ def project_summary_from_row(row) -> ProjectSummary:
     )
 
 
+def project_member_summary_from_service(payload) -> ProjectMemberSummary:
+    return ProjectMemberSummary(
+        id=payload["id"],
+        project_id=payload["project_id"],
+        member_id=payload["member_id"],
+        display_name=payload["display_name"],
+        member_type=payload["member_type"],
+        role_keys=payload.get("role_keys") or [],
+        permissions=payload.get("permissions") or [],
+        status=payload["status"],
+        created_by=payload["created_by"],
+        created_at=payload["created_at"],
+        updated_at=payload["updated_at"],
+    )
+
+
+def break_glass_grant_summary_from_service(payload) -> BreakGlassGrantSummary:
+    return BreakGlassGrantSummary(
+        id=payload["id"],
+        project_id=payload["project_id"],
+        target_member_id=payload["target_member_id"],
+        requested_by=payload["requested_by"],
+        reason=payload["reason"],
+        scope=payload.get("scope") or {},
+        granted_permissions=payload.get("granted_permissions") or [],
+        status=payload["status"],
+        expires_at=payload["expires_at"],
+        postmortem_task_id=payload.get("postmortem_task_id"),
+        revoked_by=payload.get("revoked_by"),
+        revoked_reason=payload.get("revoked_reason"),
+        revoked_at=payload.get("revoked_at"),
+        created_at=payload["created_at"],
+        updated_at=payload["updated_at"],
+    )
+
+
+def require_authenticated_actor_binding(
+    project_id: str,
+    actor: str,
+    permission: str,
+) -> None:
+    principal = current_api_principal.get()
+    if principal and principal != actor:
+        reason = (
+            f"Authenticated principal '{principal}' is not allowed to act as "
+            f"'{actor}'."
+        )
+        record_policy_denial(project_id, principal, permission, reason)
+        raise HTTPException(status_code=403, detail=reason)
+
+
+def require_project_actor(connection, project_id: str, actor: str, permission: str) -> None:
+    try:
+        members.require_member(
+            connection,
+            project_id,
+            actor,
+            permission=permission,
+        )
+    except (ProjectMemberNotFoundError, ProjectMemberPermissionError) as error:
+        record_policy_denial(project_id, actor, permission, str(error))
+        raise HTTPException(status_code=403, detail=str(error)) from error
+    require_authenticated_actor_binding(project_id, actor, permission)
+
+
+def require_decision_actor_binding(
+    connection,
+    decision_id: str,
+    actor: str,
+) -> None:
+    row = connection.execute(
+        text("SELECT project_id FROM decisions WHERE id = :decision_id"),
+        {"decision_id": decision_id},
+    ).mappings().first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Decision not found")
+    require_authenticated_actor_binding(row["project_id"], actor, "decision_resolve")
+
+
+def raise_project_actor_error(error: Exception) -> None:
+    raise HTTPException(status_code=403, detail=str(error)) from error
+
+
+def raise_decision_actor_error(
+    decision_id: str, actor: str, error: Exception
+) -> None:
+    try:
+        with begin(engine) as audit_connection:
+            row = audit_connection.execute(
+                text("SELECT project_id FROM decisions WHERE id = :decision_id"),
+                {"decision_id": decision_id},
+            ).mappings().first()
+            if row:
+                emit_event(
+                    audit_connection,
+                    row["project_id"],
+                    "policy.denied",
+                    actor,
+                    "decision",
+                    decision_id,
+                    {
+                        "permission": "decision_resolve",
+                        "reason": str(error),
+                    },
+                )
+    except Exception:
+        pass
+    raise HTTPException(status_code=403, detail=str(error)) from error
+
+
+def record_policy_denial(
+    project_id: str, actor: str, permission: str, reason: str
+) -> None:
+    try:
+        with begin(engine) as audit_connection:
+            project_exists = audit_connection.execute(
+                text("SELECT 1 FROM projects WHERE id = :project_id"),
+                {"project_id": project_id},
+            ).first()
+            if not project_exists:
+                return
+            emit_event(
+                audit_connection,
+                project_id,
+                "policy.denied",
+                actor,
+                "project",
+                project_id,
+                {
+                    "permission": permission,
+                    "reason": reason,
+                },
+            )
+    except Exception:
+        return
+
+
+def record_budget_denial_event(
+    project_id: str,
+    actor: str,
+    event_type: str,
+    entity_type: str,
+    entity_id: str,
+    data: dict,
+) -> None:
+    try:
+        with begin(engine) as audit_connection:
+            project_exists = audit_connection.execute(
+                text("SELECT 1 FROM projects WHERE id = :project_id"),
+                {"project_id": project_id},
+            ).first()
+            if not project_exists:
+                return
+            emit_event(
+                audit_connection,
+                project_id,
+                event_type,
+                actor,
+                entity_type,
+                entity_id,
+                data,
+            )
+    except Exception:
+        return
+
+
 def task_summary_from_row(row) -> TaskSummary:
     return TaskSummary(
         id=row["id"],
@@ -187,8 +497,13 @@ def task_summary_from_row(row) -> TaskSummary:
         title=row["title"],
         description=row["description"],
         status=row["status"],
+        owner_role_id=row.get("owner_role_id"),
+        parent_task_id=row.get("parent_task_id"),
+        dependency_task_ids=row.get("dependency_task_ids") or [],
+        due_at=row["due_at"].isoformat() if row.get("due_at") else None,
         priority=row["priority"],
         risk_tier=row["risk_tier"],
+        data_boundary=row.get("data_boundary") or "internal",
         dedupe_key=row["dedupe_key"],
         created_at=row["created_at"].isoformat(),
         updated_at=row["updated_at"].isoformat(),
@@ -202,6 +517,7 @@ def job_summary_from_row(row) -> JobSummary:
         task_id=row["task_id"],
         kind=row["kind"],
         status=row["status"],
+        data_boundary=row.get("data_boundary") or "internal",
         priority=row["priority"],
         max_attempts=row["max_attempts"],
         attempt=row["attempt"],
@@ -298,6 +614,7 @@ def artifact_summary_from_row(row) -> ArtifactSummary:
         uri=row["uri"],
         content_hash=row["content_hash"],
         created_by_job_id=row["created_by_job_id"],
+        data_boundary=row.get("data_boundary") or "internal",
         created_at=row["created_at"].isoformat(),
     )
 
@@ -312,6 +629,7 @@ def artifact_detail_from_row(row) -> ArtifactDetail:
         uri=row["uri"],
         content_hash=row["content_hash"],
         created_by_job_id=row["created_by_job_id"],
+        data_boundary=row.get("data_boundary") or "internal",
         created_at=row["created_at"].isoformat(),
         content=row["content"] or {},
     )
@@ -350,6 +668,7 @@ def outbox_message_summary_from_row(row) -> OutboxMessageSummary:
         body=row["body"],
         status=row["status"],
         dedupe_key=row["dedupe_key"],
+        data_boundary=row.get("data_boundary") or "internal",
         receipt_id=row.get("receipt_id"),
         created_at=row["created_at"].isoformat(),
         updated_at=row["updated_at"].isoformat(),
@@ -365,7 +684,57 @@ def inbox_message_summary_from_row(row) -> InboxMessageSummary:
         subject=row.get("subject"),
         body=row["body"],
         status=row["status"],
+        data_boundary=row.get("data_boundary") or "internal",
         parsed=row.get("parsed") or {},
+        created_at=row["created_at"].isoformat(),
+        updated_at=row["updated_at"].isoformat(),
+    )
+
+
+def reload_inbox_message(connection, message_id: str) -> dict:
+    row = connection.execute(
+        text(
+            """
+            SELECT id, project_id, channel, raw_ref, subject, body, status, parsed,
+                   data_boundary, created_at, updated_at
+            FROM inbox_messages
+            WHERE id = :message_id
+            """
+        ),
+        {"message_id": message_id},
+    ).mappings().one()
+    return dict(row)
+
+
+def infra_resource_summary_from_row(row) -> InfraResourceSummary:
+    return InfraResourceSummary(
+        id=row["id"],
+        project_id=row["project_id"],
+        task_id=row.get("task_id"),
+        decision_id=row.get("decision_id"),
+        provider=row["provider"],
+        resource_type=row["resource_type"],
+        resource_name=row["resource_name"],
+        external_resource_id=row["external_resource_id"],
+        region=row["region"],
+        size=row["size"],
+        image=row["image"],
+        tags=row.get("tags") or [],
+        status=row["status"],
+        ttl_minutes=int(row["ttl_minutes"]),
+        expires_at=row["expires_at"].isoformat(),
+        terminated_at=(
+            row["terminated_at"].isoformat() if row.get("terminated_at") else None
+        ),
+        termination_reason=row.get("termination_reason"),
+        provision_receipt_id=row.get("provision_receipt_id"),
+        provision_artifact_id=row.get("provision_artifact_id"),
+        termination_receipt_id=row.get("termination_receipt_id"),
+        termination_artifact_id=row.get("termination_artifact_id"),
+        data_boundary=row.get("data_boundary") or "internal",
+        metadata=row.get("metadata") or {},
+        created_by_job_id=row.get("created_by_job_id"),
+        updated_by_job_id=row.get("updated_by_job_id"),
         created_at=row["created_at"].isoformat(),
         updated_at=row["updated_at"].isoformat(),
     )
@@ -382,6 +751,7 @@ def receipt_response_from_row(row) -> ReceiptResponse:
         status=row["status"],
         provider_ref=row.get("provider_ref"),
         created_by_job_id=row.get("created_by_job_id"),
+        data_boundary=row.get("data_boundary") or "internal",
         result=row.get("result"),
         error=row.get("error"),
         created_at=row["created_at"].isoformat(),
@@ -400,6 +770,25 @@ def budget_reservation_summary_from_row(row) -> BudgetReservationSummary:
         reason=row.get("reason"),
         expires_at=row["expires_at"].isoformat(),
         created_at=row["created_at"].isoformat(),
+    )
+
+
+def budget_allocation_summary_from_service(payload) -> BudgetAllocationSummary:
+    return BudgetAllocationSummary(
+        id=payload["id"],
+        parent_allocation_id=payload.get("parent_allocation_id"),
+        project_id=payload["project_id"],
+        scope_type=payload["scope_type"],
+        scope_id=payload["scope_id"],
+        amount_usd_micros=int(payload["amount_usd_micros"]),
+        child_allocated_usd_micros=int(payload["child_allocated_usd_micros"]),
+        reserved_usd_micros=int(payload["reserved_usd_micros"]),
+        actual_usd_micros=int(payload["actual_usd_micros"]),
+        available_usd_micros=int(payload["available_usd_micros"]),
+        period_start=payload["period_start"],
+        period_end=payload["period_end"],
+        status=payload["status"],
+        created_at=payload["created_at"],
     )
 
 
@@ -554,7 +943,12 @@ def skill_summary_from_service(payload) -> SkillSummary:
         risk_tier=payload["risk_tier"],
         description=payload["description"],
         mock_mode=payload["mock_mode"],
+        input_schema=payload.get("input_schema") or {},
+        output_schema=payload.get("output_schema") or {},
         cost=payload.get("cost") or {},
+        retry=payload.get("retry") or {},
+        permissions=payload.get("permissions") or {},
+        data_boundary=payload.get("data_boundary", "internal"),
         policy=payload.get("policy") or {},
     )
 
@@ -597,6 +991,7 @@ def routing_log_item_from_service(payload) -> RoutingLogItem:
         task_kind=payload["task_kind"],
         workload_class=payload["workload_class"],
         risk_tier=payload["risk_tier"],
+        data_boundary=payload.get("data_boundary") or "internal",
         budget_state=payload["budget_state"],
         selected_source_id=payload.get("selected_source_id"),
         selected_provider=payload.get("selected_provider"),
@@ -620,6 +1015,28 @@ def health() -> HealthResponse:
     )
 
 
+@app.get("/v1/auth/session", response_model=AuthSessionResponse)
+def auth_session() -> AuthSessionResponse:
+    principal = current_api_principal.get()
+    binding_required = bool(settings.api_key_principal_map)
+    transport_authenticated = current_transport_authenticated.get()
+    if not settings.require_api_auth:
+        message = "API authentication is disabled for this runtime."
+    elif binding_required and principal:
+        message = f"Authenticated as project member '{principal}'."
+    elif binding_required:
+        message = "API key principal binding is required but no principal was resolved."
+    else:
+        message = "Transport API key is valid; actor binding is not configured."
+    return AuthSessionResponse(
+        auth_required=settings.require_api_auth,
+        transport_authenticated=transport_authenticated,
+        actor_binding_required=binding_required,
+        principal_member_id=principal,
+        message=message,
+    )
+
+
 @app.get("/v1/projects", response_model=ProjectListResponse)
 def list_projects() -> ProjectListResponse:
     with begin(engine) as connection:
@@ -638,6 +1055,156 @@ def list_projects() -> ProjectListResponse:
         return ProjectListResponse(
             items=[project_summary_from_row(row) for row in rows]
         )
+
+
+@app.get("/v1/members", response_model=ProjectMemberListResponse)
+def list_project_members(project_id: str) -> ProjectMemberListResponse:
+    with begin(engine) as connection:
+        return ProjectMemberListResponse(
+            project_id=project_id,
+            items=[
+                project_member_summary_from_service(member)
+                for member in members.list_members(connection, project_id)
+            ],
+        )
+
+
+@app.get("/v1/members/{member_id}", response_model=ProjectMemberSummary)
+def get_project_member(member_id: str, project_id: str) -> ProjectMemberSummary:
+    with begin(engine) as connection:
+        try:
+            member = members.get_member(connection, project_id, member_id)
+        except ProjectMemberNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        return project_member_summary_from_service(member)
+
+
+@app.post("/v1/members", response_model=ProjectMemberSummary, status_code=201)
+def upsert_project_member(
+    payload: ProjectMemberUpsertRequest,
+) -> ProjectMemberSummary:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection,
+            payload.project_id,
+            payload.actor,
+            "member_manage",
+        )
+        member = members.upsert_member(
+            connection,
+            project_id=payload.project_id,
+            member_id=payload.member_id,
+            display_name=payload.display_name,
+            member_type=payload.member_type,
+            role_keys=payload.role_keys,
+            permissions=payload.permissions,
+            actor=payload.actor,
+        )
+        return project_member_summary_from_service(member)
+
+
+@app.get("/v1/break-glass/grants", response_model=BreakGlassGrantListResponse)
+def list_break_glass_grants(
+    project_id: str,
+    include_expired: bool = False,
+) -> BreakGlassGrantListResponse:
+    with begin(engine) as connection:
+        return BreakGlassGrantListResponse(
+            project_id=project_id,
+            items=[
+                break_glass_grant_summary_from_service(grant)
+                for grant in break_glass.list_grants(
+                    connection,
+                    project_id,
+                    include_expired=include_expired,
+                )
+            ],
+        )
+
+
+@app.post(
+    "/v1/break-glass/grants",
+    response_model=BreakGlassGrantSummary,
+    status_code=201,
+)
+def create_break_glass_grant(
+    payload: BreakGlassGrantCreateRequest,
+) -> BreakGlassGrantSummary:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection,
+            payload.project_id,
+            payload.actor,
+            "member_manage",
+        )
+        try:
+            members.get_member(connection, payload.project_id, payload.target_member_id)
+            grant = break_glass.create_grant(
+                connection,
+                project_id=payload.project_id,
+                target_member_id=payload.target_member_id,
+                requested_by=payload.actor,
+                reason=payload.reason,
+                scope=payload.scope,
+                granted_permissions=payload.granted_permissions,
+                ttl_minutes=payload.ttl_minutes,
+            )
+        except ProjectMemberNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        task = intake.create_task(
+            connection,
+            project_id=payload.project_id,
+            title=f"Postmortem for break-glass grant {grant['id']}",
+            description=(
+                f"Review emergency access granted to {payload.target_member_id}. "
+                f"Reason: {payload.reason}"
+            ),
+            dedupe_key=f"break-glass:{grant['id']}:postmortem",
+            priority="p1",
+            risk_tier=3,
+            inputs={
+                "break_glass_grant_id": grant["id"],
+                "target_member_id": payload.target_member_id,
+                "scope": payload.scope,
+            },
+            required_artifacts=["break_glass_postmortem"],
+        )
+        grant = break_glass.attach_postmortem_task(
+            connection,
+            grant["id"],
+            task["task_id"],
+        )
+        return break_glass_grant_summary_from_service(grant)
+
+
+@app.post(
+    "/v1/break-glass/grants/{grant_id}/revoke",
+    response_model=BreakGlassGrantSummary,
+)
+def revoke_break_glass_grant(
+    grant_id: str,
+    payload: BreakGlassGrantRevokeRequest,
+) -> BreakGlassGrantSummary:
+    with begin(engine) as connection:
+        try:
+            existing = break_glass.get_grant(connection, grant_id)
+        except BreakGlassGrantNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        require_project_actor(
+            connection,
+            existing["project_id"],
+            payload.actor,
+            "member_manage",
+        )
+        grant = break_glass.revoke_grant(
+            connection,
+            grant_id,
+            actor=payload.actor,
+            reason=payload.reason,
+        )
+        return break_glass_grant_summary_from_service(grant)
 
 
 @app.get("/v1/status", response_model=StatusResponse)
@@ -740,12 +1307,21 @@ def metatron_query(payload: MetatronQueryRequest) -> MetatronQueryResponse:
 @app.post("/v1/commands/propose", response_model=CommandProposeResponse, status_code=201)
 def propose_command(payload: CommandProposeRequest) -> CommandProposeResponse:
     with begin(engine) as connection:
-        result = intake.propose_command(
+        require_project_actor(
             connection,
             payload.project_id,
-            payload.command,
-            payload.constraints,
+            payload.actor,
+            "command_submit",
         )
+        try:
+            result = intake.propose_command(
+                connection,
+                payload.project_id,
+                payload.command,
+                payload.constraints,
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
         return CommandProposeResponse(**result)
 
 
@@ -756,7 +1332,8 @@ def list_tasks(project_id: str) -> TaskListResponse:
             text(
                 """
                 SELECT id, project_id, title, description, status, priority, risk_tier,
-                       dedupe_key, created_at, updated_at
+                       owner_role_id, parent_task_id, dependency_task_ids, due_at,
+                       data_boundary, dedupe_key, created_at, updated_at
                 FROM tasks
                 WHERE project_id = :project_id
                 ORDER BY created_at DESC
@@ -770,22 +1347,37 @@ def list_tasks(project_id: str) -> TaskListResponse:
 @app.post("/v1/tasks", response_model=TaskSummary, status_code=201)
 def create_task(payload: TaskCreateRequest) -> TaskSummary:
     with begin(engine) as connection:
-        result = intake.create_task(
+        require_project_actor(
             connection,
-            project_id=payload.project_id,
-            title=payload.title,
-            description=payload.description,
-            dedupe_key=payload.dedupe_key,
-            priority=payload.priority,
-            risk_tier=payload.risk_tier,
-            inputs=payload.inputs,
-            required_artifacts=payload.required_artifacts,
+            payload.project_id,
+            payload.actor,
+            "task_create",
         )
+        try:
+            result = intake.create_task(
+                connection,
+                project_id=payload.project_id,
+                title=payload.title,
+                description=payload.description,
+                dedupe_key=payload.dedupe_key,
+                priority=payload.priority,
+                risk_tier=payload.risk_tier,
+                data_boundary=payload.data_boundary,
+                inputs=payload.inputs,
+                required_artifacts=payload.required_artifacts,
+                owner_role_id=payload.owner_role_id,
+                parent_task_id=payload.parent_task_id,
+                dependency_task_ids=payload.dependency_task_ids,
+                due_at=payload.due_at,
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
         row = connection.execute(
             text(
                 """
                 SELECT id, project_id, title, description, status, priority, risk_tier,
-                       dedupe_key, created_at, updated_at
+                       owner_role_id, parent_task_id, dependency_task_ids, due_at,
+                       data_boundary, dedupe_key, created_at, updated_at
                 FROM tasks
                 WHERE id = :task_id
                 """
@@ -795,14 +1387,150 @@ def create_task(payload: TaskCreateRequest) -> TaskSummary:
         return task_summary_from_row(row)
 
 
+@app.get("/v1/departments", response_model=DepartmentListResponse)
+def list_departments(project_id: str) -> DepartmentListResponse:
+    with begin(engine) as connection:
+        return DepartmentListResponse(
+            project_id=project_id,
+            items=[
+                DepartmentSummary(**item)
+                for item in canonical.list_departments(connection, project_id)
+            ],
+        )
+
+
+@app.post("/v1/departments", response_model=DepartmentSummary, status_code=201)
+def create_department(payload: DepartmentCreateRequest) -> DepartmentSummary:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection,
+            payload.project_id,
+            payload.actor,
+            "pack_manage",
+        )
+        result = canonical.create_department(
+            connection,
+            project_id=payload.project_id,
+            department_key=payload.department_key,
+            name=payload.name,
+            mission=payload.mission,
+            actor=payload.actor,
+        )
+        return DepartmentSummary(**result)
+
+
+@app.get("/v1/policies", response_model=PolicyRecordListResponse)
+def list_policy_records(project_id: str) -> PolicyRecordListResponse:
+    with begin(engine) as connection:
+        return PolicyRecordListResponse(
+            project_id=project_id,
+            items=[
+                PolicyRecordSummary(**item)
+                for item in canonical.list_policy_records(connection, project_id)
+            ],
+        )
+
+
+@app.post("/v1/policies", response_model=PolicyRecordSummary, status_code=201)
+def create_policy_record(
+    payload: PolicyRecordCreateRequest,
+) -> PolicyRecordSummary:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection,
+            payload.project_id,
+            payload.actor,
+            "budget_manage",
+        )
+        result = canonical.create_policy_record(
+            connection,
+            project_id=payload.project_id,
+            policy_key=payload.policy_key,
+            version=payload.version,
+            title=payload.title,
+            body=payload.body,
+            actor=payload.actor,
+        )
+        return PolicyRecordSummary(**result)
+
+
+@app.get("/v1/plans", response_model=PlanListResponse)
+def list_plans(project_id: str) -> PlanListResponse:
+    with begin(engine) as connection:
+        return PlanListResponse(
+            project_id=project_id,
+            items=[
+                PlanSummary(**item)
+                for item in canonical.list_plans(connection, project_id)
+            ],
+        )
+
+
+@app.post("/v1/plans", response_model=PlanSummary, status_code=201)
+def create_plan(payload: PlanCreateRequest) -> PlanSummary:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection,
+            payload.project_id,
+            payload.actor,
+            "task_create",
+        )
+        result = canonical.create_plan(
+            connection,
+            project_id=payload.project_id,
+            title=payload.title,
+            objective=payload.objective,
+            task_id=payload.task_id,
+            phases=payload.phases,
+            success_criteria=payload.success_criteria,
+            risks=payload.risks,
+            artifact_id=payload.artifact_id,
+            actor=payload.actor,
+        )
+        return PlanSummary(**result)
+
+
+@app.get("/v1/meetings", response_model=MeetingListResponse)
+def list_meetings(project_id: str) -> MeetingListResponse:
+    with begin(engine) as connection:
+        return MeetingListResponse(
+            project_id=project_id,
+            items=[
+                MeetingSummary(**item)
+                for item in canonical.list_meetings(connection, project_id)
+            ],
+        )
+
+
+@app.post("/v1/meetings", response_model=MeetingSummary, status_code=201)
+def create_meeting(payload: MeetingCreateRequest) -> MeetingSummary:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection,
+            payload.project_id,
+            payload.actor,
+            "task_create",
+        )
+        result = canonical.create_meeting(
+            connection,
+            project_id=payload.project_id,
+            title=payload.title,
+            purpose=payload.purpose,
+            participants=payload.participants,
+            agenda=payload.agenda,
+            actor=payload.actor,
+        )
+        return MeetingSummary(**result)
+
+
 @app.get("/v1/jobs/{job_id}", response_model=JobSummary)
 def get_job(job_id: str) -> JobSummary:
     with begin(engine) as connection:
         row = connection.execute(
             text(
                 """
-                SELECT id, project_id, task_id, kind, status, priority, max_attempts,
-                       attempt, run_after
+                SELECT id, project_id, task_id, kind, status, data_boundary, priority,
+                       max_attempts, attempt, run_after
                 FROM jobs
                 WHERE id = :job_id
                 """
@@ -821,7 +1549,8 @@ def get_task(task_id: str) -> TaskSummary:
             text(
                 """
                 SELECT id, project_id, title, description, status, priority, risk_tier,
-                       dedupe_key, created_at, updated_at
+                       owner_role_id, parent_task_id, dependency_task_ids, due_at,
+                       data_boundary, dedupe_key, created_at, updated_at
                 FROM tasks
                 WHERE id = :task_id
                 """
@@ -860,6 +1589,12 @@ def create_self_improvement_proposal(
 ) -> SelfImprovementProposalDetail:
     with begin(engine) as connection:
         try:
+            require_project_actor(
+                connection,
+                payload.project_id,
+                payload.actor,
+                "self_improvement_manage",
+            )
             row = self_improvement.create_proposal(
                 connection,
                 project_id=payload.project_id,
@@ -904,6 +1639,13 @@ def record_self_improvement_canary(
 ) -> SelfImprovementProposalDetail:
     with begin(engine) as connection:
         try:
+            proposal = self_improvement.get_proposal(connection, proposal_id)
+            require_project_actor(
+                connection,
+                proposal["project_id"],
+                payload.actor,
+                "self_improvement_manage",
+            )
             row = self_improvement.record_canary_result(
                 connection,
                 proposal_id,
@@ -917,6 +1659,8 @@ def record_self_improvement_canary(
             raise HTTPException(status_code=404, detail=str(error)) from error
         except InvalidSelfImprovementTransitionError as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
+        except (ProjectMemberNotFoundError, ProjectMemberPermissionError) as error:
+            raise_project_actor_error(error)
         except ValueError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
         return self_improvement_detail_from_row(row)
@@ -931,6 +1675,13 @@ def record_self_improvement_rollout(
 ) -> SelfImprovementProposalDetail:
     with begin(engine) as connection:
         try:
+            proposal = self_improvement.get_proposal(connection, proposal_id)
+            require_project_actor(
+                connection,
+                proposal["project_id"],
+                payload.actor,
+                "self_improvement_manage",
+            )
             row = self_improvement.record_rollout(
                 connection,
                 proposal_id,
@@ -944,6 +1695,8 @@ def record_self_improvement_rollout(
             raise HTTPException(status_code=404, detail=str(error)) from error
         except InvalidSelfImprovementTransitionError as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
+        except (ProjectMemberNotFoundError, ProjectMemberPermissionError) as error:
+            raise_project_actor_error(error)
         except ValueError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
         return self_improvement_detail_from_row(row)
@@ -958,6 +1711,13 @@ def rollback_self_improvement_proposal(
 ) -> SelfImprovementProposalDetail:
     with begin(engine) as connection:
         try:
+            proposal = self_improvement.get_proposal(connection, proposal_id)
+            require_project_actor(
+                connection,
+                proposal["project_id"],
+                payload.actor,
+                "self_improvement_manage",
+            )
             row = self_improvement.rollback(
                 connection,
                 proposal_id,
@@ -971,6 +1731,8 @@ def rollback_self_improvement_proposal(
             raise HTTPException(status_code=404, detail=str(error)) from error
         except InvalidSelfImprovementTransitionError as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
+        except (ProjectMemberNotFoundError, ProjectMemberPermissionError) as error:
+            raise_project_actor_error(error)
         except ValueError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
         return self_improvement_detail_from_row(row)
@@ -999,6 +1761,12 @@ def refresh_health_snapshot(
     payload: HealthSnapshotRefreshRequest,
 ) -> HealthSnapshotSummary:
     with begin(engine) as connection:
+        require_project_actor(
+            connection,
+            payload.project_id,
+            payload.actor,
+            "health_refresh",
+        )
         row = health_snapshots.refresh_snapshot(
             connection, payload.project_id, payload.actor
         )
@@ -1015,7 +1783,7 @@ def list_artifacts(project_id: str, limit: int = 25) -> ArtifactListResponse:
             text(
                 """
                 SELECT id, project_id, task_id, artifact_type, title, uri, content_hash,
-                       created_by_job_id, created_at
+                       created_by_job_id, data_boundary, created_at
                 FROM artifacts
                 WHERE project_id = :project_id
                 ORDER BY created_at DESC
@@ -1037,7 +1805,7 @@ def get_artifact(artifact_id: str) -> ArtifactDetail:
             text(
                 """
                 SELECT id, project_id, task_id, artifact_type, title, uri, content,
-                       content_hash, created_by_job_id, created_at
+                       content_hash, created_by_job_id, data_boundary, created_at
                 FROM artifacts
                 WHERE id = :artifact_id
                 """
@@ -1080,6 +1848,69 @@ def get_role_governance(role_key: str, project_id: str) -> RoleGovernanceDetail:
 
 
 @app.post(
+    "/v1/roles/{role_key}/autonomy/check",
+    response_model=RoleAutonomyCheckResponse,
+)
+def check_role_autonomy(
+    role_key: str, request: RoleAutonomyCheckRequest
+) -> RoleAutonomyCheckResponse:
+    with begin(engine) as connection:
+        try:
+            require_project_actor(
+                connection,
+                request.project_id,
+                request.actor,
+                "role_review",
+            )
+            result = role_governance.check_autonomy(
+                connection,
+                project_id=request.project_id,
+                role_key=role_key,
+                action=request.action,
+                risk_tier=request.risk_tier,
+                sandboxed=request.sandboxed,
+                policy_approved=request.policy_approved,
+                actor=request.actor,
+            )
+        except RoleNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        return RoleAutonomyCheckResponse(**result)
+
+
+@app.post(
+    "/v1/roles/{role_key}/scope/check",
+    response_model=RoleScopeCheckResponse,
+)
+def check_role_scope(
+    role_key: str, request: RoleScopeCheckRequest
+) -> RoleScopeCheckResponse:
+    with begin(engine) as connection:
+        try:
+            require_project_actor(
+                connection,
+                request.project_id,
+                request.actor,
+                "role_review",
+            )
+            result = role_governance.check_scope(
+                connection,
+                project_id=request.project_id,
+                role_key=role_key,
+                action=request.action,
+                actor=request.actor,
+                skill_id=request.skill_id,
+                evidence_ref=request.evidence_ref,
+            )
+        except RoleNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        return RoleScopeCheckResponse(**result)
+
+
+@app.post(
     "/v1/roles/{role_key}/reviews",
     response_model=RoleGovernanceDetail,
     status_code=201,
@@ -1089,6 +1920,12 @@ def record_role_review(
 ) -> RoleGovernanceDetail:
     with begin(engine) as connection:
         try:
+            require_project_actor(
+                connection,
+                request.project_id,
+                request.actor,
+                "role_review",
+            )
             detail = role_governance.record_review(
                 connection,
                 project_id=request.project_id,
@@ -1129,6 +1966,12 @@ def get_pack(pack_id: str, project_id: str) -> PackDetail:
 def install_pack(payload: PackInstallRequest) -> PackDetail:
     with begin(engine) as connection:
         try:
+            require_project_actor(
+                connection,
+                payload.project_id,
+                payload.actor,
+                "pack_manage",
+            )
             result = specpack.install_pack(
                 connection,
                 payload.project_id,
@@ -1161,6 +2004,8 @@ def get_agent_module(module_id: str, project_id: str) -> AgentModuleDetail:
             )
         except AgentModuleNotFoundError as error:
             raise HTTPException(status_code=404, detail=str(error)) from error
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
         return agent_module_detail_from_service(module)
 
 
@@ -1172,6 +2017,12 @@ def get_agent_module(module_id: str, project_id: str) -> AgentModuleDetail:
 def install_agent_module(payload: AgentModuleInstallRequest) -> AgentModuleDetail:
     with begin(engine) as connection:
         try:
+            require_project_actor(
+                connection,
+                payload.project_id,
+                payload.actor,
+                "module_manage",
+            )
             module = specpack.install_agent_module(
                 connection,
                 payload.project_id,
@@ -1210,6 +2061,12 @@ def upsert_entitlement_source(
     payload: EntitlementSourceUpsertRequest,
 ) -> EntitlementSourceSummary:
     with begin(engine) as connection:
+        require_project_actor(
+            connection,
+            payload.project_id,
+            payload.actor,
+            "entitlement_manage",
+        )
         item = entitlements.upsert_source(
             connection,
             payload.model_dump(exclude={"actor"}),
@@ -1222,6 +2079,12 @@ def upsert_entitlement_source(
 def preview_route(payload: RoutingPreviewRequest) -> RoutingPreviewResponse:
     with begin(engine) as connection:
         try:
+            require_project_actor(
+                connection,
+                payload.project_id,
+                payload.actor,
+                "entitlement_manage",
+            )
             route = entitlements.preview_route(
                 connection,
                 payload.project_id,
@@ -1229,6 +2092,7 @@ def preview_route(payload: RoutingPreviewRequest) -> RoutingPreviewResponse:
                 task_kind=payload.task_kind,
                 workload_class=payload.workload_class,
                 risk_tier=payload.risk_tier,
+                data_boundary=payload.data_boundary,
                 preferred_capabilities=payload.preferred_capabilities,
                 budget_state=payload.budget_state,
                 actor=payload.actor,
@@ -1266,6 +2130,12 @@ def list_outbox_messages(project_id: str, limit: int = 50) -> OutboxMessageListR
 @app.post("/v1/comms/outbox", response_model=OutboxMessageSummary, status_code=201)
 def create_outbox_message(payload: OutboxMessageCreateRequest) -> OutboxMessageSummary:
     with begin(engine) as connection:
+        require_project_actor(
+            connection,
+            payload.project_id,
+            payload.actor,
+            "comms_manage",
+        )
         item = comms.create_outbox_message(
             connection,
             payload.project_id,
@@ -1274,6 +2144,7 @@ def create_outbox_message(payload: OutboxMessageCreateRequest) -> OutboxMessageS
             payload.body,
             payload.dedupe_key,
             payload.actor,
+            payload.data_boundary,
         )
         return outbox_message_summary_from_row(item)
 
@@ -1282,6 +2153,12 @@ def create_outbox_message(payload: OutboxMessageCreateRequest) -> OutboxMessageS
 def queue_outbox_delivery(message_id: str, payload: OutboxQueueRequest) -> JobSummary:
     with begin(engine) as connection:
         try:
+            require_project_actor(
+                connection,
+                payload.project_id,
+                payload.actor,
+                "comms_manage",
+            )
             job = comms.queue_outbox_delivery(
                 connection,
                 payload.project_id,
@@ -1291,9 +2168,12 @@ def queue_outbox_delivery(message_id: str, payload: OutboxQueueRequest) -> JobSu
                 payload.actor,
                 payload.priority,
                 payload.max_attempts,
+                payload.urgency,
             )
         except OutboxMessageNotFoundError as error:
             raise HTTPException(status_code=404, detail=str(error)) from error
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
         return JobSummary(**job)
 
 
@@ -1303,6 +2183,12 @@ def deliver_outbox_message(
 ) -> OutboxDeliveryResponse:
     with begin(engine) as connection:
         try:
+            require_project_actor(
+                connection,
+                payload.project_id,
+                payload.actor,
+                "comms_manage",
+            )
             result = comms.deliver_outbox_message(
                 connection,
                 payload.project_id,
@@ -1334,6 +2220,12 @@ def list_inbox_messages(project_id: str, limit: int = 50) -> InboxMessageListRes
 @app.post("/v1/comms/inbox/ingest", response_model=InboxMessageSummary, status_code=201)
 def ingest_inbox_message(payload: InboxMessageIngestRequest) -> InboxMessageSummary:
     with begin(engine) as connection:
+        require_project_actor(
+            connection,
+            payload.project_id,
+            payload.actor,
+            "comms_manage",
+        )
         item = comms.ingest_inbox_message(
             connection,
             payload.project_id,
@@ -1342,7 +2234,69 @@ def ingest_inbox_message(payload: InboxMessageIngestRequest) -> InboxMessageSumm
             payload.actor,
             subject=payload.subject,
             raw_ref=payload.raw_ref,
+            data_boundary=payload.data_boundary,
         )
+        parsed = item.get("parsed") or {}
+        if parsed.get("kind") == "decision_reply":
+            parse_error = parsed.get("parse_error")
+            decision_id = parsed.get("decision_id")
+            action = parsed.get("action")
+            if parse_error or not isinstance(decision_id, str) or not isinstance(action, str):
+                comms.deadletter_inbox_message(
+                    connection,
+                    payload.project_id,
+                    item["id"],
+                    actor=payload.actor,
+                    reason=str(parse_error or "decision_reply_missing_id_or_action"),
+                    payload={"parsed": parsed},
+                )
+                return inbox_message_summary_from_row(
+                    reload_inbox_message(connection, item["id"])
+                )
+            try:
+                decision_row = decisions.transition(
+                    connection,
+                    decision_id,
+                    action=action,
+                    actor=payload.actor,
+                    note=parsed.get("note") if isinstance(parsed.get("note"), str) else None,
+                    delegate_to=(
+                        parsed.get("delegate_to")
+                        if isinstance(parsed.get("delegate_to"), str)
+                        else None
+                    ),
+                    external_ref=payload.raw_ref,
+                )
+            except (
+                DecisionNotFoundError,
+                InvalidDecisionTransitionError,
+                ProjectMemberNotFoundError,
+                ProjectMemberPermissionError,
+                ValueError,
+            ) as error:
+                comms.deadletter_inbox_message(
+                    connection,
+                    payload.project_id,
+                    item["id"],
+                    actor=payload.actor,
+                    reason=str(error),
+                    payload={"parsed": parsed},
+                )
+                return inbox_message_summary_from_row(
+                    reload_inbox_message(connection, item["id"])
+                )
+
+            comms.mark_inbox_actioned(
+                connection,
+                payload.project_id,
+                item["id"],
+                actor=payload.actor,
+                decision_id=decision_id,
+                outcome_status=decision_row["status"],
+            )
+            return inbox_message_summary_from_row(
+                reload_inbox_message(connection, item["id"])
+            )
         return inbox_message_summary_from_row(item)
 
 
@@ -1362,16 +2316,20 @@ def create_job(payload: JobCreateRequest) -> JobSummary:
                 else {}
             ),
         }
-        result = jobs.create_job(
-            connection,
-            project_id=payload.project_id,
-            task_id=payload.task_id,
-            kind=payload.kind,
-            payload=job_payload,
-            priority=payload.priority,
-            max_attempts=payload.max_attempts,
-            run_after_seconds=payload.run_after_seconds,
-        )
+        try:
+            result = jobs.create_job(
+                connection,
+                project_id=payload.project_id,
+                task_id=payload.task_id,
+                kind=payload.kind,
+                payload=job_payload,
+                priority=payload.priority,
+                max_attempts=payload.max_attempts,
+                run_after_seconds=payload.run_after_seconds,
+                data_boundary=payload.data_boundary,
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
         if payload.reservation_id:
             budget.attach_job(
                 connection,
@@ -1386,6 +2344,69 @@ def create_job(payload: JobCreateRequest) -> JobSummary:
 def bootstrap_seed() -> dict[str, str]:
     seed()
     return {"status": "ok"}
+
+
+@app.get("/v1/budget/allocations", response_model=BudgetAllocationListResponse)
+def list_budget_allocations(project_id: str) -> BudgetAllocationListResponse:
+    with begin(engine) as connection:
+        allocations = budget.list_allocations(connection, project_id)
+        return BudgetAllocationListResponse(
+            project_id=project_id,
+            items=[
+                budget_allocation_summary_from_service(allocation)
+                for allocation in allocations
+            ],
+        )
+
+
+@app.post(
+    "/v1/budget/allocations",
+    response_model=BudgetAllocationSummary,
+    status_code=201,
+)
+def create_budget_allocation(
+    payload: BudgetAllocationCreateRequest,
+) -> BudgetAllocationSummary:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection,
+            payload.project_id,
+            payload.actor,
+            "budget_manage",
+        )
+        try:
+            allocation = budget.create_allocation(
+                connection,
+                project_id=payload.project_id,
+                scope_type=payload.scope_type,
+                scope_id=payload.scope_id,
+                amount_usd_micros=payload.amount_usd_micros,
+                period_start=payload.period_start,
+                period_end=payload.period_end,
+                actor=payload.actor,
+                parent_allocation_id=payload.parent_allocation_id,
+            )
+        except ValueError as error:
+            record_budget_denial_event(
+                payload.project_id,
+                payload.actor,
+                "budget.allocation_denied",
+                (
+                    "budget_allocation"
+                    if payload.parent_allocation_id
+                    else "project"
+                ),
+                payload.parent_allocation_id or payload.project_id,
+                {
+                    "requested_usd_micros": payload.amount_usd_micros,
+                    "parent_allocation_id": payload.parent_allocation_id,
+                    "scope_type": payload.scope_type,
+                    "scope_id": payload.scope_id,
+                    "reason": str(error),
+                },
+            )
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        return budget_allocation_summary_from_service(allocation)
 
 
 @app.get("/v1/budget/status", response_model=BudgetStatusResponse)
@@ -1405,6 +2426,12 @@ def budget_status(scope_type: str, scope_id: str) -> BudgetStatusResponse:
             available_usd_micros=snapshot["available_usd_micros"],
             committed_usd_micros=snapshot["committed_usd_micros"],
             burn_approx_usd_micros=snapshot["burn_approx_usd_micros"],
+            burn_window_hours=snapshot["burn_window_hours"],
+            burn_rate_usd_micros_per_hour=snapshot[
+                "burn_rate_usd_micros_per_hour"
+            ],
+            forecasted_24h_usd_micros=snapshot["forecasted_24h_usd_micros"],
+            time_to_cap_seconds=snapshot["time_to_cap_seconds"],
             utilization_ratio=snapshot["utilization_ratio"],
             active_reservations_count=snapshot["active_reservations_count"],
             top_cost_drivers=snapshot["top_cost_drivers"],
@@ -1435,6 +2462,7 @@ def reserve_budget(payload: BudgetReserveRequest) -> BudgetReserveResponse:
             payload.reason,
             payload.expires_in_minutes,
             payload.job_id,
+            payload.allocation_id,
         )
         return BudgetReserveResponse(**result)
 
@@ -1549,11 +2577,59 @@ def decision_inbox(project_id: str) -> DecisionInboxResponse:
         )
 
 
+@app.post("/v1/decisions/digests", response_model=DecisionDigestResponse, status_code=201)
+def create_decision_digest(payload: DecisionDigestRequest) -> DecisionDigestResponse:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection,
+            payload.project_id,
+            payload.actor,
+            "decision_resolve",
+        )
+        result = decisions.create_digest(
+            connection,
+            project_id=payload.project_id,
+            actor=payload.actor,
+            max_items=payload.max_items,
+            low_risk_max=payload.low_risk_max,
+            urgent_risk_min=payload.urgent_risk_min,
+        )
+        outbox_message_id = None
+        if payload.channel:
+            require_project_actor(
+                connection,
+                payload.project_id,
+                payload.actor,
+                "comms_manage",
+            )
+            outbox = comms.create_outbox_message(
+                connection,
+                payload.project_id,
+                payload.channel,
+                "BOSS decision digest",
+                result["body"],
+                payload.dedupe_key or f"decision-digest-{result['artifact_id']}",
+                payload.actor,
+                payload.data_boundary,
+            )
+            outbox_message_id = outbox["id"]
+        return DecisionDigestResponse(
+            status=result["status"],
+            artifact_id=result["artifact_id"],
+            outbox_message_id=outbox_message_id,
+            decision_count=result["decision_count"],
+            urgent_count=result["urgent_count"],
+            batched_count=result["batched_count"],
+            body=result["body"],
+        )
+
+
 @app.post("/v1/decisions/{decision_id}/approve", response_model=DecisionCard)
 def approve_decision(
     decision_id: str, payload: DecisionActionRequest
 ) -> DecisionCard:
     with begin(engine) as connection:
+        require_decision_actor_binding(connection, decision_id, payload.actor)
         try:
             row = decisions.transition(
                 connection,
@@ -1568,6 +2644,8 @@ def approve_decision(
             raise HTTPException(status_code=404, detail=str(error)) from error
         except InvalidDecisionTransitionError as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
+        except (ProjectMemberNotFoundError, ProjectMemberPermissionError) as error:
+            raise_decision_actor_error(decision_id, payload.actor, error)
         return decision_card_from_row(row)
 
 
@@ -1576,6 +2654,7 @@ def reject_decision(
     decision_id: str, payload: DecisionActionRequest
 ) -> DecisionCard:
     with begin(engine) as connection:
+        require_decision_actor_binding(connection, decision_id, payload.actor)
         try:
             row = decisions.transition(
                 connection,
@@ -1590,6 +2669,8 @@ def reject_decision(
             raise HTTPException(status_code=404, detail=str(error)) from error
         except InvalidDecisionTransitionError as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
+        except (ProjectMemberNotFoundError, ProjectMemberPermissionError) as error:
+            raise_decision_actor_error(decision_id, payload.actor, error)
         return decision_card_from_row(row)
 
 
@@ -1598,6 +2679,7 @@ def revise_decision(
     decision_id: str, payload: DecisionActionRequest
 ) -> DecisionCard:
     with begin(engine) as connection:
+        require_decision_actor_binding(connection, decision_id, payload.actor)
         try:
             row = decisions.transition(
                 connection,
@@ -1612,6 +2694,8 @@ def revise_decision(
             raise HTTPException(status_code=404, detail=str(error)) from error
         except InvalidDecisionTransitionError as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
+        except (ProjectMemberNotFoundError, ProjectMemberPermissionError) as error:
+            raise_decision_actor_error(decision_id, payload.actor, error)
         except ValueError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
         return decision_card_from_row(row)
@@ -1622,6 +2706,7 @@ def delegate_decision(
     decision_id: str, payload: DecisionActionRequest
 ) -> DecisionCard:
     with begin(engine) as connection:
+        require_decision_actor_binding(connection, decision_id, payload.actor)
         try:
             row = decisions.transition(
                 connection,
@@ -1636,6 +2721,8 @@ def delegate_decision(
             raise HTTPException(status_code=404, detail=str(error)) from error
         except InvalidDecisionTransitionError as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
+        except (ProjectMemberNotFoundError, ProjectMemberPermissionError) as error:
+            raise_decision_actor_error(decision_id, payload.actor, error)
         except ValueError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
         return decision_card_from_row(row)
@@ -1646,6 +2733,7 @@ def execute_decision(
     decision_id: str, payload: DecisionActionRequest
 ) -> DecisionCard:
     with begin(engine) as connection:
+        require_decision_actor_binding(connection, decision_id, payload.actor)
         try:
             row = decisions.transition(
                 connection,
@@ -1660,6 +2748,8 @@ def execute_decision(
             raise HTTPException(status_code=404, detail=str(error)) from error
         except InvalidDecisionTransitionError as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
+        except (ProjectMemberNotFoundError, ProjectMemberPermissionError) as error:
+            raise_decision_actor_error(decision_id, payload.actor, error)
         except ValueError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
         return decision_card_from_row(row)
@@ -1747,6 +2837,206 @@ def create_sandbox_deployment(
             payload.created_by_job_id,
         )
         return SandboxDeploymentResponse(**result)
+
+
+@app.get(
+    "/v1/software-factory/rollouts",
+    response_model=DeploymentRolloutListResponse,
+)
+def list_deployment_rollouts(
+    project_id: str = Query(...),
+    limit: int = Query(default=20, ge=1, le=100),
+) -> DeploymentRolloutListResponse:
+    with begin(engine) as connection:
+        rows = software_factory.list_deployment_rollouts(connection, project_id, limit)
+        return DeploymentRolloutListResponse(
+            project_id=project_id,
+            items=[DeploymentRolloutSummary(**row) for row in rows],
+        )
+
+
+@app.post(
+    "/v1/infra/droplets/requests",
+    response_model=InfraProvisionReviewResponse,
+    status_code=201,
+)
+def request_infra_provision_review(
+    payload: InfraProvisionReviewRequest,
+) -> InfraProvisionReviewResponse:
+    with begin(engine) as connection:
+        try:
+            require_project_actor(
+                connection,
+                payload.project_id,
+                payload.actor,
+                "infra_provision",
+            )
+            result = infrastructure.request_droplet_provision(
+                connection,
+                project_id=payload.project_id,
+                task_id=payload.task_id,
+                reservation_id=payload.reservation_id,
+                title=payload.title,
+                region=payload.region,
+                size=payload.size,
+                ttl_minutes=payload.ttl_minutes,
+                tags=payload.tags,
+                actor=payload.actor,
+                data_boundary=payload.data_boundary,
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        return InfraProvisionReviewResponse(**result)
+
+
+@app.post("/v1/infra/droplets", response_model=InfraProvisionResponse)
+def create_infra_droplet(payload: InfraProvisionRequest) -> InfraProvisionResponse:
+    with begin(engine) as connection:
+        try:
+            result = infrastructure.create_droplet(
+                connection,
+                project_id=payload.project_id,
+                task_id=payload.task_id,
+                decision_id=payload.decision_id,
+                reservation_id=payload.reservation_id,
+                dedupe_key=payload.dedupe_key,
+                title=payload.title,
+                region=payload.region,
+                size=payload.size,
+                ttl_minutes=payload.ttl_minutes,
+                tags=payload.tags,
+                created_by_job_id=payload.created_by_job_id,
+                data_boundary=payload.data_boundary,
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        return InfraProvisionResponse(**result)
+
+
+@app.post("/v1/infra/droplets/queue", response_model=JobSummary, status_code=201)
+def queue_infra_droplet(payload: InfraProvisionJobRequest) -> JobSummary:
+    with begin(engine) as connection:
+        try:
+            require_project_actor(
+                connection,
+                payload.project_id,
+                payload.actor,
+                "infra_provision",
+            )
+            result = infrastructure.queue_droplet_provision(
+                connection,
+                project_id=payload.project_id,
+                task_id=payload.task_id,
+                decision_id=payload.decision_id,
+                reservation_id=payload.reservation_id,
+                dedupe_key=payload.dedupe_key,
+                title=payload.title,
+                region=payload.region,
+                size=payload.size,
+                ttl_minutes=payload.ttl_minutes,
+                tags=payload.tags,
+                actor=payload.actor,
+                priority=payload.priority,
+                max_attempts=payload.max_attempts,
+                data_boundary=payload.data_boundary,
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        return JobSummary(**result)
+
+
+@app.get("/v1/infra/resources", response_model=InfraResourceListResponse)
+def list_infra_resources(
+    project_id: str = Query(...),
+    limit: int = Query(default=20, ge=1, le=200),
+) -> InfraResourceListResponse:
+    with begin(engine) as connection:
+        rows = infrastructure.list_resources(connection, project_id, limit)
+        return InfraResourceListResponse(
+            project_id=project_id,
+            items=[infra_resource_summary_from_row(row) for row in rows],
+        )
+
+
+@app.post(
+    "/v1/infra/resources/{resource_id}/terminate",
+    response_model=InfraTerminationResponse,
+)
+def terminate_infra_resource(
+    resource_id: str, payload: InfraTerminationRequest
+) -> InfraTerminationResponse:
+    with begin(engine) as connection:
+        try:
+            require_project_actor(
+                connection,
+                payload.project_id,
+                payload.actor,
+                "infra_provision",
+            )
+            result = infrastructure.terminate_droplet(
+                connection,
+                project_id=payload.project_id,
+                resource_id=resource_id,
+                dedupe_key=payload.dedupe_key,
+                reason=payload.reason,
+                created_by_job_id=payload.created_by_job_id,
+            )
+        except InfraResourceNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        return InfraTerminationResponse(**result)
+
+
+@app.post(
+    "/v1/infra/resources/{resource_id}/terminate/queue",
+    response_model=JobSummary,
+    status_code=201,
+)
+def queue_infra_resource_termination(
+    resource_id: str, payload: InfraTerminationJobRequest
+) -> JobSummary:
+    with begin(engine) as connection:
+        try:
+            require_project_actor(
+                connection,
+                payload.project_id,
+                payload.actor,
+                "infra_provision",
+            )
+            result = infrastructure.queue_droplet_termination(
+                connection,
+                project_id=payload.project_id,
+                resource_id=resource_id,
+                dedupe_key=payload.dedupe_key,
+                actor=payload.actor,
+                priority=payload.priority,
+                max_attempts=payload.max_attempts,
+                reason=payload.reason,
+            )
+        except InfraResourceNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        return JobSummary(**result)
+
+
+@app.post("/v1/infra/janitor/run", response_model=InfraJanitorRunResponse)
+def run_infra_janitor(payload: InfraJanitorRunRequest) -> InfraJanitorRunResponse:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection,
+            payload.project_id,
+            payload.actor,
+            "infra_provision",
+        )
+        result = infrastructure.queue_expired_resource_terminations(
+            connection,
+            project_id=payload.project_id,
+            actor=payload.actor,
+            limit=payload.limit,
+        )
+        return InfraJanitorRunResponse(**result)
 
 
 @app.post("/v1/software-factory/proposals/queue", response_model=JobSummary, status_code=201)
@@ -1907,6 +3197,25 @@ def get_receipt(dedupe_key: str) -> ReceiptResponse:
         return receipt_response_from_row(receipt)
 
 
+@app.get("/v1/change-journal", response_model=ChangeJournalResponse)
+def list_change_journal(project_id: str, limit: int = 25) -> ChangeJournalResponse:
+    if limit < 1 or limit > 200:
+        raise HTTPException(status_code=400, detail="limit must be between 1 and 200.")
+    with begin(engine) as connection:
+        items = audit.list_change_journal(connection, project_id, limit)
+        return ChangeJournalResponse(project_id=project_id, items=items)
+
+
+@app.get("/v1/change-journal/{artifact_id}", response_model=ChangeJournalDetail)
+def get_change_journal_item(artifact_id: str, project_id: str) -> ChangeJournalDetail:
+    with begin(engine) as connection:
+        try:
+            item = audit.get_change_journal_item(connection, project_id, artifact_id)
+        except ValueError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        return ChangeJournalDetail(**item)
+
+
 @app.get("/v1/audit/export", response_model=AuditExportResponse)
 def export_audit_trail(
     project_id: str,
@@ -1961,6 +3270,12 @@ def export_audit_trail(
 def create_replay_bundle(payload: ReplayBundleRequest) -> ReplayBundleResponse:
     with begin(engine) as connection:
         try:
+            require_project_actor(
+                connection,
+                payload.project_id,
+                payload.actor,
+                "audit_export",
+            )
             result = audit.create_replay_bundle(
                 connection,
                 payload.project_id,
@@ -1979,4 +3294,40 @@ def create_replay_bundle(payload: ReplayBundleRequest) -> ReplayBundleResponse:
             created_at=result["created_at"],
             scope=AuditExportScope(**result["scope"]),
             counts=AuditExportCounts(**result["counts"]),
+        )
+
+
+@app.post(
+    "/v1/compliance/evidence-bundles",
+    response_model=ComplianceEvidenceBundleResponse,
+    status_code=201,
+)
+def create_compliance_evidence_bundle(
+    payload: ComplianceEvidenceBundleRequest,
+) -> ComplianceEvidenceBundleResponse:
+    with begin(engine) as connection:
+        try:
+            require_project_actor(
+                connection,
+                payload.project_id,
+                payload.actor,
+                "audit_export",
+            )
+            result = audit.create_compliance_evidence_bundle(
+                connection,
+                payload.project_id,
+                actor=payload.actor,
+                period_start=payload.period_start,
+                period_end=payload.period_end,
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        return ComplianceEvidenceBundleResponse(
+            status=result["status"],
+            artifact_id=result["artifact_id"],
+            project_id=result["project_id"],
+            artifact_type=result["artifact_type"],
+            created_at=result["created_at"],
+            period=result["period"],
+            counts=ComplianceEvidenceCounts(**result["counts"]),
         )

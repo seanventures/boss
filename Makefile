@@ -5,7 +5,7 @@ PIP := $(VENV)/bin/pip
 BOSS_POSTGRES_PORT ?= 5432
 DATABASE_URL ?= postgresql+psycopg://boss:boss@localhost:$(BOSS_POSTGRES_PORT)/boss
 
-.PHONY: install install-node install-python wait-db dev test lint seed smoke real-smoke-plan real-smoke-pr real-smoke-merge real-smoke-deploy worker-drain-once sandbox-template
+.PHONY: install install-node install-python wait-db dev test lint build seed smoke real-smoke-plan real-smoke-pr real-smoke-merge real-smoke-deploy worker-drain-once sandbox-template
 
 install: install-node install-python
 
@@ -33,6 +33,9 @@ test: install-python install-node
 
 lint: install-python install-node
 	DATABASE_URL=$(DATABASE_URL) pnpm lint
+
+build: install-node
+	pnpm --filter boss-web build
 
 seed: install-python
 	docker compose -f infra/docker-compose.yml up -d db

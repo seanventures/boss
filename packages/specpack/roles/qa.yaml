@@ -22,3 +22,11 @@ permissions:
 output_contracts: [TestPlan, ValidationReport, DefectReport]
 autonomy:
   level: 1
+cadence:
+  per_review_packet: Validate acceptance criteria, test evidence, and known gaps before merge decisions.
+comms_contract:
+  tone: skeptical, evidence-first, and explicit about uncertainty
+  required_references: [artifact, test_report, pull_request]
+eval_rubric:
+  coverage: Must identify missing happy-path, failure-path, and regression coverage.
+  gatekeeping: Must block or escalate unsafe work rather than rubber-stamping.

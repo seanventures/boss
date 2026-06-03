@@ -44,6 +44,271 @@ class RoleGovernanceService:
             "recent_autonomy_changes": recent_changes,
         }
 
+    def check_autonomy(
+        self,
+        connection: Connection,
+        *,
+        project_id: str,
+        role_key: str,
+        action: str,
+        risk_tier: int,
+        sandboxed: bool,
+        policy_approved: bool,
+        actor: str,
+    ) -> dict[str, Any]:
+        actor = self._require_text(actor, "actor")
+        action = self._require_text(action, "action")
+        if risk_tier < 0 or risk_tier > 3:
+            raise ValueError("risk_tier must be between 0 and 3.")
+
+        role = self.get_role(connection, project_id, role_key)
+        policy = self._load_autonomy_policy()
+        required_capability = self._required_capability(
+            action, risk_tier, sandboxed, policy_approved
+        )
+        current_level = int(role["autonomy_level"])
+        allowed_capabilities = self._expanded_allowed_capabilities(
+            policy, current_level
+        )
+        required_level = self._minimum_level_for_capability(
+            policy, required_capability
+        )
+        allowed = required_capability in allowed_capabilities
+        reason = "allowed_by_autonomy_level" if allowed else "autonomy_level_too_low"
+        if required_level is None:
+            reason = "action_not_allowed_by_autonomy_policy"
+
+        emit_event(
+            connection,
+            project_id,
+            "role.autonomy_allowed" if allowed else "role.autonomy_denied",
+            actor,
+            "role",
+            role["id"],
+            {
+                "role_key": role_key,
+                "action": action,
+                "required_capability": required_capability,
+                "risk_tier": risk_tier,
+                "sandboxed": sandboxed,
+                "policy_approved": policy_approved,
+                "current_level": current_level,
+                "required_level": required_level,
+                "reason": reason,
+            },
+        )
+        return {
+            "project_id": project_id,
+            "role_key": role_key,
+            "allowed": allowed,
+            "reason": reason,
+            "action": action,
+            "required_capability": required_capability,
+            "risk_tier": risk_tier,
+            "sandboxed": sandboxed,
+            "policy_approved": policy_approved,
+            "current_level": current_level,
+            "required_level": required_level,
+            "allowed_capabilities": allowed_capabilities,
+            "trust_score": int(role.get("trust_score") or 50),
+        }
+
+    def check_scope(
+        self,
+        connection: Connection,
+        *,
+        project_id: str,
+        role_key: str,
+        action: str,
+        actor: str,
+        skill_id: Optional[str] = None,
+        evidence_ref: Optional[str] = None,
+    ) -> dict[str, Any]:
+        actor = self._require_text(actor, "actor")
+        action = self._require_text(action, "action")
+        skill = self._require_text(skill_id or action, "skill_id")
+        evidence = (
+            self._require_text(evidence_ref, "evidence_ref")
+            if evidence_ref is not None
+            else None
+        )
+        role = self.get_role(connection, project_id, role_key, for_update=True)
+        permissions = role.get("spec", {}).get("permissions") or {}
+        allowed_skills = self._string_list(permissions.get("allowed_skills"))
+        forbidden_skills = self._string_list(permissions.get("forbidden_skills"))
+        forbidden_match = self._matching_pattern(skill, forbidden_skills)
+        allowed_match = self._matching_pattern(skill, allowed_skills)
+
+        trust_score_before = int(role.get("trust_score") or 50)
+        autonomy_level_before = int(role["autonomy_level"])
+        trust_score_after = trust_score_before
+        autonomy_level_after = autonomy_level_before
+        scope_violation_count = int(role.get("scope_violation_count") or 0)
+        artifact_id: Optional[str] = None
+        autonomy_change_id: Optional[str] = None
+        allowed = forbidden_match is None and allowed_match is not None
+        if forbidden_match is not None:
+            reason = "forbidden_by_rolespec"
+        elif allowed_match is None:
+            reason = "not_in_rolespec_allowed_skills"
+        else:
+            reason = "allowed_by_rolespec"
+
+        timestamp = now_utc()
+        if not allowed:
+            trust_score_after = self._clamp_score(trust_score_before - 10)
+            scope_violation_count += 1
+            if autonomy_level_before > 0:
+                autonomy_level_after = autonomy_level_before - 1
+                autonomy_change_id = self._create_autonomy_change(
+                    connection,
+                    project_id=project_id,
+                    role=role,
+                    change_type="downgrade",
+                    trigger="scope_violation",
+                    from_level=autonomy_level_before,
+                    to_level=autonomy_level_after,
+                    status="applied",
+                    reason="Automatic autonomy downgrade after a RoleSpec scope violation.",
+                    evidence_refs=[evidence] if evidence else [],
+                    metrics={
+                        "scope_violations": 1,
+                        "policy_violations": 1,
+                        "skill_id": skill,
+                        "action": action,
+                        "reason": reason,
+                    },
+                    actor=actor,
+                    approved_by=actor,
+                )
+            connection.execute(
+                text(
+                    """
+                    UPDATE roles
+                    SET trust_score = :trust_score,
+                        autonomy_level = :autonomy_level,
+                        policy_violation_count = policy_violation_count + 1,
+                        scope_violation_count = scope_violation_count + 1,
+                        last_reviewed_at = :timestamp,
+                        last_violation_at = :timestamp
+                    WHERE id = :role_id
+                    """
+                ),
+                {
+                    "role_id": role["id"],
+                    "trust_score": trust_score_after,
+                    "autonomy_level": autonomy_level_after,
+                    "timestamp": timestamp,
+                },
+            )
+            artifact_id = create_artifact(
+                connection,
+                self.settings,
+                project_id,
+                None,
+                "role_scope_violation",
+                f"Role scope violation for {role['display_name']}",
+                {
+                    "role_id": role["id"],
+                    "role_key": role["role_key"],
+                    "action": action,
+                    "skill_id": skill,
+                    "reason": reason,
+                    "matched_forbidden_pattern": forbidden_match,
+                    "allowed_skills": allowed_skills,
+                    "forbidden_skills": forbidden_skills,
+                    "evidence_ref": evidence,
+                    "trust_score_before": trust_score_before,
+                    "trust_score_after": trust_score_after,
+                    "autonomy_level_before": autonomy_level_before,
+                    "autonomy_level_after": autonomy_level_after,
+                    "autonomy_change_id": autonomy_change_id,
+                    "created_by": actor,
+                    "created_at": timestamp.isoformat(),
+                },
+            )
+            emit_event(
+                connection,
+                project_id,
+                "role.scope_violation",
+                actor,
+                "role",
+                role["id"],
+                {
+                    "role_key": role["role_key"],
+                    "action": action,
+                    "skill_id": skill,
+                    "reason": reason,
+                    "artifact_id": artifact_id,
+                    "autonomy_change_id": autonomy_change_id,
+                    "trust_score_before": trust_score_before,
+                    "trust_score_after": trust_score_after,
+                },
+            )
+            emit_event(
+                connection,
+                project_id,
+                "role.trust_changed",
+                actor,
+                "role",
+                role["id"],
+                {
+                    "role_key": role["role_key"],
+                    "before": trust_score_before,
+                    "after": trust_score_after,
+                    "trust_delta": trust_score_after - trust_score_before,
+                },
+            )
+            if autonomy_change_id is not None:
+                emit_event(
+                    connection,
+                    project_id,
+                    "role.autonomy_changed",
+                    actor,
+                    "role",
+                    role["id"],
+                    {
+                        "role_key": role["role_key"],
+                        "change_type": "downgrade",
+                        "from_level": autonomy_level_before,
+                        "to_level": autonomy_level_after,
+                        "autonomy_change_id": autonomy_change_id,
+                    },
+                )
+        else:
+            emit_event(
+                connection,
+                project_id,
+                "role.scope_allowed",
+                actor,
+                "role",
+                role["id"],
+                {
+                    "role_key": role["role_key"],
+                    "action": action,
+                    "skill_id": skill,
+                    "matched_allowed_pattern": allowed_match,
+                },
+            )
+
+        return {
+            "project_id": project_id,
+            "role_key": role_key,
+            "allowed": allowed,
+            "reason": reason,
+            "action": action,
+            "skill_id": skill,
+            "allowed_skills": allowed_skills,
+            "forbidden_skills": forbidden_skills,
+            "trust_score_before": trust_score_before,
+            "trust_score_after": trust_score_after,
+            "autonomy_level_before": autonomy_level_before,
+            "autonomy_level_after": autonomy_level_after,
+            "scope_violation_count": scope_violation_count,
+            "artifact_id": artifact_id,
+            "autonomy_change_id": autonomy_change_id,
+        }
+
     def record_review(
         self,
         connection: Connection,
@@ -859,6 +1124,64 @@ class RoleGovernanceService:
             <= float(requirements.get("rollback_rate_below", 0.02))
         )
 
+    def _required_capability(
+        self,
+        action: str,
+        risk_tier: int,
+        sandboxed: bool,
+        policy_approved: bool,
+    ) -> str:
+        if action in {"read", "summarize", "draft", "create_task"}:
+            return action
+        if action in {"create_decision", "create_artifact", "propose_tier2"}:
+            return action
+        if action.startswith("execute_tier"):
+            return action
+        if action == "execute":
+            if risk_tier == 0:
+                return "execute_tier0"
+            if risk_tier == 1:
+                return "execute_tier1_sandbox" if sandboxed else "execute_tier1_real"
+            if risk_tier == 2 and policy_approved:
+                return "execute_tier2_with_policy_approval"
+            if risk_tier == 2:
+                return "propose_tier2"
+        return f"manual_approval_required_tier{risk_tier}"
+
+    def _expanded_allowed_capabilities(
+        self, policy: dict[str, Any], level: int
+    ) -> list[str]:
+        levels = policy.get("levels") or {}
+        visited: set[int] = set()
+
+        def expand(current_level: int) -> set[str]:
+            if current_level in visited:
+                return set()
+            visited.add(current_level)
+            entry = levels.get(current_level) or levels.get(str(current_level)) or {}
+            allowed: set[str] = set()
+            for capability in entry.get("allowed") or []:
+                if isinstance(capability, str) and capability.startswith("level_"):
+                    inherited_level = self._coerce_int(capability.removeprefix("level_"))
+                    allowed.update(expand(inherited_level))
+                elif isinstance(capability, str):
+                    allowed.add(capability)
+            return allowed
+
+        return sorted(expand(level))
+
+    def _minimum_level_for_capability(
+        self, policy: dict[str, Any], capability: str
+    ) -> Optional[int]:
+        levels = policy.get("levels") or {}
+        level_values = sorted(
+            int(level) for level in levels.keys() if str(level).isdigit()
+        )
+        for level in level_values:
+            if capability in self._expanded_allowed_capabilities(policy, level):
+                return level
+        return None
+
     def _downgrade_trigger(
         self, metrics: dict[str, Any], policy: dict[str, Any]
     ) -> Optional[str]:
@@ -880,6 +1203,23 @@ class RoleGovernanceService:
         if metrics["scope_violations"] > 0:
             return "scope_violation"
         return None
+
+    def _matching_pattern(self, skill_id: str, patterns: list[str]) -> Optional[str]:
+        for pattern in patterns:
+            if pattern == skill_id:
+                return pattern
+            if pattern.endswith(".*") and skill_id.startswith(pattern[:-1]):
+                return pattern
+        return None
+
+    def _string_list(self, values: Any) -> list[str]:
+        if not isinstance(values, list):
+            return []
+        return [
+            item.strip()
+            for item in values
+            if isinstance(item, str) and item.strip()
+        ]
 
     def _clamp_score(self, value: int) -> int:
         return max(0, min(100, value))

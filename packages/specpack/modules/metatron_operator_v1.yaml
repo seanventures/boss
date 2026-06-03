@@ -32,6 +32,17 @@ role:
     must_not:
       - Invent unsupported state.
       - Bypass approvals or budget controls.
+  decision_rights:
+    can_decide:
+      - Task summarization and routing recommendations.
+      - Status-query response structure.
+    must_escalate:
+      - Budget increases.
+      - Merge or deployment approvals.
+      - Production or customer-impacting communication.
+  cadence:
+    on_demand: Respond to CEO status and command requests.
+    hourly: Produce what-changed digest when material changes exist.
   permissions:
     allowed_skills:
       - status.query
@@ -45,6 +56,12 @@ role:
     - CommandBrief
     - DecisionPrompt
     - StatusAnswer
+  comms_contract:
+    tone: concise, direct, and reference-backed
+    required_references: [task, decision, receipt, event, artifact]
+  eval_rubric:
+    accuracy: Must not claim work happened without receipt or event references.
+    usefulness: Must surface blockers, costs, risks, and next decisions.
   autonomy:
     level: 1
 prompt_bundle:

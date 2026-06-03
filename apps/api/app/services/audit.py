@@ -13,6 +13,28 @@ class AuditTrailService:
     def __init__(self, settings: Settings):
         self.settings = settings
 
+    CHANGE_ARTIFACT_TYPES = {
+        "diff_manifest",
+        "review_packet",
+        "test_report",
+        "merge_execution",
+        "deployment_request",
+        "deployment_result",
+        "deployment_rollout",
+        "deployment_health_verification",
+        "deployment_rollback",
+        "self_improvement_proposal",
+        "self_improvement_canary",
+        "self_improvement_rollout",
+        "self_improvement_rollback",
+        "role_autonomy_change",
+        "role_governance_review",
+        "role_scope_violation",
+        "infra_provision_request",
+        "infra_provision_receipt",
+        "infra_termination_receipt",
+    }
+
     def list_receipts(
         self, connection: Connection, project_id: str, limit: int
     ) -> list[dict]:
@@ -20,7 +42,7 @@ class AuditTrailService:
             text(
                 """
                 SELECT id, project_id, dedupe_key, effect_kind, effect_scope, payload_hash,
-                       status, provider_ref, created_by_job_id, result, error,
+                       status, provider_ref, created_by_job_id, data_boundary, result, error,
                        created_at, updated_at
                 FROM receipts
                 WHERE project_id = :project_id
@@ -31,6 +53,55 @@ class AuditTrailService:
             {"project_id": project_id, "limit": limit},
         ).mappings().all()
         return [dict(row) for row in rows]
+
+    def list_change_journal(
+        self, connection: Connection, project_id: str, limit: int
+    ) -> list[dict]:
+        rows = connection.execute(
+            text(
+                """
+                SELECT id, project_id, task_id, artifact_type, title, uri, content,
+                       content_hash, created_by_job_id, data_boundary, created_at
+                FROM artifacts
+                WHERE project_id = :project_id
+                  AND artifact_type IN :artifact_types
+                ORDER BY created_at DESC
+                LIMIT :limit
+                """
+            ).bindparams(bindparam("artifact_types", expanding=True)),
+            {
+                "project_id": project_id,
+                "artifact_types": sorted(self.CHANGE_ARTIFACT_TYPES),
+                "limit": limit,
+            },
+        ).mappings().all()
+        return [self._change_journal_item(row) for row in rows]
+
+    def get_change_journal_item(
+        self, connection: Connection, project_id: str, artifact_id: str
+    ) -> dict:
+        row = connection.execute(
+            text(
+                """
+                SELECT id, project_id, task_id, artifact_type, title, uri, content,
+                       content_hash, created_by_job_id, data_boundary, created_at
+                FROM artifacts
+                WHERE project_id = :project_id
+                  AND id = :artifact_id
+                  AND artifact_type IN :artifact_types
+                """
+            ).bindparams(bindparam("artifact_types", expanding=True)),
+            {
+                "project_id": project_id,
+                "artifact_id": artifact_id,
+                "artifact_types": sorted(self.CHANGE_ARTIFACT_TYPES),
+            },
+        ).mappings().first()
+        if not row:
+            raise ValueError("Change artifact not found")
+        item = self._change_journal_item(row)
+        item["content"] = self._json_ready(row.get("content") or {})
+        return item
 
     def export(
         self,
@@ -287,6 +358,244 @@ class AuditTrailService:
             "counts": export["counts"],
         }
 
+    def create_compliance_evidence_bundle(
+        self,
+        connection: Connection,
+        project_id: str,
+        *,
+        actor: str,
+        period_start: Optional[Any] = None,
+        period_end: Optional[Any] = None,
+    ) -> dict:
+        project = connection.execute(
+            text(
+                """
+                SELECT p.id AS project_id, p.name AS project_name,
+                       w.name AS workspace_name, o.name AS org_name
+                FROM projects p
+                JOIN workspaces w ON w.id = p.workspace_id
+                JOIN orgs o ON o.id = w.org_id
+                WHERE p.id = :project_id
+                """
+            ),
+            {"project_id": project_id},
+        ).mappings().first()
+        if not project:
+            raise ValueError("Unknown project_id")
+
+        members = self._fetch_project_members(connection, project_id)
+        roles = self._fetch_role_governance(connection, project_id)
+        policy_records = self._fetch_policy_records(connection, project_id)
+        break_glass_grants = self._fetch_break_glass_grants(connection, project_id)
+        decisions = self._fetch_decisions(connection, project_id)
+        receipts = self._fetch_receipts(connection, project_id)
+        budget_reservations = self._fetch_budget_reservations(connection, project_id)
+        cost_receipts = self._fetch_cost_receipts(connection, project_id)
+        deadletters = self._fetch_deadletters(connection, project_id)
+        compliance_events = self._fetch_compliance_events(
+            connection,
+            project_id,
+            period_start=period_start,
+            period_end=period_end,
+        )
+        generated_at = now_utc().isoformat()
+        period = {
+            "period_start": period_start.isoformat()
+            if hasattr(period_start, "isoformat")
+            else period_start,
+            "period_end": period_end.isoformat()
+            if hasattr(period_end, "isoformat")
+            else period_end,
+        }
+        counts = {
+            "project_members": len(members),
+            "roles": len(roles),
+            "policy_records": len(policy_records),
+            "break_glass_grants": len(break_glass_grants),
+            "decisions": len(decisions),
+            "receipts": len(receipts),
+            "budget_reservations": len(budget_reservations),
+            "cost_receipts": len(cost_receipts),
+            "deadletters": len(deadletters),
+            "compliance_events": len(compliance_events),
+        }
+        content = self._json_ready(
+            {
+                "bundle_type": "compliance_evidence",
+                "project": dict(project),
+                "generated_at": generated_at,
+                "generated_by": actor,
+                "period": period,
+                "controls": {
+                    "external_effects": "Receipts are required for external/material effects.",
+                    "spend": "Budget reservations are required before spendy work.",
+                    "worker_execution": "Workers execute through leased jobs only.",
+                    "visibility": "Failures must become events, decisions, or deadletters.",
+                    "identity": "Project members and optional API-key principals ground actor identity.",
+                    "break_glass": "Emergency access requires identity, reason, scope, TTL, event log, and postmortem task.",
+                },
+                "counts": counts,
+                "members": members,
+                "roles": roles,
+                "policy_records": policy_records,
+                "break_glass_grants": break_glass_grants,
+                "decisions": decisions,
+                "receipts": receipts,
+                "budget_reservations": budget_reservations,
+                "cost_receipts": cost_receipts,
+                "deadletters": deadletters,
+                "compliance_events": compliance_events,
+            }
+        )
+        artifact_id = create_artifact(
+            connection,
+            self.settings,
+            project_id,
+            None,
+            "compliance_evidence_bundle",
+            f"Compliance evidence bundle for {project_id}",
+            content,
+        )
+        emit_event(
+            connection,
+            project_id,
+            "compliance.evidence_bundle_created",
+            actor,
+            "artifact",
+            artifact_id,
+            {"period": period, "counts": counts},
+        )
+        return {
+            "status": "created",
+            "artifact_id": artifact_id,
+            "project_id": project_id,
+            "artifact_type": "compliance_evidence_bundle",
+            "created_at": generated_at,
+            "period": period,
+            "counts": counts,
+        }
+
+    def _fetch_project_members(
+        self,
+        connection: Connection,
+        project_id: str,
+    ) -> list[dict]:
+        rows = connection.execute(
+            text(
+                """
+                SELECT id, project_id, member_id, display_name, member_type,
+                       role_keys, permissions, status, created_by, created_at,
+                       updated_at
+                FROM project_members
+                WHERE project_id = :project_id
+                ORDER BY member_type ASC, member_id ASC
+                """
+            ),
+            {"project_id": project_id},
+        ).mappings().all()
+        return [dict(row) for row in rows]
+
+    def _fetch_role_governance(
+        self,
+        connection: Connection,
+        project_id: str,
+    ) -> list[dict]:
+        rows = connection.execute(
+            text(
+                """
+                SELECT id, project_id, role_key, display_name, autonomy_level,
+                       trust_score, successful_runs, policy_violation_count,
+                       duplicate_effect_attempt_count, hidden_failure_count,
+                       low_quality_output_count, scope_violation_count,
+                       last_reviewed_at, last_violation_at, source_module_id,
+                       source_module_version, created_at
+                FROM roles
+                WHERE project_id = :project_id
+                ORDER BY role_key ASC
+                """
+            ),
+            {"project_id": project_id},
+        ).mappings().all()
+        return [dict(row) for row in rows]
+
+    def _fetch_policy_records(
+        self,
+        connection: Connection,
+        project_id: str,
+    ) -> list[dict]:
+        rows = connection.execute(
+            text(
+                """
+                SELECT id, project_id, policy_key, version, title, status, body,
+                       created_by, created_at, updated_at
+                FROM policy_records
+                WHERE project_id = :project_id
+                ORDER BY policy_key ASC, version DESC
+                """
+            ),
+            {"project_id": project_id},
+        ).mappings().all()
+        return [dict(row) for row in rows]
+
+    def _fetch_break_glass_grants(
+        self,
+        connection: Connection,
+        project_id: str,
+    ) -> list[dict]:
+        rows = connection.execute(
+            text(
+                """
+                SELECT id, project_id, target_member_id, requested_by, reason,
+                       scope, granted_permissions, status, expires_at,
+                       postmortem_task_id, revoked_by, revoked_reason,
+                       revoked_at, created_at, updated_at
+                FROM break_glass_grants
+                WHERE project_id = :project_id
+                ORDER BY created_at DESC
+                """
+            ),
+            {"project_id": project_id},
+        ).mappings().all()
+        return [dict(row) for row in rows]
+
+    def _fetch_compliance_events(
+        self,
+        connection: Connection,
+        project_id: str,
+        *,
+        period_start: Optional[Any] = None,
+        period_end: Optional[Any] = None,
+    ) -> list[dict]:
+        params: dict[str, object] = {"project_id": project_id}
+        time_clause = ""
+        if period_start:
+            time_clause += " AND created_at >= :period_start"
+            params["period_start"] = period_start
+        if period_end:
+            time_clause += " AND created_at <= :period_end"
+            params["period_end"] = period_end
+        rows = connection.execute(
+            text(
+                f"""
+                SELECT id, event_type, actor, entity_type, entity_id, data, created_at
+                FROM events
+                WHERE project_id = :project_id
+                  AND (
+                    event_type LIKE 'policy.%'
+                    OR event_type LIKE 'break_glass.%'
+                    OR event_type LIKE 'budget.%'
+                    OR event_type LIKE 'decision.%'
+                    OR event_type LIKE 'receipt.%'
+                    OR event_type LIKE 'deadletter.%'
+                  )
+                  {time_clause}
+                ORDER BY created_at ASC
+                """
+            ),
+            params,
+        ).mappings().all()
+        return [dict(row) for row in rows]
+
     def _fetch_tasks(
         self, connection: Connection, project_id: str, task_ids: Optional[set[str]]
     ) -> list[dict]:
@@ -296,7 +605,8 @@ class AuditTrailService:
             statement = text(
                 """
                 SELECT id, project_id, title, description, status, priority, risk_tier,
-                       dedupe_key, created_at, updated_at
+                       owner_role_id, parent_task_id, dependency_task_ids, due_at,
+                       data_boundary, dedupe_key, created_at, updated_at
                 FROM tasks
                 WHERE project_id = :project_id AND id IN :task_ids
                 ORDER BY created_at ASC
@@ -307,7 +617,8 @@ class AuditTrailService:
             statement = text(
                 """
                 SELECT id, project_id, title, description, status, priority, risk_tier,
-                       dedupe_key, created_at, updated_at
+                       owner_role_id, parent_task_id, dependency_task_ids, due_at,
+                       data_boundary, dedupe_key, created_at, updated_at
                 FROM tasks
                 WHERE project_id = :project_id
                 ORDER BY created_at ASC
@@ -345,8 +656,8 @@ class AuditTrailService:
             clause = f"{clause} AND ({' OR '.join(scoped_filters)})"
         statement = text(
             f"""
-            SELECT id, project_id, task_id, kind, status, priority, max_attempts,
-                   attempt, run_after
+            SELECT id, project_id, task_id, kind, status, data_boundary, priority,
+                   max_attempts, attempt, run_after
             FROM jobs
             WHERE {clause}
             ORDER BY created_at ASC
@@ -429,7 +740,7 @@ class AuditTrailService:
         statement = text(
             f"""
             SELECT id, project_id, task_id, artifact_type, title, uri, content,
-                   content_hash, created_by_job_id, created_at
+                   content_hash, created_by_job_id, data_boundary, created_at
             FROM artifacts
             WHERE {clause}
             ORDER BY created_at ASC
@@ -514,7 +825,7 @@ class AuditTrailService:
         statement = text(
             f"""
             SELECT id, project_id, dedupe_key, effect_kind, effect_scope, payload_hash,
-                   status, provider_ref, created_by_job_id, result, error,
+                   status, provider_ref, created_by_job_id, data_boundary, result, error,
                    created_at, updated_at
             FROM receipts
             WHERE {clause}
@@ -602,6 +913,76 @@ class AuditTrailService:
         rows = connection.execute(statement, params).mappings().all()
         return [dict(row) for row in rows]
 
+    def _change_journal_item(self, row: dict) -> dict:
+        content = row.get("content") or {}
+        if not isinstance(content, dict):
+            content = {}
+        files_changed = self._string_list(
+            content.get("files_changed")
+            or content.get("files")
+            or content.get("changed_files")
+            or []
+        )
+        summary = self._first_text(
+            content.get("summary"),
+            content.get("description"),
+            content.get("status_note"),
+            content.get("title"),
+        )
+        diff_summary = self._first_text(
+            content.get("diff_summary"),
+            content.get("ci_validation_summary"),
+            content.get("validation_summary"),
+            content.get("risk_hotspots"),
+        )
+        rollback_plan = self._first_text(
+            content.get("rollback_plan"),
+            content.get("rollback"),
+        )
+        return {
+            "id": row["id"],
+            "project_id": row["project_id"],
+            "task_id": row.get("task_id"),
+            "artifact_type": row["artifact_type"],
+            "change_kind": self._change_kind(row["artifact_type"]),
+            "title": row["title"],
+            "summary": summary,
+            "diff_summary": diff_summary,
+            "files_changed": files_changed,
+            "rollback_plan": rollback_plan,
+            "created_by_job_id": row.get("created_by_job_id"),
+            "data_boundary": row.get("data_boundary") or "internal",
+            "created_at": row["created_at"].isoformat(),
+        }
+
+    def _change_kind(self, artifact_type: str) -> str:
+        if artifact_type.startswith("self_improvement"):
+            return "self_improvement"
+        if artifact_type.startswith("deployment"):
+            return "deployment"
+        if artifact_type.startswith("infra"):
+            return "infrastructure"
+        if artifact_type.startswith("role"):
+            return "role_governance"
+        if artifact_type in {"diff_manifest", "review_packet", "test_report"}:
+            return "software_factory"
+        return "change"
+
+    def _first_text(self, *values: Any) -> Optional[str]:
+        for value in values:
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+            if isinstance(value, list):
+                normalized = [str(item).strip() for item in value if str(item).strip()]
+                if normalized:
+                    return "; ".join(normalized[:5])
+        return None
+
+    def _string_list(self, value: Any) -> list[str]:
+        if not isinstance(value, list):
+            return []
+        return [str(item).strip() for item in value if str(item).strip()]
+
     def _fetch_events(
         self, connection: Connection, project_id: str, *, entity_ids: Optional[set[str]] = None
     ) -> list[dict]:
@@ -649,7 +1030,7 @@ class AuditTrailService:
             statement = text(
                 f"""
                 SELECT id, project_id, skill_id, task_kind, workload_class, risk_tier,
-                       budget_state, selected_source_id, selected_provider,
+                       data_boundary, budget_state, selected_source_id, selected_provider,
                        selected_model_id, denial_reason, rejected_sources, decision,
                        created_at
                 FROM routing_logs
@@ -661,7 +1042,7 @@ class AuditTrailService:
             statement = text(
                 f"""
                 SELECT id, project_id, skill_id, task_kind, workload_class, risk_tier,
-                       budget_state, selected_source_id, selected_provider,
+                       data_boundary, budget_state, selected_source_id, selected_provider,
                        selected_model_id, denial_reason, rejected_sources, decision,
                        created_at
                 FROM routing_logs

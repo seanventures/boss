@@ -10,7 +10,13 @@ from sqlalchemy.engine import Connection
 from ..config import Settings
 from ..schemas import FileChange
 from .budget import BudgetGovernor
-from .core import create_artifact, create_blocking_decision, emit_event
+from .core import (
+    create_artifact,
+    create_blocking_decision,
+    emit_event,
+    make_id,
+    normalize_data_boundary,
+)
 from .entitlements import EntitlementBrokerService
 from .github_adapter import (
     GitHubAdapter,
@@ -19,6 +25,10 @@ from .github_adapter import (
 )
 from .openai_adapter import OpenAIAdapter
 from .receipts import ReceiptService
+from .sandbox_validation import (
+    SandboxValidationAdapter,
+    SandboxValidationConfigurationError,
+)
 from .specpack import SpecPackService
 
 
@@ -31,21 +41,25 @@ class SoftwareFactoryService:
         self.openai = OpenAIAdapter(settings)
         self.entitlements = EntitlementBrokerService(settings)
         self.specpack = SpecPackService(settings)
+        self.sandbox_validation = SandboxValidationAdapter(settings)
 
     def _validation_follow_up(
         self, validation: PullRequestValidationResult
     ) -> list[str]:
-        if validation.status == "passed":
+        return self._validation_follow_up_for_status(validation.status)
+
+    def _validation_follow_up_for_status(self, status: str) -> list[str]:
+        if status == "passed":
             return [
                 "Review the diff and approval context before merge.",
                 "Proceed to merge approval only if the review packet also looks correct.",
             ]
-        if validation.status == "failed":
+        if status == "failed":
             return [
-                "Fix the failing sandbox checks before merge approval.",
-                "Review the failing GitHub check logs linked from the test report.",
+                "Fix the failing sandbox validation before merge approval.",
+                "Review the failing validation evidence linked from the test report.",
             ]
-        if validation.status == "timed_out":
+        if status == "timed_out":
             return [
                 "Wait for GitHub validation to complete or inspect why the checks stalled.",
                 "Do not approve merge until the test report shows passed validation.",
@@ -56,17 +70,23 @@ class SoftwareFactoryService:
         ]
 
     def _review_confidence(self, validation: PullRequestValidationResult) -> str:
-        if validation.status == "passed":
+        return self._review_confidence_for_status(validation.status)
+
+    def _review_confidence_for_status(self, status: str) -> str:
+        if status == "passed":
             return "ci-passed-manual-review-required"
-        if validation.status == "failed":
+        if status == "failed":
             return "ci-failed-review-required"
         return "ci-incomplete-review-required"
 
     def _review_recommendation(self, validation: PullRequestValidationResult) -> str:
-        if validation.status == "passed":
+        return self._review_recommendation_for_status(validation.status)
+
+    def _review_recommendation_for_status(self, status: str) -> str:
+        if status == "passed":
             return "Review the draft PR and merge manually after approval."
-        if validation.status == "failed":
-            return "Do not merge until the failing GitHub validation checks are fixed."
+        if status == "failed":
+            return "Do not merge until the failing sandbox validation evidence is fixed."
         return "Do not merge until GitHub validation completes successfully."
 
     def _scope(self, connection: Connection, project_id: str) -> dict:
@@ -86,6 +106,66 @@ class SoftwareFactoryService:
             raise ValueError(f"Unknown project_id: {project_id}")
         return dict(row)
 
+    def _data_boundary_for_task(
+        self, connection: Connection, task_id: Optional[str]
+    ) -> str:
+        if not task_id:
+            return "internal"
+        row = connection.execute(
+            text("SELECT data_boundary FROM tasks WHERE id = :task_id"),
+            {"task_id": task_id},
+        ).mappings().first()
+        return normalize_data_boundary(row["data_boundary"] if row else None)
+
+    def _block_github_effect_for_data_boundary(
+        self,
+        connection: Connection,
+        project_id: str,
+        task_id: Optional[str],
+        effect_kind: str,
+        actor: str,
+    ) -> Optional[dict]:
+        boundary = self._data_boundary_for_task(connection, task_id)
+        if boundary not in {"restricted", "local-only"}:
+            return None
+
+        decision_id = create_blocking_decision(
+            connection,
+            project_id,
+            task_id,
+            "Data boundary blocks GitHub external effect",
+            {
+                "action": "reclassify_or_configure_approved_boundary_adapter",
+                "effect_kind": effect_kind,
+                "data_boundary": boundary,
+            },
+            {},
+            "data_boundary_blocks_external_effect",
+        )
+        emit_event(
+            connection,
+            project_id,
+            "policy.denied",
+            actor,
+            "github_effect",
+            effect_kind,
+            {
+                "effect_kind": effect_kind,
+                "data_boundary": boundary,
+                "decision_id": decision_id,
+                "reason": "data_boundary_not_allowed_for_github",
+            },
+        )
+        return {
+            "status": "blocked",
+            "decision_id": decision_id,
+            "data_boundary": boundary,
+            "message": (
+                f"{boundary} data cannot be sent to GitHub without an approved "
+                "boundary adapter."
+            ),
+        }
+
     def _route_model_execution(
         self,
         connection: Connection,
@@ -95,6 +175,7 @@ class SoftwareFactoryService:
         task_kind: str,
         preferred_capabilities: list[str],
     ) -> dict:
+        data_boundary = self._data_boundary_for_task(connection, task_id)
         route = self.entitlements.preview_route(
             connection,
             project_id,
@@ -102,6 +183,7 @@ class SoftwareFactoryService:
             task_kind=task_kind,
             workload_class="owner_sandbox",
             risk_tier=1,
+            data_boundary=data_boundary,
             preferred_capabilities=preferred_capabilities,
             actor="coding_worker",
         )
@@ -209,6 +291,105 @@ class SoftwareFactoryService:
             "role_key": role.get("role_key") or role.get("role_id"),
             "config": module_spec.get("config") or {},
         }
+
+    def _run_sandbox_validation(
+        self,
+        connection: Connection,
+        scope: dict,
+        project_id: str,
+        task_id: Optional[str],
+        dedupe_key: str,
+        branch_name: str,
+        created_by_job_id: Optional[str],
+    ) -> tuple[Optional[dict], Optional[str], Optional[str]]:
+        if not self.sandbox_validation.enabled:
+            return None, None, None
+
+        validation_dedupe_key = f"{dedupe_key}:sandbox-validation"
+        commands = self.sandbox_validation.configured_commands()
+        receipt, created = self.receipts.create_or_reuse(
+            connection,
+            scope["org_id"],
+            scope["workspace_id"],
+            project_id,
+            validation_dedupe_key,
+            "sandbox.validation.run",
+            {
+                "repository": self.github.repository_full_name,
+                "branch_name": branch_name,
+                "repo_path": str(self.settings.sandbox_validation_repo_path or ""),
+            },
+            {"branch_name": branch_name, "commands": commands},
+            created_by_job_id=created_by_job_id,
+        )
+        if not created and receipt["status"] == "succeeded":
+            result = receipt["result"] or {}
+            return result.get("validation"), receipt["id"], receipt["status"]
+
+        try:
+            result = self.sandbox_validation.run(branch_name)
+            payload = self.sandbox_validation.to_payload(result)
+        except SandboxValidationConfigurationError as error:
+            payload = {
+                "status": "failed",
+                "summary": f"Sandbox local validation could not run: {error}",
+                "repository_path": str(self.settings.sandbox_validation_repo_path or ""),
+                "branch_name": branch_name,
+                "head_sha": None,
+                "completed": False,
+                "commands": [],
+            }
+
+        if payload["status"] == "passed":
+            self.receipts.mark_succeeded(
+                connection,
+                receipt["id"],
+                f"local-sandbox:{branch_name}",
+                {"validation": payload},
+            )
+            event_type = "software_factory.local_validation_passed"
+            receipt_status = "succeeded"
+        else:
+            self.receipts.mark_failed(
+                connection,
+                receipt["id"],
+                {"validation": payload},
+            )
+            event_type = "software_factory.local_validation_failed"
+            receipt_status = "failed"
+
+        emit_event(
+            connection,
+            project_id,
+            event_type,
+            "coding_worker",
+            "receipt",
+            receipt["id"],
+            {
+                "task_id": task_id,
+                "branch_name": branch_name,
+                "status": payload["status"],
+                "summary": payload["summary"],
+            },
+        )
+        return payload, receipt["id"], receipt_status
+
+    def _combine_validation_evidence(
+        self,
+        github_validation: PullRequestValidationResult,
+        local_validation: Optional[dict],
+    ) -> tuple[str, str, list[str]]:
+        sources = ["github.check_runs"]
+        if local_validation is not None:
+            sources.append("local.sandbox_commands")
+            local_status = str(local_validation.get("status") or "failed")
+            local_summary = str(
+                local_validation.get("summary") or "Sandbox local validation failed."
+            )
+            if local_status != "passed":
+                return "failed", local_summary, sources
+
+        return github_validation.status, github_validation.summary, sources
 
     def create_plan_artifact(
         self,
@@ -685,6 +866,178 @@ class SoftwareFactoryService:
         )
         return artifact_id, decision_id
 
+    def _record_deployment_rollout(
+        self,
+        connection: Connection,
+        project_id: str,
+        task_id: Optional[str],
+        *,
+        decision_id: str,
+        deployment_receipt_id: str,
+        deployment_artifact_id: str,
+        title: str,
+        environment: str,
+        pull_request_url: str,
+        branch_name: Optional[str],
+        merged_sha: str,
+        deployment_id: int,
+        deployment_status_url: str,
+        deployment_state: str,
+        verification: dict,
+        health_artifact_id: Optional[str],
+        rollback_decision_id: Optional[str],
+        created_by_job_id: Optional[str] = None,
+    ) -> dict:
+        health_status = str(verification.get("status") or "unknown")
+        health_stage_status = "skipped" if health_status == "skipped_unconfigured" else health_status
+        rollout_status = "completed" if health_status in {"passed", "skipped_unconfigured"} else "blocked"
+        current_stage = "release_readiness" if rollout_status == "completed" else "post_deploy_health"
+        stages = [
+            {
+                "key": "github_deployment",
+                "label": "GitHub deployment record",
+                "status": "passed" if deployment_state == "success" else "failed",
+                "evidence_refs": [
+                    f"receipt:{deployment_receipt_id}",
+                    f"artifact:{deployment_artifact_id}",
+                ],
+                "provider_ref": deployment_status_url,
+            },
+            {
+                "key": "post_deploy_health",
+                "label": "Post-deploy health verification",
+                "status": health_stage_status,
+                "required": bool(verification.get("healthcheck_url")),
+                "summary": verification.get("summary"),
+                "evidence_refs": (
+                    [f"artifact:{health_artifact_id}"] if health_artifact_id else []
+                ),
+            },
+            {
+                "key": "release_readiness",
+                "label": "Release readiness decision",
+                "status": "passed" if rollout_status == "completed" else "blocked",
+                "evidence_refs": [
+                    f"artifact:{deployment_artifact_id}",
+                    *(
+                        [f"decision:{rollback_decision_id}"]
+                        if rollback_decision_id
+                        else []
+                    ),
+                ],
+            },
+        ]
+        rollout_id = make_id("rollout")
+        rollout_content = {
+            "rollout_id": rollout_id,
+            "title": title,
+            "environment": environment,
+            "pull_request_url": pull_request_url,
+            "branch_name": branch_name,
+            "merged_sha": merged_sha,
+            "deployment_id": deployment_id,
+            "deployment_status_url": deployment_status_url,
+            "status": rollout_status,
+            "current_stage": current_stage,
+            "health_verification_status": health_status,
+            "rollback_decision_id": rollback_decision_id,
+            "stages": stages,
+        }
+        rollout_artifact_id = create_artifact(
+            connection,
+            self.settings,
+            project_id,
+            task_id,
+            "deployment_rollout",
+            f"Deployment rollout for {title}",
+            rollout_content,
+            created_by_job_id=created_by_job_id,
+        )
+        connection.execute(
+            text(
+                """
+                INSERT INTO deployment_rollouts (
+                    id, project_id, task_id, decision_id, deployment_receipt_id,
+                    deployment_artifact_id, rollout_artifact_id, title, environment,
+                    merged_sha, pull_request_url, branch_name, status, current_stage,
+                    health_verification_status, rollback_decision_id, stages,
+                    created_by_job_id
+                )
+                VALUES (
+                    :id, :project_id, :task_id, :decision_id, :deployment_receipt_id,
+                    :deployment_artifact_id, :rollout_artifact_id, :title, :environment,
+                    :merged_sha, :pull_request_url, :branch_name, :status, :current_stage,
+                    :health_verification_status, :rollback_decision_id,
+                    CAST(:stages AS JSONB), :created_by_job_id
+                )
+                """
+            ),
+            {
+                "id": rollout_id,
+                "project_id": project_id,
+                "task_id": task_id,
+                "decision_id": decision_id,
+                "deployment_receipt_id": deployment_receipt_id,
+                "deployment_artifact_id": deployment_artifact_id,
+                "rollout_artifact_id": rollout_artifact_id,
+                "title": title,
+                "environment": environment,
+                "merged_sha": merged_sha,
+                "pull_request_url": pull_request_url,
+                "branch_name": branch_name,
+                "status": rollout_status,
+                "current_stage": current_stage,
+                "health_verification_status": health_status,
+                "rollback_decision_id": rollback_decision_id,
+                "stages": json.dumps(stages),
+                "created_by_job_id": created_by_job_id,
+            },
+        )
+        emit_event(
+            connection,
+            project_id,
+            "software_factory.deployment_rollout_recorded",
+            "release_manager",
+            "deployment_rollout",
+            rollout_id,
+            {
+                "artifact_id": rollout_artifact_id,
+                "deployment_artifact_id": deployment_artifact_id,
+                "deployment_receipt_id": deployment_receipt_id,
+                "status": rollout_status,
+                "current_stage": current_stage,
+                "rollback_decision_id": rollback_decision_id,
+            },
+        )
+        return {
+            "rollout_id": rollout_id,
+            "rollout_artifact_id": rollout_artifact_id,
+            "rollout_status": rollout_status,
+            "rollout_stage": current_stage,
+        }
+
+    def list_deployment_rollouts(
+        self, connection: Connection, project_id: str, limit: int
+    ) -> list[dict]:
+        rows = connection.execute(
+            text(
+                """
+                SELECT id, project_id, task_id, decision_id, deployment_receipt_id,
+                       deployment_artifact_id, rollout_artifact_id, title,
+                       environment, merged_sha, pull_request_url, branch_name,
+                       status, current_stage, health_verification_status,
+                       rollback_decision_id, stages, created_by_job_id,
+                       created_at, updated_at
+                FROM deployment_rollouts
+                WHERE project_id = :project_id
+                ORDER BY created_at DESC
+                LIMIT :limit
+                """
+            ),
+            {"project_id": project_id, "limit": limit},
+        ).mappings().all()
+        return [dict(row) for row in rows]
+
     def propose_pull_request(
         self,
         connection: Connection,
@@ -713,6 +1066,22 @@ class SoftwareFactoryService:
                 "missing_reservation",
             )
             return {"status": "blocked", "decision_id": decision_id}
+
+        boundary_block = self._block_github_effect_for_data_boundary(
+            connection,
+            project_id,
+            task_id,
+            "github.pull_request.create",
+            "coding_worker",
+        )
+        if boundary_block:
+            self.budget.release(
+                connection,
+                project_id,
+                reservation_id,
+                "Released reservation because data-boundary policy blocked the GitHub PR effect.",
+            )
+            return boundary_block
 
         module_spec = self._resolve_agent_module(
             connection,
@@ -946,6 +1315,20 @@ class SoftwareFactoryService:
                 },
             )
 
+        local_validation, local_validation_receipt_id, local_validation_receipt_status = (
+            self._run_sandbox_validation(
+                connection,
+                scope,
+                project_id,
+                task_id,
+                dedupe_key,
+                branch_name,
+                created_by_job_id,
+            )
+        )
+        validation_status, validation_summary, validation_sources = (
+            self._combine_validation_evidence(validation, local_validation)
+        )
         validation_checks = [
             {
                 "name": check.name,
@@ -958,7 +1341,13 @@ class SoftwareFactoryService:
             for check in validation.checks
         ]
         tests_added_or_run = [check["name"] for check in validation_checks]
-        validation_follow_up = self._validation_follow_up(validation)
+        if local_validation:
+            tests_added_or_run.extend(
+                command["command"]
+                for command in local_validation.get("commands", [])
+                if isinstance(command.get("command"), str)
+            )
+        validation_follow_up = self._validation_follow_up_for_status(validation_status)
 
         diff_artifact_id = create_artifact(
             connection,
@@ -984,12 +1373,16 @@ class SoftwareFactoryService:
             f"Test report for {title}",
             {
                 "title": title,
-                "status": validation.status,
-                "summary": validation.summary,
+                "status": validation_status,
+                "summary": validation_summary,
                 "head_sha": validation.head_sha,
-                "validation_source": "github.check_runs",
+                "validation_source": "+".join(validation_sources),
+                "validation_sources": validation_sources,
                 "tests_added_or_run": tests_added_or_run,
                 "checks": validation_checks,
+                "local_validation": local_validation,
+                "local_validation_receipt_id": local_validation_receipt_id,
+                "local_validation_receipt_status": local_validation_receipt_status,
                 "required_follow_up": validation_follow_up,
                 "notes": review_text,
                 "agent_module": self._module_descriptor(module_spec),
@@ -1008,13 +1401,16 @@ class SoftwareFactoryService:
                 "summary": summary,
                 "files_changed": [file.path for file in files],
                 "tests_added_or_run": tests_added_or_run,
-                "ci_validation_status": validation.status,
-                "ci_validation_summary": validation.summary,
+                "ci_validation_status": validation_status,
+                "ci_validation_summary": validation_summary,
                 "ci_checks": validation_checks,
+                "local_validation": local_validation,
                 "risk_hotspots": review_text,
                 "rollback_plan": "Revert the sandbox PR branch or close the PR.",
-                "confidence_score": self._review_confidence(validation),
-                "recommendation": self._review_recommendation(validation),
+                "confidence_score": self._review_confidence_for_status(validation_status),
+                "recommendation": self._review_recommendation_for_status(
+                    validation_status
+                ),
                 "github_commits": commit_shas,
                 "openai_response_id": review_provider_ref,
                 "routing_log_id": route["route_decision_log_id"],
@@ -1036,8 +1432,10 @@ class SoftwareFactoryService:
                 "pull_request_url": pr.url,
                 "branch_name": branch_name,
                 "title": title,
-                "validation_status": validation.status,
-                "validation_summary": validation.summary,
+                "validation_status": validation_status,
+                "validation_summary": validation_summary,
+                "validation_sources": validation_sources,
+                "local_validation_receipt_id": local_validation_receipt_id,
                 "agent_module_id": (
                     module_spec.get("id") if isinstance(module_spec, dict) else None
                 ),
@@ -1053,8 +1451,10 @@ class SoftwareFactoryService:
             "pull_request_url": pr.url,
             "pull_request_number": pr.number,
             "branch_name": branch_name,
-            "validation_status": validation.status,
-            "validation_summary": validation.summary,
+            "validation_status": validation_status,
+            "validation_summary": validation_summary,
+            "validation_sources": validation_sources,
+            "local_validation_receipt_id": local_validation_receipt_id,
         }
         self.receipts.mark_succeeded(connection, pr_receipt["id"], pr.url, result)
         self.budget.settle(
@@ -1080,6 +1480,8 @@ class SoftwareFactoryService:
                 "routing_log_id": route["route_decision_log_id"],
                 "source_id": route["source_id"],
                 "model_id": route["model_id"],
+                "validation_sources": validation_sources,
+                "local_validation_receipt_id": local_validation_receipt_id,
                 "agent_module_id": (
                     module_spec.get("id") if isinstance(module_spec, dict) else None
                 ),
@@ -1095,8 +1497,10 @@ class SoftwareFactoryService:
             "pull_request_url": pr.url,
             "pull_request_number": pr.number,
             "branch_name": branch_name,
-            "validation_status": validation.status,
-            "validation_summary": validation.summary,
+            "validation_status": validation_status,
+            "validation_summary": validation_summary,
+            "validation_sources": validation_sources,
+            "local_validation_receipt_id": local_validation_receipt_id,
         }
 
     def merge_pull_request(
@@ -1123,6 +1527,16 @@ class SoftwareFactoryService:
                 ),
                 {"decision_id": decision_id, "project_id": project_id},
             ).scalar_one_or_none()
+
+        boundary_block = self._block_github_effect_for_data_boundary(
+            connection,
+            project_id,
+            task_id,
+            "github.pull_request.merge",
+            "release_manager",
+        )
+        if boundary_block:
+            return boundary_block
 
         scope = self._scope(connection, project_id)
         merge_receipt, created = self.receipts.create_or_reuse(
@@ -1302,6 +1716,16 @@ class SoftwareFactoryService:
                 {"decision_id": decision_id, "project_id": project_id},
             ).scalar_one_or_none()
 
+        boundary_block = self._block_github_effect_for_data_boundary(
+            connection,
+            project_id,
+            task_id,
+            "github.deployment.create",
+            "release_manager",
+        )
+        if boundary_block:
+            return boundary_block
+
         scope = self._scope(connection, project_id)
         deployment_receipt, created = self.receipts.create_or_reuse(
             connection,
@@ -1351,6 +1775,10 @@ class SoftwareFactoryService:
                 ),
                 "health_verification_status": health_status,
                 "healthcheck_url": result.get("healthcheck_url"),
+                "rollout_id": result.get("rollout_id"),
+                "rollout_artifact_id": result.get("rollout_artifact_id"),
+                "rollout_status": result.get("rollout_status"),
+                "rollout_stage": result.get("rollout_stage"),
                 "environment": result.get("environment"),
                 "deployment_id": result.get("deployment_id"),
                 "deployment_status": result.get("deployment_status"),
@@ -1507,6 +1935,26 @@ class SoftwareFactoryService:
                 verification=verification,
                 created_by_job_id=created_by_job_id,
             )
+        rollout = self._record_deployment_rollout(
+            connection,
+            project_id,
+            task_id,
+            decision_id=decision_id,
+            deployment_receipt_id=deployment_receipt["id"],
+            deployment_artifact_id=artifact_id,
+            title=title,
+            environment=environment,
+            pull_request_url=pull_request_url,
+            branch_name=branch_name,
+            merged_sha=merged_sha,
+            deployment_id=deployment.id,
+            deployment_status_url=deployment_status.url,
+            deployment_state=deployment_status.state,
+            verification=verification,
+            health_artifact_id=health_verification_artifact_id,
+            rollback_decision_id=health_decision_id,
+            created_by_job_id=created_by_job_id,
+        )
         result = {
             "artifact_id": artifact_id,
             "environment": environment,
@@ -1518,6 +1966,7 @@ class SoftwareFactoryService:
             "healthcheck_url": verification.get("healthcheck_url"),
             "health_verification_artifact_id": health_verification_artifact_id,
             "health_decision_id": health_decision_id,
+            **rollout,
         }
         self.receipts.mark_succeeded(
             connection,
@@ -1561,6 +2010,7 @@ class SoftwareFactoryService:
             "health_verification_artifact_id": health_verification_artifact_id,
             "health_verification_status": verification["status"],
             "healthcheck_url": verification.get("healthcheck_url"),
+            **rollout,
             "environment": environment,
             "deployment_id": deployment.id,
             "deployment_status": deployment_status.state,

@@ -9,7 +9,9 @@ from sqlalchemy.engine import Connection
 from ..config import Settings
 from .budget import BudgetGovernor
 from .core import create_artifact, emit_event, now_utc
+from .infrastructure import InfrastructureService
 from .jobs import JobLeaseService
+from .members import MemberDirectoryService
 from .role_governance import RoleGovernanceService
 from .self_improvement import SelfImprovementService
 from .specpack import SpecPackService
@@ -28,9 +30,11 @@ class DecisionService:
         self.settings = settings
         self.budget = BudgetGovernor(settings)
         self.jobs = JobLeaseService(settings)
+        self.infrastructure = InfrastructureService(settings)
         self.self_improvement = SelfImprovementService(settings)
         self.role_governance = RoleGovernanceService(settings)
         self.specpack = SpecPackService(settings)
+        self.members = MemberDirectoryService(settings)
 
     def expire_overdue(
         self, connection: Connection, project_id: Optional[str] = None
@@ -89,6 +93,93 @@ class DecisionService:
             )
         return expired
 
+    def create_digest(
+        self,
+        connection: Connection,
+        *,
+        project_id: str,
+        actor: str,
+        max_items: int,
+        low_risk_max: int,
+        urgent_risk_min: int,
+    ) -> dict[str, Any]:
+        self.expire_overdue(connection, project_id)
+        rows = connection.execute(
+            text(
+                """
+                SELECT id, task_id, question, status, risk_tier, default_action,
+                       recommendation, cost_summary, deadline_at, created_at
+                FROM decisions
+                WHERE project_id = :project_id
+                  AND status IN ('pending', 'delegated')
+                ORDER BY
+                  risk_tier DESC,
+                  deadline_at ASC NULLS LAST,
+                  created_at ASC
+                LIMIT :limit
+                """
+            ),
+            {"project_id": project_id, "limit": max_items},
+        ).mappings().all()
+        items = [self._digest_item(dict(row)) for row in rows]
+        urgent_items = [
+            item for item in items if int(item["risk_tier"]) >= urgent_risk_min
+        ]
+        batched_items = [
+            item for item in items if int(item["risk_tier"]) <= low_risk_max
+        ]
+        standard_items = [
+            item
+            for item in items
+            if item["id"]
+            not in {entry["id"] for entry in [*urgent_items, *batched_items]}
+        ]
+        content = {
+            "project_id": project_id,
+            "generated_by": actor,
+            "generated_at": now_utc().isoformat(),
+            "policy": {
+                "max_items": max_items,
+                "low_risk_max": low_risk_max,
+                "urgent_risk_min": urgent_risk_min,
+            },
+            "urgent": urgent_items,
+            "standard": standard_items,
+            "batched_low_risk": batched_items,
+        }
+        body = self._digest_body(content)
+        artifact_id = create_artifact(
+            connection,
+            self.settings,
+            project_id,
+            None,
+            "decision_digest",
+            "Decision digest",
+            {**content, "body": body},
+        )
+        emit_event(
+            connection,
+            project_id,
+            "decision.digest_created",
+            actor,
+            "artifact",
+            artifact_id,
+            {
+                "decision_count": len(items),
+                "urgent_count": len(urgent_items),
+                "batched_count": len(batched_items),
+            },
+        )
+        return {
+            "status": "created",
+            "artifact_id": artifact_id,
+            "decision_count": len(items),
+            "urgent_count": len(urgent_items),
+            "batched_count": len(batched_items),
+            "body": body,
+            "content": content,
+        }
+
     def get_row(
         self, connection: Connection, decision_id: str, *, for_update: bool = False
     ) -> dict:
@@ -113,6 +204,50 @@ class DecisionService:
             raise DecisionNotFoundError("Decision not found")
         return dict(row)
 
+    def _digest_item(self, row: dict[str, Any]) -> dict[str, Any]:
+        recommendation = row.get("recommendation") or {}
+        action = recommendation.get("action") if isinstance(recommendation, dict) else None
+        return {
+            "id": row["id"],
+            "task_id": row.get("task_id"),
+            "question": row["question"],
+            "status": row["status"],
+            "risk_tier": int(row["risk_tier"]),
+            "default_action": row.get("default_action") or "hold",
+            "recommendation_action": action or "review_required",
+            "deadline_at": row["deadline_at"].isoformat()
+            if row.get("deadline_at")
+            else None,
+            "created_at": row["created_at"].isoformat(),
+            "cost_summary": row.get("cost_summary") or {},
+        }
+
+    def _digest_body(self, content: dict[str, Any]) -> str:
+        lines = [
+            "Decision Digest",
+            f"Generated: {content['generated_at']}",
+            "",
+        ]
+        sections = [
+            ("Urgent", content["urgent"]),
+            ("Standard", content["standard"]),
+            ("Low-risk batch", content["batched_low_risk"]),
+        ]
+        for title, items in sections:
+            lines.append(f"{title}:")
+            if not items:
+                lines.append("- None")
+            for item in items:
+                deadline = item.get("deadline_at") or "no deadline"
+                lines.append(
+                    "- "
+                    f"{item['id']} / tier {item['risk_tier']} / "
+                    f"{item['recommendation_action']} / default {item['default_action']} / "
+                    f"{deadline}: {item['question']}"
+                )
+            lines.append("")
+        return "\n".join(lines).strip()
+
     def transition(
         self,
         connection: Connection,
@@ -130,6 +265,15 @@ class DecisionService:
         row = self.get_row(connection, decision_id, for_update=True)
         current_status = row["status"]
         timestamp = now_utc()
+        self.members.require_decision_actor(
+            connection,
+            row["project_id"],
+            actor,
+            action=action,
+            risk_tier=row["risk_tier"],
+            delegate_to=delegate_to,
+            delegated_to=row.get("delegated_to"),
+        )
 
         if action in {"approve", "reject", "revise", "delegate"}:
             if current_status not in {"pending", "delegated"}:
@@ -426,6 +570,13 @@ class DecisionService:
                 )
             else:
                 self._create_deploy_gate_block(connection, row, actor, recommendation)
+        elif action == "review_infra_provisioning":
+            if self.settings.infra_real_provision_allowed:
+                self._queue_infra_job_from_review(
+                    connection, row, actor, recommendation
+                )
+            else:
+                self._create_infra_gate_block(connection, row, actor, recommendation)
         elif action in {"self_improvement.begin_canary", "self_improvement.rollout"}:
             self.self_improvement.apply_decision_outcome(
                 connection, row, "approve", actor, row.get("resolution_note")
@@ -505,7 +656,7 @@ class DecisionService:
         if validation_status == "failed":
             return {
                 "status": "blocked_ci_validation_failed",
-                "reason": "GitHub validation failed for this sandbox PR proposal.",
+                "reason": "Sandbox validation failed for this PR proposal.",
                 "next_action": "Fix the failing checks and regenerate or update the proposal before merge approval.",
                 "event_reason": "ci_validation_failed",
                 "validation_status": validation_status,
@@ -888,6 +1039,134 @@ class DecisionService:
                 "reason": "manual_deploy_required",
                 "pull_request_url": recommendation.get("pull_request_url"),
             },
+        )
+
+    def _queue_infra_job_from_review(
+        self,
+        connection: Connection,
+        row: dict[str, Any],
+        actor: str,
+        recommendation: dict[str, Any],
+    ) -> None:
+        title = recommendation.get("title")
+        region = recommendation.get("region")
+        size = recommendation.get("size")
+        reservation_id = recommendation.get("reservation_id")
+        ttl_minutes = recommendation.get("ttl_minutes")
+        tags = recommendation.get("tags") or []
+        data_boundary = recommendation.get("data_boundary")
+        if not isinstance(title, str) or not title.strip():
+            title = row["question"]
+        if not isinstance(region, str) or not region.strip():
+            emit_event(
+                connection,
+                row["project_id"],
+                "decision.follow_on_skipped",
+                actor,
+                "decision",
+                row["id"],
+                {"reason": "missing_infra_region"},
+            )
+            return
+        if not isinstance(size, str) or not size.strip():
+            emit_event(
+                connection,
+                row["project_id"],
+                "decision.follow_on_skipped",
+                actor,
+                "decision",
+                row["id"],
+                {"reason": "missing_infra_size"},
+            )
+            return
+        if not isinstance(reservation_id, str) or not reservation_id.strip():
+            emit_event(
+                connection,
+                row["project_id"],
+                "decision.follow_on_skipped",
+                actor,
+                "decision",
+                row["id"],
+                {"reason": "missing_infra_reservation"},
+            )
+            return
+        if not isinstance(ttl_minutes, int):
+            emit_event(
+                connection,
+                row["project_id"],
+                "decision.follow_on_skipped",
+                actor,
+                "decision",
+                row["id"],
+                {"reason": "missing_infra_ttl"},
+            )
+            return
+        job = self.infrastructure.queue_droplet_provision(
+            connection,
+            project_id=row["project_id"],
+            task_id=row["task_id"],
+            decision_id=row["id"],
+            reservation_id=reservation_id,
+            dedupe_key=f"approved-infra-provision-{row['id']}",
+            title=title,
+            region=region,
+            size=size,
+            ttl_minutes=ttl_minutes,
+            tags=tags if isinstance(tags, list) else [],
+            actor=actor,
+            priority=15,
+            max_attempts=1,
+            data_boundary=data_boundary if isinstance(data_boundary, str) else None,
+        )
+        emit_event(
+            connection,
+            row["project_id"],
+            "decision.follow_on_job_queued",
+            actor,
+            "job",
+            job["id"],
+            {
+                "decision_id": row["id"],
+                "kind": "infra.droplet.create",
+                "reservation_id": reservation_id,
+            },
+        )
+
+    def _create_infra_gate_block(
+        self,
+        connection: Connection,
+        row: dict[str, Any],
+        actor: str,
+        recommendation: dict[str, Any],
+    ) -> None:
+        title = recommendation.get("title")
+        region = recommendation.get("region")
+        size = recommendation.get("size")
+        reservation_id = recommendation.get("reservation_id")
+        ttl_minutes = recommendation.get("ttl_minutes")
+        data_boundary = recommendation.get("data_boundary")
+        if not isinstance(title, str) or not title.strip():
+            title = row["question"]
+        if not isinstance(region, str) or not region:
+            region = "unknown"
+        if not isinstance(size, str) or not size:
+            size = "unknown"
+        if not isinstance(reservation_id, str):
+            reservation_id = ""
+        if not isinstance(ttl_minutes, int):
+            ttl_minutes = 0
+        self.infrastructure.create_provision_gate_block(
+            connection,
+            project_id=row["project_id"],
+            task_id=row["task_id"],
+            decision_id=row["id"],
+            title=title,
+            region=region,
+            size=size,
+            ttl_minutes=ttl_minutes,
+            reservation_id=reservation_id,
+            data_boundary=data_boundary if isinstance(data_boundary, str) else "internal",
+            actor=actor,
         )
 
     def _task_context(

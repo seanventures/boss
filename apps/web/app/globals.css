@@ -29,6 +29,27 @@ a {
   color: inherit;
 }
 
+.skip-link {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  z-index: 20;
+  transform: translateY(-160%);
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+  background: #06101e;
+  color: var(--text);
+  padding: 10px 14px;
+  text-decoration: none;
+  transition: transform 160ms ease;
+}
+
+.skip-link:focus {
+  transform: translateY(0);
+  outline: 3px solid rgba(127, 215, 200, 0.32);
+  outline-offset: 3px;
+}
+
 .shell {
   min-height: 100vh;
   padding: 56px 24px;
@@ -116,10 +137,15 @@ a {
   gap: 20px;
 }
 
+.panel-stack:focus {
+  outline: 3px solid rgba(127, 215, 200, 0.38);
+  outline-offset: 8px;
+}
+
 .section-head {
   display: flex;
   gap: 16px;
-  align-items: end;
+  align-items: flex-end;
   justify-content: space-between;
 }
 
@@ -164,7 +190,7 @@ a {
 .feed-row {
   display: flex;
   gap: 16px;
-  align-items: start;
+  align-items: flex-start;
   justify-content: space-between;
   padding-top: 14px;
   border-top: 1px solid rgba(162, 199, 255, 0.14);
@@ -196,7 +222,7 @@ a {
 .decision-footer {
   display: flex;
   gap: 16px;
-  align-items: start;
+  align-items: flex-start;
   justify-content: space-between;
 }
 

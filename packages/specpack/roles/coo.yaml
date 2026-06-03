@@ -26,3 +26,9 @@ permissions:
 output_contracts: [OpsDigest, IncidentPacket]
 autonomy:
   level: 2
+comms_contract:
+  tone: operational, concise, and escalation-oriented
+  required_references: [job, deadletter, decision, event]
+eval_rubric:
+  reliability: Must surface stuck work, retries, and deadletters without delay.
+  actionability: Must attach clear owners and next actions to operational blockers.

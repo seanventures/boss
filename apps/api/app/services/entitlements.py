@@ -10,7 +10,7 @@ from sqlalchemy.engine import Connection
 
 from ..config import Settings
 from .budget import BudgetGovernor
-from .core import emit_event, make_id
+from .core import DATA_BOUNDARIES, emit_event, make_id, normalize_data_boundary
 
 
 class SkillNotFoundError(Exception):
@@ -63,6 +63,7 @@ class EntitlementBrokerService:
             for skill in payload.get("skills", []):
                 if not isinstance(skill, dict):
                     continue
+                self.validate_skill_spec(skill, str(path))
                 items.append(
                     {
                         "id": skill.get("id", path.stem),
@@ -70,12 +71,70 @@ class EntitlementBrokerService:
                         "risk_tier": int(skill.get("risk_tier", 0)),
                         "description": skill.get("description", ""),
                         "mock_mode": bool(skill.get("mock_mode", False)),
+                        "input_schema": skill.get("input_schema", {}) or {},
+                        "output_schema": skill.get("output_schema", {}) or {},
                         "cost": skill.get("cost", {}) or {},
+                        "retry": skill.get("retry", {}) or {},
+                        "permissions": skill.get("permissions", {}) or {},
+                        "data_boundary": skill.get("data_boundary", "internal"),
                         "policy": skill.get("policy", {}) or {},
                     }
                 )
         items.sort(key=lambda item: item["id"])
         return items
+
+    def validate_skill_spec(self, skill: dict[str, Any], source: str) -> None:
+        errors: list[str] = []
+        for key in ("id", "kind", "description", "data_boundary"):
+            if not isinstance(skill.get(key), str) or not skill[key].strip():
+                errors.append(f"{key} must be a non-empty string")
+
+        risk_tier = skill.get("risk_tier")
+        if not isinstance(risk_tier, int) or risk_tier < 0 or risk_tier > 3:
+            errors.append("risk_tier must be an integer between 0 and 3")
+
+        if skill.get("mock_mode") is not False:
+            errors.append("mock_mode must be false in real-only runtime specs")
+
+        for key in (
+            "input_schema",
+            "output_schema",
+            "cost",
+            "retry",
+            "permissions",
+            "policy",
+        ):
+            if not isinstance(skill.get(key), dict) or not skill[key]:
+                errors.append(f"{key} must be a non-empty object")
+
+        cost = skill.get("cost") if isinstance(skill.get("cost"), dict) else {}
+        if not isinstance(cost.get("estimator"), str) or not cost["estimator"].strip():
+            errors.append("cost.estimator must be a non-empty string")
+        if not isinstance(cost.get("category"), str) or not cost["category"].strip():
+            errors.append("cost.category must be a non-empty string")
+
+        retry = skill.get("retry") if isinstance(skill.get("retry"), dict) else {}
+        max_attempts = retry.get("max_attempts")
+        if not isinstance(max_attempts, int) or max_attempts < 1:
+            errors.append("retry.max_attempts must be a positive integer")
+        if not isinstance(retry.get("backoff"), str) or not retry["backoff"].strip():
+            errors.append("retry.backoff must be a non-empty string")
+
+        permissions = (
+            skill.get("permissions") if isinstance(skill.get("permissions"), dict) else {}
+        )
+        for key in ("allowed_callers", "required_permissions"):
+            value = permissions.get(key)
+            if not isinstance(value, list) or not value:
+                errors.append(f"permissions.{key} must be a non-empty list")
+            elif any(not isinstance(item, str) or not item.strip() for item in value):
+                errors.append(
+                    f"permissions.{key} must contain only non-empty strings"
+                )
+
+        if errors:
+            skill_id = skill.get("id", "<unknown>")
+            raise ValueError(f"SkillSpec {skill_id} in {source} is invalid: {'; '.join(errors)}")
 
     def get_skill(self, skill_id: str) -> dict[str, Any]:
         for skill in self.list_skills():
@@ -95,7 +154,10 @@ class EntitlementBrokerService:
         if source_id == "cursor_cli":
             return False, bool(self.settings.cursor_cli_enabled)
         if source_id == "approved_local_model_host":
-            return False, bool(self.settings.local_model_enabled and self.settings.local_model_id)
+            local_ready = bool(
+                self.settings.local_model_enabled and self.settings.local_model_id
+            )
+            return local_ready, local_ready
         return False, False
 
     def _credential_ref(self, source_id: str) -> Optional[str]:
@@ -377,6 +439,29 @@ class EntitlementBrokerService:
 
         return sorted(models, key=score, reverse=True)[0]
 
+    def _allowed_data_boundaries_for_source(
+        self, source: dict[str, Any]
+    ) -> set[str]:
+        defaults = self._source_record_defaults().get(source["source_id"], {})
+        configured = defaults.get("allowed_data_boundaries")
+        if isinstance(configured, list) and configured:
+            return {normalize_data_boundary(str(item)) for item in configured}
+        boundary_policy = (
+            (self._provider_registry().get("routing_policy") or {}).get(
+                "data_boundaries"
+            )
+            or {}
+        )
+        if source.get("source_kind") == "approved_local_model":
+            configured = boundary_policy.get("approved_local_model_default")
+            if isinstance(configured, list) and configured:
+                return {normalize_data_boundary(str(item)) for item in configured}
+            return set(DATA_BOUNDARIES)
+        configured = boundary_policy.get("external_official_source_default")
+        if isinstance(configured, list) and configured:
+            return {normalize_data_boundary(str(item)) for item in configured}
+        return {"public", "internal", "confidential"}
+
     def list_routing_logs(
         self, connection: Connection, project_id: str, limit: int = 25
     ) -> list[dict[str, Any]]:
@@ -384,7 +469,7 @@ class EntitlementBrokerService:
             text(
                 """
                 SELECT id, project_id, skill_id, task_kind, workload_class, risk_tier,
-                       budget_state, selected_source_id, selected_provider,
+                       data_boundary, budget_state, selected_source_id, selected_provider,
                        selected_model_id, denial_reason, rejected_sources, decision,
                        created_at
                 FROM routing_logs
@@ -414,10 +499,12 @@ class EntitlementBrokerService:
         risk_tier: int,
         preferred_capabilities: Optional[list[str]] = None,
         budget_state: Optional[str] = None,
+        data_boundary: str = "internal",
         actor: str = "system",
     ) -> dict[str, Any]:
         preferred_capabilities = preferred_capabilities or []
         skill = self.get_skill(skill_id)
+        boundary = normalize_data_boundary(data_boundary)
         budget_snapshot = self.budget.status_for_project(connection, project_id)
         resolved_budget_state = budget_state or budget_snapshot["budget_state"]
         registry = self._provider_registry()
@@ -487,6 +574,15 @@ class EntitlementBrokerService:
                     }
                 )
                 continue
+            if boundary not in self._allowed_data_boundaries_for_source(source):
+                rejected_sources.append(
+                    {
+                        "source_id": source["source_id"],
+                        "reason": "data_boundary_not_allowed",
+                        "data_boundary": boundary,
+                    }
+                )
+                continue
 
             model_candidates = self._models_for_source(
                 source["provider"],
@@ -539,6 +635,7 @@ class EntitlementBrokerService:
         decision = {
             "skill_id": skill_id,
             "task_kind": task_kind,
+            "data_boundary": boundary,
             "reservation_required": bool(
                 (skill.get("policy") or {}).get("requires_budget_reservation", False)
             ),
@@ -552,12 +649,12 @@ class EntitlementBrokerService:
                 """
                 INSERT INTO routing_logs (
                     id, project_id, skill_id, task_kind, workload_class, risk_tier,
-                    budget_state, selected_source_id, selected_provider,
+                    data_boundary, budget_state, selected_source_id, selected_provider,
                     selected_model_id, denial_reason, rejected_sources, decision
                 )
                 VALUES (
                     :id, :project_id, :skill_id, :task_kind, :workload_class, :risk_tier,
-                    :budget_state, :selected_source_id, :selected_provider,
+                    :data_boundary, :budget_state, :selected_source_id, :selected_provider,
                     :selected_model_id, :denial_reason, CAST(:rejected_sources AS JSONB),
                     CAST(:decision AS JSONB)
                 )
@@ -570,6 +667,7 @@ class EntitlementBrokerService:
                 "task_kind": task_kind,
                 "workload_class": workload_class,
                 "risk_tier": risk_tier,
+                "data_boundary": boundary,
                 "budget_state": resolved_budget_state,
                 "selected_source_id": selected_source["source_id"] if selected_source else None,
                 "selected_provider": selected_source["provider"] if selected_source else None,
@@ -589,6 +687,7 @@ class EntitlementBrokerService:
             {
                 "skill_id": skill_id,
                 "task_kind": task_kind,
+                "data_boundary": boundary,
                 "selected_source_id": selected_source["source_id"] if selected_source else None,
                 "selected_model_id": selected_model.get("id") if selected_model else None,
                 "denial_reason": denial_reason,
@@ -600,6 +699,7 @@ class EntitlementBrokerService:
             "task_kind": task_kind,
             "workload_class": workload_class,
             "risk_tier": risk_tier,
+            "data_boundary": boundary,
             "budget_state": resolved_budget_state,
             "source_id": selected_source["source_id"] if selected_source else None,
             "provider": selected_source["provider"] if selected_source else None,

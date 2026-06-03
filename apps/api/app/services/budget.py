@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import timedelta
 from typing import Any, Optional
 
 from sqlalchemy import text
@@ -80,6 +81,10 @@ class BudgetGovernor:
                 "available_usd_micros": 0,
                 "committed_usd_micros": 0,
                 "burn_approx_usd_micros": 0,
+                "burn_window_hours": 24,
+                "burn_rate_usd_micros_per_hour": 0,
+                "forecasted_24h_usd_micros": 0,
+                "time_to_cap_seconds": None,
                 "utilization_ratio": 0.0,
                 "active_reservations_count": 0,
                 "top_cost_drivers": [],
@@ -114,6 +119,24 @@ class BudgetGovernor:
             {"project_id": project_id},
         ).scalar_one()
         actual = int(actual)
+
+        burn_window_hours = 24
+        burn_window_start = now_utc() - timedelta(hours=burn_window_hours)
+        recent_actual = connection.execute(
+            text(
+                """
+                SELECT COALESCE(SUM(COALESCE(actual_usd_micros, estimated_usd_micros)), 0) AS total
+                FROM cost_receipts
+                WHERE project_id = :project_id
+                  AND created_at >= :burn_window_start
+                """
+            ),
+            {
+                "project_id": project_id,
+                "burn_window_start": burn_window_start,
+            },
+        ).scalar_one()
+        recent_actual = int(recent_actual)
 
         top_cost_drivers = [
             {
@@ -152,6 +175,14 @@ class BudgetGovernor:
             orange,
             red,
         )
+        burn_rate = int(recent_actual / burn_window_hours)
+        forecasted_24h = recent_actual + reserved
+        time_to_cap_seconds: Optional[int] = None
+        if cap and committed >= cap:
+            time_to_cap_seconds = 0
+        elif cap and burn_rate > 0:
+            remaining = max(cap - committed, 0)
+            time_to_cap_seconds = int((remaining / burn_rate) * 3600)
 
         return {
             "budget_state": budget_state,
@@ -161,6 +192,10 @@ class BudgetGovernor:
             "available_usd_micros": available,
             "committed_usd_micros": committed,
             "burn_approx_usd_micros": committed,
+            "burn_window_hours": burn_window_hours,
+            "burn_rate_usd_micros_per_hour": burn_rate,
+            "forecasted_24h_usd_micros": forecasted_24h,
+            "time_to_cap_seconds": time_to_cap_seconds,
             "utilization_ratio": round(utilization, 6),
             "active_reservations_count": active_reservations_count,
             "top_cost_drivers": top_cost_drivers,
@@ -168,6 +203,127 @@ class BudgetGovernor:
             "auto_lite_mode_pct": orange,
             "freeze_provisioning_pct": red,
         }
+
+    def list_allocations(
+        self, connection: Connection, project_id: str
+    ) -> list[dict[str, Any]]:
+        rows = connection.execute(
+            text(
+                """
+                SELECT id, parent_allocation_id, project_id, scope_type, scope_id,
+                       amount_usd_micros, period_start, period_end, status, created_at
+                FROM budget_allocations
+                WHERE project_id = :project_id
+                ORDER BY created_at DESC, id ASC
+                """
+            ),
+            {"project_id": project_id},
+        ).mappings().all()
+        return [self._allocation_snapshot(connection, row) for row in rows]
+
+    def create_allocation(
+        self,
+        connection: Connection,
+        project_id: str,
+        scope_type: str,
+        scope_id: str,
+        amount_usd_micros: int,
+        period_start: Any,
+        period_end: Any,
+        actor: str,
+        parent_allocation_id: Optional[str] = None,
+    ) -> dict[str, Any]:
+        if amount_usd_micros <= 0:
+            raise ValueError("amount_usd_micros must be greater than zero.")
+        if period_end <= period_start:
+            raise ValueError("period_end must be after period_start.")
+
+        if parent_allocation_id:
+            parent = self._get_allocation(
+                connection, project_id, parent_allocation_id, for_update=True
+            )
+            parent_snapshot = self._allocation_snapshot(connection, parent)
+            if amount_usd_micros > parent_snapshot["available_usd_micros"]:
+                emit_event(
+                    connection,
+                    project_id,
+                    "budget.allocation_denied",
+                    actor,
+                    "budget_allocation",
+                    parent_allocation_id,
+                    {
+                        "requested_usd_micros": amount_usd_micros,
+                        "available_usd_micros": parent_snapshot["available_usd_micros"],
+                        "reason": "child_allocation_exceeds_parent_available",
+                    },
+                )
+                raise ValueError("Child allocation exceeds parent available budget.")
+        else:
+            policy = self.status_for_project(connection, project_id)
+            if (
+                policy["cap_usd_micros"]
+                and amount_usd_micros > policy["cap_usd_micros"]
+            ):
+                emit_event(
+                    connection,
+                    project_id,
+                    "budget.allocation_denied",
+                    actor,
+                    "project",
+                    project_id,
+                    {
+                        "requested_usd_micros": amount_usd_micros,
+                        "cap_usd_micros": policy["cap_usd_micros"],
+                        "reason": "root_allocation_exceeds_project_cap",
+                    },
+                )
+                raise ValueError("Root allocation exceeds project budget cap.")
+
+        allocation_id = make_id("bua")
+        connection.execute(
+            text(
+                """
+                INSERT INTO budget_allocations (
+                    id, parent_allocation_id, project_id, scope_type, scope_id,
+                    amount_usd_micros, period_start, period_end, status
+                )
+                VALUES (
+                    :id, :parent_allocation_id, :project_id, :scope_type, :scope_id,
+                    :amount_usd_micros, :period_start, :period_end, 'active'
+                )
+                """
+            ),
+            {
+                "id": allocation_id,
+                "parent_allocation_id": parent_allocation_id,
+                "project_id": project_id,
+                "scope_type": scope_type,
+                "scope_id": scope_id,
+                "amount_usd_micros": amount_usd_micros,
+                "period_start": period_start,
+                "period_end": period_end,
+            },
+        )
+        emit_event(
+            connection,
+            project_id,
+            "budget.allocation_created",
+            actor,
+            "budget_allocation",
+            allocation_id,
+            {
+                "parent_allocation_id": parent_allocation_id,
+                "scope_type": scope_type,
+                "scope_id": scope_id,
+                "amount_usd_micros": amount_usd_micros,
+                "period_start": period_start.isoformat(),
+                "period_end": period_end.isoformat(),
+            },
+        )
+        return self._allocation_snapshot(
+            connection,
+            self._get_allocation(connection, project_id, allocation_id),
+        )
 
     def quote(
         self,
@@ -215,6 +371,7 @@ class BudgetGovernor:
         reason: str,
         expires_in_minutes: int,
         job_id: Optional[str] = None,
+        allocation_id: Optional[str] = None,
     ) -> dict:
         self.expire_stale_reservations(connection, project_id)
         snapshot = self.status_for_project(connection, project_id)
@@ -256,6 +413,47 @@ class BudgetGovernor:
                 "message": "Budget cap exceeded. Decision created.",
             }
 
+        if allocation_id:
+            allocation = self._get_allocation(
+                connection, project_id, allocation_id, for_update=True
+            )
+            allocation_snapshot = self._allocation_snapshot(connection, allocation)
+            if amount_usd_micros > allocation_snapshot["available_usd_micros"]:
+                decision_id = create_blocking_decision(
+                    connection,
+                    project_id,
+                    None,
+                    "Budget allocation reservation denied",
+                    {"action": "increase_allocation_or_defer"},
+                    {
+                        "allocation_id": allocation_id,
+                        "requested_usd_micros": amount_usd_micros,
+                        "available_usd_micros": allocation_snapshot[
+                            "available_usd_micros"
+                        ],
+                    },
+                    "budget_denied",
+                )
+                emit_event(
+                    connection,
+                    project_id,
+                    "budget.allocation_reservation_denied",
+                    "budget_governor",
+                    "decision",
+                    decision_id,
+                    {
+                        "allocation_id": allocation_id,
+                        "requested_usd_micros": amount_usd_micros,
+                        "reason": reason,
+                    },
+                )
+                return {
+                    "status": "denied",
+                    "decision_id": decision_id,
+                    "budget_state": snapshot["budget_state"],
+                    "message": "Budget allocation exceeded. Decision created.",
+                }
+
         reservation_id = make_id("res")
         connection.execute(
             text(
@@ -265,13 +463,14 @@ class BudgetGovernor:
                     status, reason, expires_at
                 )
                 VALUES (
-                    :id, NULL, :project_id, :job_id, :category, :amount_usd_micros,
+                    :id, :allocation_id, :project_id, :job_id, :category, :amount_usd_micros,
                     'active', :reason, :expires_at
                 )
                 """
             ),
             {
                 "id": reservation_id,
+                "allocation_id": allocation_id,
                 "project_id": project_id,
                 "job_id": job_id,
                 "category": category,
@@ -291,6 +490,7 @@ class BudgetGovernor:
                 "category": category,
                 "amount_usd_micros": amount_usd_micros,
                 "job_id": job_id,
+                "allocation_id": allocation_id,
             },
         )
         fresh = self.status_for_project(connection, project_id)
@@ -300,6 +500,93 @@ class BudgetGovernor:
             "decision_id": None,
             "budget_state": fresh["budget_state"],
             "message": "Reservation created.",
+        }
+
+    def _get_allocation(
+        self,
+        connection: Connection,
+        project_id: str,
+        allocation_id: str,
+        *,
+        for_update: bool = False,
+    ) -> dict[str, Any]:
+        lock_clause = "FOR UPDATE" if for_update else ""
+        row = connection.execute(
+            text(
+                f"""
+                SELECT id, parent_allocation_id, project_id, scope_type, scope_id,
+                       amount_usd_micros, period_start, period_end, status, created_at
+                FROM budget_allocations
+                WHERE id = :allocation_id AND project_id = :project_id
+                {lock_clause}
+                """
+            ),
+            {"allocation_id": allocation_id, "project_id": project_id},
+        ).mappings().first()
+        if not row or row["status"] != "active":
+            raise ValueError("Active budget allocation not found.")
+        return dict(row)
+
+    def _allocation_snapshot(
+        self, connection: Connection, row: Any
+    ) -> dict[str, Any]:
+        allocation_id = row["id"]
+        child_total = int(
+            connection.execute(
+                text(
+                    """
+                    SELECT COALESCE(SUM(amount_usd_micros), 0)
+                    FROM budget_allocations
+                    WHERE parent_allocation_id = :allocation_id
+                      AND status = 'active'
+                    """
+                ),
+                {"allocation_id": allocation_id},
+            ).scalar_one()
+        )
+        reserved = int(
+            connection.execute(
+                text(
+                    """
+                    SELECT COALESCE(SUM(amount_usd_micros), 0)
+                    FROM budget_reservations
+                    WHERE allocation_id = :allocation_id
+                      AND status = 'active'
+                    """
+                ),
+                {"allocation_id": allocation_id},
+            ).scalar_one()
+        )
+        actual = int(
+            connection.execute(
+                text(
+                    """
+                    SELECT COALESCE(SUM(COALESCE(cr.actual_usd_micros, cr.estimated_usd_micros)), 0)
+                    FROM cost_receipts cr
+                    JOIN budget_reservations br ON br.id = cr.reservation_id
+                    WHERE br.allocation_id = :allocation_id
+                    """
+                ),
+                {"allocation_id": allocation_id},
+            ).scalar_one()
+        )
+        amount = int(row["amount_usd_micros"])
+        committed = child_total + reserved + actual
+        return {
+            "id": allocation_id,
+            "parent_allocation_id": row["parent_allocation_id"],
+            "project_id": row["project_id"],
+            "scope_type": row["scope_type"],
+            "scope_id": row["scope_id"],
+            "amount_usd_micros": amount,
+            "child_allocated_usd_micros": child_total,
+            "reserved_usd_micros": reserved,
+            "actual_usd_micros": actual,
+            "available_usd_micros": max(amount - committed, 0),
+            "period_start": row["period_start"].isoformat(),
+            "period_end": row["period_end"].isoformat(),
+            "status": row["status"],
+            "created_at": row["created_at"].isoformat(),
         }
 
     def release(

@@ -3,6 +3,7 @@ from sqlalchemy import text
 from .config import get_settings
 from .db import ensure_schema, get_engine
 from .services.entitlements import EntitlementBrokerService
+from .services.members import MemberDirectoryService
 from .services.specpack import SpecPackService
 
 
@@ -11,6 +12,7 @@ def seed() -> None:
     settings.artifact_root.mkdir(parents=True, exist_ok=True)
     engine = get_engine(settings)
     entitlements = EntitlementBrokerService(settings)
+    members = MemberDirectoryService(settings)
     specpack = SpecPackService(settings)
     ensure_schema(engine, settings)
 
@@ -70,6 +72,11 @@ def seed() -> None:
                 "monthly_cap": settings.monthly_cap_usd_micros,
                 "burst_cap": settings.burst_cap_usd_micros_per_min,
             },
+        )
+        members.seed_default_members(
+            connection,
+            settings.default_project_id,
+            "bootstrap",
         )
         specpack.install_pack(
             connection,

@@ -1,11 +1,15 @@
 import {
   createReplayBundleAction,
+  createBreakGlassGrantAction,
+  createComplianceEvidenceBundleAction,
+  createDecisionDigestAction,
   installAgentModuleAction,
   installPackAction,
   queueOutboxMessageAction,
   refreshHealthSnapshotAction,
   recordSelfImprovementCanaryAction,
   recordSelfImprovementRolloutAction,
+  revokeBreakGlassGrantAction,
   resolveDecisionAction,
   rollbackSelfImprovementProposalAction,
   submitSelfImprovementProposalAction,
@@ -15,12 +19,19 @@ import {
 import { fetchAuditSummary } from "../lib/audit";
 import { fetchArtifactFeed } from "../lib/artifacts";
 import { fetchAgentModuleFeed } from "../lib/agent-modules";
+import { fetchAuthSession } from "../lib/auth-session";
 import { fetchInboxFeed, fetchOutboxFeed } from "../lib/comms";
+import { fetchBudgetAllocationFeed } from "../lib/budget-allocations";
+import { fetchBudgetStatus } from "../lib/budget-status";
+import { fetchBreakGlassGrantFeed } from "../lib/break-glass";
+import { fetchChangeJournalFeed } from "../lib/change-journal";
 import { fetchDeadletterFeed } from "../lib/deadletters";
 import { fetchDecisionFeed, type DecisionFeedItem } from "../lib/decisions";
 import { fetchEntitlementFeed } from "../lib/entitlements";
 import { fetchActivityFeed } from "../lib/events";
 import { fetchHealthSnapshotFeed } from "../lib/health-snapshots";
+import { fetchInfrastructureResourceFeed } from "../lib/infrastructure";
+import { fetchMemberFeed } from "../lib/members";
 import { fetchMetatronQuery } from "../lib/metatron";
 import { fetchPackFeed } from "../lib/packs";
 import { fetchProjectFeed } from "../lib/projects";
@@ -70,6 +81,24 @@ function formatDateTime(value?: string): string {
     dateStyle: "medium",
     timeStyle: "short",
   }).format(new Date(value));
+}
+
+function formatDurationSeconds(value?: number | null): string {
+  if (typeof value !== "number") {
+    return "No active burn rate";
+  }
+  if (value <= 0) {
+    return "At cap";
+  }
+  const hours = Math.floor(value / 3600);
+  const days = Math.floor(hours / 24);
+  if (days > 0) {
+    return `${days}d ${hours % 24}h`;
+  }
+  if (hours > 0) {
+    return `${hours}h`;
+  }
+  return `${Math.max(Math.floor(value / 60), 1)}m`;
 }
 
 function titleCaseToken(value: string): string {
@@ -165,6 +194,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
   const metatronQuestion = getParam(resolvedSearchParams?.q);
   const metatronTaskId = getParam(resolvedSearchParams?.task_id);
   const metatronDecisionId = getParam(resolvedSearchParams?.decision_id);
+  const requestedActorId = getParam(resolvedSearchParams?.actor);
   const projects = await fetchProjectFeed(requestedProjectId);
   const activeProjectId = projects.items.some(
     (project) => project.id === requestedProjectId,
@@ -186,11 +216,18 @@ export default async function HomePage({ searchParams }: HomePageProps) {
     routingLogs,
     skills,
     receipts,
+    infrastructureResources,
+    budgetStatus,
+    budgetAllocations,
     auditSummary,
+    changeJournal,
     selfImprovement,
     outbox,
     inbox,
+    members,
     metatron,
+    authSession,
+    breakGlassGrants,
   ] =
     await Promise.all([
       fetchStatus(activeProjectId),
@@ -207,30 +244,52 @@ export default async function HomePage({ searchParams }: HomePageProps) {
       fetchRoutingLogFeed(activeProjectId),
       fetchSkillFeed(),
       fetchReceiptFeed(activeProjectId),
+      fetchInfrastructureResourceFeed(activeProjectId),
+      fetchBudgetStatus(activeProjectId),
+      fetchBudgetAllocationFeed(activeProjectId),
       fetchAuditSummary(activeProjectId),
+      fetchChangeJournalFeed(activeProjectId),
       fetchSelfImprovementFeed(activeProjectId),
       fetchOutboxFeed(activeProjectId),
       fetchInboxFeed(activeProjectId),
+      fetchMemberFeed(activeProjectId),
       fetchMetatronQuery(
         metatronQuestion,
         metatronTaskId,
         metatronDecisionId,
         activeProjectId,
       ),
+      fetchAuthSession(),
+      fetchBreakGlassGrantFeed(activeProjectId),
     ]);
 
   const deadletterCount = deadletters.items.length;
   const disableCommandEntry = !status.apiReachable || !status.databaseConnected;
   const installedCorePack = packs.items.find((pack) => pack.installed);
+  const activeActorId =
+    requestedActorId &&
+    members.items.some((member) => member.memberId === requestedActorId)
+      ? requestedActorId
+      : members.items.some((member) => member.memberId === "executive_console")
+        ? "executive_console"
+        : members.items[0]?.memberId ?? "executive_console";
+  const activeActor = members.items.find(
+    (member) => member.memberId === activeActorId,
+  );
 
   return (
-    <main className="shell">
+    <main className="shell" aria-labelledby="boss-console-title">
+      <a className="skip-link" href="#decision-inbox">
+        Skip to decision inbox
+      </a>
       <div className="frame">
         <section className="hero">
           <div className="hero-grid">
             <div className="hero-copy">
               <span className="eyebrow">Business Operating System Sentinel</span>
-              <h1>Executive control for autonomous work.</h1>
+              <h1 id="boss-console-title">
+                Executive control for autonomous work.
+              </h1>
               <p>
                 Real GitHub and OpenAI integrations are gated behind receipts,
                 reservations, and approvals. The console now submits CEO
@@ -263,11 +322,29 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                       ))}
                     </select>
                   </label>
+                  <label className="field">
+                    <span>Active actor</span>
+                    <select
+                      className="input"
+                      name="actor"
+                      defaultValue={activeActorId}
+                    >
+                      {members.items.length > 0 ? (
+                        members.items.map((member) => (
+                          <option key={member.id} value={member.memberId}>
+                            {member.displayName} ({member.memberId})
+                          </option>
+                        ))
+                      ) : (
+                        <option value={activeActorId}>{activeActorId}</option>
+                      )}
+                    </select>
+                  </label>
                   <button className="button secondary" type="submit">
-                    Switch project
+                    Apply scope
                   </button>
                   <p className="detail">
-                    Every panel on this page now runs against the selected project.
+                    Every write action now carries the selected project member actor.
                   </p>
                 </form>
               ) : (
@@ -276,10 +353,19 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                     "Project registry is unavailable, so the console is using its default scope."}
                 </p>
               )}
+              <p className="detail">
+                Active actor: {activeActor?.displayName ?? activeActorId} / roles{" "}
+                {activeActor?.roleKeys.join(", ") || "unknown"} / permissions{" "}
+                {activeActor?.permissions.length ?? 0}
+                {!members.apiReachable && members.blockedReason
+                  ? ` (${members.blockedReason})`
+                  : ""}
+              </p>
             </div>
 
             <form action={submitCommandAction} className="composer">
               <input type="hidden" name="project_id" value={activeProjectId} />
+              <input type="hidden" name="actor" value={activeActorId} />
               <div>
                 <span className="eyebrow">CEO Command</span>
                 <h2>Issue a real outcome.</h2>
@@ -329,6 +415,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             </div>
             <form method="get" className="composer">
               <input type="hidden" name="project_id" value={activeProjectId} />
+              <input type="hidden" name="actor" value={activeActorId} />
               <label className="field">
                 <span>Question</span>
                 <input
@@ -435,6 +522,21 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             </p>
           </article>
           <article>
+            <h2>Auth Session</h2>
+            <div className="metric">
+              {authSession.actorBindingRequired
+                ? authSession.principalMemberId ?? "Bound"
+                : authSession.authRequired
+                  ? "API key"
+                  : "Local"}
+            </div>
+            <p className="detail">
+              {authSession.apiReachable
+                ? authSession.message
+                : authSession.blockedReason ?? "Auth session API unavailable."}
+            </p>
+          </article>
+          <article>
             <h2>Budget State</h2>
             <div className="metric">{status.budgetState}</div>
             <p className="detail">
@@ -503,6 +605,353 @@ export default async function HomePage({ searchParams }: HomePageProps) {
         <section className="panel-stack">
           <div className="section-head">
             <div>
+              <span className="eyebrow">Break-Glass Access</span>
+              <h2>Emergency RBAC with TTL and postmortem tasks.</h2>
+            </div>
+            <p className="status-meta">
+              PRD 9.2 requires identity, reason, scope, TTL, event log, and a
+              postmortem task for emergency access.
+            </p>
+          </div>
+
+          <div className="stack-grid">
+            <article className="stack-card">
+              <h3>Grant temporary access</h3>
+              <form action={createBreakGlassGrantAction} className="composer compact">
+                <input type="hidden" name="project_id" value={activeProjectId} />
+                <input type="hidden" name="actor" value={activeActorId} />
+                <label className="field">
+                  <span>Target member</span>
+                  <select className="input" name="target_member_id" required>
+                    {members.items.map((member) => (
+                      <option key={member.id} value={member.memberId}>
+                        {member.displayName} ({member.memberId})
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="field">
+                  <span>Granted permissions</span>
+                  <textarea
+                    name="granted_permissions"
+                    rows={3}
+                    className="textarea"
+                    placeholder={"One permission per line\nmember_manage\naudit_export"}
+                    required
+                  />
+                </label>
+                <label className="field">
+                  <span>Reason</span>
+                  <textarea
+                    name="reason"
+                    rows={3}
+                    className="textarea"
+                    placeholder="Describe the incident, scope, and why normal access is insufficient."
+                    required
+                  />
+                </label>
+                <div className="input-grid">
+                  <label className="field">
+                    <span>TTL minutes</span>
+                    <input
+                      className="input"
+                      name="ttl_minutes"
+                      type="number"
+                      min={5}
+                      max={1440}
+                      defaultValue={60}
+                      required
+                    />
+                  </label>
+                  <label className="field">
+                    <span>Scope JSON</span>
+                    <input
+                      className="input"
+                      name="scope_json"
+                      placeholder='{"incident_id":"inc_123"}'
+                    />
+                  </label>
+                </div>
+                <button className="button secondary" type="submit">
+                  Grant break-glass access
+                </button>
+              </form>
+            </article>
+
+            <article className="stack-card">
+              <h3>Recent grants</h3>
+              {!breakGlassGrants.apiReachable ? (
+                <p className="detail">
+                  {breakGlassGrants.blockedReason ??
+                    "Break-glass API is unavailable."}
+                </p>
+              ) : breakGlassGrants.items.length === 0 ? (
+                <p className="detail">
+                  No break-glass grants have been created for this project.
+                </p>
+              ) : (
+                <div className="feed-list">
+                  {breakGlassGrants.items.map((grant) => (
+                    <div className="feed-row" key={grant.id}>
+                      <div>
+                        <h4>
+                          {grant.targetMemberId} / {grant.status}
+                        </h4>
+                        <p className="detail">
+                          Permissions: {grant.grantedPermissions.join(", ")}
+                        </p>
+                        <p className="detail">
+                          Expires {formatDateTime(grant.expiresAt)} / requested by{" "}
+                          {grant.requestedBy}
+                        </p>
+                        <p className="detail">
+                          Postmortem task: {grant.postmortemTaskId ?? "missing"}
+                        </p>
+                        <p className="detail">{grant.reason}</p>
+                      </div>
+                      {grant.status === "active" ? (
+                        <form
+                          action={revokeBreakGlassGrantAction}
+                          className="composer compact"
+                        >
+                          <input type="hidden" name="grant_id" value={grant.id} />
+                          <input
+                            type="hidden"
+                            name="project_id"
+                            value={activeProjectId}
+                          />
+                          <input type="hidden" name="actor" value={activeActorId} />
+                          <label className="field">
+                            <span>Revocation reason</span>
+                            <input
+                              className="input"
+                              name="reason"
+                              placeholder="Emergency access no longer needed."
+                              required
+                            />
+                          </label>
+                          <button className="button secondary" type="submit">
+                            Revoke
+                          </button>
+                        </form>
+                      ) : (
+                        <code className="mono">{grant.id}</code>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </article>
+          </div>
+        </section>
+
+        <section className="panel-stack">
+          <div className="section-head">
+            <div>
+              <span className="eyebrow">Budget Control Center</span>
+              <h2>Live spend, forecast, and cap pressure.</h2>
+            </div>
+            <p className="status-meta">
+              Source: `/v1/budget/status` for project {activeProjectId}.
+            </p>
+          </div>
+
+          <article className="stack-card">
+            {!budgetStatus.apiReachable ? (
+              <p className="detail">
+                {budgetStatus.blockedReason ?? "Budget status API is unavailable."}
+              </p>
+            ) : (
+              <>
+                <div className="grid compact-grid">
+                  <article>
+                    <h2>Actual Spend</h2>
+                    <div className="metric">
+                      {formatMicros(budgetStatus.actualUsdMicros)}
+                    </div>
+                    <p className="detail">Cost receipts recorded for this project.</p>
+                  </article>
+                  <article>
+                    <h2>Reserved</h2>
+                    <div className="metric">
+                      {formatMicros(budgetStatus.reservedUsdMicros)}
+                    </div>
+                    <p className="detail">
+                      {budgetStatus.activeReservationsCount} active reservation
+                      {budgetStatus.activeReservationsCount === 1 ? "" : "s"}.
+                    </p>
+                  </article>
+                  <article>
+                    <h2>Forecast 24h</h2>
+                    <div className="metric">
+                      {formatMicros(budgetStatus.forecasted24hUsdMicros)}
+                    </div>
+                    <p className="detail">
+                      Observed spend over {budgetStatus.burnWindowHours}h plus
+                      active reservations.
+                    </p>
+                  </article>
+                  <article>
+                    <h2>Time To Cap</h2>
+                    <div className="metric">
+                      {formatDurationSeconds(budgetStatus.timeToCapSeconds)}
+                    </div>
+                    <p className="detail">
+                      Burn rate{" "}
+                      {formatMicros(budgetStatus.burnRateUsdMicrosPerHour)}
+                      /hour.
+                    </p>
+                  </article>
+                </div>
+                <div className="decision-grid">
+                  <div>
+                    <h4>Cap pressure</h4>
+                    <p className="detail">
+                      State {budgetStatus.budgetState}; committed{" "}
+                      {formatMicros(budgetStatus.committedUsdMicros)} of{" "}
+                      {formatMicros(budgetStatus.capUsdMicros)} with{" "}
+                      {Math.round(budgetStatus.utilizationRatio * 100)}%
+                      utilization.
+                    </p>
+                  </div>
+                  <div>
+                    <h4>Top cost drivers</h4>
+                    {budgetStatus.topCostDrivers.length > 0 ? (
+                      <ul className="detail">
+                        {budgetStatus.topCostDrivers.map((driver) => (
+                          <li key={driver.skillOrModelId}>
+                            {driver.skillOrModelId}:{" "}
+                            {formatMicros(driver.amountUsdMicros)}
+                          </li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <p className="detail">No cost receipts recorded yet.</p>
+                    )}
+                  </div>
+                </div>
+              </>
+            )}
+          </article>
+        </section>
+
+        <section className="panel-stack">
+          <div className="section-head">
+            <div>
+              <span className="eyebrow">Budget Allocations</span>
+              <h2>Hierarchical spend envelopes for departments and initiatives.</h2>
+            </div>
+            <p className="status-meta">
+              Child allocations and reservations cannot exceed the parent envelope.
+            </p>
+          </div>
+
+          <article className="stack-card">
+            {!budgetAllocations.apiReachable ? (
+              <p className="detail">
+                {budgetAllocations.blockedReason ??
+                  "Budget allocation API is unavailable."}
+              </p>
+            ) : budgetAllocations.items.length === 0 ? (
+              <p className="detail">
+                No budget allocations have been created for this project yet.
+              </p>
+            ) : (
+              <div className="feed-list">
+                {budgetAllocations.items.map((allocation) => (
+                  <div className="feed-row" key={allocation.id}>
+                    <div>
+                      <h4>
+                        {titleCaseToken(allocation.scopeType)} /{" "}
+                        {allocation.scopeId}
+                      </h4>
+                      <p className="detail">
+                        Amount {formatMicros(allocation.amountUsdMicros)} / available{" "}
+                        {formatMicros(allocation.availableUsdMicros)}
+                      </p>
+                      <p className="detail">
+                        Child allocations{" "}
+                        {formatMicros(allocation.childAllocatedUsdMicros)} / reserved{" "}
+                        {formatMicros(allocation.reservedUsdMicros)} / actual{" "}
+                        {formatMicros(allocation.actualUsdMicros)}
+                      </p>
+                      <p className="detail">
+                        {formatDateTime(allocation.periodStart)} to{" "}
+                        {formatDateTime(allocation.periodEnd)}
+                      </p>
+                    </div>
+                    <code className="mono">
+                      {allocation.parentAllocationId ?? allocation.id}
+                    </code>
+                  </div>
+                ))}
+              </div>
+            )}
+          </article>
+        </section>
+
+        <section className="panel-stack">
+          <div className="section-head">
+            <div>
+              <span className="eyebrow">Infrastructure Resources</span>
+              <h2>Receipt-backed droplets with TTL and janitor visibility.</h2>
+            </div>
+            <p className="status-meta">
+              Source: `/v1/infra/resources` for project {activeProjectId}.
+            </p>
+          </div>
+
+          <article className="stack-card">
+            {!infrastructureResources.apiReachable ? (
+              <p className="detail">
+                {infrastructureResources.blockedReason ??
+                  "Infrastructure resource API is unavailable."}
+              </p>
+            ) : infrastructureResources.items.length === 0 ? (
+              <p className="detail">
+                No provisioned infrastructure resources are currently recorded for
+                this project.
+              </p>
+            ) : (
+              <div className="feed-list">
+                {infrastructureResources.items.map((resource) => (
+                  <div className="feed-row" key={resource.id}>
+                    <div>
+                      <h4>
+                        {resource.resourceName} / {resource.status}
+                      </h4>
+                      <p className="detail">
+                        {resource.provider} {resource.resourceType} in{" "}
+                        {resource.region} on {resource.size} / boundary{" "}
+                        {resource.dataBoundary}
+                      </p>
+                      <p className="detail">
+                        TTL {resource.ttlMinutes}m / expires{" "}
+                        {formatDateTime(resource.expiresAt)}
+                      </p>
+                      <p className="detail">
+                        {resource.providerRef ?? resource.externalResourceId}
+                      </p>
+                      {resource.terminationReason ? (
+                        <p className="detail">
+                          Termination: {resource.terminationReason}
+                          {resource.terminatedAt
+                            ? ` at ${formatDateTime(resource.terminatedAt)}`
+                            : ""}
+                        </p>
+                      ) : null}
+                    </div>
+                    <code className="mono">{resource.id}</code>
+                  </div>
+                ))}
+              </div>
+            )}
+          </article>
+        </section>
+
+        <section className="panel-stack">
+          <div className="section-head">
+            <div>
               <span className="eyebrow">Health Snapshots</span>
               <h2>Durable system state for what changed and what is risky.</h2>
             </div>
@@ -521,6 +970,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               </p>
               <form action={refreshHealthSnapshotAction}>
                 <input type="hidden" name="project_id" value={activeProjectId} />
+                <input type="hidden" name="actor" value={activeActorId} />
                 <button className="button secondary" type="submit">
                   Refresh snapshot
                 </button>
@@ -630,11 +1080,61 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                   </div>
                   <form action={createReplayBundleAction}>
                     <input type="hidden" name="project_id" value={activeProjectId} />
+                    <input type="hidden" name="actor" value={activeActorId} />
                     <button className="button secondary" type="submit">
                       Create replay bundle
                     </button>
                   </form>
+                  <form action={createComplianceEvidenceBundleAction}>
+                    <input type="hidden" name="project_id" value={activeProjectId} />
+                    <input type="hidden" name="actor" value={activeActorId} />
+                    <button className="button secondary" type="submit">
+                      Create compliance evidence
+                    </button>
+                  </form>
                 </>
+              )}
+            </article>
+
+            <article className="stack-card">
+              <h3>Change journal</h3>
+              {!changeJournal.apiReachable ? (
+                <p className="detail">
+                  {changeJournal.blockedReason ?? "Change journal API is unavailable."}
+                </p>
+              ) : changeJournal.items.length === 0 ? (
+                <p className="detail">
+                  No change artifacts have been recorded yet.
+                </p>
+              ) : (
+                <div className="feed-list">
+                  {changeJournal.items.map((item) => (
+                    <div className="feed-row" key={item.id}>
+                      <div>
+                        <h4>{item.title}</h4>
+                        <p className="detail">
+                          {titleCaseToken(item.changeKind)} / {item.artifactType} /{" "}
+                          {formatDateTime(item.createdAt)}
+                        </p>
+                        {item.summary ? (
+                          <p className="detail">{item.summary}</p>
+                        ) : null}
+                        {item.diffSummary ? (
+                          <p className="detail">Diff: {item.diffSummary}</p>
+                        ) : null}
+                        {item.filesChanged.length > 0 ? (
+                          <p className="detail">
+                            Files: {item.filesChanged.slice(0, 4).join(", ")}
+                          </p>
+                        ) : null}
+                        {item.rollbackPlan ? (
+                          <p className="detail">Rollback: {item.rollbackPlan}</p>
+                        ) : null}
+                      </div>
+                      <code className="mono">{item.taskId ?? item.id}</code>
+                    </div>
+                  ))}
+                </div>
               )}
             </article>
 
@@ -686,6 +1186,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               <h3>Propose an improvement</h3>
               <form action={submitSelfImprovementProposalAction} className="composer compact">
                 <input type="hidden" name="project_id" value={activeProjectId} />
+                <input type="hidden" name="actor" value={activeActorId} />
                 <label className="field">
                   <span>Title</span>
                   <input
@@ -804,8 +1305,10 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                           <form action={recordSelfImprovementCanaryAction} className="composer compact">
                             <input type="hidden" name="proposal_id" value={proposal.id} />
                             <input type="hidden" name="project_id" value={activeProjectId} />
+                            <input type="hidden" name="actor" value={activeActorId} />
                             <input type="hidden" name="outcome" value="succeeded" />
                             <textarea
+                              aria-label="Canary success summary"
                               className="textarea"
                               name="summary"
                               rows={2}
@@ -813,6 +1316,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                               required
                             />
                             <textarea
+                              aria-label="Canary success metrics JSON"
                               className="textarea"
                               name="metrics_json"
                               rows={3}
@@ -820,6 +1324,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                               required
                             />
                             <textarea
+                              aria-label="Canary success evidence references"
                               className="textarea"
                               name="evidence_refs"
                               rows={2}
@@ -833,8 +1338,10 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                           <form action={recordSelfImprovementCanaryAction} className="composer compact">
                             <input type="hidden" name="proposal_id" value={proposal.id} />
                             <input type="hidden" name="project_id" value={activeProjectId} />
+                            <input type="hidden" name="actor" value={activeActorId} />
                             <input type="hidden" name="outcome" value="failed" />
                             <textarea
+                              aria-label="Canary failure summary"
                               className="textarea"
                               name="summary"
                               rows={2}
@@ -842,6 +1349,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                               required
                             />
                             <textarea
+                              aria-label="Canary failure metrics JSON"
                               className="textarea"
                               name="metrics_json"
                               rows={3}
@@ -849,6 +1357,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                               required
                             />
                             <textarea
+                              aria-label="Canary failure evidence references"
                               className="textarea"
                               name="evidence_refs"
                               rows={2}
@@ -864,7 +1373,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                         <form action={recordSelfImprovementRolloutAction} className="composer compact">
                           <input type="hidden" name="proposal_id" value={proposal.id} />
                           <input type="hidden" name="project_id" value={activeProjectId} />
+                          <input type="hidden" name="actor" value={activeActorId} />
                           <textarea
+                            aria-label="Rollout summary"
                             className="textarea"
                             name="summary"
                             rows={2}
@@ -872,11 +1383,13 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                             required
                           />
                           <input
+                            aria-label="Rollout external reference"
                             className="input"
                             name="external_ref"
                             placeholder="External reference (deploy URL, commit SHA)"
                           />
                           <textarea
+                            aria-label="Rollout metrics JSON"
                             className="textarea"
                             name="metrics_json"
                             rows={3}
@@ -884,6 +1397,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                             required
                           />
                           <textarea
+                            aria-label="Rollout evidence references"
                             className="textarea"
                             name="evidence_refs"
                             rows={2}
@@ -898,7 +1412,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                         <form action={rollbackSelfImprovementProposalAction} className="composer compact">
                           <input type="hidden" name="proposal_id" value={proposal.id} />
                           <input type="hidden" name="project_id" value={activeProjectId} />
+                          <input type="hidden" name="actor" value={activeActorId} />
                           <textarea
+                            aria-label="Rollback reason"
                             className="textarea"
                             name="reason"
                             rows={2}
@@ -906,11 +1422,13 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                             required
                           />
                           <input
+                            aria-label="Rollback external reference"
                             className="input"
                             name="external_ref"
                             placeholder="External reference (rollback PR, incident ticket)"
                           />
                           <textarea
+                            aria-label="Rollback metrics JSON"
                             className="textarea"
                             name="metrics_json"
                             rows={3}
@@ -918,6 +1436,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                             required
                           />
                           <textarea
+                            aria-label="Rollback evidence references"
                             className="textarea"
                             name="evidence_refs"
                             rows={2}
@@ -955,12 +1474,13 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               <h3>Draft outbound message</h3>
               <form action={submitOutboxDraftAction} className="composer compact">
                 <input type="hidden" name="project_id" value={activeProjectId} />
+                <input type="hidden" name="actor" value={activeActorId} />
                 <label className="field">
                   <span>Channel</span>
                   <input
                     name="channel"
                     className="input"
-                    placeholder="slack:#ops"
+                    placeholder="slack:#ops or email:founder@example.com"
                     required
                   />
                 </label>
@@ -1013,6 +1533,20 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                         <form action={queueOutboxMessageAction}>
                           <input type="hidden" name="message_id" value={message.id} />
                           <input type="hidden" name="project_id" value={activeProjectId} />
+                          <input type="hidden" name="actor" value={activeActorId} />
+                          <label className="field">
+                            <span>Urgency</span>
+                            <select
+                              aria-label={`Delivery urgency for ${message.id}`}
+                              className="input"
+                              defaultValue="normal"
+                              name="urgency"
+                            >
+                              <option value="low">Low</option>
+                              <option value="normal">Normal</option>
+                              <option value="urgent">Urgent</option>
+                            </select>
+                          </label>
                           <button className="button secondary" type="submit">
                             Queue send
                           </button>
@@ -1097,6 +1631,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                         <form action={installPackAction}>
                           <input type="hidden" name="pack_id" value={pack.packId} />
                           <input type="hidden" name="project_id" value={activeProjectId} />
+                          <input type="hidden" name="actor" value={activeActorId} />
                           <button className="button secondary" type="submit">
                             Install
                           </button>
@@ -1212,6 +1747,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                       <form action={installAgentModuleAction}>
                         <input type="hidden" name="module_id" value={module.moduleId} />
                         <input type="hidden" name="project_id" value={activeProjectId} />
+                        <input type="hidden" name="actor" value={activeActorId} />
                         <button className="button secondary" type="submit">
                           Install module
                         </button>
@@ -1294,7 +1830,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                             : `Denied: ${route.denialReason ?? "unknown"}`}
                         </p>
                         <p className="detail">
-                          {route.workloadClass} / {formatDateTime(route.createdAt)}
+                          {route.workloadClass} / {route.dataBoundary} /{" "}
+                          {formatDateTime(route.createdAt)}
                         </p>
                       </div>
                       <code className="mono">{route.id}</code>
@@ -1361,6 +1898,14 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                         <p className="detail">
                           {task.status} / {task.priority} / risk {task.riskTier}
                         </p>
+                        <p className="detail">
+                          Owner {task.ownerRoleId ?? "unassigned"} / parent{" "}
+                          {task.parentTaskId ?? "root"} / dependencies{" "}
+                          {task.dependencyTaskIds.length}
+                        </p>
+                        {task.dueAt ? (
+                          <p className="detail">Due {formatDateTime(task.dueAt)}</p>
+                        ) : null}
                       </div>
                       <code className="mono">{task.id}</code>
                     </div>
@@ -1463,17 +2008,65 @@ export default async function HomePage({ searchParams }: HomePageProps) {
           </div>
         </section>
 
-        <section className="panel-stack">
+        <section
+          aria-labelledby="decision-inbox-title"
+          className="panel-stack"
+          id="decision-inbox"
+          tabIndex={-1}
+        >
           <div className="section-head">
             <div>
               <span className="eyebrow">Decision Inbox</span>
-              <h2>Explicit approvals before real effects.</h2>
+              <h2 id="decision-inbox-title">
+                Explicit approvals before real effects.
+              </h2>
             </div>
             <p className="status-meta">
               Decisions are served by the control plane API and expire to a safe
               default when their deadline passes.
             </p>
           </div>
+
+          {decisions.apiReachable ? (
+            <article className="decision-card">
+              <div className="decision-head">
+                <div>
+                  <span className="pill">Digest</span>
+                  <h3>Create decision digest</h3>
+                </div>
+                <p className="detail">
+                  Creates a durable digest artifact. Optional channel creates an
+                  outbox draft only; sending still requires a budgeted queue action.
+                </p>
+              </div>
+              <form action={createDecisionDigestAction} className="decision-actions">
+                <input type="hidden" name="project_id" value={activeProjectId} />
+                <input type="hidden" name="actor" value={activeActorId} />
+                <label className="field">
+                  <span>Max items</span>
+                  <input
+                    className="input"
+                    defaultValue={20}
+                    max={100}
+                    min={1}
+                    name="max_items"
+                    type="number"
+                  />
+                </label>
+                <label className="field">
+                  <span>Optional outbox channel</span>
+                  <input
+                    className="input"
+                    name="channel"
+                    placeholder="email:founder@example.com or slack:#ops"
+                  />
+                </label>
+                <button className="button secondary" type="submit">
+                  Create digest
+                </button>
+              </form>
+            </article>
+          ) : null}
 
           {!decisions.apiReachable ? (
             <article className="decision-card empty">
@@ -1553,13 +2146,16 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                             value={decision.id}
                           />
                           <input type="hidden" name="project_id" value={activeProjectId} />
+                          <input type="hidden" name="actor" value={activeActorId} />
                           <textarea
+                            aria-label={`Decision note for ${decision.id}`}
                             className="textarea decision-note"
                             name="note"
                             rows={3}
                             placeholder="Optional note or required revision request rationale."
                           />
                           <input
+                            aria-label={`Delegate target for ${decision.id}`}
                             className="input"
                             name="delegate_to"
                             placeholder="Delegate to role or approver"
@@ -1598,13 +2194,16 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                             value={decision.id}
                           />
                           <input type="hidden" name="project_id" value={activeProjectId} />
+                          <input type="hidden" name="actor" value={activeActorId} />
                           <textarea
+                            aria-label={`Execution note for ${decision.id}`}
                             className="textarea decision-note"
                             name="note"
                             rows={2}
                             placeholder="Record what was executed."
                           />
                           <input
+                            aria-label={`Execution external reference for ${decision.id}`}
                             className="input"
                             name="external_ref"
                             placeholder="External reference (PR URL, commit SHA, ticket)"

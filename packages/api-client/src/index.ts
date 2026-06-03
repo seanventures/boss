@@ -5,6 +5,13 @@ export type HealthResponse = {
   openai_configured: boolean;
 };
 
+export type DataBoundary =
+  | "public"
+  | "internal"
+  | "confidential"
+  | "restricted"
+  | "local-only";
+
 export type ProjectSummary = {
   id: string;
   name: string;
@@ -18,6 +25,81 @@ export type ProjectSummary = {
 
 export type ProjectListResponse = {
   items: ProjectSummary[];
+};
+
+export type AuthSessionResponse = {
+  auth_required: boolean;
+  transport_authenticated: boolean;
+  actor_binding_required: boolean;
+  principal_member_id?: string;
+  message: string;
+};
+
+export type ProjectMemberSummary = {
+  id: string;
+  project_id: string;
+  member_id: string;
+  display_name: string;
+  member_type: string;
+  role_keys: string[];
+  permissions: string[];
+  status: string;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ProjectMemberListResponse = {
+  project_id: string;
+  items: ProjectMemberSummary[];
+};
+
+export type ProjectMemberUpsertRequest = {
+  project_id: string;
+  member_id: string;
+  display_name: string;
+  member_type?: string;
+  role_keys?: string[];
+  permissions?: string[];
+  actor?: string;
+};
+
+export type BreakGlassGrantSummary = {
+  id: string;
+  project_id: string;
+  target_member_id: string;
+  requested_by: string;
+  reason: string;
+  scope: Record<string, unknown>;
+  granted_permissions: string[];
+  status: string;
+  expires_at: string;
+  postmortem_task_id?: string;
+  revoked_by?: string;
+  revoked_reason?: string;
+  revoked_at?: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type BreakGlassGrantListResponse = {
+  project_id: string;
+  items: BreakGlassGrantSummary[];
+};
+
+export type BreakGlassGrantCreateRequest = {
+  project_id: string;
+  target_member_id: string;
+  reason: string;
+  scope?: Record<string, unknown>;
+  granted_permissions: string[];
+  ttl_minutes?: number;
+  actor?: string;
+};
+
+export type BreakGlassGrantRevokeRequest = {
+  actor?: string;
+  reason: string;
 };
 
 export type StatusResponse = {
@@ -93,6 +175,7 @@ export type CommandProposeRequest = {
   project_id: string;
   command: string;
   constraints?: Record<string, unknown>;
+  actor?: string;
 };
 
 export type CommandProposeResponse = {
@@ -108,8 +191,13 @@ export type TaskSummary = {
   title: string;
   description?: string;
   status: string;
+  owner_role_id?: string;
+  parent_task_id?: string;
+  dependency_task_ids: string[];
+  due_at?: string;
   priority: string;
   risk_tier: number;
+  data_boundary: DataBoundary;
   dedupe_key: string;
   created_at: string;
   updated_at: string;
@@ -123,11 +211,131 @@ export type TaskCreateRequest = {
   project_id: string;
   title: string;
   description?: string;
+  owner_role_id?: string;
+  parent_task_id?: string;
+  dependency_task_ids?: string[];
+  due_at?: string;
   priority?: string;
   risk_tier?: number;
+  data_boundary?: DataBoundary;
   dedupe_key: string;
   inputs?: Record<string, unknown>;
   required_artifacts?: string[];
+  actor?: string;
+};
+
+export type DepartmentSummary = {
+  id: string;
+  project_id: string;
+  department_key: string;
+  name: string;
+  mission: string;
+  status: string;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type DepartmentCreateRequest = {
+  project_id: string;
+  department_key: string;
+  name: string;
+  mission: string;
+  actor?: string;
+};
+
+export type DepartmentListResponse = {
+  project_id: string;
+  items: DepartmentSummary[];
+};
+
+export type PolicyRecordSummary = {
+  id: string;
+  project_id: string;
+  policy_key: string;
+  version: number;
+  title: string;
+  status: string;
+  body: Record<string, unknown>;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type PolicyRecordCreateRequest = {
+  project_id: string;
+  policy_key: string;
+  version?: number;
+  title: string;
+  body: Record<string, unknown>;
+  actor?: string;
+};
+
+export type PolicyRecordListResponse = {
+  project_id: string;
+  items: PolicyRecordSummary[];
+};
+
+export type PlanSummary = {
+  id: string;
+  project_id: string;
+  task_id?: string;
+  title: string;
+  objective: string;
+  status: string;
+  phases: unknown[];
+  success_criteria: unknown[];
+  risks: unknown[];
+  artifact_id?: string;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type PlanCreateRequest = {
+  project_id: string;
+  title: string;
+  objective: string;
+  task_id?: string;
+  phases?: unknown[];
+  success_criteria?: unknown[];
+  risks?: unknown[];
+  artifact_id?: string;
+  actor?: string;
+};
+
+export type PlanListResponse = {
+  project_id: string;
+  items: PlanSummary[];
+};
+
+export type MeetingSummary = {
+  id: string;
+  project_id: string;
+  title: string;
+  purpose: string;
+  status: string;
+  participants: string[];
+  agenda: string[];
+  minutes_artifact_id?: string;
+  decisions: unknown[];
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type MeetingCreateRequest = {
+  project_id: string;
+  title: string;
+  purpose: string;
+  participants?: string[];
+  agenda?: string[];
+  actor?: string;
+};
+
+export type MeetingListResponse = {
+  project_id: string;
+  items: MeetingSummary[];
 };
 
 export type SelfImprovementProposalCreateRequest = {
@@ -208,6 +416,7 @@ export type JobSummary = {
   task_id?: string;
   kind: string;
   status: string;
+  data_boundary: DataBoundary;
   priority: number;
   max_attempts: number;
   attempt: number;
@@ -219,6 +428,7 @@ export type JobCreateRequest = {
   kind: string;
   task_id?: string;
   payload?: Record<string, unknown>;
+  data_boundary?: DataBoundary;
   requires_reservation?: boolean;
   reservation_id?: string;
   priority?: number;
@@ -232,6 +442,7 @@ export type LeasedJob = {
   task_id?: string;
   kind: string;
   payload: Record<string, unknown>;
+  data_boundary: DataBoundary;
   attempt: number;
   max_attempts: number;
   lease_token: string;
@@ -282,10 +493,18 @@ export type WorkerCompleteResponse = {
   pull_request_url?: string;
   merged_sha?: string;
   branch_name?: string;
+  validation_status?: string;
+  validation_summary?: string;
+  validation_sources?: string[];
+  local_validation_receipt_id?: string;
   environment?: string;
   deployment_id?: number;
   deployment_status?: string;
   deployment_url?: string;
+  rollout_id?: string;
+  rollout_artifact_id?: string;
+  rollout_status?: string;
+  rollout_stage?: string;
 };
 
 export type WorkerFailRequest = {
@@ -314,6 +533,10 @@ export type BudgetStatusResponse = {
   available_usd_micros: number;
   committed_usd_micros: number;
   burn_approx_usd_micros: number;
+  burn_window_hours: number;
+  burn_rate_usd_micros_per_hour: number;
+  forecasted_24h_usd_micros: number;
+  time_to_cap_seconds?: number | null;
   utilization_ratio: number;
   active_reservations_count: number;
   top_cost_drivers: Array<{
@@ -328,6 +551,7 @@ export type BudgetReserveRequest = {
   amount_usd_micros: number;
   reason: string;
   job_id?: string;
+  allocation_id?: string;
   expires_in_minutes?: number;
 };
 
@@ -337,6 +561,39 @@ export type BudgetReserveResponse = {
   decision_id?: string;
   budget_state: string;
   message: string;
+};
+
+export type BudgetAllocationSummary = {
+  id: string;
+  parent_allocation_id?: string;
+  project_id: string;
+  scope_type: string;
+  scope_id: string;
+  amount_usd_micros: number;
+  child_allocated_usd_micros: number;
+  reserved_usd_micros: number;
+  actual_usd_micros: number;
+  available_usd_micros: number;
+  period_start: string;
+  period_end: string;
+  status: string;
+  created_at: string;
+};
+
+export type BudgetAllocationListResponse = {
+  project_id: string;
+  items: BudgetAllocationSummary[];
+};
+
+export type BudgetAllocationCreateRequest = {
+  project_id: string;
+  scope_type: string;
+  scope_id: string;
+  amount_usd_micros: number;
+  period_start: string;
+  period_end: string;
+  parent_allocation_id?: string;
+  actor?: string;
 };
 
 export type BudgetQuoteRequest = {
@@ -409,6 +666,27 @@ export type DecisionActionRequest = {
   external_ref?: string;
 };
 
+export type DecisionDigestRequest = {
+  project_id: string;
+  channel?: string;
+  actor?: string;
+  max_items?: number;
+  low_risk_max?: number;
+  urgent_risk_min?: number;
+  dedupe_key?: string;
+  data_boundary?: DataBoundary;
+};
+
+export type DecisionDigestResponse = {
+  status: string;
+  artifact_id: string;
+  outbox_message_id?: string;
+  decision_count: number;
+  urgent_count: number;
+  batched_count: number;
+  body: string;
+};
+
 export type OpenAIPlanRequest = {
   project_id: string;
   reservation_id: string;
@@ -454,6 +732,7 @@ export type PullRequestProposalJobRequest = PullRequestProposalRequest & {
 
 export type PullRequestProposalResponse = {
   status: string;
+  data_boundary?: DataBoundary;
   artifact_id?: string;
   diff_artifact_id?: string;
   test_report_artifact_id?: string;
@@ -464,6 +743,8 @@ export type PullRequestProposalResponse = {
   branch_name?: string;
   validation_status?: string;
   validation_summary?: string;
+  validation_sources?: string[];
+  local_validation_receipt_id?: string;
   message?: string;
 };
 
@@ -486,6 +767,7 @@ export type PullRequestMergeJobRequest = PullRequestMergeRequest & {
 
 export type PullRequestMergeResponse = {
   status: string;
+  data_boundary?: DataBoundary;
   artifact_id?: string;
   receipt_id?: string;
   decision_id?: string;
@@ -516,6 +798,7 @@ export type SandboxDeploymentJobRequest = SandboxDeploymentRequest & {
 
 export type SandboxDeploymentResponse = {
   status: string;
+  data_boundary?: DataBoundary;
   artifact_id?: string;
   receipt_id?: string;
   decision_id?: string;
@@ -523,12 +806,170 @@ export type SandboxDeploymentResponse = {
   health_verification_artifact_id?: string;
   health_verification_status?: string;
   healthcheck_url?: string;
+  rollout_id?: string;
+  rollout_artifact_id?: string;
+  rollout_status?: string;
+  rollout_stage?: string;
   environment?: string;
   deployment_id?: number;
   deployment_status?: string;
   deployment_url?: string;
   merged_sha?: string;
   message?: string;
+};
+
+export type InfraProvisionReviewRequest = {
+  project_id: string;
+  task_id?: string;
+  reservation_id: string;
+  title: string;
+  region: string;
+  size: string;
+  ttl_minutes: number;
+  tags?: string[];
+  data_boundary?: DataBoundary;
+  actor?: string;
+};
+
+export type InfraProvisionReviewResponse = {
+  status: string;
+  artifact_id: string;
+  decision_id: string;
+  data_boundary: DataBoundary;
+};
+
+export type InfraProvisionRequest = {
+  project_id: string;
+  decision_id: string;
+  reservation_id: string;
+  dedupe_key: string;
+  title: string;
+  region: string;
+  size: string;
+  ttl_minutes: number;
+  tags?: string[];
+  task_id?: string;
+  data_boundary?: DataBoundary;
+  created_by_job_id?: string;
+};
+
+export type InfraProvisionJobRequest = InfraProvisionRequest & {
+  actor?: string;
+  priority?: number;
+  max_attempts?: number;
+};
+
+export type InfraProvisionResponse = {
+  status: string;
+  resource_id?: string;
+  artifact_id?: string;
+  receipt_id?: string;
+  decision_id?: string;
+  provider_ref?: string;
+  provider_resource_id?: string;
+  resource_name?: string;
+  expires_at?: string;
+  data_boundary?: DataBoundary;
+  message?: string;
+};
+
+export type InfraTerminationRequest = {
+  project_id: string;
+  dedupe_key: string;
+  actor?: string;
+  reason?: string;
+  created_by_job_id?: string;
+};
+
+export type InfraTerminationJobRequest = InfraTerminationRequest & {
+  priority?: number;
+  max_attempts?: number;
+};
+
+export type InfraTerminationResponse = {
+  status: string;
+  resource_id?: string;
+  artifact_id?: string;
+  receipt_id?: string;
+  decision_id?: string;
+  provider_ref?: string;
+  message?: string;
+};
+
+export type InfraJanitorRunRequest = {
+  project_id: string;
+  actor?: string;
+  limit?: number;
+};
+
+export type InfraJanitorRunResponse = {
+  status: string;
+  project_id: string;
+  queued_job_ids: string[];
+  resource_ids: string[];
+};
+
+export type InfraResourceSummary = {
+  id: string;
+  project_id: string;
+  task_id?: string;
+  decision_id?: string;
+  provider: string;
+  resource_type: string;
+  resource_name: string;
+  external_resource_id: string;
+  region: string;
+  size: string;
+  image: string;
+  tags: string[];
+  status: string;
+  ttl_minutes: number;
+  expires_at: string;
+  terminated_at?: string;
+  termination_reason?: string;
+  provision_receipt_id?: string;
+  provision_artifact_id?: string;
+  termination_receipt_id?: string;
+  termination_artifact_id?: string;
+  data_boundary: DataBoundary;
+  metadata: Record<string, unknown>;
+  created_by_job_id?: string;
+  updated_by_job_id?: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type InfraResourceListResponse = {
+  project_id: string;
+  items: InfraResourceSummary[];
+};
+
+export type DeploymentRolloutSummary = {
+  id: string;
+  project_id: string;
+  task_id?: string;
+  decision_id?: string;
+  deployment_receipt_id?: string;
+  deployment_artifact_id?: string;
+  rollout_artifact_id?: string;
+  title: string;
+  environment: string;
+  merged_sha: string;
+  pull_request_url: string;
+  branch_name?: string;
+  status: string;
+  current_stage: string;
+  health_verification_status?: string;
+  rollback_decision_id?: string;
+  stages: Array<Record<string, unknown>>;
+  created_by_job_id?: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type DeploymentRolloutListResponse = {
+  project_id: string;
+  items: DeploymentRolloutSummary[];
 };
 
 export type ArtifactSummary = {
@@ -540,6 +981,7 @@ export type ArtifactSummary = {
   uri?: string;
   content_hash?: string;
   created_by_job_id?: string;
+  data_boundary: DataBoundary;
   created_at: string;
 };
 
@@ -552,6 +994,31 @@ export type ArtifactListResponse = {
   items: ArtifactSummary[];
 };
 
+export type ChangeJournalItem = {
+  id: string;
+  project_id: string;
+  task_id?: string;
+  artifact_type: string;
+  change_kind: string;
+  title: string;
+  summary?: string;
+  diff_summary?: string;
+  files_changed: string[];
+  rollback_plan?: string;
+  created_by_job_id?: string;
+  data_boundary: DataBoundary;
+  created_at: string;
+};
+
+export type ChangeJournalDetail = ChangeJournalItem & {
+  content: Record<string, unknown>;
+};
+
+export type ChangeJournalResponse = {
+  project_id: string;
+  items: ChangeJournalItem[];
+};
+
 export type ReceiptResponse = {
   id: string;
   project_id: string;
@@ -562,6 +1029,7 @@ export type ReceiptResponse = {
   status: string;
   provider_ref?: string;
   created_by_job_id?: string;
+  data_boundary: DataBoundary;
   result?: Record<string, unknown>;
   error?: Record<string, unknown>;
   created_at: string;
@@ -656,11 +1124,45 @@ export type ReplayBundleResponse = {
   counts: AuditExportCounts;
 };
 
+export type ComplianceEvidenceBundleRequest = {
+  project_id: string;
+  actor?: string;
+  period_start?: string;
+  period_end?: string;
+};
+
+export type ComplianceEvidenceCounts = {
+  project_members: number;
+  roles: number;
+  policy_records: number;
+  break_glass_grants: number;
+  decisions: number;
+  receipts: number;
+  budget_reservations: number;
+  cost_receipts: number;
+  deadletters: number;
+  compliance_events: number;
+};
+
+export type ComplianceEvidenceBundleResponse = {
+  status: string;
+  artifact_id: string;
+  project_id: string;
+  artifact_type: string;
+  created_at: string;
+  period: {
+    period_start?: string | null;
+    period_end?: string | null;
+  };
+  counts: ComplianceEvidenceCounts;
+};
+
 export type OutboxMessageCreateRequest = {
   project_id: string;
   channel: string;
   subject?: string;
   body: string;
+  data_boundary?: DataBoundary;
   dedupe_key: string;
   actor?: string;
 };
@@ -672,6 +1174,7 @@ export type OutboxMessageSummary = {
   subject?: string;
   body: string;
   status: string;
+  data_boundary: DataBoundary;
   dedupe_key: string;
   receipt_id?: string;
   created_at: string;
@@ -690,11 +1193,13 @@ export type OutboxQueueRequest = {
   actor?: string;
   priority?: number;
   max_attempts?: number;
+  urgency?: "low" | "normal" | "urgent";
   created_by_job_id?: string;
 };
 
 export type OutboxDeliveryResponse = {
   status: string;
+  data_boundary?: DataBoundary;
   message_id?: string;
   receipt_id?: string;
   decision_id?: string;
@@ -708,6 +1213,7 @@ export type InboxMessageIngestRequest = {
   subject?: string;
   body: string;
   raw_ref?: string;
+  data_boundary?: DataBoundary;
   actor?: string;
 };
 
@@ -719,6 +1225,7 @@ export type InboxMessageSummary = {
   subject?: string;
   body: string;
   status: string;
+  data_boundary: DataBoundary;
   parsed: Record<string, unknown>;
   created_at: string;
   updated_at: string;
@@ -764,6 +1271,57 @@ export type RoleReviewRequest = {
   summary: string;
   metrics: Record<string, unknown>;
   evidence_refs: string[];
+};
+
+export type RoleAutonomyCheckRequest = {
+  project_id: string;
+  actor?: string;
+  action: string;
+  risk_tier?: number;
+  sandboxed?: boolean;
+  policy_approved?: boolean;
+};
+
+export type RoleAutonomyCheckResponse = {
+  project_id: string;
+  role_key: string;
+  allowed: boolean;
+  reason: string;
+  action: string;
+  required_capability: string;
+  risk_tier: number;
+  sandboxed: boolean;
+  policy_approved: boolean;
+  current_level: number;
+  required_level?: number | null;
+  allowed_capabilities: string[];
+  trust_score: number;
+};
+
+export type RoleScopeCheckRequest = {
+  project_id: string;
+  actor?: string;
+  action: string;
+  skill_id?: string;
+  evidence_ref?: string;
+};
+
+export type RoleScopeCheckResponse = {
+  project_id: string;
+  role_key: string;
+  allowed: boolean;
+  reason: string;
+  action: string;
+  skill_id: string;
+  allowed_skills: string[];
+  forbidden_skills: string[];
+  trust_score_before: number;
+  trust_score_after: number;
+  autonomy_level_before: number;
+  autonomy_level_after: number;
+  scope_violation_count: number;
+  artifact_id?: string;
+  autonomy_change_id?: string;
 };
 
 export type RoleReviewSummary = {
@@ -896,7 +1454,12 @@ export type SkillSummary = {
   risk_tier: number;
   description: string;
   mock_mode: boolean;
+  input_schema: Record<string, unknown>;
+  output_schema: Record<string, unknown>;
   cost: Record<string, unknown>;
+  retry: Record<string, unknown>;
+  permissions: Record<string, unknown>;
+  data_boundary: string;
   policy: Record<string, unknown>;
 };
 
@@ -964,6 +1527,7 @@ export type RoutingPreviewRequest = {
   task_kind: string;
   workload_class: string;
   risk_tier?: number;
+  data_boundary?: DataBoundary;
   preferred_capabilities?: string[];
   budget_state?: string;
   actor?: string;
@@ -975,6 +1539,7 @@ export type RoutingPreviewResponse = {
   task_kind: string;
   workload_class: string;
   risk_tier: number;
+  data_boundary: DataBoundary;
   budget_state: string;
   source_id?: string;
   provider?: string;
@@ -991,6 +1556,7 @@ export type RoutingLogItem = {
   task_kind: string;
   workload_class: string;
   risk_tier: number;
+  data_boundary: DataBoundary;
   budget_state: string;
   selected_source_id?: string;
   selected_provider?: string;
@@ -1051,6 +1617,7 @@ export class BossApiError extends Error {
 export type BossApiClientConfig = {
   baseUrl: string;
   fetchImpl?: typeof fetch;
+  apiKey?: string;
 };
 
 type QueryValue = string | number | boolean | undefined | null;
@@ -1073,6 +1640,7 @@ function withQuery(path: string, query?: Record<string, QueryValue>): string {
 export function createBossApiClient(config: BossApiClientConfig) {
   const baseUrl = config.baseUrl.replace(/\/$/, "");
   const fetchImpl = config.fetchImpl ?? fetch;
+  const apiKey = config.apiKey?.trim();
 
   async function request<T>(
     method: "GET" | "POST",
@@ -1087,6 +1655,7 @@ export function createBossApiClient(config: BossApiClientConfig) {
       cache: "no-store",
       headers: {
         Accept: "application/json",
+        ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
         ...(options?.body ? { "Content-Type": "application/json" } : {}),
       },
       ...(options?.body ? { body: JSON.stringify(options.body) } : {}),
@@ -1114,6 +1683,46 @@ export function createBossApiClient(config: BossApiClientConfig) {
     },
     listProjects() {
       return request<ProjectListResponse>("GET", "/v1/projects");
+    },
+    getAuthSession() {
+      return request<AuthSessionResponse>("GET", "/v1/auth/session");
+    },
+    listProjectMembers(projectId: string) {
+      return request<ProjectMemberListResponse>("GET", "/v1/members", {
+        query: { project_id: projectId },
+      });
+    },
+    getProjectMember(projectId: string, memberId: string) {
+      return request<ProjectMemberSummary>(
+        "GET",
+        `/v1/members/${encodeURIComponent(memberId)}`,
+        { query: { project_id: projectId } },
+      );
+    },
+    upsertProjectMember(payload: ProjectMemberUpsertRequest) {
+      return request<ProjectMemberSummary>("POST", "/v1/members", {
+        body: payload,
+      });
+    },
+    listBreakGlassGrants(projectId: string, includeExpired = false) {
+      return request<BreakGlassGrantListResponse>("GET", "/v1/break-glass/grants", {
+        query: { project_id: projectId, include_expired: includeExpired },
+      });
+    },
+    createBreakGlassGrant(payload: BreakGlassGrantCreateRequest) {
+      return request<BreakGlassGrantSummary>("POST", "/v1/break-glass/grants", {
+        body: payload,
+      });
+    },
+    revokeBreakGlassGrant(
+      grantId: string,
+      payload: BreakGlassGrantRevokeRequest,
+    ) {
+      return request<BreakGlassGrantSummary>(
+        "POST",
+        `/v1/break-glass/grants/${encodeURIComponent(grantId)}/revoke`,
+        { body: payload },
+      );
     },
     getStatus(projectId: string) {
       return request<StatusResponse>("GET", "/v1/status", {
@@ -1149,6 +1758,46 @@ export function createBossApiClient(config: BossApiClientConfig) {
     },
     createTask(payload: TaskCreateRequest) {
       return request<TaskSummary>("POST", "/v1/tasks", {
+        body: payload,
+      });
+    },
+    listDepartments(projectId: string) {
+      return request<DepartmentListResponse>("GET", "/v1/departments", {
+        query: { project_id: projectId },
+      });
+    },
+    createDepartment(payload: DepartmentCreateRequest) {
+      return request<DepartmentSummary>("POST", "/v1/departments", {
+        body: payload,
+      });
+    },
+    listPolicyRecords(projectId: string) {
+      return request<PolicyRecordListResponse>("GET", "/v1/policies", {
+        query: { project_id: projectId },
+      });
+    },
+    createPolicyRecord(payload: PolicyRecordCreateRequest) {
+      return request<PolicyRecordSummary>("POST", "/v1/policies", {
+        body: payload,
+      });
+    },
+    listPlans(projectId: string) {
+      return request<PlanListResponse>("GET", "/v1/plans", {
+        query: { project_id: projectId },
+      });
+    },
+    createPlan(payload: PlanCreateRequest) {
+      return request<PlanSummary>("POST", "/v1/plans", {
+        body: payload,
+      });
+    },
+    listMeetings(projectId: string) {
+      return request<MeetingListResponse>("GET", "/v1/meetings", {
+        query: { project_id: projectId },
+      });
+    },
+    createMeeting(payload: MeetingCreateRequest) {
+      return request<MeetingSummary>("POST", "/v1/meetings", {
         body: payload,
       });
     },
@@ -1226,6 +1875,18 @@ export function createBossApiClient(config: BossApiClientConfig) {
         `/v1/artifacts/${encodeURIComponent(artifactId)}`,
       );
     },
+    listChangeJournal(projectId: string, limit = 25) {
+      return request<ChangeJournalResponse>("GET", "/v1/change-journal", {
+        query: { project_id: projectId, limit },
+      });
+    },
+    getChangeJournalItem(projectId: string, artifactId: string) {
+      return request<ChangeJournalDetail>(
+        "GET",
+        `/v1/change-journal/${encodeURIComponent(artifactId)}`,
+        { query: { project_id: projectId } },
+      );
+    },
     listRoles(projectId: string) {
       return request<RoleListResponse>("GET", "/v1/roles", {
         query: { project_id: projectId },
@@ -1249,6 +1910,20 @@ export function createBossApiClient(config: BossApiClientConfig) {
       return request<RoleGovernanceDetail>(
         "POST",
         `/v1/roles/${encodeURIComponent(roleKey)}/reviews`,
+        { body: payload },
+      );
+    },
+    checkRoleAutonomy(roleKey: string, payload: RoleAutonomyCheckRequest) {
+      return request<RoleAutonomyCheckResponse>(
+        "POST",
+        `/v1/roles/${encodeURIComponent(roleKey)}/autonomy/check`,
+        { body: payload },
+      );
+    },
+    checkRoleScope(roleKey: string, payload: RoleScopeCheckRequest) {
+      return request<RoleScopeCheckResponse>(
+        "POST",
+        `/v1/roles/${encodeURIComponent(roleKey)}/scope/check`,
         { body: payload },
       );
     },
@@ -1372,6 +2047,16 @@ export function createBossApiClient(config: BossApiClientConfig) {
         query: { scope_type: scopeType, scope_id: scopeId },
       });
     },
+    listBudgetAllocations(projectId: string) {
+      return request<BudgetAllocationListResponse>("GET", "/v1/budget/allocations", {
+        query: { project_id: projectId },
+      });
+    },
+    createBudgetAllocation(payload: BudgetAllocationCreateRequest) {
+      return request<BudgetAllocationSummary>("POST", "/v1/budget/allocations", {
+        body: payload,
+      });
+    },
     quoteBudget(payload: BudgetQuoteRequest) {
       return request<BudgetQuoteResponse>("POST", "/v1/budget/quote", {
         body: payload,
@@ -1390,6 +2075,11 @@ export function createBossApiClient(config: BossApiClientConfig) {
     listDecisions(projectId: string) {
       return request<DecisionInboxResponse>("GET", "/v1/decisions/inbox", {
         query: { project_id: projectId },
+      });
+    },
+    createDecisionDigest(payload: DecisionDigestRequest) {
+      return request<DecisionDigestResponse>("POST", "/v1/decisions/digests", {
+        body: payload,
       });
     },
     approveDecision(decisionId: string, payload: DecisionActionRequest = {}) {
@@ -1459,6 +2149,63 @@ export function createBossApiClient(config: BossApiClientConfig) {
         },
       );
     },
+    listDeploymentRollouts(projectId: string, limit = 20) {
+      return request<DeploymentRolloutListResponse>(
+        "GET",
+        "/v1/software-factory/rollouts",
+        { query: { project_id: projectId, limit } },
+      );
+    },
+    requestInfraProvisionReview(payload: InfraProvisionReviewRequest) {
+      return request<InfraProvisionReviewResponse>(
+        "POST",
+        "/v1/infra/droplets/requests",
+        {
+          body: payload,
+        },
+      );
+    },
+    createInfraDroplet(payload: InfraProvisionRequest) {
+      return request<InfraProvisionResponse>("POST", "/v1/infra/droplets", {
+        body: payload,
+      });
+    },
+    queueInfraDroplet(payload: InfraProvisionJobRequest) {
+      return request<JobSummary>("POST", "/v1/infra/droplets/queue", {
+        body: payload,
+      });
+    },
+    listInfraResources(projectId: string, limit = 20) {
+      return request<InfraResourceListResponse>("GET", "/v1/infra/resources", {
+        query: { project_id: projectId, limit },
+      });
+    },
+    terminateInfraResource(resourceId: string, payload: InfraTerminationRequest) {
+      return request<InfraTerminationResponse>(
+        "POST",
+        `/v1/infra/resources/${encodeURIComponent(resourceId)}/terminate`,
+        {
+          body: payload,
+        },
+      );
+    },
+    queueInfraResourceTermination(
+      resourceId: string,
+      payload: InfraTerminationJobRequest,
+    ) {
+      return request<JobSummary>(
+        "POST",
+        `/v1/infra/resources/${encodeURIComponent(resourceId)}/terminate/queue`,
+        {
+          body: payload,
+        },
+      );
+    },
+    runInfraJanitor(payload: InfraJanitorRunRequest) {
+      return request<InfraJanitorRunResponse>("POST", "/v1/infra/janitor/run", {
+        body: payload,
+      });
+    },
     queuePullRequestProposalJob(payload: PullRequestProposalJobRequest) {
       return request<JobSummary>("POST", "/v1/software-factory/proposals/queue", {
         body: payload,
@@ -1502,6 +2249,13 @@ export function createBossApiClient(config: BossApiClientConfig) {
       return request<ReplayBundleResponse>("POST", "/v1/audit/replay-bundles", {
         body: payload,
       });
+    },
+    createComplianceEvidenceBundle(payload: ComplianceEvidenceBundleRequest) {
+      return request<ComplianceEvidenceBundleResponse>(
+        "POST",
+        "/v1/compliance/evidence-bundles",
+        { body: payload },
+      );
     },
     listEvents(projectId: string, limit = 50) {
       return request<EventFeedResponse>("GET", "/v1/events", {

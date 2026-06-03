@@ -24,7 +24,7 @@ export type MetatronCard = {
   blockedReason?: string;
 };
 
-export function placeholderMetatron(
+export function unavailableMetatron(
   question: string,
   reason: string,
   projectId = PROJECT_ID,
@@ -85,13 +85,13 @@ export async function fetchMetatronQuery(
     );
   } catch (error) {
     if (error instanceof BossApiError) {
-      return placeholderMetatron(
+      return unavailableMetatron(
         question.trim(),
         `API returned ${error.status}`,
         projectId,
       );
     }
-    return placeholderMetatron(
+    return unavailableMetatron(
       question.trim(),
       error instanceof Error ? error.message : "Unknown API error",
       projectId,

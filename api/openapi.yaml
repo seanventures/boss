@@ -2,9 +2,13 @@ openapi: 3.1.0
 info:
   title: BOSS Control Plane API
   version: 0.1.0
+security:
+  - BossBearerAuth: []
+  - BossApiKeyAuth: []
 paths:
   /health:
     get:
+      security: []
       summary: Health check
       responses:
         '200': { description: OK }
@@ -13,6 +17,117 @@ paths:
       summary: List projects available to the current control-plane client
       responses:
         '200': { description: Project list }
+  /v1/auth/session:
+    get:
+      summary: Inspect transport authentication and API-key principal binding
+      responses:
+        '200': { description: Auth session and principal binding state }
+  /v1/members:
+    get:
+      summary: List active project members and system actors
+      parameters:
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Project member directory }
+    post:
+      summary: Create or update a project member
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id, member_id, display_name, role_keys, permissions]
+              properties:
+                project_id: { type: string }
+                member_id: { type: string }
+                display_name: { type: string }
+                member_type: { type: string, default: human }
+                role_keys:
+                  type: array
+                  items: { type: string }
+                permissions:
+                  type: array
+                  items: { type: string }
+                actor: { type: string, default: ceo }
+      responses:
+        '201': { description: Project member upserted }
+        '403': { description: Actor is not allowed to manage members }
+  /v1/members/{member_id}:
+    get:
+      summary: Get an active project member
+      parameters:
+        - name: member_id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Project member }
+        '404': { description: Member not found }
+  /v1/break-glass/grants:
+    get:
+      summary: List break-glass access grants
+      parameters:
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+        - name: include_expired
+          in: query
+          required: false
+          schema: { type: boolean, default: false }
+      responses:
+        '200': { description: Break-glass grant list }
+    post:
+      summary: Grant temporary break-glass access with TTL and postmortem task
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id, target_member_id, reason, granted_permissions]
+              properties:
+                project_id: { type: string }
+                target_member_id: { type: string }
+                reason: { type: string }
+                scope: { type: object }
+                granted_permissions:
+                  type: array
+                  items: { type: string }
+                ttl_minutes: { type: integer, default: 60 }
+                actor: { type: string, default: ceo }
+      responses:
+        '201': { description: Break-glass grant created }
+        '403': { description: Actor is not allowed to grant emergency access }
+  /v1/break-glass/grants/{grant_id}/revoke:
+    post:
+      summary: Revoke an active break-glass grant
+      parameters:
+        - name: grant_id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                actor: { type: string, default: ceo }
+                reason: { type: string }
+      responses:
+        '200': { description: Break-glass grant revoked }
+        '404': { description: Break-glass grant not found }
   /v1/status:
     get:
       summary: Executive status summary
@@ -85,8 +200,10 @@ paths:
                 project_id: { type: string }
                 command: { type: string }
                 constraints: { type: object }
+                actor: { type: string, default: executive_console }
       responses:
         '201': { description: Command accepted }
+        '403': { description: Actor is not allowed to submit commands }
   /v1/tasks:
     get:
       summary: List tasks
@@ -99,8 +216,163 @@ paths:
         '200': { description: Task list }
     post:
       summary: Create task
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id, title, dedupe_key]
+              properties:
+                project_id: { type: string }
+                title: { type: string }
+                description: { type: string }
+                owner_role_id:
+                  type: string
+                  description: Role id or role key responsible for the task.
+                parent_task_id:
+                  type: string
+                  description: Parent task id in the initiative/task hierarchy.
+                dependency_task_ids:
+                  type: array
+                  items: { type: string }
+                  description: Same-project task ids that must be considered dependencies.
+                due_at:
+                  type: string
+                  format: date-time
+                priority: { type: string, default: p2 }
+                risk_tier: { type: integer, default: 1 }
+                data_boundary:
+                  type: string
+                  default: internal
+                  enum: [public, internal, confidential, restricted, local-only]
+                dedupe_key: { type: string }
+                inputs: { type: object }
+                required_artifacts:
+                  type: array
+                  items: { type: string }
+                actor: { type: string, default: executive_console }
       responses:
         '201': { description: Created }
+        '403': { description: Actor is not allowed to create tasks }
+  /v1/departments:
+    get:
+      summary: List canonical departments for a project
+      parameters:
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Department list }
+    post:
+      summary: Create or update a canonical department
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id, department_key, name, mission]
+              properties:
+                project_id: { type: string }
+                department_key: { type: string }
+                name: { type: string }
+                mission: { type: string }
+                actor: { type: string, default: ceo }
+      responses:
+        '201': { description: Department created or updated }
+  /v1/policies:
+    get:
+      summary: List canonical policy records for a project
+      parameters:
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Policy record list }
+    post:
+      summary: Create or update a canonical policy record
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id, policy_key, title, body]
+              properties:
+                project_id: { type: string }
+                policy_key: { type: string }
+                version: { type: integer, default: 1 }
+                title: { type: string }
+                body: { type: object }
+                actor: { type: string, default: ceo }
+      responses:
+        '201': { description: Policy record created or updated }
+  /v1/plans:
+    get:
+      summary: List canonical plans for a project
+      parameters:
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Plan list }
+    post:
+      summary: Create a canonical plan
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id, title, objective]
+              properties:
+                project_id: { type: string }
+                title: { type: string }
+                objective: { type: string }
+                task_id: { type: string }
+                phases: { type: array, items: {} }
+                success_criteria: { type: array, items: {} }
+                risks: { type: array, items: {} }
+                artifact_id: { type: string }
+                actor: { type: string, default: ceo }
+      responses:
+        '201': { description: Plan created }
+  /v1/meetings:
+    get:
+      summary: List canonical meetings for a project
+      parameters:
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Meeting list }
+    post:
+      summary: Create a canonical meeting record
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id, title, purpose]
+              properties:
+                project_id: { type: string }
+                title: { type: string }
+                purpose: { type: string }
+                participants:
+                  type: array
+                  items: { type: string }
+                agenda:
+                  type: array
+                  items: { type: string }
+                actor: { type: string, default: ceo }
+      responses:
+        '201': { description: Meeting created }
   /v1/jobs/{job_id}:
     get:
       summary: Get job
@@ -110,7 +382,7 @@ paths:
           required: true
           schema: { type: string }
       responses:
-        '200': { description: Job }
+        '200': { description: Job summary including data_boundary classification }
         '404': { description: Job not found }
   /v1/tasks/{task_id}:
     get:
@@ -121,7 +393,7 @@ paths:
           required: true
           schema: { type: string }
       responses:
-        '200': { description: Task }
+        '200': { description: Task summary including data_boundary classification }
   /v1/self-improvement/proposals:
     get:
       summary: List self-improvement proposals for a project
@@ -265,7 +537,7 @@ paths:
           required: false
           schema: { type: integer, default: 25 }
       responses:
-        '200': { description: Artifact list }
+        '200': { description: Artifact list including data_boundary classifications }
   /v1/artifacts/{artifact_id}:
     get:
       summary: Get artifact
@@ -275,7 +547,7 @@ paths:
           required: true
           schema: { type: string }
       responses:
-        '200': { description: Artifact detail }
+        '200': { description: Artifact detail including data_boundary classification }
         '404': { description: Artifact not found }
   /v1/roles:
     get:
@@ -346,6 +618,94 @@ paths:
         '201': { description: Role governance detail after the review }
         '404': { description: Role not found }
         '422': { description: Review payload is invalid }
+  /v1/roles/{role_key}/autonomy/check:
+    post:
+      summary: Check whether a role's autonomy level permits an action
+      parameters:
+        - name: role_key
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id, action]
+              properties:
+                project_id: { type: string }
+                actor: { type: string, default: system }
+                action: { type: string }
+                risk_tier: { type: integer, minimum: 0, maximum: 3, default: 0 }
+                sandboxed: { type: boolean, default: false }
+                policy_approved: { type: boolean, default: false }
+      responses:
+        '200':
+          description: Autonomy check result
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - project_id
+                  - role_key
+                  - allowed
+                  - reason
+                  - action
+                  - required_capability
+                  - risk_tier
+                  - sandboxed
+                  - policy_approved
+                  - current_level
+                  - allowed_capabilities
+                  - trust_score
+                properties:
+                  project_id: { type: string }
+                  role_key: { type: string }
+                  allowed: { type: boolean }
+                  reason: { type: string }
+                  action: { type: string }
+                  required_capability: { type: string }
+                  risk_tier: { type: integer }
+                  sandboxed: { type: boolean }
+                  policy_approved: { type: boolean }
+                  current_level: { type: integer }
+                  required_level:
+                    type: integer
+                    nullable: true
+                  allowed_capabilities:
+                    type: array
+                    items: { type: string }
+                  trust_score: { type: integer }
+        '404': { description: Role not found }
+        '422': { description: Autonomy check payload is invalid }
+  /v1/roles/{role_key}/scope/check:
+    post:
+      summary: Check RoleSpec scope and record drift if an action is out of scope
+      parameters:
+        - name: role_key
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id, action]
+              properties:
+                project_id: { type: string }
+                actor: { type: string, default: system }
+                action: { type: string }
+                skill_id: { type: string }
+                evidence_ref: { type: string }
+      responses:
+        '200': { description: Role scope check result with trust/autonomy impact }
+        '403': { description: Actor is not allowed to review roles }
+        '404': { description: Role not found }
+        '422': { description: Invalid role scope check request }
   /v1/packs:
     get:
       summary: List available packs with install status for a project
@@ -438,7 +798,44 @@ paths:
     get:
       summary: List registered control-plane skills from specpack
       responses:
-        '200': { description: Skill list }
+        '200':
+          description: Skill list
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      required:
+                        - id
+                        - kind
+                        - risk_tier
+                        - description
+                        - mock_mode
+                        - input_schema
+                        - output_schema
+                        - cost
+                        - retry
+                        - permissions
+                        - data_boundary
+                        - policy
+                      properties:
+                        id: { type: string }
+                        kind: { type: string }
+                        risk_tier: { type: integer }
+                        description: { type: string }
+                        mock_mode: { type: boolean }
+                        input_schema: { type: object }
+                        output_schema: { type: object }
+                        cost: { type: object }
+                        retry: { type: object }
+                        permissions: { type: object }
+                        data_boundary: { type: string }
+                        policy: { type: object }
   /v1/entitlements/sources:
     get:
       summary: List configured entitlement sources for a project
@@ -470,8 +867,23 @@ paths:
             schema:
               type: object
               required: [project_id, skill_id, task_kind, workload_class]
+              properties:
+                project_id: { type: string }
+                skill_id: { type: string }
+                task_kind: { type: string }
+                workload_class: { type: string }
+                risk_tier: { type: integer, default: 1 }
+                data_boundary:
+                  type: string
+                  default: internal
+                  enum: [public, internal, confidential, restricted, local-only]
+                preferred_capabilities:
+                  type: array
+                  items: { type: string }
+                budget_state: { type: string }
+                actor: { type: string, default: system }
       responses:
-        '200': { description: Routing decision }
+        '200': { description: Routing decision with persisted data_boundary policy result }
         '404': { description: Skill not found }
   /v1/router/logs:
     get:
@@ -486,7 +898,7 @@ paths:
           required: false
           schema: { type: integer, default: 25 }
       responses:
-        '200': { description: Routing log list }
+        '200': { description: Routing log list including data_boundary classifications }
   /v1/comms/outbox:
     get:
       summary: List outbound communication records for a project
@@ -500,7 +912,7 @@ paths:
           required: false
           schema: { type: integer, default: 50 }
       responses:
-        '200': { description: Outbox list }
+        '200': { description: Outbox list including data_boundary classifications }
     post:
       summary: Create an outbox draft message
       requestBody:
@@ -512,13 +924,19 @@ paths:
               required: [project_id, channel, body, dedupe_key]
               properties:
                 project_id: { type: string }
-                channel: { type: string }
+                channel:
+                  type: string
+                  description: "Provider-prefixed destination such as slack:#ops or email:founder@example.com"
                 subject: { type: string }
                 body: { type: string }
+                data_boundary:
+                  type: string
+                  default: internal
+                  enum: [public, internal, confidential, restricted, local-only]
                 dedupe_key: { type: string }
                 actor: { type: string, default: executive_console }
       responses:
-        '201': { description: Outbox draft created }
+        '201': { description: Outbox draft created with data_boundary classification }
   /v1/comms/outbox/{message_id}/queue:
     post:
       summary: Queue a receipt-gated outbound communication job
@@ -541,8 +959,13 @@ paths:
                 actor: { type: string, default: executive_console }
                 priority: { type: integer, default: 25 }
                 max_attempts: { type: integer, default: 3 }
+                urgency:
+                  type: string
+                  default: normal
+                  enum: [low, normal, urgent]
+                  description: "Non-urgent deliveries can be deferred by quiet-hours or throttle policy; urgent deliveries bypass those scheduling deferrals."
       responses:
-        '201': { description: Communication job queued }
+        '201': { description: Communication job queued with inherited data_boundary classification and optional quiet-hours/throttle deferral }
         '404': { description: Outbox message not found }
   /v1/comms/outbox/{message_id}/deliver:
     post:
@@ -566,7 +989,7 @@ paths:
                 actor: { type: string, default: executive_console }
                 created_by_job_id: { type: string }
       responses:
-        '200': { description: Communication delivered, blocked, reused, or failed }
+        '200': { description: "Communication delivered, blocked, reused, or failed through a guarded Slack or SMTP adapter, including data_boundary when policy blocks an external effect" }
         '404': { description: Outbox message not found }
   /v1/comms/inbox:
     get:
@@ -581,10 +1004,10 @@ paths:
           required: false
           schema: { type: integer, default: 50 }
       responses:
-        '200': { description: Inbox list }
+        '200': { description: Inbox list including data_boundary classifications }
   /v1/comms/inbox/ingest:
     post:
-      summary: Record an inbound message in the inbox
+      summary: Record an inbound message in the inbox and deterministically process decision replies
       requestBody:
         required: true
         content:
@@ -594,13 +1017,19 @@ paths:
               required: [project_id, channel, body]
               properties:
                 project_id: { type: string }
-                channel: { type: string }
+                channel:
+                  type: string
+                  description: "Provider-prefixed source such as email:founder@example.com or slack:#ops"
                 subject: { type: string }
                 body: { type: string }
                 raw_ref: { type: string }
+                data_boundary:
+                  type: string
+                  default: internal
+                  enum: [public, internal, confidential, restricted, local-only]
                 actor: { type: string, default: system }
       responses:
-        '201': { description: Inbox message recorded }
+        '201': { description: Inbox message recorded, actioned, or deadlettered with data_boundary classification }
   /v1/decisions/inbox:
     get:
       summary: List decisions for inbox with pending items first
@@ -611,6 +1040,33 @@ paths:
           schema: { type: string }
       responses:
         '200': { description: Decision cards }
+  /v1/decisions/digests:
+    post:
+      summary: Create a durable decision digest artifact and optional outbox draft
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id]
+              properties:
+                project_id: { type: string }
+                channel:
+                  type: string
+                  description: "Optional provider-prefixed outbox destination. Creates a draft only; delivery still requires queue/reservation."
+                actor: { type: string, default: executive_console }
+                max_items: { type: integer, default: 20, minimum: 1, maximum: 100 }
+                low_risk_max: { type: integer, default: 1, minimum: 0, maximum: 3 }
+                urgent_risk_min: { type: integer, default: 2, minimum: 0, maximum: 3 }
+                dedupe_key: { type: string }
+                data_boundary:
+                  type: string
+                  default: internal
+                  enum: [public, internal, confidential, restricted, local-only]
+      responses:
+        '201': { description: Decision digest artifact created, with optional outbox draft id }
+        '403': { description: Actor lacks decision or comms permission }
   /v1/decisions/{decision_id}/approve:
     post:
       summary: Approve decision
@@ -736,6 +1192,9 @@ paths:
                 task_id: { type: string }
                 kind: { type: string }
                 payload: { type: object }
+                data_boundary:
+                  type: string
+                  enum: [public, internal, confidential, restricted, local-only]
                 requires_reservation: { type: boolean, default: false }
                 reservation_id: { type: string }
                 priority: { type: integer, default: 100 }
@@ -826,7 +1285,85 @@ paths:
           required: true
           schema: { type: string }
       responses:
-        '200': { description: Budget status }
+        '200':
+          description: Budget status
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - scope_type
+                  - scope_id
+                  - budget_state
+                  - cap_usd_micros
+                  - reserved_usd_micros
+                  - actual_usd_micros
+                  - available_usd_micros
+                  - committed_usd_micros
+                  - burn_window_hours
+                  - burn_rate_usd_micros_per_hour
+                  - forecasted_24h_usd_micros
+                  - utilization_ratio
+                  - active_reservations_count
+                  - top_cost_drivers
+                properties:
+                  scope_type: { type: string }
+                  scope_id: { type: string }
+                  budget_state: { type: string }
+                  cap_usd_micros: { type: integer }
+                  reserved_usd_micros: { type: integer }
+                  actual_usd_micros: { type: integer }
+                  available_usd_micros: { type: integer }
+                  committed_usd_micros: { type: integer }
+                  burn_approx_usd_micros: { type: integer }
+                  burn_window_hours: { type: integer }
+                  burn_rate_usd_micros_per_hour: { type: integer }
+                  forecasted_24h_usd_micros: { type: integer }
+                  time_to_cap_seconds:
+                    type: integer
+                    nullable: true
+                  utilization_ratio: { type: number }
+                  active_reservations_count: { type: integer }
+                  top_cost_drivers:
+                    type: array
+                    items:
+                      type: object
+                      required: [skill_or_model_id, amount_usd_micros]
+                      properties:
+                        skill_or_model_id: { type: string }
+                        amount_usd_micros: { type: integer }
+  /v1/budget/allocations:
+    get:
+      summary: List hierarchical budget allocations for a project
+      parameters:
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Budget allocation list }
+    post:
+      summary: Create a budget allocation with parent-cap enforcement
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id, scope_type, scope_id, amount_usd_micros, period_start, period_end]
+              properties:
+                project_id: { type: string }
+                parent_allocation_id: { type: string }
+                scope_type: { type: string }
+                scope_id: { type: string }
+                amount_usd_micros: { type: integer }
+                period_start: { type: string, format: date-time }
+                period_end: { type: string, format: date-time }
+                actor: { type: string, default: ceo }
+      responses:
+        '201': { description: Budget allocation created }
+        '403': { description: Actor is not allowed to manage budgets }
+        '409': { description: Allocation exceeds parent or project budget cap }
   /v1/budget/quote:
     post:
       summary: Quote a spend request against the active project budget
@@ -860,6 +1397,7 @@ paths:
                 amount_usd_micros: { type: integer }
                 reason: { type: string }
                 job_id: { type: string }
+                allocation_id: { type: string }
                 expires_in_minutes: { type: integer, default: 30 }
       responses:
         '201': { description: Reservation created or denied }
@@ -901,7 +1439,7 @@ paths:
         '200': { description: Plan artifact created, reused, or blocked }
   /v1/software-factory/proposals:
     post:
-      summary: Create a real sandbox pull request proposal behind a reservation and capture GitHub validation evidence
+      summary: Create a real sandbox pull request proposal behind a reservation and capture GitHub plus optional local validation evidence
       requestBody:
         required: true
         content:
@@ -929,7 +1467,7 @@ paths:
                       path: { type: string }
                       content: { type: string }
       responses:
-        '200': { description: Sandbox PR created, reused, or blocked }
+        '200': { description: "Sandbox PR created, reused, or blocked, including data_boundary when policy blocks an external effect" }
   /v1/software-factory/merges:
     post:
       summary: Merge a sandbox pull request behind a receipt-backed control-plane gate after passed validation
@@ -951,7 +1489,7 @@ paths:
                 branch_name: { type: string }
                 created_by_job_id: { type: string }
       responses:
-        '200': { description: Sandbox PR merged, reused, blocked, or failed }
+        '200': { description: "Sandbox PR merged, reused, blocked, or failed, including data_boundary when policy blocks an external effect" }
   /v1/software-factory/deployments:
     post:
       summary: Record a sandbox deployment behind a receipt-backed control-plane gate, with optional post-deploy health verification
@@ -975,7 +1513,21 @@ paths:
                 environment: { type: string }
                 created_by_job_id: { type: string }
       responses:
-        '200': { description: Sandbox deployment created, reused, blocked, or failed, including health-verification status when configured }
+        '200': { description: "Sandbox deployment created, reused, blocked, or failed, including data_boundary when policy blocks an external effect and health-verification status when configured" }
+  /v1/software-factory/rollouts:
+    get:
+      summary: List durable sandbox deployment rollout records and staged verification evidence
+      parameters:
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, default: 20 }
+      responses:
+        '200': { description: Deployment rollout list }
   /v1/software-factory/proposals/queue:
     post:
       summary: Queue a real sandbox PR proposal for leased worker execution
@@ -1057,6 +1609,178 @@ paths:
                 max_attempts: { type: integer, default: 3 }
       responses:
         '201': { description: Deployment job queued }
+  /v1/infra/droplets/requests:
+    post:
+      summary: Create an approval-gated infrastructure provisioning request artifact and decision
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id, reservation_id, title, region, size, ttl_minutes]
+              properties:
+                project_id: { type: string }
+                task_id: { type: string }
+                reservation_id: { type: string }
+                title: { type: string }
+                region: { type: string }
+                size: { type: string }
+                ttl_minutes: { type: integer, minimum: 5, maximum: 10080 }
+                tags:
+                  type: array
+                  items: { type: string }
+                data_boundary: { type: string }
+                actor: { type: string, default: ceo }
+      responses:
+        '201': { description: Infrastructure provisioning review created }
+        '403': { description: Actor is not allowed to request infrastructure provisioning }
+        '422': { description: Invalid infrastructure review request }
+  /v1/infra/droplets:
+    post:
+      summary: Provision a real sandbox droplet behind decision, reservation, and receipt gates
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                [project_id, decision_id, reservation_id, dedupe_key, title, region, size, ttl_minutes]
+              properties:
+                project_id: { type: string }
+                task_id: { type: string }
+                decision_id: { type: string }
+                reservation_id: { type: string }
+                dedupe_key: { type: string }
+                title: { type: string }
+                region: { type: string }
+                size: { type: string }
+                ttl_minutes: { type: integer, minimum: 5, maximum: 10080 }
+                tags:
+                  type: array
+                  items: { type: string }
+                data_boundary: { type: string }
+                created_by_job_id: { type: string }
+      responses:
+        '200': { description: Infrastructure provisioning created, reused, blocked, or failed }
+        '422': { description: Invalid infrastructure provisioning request }
+  /v1/infra/droplets/queue:
+    post:
+      summary: Queue infrastructure provisioning for leased worker execution
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                [project_id, decision_id, reservation_id, dedupe_key, title, region, size, ttl_minutes]
+              properties:
+                project_id: { type: string }
+                task_id: { type: string }
+                decision_id: { type: string }
+                reservation_id: { type: string }
+                dedupe_key: { type: string }
+                title: { type: string }
+                region: { type: string }
+                size: { type: string }
+                ttl_minutes: { type: integer, minimum: 5, maximum: 10080 }
+                tags:
+                  type: array
+                  items: { type: string }
+                data_boundary: { type: string }
+                actor: { type: string, default: release_manager }
+                priority: { type: integer, default: 15 }
+                max_attempts: { type: integer, default: 1 }
+      responses:
+        '201': { description: Infrastructure provisioning job queued }
+        '403': { description: Actor is not allowed to queue infrastructure provisioning }
+        '422': { description: Invalid infrastructure provisioning job request }
+  /v1/infra/resources:
+    get:
+      summary: List provisioned infrastructure resources for a project
+      parameters:
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, default: 20 }
+      responses:
+        '200': { description: Infrastructure resource list }
+  /v1/infra/resources/{resource_id}/terminate:
+    post:
+      summary: Terminate a provisioned sandbox resource through a receipt-backed adapter
+      parameters:
+        - name: resource_id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id, dedupe_key]
+              properties:
+                project_id: { type: string }
+                dedupe_key: { type: string }
+                actor: { type: string, default: release_manager }
+                reason: { type: string }
+                created_by_job_id: { type: string }
+      responses:
+        '200': { description: Infrastructure termination created, reused, blocked, or failed }
+        '403': { description: Actor is not allowed to terminate infrastructure }
+        '404': { description: Infrastructure resource not found }
+        '422': { description: Invalid infrastructure termination request }
+  /v1/infra/resources/{resource_id}/terminate/queue:
+    post:
+      summary: Queue infrastructure termination for leased worker execution
+      parameters:
+        - name: resource_id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id, dedupe_key]
+              properties:
+                project_id: { type: string }
+                dedupe_key: { type: string }
+                actor: { type: string, default: release_manager }
+                reason: { type: string }
+                priority: { type: integer, default: 10 }
+                max_attempts: { type: integer, default: 1 }
+      responses:
+        '201': { description: Infrastructure termination job queued }
+        '403': { description: Actor is not allowed to queue infrastructure termination }
+        '404': { description: Infrastructure resource not found }
+        '422': { description: Invalid infrastructure termination job request }
+  /v1/infra/janitor/run:
+    post:
+      summary: Queue termination jobs for expired TTL-managed infrastructure resources
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id]
+              properties:
+                project_id: { type: string }
+                actor: { type: string, default: system }
+                limit: { type: integer, default: 20 }
+      responses:
+        '200': { description: TTL janitor run queued or no-op }
+        '403': { description: Actor is not allowed to run the infrastructure janitor }
   /v1/receipts/{dedupe_key}:
     get:
       summary: Get receipt by dedupe key
@@ -1066,7 +1790,7 @@ paths:
           required: true
           schema: { type: string }
       responses:
-        '200': { description: Receipt }
+        '200': { description: Receipt including data_boundary classification }
   /v1/receipts:
     get:
       summary: List receipts for a project
@@ -1080,7 +1804,36 @@ paths:
           required: false
           schema: { type: integer, default: 50 }
       responses:
-        '200': { description: Receipt list }
+        '200': { description: Receipt list including data_boundary classifications }
+  /v1/change-journal:
+    get:
+      summary: List change artifacts with normalized diff and rollback metadata
+      parameters:
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, default: 25 }
+      responses:
+        '200': { description: Change journal items backed by durable artifacts }
+  /v1/change-journal/{artifact_id}:
+    get:
+      summary: Get change artifact detail and diff content
+      parameters:
+        - name: artifact_id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Change journal detail with artifact content }
+        '404': { description: Change artifact not found for project }
   /v1/audit/export:
     get:
       summary: Export a reconstructable audit chain
@@ -1102,7 +1855,7 @@ paths:
           required: false
           schema: { type: string }
       responses:
-        '200': { description: Audit export }
+        '200': { description: Audit export including data_boundary classifications for tasks, jobs, artifacts, and receipts }
         '404': { description: Unknown project }
   /v1/audit/replay-bundles:
     post:
@@ -1122,6 +1875,25 @@ paths:
                 actor: { type: string, default: system }
       responses:
         '201': { description: Replay bundle created }
+        '404': { description: Unknown project }
+  /v1/compliance/evidence-bundles:
+    post:
+      summary: Create a compliance evidence artifact for access, budget, effects, and policy controls
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id]
+              properties:
+                project_id: { type: string }
+                actor: { type: string, default: ceo }
+                period_start: { type: string, format: date-time }
+                period_end: { type: string, format: date-time }
+      responses:
+        '201': { description: Compliance evidence bundle created }
+        '403': { description: Actor is not allowed to create evidence bundles }
         '404': { description: Unknown project }
   /v1/events:
     get:
@@ -1151,3 +1923,14 @@ paths:
           schema: { type: integer, default: 50 }
       responses:
         '200': { description: Deadletters }
+components:
+  securitySchemes:
+    BossBearerAuth:
+      type: http
+      scheme: bearer
+      description: Set when `BOSS_REQUIRE_API_AUTH=true`.
+    BossApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-BOSS-API-Key
+      description: Alternate API key header accepted when `BOSS_REQUIRE_API_AUTH=true`.

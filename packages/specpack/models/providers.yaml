@@ -119,6 +119,11 @@ models:
     cost_class: token_metered
     enabled: true
 routing_policy:
+  data_boundaries:
+    external_official_source_default: [public, internal, confidential]
+    approved_local_model_default: [public, internal, confidential, restricted, local-only]
+    restricted_requires_explicit_source_approval: true
+    local_only_requires_approved_local_model: true
   workload_class_defaults:
     owner_sandbox:
       preferred_source_kinds: [official_cli, official_coding_agent, official_api, approved_local_model]

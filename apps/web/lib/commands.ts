@@ -6,6 +6,7 @@ export function buildCommandRequest(
   commandInput: FormDataEntryValue | null,
   deadlineInput: FormDataEntryValue | null,
   projectId = PROJECT_ID,
+  actor = "executive_console",
 ): CommandProposeRequest {
   const command =
     typeof commandInput === "string" ? commandInput.trim() : "";
@@ -22,5 +23,6 @@ export function buildCommandRequest(
     project_id: resolveProjectId(projectId),
     command,
     constraints,
+    actor,
   };
 }

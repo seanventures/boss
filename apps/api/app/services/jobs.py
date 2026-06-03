@@ -18,6 +18,7 @@ from .core import (
     emit_event,
     make_id,
     now_utc,
+    normalize_data_boundary,
 )
 
 
@@ -41,19 +42,23 @@ class JobLeaseService:
         priority: int = 100,
         max_attempts: int = 3,
         run_after_seconds: int = 0,
+        data_boundary: Optional[str] = None,
     ) -> dict[str, Any]:
         job_id = make_id("job")
         run_after = now_utc() + timedelta(seconds=run_after_seconds)
+        boundary = self._resolve_job_data_boundary(
+            connection, task_id, payload or {}, data_boundary
+        )
         connection.execute(
             text(
                 """
                 INSERT INTO jobs (
                     id, project_id, task_id, kind, priority, status, payload,
-                    max_attempts, attempt, run_after
+                    data_boundary, max_attempts, attempt, run_after
                 )
                 VALUES (
                     :id, :project_id, :task_id, :kind, :priority, 'queued', CAST(:payload AS JSONB),
-                    :max_attempts, 0, :run_after
+                    :data_boundary, :max_attempts, 0, :run_after
                 )
                 """
             ),
@@ -64,6 +69,7 @@ class JobLeaseService:
                 "kind": kind,
                 "priority": priority,
                 "payload": json.dumps(payload or {}),
+                "data_boundary": boundary,
                 "max_attempts": max_attempts,
                 "run_after": run_after,
             },
@@ -75,7 +81,7 @@ class JobLeaseService:
             "control_plane",
             "job",
             job_id,
-            {"kind": kind, "task_id": task_id},
+            {"kind": kind, "task_id": task_id, "data_boundary": boundary},
         )
         return {
             "id": job_id,
@@ -83,11 +89,33 @@ class JobLeaseService:
             "task_id": task_id,
             "kind": kind,
             "status": "queued",
+            "data_boundary": boundary,
             "priority": priority,
             "max_attempts": max_attempts,
             "attempt": 0,
             "run_after": run_after.isoformat(),
         }
+
+    def _resolve_job_data_boundary(
+        self,
+        connection: Connection,
+        task_id: Optional[str],
+        payload: dict[str, Any],
+        data_boundary: Optional[str],
+    ) -> str:
+        if data_boundary:
+            return normalize_data_boundary(data_boundary)
+        payload_boundary = payload.get("data_boundary")
+        if isinstance(payload_boundary, str) and payload_boundary.strip():
+            return normalize_data_boundary(payload_boundary)
+        if task_id:
+            row = connection.execute(
+                text("SELECT data_boundary FROM tasks WHERE id = :task_id"),
+                {"task_id": task_id},
+            ).mappings().first()
+            if row:
+                return normalize_data_boundary(row["data_boundary"])
+        return "internal"
 
     def claim_job(
         self,
@@ -106,7 +134,8 @@ class JobLeaseService:
 
         candidate_statement = text(
             """
-            SELECT id, project_id, task_id, kind, payload, attempt, max_attempts, status
+            SELECT id, project_id, task_id, kind, payload, data_boundary, attempt,
+                   max_attempts, status
             FROM jobs
             WHERE kind IN :capabilities
               AND run_after <= :now_utc
@@ -193,6 +222,7 @@ class JobLeaseService:
                         task_id,
                         kind,
                         payload,
+                        data_boundary,
                         attempt,
                         max_attempts,
                         lease_expires_at
@@ -227,6 +257,7 @@ class JobLeaseService:
                 "task_id": row["task_id"],
                 "kind": row["kind"],
                 "payload": row["payload"] or {},
+                "data_boundary": row["data_boundary"],
                 "attempt": row["attempt"],
                 "max_attempts": row["max_attempts"],
                 "lease_token": lease_token,
@@ -473,7 +504,7 @@ class JobLeaseService:
             text(
                 """
                 SELECT id, project_id, task_id, kind, payload, status, attempt, max_attempts,
-                       lease_owner, lease_token_hash, lease_expires_at
+                       data_boundary, lease_owner, lease_token_hash, lease_expires_at
                 FROM jobs
                 WHERE id = :job_id
                 FOR UPDATE
@@ -517,6 +548,10 @@ class JobLeaseService:
                 "branch_name": result.get("branch_name"),
                 "validation_status": result.get("validation_status"),
                 "validation_summary": result.get("validation_summary"),
+                "validation_sources": result.get("validation_sources") or [],
+                "local_validation_receipt_id": result.get(
+                    "local_validation_receipt_id"
+                ),
             }
 
         if job_row["kind"] == "github.pull_request.merge":
@@ -540,11 +575,36 @@ class JobLeaseService:
                 "deployment_status": result.get("deployment_status"),
                 "deployment_url": result.get("deployment_url"),
                 "merged_sha": result.get("merged_sha"),
+                "rollout_id": result.get("rollout_id"),
+                "rollout_artifact_id": result.get("rollout_artifact_id"),
+                "rollout_status": result.get("rollout_status"),
+                "rollout_stage": result.get("rollout_stage"),
             }
 
         if job_row["kind"] == "comms.outbox.deliver":
             return {
                 "receipt_id": result.get("receipt_id"),
+            }
+
+        if job_row["kind"] == "infra.droplet.create":
+            return {
+                "artifact_id": result.get("artifact_id"),
+                "decision_id": result.get("decision_id"),
+                "receipt_id": result.get("receipt_id"),
+                "resource_id": result.get("resource_id"),
+                "provider_ref": result.get("provider_ref"),
+                "provider_resource_id": result.get("provider_resource_id"),
+                "resource_name": result.get("resource_name"),
+                "expires_at": result.get("expires_at"),
+            }
+
+        if job_row["kind"] == "infra.droplet.delete":
+            return {
+                "artifact_id": result.get("artifact_id"),
+                "decision_id": result.get("decision_id"),
+                "receipt_id": result.get("receipt_id"),
+                "resource_id": result.get("resource_id"),
+                "provider_ref": result.get("provider_ref"),
             }
 
         if job_row["kind"] not in {"plan.command", "plan.generate"}:
@@ -611,6 +671,7 @@ class JobLeaseService:
             "github.pull_request",
             "software_factory.propose_pr",
             "comms.outbox.deliver",
+            "infra.droplet.create",
         }
         return bool(payload.get("requires_reservation")) or kind in spendy_kinds
 
@@ -665,6 +726,14 @@ class JobLeaseService:
             "comms.outbox.deliver",
         }
         if budget_state == "red":
+            if kind == "infra.droplet.create":
+                return {
+                    "budget_state": budget_state,
+                    "task_priority": task_priority,
+                    "risk_tier": risk_tier,
+                    "defer_seconds": 900,
+                    "reason": "red_freezes_infra_provisioning",
+                }
             if task_priority != "p0":
                 return {
                     "budget_state": budget_state,

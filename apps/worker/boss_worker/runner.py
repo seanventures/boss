@@ -18,6 +18,8 @@ def capabilities() -> list[str]:
         "software_factory.propose_pr",
         "github.pull_request.merge",
         "github.deployment.create",
+        "infra.droplet.create",
+        "infra.droplet.delete",
         "comms.outbox.deliver",
     ]
 
@@ -144,6 +146,43 @@ def execute_job(job: LeasedJob, client: ControlPlaneClient) -> dict[str, Any]:
         )
         if result.get("status") == "failed":
             raise RuntimeError(result.get("message") or "Deployment creation failed.")
+        return result
+    if job.kind == "infra.droplet.create":
+        result = client.create_infra_droplet(
+            {
+                "project_id": job.project_id,
+                "task_id": job.task_id,
+                "decision_id": job.payload["decision_id"],
+                "reservation_id": job.payload["reservation_id"],
+                "dedupe_key": job.payload["dedupe_key"],
+                "title": job.payload["title"],
+                "region": job.payload["region"],
+                "size": job.payload["size"],
+                "ttl_minutes": job.payload["ttl_minutes"],
+                "tags": job.payload.get("tags") or [],
+                "data_boundary": job.payload.get("data_boundary"),
+                "created_by_job_id": job.id,
+            }
+        )
+        if result.get("status") == "failed":
+            raise RuntimeError(
+                result.get("message") or "Infrastructure provisioning failed."
+            )
+        return result
+    if job.kind == "infra.droplet.delete":
+        result = client.terminate_infra_resource(
+            job.payload["resource_id"],
+            {
+                "project_id": job.project_id,
+                "dedupe_key": job.payload["dedupe_key"],
+                "reason": job.payload.get("reason"),
+                "created_by_job_id": job.id,
+            },
+        )
+        if result.get("status") == "failed":
+            raise RuntimeError(
+                result.get("message") or "Infrastructure termination failed."
+            )
         return result
     if job.kind == "comms.outbox.deliver":
         result = client.deliver_outbox_message(

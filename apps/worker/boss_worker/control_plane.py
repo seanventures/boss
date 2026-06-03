@@ -17,15 +17,21 @@ class LeasedJob:
     max_attempts: int
     lease_token: str
     lease_expires_at: str
+    data_boundary: str = "internal"
 
 
 class ControlPlaneClient:
-    def __init__(self, base_url: str, timeout: float = 30.0):
+    def __init__(
+        self, base_url: str, timeout: float = 30.0, api_key: Optional[str] = None
+    ):
         self.base_url = base_url.rstrip("/")
+        headers = {"Accept": "application/json"}
+        if api_key and api_key.strip():
+            headers["Authorization"] = f"Bearer {api_key.strip()}"
         self._client = httpx.Client(
             base_url=self.base_url,
             timeout=timeout,
-            headers={"Accept": "application/json"},
+            headers=headers,
         )
 
     def close(self) -> None:
@@ -106,6 +112,21 @@ class ControlPlaneClient:
 
     def create_deployment(self, payload: dict[str, Any]) -> dict[str, Any]:
         response = self._client.post("/v1/software-factory/deployments", json=payload)
+        response.raise_for_status()
+        return response.json()
+
+    def create_infra_droplet(self, payload: dict[str, Any]) -> dict[str, Any]:
+        response = self._client.post("/v1/infra/droplets", json=payload)
+        response.raise_for_status()
+        return response.json()
+
+    def terminate_infra_resource(
+        self, resource_id: str, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        response = self._client.post(
+            f"/v1/infra/resources/{resource_id}/terminate",
+            json=payload,
+        )
         response.raise_for_status()
         return response.json()
 

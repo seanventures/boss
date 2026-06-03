@@ -1,8 +1,11 @@
 from __future__ import annotations
 
-from typing import Any, Optional
+from datetime import datetime
+from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field, model_validator
+
+DataBoundary = Literal["public", "internal", "confidential", "restricted", "local-only"]
 
 
 def _require_text(value: str, field_name: str) -> str:
@@ -47,6 +50,114 @@ class ProjectSummary(BaseModel):
 
 class ProjectListResponse(BaseModel):
     items: list[ProjectSummary]
+
+
+class AuthSessionResponse(BaseModel):
+    auth_required: bool
+    transport_authenticated: bool
+    actor_binding_required: bool
+    principal_member_id: Optional[str] = None
+    message: str
+
+
+class ProjectMemberSummary(BaseModel):
+    id: str
+    project_id: str
+    member_id: str
+    display_name: str
+    member_type: str
+    role_keys: list[str]
+    permissions: list[str]
+    status: str
+    created_by: str
+    created_at: str
+    updated_at: str
+
+
+class ProjectMemberListResponse(BaseModel):
+    project_id: str
+    items: list[ProjectMemberSummary]
+
+
+class ProjectMemberUpsertRequest(BaseModel):
+    project_id: str
+    member_id: str
+    display_name: str
+    member_type: str = "human"
+    role_keys: list[str] = Field(default_factory=list)
+    permissions: list[str] = Field(default_factory=list)
+    actor: str = "ceo"
+
+    @model_validator(mode="after")
+    def validate_member_fields(self) -> "ProjectMemberUpsertRequest":
+        self.member_id = _require_text(self.member_id, "member_id")
+        self.display_name = _require_text(self.display_name, "display_name")
+        self.member_type = _require_text(self.member_type, "member_type")
+        self.role_keys = _require_non_empty_string_list(
+            self.role_keys, "role_keys"
+        )
+        self.permissions = _require_non_empty_string_list(
+            self.permissions, "permissions"
+        )
+        self.actor = _require_text(self.actor, "actor")
+        return self
+
+
+class BreakGlassGrantSummary(BaseModel):
+    id: str
+    project_id: str
+    target_member_id: str
+    requested_by: str
+    reason: str
+    scope: dict[str, Any] = Field(default_factory=dict)
+    granted_permissions: list[str]
+    status: str
+    expires_at: str
+    postmortem_task_id: Optional[str] = None
+    revoked_by: Optional[str] = None
+    revoked_reason: Optional[str] = None
+    revoked_at: Optional[str] = None
+    created_at: str
+    updated_at: str
+
+
+class BreakGlassGrantListResponse(BaseModel):
+    project_id: str
+    items: list[BreakGlassGrantSummary]
+
+
+class BreakGlassGrantCreateRequest(BaseModel):
+    project_id: str
+    target_member_id: str
+    reason: str
+    scope: dict[str, Any] = Field(default_factory=dict)
+    granted_permissions: list[str]
+    ttl_minutes: int = Field(default=60, ge=5, le=1440)
+    actor: str = "ceo"
+
+    @model_validator(mode="after")
+    def validate_grant(self) -> "BreakGlassGrantCreateRequest":
+        self.target_member_id = _require_text(
+            self.target_member_id, "target_member_id"
+        )
+        self.reason = _require_text(self.reason, "reason")
+        self.granted_permissions = _require_non_empty_string_list(
+            self.granted_permissions,
+            "granted_permissions",
+        )
+        self.actor = _require_text(self.actor, "actor")
+        return self
+
+
+class BreakGlassGrantRevokeRequest(BaseModel):
+    actor: str = "ceo"
+    reason: str
+
+    @model_validator(mode="after")
+    def validate_revoke(self) -> "BreakGlassGrantRevokeRequest":
+        self.actor = _require_text(self.actor, "actor")
+        self.reason = _require_text(self.reason, "reason")
+        return self
 
 
 class StatusResponse(BaseModel):
@@ -122,6 +233,7 @@ class CommandProposeRequest(BaseModel):
     project_id: str
     command: str
     constraints: dict[str, Any] = Field(default_factory=dict)
+    actor: str = "executive_console"
 
 
 class CommandProposeResponse(BaseModel):
@@ -137,6 +249,7 @@ class BudgetReserveRequest(BaseModel):
     amount_usd_micros: int = Field(gt=0)
     reason: str
     job_id: Optional[str] = None
+    allocation_id: Optional[str] = None
     expires_in_minutes: int = Field(default=30, ge=5, le=240)
 
 
@@ -190,9 +303,46 @@ class BudgetStatusResponse(BaseModel):
     available_usd_micros: int
     committed_usd_micros: int
     burn_approx_usd_micros: int
+    burn_window_hours: int
+    burn_rate_usd_micros_per_hour: int
+    forecasted_24h_usd_micros: int
+    time_to_cap_seconds: Optional[int] = None
     utilization_ratio: float
     active_reservations_count: int
     top_cost_drivers: list[dict[str, Any]]
+
+
+class BudgetAllocationSummary(BaseModel):
+    id: str
+    parent_allocation_id: Optional[str] = None
+    project_id: str
+    scope_type: str
+    scope_id: str
+    amount_usd_micros: int
+    child_allocated_usd_micros: int
+    reserved_usd_micros: int
+    actual_usd_micros: int
+    available_usd_micros: int
+    period_start: str
+    period_end: str
+    status: str
+    created_at: str
+
+
+class BudgetAllocationListResponse(BaseModel):
+    project_id: str
+    items: list[BudgetAllocationSummary]
+
+
+class BudgetAllocationCreateRequest(BaseModel):
+    project_id: str
+    scope_type: str
+    scope_id: str
+    amount_usd_micros: int = Field(gt=0)
+    period_start: datetime
+    period_end: datetime
+    parent_allocation_id: Optional[str] = None
+    actor: str = "ceo"
 
 
 class OpenAIPlanRequest(BaseModel):
@@ -240,6 +390,7 @@ class PullRequestProposalJobRequest(PullRequestProposalRequest):
 
 class PullRequestProposalResponse(BaseModel):
     status: str
+    data_boundary: Optional[DataBoundary] = None
     artifact_id: Optional[str] = None
     diff_artifact_id: Optional[str] = None
     test_report_artifact_id: Optional[str] = None
@@ -250,6 +401,8 @@ class PullRequestProposalResponse(BaseModel):
     branch_name: Optional[str] = None
     validation_status: Optional[str] = None
     validation_summary: Optional[str] = None
+    validation_sources: list[str] = Field(default_factory=list)
+    local_validation_receipt_id: Optional[str] = None
     message: Optional[str] = None
 
 
@@ -290,6 +443,7 @@ class SandboxDeploymentJobRequest(SandboxDeploymentRequest):
 
 class PullRequestMergeResponse(BaseModel):
     status: str
+    data_boundary: Optional[DataBoundary] = None
     artifact_id: Optional[str] = None
     receipt_id: Optional[str] = None
     decision_id: Optional[str] = None
@@ -302,6 +456,7 @@ class PullRequestMergeResponse(BaseModel):
 
 class SandboxDeploymentResponse(BaseModel):
     status: str
+    data_boundary: Optional[DataBoundary] = None
     artifact_id: Optional[str] = None
     receipt_id: Optional[str] = None
     decision_id: Optional[str] = None
@@ -309,12 +464,170 @@ class SandboxDeploymentResponse(BaseModel):
     health_verification_artifact_id: Optional[str] = None
     health_verification_status: Optional[str] = None
     healthcheck_url: Optional[str] = None
+    rollout_id: Optional[str] = None
+    rollout_artifact_id: Optional[str] = None
+    rollout_status: Optional[str] = None
+    rollout_stage: Optional[str] = None
     environment: Optional[str] = None
     deployment_id: Optional[int] = None
     deployment_status: Optional[str] = None
     deployment_url: Optional[str] = None
     merged_sha: Optional[str] = None
     message: Optional[str] = None
+
+
+class InfraProvisionReviewRequest(BaseModel):
+    project_id: str
+    task_id: Optional[str] = None
+    reservation_id: str
+    title: str
+    region: str
+    size: str
+    ttl_minutes: int = Field(ge=5, le=10_080)
+    tags: list[str] = Field(default_factory=list)
+    data_boundary: Optional[DataBoundary] = None
+    actor: str = "ceo"
+
+
+class InfraProvisionReviewResponse(BaseModel):
+    status: str
+    artifact_id: str
+    decision_id: str
+    data_boundary: DataBoundary = "internal"
+
+
+class InfraProvisionRequest(BaseModel):
+    project_id: str
+    decision_id: str
+    reservation_id: str
+    dedupe_key: str
+    title: str
+    region: str
+    size: str
+    ttl_minutes: int = Field(ge=5, le=10_080)
+    tags: list[str] = Field(default_factory=list)
+    task_id: Optional[str] = None
+    data_boundary: Optional[DataBoundary] = None
+    created_by_job_id: Optional[str] = None
+
+
+class InfraProvisionJobRequest(InfraProvisionRequest):
+    actor: str = "release_manager"
+    priority: int = Field(default=15, ge=0)
+    max_attempts: int = Field(default=1, ge=1, le=20)
+
+
+class InfraProvisionResponse(BaseModel):
+    status: str
+    resource_id: Optional[str] = None
+    artifact_id: Optional[str] = None
+    receipt_id: Optional[str] = None
+    decision_id: Optional[str] = None
+    provider_ref: Optional[str] = None
+    provider_resource_id: Optional[str] = None
+    resource_name: Optional[str] = None
+    expires_at: Optional[str] = None
+    data_boundary: Optional[DataBoundary] = None
+    message: Optional[str] = None
+
+
+class InfraTerminationRequest(BaseModel):
+    project_id: str
+    dedupe_key: str
+    actor: str = "release_manager"
+    reason: Optional[str] = None
+    created_by_job_id: Optional[str] = None
+
+
+class InfraTerminationJobRequest(InfraTerminationRequest):
+    priority: int = Field(default=10, ge=0)
+    max_attempts: int = Field(default=1, ge=1, le=20)
+
+
+class InfraTerminationResponse(BaseModel):
+    status: str
+    resource_id: Optional[str] = None
+    artifact_id: Optional[str] = None
+    receipt_id: Optional[str] = None
+    decision_id: Optional[str] = None
+    provider_ref: Optional[str] = None
+    message: Optional[str] = None
+
+
+class InfraJanitorRunRequest(BaseModel):
+    project_id: str
+    actor: str = "system"
+    limit: int = Field(default=20, ge=1, le=200)
+
+
+class InfraJanitorRunResponse(BaseModel):
+    status: str
+    project_id: str
+    queued_job_ids: list[str] = Field(default_factory=list)
+    resource_ids: list[str] = Field(default_factory=list)
+
+
+class InfraResourceSummary(BaseModel):
+    id: str
+    project_id: str
+    task_id: Optional[str] = None
+    decision_id: Optional[str] = None
+    provider: str
+    resource_type: str
+    resource_name: str
+    external_resource_id: str
+    region: str
+    size: str
+    image: str
+    tags: list[str] = Field(default_factory=list)
+    status: str
+    ttl_minutes: int
+    expires_at: str
+    terminated_at: Optional[str] = None
+    termination_reason: Optional[str] = None
+    provision_receipt_id: Optional[str] = None
+    provision_artifact_id: Optional[str] = None
+    termination_receipt_id: Optional[str] = None
+    termination_artifact_id: Optional[str] = None
+    data_boundary: DataBoundary = "internal"
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    created_by_job_id: Optional[str] = None
+    updated_by_job_id: Optional[str] = None
+    created_at: str
+    updated_at: str
+
+
+class InfraResourceListResponse(BaseModel):
+    project_id: str
+    items: list[InfraResourceSummary]
+
+
+class DeploymentRolloutSummary(BaseModel):
+    id: str
+    project_id: str
+    task_id: Optional[str] = None
+    decision_id: Optional[str] = None
+    deployment_receipt_id: Optional[str] = None
+    deployment_artifact_id: Optional[str] = None
+    rollout_artifact_id: Optional[str] = None
+    title: str
+    environment: str
+    merged_sha: str
+    pull_request_url: str
+    branch_name: Optional[str] = None
+    status: str
+    current_stage: str
+    health_verification_status: Optional[str] = None
+    rollback_decision_id: Optional[str] = None
+    stages: list[dict[str, Any]]
+    created_by_job_id: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class DeploymentRolloutListResponse(BaseModel):
+    project_id: str
+    items: list[DeploymentRolloutSummary]
 
 
 class ReceiptResponse(BaseModel):
@@ -327,6 +640,7 @@ class ReceiptResponse(BaseModel):
     payload_hash: Optional[str] = None
     provider_ref: Optional[str] = None
     created_by_job_id: Optional[str] = None
+    data_boundary: DataBoundary = "internal"
     result: Optional[dict[str, Any]] = None
     error: Optional[dict[str, Any]] = None
     created_at: str
@@ -344,6 +658,7 @@ class JobSummary(BaseModel):
     task_id: Optional[str] = None
     kind: str
     status: str
+    data_boundary: DataBoundary = "internal"
     priority: int
     max_attempts: int
     attempt: int
@@ -355,6 +670,7 @@ class JobCreateRequest(BaseModel):
     kind: str
     task_id: Optional[str] = None
     payload: dict[str, Any] = Field(default_factory=dict)
+    data_boundary: Optional[DataBoundary] = None
     requires_reservation: bool = False
     reservation_id: Optional[str] = None
     priority: int = Field(default=100, ge=0)
@@ -368,6 +684,7 @@ class LeasedJob(BaseModel):
     task_id: Optional[str] = None
     kind: str
     payload: dict[str, Any]
+    data_boundary: DataBoundary = "internal"
     attempt: int
     max_attempts: int
     lease_token: str
@@ -418,10 +735,23 @@ class WorkerCompleteResponse(BaseModel):
     pull_request_url: Optional[str] = None
     merged_sha: Optional[str] = None
     branch_name: Optional[str] = None
+    validation_status: Optional[str] = None
+    validation_summary: Optional[str] = None
+    validation_sources: list[str] = Field(default_factory=list)
+    local_validation_receipt_id: Optional[str] = None
     environment: Optional[str] = None
     deployment_id: Optional[int] = None
     deployment_status: Optional[str] = None
     deployment_url: Optional[str] = None
+    rollout_id: Optional[str] = None
+    rollout_artifact_id: Optional[str] = None
+    rollout_status: Optional[str] = None
+    rollout_stage: Optional[str] = None
+    resource_id: Optional[str] = None
+    provider_ref: Optional[str] = None
+    provider_resource_id: Optional[str] = None
+    resource_name: Optional[str] = None
+    expires_at: Optional[str] = None
 
 
 class WorkerFailRequest(BaseModel):
@@ -446,8 +776,13 @@ class TaskSummary(BaseModel):
     title: str
     description: Optional[str] = None
     status: str
+    owner_role_id: Optional[str] = None
+    parent_task_id: Optional[str] = None
+    dependency_task_ids: list[str] = Field(default_factory=list)
+    due_at: Optional[str] = None
     priority: str
     risk_tier: int
+    data_boundary: DataBoundary = "internal"
     dedupe_key: str
     created_at: str
     updated_at: str
@@ -461,11 +796,131 @@ class TaskCreateRequest(BaseModel):
     project_id: str
     title: str
     description: Optional[str] = None
+    owner_role_id: Optional[str] = None
+    parent_task_id: Optional[str] = None
+    dependency_task_ids: list[str] = Field(default_factory=list)
+    due_at: Optional[datetime] = None
     priority: str = "p2"
     risk_tier: int = Field(default=1, ge=0, le=3)
+    data_boundary: DataBoundary = "internal"
     dedupe_key: str
     inputs: dict[str, Any] = Field(default_factory=dict)
     required_artifacts: list[str] = Field(default_factory=list)
+    actor: str = "executive_console"
+
+
+class DepartmentSummary(BaseModel):
+    id: str
+    project_id: str
+    department_key: str
+    name: str
+    mission: str
+    status: str
+    created_by: str
+    created_at: str
+    updated_at: str
+
+
+class DepartmentCreateRequest(BaseModel):
+    project_id: str
+    department_key: str
+    name: str
+    mission: str
+    actor: str = "ceo"
+
+
+class DepartmentListResponse(BaseModel):
+    project_id: str
+    items: list[DepartmentSummary]
+
+
+class PolicyRecordSummary(BaseModel):
+    id: str
+    project_id: str
+    policy_key: str
+    version: int
+    title: str
+    status: str
+    body: dict[str, Any] = Field(default_factory=dict)
+    created_by: str
+    created_at: str
+    updated_at: str
+
+
+class PolicyRecordCreateRequest(BaseModel):
+    project_id: str
+    policy_key: str
+    version: int = Field(default=1, ge=1)
+    title: str
+    body: dict[str, Any]
+    actor: str = "ceo"
+
+
+class PolicyRecordListResponse(BaseModel):
+    project_id: str
+    items: list[PolicyRecordSummary]
+
+
+class PlanSummary(BaseModel):
+    id: str
+    project_id: str
+    task_id: Optional[str] = None
+    title: str
+    objective: str
+    status: str
+    phases: list[Any] = Field(default_factory=list)
+    success_criteria: list[Any] = Field(default_factory=list)
+    risks: list[Any] = Field(default_factory=list)
+    artifact_id: Optional[str] = None
+    created_by: str
+    created_at: str
+    updated_at: str
+
+
+class PlanCreateRequest(BaseModel):
+    project_id: str
+    title: str
+    objective: str
+    task_id: Optional[str] = None
+    phases: list[Any] = Field(default_factory=list)
+    success_criteria: list[Any] = Field(default_factory=list)
+    risks: list[Any] = Field(default_factory=list)
+    artifact_id: Optional[str] = None
+    actor: str = "ceo"
+
+
+class PlanListResponse(BaseModel):
+    project_id: str
+    items: list[PlanSummary]
+
+
+class MeetingSummary(BaseModel):
+    id: str
+    project_id: str
+    title: str
+    purpose: str
+    status: str
+    participants: list[str] = Field(default_factory=list)
+    agenda: list[str] = Field(default_factory=list)
+    minutes_artifact_id: Optional[str] = None
+    decisions: list[Any] = Field(default_factory=list)
+    created_by: str
+    created_at: str
+    updated_at: str
+
+
+class MeetingCreateRequest(BaseModel):
+    project_id: str
+    title: str
+    purpose: str
+    participants: list[str] = Field(default_factory=list)
+    agenda: list[str] = Field(default_factory=list)
+    actor: str = "ceo"
+
+
+class MeetingListResponse(BaseModel):
+    project_id: str
+    items: list[MeetingSummary]
 
 
 class SelfImprovementProposalCreateRequest(BaseModel):
@@ -637,6 +1092,27 @@ class DecisionActionRequest(BaseModel):
     external_ref: Optional[str] = None
 
 
+class DecisionDigestRequest(BaseModel):
+    project_id: str
+    channel: Optional[str] = None
+    actor: str = "executive_console"
+    max_items: int = Field(default=20, ge=1, le=100)
+    low_risk_max: int = Field(default=1, ge=0, le=3)
+    urgent_risk_min: int = Field(default=2, ge=0, le=3)
+    dedupe_key: Optional[str] = None
+    data_boundary: DataBoundary = "internal"
+
+
+class DecisionDigestResponse(BaseModel):
+    status: str
+    artifact_id: str
+    outbox_message_id: Optional[str] = None
+    decision_count: int
+    urgent_count: int
+    batched_count: int
+    body: str
+
+
 class EventItem(BaseModel):
     id: str
     event_type: str
@@ -661,6 +1137,7 @@ class ArtifactSummary(BaseModel):
     uri: Optional[str] = None
     content_hash: Optional[str] = None
     created_by_job_id: Optional[str] = None
+    data_boundary: DataBoundary = "internal"
     created_at: str
 
 
@@ -671,6 +1148,31 @@ class ArtifactDetail(ArtifactSummary):
 class ArtifactListResponse(BaseModel):
     project_id: str
     items: list[ArtifactSummary]
+
+
+class ChangeJournalItem(BaseModel):
+    id: str
+    project_id: str
+    task_id: Optional[str] = None
+    artifact_type: str
+    change_kind: str
+    title: str
+    summary: Optional[str] = None
+    diff_summary: Optional[str] = None
+    files_changed: list[str] = Field(default_factory=list)
+    rollback_plan: Optional[str] = None
+    created_by_job_id: Optional[str] = None
+    data_boundary: DataBoundary = "internal"
+    created_at: str
+
+
+class ChangeJournalDetail(ChangeJournalItem):
+    content: dict[str, Any] = Field(default_factory=dict)
+
+
+class ChangeJournalResponse(BaseModel):
+    project_id: str
+    items: list[ChangeJournalItem]
 
 
 class DeadletterItem(BaseModel):
@@ -771,11 +1273,49 @@ class ReplayBundleResponse(BaseModel):
     counts: AuditExportCounts
 
 
+class ComplianceEvidenceBundleRequest(BaseModel):
+    project_id: str
+    actor: str = "ceo"
+    period_start: Optional[datetime] = None
+    period_end: Optional[datetime] = None
+
+    @model_validator(mode="after")
+    def validate_period(self) -> "ComplianceEvidenceBundleRequest":
+        if self.period_start and self.period_end and self.period_end < self.period_start:
+            raise ValueError("period_end must be after period_start.")
+        self.actor = _require_text(self.actor, "actor")
+        return self
+
+
+class ComplianceEvidenceCounts(BaseModel):
+    project_members: int
+    roles: int
+    policy_records: int
+    break_glass_grants: int
+    decisions: int
+    receipts: int
+    budget_reservations: int
+    cost_receipts: int
+    deadletters: int
+    compliance_events: int
+
+
+class ComplianceEvidenceBundleResponse(BaseModel):
+    status: str
+    artifact_id: str
+    project_id: str
+    artifact_type: str
+    created_at: str
+    period: dict[str, Optional[str]]
+    counts: ComplianceEvidenceCounts
+
+
 class OutboxMessageCreateRequest(BaseModel):
     project_id: str
     channel: str
     subject: Optional[str] = None
     body: str
+    data_boundary: DataBoundary = "internal"
     dedupe_key: str
     actor: str = "executive_console"
 
@@ -787,6 +1327,7 @@ class OutboxMessageSummary(BaseModel):
     subject: Optional[str] = None
     body: str
     status: str
+    data_boundary: DataBoundary = "internal"
     dedupe_key: str
     receipt_id: Optional[str] = None
     created_at: str
@@ -805,11 +1346,13 @@ class OutboxQueueRequest(BaseModel):
     actor: str = "executive_console"
     priority: int = Field(default=25, ge=0)
     max_attempts: int = Field(default=3, ge=1, le=20)
+    urgency: Literal["low", "normal", "urgent"] = "normal"
     created_by_job_id: Optional[str] = None
 
 
 class OutboxDeliveryResponse(BaseModel):
     status: str
+    data_boundary: Optional[DataBoundary] = None
     message_id: Optional[str] = None
     receipt_id: Optional[str] = None
     decision_id: Optional[str] = None
@@ -823,6 +1366,7 @@ class InboxMessageIngestRequest(BaseModel):
     subject: Optional[str] = None
     body: str
     raw_ref: Optional[str] = None
+    data_boundary: DataBoundary = "internal"
     actor: str = "system"
 
 
@@ -834,6 +1378,7 @@ class InboxMessageSummary(BaseModel):
     subject: Optional[str] = None
     body: str
     status: str
+    data_boundary: DataBoundary = "internal"
     parsed: dict[str, Any] = Field(default_factory=dict)
     created_at: str
     updated_at: str
@@ -889,6 +1434,73 @@ class RoleReviewRequest(BaseModel):
             self.evidence_refs, "evidence_refs"
         )
         return self
+
+
+class RoleAutonomyCheckRequest(BaseModel):
+    project_id: str
+    actor: str = "system"
+    action: str
+    risk_tier: int = Field(default=0, ge=0, le=3)
+    sandboxed: bool = False
+    policy_approved: bool = False
+
+    @model_validator(mode="after")
+    def validate_fields(self) -> "RoleAutonomyCheckRequest":
+        self.actor = _require_text(self.actor, "actor")
+        self.action = _require_text(self.action, "action")
+        return self
+
+
+class RoleAutonomyCheckResponse(BaseModel):
+    project_id: str
+    role_key: str
+    allowed: bool
+    reason: str
+    action: str
+    required_capability: str
+    risk_tier: int
+    sandboxed: bool
+    policy_approved: bool
+    current_level: int
+    required_level: Optional[int] = None
+    allowed_capabilities: list[str] = Field(default_factory=list)
+    trust_score: int
+
+
+class RoleScopeCheckRequest(BaseModel):
+    project_id: str
+    actor: str = "system"
+    action: str
+    skill_id: Optional[str] = None
+    evidence_ref: Optional[str] = None
+
+    @model_validator(mode="after")
+    def validate_fields(self) -> "RoleScopeCheckRequest":
+        self.actor = _require_text(self.actor, "actor")
+        self.action = _require_text(self.action, "action")
+        if self.skill_id is not None:
+            self.skill_id = _require_text(self.skill_id, "skill_id")
+        if self.evidence_ref is not None:
+            self.evidence_ref = _require_text(self.evidence_ref, "evidence_ref")
+        return self
+
+
+class RoleScopeCheckResponse(BaseModel):
+    project_id: str
+    role_key: str
+    allowed: bool
+    reason: str
+    action: str
+    skill_id: str
+    allowed_skills: list[str] = Field(default_factory=list)
+    forbidden_skills: list[str] = Field(default_factory=list)
+    trust_score_before: int
+    trust_score_after: int
+    autonomy_level_before: int
+    autonomy_level_after: int
+    scope_violation_count: int
+    artifact_id: Optional[str] = None
+    autonomy_change_id: Optional[str] = None
 
 
 class RoleReviewSummary(BaseModel):
@@ -1021,7 +1633,12 @@ class SkillSummary(BaseModel):
     risk_tier: int
     description: str
     mock_mode: bool
+    input_schema: dict[str, Any]
+    output_schema: dict[str, Any]
     cost: dict[str, Any]
+    retry: dict[str, Any]
+    permissions: dict[str, Any]
+    data_boundary: str
     policy: dict[str, Any]
 
 
@@ -1089,6 +1706,7 @@ class RoutingPreviewRequest(BaseModel):
     task_kind: str
     workload_class: str
     risk_tier: int = Field(default=1, ge=0, le=3)
+    data_boundary: DataBoundary = "internal"
     preferred_capabilities: list[str] = Field(default_factory=list)
     budget_state: Optional[str] = None
     actor: str = "system"
@@ -1100,6 +1718,7 @@ class RoutingPreviewResponse(BaseModel):
     task_kind: str
     workload_class: str
     risk_tier: int
+    data_boundary: DataBoundary = "internal"
     budget_state: str
     source_id: Optional[str] = None
     provider: Optional[str] = None
@@ -1116,6 +1735,7 @@ class RoutingLogItem(BaseModel):
     task_kind: str
     workload_class: str
     risk_tier: int
+    data_boundary: DataBoundary = "internal"
     budget_state: str
     selected_source_id: Optional[str] = None
     selected_provider: Optional[str] = None

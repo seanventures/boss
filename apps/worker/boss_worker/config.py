@@ -14,6 +14,9 @@ class WorkerSettings(BaseSettings):
     control_plane_url: str = Field(
         default="http://127.0.0.1:8000", alias="BOSS_CONTROL_PLANE_URL"
     )
+    api_key: Optional[str] = Field(
+        default=None, validation_alias=AliasChoices("BOSS_API_KEY", "BOSS_WORKER_API_KEY")
+    )
     worker_id: str = Field(default="worker-local", alias="BOSS_WORKER_ID")
     poll_interval_seconds: int = Field(default=15, alias="BOSS_POLL_INTERVAL_SECONDS")
     lease_ttl_seconds: int = Field(default=60, alias="BOSS_LEASE_TTL_SECONDS")

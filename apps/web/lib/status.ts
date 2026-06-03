@@ -22,7 +22,10 @@ export type StatusCard = {
   blockedReason?: string;
 };
 
-export function placeholderStatus(reason: string, projectId = PROJECT_ID): StatusCard {
+export function unavailableStatus(
+  reason: string,
+  projectId = PROJECT_ID,
+): StatusCard {
   return {
     projectId: resolveProjectId(projectId),
     projectName: resolveProjectId(projectId),
@@ -67,9 +70,9 @@ export async function fetchStatus(projectId = PROJECT_ID): Promise<StatusCard> {
     return mapStatus(await client.getStatus(resolveProjectId(projectId)));
   } catch (error) {
     if (error instanceof BossApiError) {
-      return placeholderStatus(`API returned ${error.status}`, projectId);
+      return unavailableStatus(`API returned ${error.status}`, projectId);
     }
-    return placeholderStatus(
+    return unavailableStatus(
       error instanceof Error ? error.message : "Unknown API error",
       projectId,
     );

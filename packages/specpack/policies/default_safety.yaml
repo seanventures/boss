@@ -43,6 +43,9 @@ rules:
     forbid_rate_limit_evasion: true
     forbid_personal_subscription_for_multi_tenant_workloads: true
     optimize_within_limits: true
+    enforce_data_boundaries: true
+    local_only_requires_approved_local_model: true
+    restricted_requires_explicit_source_approval: true
   sandbox_real_mode:
     slack_real_send_allowed: false
     github_real_pr_allowed: true

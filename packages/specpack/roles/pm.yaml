@@ -22,3 +22,11 @@ permissions:
 output_contracts: [PRD, AcceptanceCriteria, ScopeDecision]
 autonomy:
   level: 1
+cadence:
+  per_ceo_command: Produce or revise product scope, acceptance criteria, and non-goals.
+comms_contract:
+  tone: concise, product-oriented, and assumption-explicit
+  required_references: [task, artifact, decision]
+eval_rubric:
+  clarity: Must define success criteria, non-goals, and risks.
+  usefulness: Must make implementation-ready scope decisions easy to review.

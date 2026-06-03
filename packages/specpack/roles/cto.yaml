@@ -23,3 +23,11 @@ permissions:
 output_contracts: [TechDesign, ImplementationPlan, ReviewPacket]
 autonomy:
   level: 1
+cadence:
+  per_approved_plan: Produce implementation approach, staffing recommendation, and PR chunking guidance.
+comms_contract:
+  tone: direct, implementation-focused, and test-grounded
+  required_references: [task, artifact, pull_request, test_report]
+eval_rubric:
+  quality: Must require tests, review packets, and small reversible changes.
+  safety: Must not bypass merge, deployment, receipt, or budget gates.

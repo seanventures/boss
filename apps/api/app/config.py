@@ -21,6 +21,57 @@ class Settings(BaseSettings):
     slack_webhook_url: Optional[str] = Field(
         default=None, alias="BOSS_SLACK_WEBHOOK_URL"
     )
+    infra_real_provision_allowed: bool = Field(
+        default=False, alias="BOSS_INFRA_REAL_PROVISION_ALLOWED"
+    )
+    digitalocean_token: Optional[str] = Field(
+        default=None, alias="BOSS_DIGITALOCEAN_TOKEN"
+    )
+    digitalocean_default_image: str = Field(
+        default="ubuntu-24-04-x64",
+        alias="BOSS_DIGITALOCEAN_DEFAULT_IMAGE",
+    )
+    digitalocean_default_tags: str = Field(
+        default="boss,ttl-managed",
+        alias="BOSS_DIGITALOCEAN_DEFAULT_TAGS",
+    )
+    digitalocean_vpc_uuid: Optional[str] = Field(
+        default=None, alias="BOSS_DIGITALOCEAN_VPC_UUID"
+    )
+    digitalocean_ssh_key_ids: str = Field(
+        default="", alias="BOSS_DIGITALOCEAN_SSH_KEY_IDS"
+    )
+    email_real_send_allowed: bool = Field(
+        default=False, alias="BOSS_EMAIL_REAL_SEND_ALLOWED"
+    )
+    email_smtp_host: Optional[str] = Field(
+        default=None, alias="BOSS_EMAIL_SMTP_HOST"
+    )
+    email_smtp_port: int = Field(default=587, alias="BOSS_EMAIL_SMTP_PORT")
+    email_smtp_username: Optional[str] = Field(
+        default=None, alias="BOSS_EMAIL_SMTP_USERNAME"
+    )
+    email_smtp_password: Optional[str] = Field(
+        default=None, alias="BOSS_EMAIL_SMTP_PASSWORD"
+    )
+    email_smtp_use_tls: bool = Field(
+        default=True, alias="BOSS_EMAIL_SMTP_USE_TLS"
+    )
+    email_smtp_use_ssl: bool = Field(
+        default=False, alias="BOSS_EMAIL_SMTP_USE_SSL"
+    )
+    email_from_address: Optional[str] = Field(
+        default=None, alias="BOSS_EMAIL_FROM_ADDRESS"
+    )
+    email_from_name: Optional[str] = Field(
+        default=None, alias="BOSS_EMAIL_FROM_NAME"
+    )
+    require_api_auth: bool = Field(default=False, alias="BOSS_REQUIRE_API_AUTH")
+    api_keys: str = Field(default="", alias="BOSS_API_KEYS")
+    api_key_principals: str = Field(
+        default="",
+        alias="BOSS_API_KEY_PRINCIPALS",
+    )
     openai_model: str = Field(default="gpt-5.2-codex", alias="BOSS_OPENAI_MODEL")
     github_token: Optional[str] = Field(
         default=None, validation_alias=AliasChoices("BOSS_GITHUB_TOKEN", "GITHUB_TOKEN")
@@ -62,6 +113,21 @@ class Settings(BaseSettings):
     comms_message_budget_usd_micros: int = Field(
         default=50_000, alias="BOSS_COMMS_MESSAGE_BUDGET_USD_MICROS"
     )
+    comms_quiet_hours_enabled: bool = Field(
+        default=False, alias="BOSS_COMMS_QUIET_HOURS_ENABLED"
+    )
+    comms_quiet_hours_start_utc: str = Field(
+        default="22:00", alias="BOSS_COMMS_QUIET_HOURS_START_UTC"
+    )
+    comms_quiet_hours_end_utc: str = Field(
+        default="07:00", alias="BOSS_COMMS_QUIET_HOURS_END_UTC"
+    )
+    comms_throttle_max_queued_per_hour: int = Field(
+        default=0, alias="BOSS_COMMS_THROTTLE_MAX_QUEUED_PER_HOUR"
+    )
+    comms_throttle_defer_minutes: int = Field(
+        default=15, alias="BOSS_COMMS_THROTTLE_DEFER_MINUTES"
+    )
     slack_real_send_allowed: bool = Field(
         default=False, alias="BOSS_SLACK_REAL_SEND_ALLOWED"
     )
@@ -89,6 +155,28 @@ class Settings(BaseSettings):
     sandbox_ci_poll_interval_seconds: int = Field(
         default=5, alias="BOSS_SANDBOX_CI_POLL_INTERVAL_SECONDS"
     )
+    sandbox_local_validation_enabled: bool = Field(
+        default=False, alias="BOSS_SANDBOX_LOCAL_VALIDATION_ENABLED"
+    )
+    sandbox_validation_repo_path: Optional[Path] = Field(
+        default=None, alias="BOSS_SANDBOX_VALIDATION_REPO_PATH"
+    )
+    sandbox_validation_commands: str = Field(
+        default="", alias="BOSS_SANDBOX_VALIDATION_COMMANDS"
+    )
+    sandbox_validation_allowed_commands: str = Field(
+        default="pnpm,npm,node,python,python3,pytest,make",
+        alias="BOSS_SANDBOX_VALIDATION_ALLOWED_COMMANDS",
+    )
+    sandbox_validation_timeout_seconds: int = Field(
+        default=120, alias="BOSS_SANDBOX_VALIDATION_TIMEOUT_SECONDS"
+    )
+    sandbox_validation_output_limit_chars: int = Field(
+        default=12000, alias="BOSS_SANDBOX_VALIDATION_OUTPUT_LIMIT_CHARS"
+    )
+    sandbox_validation_fetch_remote: bool = Field(
+        default=True, alias="BOSS_SANDBOX_VALIDATION_FETCH_REMOTE"
+    )
 
     @property
     def repo_root(self) -> Path:
@@ -105,6 +193,48 @@ class Settings(BaseSettings):
     @property
     def specpack_root(self) -> Path:
         return (self.repo_root / "packages" / "specpack").resolve()
+
+    @property
+    def api_key_values(self) -> tuple[str, ...]:
+        return tuple(
+            key.strip()
+            for key in self.api_keys.replace("\n", ",").split(",")
+            if key.strip()
+        )
+
+    @property
+    def api_key_principal_map(self) -> dict[str, str]:
+        principal_map: dict[str, str] = {}
+        for entry in self.api_key_principals.replace("\n", ",").split(","):
+            cleaned = entry.strip()
+            if not cleaned:
+                continue
+            delimiter = "=" if "=" in cleaned else ":"
+            token, _, member_id = cleaned.partition(delimiter)
+            if token.strip() and member_id.strip():
+                principal_map[token.strip()] = member_id.strip()
+        return principal_map
+
+    @property
+    def digitalocean_tag_values(self) -> tuple[str, ...]:
+        return tuple(
+            value.strip()
+            for value in self.digitalocean_default_tags.replace("\n", ",").split(",")
+            if value.strip()
+        )
+
+    @property
+    def digitalocean_ssh_key_id_values(self) -> tuple[int, ...]:
+        values: list[int] = []
+        for raw in self.digitalocean_ssh_key_ids.replace("\n", ",").split(","):
+            cleaned = raw.strip()
+            if not cleaned:
+                continue
+            try:
+                values.append(int(cleaned))
+            except ValueError:
+                continue
+        return tuple(values)
 
 
 @lru_cache(maxsize=1)

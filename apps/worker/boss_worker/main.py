@@ -50,7 +50,7 @@ def main() -> None:
     if args.once:
         return
 
-    client = ControlPlaneClient(settings.control_plane_url)
+    client = ControlPlaneClient(settings.control_plane_url, api_key=settings.api_key)
     try:
         if args.drain_once:
             run_worker_cycle(client, settings)

@@ -12,6 +12,9 @@ from sqlalchemy.engine import Connection
 from ..config import Settings
 
 
+DATA_BOUNDARIES = {"public", "internal", "confidential", "restricted", "local-only"}
+
+
 def now_utc() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -23,6 +26,16 @@ def make_id(prefix: str) -> str:
 def json_hash(payload: Union[dict, list, str]) -> str:
     normalized = json.dumps(payload, sort_keys=True).encode("utf-8")
     return hashlib.sha256(normalized).hexdigest()
+
+
+def normalize_data_boundary(value: Optional[str] = None) -> str:
+    boundary = (value or "internal").strip().lower()
+    if boundary not in DATA_BOUNDARIES:
+        raise ValueError(
+            "data_boundary must be one of: "
+            + ", ".join(sorted(DATA_BOUNDARIES))
+        )
+    return boundary
 
 
 def emit_event(
@@ -61,6 +74,9 @@ def create_blocking_decision(
     recommendation: dict,
     cost_summary: dict,
     reason: str,
+    *,
+    risk_tier: int = 2,
+    default_action: str = "hold",
 ) -> str:
     decision_id = make_id("dec")
     deadline_at = now_utc() + timedelta(hours=24)
@@ -73,8 +89,8 @@ def create_blocking_decision(
             )
             VALUES (
                 :id, :project_id, :task_id, :question, CAST(:recommendation AS JSONB),
-                CAST(:options AS JSONB), 2, CAST(:cost_summary AS JSONB), :deadline_at,
-                'hold', 'pending'
+                CAST(:options AS JSONB), :risk_tier, CAST(:cost_summary AS JSONB), :deadline_at,
+                :default_action, 'pending'
             )
             """
         ),
@@ -90,8 +106,10 @@ def create_blocking_decision(
                     {"action": "reject", "label": "Keep blocked"},
                 ]
             ),
+            "risk_tier": risk_tier,
             "cost_summary": json.dumps(cost_summary),
             "deadline_at": deadline_at,
+            "default_action": default_action,
         },
     )
     emit_event(
@@ -101,7 +119,12 @@ def create_blocking_decision(
         "system",
         "decision",
         decision_id,
-        {"reason": reason, "deadline_at": deadline_at.isoformat(), "default_action": "hold"},
+        {
+            "reason": reason,
+            "deadline_at": deadline_at.isoformat(),
+            "default_action": default_action,
+            "risk_tier": risk_tier,
+        },
     )
     return decision_id
 
@@ -115,7 +138,16 @@ def create_artifact(
     title: str,
     content: dict,
     created_by_job_id: Optional[str] = None,
+    data_boundary: Optional[str] = None,
 ) -> str:
+    boundary_source = data_boundary or content.get("data_boundary")
+    if not boundary_source and task_id:
+        row = connection.execute(
+            text("SELECT data_boundary FROM tasks WHERE id = :task_id"),
+            {"task_id": task_id},
+        ).mappings().first()
+        boundary_source = row["data_boundary"] if row else None
+    boundary = normalize_data_boundary(boundary_source)
     artifact_id = make_id("art")
     artifact_dir = settings.artifact_root / project_id
     artifact_dir.mkdir(parents=True, exist_ok=True)
@@ -125,11 +157,13 @@ def create_artifact(
         text(
             """
             INSERT INTO artifacts (
-                id, project_id, task_id, artifact_type, title, uri, content, content_hash, created_by_job_id
+                id, project_id, task_id, artifact_type, title, uri, content,
+                content_hash, created_by_job_id, data_boundary
             )
             VALUES (
                 :id, :project_id, :task_id, :artifact_type, :title, :uri,
-                CAST(:content AS JSONB), :content_hash, :created_by_job_id
+                CAST(:content AS JSONB), :content_hash, :created_by_job_id,
+                :data_boundary
             )
             """
         ),
@@ -143,6 +177,7 @@ def create_artifact(
             "content": json.dumps(content),
             "content_hash": json_hash(content),
             "created_by_job_id": created_by_job_id,
+            "data_boundary": boundary,
         },
     )
     emit_event(
@@ -152,7 +187,7 @@ def create_artifact(
         "system",
         "artifact",
         artifact_id,
-        {"artifact_type": artifact_type, "title": title},
+        {"artifact_type": artifact_type, "title": title, "data_boundary": boundary},
     )
     return artifact_id
 

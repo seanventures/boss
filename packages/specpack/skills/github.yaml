@@ -4,6 +4,7 @@ skills:
     risk_tier: 2
     mock_mode: false
     description: Create a real sandbox PR artifact and receipt against the approved test repository.
+    data_boundary: internal
     input_schema:
       repo: string
       branch: string
@@ -16,6 +17,12 @@ skills:
     cost:
       estimator: runtime_plus_model
       category: tool
+    retry:
+      max_attempts: 2
+      backoff: exponential
+    permissions:
+      allowed_callers: [software_factory, worker]
+      required_permissions: [github_pr_create]
     policy:
       requires_receipt: true
       dedupe_key_template: "github.create_pr:{repo}:{branch}:{title}"
@@ -26,6 +33,25 @@ skills:
     risk_tier: 2
     mock_mode: false
     description: Create a real GitHub PR against an approved repository after policy and budget checks.
+    data_boundary: internal
+    input_schema:
+      repo: string
+      branch: string
+      title: string
+      body: string
+      review_packet_artifact_id: string
+    output_schema:
+      pr_url: string
+      receipt_id: string
+    cost:
+      estimator: fixed
+      category: tool
+    retry:
+      max_attempts: 1
+      backoff: none
+    permissions:
+      allowed_callers: [software_factory, release_manager]
+      required_permissions: [github_pr_create]
     policy:
       requires_receipt: true
       requires_budget_reservation: false
@@ -35,6 +61,24 @@ skills:
     risk_tier: 3
     mock_mode: false
     description: Merge a real PR only after explicit approvals and green validation.
+    data_boundary: internal
+    input_schema:
+      repo: string
+      pull_number: integer
+      merge_method: string
+      approval_decision_id: string
+    output_schema:
+      merge_commit_sha: string
+      receipt_id: string
+    cost:
+      estimator: fixed
+      category: tool
+    retry:
+      max_attempts: 1
+      backoff: none
+    permissions:
+      allowed_callers: [release_manager, worker]
+      required_permissions: [github_pr_merge]
     policy:
       requires_receipt: true
       requires_approval: [ceo, cto]

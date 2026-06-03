@@ -6,7 +6,7 @@ from typing import Optional
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
-from .core import emit_event, json_hash, make_id
+from .core import emit_event, json_hash, make_id, normalize_data_boundary
 
 
 class ReceiptService:
@@ -17,7 +17,7 @@ class ReceiptService:
             text(
                 """
                 SELECT id, project_id, dedupe_key, effect_kind, effect_scope, payload_hash,
-                       status, provider_ref, created_by_job_id, result, error,
+                       status, provider_ref, created_by_job_id, data_boundary, result, error,
                        created_at, updated_at
                 FROM receipts
                 WHERE org_id = :org_id AND dedupe_key = :dedupe_key
@@ -34,7 +34,7 @@ class ReceiptService:
             text(
                 """
                 SELECT id, project_id, dedupe_key, effect_kind, effect_scope, payload_hash,
-                       status, provider_ref, created_by_job_id, result, error,
+                       status, provider_ref, created_by_job_id, data_boundary, result, error,
                        created_at, updated_at
                 FROM receipts
                 WHERE project_id = :project_id
@@ -57,22 +57,30 @@ class ReceiptService:
         effect_scope: dict,
         payload: dict,
         created_by_job_id: Optional[str] = None,
+        data_boundary: Optional[str] = None,
     ) -> tuple[dict, bool]:
         existing = self.get_by_dedupe_key(connection, org_id, dedupe_key)
         if existing:
             return existing, False
 
         receipt_id = make_id("rcpt")
+        boundary = normalize_data_boundary(
+            data_boundary
+            or effect_scope.get("data_boundary")
+            or payload.get("data_boundary")
+        )
         connection.execute(
             text(
                 """
                 INSERT INTO receipts (
                     id, org_id, workspace_id, project_id, dedupe_key, effect_kind,
-                    effect_scope, payload_hash, status, created_by_job_id
+                    effect_scope, payload_hash, status, created_by_job_id,
+                    data_boundary
                 )
                 VALUES (
                     :id, :org_id, :workspace_id, :project_id, :dedupe_key, :effect_kind,
-                    CAST(:effect_scope AS JSONB), :payload_hash, 'in_progress', :created_by_job_id
+                    CAST(:effect_scope AS JSONB), :payload_hash, 'in_progress',
+                    :created_by_job_id, :data_boundary
                 )
                 """
             ),
@@ -86,6 +94,7 @@ class ReceiptService:
                 "effect_scope": json.dumps(effect_scope),
                 "payload_hash": json_hash(payload),
                 "created_by_job_id": created_by_job_id,
+                "data_boundary": boundary,
             },
         )
         emit_event(
@@ -95,7 +104,11 @@ class ReceiptService:
             "system",
             "receipt",
             receipt_id,
-            {"effect_kind": effect_kind, "dedupe_key": dedupe_key},
+            {
+                "effect_kind": effect_kind,
+                "dedupe_key": dedupe_key,
+                "data_boundary": boundary,
+            },
         )
         return (
             {
@@ -108,6 +121,7 @@ class ReceiptService:
                 "payload_hash": json_hash(payload),
                 "provider_ref": None,
                 "created_by_job_id": created_by_job_id,
+                "data_boundary": boundary,
                 "result": None,
                 "error": None,
                 "created_at": None,
