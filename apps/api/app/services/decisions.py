@@ -7,7 +7,7 @@ from sqlalchemy.engine import Connection
 
 from ..config import Settings
 from .budget import BudgetGovernor
-from .core import emit_event, now_utc
+from .core import create_artifact, emit_event, now_utc
 from .jobs import JobLeaseService
 
 
@@ -172,8 +172,19 @@ class DecisionService:
         self, connection: Connection, row: dict[str, Any], actor: str
     ) -> None:
         recommendation = row["recommendation"] or {}
-        if recommendation.get("action") != "review_plan_draft":
-            return
+        action = recommendation.get("action")
+        if action == "review_plan_draft":
+            self._queue_pr_proposal_from_plan(connection, row, actor, recommendation)
+        elif action == "review_pull_request":
+            self._create_merge_gate_block(connection, row, actor, recommendation)
+
+    def _queue_pr_proposal_from_plan(
+        self,
+        connection: Connection,
+        row: dict[str, Any],
+        actor: str,
+        recommendation: dict[str, Any],
+    ) -> None:
 
         artifact_id = recommendation.get("artifact_id")
         if not isinstance(artifact_id, str) or not artifact_id:
@@ -268,6 +279,53 @@ class DecisionService:
                 "decision_id": row["id"],
                 "reservation_id": reservation["reservation_id"],
                 "kind": "software_factory.propose_pr",
+            },
+        )
+
+    def _create_merge_gate_block(
+        self,
+        connection: Connection,
+        row: dict[str, Any],
+        actor: str,
+        recommendation: dict[str, Any],
+    ) -> None:
+        title = recommendation.get("title")
+        if not isinstance(title, str) or not title.strip():
+            title = row["question"]
+        merge_gate_artifact_id = create_artifact(
+            connection,
+            self.settings,
+            row["project_id"],
+            row["task_id"],
+            "merge_gate",
+            f"Merge gate for {title}",
+            {
+                "status": "blocked_manual_merge_required",
+                "reason": "Automatic merge and deploy effects are still disabled in this phase.",
+                "approved_review_decision_id": row["id"],
+                "approved_by": actor,
+                "pull_request_url": recommendation.get("pull_request_url"),
+                "branch_name": recommendation.get("branch_name"),
+                "review_packet_artifact_id": recommendation.get("artifact_id"),
+                "diff_artifact_id": recommendation.get("diff_artifact_id"),
+                "test_report_artifact_id": recommendation.get("test_report_artifact_id"),
+                "receipt_id": recommendation.get("receipt_id"),
+                "next_action": "Review and merge the sandbox PR manually in GitHub. Deploy remains outside BOSS automation in this phase.",
+            },
+        )
+        emit_event(
+            connection,
+            row["project_id"],
+            "decision.follow_on_blocked",
+            actor,
+            "artifact",
+            merge_gate_artifact_id,
+            {
+                "decision_id": row["id"],
+                "blocked_action": "github.pull_request.merge",
+                "reason": "manual_merge_required",
+                "pull_request_url": recommendation.get("pull_request_url"),
+                "receipt_id": recommendation.get("receipt_id"),
             },
         )
 

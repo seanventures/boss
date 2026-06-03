@@ -99,6 +99,7 @@ If a required credential is missing, the API must fail closed and create visible
 - Spend-gated jobs without an active reservation are not leased; they create a visible decision and are cancelled explicitly rather than running silently.
 - Real sandbox PR proposals can now be queued as leased jobs so GitHub/OpenAI execution runs through `reservation -> job -> lease -> receipt -> artifact -> decision`.
 - Approving a plan-review decision now auto-reserves the configured sandbox proposal budget and queues the next `software_factory.propose_pr` job instead of stopping at decision state only.
+- Approving the final sandbox PR review decision now creates a receipt-linked merge gate artifact and a visible blocked event, making the manual-merge boundary explicit instead of leaving approval as a terminal dead end.
 
 ## GitHub bootstrap
 

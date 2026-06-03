@@ -435,7 +435,16 @@ class SoftwareFactoryService:
             project_id,
             None,
             f"Review and approve sandbox PR: {title}",
-            {"action": "review_pull_request"},
+            {
+                "action": "review_pull_request",
+                "artifact_id": artifact_id,
+                "diff_artifact_id": diff_artifact_id,
+                "test_report_artifact_id": test_report_artifact_id,
+                "receipt_id": pr_receipt["id"],
+                "pull_request_url": pr.url,
+                "branch_name": branch_name,
+                "title": title,
+            },
             {},
             "merge_decision_required",
         )

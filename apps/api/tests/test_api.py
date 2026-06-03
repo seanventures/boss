@@ -1,3 +1,4 @@
+import json
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import text
@@ -698,6 +699,92 @@ def test_approving_plan_decision_queues_follow_on_pr_job(client, engine):
     assert events.status_code == 200
     event_types = [item["event_type"] for item in events.json()["items"]]
     assert "decision.follow_on_job_queued" in event_types
+
+
+def test_approving_pr_review_decision_creates_merge_gate_block_artifact(client, engine):
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                """
+                INSERT INTO artifacts (
+                    id, project_id, task_id, artifact_type, title, uri, content, content_hash, created_by_job_id
+                )
+                VALUES (
+                    'art_review_packet', 'boss-dogfood', NULL, 'review_packet', 'Review packet',
+                    NULL, '{}'::jsonb, 'hash', NULL
+                )
+                """
+            )
+        )
+        connection.execute(
+            text(
+                """
+                INSERT INTO decisions (
+                    id, project_id, task_id, question, recommendation, options, risk_tier,
+                    cost_summary, default_action, status
+                )
+                VALUES (
+                    'dec_review_pr', 'boss-dogfood', NULL, 'Review and approve sandbox PR: Demo',
+                    CAST(:recommendation AS JSONB), '[]'::jsonb, 2, '{}'::jsonb, 'hold', 'pending'
+                )
+                """
+            ),
+            {
+                "recommendation": json.dumps(
+                    {
+                        "action": "review_pull_request",
+                        "artifact_id": "art_review_packet",
+                        "receipt_id": "rcpt_pr_demo",
+                        "pull_request_url": "https://github.com/seanheiney/boss-sandbox/pull/42",
+                        "branch_name": "boss/demo-pr",
+                        "title": "Demo",
+                    }
+                )
+            },
+        )
+
+    approve = client.post(
+        "/v1/decisions/dec_review_pr/approve",
+        json={"actor": "ceo", "note": "Manual merge is acceptable."},
+    )
+    assert approve.status_code == 200
+    assert approve.json()["status"] == "approved"
+
+    with engine.begin() as connection:
+        merge_gate = connection.execute(
+            text(
+                """
+                SELECT artifact_type, title, content
+                FROM artifacts
+                WHERE project_id = 'boss-dogfood' AND artifact_type = 'merge_gate'
+                ORDER BY created_at DESC
+                LIMIT 1
+                """
+            )
+        ).mappings().one()
+        queued_jobs = connection.execute(
+            text(
+                """
+                SELECT COUNT(*) FROM jobs
+                WHERE project_id = 'boss-dogfood' AND kind = 'github.pull_request.merge'
+                """
+            )
+        ).scalar_one()
+
+    assert merge_gate["artifact_type"] == "merge_gate"
+    assert "Merge gate for Demo" == merge_gate["title"]
+    assert merge_gate["content"]["status"] == "blocked_manual_merge_required"
+    assert (
+        merge_gate["content"]["pull_request_url"]
+        == "https://github.com/seanheiney/boss-sandbox/pull/42"
+    )
+    assert merge_gate["content"]["receipt_id"] == "rcpt_pr_demo"
+    assert queued_jobs == 0
+
+    events = client.get("/v1/events", params={"project_id": "boss-dogfood"})
+    assert events.status_code == 200
+    event_types = [item["event_type"] for item in events.json()["items"]]
+    assert "decision.follow_on_blocked" in event_types
 
 
 def test_spend_gated_job_without_reservation_is_not_leased(client, engine):
