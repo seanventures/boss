@@ -181,3 +181,247 @@ def test_openai_plan_blocks_without_reservation(client):
     payload = response.json()
     assert payload["status"] == "blocked"
     assert payload["decision_id"]
+
+
+def test_two_workers_cannot_claim_same_job(client):
+    created = client.post(
+        "/v1/jobs",
+        json={
+            "project_id": "boss-dogfood",
+            "kind": "plan.generate",
+            "payload": {"command": "Create a draft plan."},
+        },
+    )
+    assert created.status_code == 201
+    job_id = created.json()["id"]
+
+    worker_a = client.post(
+        "/v1/worker/poll",
+        json={
+            "worker_id": "worker-a",
+            "capabilities": ["plan.generate"],
+            "lease_ttl_seconds": 60,
+        },
+    )
+    assert worker_a.status_code == 200
+    leased = worker_a.json()
+    assert leased["status"] == "leased"
+    assert leased["job"]["id"] == job_id
+
+    worker_b = client.post(
+        "/v1/worker/poll",
+        json={
+            "worker_id": "worker-b",
+            "capabilities": ["plan.generate"],
+            "lease_ttl_seconds": 60,
+        },
+    )
+    assert worker_b.status_code == 200
+    assert worker_b.json()["status"] == "idle"
+    assert worker_b.json()["job"] is None
+
+
+def test_expired_lease_can_be_reclaimed(client, engine):
+    created = client.post(
+        "/v1/jobs",
+        json={
+            "project_id": "boss-dogfood",
+            "kind": "plan.generate",
+            "payload": {"command": "Create a draft plan."},
+        },
+    )
+    assert created.status_code == 201
+    job_id = created.json()["id"]
+
+    first = client.post(
+        "/v1/worker/poll",
+        json={
+            "worker_id": "worker-a",
+            "capabilities": ["plan.generate"],
+            "lease_ttl_seconds": 60,
+        },
+    )
+    assert first.status_code == 200
+    assert first.json()["job"]["attempt"] == 1
+
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                """
+                UPDATE jobs
+                SET lease_expires_at = :lease_expires_at
+                WHERE id = :job_id
+                """
+            ),
+            {
+                "job_id": job_id,
+                "lease_expires_at": datetime.now(timezone.utc) - timedelta(seconds=5),
+            },
+        )
+
+    second = client.post(
+        "/v1/worker/poll",
+        json={
+            "worker_id": "worker-b",
+            "capabilities": ["plan.generate"],
+            "lease_ttl_seconds": 60,
+        },
+    )
+    assert second.status_code == 200
+    payload = second.json()
+    assert payload["status"] == "leased"
+    assert payload["job"]["id"] == job_id
+    assert payload["job"]["attempt"] == 2
+
+    events = client.get("/v1/events", params={"project_id": "boss-dogfood"})
+    assert events.status_code == 200
+    assert "job.lease_reclaimed" in [
+        item["event_type"] for item in events.json()["items"]
+    ]
+
+
+def test_failed_job_retries_then_deadletters(client, engine):
+    created = client.post(
+        "/v1/jobs",
+        json={
+            "project_id": "boss-dogfood",
+            "kind": "plan.generate",
+            "payload": {"command": "Create a draft plan."},
+            "max_attempts": 2,
+        },
+    )
+    assert created.status_code == 201
+    job_id = created.json()["id"]
+
+    first_lease = client.post(
+        "/v1/worker/poll",
+        json={
+            "worker_id": "worker-a",
+            "capabilities": ["plan.generate"],
+            "lease_ttl_seconds": 60,
+        },
+    ).json()["job"]
+    heartbeat = client.post(
+        "/v1/worker/heartbeat",
+        json={
+            "worker_id": "worker-a",
+            "job_id": job_id,
+            "lease_token": first_lease["lease_token"],
+            "lease_ttl_seconds": 60,
+        },
+    )
+    assert heartbeat.status_code == 200
+
+    first_fail = client.post(
+        "/v1/worker/fail",
+        json={
+            "worker_id": "worker-a",
+            "job_id": job_id,
+            "lease_token": first_lease["lease_token"],
+            "error": {"message": "transient failure"},
+            "retryable": True,
+            "retry_delay_seconds": 0,
+        },
+    )
+    assert first_fail.status_code == 200
+    assert first_fail.json()["status"] == "failed_retryable"
+
+    second_lease = client.post(
+        "/v1/worker/poll",
+        json={
+            "worker_id": "worker-b",
+            "capabilities": ["plan.generate"],
+            "lease_ttl_seconds": 60,
+        },
+    ).json()["job"]
+    second_heartbeat = client.post(
+        "/v1/worker/heartbeat",
+        json={
+            "worker_id": "worker-b",
+            "job_id": job_id,
+            "lease_token": second_lease["lease_token"],
+            "lease_ttl_seconds": 60,
+        },
+    )
+    assert second_heartbeat.status_code == 200
+
+    second_fail = client.post(
+        "/v1/worker/fail",
+        json={
+            "worker_id": "worker-b",
+            "job_id": job_id,
+            "lease_token": second_lease["lease_token"],
+            "error": {"message": "still failing"},
+            "retryable": True,
+            "retry_delay_seconds": 0,
+        },
+    )
+    assert second_fail.status_code == 200
+    payload = second_fail.json()
+    assert payload["status"] == "deadlettered"
+    assert payload["deadletter_id"]
+
+    with engine.begin() as connection:
+        status = connection.execute(
+            text("SELECT status FROM jobs WHERE id = :job_id"),
+            {"job_id": job_id},
+        ).scalar_one()
+        deadletters = connection.execute(
+            text(
+                "SELECT COUNT(*) FROM deadletters WHERE source_kind = 'job' AND source_id = :job_id"
+            ),
+            {"job_id": job_id},
+        ).scalar_one()
+    assert status == "deadlettered"
+    assert deadletters == 1
+
+
+def test_worker_complete_creates_plan_artifact_and_decision(client):
+    created = client.post(
+        "/v1/jobs",
+        json={
+            "project_id": "boss-dogfood",
+            "kind": "plan.generate",
+            "payload": {"command": "Create a draft plan."},
+        },
+    )
+    assert created.status_code == 201
+    job_id = created.json()["id"]
+
+    leased = client.post(
+        "/v1/worker/poll",
+        json={
+            "worker_id": "worker-a",
+            "capabilities": ["plan.generate"],
+            "lease_ttl_seconds": 60,
+        },
+    ).json()["job"]
+    client.post(
+        "/v1/worker/heartbeat",
+        json={
+            "worker_id": "worker-a",
+            "job_id": job_id,
+            "lease_token": leased["lease_token"],
+            "lease_ttl_seconds": 60,
+        },
+    )
+    complete = client.post(
+        "/v1/worker/complete",
+        json={
+            "worker_id": "worker-a",
+            "job_id": job_id,
+            "lease_token": leased["lease_token"],
+            "result": {
+                "summary": "Create a draft plan.",
+                "objectives": ["Create a draft plan."],
+                "steps": ["Do the work."],
+                "risks": ["None"],
+                "done_when": ["Artifact exists."],
+            },
+        },
+    )
+    assert complete.status_code == 200
+    payload = complete.json()
+    assert payload["status"] == "succeeded"
+    assert payload["artifact_id"]
+    assert payload["decision_id"]

@@ -17,6 +17,9 @@ from .schemas import (
     EventFeedResponse,
     EventItem,
     HealthResponse,
+    JobCreateRequest,
+    JobSummary,
+    LeasedJob,
     OpenAIPlanRequest,
     OpenAIPlanResponse,
     PullRequestProposalRequest,
@@ -26,9 +29,18 @@ from .schemas import (
     TaskCreateRequest,
     TaskListResponse,
     TaskSummary,
+    WorkerCompleteRequest,
+    WorkerCompleteResponse,
+    WorkerFailRequest,
+    WorkerFailResponse,
+    WorkerHeartbeatRequest,
+    WorkerHeartbeatResponse,
+    WorkerPollRequest,
+    WorkerPollResponse,
 )
 from .services.budget import BudgetGovernor
 from .services.intake import CommandIntakeService
+from .services.jobs import JobLeaseService, LeaseNotFoundError
 from .services.receipts import ReceiptService
 from .services.software_factory import SoftwareFactoryService
 
@@ -36,6 +48,7 @@ settings = get_settings()
 engine = get_engine(settings)
 budget = BudgetGovernor(settings)
 intake = CommandIntakeService(settings)
+jobs = JobLeaseService(settings)
 receipts = ReceiptService()
 software_factory = SoftwareFactoryService(settings)
 
@@ -61,6 +74,20 @@ def task_summary_from_row(row) -> TaskSummary:
         dedupe_key=row["dedupe_key"],
         created_at=row["created_at"].isoformat(),
         updated_at=row["updated_at"].isoformat(),
+    )
+
+
+def job_summary_from_row(row) -> JobSummary:
+    return JobSummary(
+        id=row["id"],
+        project_id=row["project_id"],
+        task_id=row["task_id"],
+        kind=row["kind"],
+        status=row["status"],
+        priority=row["priority"],
+        max_attempts=row["max_attempts"],
+        attempt=row["attempt"],
+        run_after=row["run_after"].isoformat(),
     )
 
 
@@ -215,6 +242,22 @@ def get_task(task_id: str) -> TaskSummary:
         return task_summary_from_row(row)
 
 
+@app.post("/v1/jobs", response_model=JobSummary, status_code=201)
+def create_job(payload: JobCreateRequest) -> JobSummary:
+    with begin(engine) as connection:
+        result = jobs.create_job(
+            connection,
+            project_id=payload.project_id,
+            task_id=payload.task_id,
+            kind=payload.kind,
+            payload=payload.payload,
+            priority=payload.priority,
+            max_attempts=payload.max_attempts,
+            run_after_seconds=payload.run_after_seconds,
+        )
+        return JobSummary(**result)
+
+
 @app.post("/v1/bootstrap/seed")
 def bootstrap_seed() -> dict[str, str]:
     seed()
@@ -250,6 +293,70 @@ def reserve_budget(payload: BudgetReserveRequest) -> BudgetReserveResponse:
             payload.expires_in_minutes,
         )
         return BudgetReserveResponse(**result)
+
+
+@app.post("/v1/worker/poll", response_model=WorkerPollResponse)
+def worker_poll(payload: WorkerPollRequest) -> WorkerPollResponse:
+    with begin(engine) as connection:
+        job = jobs.claim_job(
+            connection,
+            payload.worker_id,
+            payload.capabilities,
+            payload.lease_ttl_seconds,
+        )
+        if not job:
+            return WorkerPollResponse(status="idle", job=None)
+        return WorkerPollResponse(status="leased", job=LeasedJob(**job))
+
+
+@app.post("/v1/worker/heartbeat", response_model=WorkerHeartbeatResponse)
+def worker_heartbeat(payload: WorkerHeartbeatRequest) -> WorkerHeartbeatResponse:
+    with begin(engine) as connection:
+        try:
+            result = jobs.heartbeat(
+                connection,
+                payload.worker_id,
+                payload.job_id,
+                payload.lease_token,
+                payload.lease_ttl_seconds,
+            )
+        except LeaseNotFoundError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        return WorkerHeartbeatResponse(**result)
+
+
+@app.post("/v1/worker/complete", response_model=WorkerCompleteResponse)
+def worker_complete(payload: WorkerCompleteRequest) -> WorkerCompleteResponse:
+    with begin(engine) as connection:
+        try:
+            result = jobs.complete(
+                connection,
+                payload.worker_id,
+                payload.job_id,
+                payload.lease_token,
+                payload.result,
+            )
+        except LeaseNotFoundError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        return WorkerCompleteResponse(**result)
+
+
+@app.post("/v1/worker/fail", response_model=WorkerFailResponse)
+def worker_fail(payload: WorkerFailRequest) -> WorkerFailResponse:
+    with begin(engine) as connection:
+        try:
+            result = jobs.fail(
+                connection,
+                payload.worker_id,
+                payload.job_id,
+                payload.lease_token,
+                payload.error,
+                payload.retryable,
+                payload.retry_delay_seconds,
+            )
+        except LeaseNotFoundError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        return WorkerFailResponse(**result)
 
 
 @app.get("/v1/decisions/inbox", response_model=DecisionInboxResponse)

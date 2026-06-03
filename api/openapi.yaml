@@ -37,6 +37,11 @@ paths:
   /v1/tasks:
     get:
       summary: List tasks
+      parameters:
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
       responses:
         '200': { description: Task list }
     post:
@@ -86,6 +91,21 @@ paths:
   /v1/jobs:
     post:
       summary: Create job
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id, kind]
+              properties:
+                project_id: { type: string }
+                task_id: { type: string }
+                kind: { type: string }
+                payload: { type: object }
+                priority: { type: integer, default: 100 }
+                max_attempts: { type: integer, default: 3 }
+                run_after_seconds: { type: integer, default: 0 }
       responses:
         '201': { description: Created }
   /v1/worker/poll:
@@ -102,16 +122,60 @@ paths:
                 worker_id: { type: string }
                 capabilities: { type: array, items: { type: string } }
                 max_jobs: { type: integer, default: 1 }
+                lease_ttl_seconds: { type: integer, default: 60 }
       responses:
         '200': { description: Job lease or empty response }
   /v1/worker/heartbeat:
     post:
       summary: Renew job lease heartbeat
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [worker_id, job_id, lease_token]
+              properties:
+                worker_id: { type: string }
+                job_id: { type: string }
+                lease_token: { type: string }
+                lease_ttl_seconds: { type: integer, default: 60 }
       responses:
         '200': { description: Heartbeat accepted }
   /v1/worker/complete:
     post:
-      summary: Complete or fail leased job
+      summary: Complete leased job
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [worker_id, job_id, lease_token]
+              properties:
+                worker_id: { type: string }
+                job_id: { type: string }
+                lease_token: { type: string }
+                result: { type: object }
+      responses:
+        '200': { description: Completion recorded }
+  /v1/worker/fail:
+    post:
+      summary: Fail leased job and trigger retry or deadletter handling
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [worker_id, job_id, lease_token, error]
+              properties:
+                worker_id: { type: string }
+                job_id: { type: string }
+                lease_token: { type: string }
+                error: { type: object }
+                retryable: { type: boolean, default: true }
+                retry_delay_seconds: { type: integer, default: 30 }
       responses:
         '200': { description: Completion recorded }
   /v1/budget/status:

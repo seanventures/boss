@@ -59,6 +59,95 @@ export type TaskCreateRequest = {
   required_artifacts?: string[];
 };
 
+export type JobSummary = {
+  id: string;
+  project_id: string;
+  task_id?: string;
+  kind: string;
+  status: string;
+  priority: number;
+  max_attempts: number;
+  attempt: number;
+  run_after: string;
+};
+
+export type JobCreateRequest = {
+  project_id: string;
+  kind: string;
+  task_id?: string;
+  payload?: Record<string, unknown>;
+  priority?: number;
+  max_attempts?: number;
+  run_after_seconds?: number;
+};
+
+export type LeasedJob = {
+  id: string;
+  project_id: string;
+  task_id?: string;
+  kind: string;
+  payload: Record<string, unknown>;
+  attempt: number;
+  max_attempts: number;
+  lease_token: string;
+  lease_expires_at: string;
+};
+
+export type WorkerPollRequest = {
+  worker_id: string;
+  capabilities: string[];
+  max_jobs?: number;
+  lease_ttl_seconds?: number;
+};
+
+export type WorkerPollResponse = {
+  status: string;
+  job?: LeasedJob | null;
+};
+
+export type WorkerHeartbeatRequest = {
+  worker_id: string;
+  job_id: string;
+  lease_token: string;
+  lease_ttl_seconds?: number;
+};
+
+export type WorkerHeartbeatResponse = {
+  job_id: string;
+  status: string;
+  lease_expires_at: string;
+};
+
+export type WorkerCompleteRequest = {
+  worker_id: string;
+  job_id: string;
+  lease_token: string;
+  result?: Record<string, unknown>;
+};
+
+export type WorkerCompleteResponse = {
+  job_id: string;
+  status: string;
+  artifact_id?: string;
+  decision_id?: string;
+};
+
+export type WorkerFailRequest = {
+  worker_id: string;
+  job_id: string;
+  lease_token: string;
+  error: Record<string, unknown>;
+  retryable?: boolean;
+  retry_delay_seconds?: number;
+};
+
+export type WorkerFailResponse = {
+  job_id: string;
+  status: string;
+  run_after?: string;
+  deadletter_id?: string;
+};
+
 export type BudgetStatusResponse = {
   scope_type: string;
   scope_id: string;
@@ -265,8 +354,33 @@ export function createBossApiClient(config: BossApiClientConfig) {
         body: payload,
       });
     },
+    createJob(payload: JobCreateRequest) {
+      return request<JobSummary>("POST", "/v1/jobs", {
+        body: payload,
+      });
+    },
     getTask(taskId: string) {
       return request<TaskSummary>("GET", `/v1/tasks/${encodeURIComponent(taskId)}`);
+    },
+    pollWorker(payload: WorkerPollRequest) {
+      return request<WorkerPollResponse>("POST", "/v1/worker/poll", {
+        body: payload,
+      });
+    },
+    heartbeatWorker(payload: WorkerHeartbeatRequest) {
+      return request<WorkerHeartbeatResponse>("POST", "/v1/worker/heartbeat", {
+        body: payload,
+      });
+    },
+    completeWorkerJob(payload: WorkerCompleteRequest) {
+      return request<WorkerCompleteResponse>("POST", "/v1/worker/complete", {
+        body: payload,
+      });
+    },
+    failWorkerJob(payload: WorkerFailRequest) {
+      return request<WorkerFailResponse>("POST", "/v1/worker/fail", {
+        body: payload,
+      });
     },
     getBudgetStatus(scopeType: string, scopeId: string) {
       return request<BudgetStatusResponse>("GET", "/v1/budget/status", {

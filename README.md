@@ -65,6 +65,7 @@ If a required credential is missing, the API must fail closed and create visible
 - `make smoke`: run a local schema/bootstrap smoke check
 - `make real-smoke-plan`: run a real reservation -> OpenAI plan flow against local Postgres
 - `make real-smoke-pr`: run a real reservation -> OpenAI plan -> sandbox PR proposal flow
+- `make worker-drain-once`: poll the control plane once and execute at most one leased job
 
 ## Current control-plane endpoints
 
@@ -74,6 +75,11 @@ If a required credential is missing, the API must fail closed and create visible
 - `GET /v1/tasks`
 - `POST /v1/tasks`
 - `GET /v1/tasks/{task_id}`
+- `POST /v1/jobs`
+- `POST /v1/worker/poll`
+- `POST /v1/worker/heartbeat`
+- `POST /v1/worker/complete`
+- `POST /v1/worker/fail`
 - `GET /v1/budget/status`
 - `POST /v1/budget/reserve`
 - `GET /v1/decisions/inbox`

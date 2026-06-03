@@ -8,11 +8,13 @@ from sqlalchemy.engine import Connection
 
 from ..config import Settings
 from .core import create_artifact, emit_event, make_id
+from .jobs import JobLeaseService
 
 
 class CommandIntakeService:
     def __init__(self, settings: Settings):
         self.settings = settings
+        self.jobs = JobLeaseService(settings)
 
     def create_task(
         self,
@@ -99,43 +101,21 @@ class CommandIntakeService:
                 "next_expected_artifact": "plan_draft",
             },
         )
-        job_id = make_id("job")
-        connection.execute(
-            text(
-                """
-                INSERT INTO jobs (
-                    id, project_id, task_id, kind, priority, status, payload
-                )
-                VALUES (
-                    :id, :project_id, :task_id, 'plan.command', 50, 'queued', CAST(:payload AS JSONB)
-                )
-                """
-            ),
-            {
-                "id": job_id,
-                "project_id": project_id,
-                "task_id": task_id,
-                "payload": json.dumps(
-                    {
-                        "command": command,
-                        "constraints": constraints or {},
-                        "artifact_id": artifact_id,
-                    }
-                ),
-            },
-        )
-        emit_event(
+        job = self.jobs.create_job(
             connection,
-            project_id,
-            "job.created",
-            "control_plane",
-            "job",
-            job_id,
-            {"task_id": task_id, "kind": "plan.command"},
+            project_id=project_id,
+            task_id=task_id,
+            kind="plan.command",
+            priority=50,
+            payload={
+                "command": command,
+                "constraints": constraints or {},
+                "artifact_id": artifact_id,
+            },
         )
         return {
             "task_id": task_id,
-            "job_id": job_id,
+            "job_id": job["id"],
             "artifact_id": artifact_id,
             "status": "accepted",
         }

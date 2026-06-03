@@ -114,6 +114,95 @@ class ReceiptResponse(BaseModel):
     error: Optional[dict[str, Any]] = None
 
 
+class JobSummary(BaseModel):
+    id: str
+    project_id: str
+    task_id: Optional[str] = None
+    kind: str
+    status: str
+    priority: int
+    max_attempts: int
+    attempt: int
+    run_after: str
+
+
+class JobCreateRequest(BaseModel):
+    project_id: str
+    kind: str
+    task_id: Optional[str] = None
+    payload: dict[str, Any] = Field(default_factory=dict)
+    priority: int = Field(default=100, ge=0)
+    max_attempts: int = Field(default=3, ge=1, le=20)
+    run_after_seconds: int = Field(default=0, ge=0, le=86_400)
+
+
+class LeasedJob(BaseModel):
+    id: str
+    project_id: str
+    task_id: Optional[str] = None
+    kind: str
+    payload: dict[str, Any]
+    attempt: int
+    max_attempts: int
+    lease_token: str
+    lease_expires_at: str
+
+
+class WorkerPollRequest(BaseModel):
+    worker_id: str
+    capabilities: list[str]
+    max_jobs: int = Field(default=1, ge=1, le=1)
+    lease_ttl_seconds: int = Field(default=60, ge=5, le=600)
+
+
+class WorkerPollResponse(BaseModel):
+    status: str
+    job: Optional[LeasedJob] = None
+
+
+class WorkerHeartbeatRequest(BaseModel):
+    worker_id: str
+    job_id: str
+    lease_token: str
+    lease_ttl_seconds: int = Field(default=60, ge=5, le=600)
+
+
+class WorkerHeartbeatResponse(BaseModel):
+    job_id: str
+    status: str
+    lease_expires_at: str
+
+
+class WorkerCompleteRequest(BaseModel):
+    worker_id: str
+    job_id: str
+    lease_token: str
+    result: dict[str, Any] = Field(default_factory=dict)
+
+
+class WorkerCompleteResponse(BaseModel):
+    job_id: str
+    status: str
+    artifact_id: Optional[str] = None
+    decision_id: Optional[str] = None
+
+
+class WorkerFailRequest(BaseModel):
+    worker_id: str
+    job_id: str
+    lease_token: str
+    error: dict[str, Any]
+    retryable: bool = True
+    retry_delay_seconds: int = Field(default=30, ge=0, le=3600)
+
+
+class WorkerFailResponse(BaseModel):
+    job_id: str
+    status: str
+    run_after: Optional[str] = None
+    deadletter_id: Optional[str] = None
+
+
 class TaskSummary(BaseModel):
     id: str
     project_id: str

@@ -38,8 +38,10 @@ def clean_tables(engine):
         connection.execute(text("DELETE FROM cost_receipts"))
         connection.execute(text("DELETE FROM budget_reservations"))
         connection.execute(text("DELETE FROM receipts"))
+        connection.execute(text("DELETE FROM deadletters"))
         connection.execute(text("DELETE FROM artifacts"))
         connection.execute(text("DELETE FROM decisions"))
+        connection.execute(text("DELETE FROM jobs"))
         connection.execute(text("DELETE FROM tasks"))
         connection.execute(text("DELETE FROM events"))
     yield
