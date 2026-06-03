@@ -802,7 +802,7 @@ paths:
         '200': { description: Plan artifact created, reused, or blocked }
   /v1/software-factory/proposals:
     post:
-      summary: Create a real sandbox pull request proposal behind a reservation
+      summary: Create a real sandbox pull request proposal behind a reservation and capture GitHub validation evidence
       requestBody:
         required: true
         content:
@@ -832,7 +832,7 @@ paths:
         '200': { description: Sandbox PR created, reused, or blocked }
   /v1/software-factory/merges:
     post:
-      summary: Merge a sandbox pull request behind a receipt-backed control-plane gate
+      summary: Merge a sandbox pull request behind a receipt-backed control-plane gate after passed validation
       requestBody:
         required: true
         content:

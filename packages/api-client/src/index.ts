@@ -445,6 +445,8 @@ export type PullRequestProposalResponse = {
   pull_request_url?: string;
   pull_request_number?: number;
   branch_name?: string;
+  validation_status?: string;
+  validation_summary?: string;
   message?: string;
 };
 

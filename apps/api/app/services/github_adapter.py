@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import base64
+import time
 from typing import Optional
 
 import httpx
@@ -39,6 +40,25 @@ class DeploymentStatusResult:
     state: str
     url: str
     environment_url: Optional[str]
+
+
+@dataclass
+class PullRequestValidationCheck:
+    name: str
+    status: str
+    conclusion: Optional[str]
+    html_url: Optional[str]
+    started_at: Optional[str]
+    completed_at: Optional[str]
+
+
+@dataclass
+class PullRequestValidationResult:
+    status: str
+    summary: str
+    head_sha: str
+    completed: bool
+    checks: list[PullRequestValidationCheck]
 
 
 class GitHubAdapter:
@@ -207,4 +227,97 @@ class GitHubAdapter:
             state=response["state"],
             url=response["url"],
             environment_url=response.get("environment_url"),
+        )
+
+    def wait_for_commit_checks(
+        self,
+        head_sha: str,
+        *,
+        timeout_seconds: int,
+        poll_interval_seconds: int,
+    ) -> PullRequestValidationResult:
+        start = time.monotonic()
+        while True:
+            payload = self._request(
+                "GET",
+                f"/repos/{self.repository_full_name}/commits/{head_sha}/check-runs",
+            )
+            check_runs = [
+                PullRequestValidationCheck(
+                    name=str(item.get("name") or "Unnamed check"),
+                    status=str(item.get("status") or "unknown"),
+                    conclusion=item.get("conclusion"),
+                    html_url=item.get("html_url"),
+                    started_at=item.get("started_at"),
+                    completed_at=item.get("completed_at"),
+                )
+                for item in payload.get("check_runs", [])
+            ]
+            evaluation = self._evaluate_check_runs(head_sha, check_runs)
+            if evaluation.completed:
+                return evaluation
+
+            elapsed = time.monotonic() - start
+            if elapsed >= timeout_seconds:
+                return PullRequestValidationResult(
+                    status="timed_out",
+                    summary=(
+                        "Timed out while waiting for GitHub validation checks to "
+                        "complete."
+                    ),
+                    head_sha=head_sha,
+                    completed=False,
+                    checks=check_runs,
+                )
+
+            time.sleep(max(1, poll_interval_seconds))
+
+    def _evaluate_check_runs(
+        self, head_sha: str, check_runs: list[PullRequestValidationCheck]
+    ) -> PullRequestValidationResult:
+        if not check_runs:
+            return PullRequestValidationResult(
+                status="pending",
+                summary="GitHub has not published validation checks for this commit yet.",
+                head_sha=head_sha,
+                completed=False,
+                checks=[],
+            )
+
+        if any(check.status != "completed" for check in check_runs):
+            return PullRequestValidationResult(
+                status="pending",
+                summary="GitHub validation checks are still running for this proposal.",
+                head_sha=head_sha,
+                completed=False,
+                checks=check_runs,
+            )
+
+        failing = [
+            check
+            for check in check_runs
+            if (check.conclusion or "").lower()
+            not in {"success", "neutral", "skipped"}
+        ]
+        if failing:
+            failed_names = ", ".join(check.name for check in failing[:3])
+            if len(failing) > 3:
+                failed_names = f"{failed_names}, and {len(failing) - 3} more"
+            return PullRequestValidationResult(
+                status="failed",
+                summary=f"GitHub validation failed: {failed_names}.",
+                head_sha=head_sha,
+                completed=True,
+                checks=check_runs,
+            )
+
+        passed_names = ", ".join(check.name for check in check_runs[:3])
+        if len(check_runs) > 3:
+            passed_names = f"{passed_names}, and {len(check_runs) - 3} more"
+        return PullRequestValidationResult(
+            status="passed",
+            summary=f"GitHub validation passed: {passed_names}.",
+            head_sha=head_sha,
+            completed=True,
+            checks=check_runs,
         )

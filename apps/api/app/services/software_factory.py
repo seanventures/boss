@@ -11,7 +11,11 @@ from ..schemas import FileChange
 from .budget import BudgetGovernor
 from .core import create_artifact, create_blocking_decision, emit_event
 from .entitlements import EntitlementBrokerService
-from .github_adapter import GitHubAdapter, IntegrationConfigurationError
+from .github_adapter import (
+    GitHubAdapter,
+    IntegrationConfigurationError,
+    PullRequestValidationResult,
+)
 from .openai_adapter import OpenAIAdapter
 from .receipts import ReceiptService
 
@@ -24,6 +28,43 @@ class SoftwareFactoryService:
         self.github = GitHubAdapter(settings)
         self.openai = OpenAIAdapter(settings)
         self.entitlements = EntitlementBrokerService(settings)
+
+    def _validation_follow_up(
+        self, validation: PullRequestValidationResult
+    ) -> list[str]:
+        if validation.status == "passed":
+            return [
+                "Review the diff and approval context before merge.",
+                "Proceed to merge approval only if the review packet also looks correct.",
+            ]
+        if validation.status == "failed":
+            return [
+                "Fix the failing sandbox checks before merge approval.",
+                "Review the failing GitHub check logs linked from the test report.",
+            ]
+        if validation.status == "timed_out":
+            return [
+                "Wait for GitHub validation to complete or inspect why the checks stalled.",
+                "Do not approve merge until the test report shows passed validation.",
+            ]
+        return [
+            "Wait for GitHub validation to complete before merge approval.",
+            "Inspect the linked check runs if validation does not finish normally.",
+        ]
+
+    def _review_confidence(self, validation: PullRequestValidationResult) -> str:
+        if validation.status == "passed":
+            return "ci-passed-manual-review-required"
+        if validation.status == "failed":
+            return "ci-failed-review-required"
+        return "ci-incomplete-review-required"
+
+    def _review_recommendation(self, validation: PullRequestValidationResult) -> str:
+        if validation.status == "passed":
+            return "Review the draft PR and merge manually after approval."
+        if validation.status == "failed":
+            return "Do not merge until the failing GitHub validation checks are fixed."
+        return "Do not merge until GitHub validation completes successfully."
 
     def _scope(self, connection: Connection, project_id: str) -> dict:
         row = connection.execute(
@@ -524,6 +565,8 @@ class SoftwareFactoryService:
                 "pull_request_url": result.get("pull_request_url"),
                 "pull_request_number": result.get("pull_request_number"),
                 "branch_name": result.get("branch_name"),
+                "validation_status": result.get("validation_status"),
+                "validation_summary": result.get("validation_summary"),
             }
 
         try:
@@ -661,6 +704,50 @@ class SoftwareFactoryService:
                 "message": str(error),
             }
 
+        branch_head_sha = commit_shas[-1] if commit_shas else self.github.ensure_branch(
+            branch_name
+        )
+        try:
+            validation = self.github.wait_for_commit_checks(
+                branch_head_sha,
+                timeout_seconds=self.settings.sandbox_ci_timeout_seconds,
+                poll_interval_seconds=self.settings.sandbox_ci_poll_interval_seconds,
+            )
+        except Exception as error:
+            validation = PullRequestValidationResult(
+                status="unavailable",
+                summary=f"Unable to capture GitHub validation evidence: {error}",
+                head_sha=branch_head_sha,
+                completed=False,
+                checks=[],
+            )
+            emit_event(
+                connection,
+                project_id,
+                "software_factory.validation_unavailable",
+                "coding_worker",
+                "receipt",
+                pr_receipt["id"],
+                {
+                    "pull_request_url": pr.url,
+                    "message": str(error),
+                },
+            )
+
+        validation_checks = [
+            {
+                "name": check.name,
+                "status": check.status,
+                "conclusion": check.conclusion,
+                "html_url": check.html_url,
+                "started_at": check.started_at,
+                "completed_at": check.completed_at,
+            }
+            for check in validation.checks
+        ]
+        tests_added_or_run = [check["name"] for check in validation_checks]
+        validation_follow_up = self._validation_follow_up(validation)
+
         diff_artifact_id = create_artifact(
             connection,
             self.settings,
@@ -685,12 +772,13 @@ class SoftwareFactoryService:
             f"Test report for {title}",
             {
                 "title": title,
-                "status": "not_run",
-                "tests_added_or_run": [],
-                "required_follow_up": [
-                    "Execute repository CI in the sandbox before merge approval.",
-                    "Add or update focused tests if the reviewer flags gaps.",
-                ],
+                "status": validation.status,
+                "summary": validation.summary,
+                "head_sha": validation.head_sha,
+                "validation_source": "github.check_runs",
+                "tests_added_or_run": tests_added_or_run,
+                "checks": validation_checks,
+                "required_follow_up": validation_follow_up,
                 "notes": review_text,
             },
             created_by_job_id=created_by_job_id,
@@ -706,11 +794,14 @@ class SoftwareFactoryService:
                 "title": title,
                 "summary": summary,
                 "files_changed": [file.path for file in files],
-                "tests_added_or_run": [],
+                "tests_added_or_run": tests_added_or_run,
+                "ci_validation_status": validation.status,
+                "ci_validation_summary": validation.summary,
+                "ci_checks": validation_checks,
                 "risk_hotspots": review_text,
                 "rollback_plan": "Revert the sandbox PR branch or close the PR.",
-                "confidence_score": "manual-review-required",
-                "recommendation": "Review the draft PR and merge manually after approval.",
+                "confidence_score": self._review_confidence(validation),
+                "recommendation": self._review_recommendation(validation),
                 "github_commits": commit_shas,
                 "openai_response_id": review_provider_ref,
                 "routing_log_id": route["route_decision_log_id"],
@@ -731,6 +822,8 @@ class SoftwareFactoryService:
                 "pull_request_url": pr.url,
                 "branch_name": branch_name,
                 "title": title,
+                "validation_status": validation.status,
+                "validation_summary": validation.summary,
             },
             {},
             "merge_decision_required",
@@ -743,6 +836,8 @@ class SoftwareFactoryService:
             "pull_request_url": pr.url,
             "pull_request_number": pr.number,
             "branch_name": branch_name,
+            "validation_status": validation.status,
+            "validation_summary": validation.summary,
         }
         self.receipts.mark_succeeded(connection, pr_receipt["id"], pr.url, result)
         self.budget.settle(
@@ -773,11 +868,15 @@ class SoftwareFactoryService:
         return {
             "status": "created",
             "artifact_id": artifact_id,
+            "diff_artifact_id": diff_artifact_id,
+            "test_report_artifact_id": test_report_artifact_id,
             "receipt_id": pr_receipt["id"],
             "decision_id": decision_id,
             "pull_request_url": pr.url,
             "pull_request_number": pr.number,
             "branch_name": branch_name,
+            "validation_status": validation.status,
+            "validation_summary": validation.summary,
         }
 
     def merge_pull_request(

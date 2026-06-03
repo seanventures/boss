@@ -394,6 +394,21 @@ class DecisionService:
         if action == "review_plan_draft":
             self._queue_pr_proposal_from_plan(connection, row, actor, recommendation)
         elif action == "review_pull_request":
+            ci_gate = self._pull_request_ci_gate(connection, row)
+            if ci_gate is not None:
+                self._create_merge_gate_block(
+                    connection,
+                    row,
+                    actor,
+                    recommendation,
+                    status=ci_gate["status"],
+                    reason=ci_gate["reason"],
+                    next_action=ci_gate["next_action"],
+                    event_reason=ci_gate["event_reason"],
+                    ci_validation_status=ci_gate["validation_status"],
+                    ci_validation_summary=ci_gate["validation_summary"],
+                )
+                return
             if self.settings.enable_sandbox_merge:
                 self._queue_merge_job_from_review(
                     connection, row, actor, recommendation
@@ -430,6 +445,68 @@ class DecisionService:
             self.self_improvement.apply_decision_outcome(
                 connection, row, action, actor, note
             )
+
+    def _pull_request_ci_gate(
+        self, connection: Connection, row: dict[str, Any]
+    ) -> Optional[dict[str, str]]:
+        recommendation = row["recommendation"] or {}
+        artifact_id = recommendation.get("test_report_artifact_id")
+        if not isinstance(artifact_id, str) or not artifact_id:
+            return {
+                "status": "blocked_ci_validation_missing",
+                "reason": "No test report artifact is linked to this sandbox PR review.",
+                "next_action": "Re-run or regenerate the proposal so BOSS can capture validation evidence before merge.",
+                "event_reason": "missing_test_report",
+                "validation_status": "missing",
+                "validation_summary": "No test report artifact was attached to the review decision.",
+            }
+
+        artifact = connection.execute(
+            text(
+                """
+                SELECT content
+                FROM artifacts
+                WHERE id = :artifact_id AND project_id = :project_id
+                """
+            ),
+            {"artifact_id": artifact_id, "project_id": row["project_id"]},
+        ).mappings().first()
+        if not artifact:
+            return {
+                "status": "blocked_ci_validation_missing",
+                "reason": "The linked sandbox test report artifact could not be found.",
+                "next_action": "Re-run or regenerate the proposal so BOSS can capture validation evidence before merge.",
+                "event_reason": "missing_test_report",
+                "validation_status": "missing",
+                "validation_summary": "The linked test report artifact was not found.",
+            }
+
+        content = artifact["content"] or {}
+        validation_status = str(content.get("status") or "missing")
+        validation_summary = str(
+            content.get("summary")
+            or content.get("notes")
+            or "Validation evidence is incomplete."
+        )
+        if validation_status == "passed":
+            return None
+        if validation_status == "failed":
+            return {
+                "status": "blocked_ci_validation_failed",
+                "reason": "GitHub validation failed for this sandbox PR proposal.",
+                "next_action": "Fix the failing checks and regenerate or update the proposal before merge approval.",
+                "event_reason": "ci_validation_failed",
+                "validation_status": validation_status,
+                "validation_summary": validation_summary,
+            }
+        return {
+            "status": "blocked_ci_validation_incomplete",
+            "reason": "GitHub validation has not completed successfully for this sandbox PR proposal.",
+            "next_action": "Wait for the checks to finish successfully before merge approval.",
+            "event_reason": "ci_validation_incomplete",
+            "validation_status": validation_status,
+            "validation_summary": validation_summary,
+        }
 
     def _queue_pr_proposal_from_plan(
         self,
@@ -606,6 +683,13 @@ class DecisionService:
         row: dict[str, Any],
         actor: str,
         recommendation: dict[str, Any],
+        *,
+        status: str = "blocked_manual_merge_required",
+        reason: str = "Automatic merge and deploy effects are still disabled in this phase.",
+        next_action: str = "Review and merge the sandbox PR manually in GitHub. Deploy remains outside BOSS automation in this phase.",
+        event_reason: str = "manual_merge_required",
+        ci_validation_status: Optional[str] = None,
+        ci_validation_summary: Optional[str] = None,
     ) -> None:
         title = recommendation.get("title")
         if not isinstance(title, str) or not title.strip():
@@ -618,8 +702,8 @@ class DecisionService:
             "merge_gate",
             f"Merge gate for {title}",
             {
-                "status": "blocked_manual_merge_required",
-                "reason": "Automatic merge and deploy effects are still disabled in this phase.",
+                "status": status,
+                "reason": reason,
                 "approved_review_decision_id": row["id"],
                 "approved_by": actor,
                 "pull_request_url": recommendation.get("pull_request_url"),
@@ -627,8 +711,10 @@ class DecisionService:
                 "review_packet_artifact_id": recommendation.get("artifact_id"),
                 "diff_artifact_id": recommendation.get("diff_artifact_id"),
                 "test_report_artifact_id": recommendation.get("test_report_artifact_id"),
+                "ci_validation_status": ci_validation_status,
+                "ci_validation_summary": ci_validation_summary,
                 "receipt_id": recommendation.get("receipt_id"),
-                "next_action": "Review and merge the sandbox PR manually in GitHub. Deploy remains outside BOSS automation in this phase.",
+                "next_action": next_action,
             },
         )
         emit_event(
@@ -641,7 +727,7 @@ class DecisionService:
             {
                 "decision_id": row["id"],
                 "blocked_action": "github.pull_request.merge",
-                "reason": "manual_merge_required",
+                "reason": event_reason,
                 "pull_request_url": recommendation.get("pull_request_url"),
                 "receipt_id": recommendation.get("receipt_id"),
             },

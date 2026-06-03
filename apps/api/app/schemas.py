@@ -209,6 +209,8 @@ class PullRequestProposalResponse(BaseModel):
     pull_request_url: Optional[str] = None
     pull_request_number: Optional[int] = None
     branch_name: Optional[str] = None
+    validation_status: Optional[str] = None
+    validation_summary: Optional[str] = None
     message: Optional[str] = None
 
 

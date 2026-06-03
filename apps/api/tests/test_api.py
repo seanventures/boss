@@ -9,6 +9,8 @@ from apps.api.app.services.github_adapter import (
     DeploymentStatusResult,
     PullRequestMergeResult,
     PullRequestResult,
+    PullRequestValidationCheck,
+    PullRequestValidationResult,
 )
 
 
@@ -1888,6 +1890,28 @@ def test_approving_pr_review_decision_creates_merge_gate_block_artifact(client, 
         connection.execute(
             text(
                 """
+                INSERT INTO artifacts (
+                    id, project_id, task_id, artifact_type, title, uri, content, content_hash, created_by_job_id
+                )
+                VALUES (
+                    'art_test_report_merge_gate', 'boss-dogfood', NULL, 'test_report', 'Test report',
+                    NULL, CAST(:content AS JSONB), 'hash-test', NULL
+                )
+                """
+            ),
+            {
+                "content": json.dumps(
+                    {
+                        "status": "passed",
+                        "summary": "GitHub validation passed: CI.",
+                        "tests_added_or_run": ["CI"],
+                    }
+                )
+            },
+        )
+        connection.execute(
+            text(
+                """
                 INSERT INTO decisions (
                     id, project_id, task_id, question, recommendation, options, risk_tier,
                     cost_summary, default_action, status
@@ -1903,6 +1927,7 @@ def test_approving_pr_review_decision_creates_merge_gate_block_artifact(client, 
                     {
                         "action": "review_pull_request",
                         "artifact_id": "art_review_packet",
+                        "test_report_artifact_id": "art_test_report_merge_gate",
                         "receipt_id": "rcpt_pr_demo",
                         "pull_request_url": "https://github.com/seanheiney/boss-sandbox/pull/42",
                         "branch_name": "boss/demo-pr",
@@ -1964,6 +1989,28 @@ def test_approving_pr_review_decision_queues_merge_job_when_policy_enabled(clien
             connection.execute(
                 text(
                     """
+                    INSERT INTO artifacts (
+                        id, project_id, task_id, artifact_type, title, uri, content, content_hash, created_by_job_id
+                    )
+                    VALUES (
+                        'art_test_report_merge_allowed', 'boss-dogfood', NULL, 'test_report', 'Test report',
+                        NULL, CAST(:content AS JSONB), 'hash-test', NULL
+                    )
+                    """
+                ),
+                {
+                    "content": json.dumps(
+                        {
+                            "status": "passed",
+                            "summary": "GitHub validation passed: CI.",
+                            "tests_added_or_run": ["CI"],
+                        }
+                    )
+                },
+            )
+            connection.execute(
+                text(
+                    """
                     INSERT INTO decisions (
                         id, project_id, task_id, question, recommendation, options, risk_tier,
                         cost_summary, default_action, status
@@ -1978,6 +2025,7 @@ def test_approving_pr_review_decision_queues_merge_job_when_policy_enabled(clien
                     "recommendation": json.dumps(
                         {
                             "action": "review_pull_request",
+                            "test_report_artifact_id": "art_test_report_merge_allowed",
                             "pull_request_url": "https://github.com/seanheiney/boss-sandbox/pull/42",
                             "branch_name": "boss/demo-pr",
                             "title": "Merge",
@@ -2026,6 +2074,110 @@ def test_approving_pr_review_decision_queues_merge_job_when_policy_enabled(clien
         assert events.status_code == 200
         event_types = [item["event_type"] for item in events.json()["items"]]
         assert "decision.follow_on_job_queued" in event_types
+    finally:
+        api_main.decisions.settings.enable_sandbox_merge = previous
+
+
+def test_approving_pr_review_decision_blocks_merge_when_ci_failed(client, engine):
+    previous = api_main.decisions.settings.enable_sandbox_merge
+    api_main.decisions.settings.enable_sandbox_merge = True
+    try:
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO artifacts (
+                        id, project_id, task_id, artifact_type, title, uri, content, content_hash, created_by_job_id
+                    )
+                    VALUES (
+                        'art_test_report_merge_failed', 'boss-dogfood', NULL, 'test_report', 'Test report',
+                        NULL, CAST(:content AS JSONB), 'hash-test', NULL
+                    )
+                    """
+                ),
+                {
+                    "content": json.dumps(
+                        {
+                            "status": "failed",
+                            "summary": "GitHub validation failed: CI.",
+                            "tests_added_or_run": ["CI"],
+                        }
+                    )
+                },
+            )
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO decisions (
+                        id, project_id, task_id, question, recommendation, options, risk_tier,
+                        cost_summary, default_action, status
+                    )
+                    VALUES (
+                        'dec_review_pr_merge_failed', 'boss-dogfood', NULL, 'Review and approve sandbox PR: Broken',
+                        CAST(:recommendation AS JSONB), '[]'::jsonb, 2, '{}'::jsonb, 'hold', 'pending'
+                    )
+                    """
+                ),
+                {
+                    "recommendation": json.dumps(
+                        {
+                            "action": "review_pull_request",
+                            "test_report_artifact_id": "art_test_report_merge_failed",
+                            "pull_request_url": "https://github.com/seanheiney/boss-sandbox/pull/77",
+                            "branch_name": "boss/broken-pr",
+                            "title": "Broken",
+                        }
+                    )
+                },
+            )
+
+        approve = client.post(
+            "/v1/decisions/dec_review_pr_merge_failed/approve",
+            json={"actor": "ceo", "note": "Try to merge anyway."},
+        )
+        assert approve.status_code == 200
+        assert approve.json()["status"] == "approved"
+
+        with engine.begin() as connection:
+            merge_jobs = connection.execute(
+                text(
+                    """
+                    SELECT COUNT(*)
+                    FROM jobs
+                    WHERE project_id = 'boss-dogfood'
+                      AND kind = 'github.pull_request.merge'
+                      AND payload->>'decision_id' = 'dec_review_pr_merge_failed'
+                    """
+                )
+            ).scalar_one()
+            merge_gate = connection.execute(
+                text(
+                    """
+                    SELECT content
+                    FROM artifacts
+                    WHERE project_id = 'boss-dogfood' AND artifact_type = 'merge_gate'
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                    """
+                )
+            ).mappings().one()
+
+        assert merge_jobs == 0
+        assert merge_gate["content"]["status"] == "blocked_ci_validation_failed"
+        assert merge_gate["content"]["ci_validation_status"] == "failed"
+        assert "GitHub validation failed" in merge_gate["content"]["reason"]
+
+        events = client.get("/v1/events", params={"project_id": "boss-dogfood"})
+        assert events.status_code == 200
+        blocked_events = [
+            item
+            for item in events.json()["items"]
+            if item["event_type"] == "decision.follow_on_blocked"
+        ]
+        assert blocked_events
+        assert any(
+            item["data"]["reason"] == "ci_validation_failed" for item in blocked_events
+        )
     finally:
         api_main.decisions.settings.enable_sandbox_merge = previous
 
@@ -2547,6 +2699,104 @@ def test_pr_proposal_blocks_without_github_credentials_and_releases_reservation(
     assert decision_question == "GitHub integration is not configured"
 
 
+def test_pr_proposal_records_github_validation_evidence(client, monkeypatch):
+    reserve = client.post(
+        "/v1/budget/reserve",
+        json={
+            "project_id": "boss-dogfood",
+            "category": "tool",
+            "amount_usd_micros": 500_000,
+            "reason": "PR proposal with validation evidence.",
+        },
+    )
+    assert reserve.status_code == 201
+    reservation_id = reserve.json()["reservation_id"]
+
+    previous_openai = api_main.software_factory.settings.openai_api_key
+    api_main.software_factory.settings.openai_api_key = "test-openai-key"
+    monkeypatch.setattr(
+        api_main.software_factory.openai,
+        "create_text_response",
+        lambda prompt, system_prompt=None, model=None: (
+            "resp_review_packet",
+            "## Implementation summary\n- Review packet generated with CI evidence.",
+        ),
+    )
+    monkeypatch.setattr(
+        api_main.software_factory.github,
+        "ensure_branch",
+        lambda branch_name: "sha-base",
+    )
+    monkeypatch.setattr(
+        api_main.software_factory.github,
+        "upsert_file",
+        lambda branch_name, path, content, message: f"commit-{path}",
+    )
+    monkeypatch.setattr(
+        api_main.software_factory.github,
+        "create_pull_request",
+        lambda branch_name, title, body: PullRequestResult(
+            url="https://github.com/seanheiney/boss-sandbox/pull/5",
+            number=5,
+        ),
+    )
+    monkeypatch.setattr(
+        api_main.software_factory.github,
+        "wait_for_commit_checks",
+        lambda head_sha, timeout_seconds, poll_interval_seconds: PullRequestValidationResult(
+            status="passed",
+            summary="GitHub validation passed: CI.",
+            head_sha=head_sha,
+            completed=True,
+            checks=[
+                PullRequestValidationCheck(
+                    name="CI",
+                    status="completed",
+                    conclusion="success",
+                    html_url="https://github.com/seanheiney/boss-sandbox/actions/runs/1",
+                    started_at="2026-06-02T12:00:00Z",
+                    completed_at="2026-06-02T12:01:00Z",
+                )
+            ],
+        ),
+    )
+
+    try:
+        response = client.post(
+            "/v1/software-factory/proposals",
+            json={
+                "project_id": "boss-dogfood",
+                "reservation_id": reservation_id,
+                "dedupe_key": "pr-proposal-validation-evidence",
+                "title": "Sandbox PR with CI",
+                "branch_name": "boss/pr-validation-evidence",
+                "summary": "Collect GitHub validation evidence.",
+                "files": [{"path": "README.md", "content": "hello validation"}],
+            },
+        )
+    finally:
+        api_main.software_factory.settings.openai_api_key = previous_openai
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "created"
+    assert payload["validation_status"] == "passed"
+    assert "GitHub validation passed" in payload["validation_summary"]
+
+    test_report = client.get(f"/v1/artifacts/{payload['test_report_artifact_id']}")
+    assert test_report.status_code == 200
+    test_report_payload = test_report.json()
+    assert test_report_payload["content"]["status"] == "passed"
+    assert test_report_payload["content"]["tests_added_or_run"] == ["CI"]
+    assert test_report_payload["content"]["checks"][0]["conclusion"] == "success"
+
+    review_packet = client.get(f"/v1/artifacts/{payload['artifact_id']}")
+    assert review_packet.status_code == 200
+    review_payload = review_packet.json()
+    assert review_payload["content"]["ci_validation_status"] == "passed"
+    assert review_payload["content"]["confidence_score"] == "ci-passed-manual-review-required"
+
+
 def test_queue_merge_job_is_leasable_and_completion_passes_through(client):
     queued = client.post(
         "/v1/software-factory/merges/queue",
@@ -2879,6 +3129,26 @@ def test_command_to_merge_flow_completes_task_when_merge_policy_enabled(
     )
     monkeypatch.setattr(
         api_main.software_factory.github,
+        "wait_for_commit_checks",
+        lambda head_sha, timeout_seconds, poll_interval_seconds: PullRequestValidationResult(
+            status="passed",
+            summary="GitHub validation passed: CI.",
+            head_sha=head_sha,
+            completed=True,
+            checks=[
+                PullRequestValidationCheck(
+                    name="CI",
+                    status="completed",
+                    conclusion="success",
+                    html_url="https://github.com/seanheiney/boss-sandbox/actions/runs/99",
+                    started_at="2026-06-02T12:00:00Z",
+                    completed_at="2026-06-02T12:01:00Z",
+                )
+            ],
+        ),
+    )
+    monkeypatch.setattr(
+        api_main.software_factory.github,
         "merge_pull_request",
         lambda pull_request_number, commit_title: PullRequestMergeResult(
             sha="merge-sha-99",
@@ -2993,6 +3263,7 @@ def test_command_to_merge_flow_completes_task_when_merge_policy_enabled(
         assert proposal_run.status_code == 200
         proposal_result = proposal_run.json()
         assert proposal_result["status"] == "created"
+        assert proposal_result["validation_status"] == "passed"
         pr_decision_id = proposal_result["decision_id"]
 
         complete_pr = client.post(
@@ -3207,6 +3478,26 @@ def test_command_to_deploy_flow_completes_task_when_deploy_policy_enabled(
         lambda branch_name, title, body: PullRequestResult(
             url="https://github.com/seanheiney/boss-sandbox/pull/199",
             number=199,
+        ),
+    )
+    monkeypatch.setattr(
+        api_main.software_factory.github,
+        "wait_for_commit_checks",
+        lambda head_sha, timeout_seconds, poll_interval_seconds: PullRequestValidationResult(
+            status="passed",
+            summary="GitHub validation passed: CI.",
+            head_sha=head_sha,
+            completed=True,
+            checks=[
+                PullRequestValidationCheck(
+                    name="CI",
+                    status="completed",
+                    conclusion="success",
+                    html_url="https://github.com/seanheiney/boss-sandbox/actions/runs/199",
+                    started_at="2026-06-02T12:00:00Z",
+                    completed_at="2026-06-02T12:01:00Z",
+                )
+            ],
         ),
     )
     monkeypatch.setattr(

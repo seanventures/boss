@@ -156,7 +156,9 @@ The dogfood seed also registers the initial entitlement-source inventory from `p
 - `POST /v1/audit/replay-bundles` persists that export as a durable `replay_bundle` artifact so the console and external clients can capture a point-in-time run packet.
 - Queued OpenAI, PR proposal, and merge work now stamps both artifacts and receipts with `created_by_job_id`, and PR-proposal reservations are attached to their worker jobs for tighter lineage.
 - Approving a plan-review decision now auto-reserves the configured sandbox proposal budget and queues the next `software_factory.propose_pr` job instead of stopping at decision state only.
+- Sandbox PR proposals now wait for real GitHub check-run evidence and persist that evidence into the `test_report` and `review_packet` artifacts before the PR review decision is considered mergeable.
 - Approving the final sandbox PR review decision creates a receipt-linked merge gate by default, and can queue a real `github.pull_request.merge` job only when `BOSS_ENABLE_SANDBOX_MERGE=true`.
+- Even when merge policy is enabled, BOSS now blocks merge execution unless the linked sandbox validation report is in a passed state.
 - When sandbox deploy policy is enabled, a successful merge creates a deployment review decision instead of silently treating merge as the terminal step. Approving that decision queues a real `github.deployment.create` job against the sandbox repository, backed by a receipt and a durable `deployment_result` artifact.
 
 ## Model entitlement broker

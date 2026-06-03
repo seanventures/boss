@@ -77,6 +77,12 @@ class Settings(BaseSettings):
     sandbox_deploy_environment: str = Field(
         default="staging", alias="BOSS_SANDBOX_DEPLOY_ENVIRONMENT"
     )
+    sandbox_ci_timeout_seconds: int = Field(
+        default=120, alias="BOSS_SANDBOX_CI_TIMEOUT_SECONDS"
+    )
+    sandbox_ci_poll_interval_seconds: int = Field(
+        default=5, alias="BOSS_SANDBOX_CI_POLL_INTERVAL_SECONDS"
+    )
 
     @property
     def repo_root(self) -> Path:

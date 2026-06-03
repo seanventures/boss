@@ -515,6 +515,8 @@ class JobLeaseService:
                 "receipt_id": result.get("receipt_id"),
                 "pull_request_url": result.get("pull_request_url"),
                 "branch_name": result.get("branch_name"),
+                "validation_status": result.get("validation_status"),
+                "validation_summary": result.get("validation_summary"),
             }
 
         if job_row["kind"] == "github.pull_request.merge":
