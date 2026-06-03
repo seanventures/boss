@@ -2,6 +2,8 @@
 
 BOSS, the Business Operating System Sentinel, is a financially controlled autonomous company operating system. This repository is the real control plane and dogfood environment for BOSS itself.
 
+Current release: `v0.2.0`
+
 ## Operating invariants
 
 - No external effect without a `Receipt`.
@@ -31,6 +33,7 @@ If a required credential is missing, the API must fail closed and create visible
 - `AGENTS.md`: active repository rules
 - `docs/product/PRD-v1.0.md`: governing product intent
 - `docs/product/IMPLEMENTATION_STATUS.md`: shipped runtime status and current constraints
+- `CHANGELOG.md`: release notes
 - `api/openapi.yaml`: active API contract
 - `db/schema.sql`: active starter schema
 - `apps/web`: Next.js executive console shell

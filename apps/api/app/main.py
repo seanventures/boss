@@ -149,7 +149,7 @@ async def lifespan(_: FastAPI):
     yield
 
 
-app = FastAPI(title="BOSS Control Plane", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title="BOSS Control Plane", version="0.2.0", lifespan=lifespan)
 
 
 def task_summary_from_row(row) -> TaskSummary:
