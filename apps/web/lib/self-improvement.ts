@@ -3,7 +3,7 @@ import {
   type SelfImprovementProposalSummary,
 } from "@boss/api-client";
 
-import { client, PROJECT_ID } from "./client";
+import { client, PROJECT_ID, resolveProjectId } from "./client";
 
 export type SelfImprovementFeedItem = {
   id: string;
@@ -56,18 +56,25 @@ function mapProposal(
   };
 }
 
-export function emptySelfImprovementFeed(reason?: string): SelfImprovementFeed {
+export function emptySelfImprovementFeed(
+  reason?: string,
+  projectId = PROJECT_ID,
+): SelfImprovementFeed {
   return {
-    projectId: PROJECT_ID,
+    projectId: resolveProjectId(projectId),
     apiReachable: false,
     blockedReason: reason,
     items: [],
   };
 }
 
-export async function fetchSelfImprovementFeed(): Promise<SelfImprovementFeed> {
+export async function fetchSelfImprovementFeed(
+  projectId = PROJECT_ID,
+): Promise<SelfImprovementFeed> {
   try {
-    const payload = await client.listSelfImprovementProposals(PROJECT_ID);
+    const payload = await client.listSelfImprovementProposals(
+      resolveProjectId(projectId),
+    );
     return {
       projectId: payload.project_id,
       apiReachable: true,
@@ -75,10 +82,11 @@ export async function fetchSelfImprovementFeed(): Promise<SelfImprovementFeed> {
     };
   } catch (error) {
     if (error instanceof BossApiError) {
-      return emptySelfImprovementFeed(`API returned ${error.status}`);
+      return emptySelfImprovementFeed(`API returned ${error.status}`, projectId);
     }
     return emptySelfImprovementFeed(
       error instanceof Error ? error.message : "Unknown API error",
+      projectId,
     );
   }
 }

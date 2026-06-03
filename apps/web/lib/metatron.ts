@@ -2,7 +2,7 @@ import {
   BossApiError,
   type MetatronQueryResponse,
 } from "@boss/api-client";
-import { client, PROJECT_ID } from "./client";
+import { client, PROJECT_ID, resolveProjectId } from "./client";
 
 export type MetatronCard = {
   projectId: string;
@@ -27,9 +27,10 @@ export type MetatronCard = {
 export function placeholderMetatron(
   question: string,
   reason: string,
+  projectId = PROJECT_ID,
 ): MetatronCard {
   return {
-    projectId: PROJECT_ID,
+    projectId: resolveProjectId(projectId),
     question,
     category: "unavailable",
     answer: "Metatron could not answer because the control-plane API is unavailable.",
@@ -68,6 +69,7 @@ export async function fetchMetatronQuery(
   question?: string,
   taskId?: string,
   decisionId?: string,
+  projectId = PROJECT_ID,
 ): Promise<MetatronCard | null> {
   if (!question?.trim()) {
     return null;
@@ -75,7 +77,7 @@ export async function fetchMetatronQuery(
   try {
     return mapMetatron(
       await client.queryMetatron({
-        project_id: PROJECT_ID,
+        project_id: resolveProjectId(projectId),
         question: question.trim(),
         task_id: taskId,
         decision_id: decisionId,
@@ -83,11 +85,16 @@ export async function fetchMetatronQuery(
     );
   } catch (error) {
     if (error instanceof BossApiError) {
-      return placeholderMetatron(question.trim(), `API returned ${error.status}`);
+      return placeholderMetatron(
+        question.trim(),
+        `API returned ${error.status}`,
+        projectId,
+      );
     }
     return placeholderMetatron(
       question.trim(),
       error instanceof Error ? error.message : "Unknown API error",
+      projectId,
     );
   }
 }

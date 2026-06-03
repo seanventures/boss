@@ -1,6 +1,6 @@
 import { BossApiError, type RoutingLogItem } from "@boss/api-client";
 
-import { client, PROJECT_ID } from "./client";
+import { client, PROJECT_ID, resolveProjectId } from "./client";
 
 export type RoutingLogFeedItem = {
   id: string;
@@ -33,18 +33,21 @@ function mapLog(payload: RoutingLogItem): RoutingLogFeedItem {
   };
 }
 
-export function emptyRoutingLogFeed(reason?: string): RoutingLogFeed {
+export function emptyRoutingLogFeed(reason?: string, projectId = PROJECT_ID): RoutingLogFeed {
   return {
-    projectId: PROJECT_ID,
+    projectId: resolveProjectId(projectId),
     apiReachable: false,
     blockedReason: reason,
     items: [],
   };
 }
 
-export async function fetchRoutingLogFeed(limit = 8): Promise<RoutingLogFeed> {
+export async function fetchRoutingLogFeed(
+  projectId = PROJECT_ID,
+  limit = 8,
+): Promise<RoutingLogFeed> {
   try {
-    const payload = await client.listRoutingLogs(PROJECT_ID, limit);
+    const payload = await client.listRoutingLogs(resolveProjectId(projectId), limit);
     return {
       projectId: payload.project_id,
       apiReachable: true,
@@ -52,10 +55,11 @@ export async function fetchRoutingLogFeed(limit = 8): Promise<RoutingLogFeed> {
     };
   } catch (error) {
     if (error instanceof BossApiError) {
-      return emptyRoutingLogFeed(`API returned ${error.status}`);
+      return emptyRoutingLogFeed(`API returned ${error.status}`, projectId);
     }
     return emptyRoutingLogFeed(
       error instanceof Error ? error.message : "Unknown API error",
+      projectId,
     );
   }
 }

@@ -1,5 +1,6 @@
 import {
   createReplayBundleAction,
+  installAgentModuleAction,
   installPackAction,
   queueOutboxMessageAction,
   refreshHealthSnapshotAction,
@@ -13,6 +14,7 @@ import {
 } from "./actions";
 import { fetchAuditSummary } from "../lib/audit";
 import { fetchArtifactFeed } from "../lib/artifacts";
+import { fetchAgentModuleFeed } from "../lib/agent-modules";
 import { fetchInboxFeed, fetchOutboxFeed } from "../lib/comms";
 import { fetchDeadletterFeed } from "../lib/deadletters";
 import { fetchDecisionFeed, type DecisionFeedItem } from "../lib/decisions";
@@ -21,6 +23,7 @@ import { fetchActivityFeed } from "../lib/events";
 import { fetchHealthSnapshotFeed } from "../lib/health-snapshots";
 import { fetchMetatronQuery } from "../lib/metatron";
 import { fetchPackFeed } from "../lib/packs";
+import { fetchProjectFeed } from "../lib/projects";
 import { fetchReceiptFeed } from "../lib/receipts";
 import { fetchRoleFeed } from "../lib/roles";
 import { fetchRoutingLogFeed } from "../lib/routing";
@@ -28,6 +31,7 @@ import { fetchSelfImprovementFeed } from "../lib/self-improvement";
 import { fetchSkillFeed } from "../lib/skills";
 import { fetchStatus } from "../lib/status";
 import { fetchTaskFeed } from "../lib/tasks";
+import { PROJECT_ID } from "../lib/client";
 
 function formatMicros(amount: unknown): string {
   if (typeof amount !== "number") {
@@ -79,6 +83,43 @@ function riskLabel(risk: Record<string, unknown>): string {
   return `${severity} / ${title}`;
 }
 
+function entitlementBadge(
+  source: {
+    effectiveStatus: string;
+    runtimeSupported: boolean;
+    credentialPresent: boolean;
+  },
+): string {
+  if (source.effectiveStatus === "active") {
+    return "active";
+  }
+  if (source.runtimeSupported && !source.credentialPresent) {
+    return "credentials required";
+  }
+  if (source.runtimeSupported) {
+    return "adapter ready";
+  }
+  return "registry only";
+}
+
+function entitlementDetail(
+  source: {
+    runtimeSupported: boolean;
+    credentialPresent: boolean;
+    credentialRef?: string;
+  },
+): string {
+  if (source.runtimeSupported && source.credentialPresent) {
+    return "Adapter support is enabled and credentials are present.";
+  }
+  if (source.runtimeSupported && !source.credentialPresent) {
+    return source.credentialRef
+      ? `Adapter support is enabled, but ${source.credentialRef} is not configured.`
+      : "Adapter support is enabled, but credentials are missing.";
+  }
+  return "This source is currently registry inventory only and cannot execute work.";
+}
+
 function decisionStatusDetail(decision: DecisionFeedItem): string {
   if (decision.status === "delegated" && decision.delegatedTo) {
     return `Delegated to ${decision.delegatedTo}${
@@ -119,9 +160,17 @@ function getParam(value: string | string[] | undefined): string | undefined {
 
 export default async function HomePage({ searchParams }: HomePageProps) {
   const resolvedSearchParams = searchParams ? await searchParams : undefined;
+  const requestedProjectId =
+    getParam(resolvedSearchParams?.project_id) ?? PROJECT_ID;
   const metatronQuestion = getParam(resolvedSearchParams?.q);
   const metatronTaskId = getParam(resolvedSearchParams?.task_id);
   const metatronDecisionId = getParam(resolvedSearchParams?.decision_id);
+  const projects = await fetchProjectFeed(requestedProjectId);
+  const activeProjectId = projects.items.some(
+    (project) => project.id === requestedProjectId,
+  )
+    ? requestedProjectId
+    : projects.items[0]?.id ?? requestedProjectId;
   const [
     status,
     decisions,
@@ -132,6 +181,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
     deadletters,
     packs,
     roles,
+    agentModules,
     entitlements,
     routingLogs,
     skills,
@@ -143,27 +193,29 @@ export default async function HomePage({ searchParams }: HomePageProps) {
     metatron,
   ] =
     await Promise.all([
-      fetchStatus(),
-      fetchDecisionFeed(),
-      fetchTaskFeed(),
-      fetchArtifactFeed(),
-      fetchActivityFeed(),
-      fetchHealthSnapshotFeed(),
-      fetchDeadletterFeed(),
-      fetchPackFeed(),
-      fetchRoleFeed(),
-      fetchEntitlementFeed(),
-      fetchRoutingLogFeed(),
+      fetchStatus(activeProjectId),
+      fetchDecisionFeed(activeProjectId),
+      fetchTaskFeed(activeProjectId),
+      fetchArtifactFeed(activeProjectId),
+      fetchActivityFeed(activeProjectId),
+      fetchHealthSnapshotFeed(activeProjectId),
+      fetchDeadletterFeed(activeProjectId),
+      fetchPackFeed(activeProjectId),
+      fetchRoleFeed(activeProjectId),
+      fetchAgentModuleFeed(activeProjectId),
+      fetchEntitlementFeed(activeProjectId),
+      fetchRoutingLogFeed(activeProjectId),
       fetchSkillFeed(),
-      fetchReceiptFeed(),
-      fetchAuditSummary(),
-      fetchSelfImprovementFeed(),
-      fetchOutboxFeed(),
-      fetchInboxFeed(),
+      fetchReceiptFeed(activeProjectId),
+      fetchAuditSummary(activeProjectId),
+      fetchSelfImprovementFeed(activeProjectId),
+      fetchOutboxFeed(activeProjectId),
+      fetchInboxFeed(activeProjectId),
       fetchMetatronQuery(
         metatronQuestion,
         metatronTaskId,
         metatronDecisionId,
+        activeProjectId,
       ),
     ]);
 
@@ -195,9 +247,39 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                     : "No deadletters"}
                 </span>
               </div>
+              {projects.apiReachable && projects.items.length > 0 ? (
+                <form method="get" className="composer compact">
+                  <label className="field">
+                    <span>Project scope</span>
+                    <select
+                      className="input"
+                      name="project_id"
+                      defaultValue={activeProjectId}
+                    >
+                      {projects.items.map((project) => (
+                        <option key={project.id} value={project.id}>
+                          {project.orgName} / {project.workspaceName} / {project.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <button className="button secondary" type="submit">
+                    Switch project
+                  </button>
+                  <p className="detail">
+                    Every panel on this page now runs against the selected project.
+                  </p>
+                </form>
+              ) : (
+                <p className="detail">
+                  {projects.blockedReason ??
+                    "Project registry is unavailable, so the console is using its default scope."}
+                </p>
+              )}
             </div>
 
             <form action={submitCommandAction} className="composer">
+              <input type="hidden" name="project_id" value={activeProjectId} />
               <div>
                 <span className="eyebrow">CEO Command</span>
                 <h2>Issue a real outcome.</h2>
@@ -246,6 +328,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               </div>
             </div>
             <form method="get" className="composer">
+              <input type="hidden" name="project_id" value={activeProjectId} />
               <label className="field">
                 <span>Question</span>
                 <input
@@ -437,6 +520,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                   : "No persisted health snapshot yet. Refresh one from the console."}
               </p>
               <form action={refreshHealthSnapshotAction}>
+                <input type="hidden" name="project_id" value={activeProjectId} />
                 <button className="button secondary" type="submit">
                   Refresh snapshot
                 </button>
@@ -545,6 +629,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                     </div>
                   </div>
                   <form action={createReplayBundleAction}>
+                    <input type="hidden" name="project_id" value={activeProjectId} />
                     <button className="button secondary" type="submit">
                       Create replay bundle
                     </button>
@@ -600,6 +685,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             <article className="stack-card">
               <h3>Propose an improvement</h3>
               <form action={submitSelfImprovementProposalAction} className="composer compact">
+                <input type="hidden" name="project_id" value={activeProjectId} />
                 <label className="field">
                   <span>Title</span>
                   <input
@@ -715,31 +801,129 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                       </div>
                       {proposal.status === "canary_approved" ? (
                         <div className="button-stack">
-                          <form action={recordSelfImprovementCanaryAction}>
+                          <form action={recordSelfImprovementCanaryAction} className="composer compact">
                             <input type="hidden" name="proposal_id" value={proposal.id} />
+                            <input type="hidden" name="project_id" value={activeProjectId} />
                             <input type="hidden" name="outcome" value="succeeded" />
+                            <textarea
+                              className="textarea"
+                              name="summary"
+                              rows={2}
+                              placeholder="Describe the successful canary outcome."
+                              required
+                            />
+                            <textarea
+                              className="textarea"
+                              name="metrics_json"
+                              rows={3}
+                              placeholder={'{"passed_checks": 3, "error_rate": 0}'}
+                              required
+                            />
+                            <textarea
+                              className="textarea"
+                              name="evidence_refs"
+                              rows={2}
+                              placeholder={"One evidence ref per line\nartifact:test-report-123"}
+                              required
+                            />
                             <button className="button secondary" type="submit">
                               Record canary success
                             </button>
                           </form>
-                          <form action={recordSelfImprovementCanaryAction}>
+                          <form action={recordSelfImprovementCanaryAction} className="composer compact">
                             <input type="hidden" name="proposal_id" value={proposal.id} />
+                            <input type="hidden" name="project_id" value={activeProjectId} />
                             <input type="hidden" name="outcome" value="failed" />
+                            <textarea
+                              className="textarea"
+                              name="summary"
+                              rows={2}
+                              placeholder="Describe what failed in canary."
+                              required
+                            />
+                            <textarea
+                              className="textarea"
+                              name="metrics_json"
+                              rows={3}
+                              placeholder={'{"failed_checks": 1, "rollback_required": 1}'}
+                              required
+                            />
+                            <textarea
+                              className="textarea"
+                              name="evidence_refs"
+                              rows={2}
+                              placeholder={"One evidence ref per line\nartifact:canary-log-456"}
+                              required
+                            />
                             <button className="button secondary" type="submit">
                               Record canary failure
                             </button>
                           </form>
                         </div>
                       ) : proposal.status === "rollout_approved" ? (
-                        <form action={recordSelfImprovementRolloutAction}>
+                        <form action={recordSelfImprovementRolloutAction} className="composer compact">
                           <input type="hidden" name="proposal_id" value={proposal.id} />
+                          <input type="hidden" name="project_id" value={activeProjectId} />
+                          <textarea
+                            className="textarea"
+                            name="summary"
+                            rows={2}
+                            placeholder="Describe what rolled out and what was validated."
+                            required
+                          />
+                          <input
+                            className="input"
+                            name="external_ref"
+                            placeholder="External reference (deploy URL, commit SHA)"
+                          />
+                          <textarea
+                            className="textarea"
+                            name="metrics_json"
+                            rows={3}
+                            placeholder={'{"latency_p95_ms": 220, "error_rate": 0}'}
+                            required
+                          />
+                          <textarea
+                            className="textarea"
+                            name="evidence_refs"
+                            rows={2}
+                            placeholder={"One evidence ref per line\nartifact:rollout-report-789"}
+                            required
+                          />
                           <button className="button secondary" type="submit">
                             Record rollout
                           </button>
                         </form>
                       ) : proposal.status === "rolled_out" ? (
-                        <form action={rollbackSelfImprovementProposalAction}>
+                        <form action={rollbackSelfImprovementProposalAction} className="composer compact">
                           <input type="hidden" name="proposal_id" value={proposal.id} />
+                          <input type="hidden" name="project_id" value={activeProjectId} />
+                          <textarea
+                            className="textarea"
+                            name="reason"
+                            rows={2}
+                            placeholder="Describe why rollback was required."
+                            required
+                          />
+                          <input
+                            className="input"
+                            name="external_ref"
+                            placeholder="External reference (rollback PR, incident ticket)"
+                          />
+                          <textarea
+                            className="textarea"
+                            name="metrics_json"
+                            rows={3}
+                            placeholder={'{"rollback_duration_minutes": 4, "customer_impact": 0}'}
+                            required
+                          />
+                          <textarea
+                            className="textarea"
+                            name="evidence_refs"
+                            rows={2}
+                            placeholder={"One evidence ref per line\nartifact:rollback-report-101"}
+                            required
+                          />
                           <button className="button secondary" type="submit">
                             Record rollback
                           </button>
@@ -770,6 +954,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             <article className="stack-card">
               <h3>Draft outbound message</h3>
               <form action={submitOutboxDraftAction} className="composer compact">
+                <input type="hidden" name="project_id" value={activeProjectId} />
                 <label className="field">
                   <span>Channel</span>
                   <input
@@ -827,6 +1012,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                       {message.status === "draft" ? (
                         <form action={queueOutboxMessageAction}>
                           <input type="hidden" name="message_id" value={message.id} />
+                          <input type="hidden" name="project_id" value={activeProjectId} />
                           <button className="button secondary" type="submit">
                             Queue send
                           </button>
@@ -910,6 +1096,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                       ) : (
                         <form action={installPackAction}>
                           <input type="hidden" name="pack_id" value={pack.packId} />
+                          <input type="hidden" name="project_id" value={activeProjectId} />
                           <button className="button secondary" type="submit">
                             Install
                           </button>
@@ -947,6 +1134,14 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                           {role.successfulRuns} successful runs / {role.policyViolationCount} policy
                           {" "}violations / {role.scopeViolationCount} scope violations
                         </p>
+                        {role.sourceModuleId ? (
+                          <p className="detail">
+                            Packaged from {role.sourceModuleId}
+                            {role.sourceModuleVersion
+                              ? ` v${role.sourceModuleVersion}`
+                              : ""}
+                          </p>
+                        ) : null}
                         {role.lastReviewedAt ? (
                           <p className="detail">
                             Last reviewed {formatDateTime(role.lastReviewedAt)}
@@ -963,6 +1158,70 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               )}
             </article>
           </div>
+        </section>
+
+        <section className="panel-stack">
+          <div className="section-head">
+            <div>
+              <span className="eyebrow">Agent Marketplace</span>
+              <h2>Packaged worker modules with contained prompts, skills, and runtime policy.</h2>
+            </div>
+            <p className="status-meta">
+              Modules are installable catalog units that can own a role charter, prompt bundle,
+              runtime job kinds, and configuration defaults.
+            </p>
+          </div>
+
+          <article className="stack-card">
+            <h3>Available agent modules</h3>
+            {!agentModules.apiReachable ? (
+              <p className="detail">
+                {agentModules.blockedReason ?? "Agent module API is unavailable."}
+              </p>
+            ) : agentModules.items.length === 0 ? (
+              <p className="detail">No agent modules are available.</p>
+            ) : (
+              <div className="feed-list">
+                {agentModules.items.map((module) => (
+                  <div className="feed-row" key={module.moduleId}>
+                    <div>
+                      <h4>{module.displayName}</h4>
+                      <p className="detail">
+                        {module.moduleId} / {module.publisher} / {module.category}
+                      </p>
+                      <p className="detail">{module.description}</p>
+                      <p className="detail">
+                        v{module.version} / {module.roleKey ?? "no role"} /{" "}
+                        {module.jobKinds.join(", ")}
+                      </p>
+                      <p className="detail">
+                        {module.priceModel ?? "custom pricing"}
+                        {module.priceUsdMicros
+                          ? ` / ${formatMicros(module.priceUsdMicros)}`
+                          : ""}
+                      </p>
+                    </div>
+                    {module.installed ? (
+                      <span className="pill">
+                        installed
+                        {module.installedAt
+                          ? ` ${formatDateTime(module.installedAt)}`
+                          : ""}
+                      </span>
+                    ) : (
+                      <form action={installAgentModuleAction}>
+                        <input type="hidden" name="module_id" value={module.moduleId} />
+                        <input type="hidden" name="project_id" value={activeProjectId} />
+                        <button className="button secondary" type="submit">
+                          Install module
+                        </button>
+                      </form>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </article>
         </section>
 
         <section className="panel-stack">
@@ -1000,9 +1259,14 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                             ? source.supportedModels.join(", ")
                             : "No runtime-backed models"}
                         </p>
+                        <p className="detail">{entitlementDetail(source)}</p>
                       </div>
-                      <span className={`pill${source.runtimeSupported ? "" : " warn"}`}>
-                        {source.runtimeSupported ? "runtime ready" : "registry only"}
+                      <span
+                        className={`pill${
+                          source.effectiveStatus === "active" ? "" : " warn"
+                        }`}
+                      >
+                        {entitlementBadge(source)}
                       </span>
                     </div>
                   ))}
@@ -1288,6 +1552,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                             name="decision_id"
                             value={decision.id}
                           />
+                          <input type="hidden" name="project_id" value={activeProjectId} />
                           <textarea
                             className="textarea decision-note"
                             name="note"
@@ -1332,6 +1597,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                             name="decision_id"
                             value={decision.id}
                           />
+                          <input type="hidden" name="project_id" value={activeProjectId} />
                           <textarea
                             className="textarea decision-note"
                             name="note"

@@ -1,6 +1,6 @@
 import { BossApiError } from "@boss/api-client";
 
-import { client, PROJECT_ID } from "./client";
+import { client, PROJECT_ID, resolveProjectId } from "./client";
 
 export type AuditSummary = {
   projectId: string;
@@ -19,9 +19,9 @@ export type AuditSummary = {
   };
 };
 
-export function emptyAuditSummary(reason?: string): AuditSummary {
+export function emptyAuditSummary(reason?: string, projectId = PROJECT_ID): AuditSummary {
   return {
-    projectId: PROJECT_ID,
+    projectId: resolveProjectId(projectId),
     apiReachable: false,
     blockedReason: reason,
     counts: {
@@ -37,9 +37,9 @@ export function emptyAuditSummary(reason?: string): AuditSummary {
   };
 }
 
-export async function fetchAuditSummary(): Promise<AuditSummary> {
+export async function fetchAuditSummary(projectId = PROJECT_ID): Promise<AuditSummary> {
   try {
-    const payload = await client.exportAuditTrail(PROJECT_ID);
+    const payload = await client.exportAuditTrail(resolveProjectId(projectId));
     return {
       projectId: payload.project_id,
       apiReachable: true,
@@ -57,10 +57,11 @@ export async function fetchAuditSummary(): Promise<AuditSummary> {
     };
   } catch (error) {
     if (error instanceof BossApiError) {
-      return emptyAuditSummary(`API returned ${error.status}`);
+      return emptyAuditSummary(`API returned ${error.status}`, projectId);
     }
     return emptyAuditSummary(
       error instanceof Error ? error.message : "Unknown API error",
+      projectId,
     );
   }
 }

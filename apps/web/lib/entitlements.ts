@@ -1,6 +1,6 @@
 import { BossApiError, type EntitlementSourceSummary } from "@boss/api-client";
 
-import { client, PROJECT_ID } from "./client";
+import { client, PROJECT_ID, resolveProjectId } from "./client";
 
 export type EntitlementSourceFeedItem = {
   id: string;
@@ -10,6 +10,8 @@ export type EntitlementSourceFeedItem = {
   status: string;
   effectiveStatus: string;
   runtimeSupported: boolean;
+  credentialPresent: boolean;
+  credentialRef?: string;
   supportedModels: string[];
 };
 
@@ -29,22 +31,26 @@ function mapSource(payload: EntitlementSourceSummary): EntitlementSourceFeedItem
     status: payload.status,
     effectiveStatus: payload.effective_status,
     runtimeSupported: payload.runtime_supported,
+    credentialPresent: Boolean(payload.observed_capacity?.credential_present),
+    credentialRef: payload.credential_ref,
     supportedModels: payload.supported_models,
   };
 }
 
-export function emptyEntitlementFeed(reason?: string): EntitlementFeed {
+export function emptyEntitlementFeed(reason?: string, projectId = PROJECT_ID): EntitlementFeed {
   return {
-    projectId: PROJECT_ID,
+    projectId: resolveProjectId(projectId),
     apiReachable: false,
     blockedReason: reason,
     items: [],
   };
 }
 
-export async function fetchEntitlementFeed(): Promise<EntitlementFeed> {
+export async function fetchEntitlementFeed(
+  projectId = PROJECT_ID,
+): Promise<EntitlementFeed> {
   try {
-    const payload = await client.listEntitlementSources(PROJECT_ID);
+    const payload = await client.listEntitlementSources(resolveProjectId(projectId));
     return {
       projectId: payload.project_id,
       apiReachable: true,
@@ -52,10 +58,11 @@ export async function fetchEntitlementFeed(): Promise<EntitlementFeed> {
     };
   } catch (error) {
     if (error instanceof BossApiError) {
-      return emptyEntitlementFeed(`API returned ${error.status}`);
+      return emptyEntitlementFeed(`API returned ${error.status}`, projectId);
     }
     return emptyEntitlementFeed(
       error instanceof Error ? error.message : "Unknown API error",
+      projectId,
     );
   }
 }

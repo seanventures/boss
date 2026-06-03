@@ -26,6 +26,18 @@ def build_plan_result(job: LeasedJob) -> dict[str, Any]:
     command = str(job.payload.get("command") or "Plan the requested task.")
     constraints = job.payload.get("constraints") or {}
     deadline = constraints.get("deadline")
+    agent_module = job.payload.get("agent_module") or {}
+    module_name = (
+        agent_module.get("display_name")
+        if isinstance(agent_module.get("display_name"), str)
+        else None
+    )
+    prompt_bundle = (
+        agent_module.get("prompt_bundle")
+        if isinstance(agent_module.get("prompt_bundle"), dict)
+        else {}
+    )
+    planning_guidance = prompt_bundle.get("planning")
 
     steps = [
         "Clarify task scope and acceptance criteria.",
@@ -42,6 +54,8 @@ def build_plan_result(job: LeasedJob) -> dict[str, Any]:
     ]
     if deadline:
         steps.append(f"Respect the requested deadline: {deadline}.")
+    if isinstance(planning_guidance, str) and planning_guidance.strip():
+        steps.append(f"Module guidance: {planning_guidance.strip()}")
 
     return {
         "summary": command,
@@ -49,6 +63,14 @@ def build_plan_result(job: LeasedJob) -> dict[str, Any]:
         "steps": steps,
         "risks": risks,
         "done_when": done_when,
+        "agent_module": {
+            "id": agent_module.get("id"),
+            "version": agent_module.get("version"),
+            "display_name": module_name,
+            "role_key": agent_module.get("role_key"),
+        }
+        if agent_module
+        else {},
     }
 
 
@@ -63,6 +85,7 @@ def execute_job(job: LeasedJob, client: ControlPlaneClient) -> dict[str, Any]:
                 "dedupe_key": job.payload["dedupe_key"],
                 "prompt": job.payload["prompt"],
                 "system_prompt": job.payload.get("system_prompt"),
+                "agent_module_id": job.payload.get("agent_module_id"),
                 "created_by_job_id": job.id,
             }
         )
@@ -80,6 +103,7 @@ def execute_job(job: LeasedJob, client: ControlPlaneClient) -> dict[str, Any]:
                 "branch_name": job.payload["branch_name"],
                 "summary": job.payload["summary"],
                 "files": job.payload["files"],
+                "agent_module_id": job.payload.get("agent_module_id"),
                 "created_by_job_id": job.id,
             }
         )

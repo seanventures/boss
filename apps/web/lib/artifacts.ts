@@ -1,6 +1,6 @@
 import { BossApiError, type ArtifactSummary } from "@boss/api-client";
 
-import { client, PROJECT_ID } from "./client";
+import { client, PROJECT_ID, resolveProjectId } from "./client";
 
 export type ArtifactFeedItem = {
   id: string;
@@ -27,18 +27,21 @@ function mapArtifact(payload: ArtifactSummary): ArtifactFeedItem {
   };
 }
 
-export function emptyArtifactFeed(reason?: string): ArtifactFeed {
+export function emptyArtifactFeed(reason?: string, projectId = PROJECT_ID): ArtifactFeed {
   return {
-    projectId: PROJECT_ID,
+    projectId: resolveProjectId(projectId),
     apiReachable: false,
     blockedReason: reason,
     items: [],
   };
 }
 
-export async function fetchArtifactFeed(limit = 8): Promise<ArtifactFeed> {
+export async function fetchArtifactFeed(
+  projectId = PROJECT_ID,
+  limit = 8,
+): Promise<ArtifactFeed> {
   try {
-    const payload = await client.listArtifacts(PROJECT_ID, limit);
+    const payload = await client.listArtifacts(resolveProjectId(projectId), limit);
     return {
       projectId: payload.project_id,
       apiReachable: true,
@@ -46,10 +49,11 @@ export async function fetchArtifactFeed(limit = 8): Promise<ArtifactFeed> {
     };
   } catch (error) {
     if (error instanceof BossApiError) {
-      return emptyArtifactFeed(`API returned ${error.status}`);
+      return emptyArtifactFeed(`API returned ${error.status}`, projectId);
     }
     return emptyArtifactFeed(
       error instanceof Error ? error.message : "Unknown API error",
+      projectId,
     );
   }
 }

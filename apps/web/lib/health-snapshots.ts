@@ -3,7 +3,7 @@ import {
   type HealthSnapshotSummary,
 } from "@boss/api-client";
 
-import { client, PROJECT_ID } from "./client";
+import { client, PROJECT_ID, resolveProjectId } from "./client";
 
 export type HealthSnapshotFeedItem = {
   id: string;
@@ -38,18 +38,23 @@ function mapSnapshot(payload: HealthSnapshotSummary): HealthSnapshotFeedItem {
   };
 }
 
-export function emptyHealthSnapshotFeed(reason?: string): HealthSnapshotFeed {
+export function emptyHealthSnapshotFeed(
+  reason?: string,
+  projectId = PROJECT_ID,
+): HealthSnapshotFeed {
   return {
-    projectId: PROJECT_ID,
+    projectId: resolveProjectId(projectId),
     apiReachable: false,
     blockedReason: reason,
     items: [],
   };
 }
 
-export async function fetchHealthSnapshotFeed(): Promise<HealthSnapshotFeed> {
+export async function fetchHealthSnapshotFeed(
+  projectId = PROJECT_ID,
+): Promise<HealthSnapshotFeed> {
   try {
-    const payload = await client.listHealthSnapshots(PROJECT_ID);
+    const payload = await client.listHealthSnapshots(resolveProjectId(projectId));
     return {
       projectId: payload.project_id,
       apiReachable: true,
@@ -57,10 +62,11 @@ export async function fetchHealthSnapshotFeed(): Promise<HealthSnapshotFeed> {
     };
   } catch (error) {
     if (error instanceof BossApiError) {
-      return emptyHealthSnapshotFeed(`API returned ${error.status}`);
+      return emptyHealthSnapshotFeed(`API returned ${error.status}`, projectId);
     }
     return emptyHealthSnapshotFeed(
       error instanceof Error ? error.message : "Unknown API error",
+      projectId,
     );
   }
 }

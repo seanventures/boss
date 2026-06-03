@@ -5,6 +5,21 @@ export type HealthResponse = {
   openai_configured: boolean;
 };
 
+export type ProjectSummary = {
+  id: string;
+  name: string;
+  slug: string;
+  workspace_id: string;
+  workspace_name: string;
+  org_id: string;
+  org_name: string;
+  created_at: string;
+};
+
+export type ProjectListResponse = {
+  items: ProjectSummary[];
+};
+
 export type StatusResponse = {
   project_id: string;
   project_name: string;
@@ -400,6 +415,7 @@ export type OpenAIPlanRequest = {
   dedupe_key: string;
   prompt: string;
   system_prompt?: string;
+  agent_module_id?: string;
   created_by_job_id?: string;
 };
 
@@ -426,6 +442,7 @@ export type PullRequestProposalRequest = {
   branch_name: string;
   summary: string;
   files: FileChange[];
+  agent_module_id?: string;
   created_by_job_id?: string;
 };
 
@@ -718,6 +735,8 @@ export type RoleSummary = {
   role_key: string;
   display_name: string;
   autonomy_level: number;
+  source_module_id?: string;
+  source_module_version?: string;
   trust_score: number;
   successful_runs: number;
   policy_violation_count: number;
@@ -825,6 +844,50 @@ export type PackInstallRequest = {
   project_id: string;
   pack_id: string;
   actor?: string;
+};
+
+export type AgentModuleSummary = {
+  module_id: string;
+  version: string;
+  display_name: string;
+  description: string;
+  publisher: string;
+  category: string;
+  status: string;
+  role_key?: string;
+  job_kinds: string[];
+  default_skill_ids: string[];
+  tags: string[];
+  price_model?: string;
+  price_usd_micros?: number;
+  config_schema: Record<string, unknown>;
+  installed: boolean;
+  installed_by?: string;
+  installed_at?: string;
+  updated_at?: string;
+  installed_version?: string;
+  config: Record<string, unknown>;
+};
+
+export type AgentModuleDetail = AgentModuleSummary & {
+  prompt_bundle: Record<string, unknown>;
+  runtime: Record<string, unknown>;
+  marketplace: Record<string, unknown>;
+  role: Record<string, unknown>;
+  role_result: Record<string, unknown>;
+  install_status?: string;
+};
+
+export type AgentModuleListResponse = {
+  project_id: string;
+  items: AgentModuleSummary[];
+};
+
+export type AgentModuleInstallRequest = {
+  project_id: string;
+  module_id: string;
+  actor?: string;
+  config?: Record<string, unknown>;
 };
 
 export type SkillSummary = {
@@ -1030,12 +1093,11 @@ export function createBossApiClient(config: BossApiClientConfig) {
     });
 
     if (!response.ok) {
-      let body: unknown;
+      const rawBody = await response.text();
+      let body: unknown = rawBody;
       try {
-        body = await response.json();
-      } catch {
-        body = await response.text();
-      }
+        body = rawBody ? JSON.parse(rawBody) : undefined;
+      } catch {}
       throw new BossApiError(
         `BOSS API request failed: ${response.status}`,
         response.status,
@@ -1049,6 +1111,9 @@ export function createBossApiClient(config: BossApiClientConfig) {
   return {
     getHealth() {
       return request<HealthResponse>("GET", "/health");
+    },
+    listProjects() {
+      return request<ProjectListResponse>("GET", "/v1/projects");
     },
     getStatus(projectId: string) {
       return request<StatusResponse>("GET", "/v1/status", {
@@ -1199,6 +1264,25 @@ export function createBossApiClient(config: BossApiClientConfig) {
     },
     installPack(payload: PackInstallRequest) {
       return request<PackDetail>("POST", "/v1/packs/install", {
+        body: payload,
+      });
+    },
+    listAgentModules(projectId: string) {
+      return request<AgentModuleListResponse>("GET", "/v1/agent-modules", {
+        query: { project_id: projectId },
+      });
+    },
+    getAgentModule(projectId: string, moduleId: string) {
+      return request<AgentModuleDetail>(
+        "GET",
+        `/v1/agent-modules/${encodeURIComponent(moduleId)}`,
+        {
+          query: { project_id: projectId },
+        },
+      );
+    },
+    installAgentModule(payload: AgentModuleInstallRequest) {
+      return request<AgentModuleDetail>("POST", "/v1/agent-modules/install", {
         body: payload,
       });
     },

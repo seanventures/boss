@@ -1,8 +1,46 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { client } from "../lib/client";
+import { client, PROJECT_ID, resolveProjectId } from "../lib/client";
 import { buildCommandRequest } from "../lib/commands";
+
+function getProjectId(formData: FormData): string {
+  const value = formData.get("project_id");
+  return typeof value === "string" && value.trim()
+    ? value.trim()
+    : resolveProjectId(PROJECT_ID);
+}
+
+function parseLines(value: FormDataEntryValue | null): string[] {
+  if (typeof value !== "string") {
+    return [];
+  }
+  return value
+    .split("\n")
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function parseRequiredMetrics(
+  value: FormDataEntryValue | null,
+): Record<string, unknown> {
+  if (typeof value !== "string" || !value.trim()) {
+    throw new Error("metrics_json is required");
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    throw new Error("metrics_json must be valid JSON");
+  }
+  if (!parsed || Array.isArray(parsed) || typeof parsed !== "object") {
+    throw new Error("metrics_json must be a JSON object");
+  }
+  if (Object.keys(parsed as Record<string, unknown>).length === 0) {
+    throw new Error("metrics_json must contain at least one entry");
+  }
+  return parsed as Record<string, unknown>;
+}
 
 export async function resolveDecisionAction(formData: FormData): Promise<void> {
   const decisionId = formData.get("decision_id");
@@ -55,17 +93,19 @@ export async function resolveDecisionAction(formData: FormData): Promise<void> {
 }
 
 export async function submitCommandAction(formData: FormData): Promise<void> {
+  const projectId = getProjectId(formData);
   const payload = buildCommandRequest(
     formData.get("command"),
     formData.get("deadline"),
+    projectId,
   );
   await client.proposeCommand(payload);
   revalidatePath("/");
 }
 
-export async function refreshHealthSnapshotAction(): Promise<void> {
+export async function refreshHealthSnapshotAction(formData: FormData): Promise<void> {
   await client.refreshHealthSnapshot({
-    project_id: process.env.NEXT_PUBLIC_BOSS_PROJECT_ID ?? "boss-dogfood",
+    project_id: getProjectId(formData),
     actor: "executive_console",
   });
   revalidatePath("/");
@@ -77,16 +117,29 @@ export async function installPackAction(formData: FormData): Promise<void> {
     throw new Error("pack_id is required");
   }
   await client.installPack({
-    project_id: process.env.NEXT_PUBLIC_BOSS_PROJECT_ID ?? "boss-dogfood",
+    project_id: getProjectId(formData),
     pack_id: packId,
     actor: "executive_console",
   });
   revalidatePath("/");
 }
 
-export async function createReplayBundleAction(): Promise<void> {
+export async function installAgentModuleAction(formData: FormData): Promise<void> {
+  const moduleId = formData.get("module_id");
+  if (typeof moduleId !== "string" || !moduleId) {
+    throw new Error("module_id is required");
+  }
+  await client.installAgentModule({
+    project_id: getProjectId(formData),
+    module_id: moduleId,
+    actor: "executive_console",
+  });
+  revalidatePath("/");
+}
+
+export async function createReplayBundleAction(formData: FormData): Promise<void> {
   await client.createReplayBundle({
-    project_id: process.env.NEXT_PUBLIC_BOSS_PROJECT_ID ?? "boss-dogfood",
+    project_id: getProjectId(formData),
     actor: "executive_console",
   });
   revalidatePath("/");
@@ -106,7 +159,7 @@ export async function submitOutboxDraftAction(formData: FormData): Promise<void>
 
   const dedupeKey = `outbox-${Date.now()}`;
   await client.createOutboxMessage({
-    project_id: process.env.NEXT_PUBLIC_BOSS_PROJECT_ID ?? "boss-dogfood",
+    project_id: getProjectId(formData),
     channel: channel.trim(),
     subject: typeof subject === "string" && subject.trim() ? subject.trim() : undefined,
     body: body.trim(),
@@ -122,7 +175,7 @@ export async function queueOutboxMessageAction(formData: FormData): Promise<void
     throw new Error("message_id is required");
   }
 
-  const projectId = process.env.NEXT_PUBLIC_BOSS_PROJECT_ID ?? "boss-dogfood";
+  const projectId = getProjectId(formData);
   const reservation = await client.reserveBudget({
     project_id: projectId,
     category: "comms",
@@ -142,19 +195,10 @@ export async function queueOutboxMessageAction(formData: FormData): Promise<void
   revalidatePath("/");
 }
 
-function parseLines(value: FormDataEntryValue | null): string[] {
-  if (typeof value !== "string") {
-    return [];
-  }
-  return value
-    .split("\n")
-    .map((item) => item.trim())
-    .filter(Boolean);
-}
-
 export async function submitSelfImprovementProposalAction(
   formData: FormData,
 ): Promise<void> {
+  const projectId = getProjectId(formData);
   const title = formData.get("title");
   const summary = formData.get("summary");
   const changeRef = formData.get("change_ref");
@@ -174,7 +218,7 @@ export async function submitSelfImprovementProposalAction(
   }
 
   await client.createSelfImprovementProposal({
-    project_id: process.env.NEXT_PUBLIC_BOSS_PROJECT_ID ?? "boss-dogfood",
+    project_id: projectId,
     title: title.trim(),
     summary: summary.trim(),
     change_ref: changeRef.trim(),
@@ -195,19 +239,22 @@ export async function recordSelfImprovementCanaryAction(
 ): Promise<void> {
   const proposalId = formData.get("proposal_id");
   const outcome = formData.get("outcome");
+  const summary = formData.get("summary");
   if (typeof proposalId !== "string" || !proposalId) {
     throw new Error("proposal_id is required");
   }
   if (outcome !== "succeeded" && outcome !== "failed") {
     throw new Error("outcome must be succeeded or failed");
   }
+  if (typeof summary !== "string" || !summary.trim()) {
+    throw new Error("summary is required");
+  }
   await client.recordSelfImprovementCanary(proposalId, {
     actor: "executive_console",
     outcome,
-    summary:
-      outcome === "succeeded"
-        ? "Recorded from the executive console after canary validation."
-        : "Recorded from the executive console after canary failure review.",
+    summary: summary.trim(),
+    metrics: parseRequiredMetrics(formData.get("metrics_json")),
+    evidence_refs: parseLines(formData.get("evidence_refs")),
   });
   revalidatePath("/");
 }
@@ -216,12 +263,23 @@ export async function recordSelfImprovementRolloutAction(
   formData: FormData,
 ): Promise<void> {
   const proposalId = formData.get("proposal_id");
+  const summary = formData.get("summary");
   if (typeof proposalId !== "string" || !proposalId) {
     throw new Error("proposal_id is required");
   }
+  if (typeof summary !== "string" || !summary.trim()) {
+    throw new Error("summary is required");
+  }
   await client.recordSelfImprovementRollout(proposalId, {
     actor: "executive_console",
-    summary: "Recorded from the executive console after rollout completion.",
+    summary: summary.trim(),
+    external_ref:
+      typeof formData.get("external_ref") === "string" &&
+      String(formData.get("external_ref")).trim()
+        ? String(formData.get("external_ref")).trim()
+        : undefined,
+    metrics: parseRequiredMetrics(formData.get("metrics_json")),
+    evidence_refs: parseLines(formData.get("evidence_refs")),
   });
   revalidatePath("/");
 }
@@ -230,12 +288,23 @@ export async function rollbackSelfImprovementProposalAction(
   formData: FormData,
 ): Promise<void> {
   const proposalId = formData.get("proposal_id");
+  const reason = formData.get("reason");
   if (typeof proposalId !== "string" || !proposalId) {
     throw new Error("proposal_id is required");
   }
+  if (typeof reason !== "string" || !reason.trim()) {
+    throw new Error("reason is required");
+  }
   await client.rollbackSelfImprovementProposal(proposalId, {
     actor: "executive_console",
-    reason: "Rollback recorded from the executive console.",
+    reason: reason.trim(),
+    external_ref:
+      typeof formData.get("external_ref") === "string" &&
+      String(formData.get("external_ref")).trim()
+        ? String(formData.get("external_ref")).trim()
+        : undefined,
+    metrics: parseRequiredMetrics(formData.get("metrics_json")),
+    evidence_refs: parseLines(formData.get("evidence_refs")),
   });
   revalidatePath("/");
 }

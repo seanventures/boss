@@ -23,6 +23,7 @@ This document summarizes the currently implemented BOSS runtime surfaces in this
   - deadletters
   - health snapshots
 - API-first control plane:
+  - project discovery for runtime-scoped clients
   - CEO command intake
   - task and job inspection
   - budget quote, reserve, release, and status
@@ -33,6 +34,7 @@ This document summarizes the currently implemented BOSS runtime surfaces in this
   - comms inbox and outbox
   - self-improvement proposal workflow
   - role and pack discovery/install
+  - agent-module catalog and install flow
   - entitlement source and routing-log visibility
 - Worker runtime:
   - pull-based Postgres leasing
@@ -48,6 +50,7 @@ This document summarizes the currently implemented BOSS runtime surfaces in this
 - Software factory loop:
   - command -> plan artifact -> plan approval decision
   - approved plan -> reserved PR proposal job
+  - installed agent module selected into queued proposal work
   - PR proposal -> receipt-backed GitHub draft PR
   - GitHub validation evidence captured into `test_report` and `review_packet`
   - PR review approval -> merge gate or merge job, depending on policy
@@ -56,11 +59,18 @@ This document summarizes the currently implemented BOSS runtime surfaces in this
   - optional post-deploy health verification with blocking follow-on decision on failure
 - Governance surfaces:
   - Core Pack install for dogfood
+  - packaged agent-module catalog, install flow, and role lineage
   - model entitlement broker with routing logs
   - runtime role governance with trust scoring, review artifacts, and autonomy-change records
   - self-improvement proposal, canary, rollout, and rollback records
   - fail-closed self-improvement evidence gates for tests, canary scope, rollback steps, metrics, and evidence refs
   - audit export and replay-bundle artifact generation
+- Executive console grounding:
+  - runtime project selection instead of fixed single-project UI scope
+  - Metatron activity queries grounded in live event data
+  - self-improvement canary, rollout, and rollback submission with required evidence payloads
+  - API-driven agent marketplace visibility and module installation
+  - entitlement readiness labels that distinguish active, credential-gated, adapter-ready, and registry-only sources
 
 ## Current end-to-end founder flow
 
@@ -71,11 +81,12 @@ The current founder-dogfood control loop is:
 3. A worker leases and completes planning work.
 4. BOSS creates a plan artifact and blocking decision.
 5. Approval of that decision reserves budget and queues a PR proposal job.
-6. The proposal job creates a real sandbox PR against `seanheiney/boss-sandbox`.
-7. BOSS captures GitHub check-run evidence into the test report and review packet.
-8. Approval of the PR review decision only queues merge work if validation passed and merge policy is enabled.
-9. Merge can create a deploy review decision.
-10. Deployment can be recorded through the GitHub Deployments API when deploy policy is enabled, with optional post-deploy health verification when configured.
+6. The queued proposal job resolves through the installed software-engineer module so prompt/runtime defaults come from the packaged module.
+7. The proposal job creates a real sandbox PR against `seanheiney/boss-sandbox`.
+8. BOSS captures GitHub check-run evidence into the test report and review packet.
+9. Approval of the PR review decision only queues merge work if validation passed and merge policy is enabled.
+10. Merge can create a deploy review decision.
+11. Deployment can be recorded through the GitHub Deployments API when deploy policy is enabled, with optional post-deploy health verification when configured.
 
 ## Operational knobs already in use
 
@@ -110,7 +121,7 @@ The current local release-grade baseline for this repo is:
 
 The latest passing local state at the time of this update was:
 
-- `78` tests passed
+- `83` tests passed
 - smoke passed
 - OpenAPI parsed successfully
 

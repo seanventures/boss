@@ -42,6 +42,7 @@ If a required credential is missing, the API must fail closed and create visible
 - `packages/api-client`: shared TypeScript client for the control-plane API
 - `packages/specpack`: active spec objects, workflows, and policies
 - `packages/specpack/packs`: spec-backed company pack definitions installable into projects
+- `packages/specpack/modules`: packaged agent modules with contained prompts, runtime job kinds, and configuration defaults
 - `templates/boss-sandbox`: starter contents for the real sandbox target repository
 - `reference/boss_build_spec_pack`: original imported build pack
 
@@ -81,13 +82,18 @@ The executive console now supports API-driven CEO command intake plus live visib
 
 The console also exposes a Metatron status-query surface. It answers scoped operational questions directly from the live control plane and returns freshness plus explicit references instead of free-form unsupported chat.
 
+The console is now project-scoped at runtime rather than being hard-wired to `boss-dogfood`. It lists available projects from the control plane, lets the operator switch project context, and sends that selected `project_id` through all command, decision, comms, audit, governance, and self-improvement actions.
+
 The dogfood seed now installs the spec-backed `core_v1` company pack into `boss-dogfood`, which provisions the default operating roles from `packages/specpack/roles`.
+
+The dogfood seed now also installs the first packaged agent modules, including `metatron_operator_v1` and `codex_software_engineer_v1`, so role lineage, prompt bundles, and runtime job defaults are grounded in installable marketplace units instead of only pack metadata.
 
 The dogfood seed also registers the initial entitlement-source inventory from `packages/specpack/models/providers.yaml`, and brokered OpenAI planning/review calls now write routing logs before execution.
 
 ## Current control-plane endpoints
 
 - `GET /health`
+- `GET /v1/projects`
 - `GET /v1/status`
 - `POST /v1/metatron/query`
 - `GET /v1/health-snapshots`
@@ -112,6 +118,9 @@ The dogfood seed also registers the initial entitlement-source inventory from `p
 - `GET /v1/packs`
 - `GET /v1/packs/{pack_id}`
 - `POST /v1/packs/install`
+- `GET /v1/agent-modules`
+- `GET /v1/agent-modules/{module_id}`
+- `POST /v1/agent-modules/install`
 - `GET /v1/skills`
 - `GET /v1/entitlements/sources`
 - `POST /v1/entitlements/sources`
@@ -175,6 +184,7 @@ The dogfood seed also registers the initial entitlement-source inventory from `p
 - Router previews and brokered model calls write durable routing logs with selected source, selected model, denial reasons, and rejected alternatives.
 - OpenAI planning and review-packet generation now pass through the broker before execution.
 - The broker fails closed when no eligible runtime-backed source is available or when provider-policy constraints disallow the workload.
+- The executive console no longer labels seeded provider inventory as generically “runtime ready.” It distinguishes active capacity, credential-gated capacity, adapter-ready capacity, and registry-only inventory so the visible surface matches real backend readiness.
 
 ## Communications plane
 
@@ -191,6 +201,7 @@ The dogfood seed also registers the initial entitlement-source inventory from `p
 - The self-improvement API now fails closed if proposal, canary, rollout, or rollback requests omit required change-control evidence such as non-empty test plans, canary scope, rollback steps, metrics, or evidence references.
 - Decision outcomes are now connected to proposal state. Approval advances the proposal, revision requests reopen it explicitly, and rejection leaves a visible rejected state instead of silent drift.
 - Successful canaries automatically create the next rollout approval decision. Rollout and rollback are both recorded as first-class artifacts so BOSS can prove how it changed itself.
+- The executive console now submits canary, rollout, and rollback updates with explicit metrics and evidence references instead of rendering dead-end buttons that fail validation at the API boundary.
 
 ## Health snapshots
 
@@ -204,6 +215,13 @@ The dogfood seed also registers the initial entitlement-source inventory from `p
 - `POST /v1/roles/{role_key}/reviews` records a durable governance review with evidence refs and metrics, updates the role trust score, and emits audit events for trust changes and detected drift.
 - Review metrics can now trigger automatic autonomy downgrades for violation conditions, or create explicit autonomy-upgrade decisions when a role meets the autonomy ladder policy.
 - Approved autonomy decisions now update the live role record through the control plane instead of leaving autonomy changes as spec-only intent.
+
+## Agent modules and marketplace
+
+- Agent logic is now a contained product surface, separate from company packs. A packaged agent module can own a role charter, prompt bundle, runtime job kinds, skill defaults, and install-time configuration.
+- `GET /v1/agent-modules` exposes the marketplace catalog for a project, `POST /v1/agent-modules/install` installs a module into a project, and installed roles retain `source_module_id` and `source_module_version` lineage.
+- Approved plan follow-on jobs now carry `agent_module_id`, and installed module configuration can influence runtime behavior such as proposal branch prefixes.
+- OpenAI plan generation and software-factory PR proposals now resolve through installed agent modules so prompt/system behavior and capability hints are driven by the packaged module, not only hardcoded service logic.
 
 ## GitHub bootstrap
 

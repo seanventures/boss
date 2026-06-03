@@ -28,6 +28,13 @@ rules:
     require_pr: true
     require_tests: true
     require_rollback_plan: true
+  agent_modules:
+    require_spec_backed_catalog: true
+    require_explicit_install: true
+    require_role_lineage: true
+    require_runtime_resolution_for_governed_job_kinds: true
+    forbid_hidden_prompt_overrides: true
+    forbid_direct_core_bypass_for_packaged_agent_logic: true
   entitlements:
     require_official_access_method: true
     forbid_consumer_ui_scraping: true

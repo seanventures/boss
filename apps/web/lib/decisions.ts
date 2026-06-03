@@ -2,7 +2,7 @@ import {
   BossApiError,
   type DecisionCard as ApiDecisionCard,
 } from "@boss/api-client";
-import { client, PROJECT_ID } from "./client";
+import { client, PROJECT_ID, resolveProjectId } from "./client";
 
 export type DecisionFeedItem = {
   id: string;
@@ -65,18 +65,20 @@ function mapDecision(payload: ApiDecisionCard): DecisionFeedItem {
   };
 }
 
-export function emptyDecisionFeed(reason?: string): DecisionFeed {
+export function emptyDecisionFeed(reason?: string, projectId = PROJECT_ID): DecisionFeed {
   return {
-    projectId: PROJECT_ID,
+    projectId: resolveProjectId(projectId),
     apiReachable: false,
     blockedReason: reason,
     items: [],
   };
 }
 
-export async function fetchDecisionFeed(): Promise<DecisionFeed> {
+export async function fetchDecisionFeed(
+  projectId = PROJECT_ID,
+): Promise<DecisionFeed> {
   try {
-    const payload = await client.listDecisions(PROJECT_ID);
+    const payload = await client.listDecisions(resolveProjectId(projectId));
     return {
       projectId: payload.project_id,
       apiReachable: true,
@@ -84,10 +86,11 @@ export async function fetchDecisionFeed(): Promise<DecisionFeed> {
     };
   } catch (error) {
     if (error instanceof BossApiError) {
-      return emptyDecisionFeed(`API returned ${error.status}`);
+      return emptyDecisionFeed(`API returned ${error.status}`, projectId);
     }
     return emptyDecisionFeed(
       error instanceof Error ? error.message : "Unknown API error",
+      projectId,
     );
   }
 }

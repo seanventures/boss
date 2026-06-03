@@ -54,6 +54,7 @@ Core tables:
 - `workspaces`
 - `projects`
 - `roles`
+- `agent_module_installs`
 - `tasks`
 - `decisions`
 - `jobs`
@@ -165,6 +166,28 @@ Model calls are skills too. The router chooses a model/tool based on:
 - fallback health
 
 Every route decision creates a router log event.
+
+## Agent modules and marketplace
+
+BOSS packages worker/agent logic as installable `AgentModule` units rather than scattering prompts and runtime defaults across unrelated services.
+
+An AgentModule may contain:
+
+- role identity and charter
+- prompt bundle
+- runtime job kinds
+- default skill bindings
+- install-time configuration schema
+- marketplace metadata
+
+Implementation guidance:
+
+- Store module installation state separately from pack installation state.
+- Keep role lineage back to `source_module_id` and `source_module_version`.
+- Allow company packs to provision baseline roles, but let installed modules override or enrich the runtime role spec for governed job kinds.
+- Resolve runtime behavior through installed modules when a job kind is claimed by a module.
+- Keep module packaging deterministic and spec-backed so modules can be sold, versioned, and installed through a marketplace later without changing core execution rules.
+- Module selection must not bypass budget, receipt, approval, entitlement, or lease enforcement.
 
 ## Self-improvement safety
 

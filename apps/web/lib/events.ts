@@ -1,6 +1,6 @@
 import { BossApiError, type EventItem } from "@boss/api-client";
 
-import { client, PROJECT_ID } from "./client";
+import { client, PROJECT_ID, resolveProjectId } from "./client";
 
 export type ActivityFeedItem = {
   id: string;
@@ -29,18 +29,21 @@ function mapEvent(payload: EventItem): ActivityFeedItem {
   };
 }
 
-export function emptyActivityFeed(reason?: string): ActivityFeed {
+export function emptyActivityFeed(reason?: string, projectId = PROJECT_ID): ActivityFeed {
   return {
-    projectId: PROJECT_ID,
+    projectId: resolveProjectId(projectId),
     apiReachable: false,
     blockedReason: reason,
     items: [],
   };
 }
 
-export async function fetchActivityFeed(limit = 8): Promise<ActivityFeed> {
+export async function fetchActivityFeed(
+  projectId = PROJECT_ID,
+  limit = 8,
+): Promise<ActivityFeed> {
   try {
-    const payload = await client.listEvents(PROJECT_ID, limit);
+    const payload = await client.listEvents(resolveProjectId(projectId), limit);
     return {
       projectId: payload.project_id,
       apiReachable: true,
@@ -48,10 +51,11 @@ export async function fetchActivityFeed(limit = 8): Promise<ActivityFeed> {
     };
   } catch (error) {
     if (error instanceof BossApiError) {
-      return emptyActivityFeed(`API returned ${error.status}`);
+      return emptyActivityFeed(`API returned ${error.status}`, projectId);
     }
     return emptyActivityFeed(
       error instanceof Error ? error.message : "Unknown API error",
+      projectId,
     );
   }
 }

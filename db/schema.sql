@@ -42,6 +42,8 @@ ALTER TABLE roles ADD COLUMN IF NOT EXISTS low_quality_output_count INTEGER NOT 
 ALTER TABLE roles ADD COLUMN IF NOT EXISTS scope_violation_count INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE roles ADD COLUMN IF NOT EXISTS last_reviewed_at TIMESTAMPTZ;
 ALTER TABLE roles ADD COLUMN IF NOT EXISTS last_violation_at TIMESTAMPTZ;
+ALTER TABLE roles ADD COLUMN IF NOT EXISTS source_module_id TEXT;
+ALTER TABLE roles ADD COLUMN IF NOT EXISTS source_module_version TEXT;
 
 CREATE TABLE IF NOT EXISTS pack_installs (
   id TEXT PRIMARY KEY,
@@ -56,6 +58,29 @@ CREATE TABLE IF NOT EXISTS pack_installs (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE(project_id, pack_id)
 );
+
+CREATE TABLE IF NOT EXISTS agent_module_installs (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id),
+  module_id TEXT NOT NULL,
+  module_version TEXT NOT NULL,
+  role_key TEXT NOT NULL,
+  display_name TEXT NOT NULL,
+  publisher TEXT NOT NULL,
+  category TEXT NOT NULL DEFAULT 'general',
+  description TEXT,
+  marketplace JSONB NOT NULL DEFAULT '{}'::jsonb,
+  runtime JSONB NOT NULL DEFAULT '{}'::jsonb,
+  config JSONB NOT NULL DEFAULT '{}'::jsonb,
+  spec JSONB NOT NULL DEFAULT '{}'::jsonb,
+  installed_by TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'active',
+  installed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(project_id, module_id)
+);
+CREATE INDEX IF NOT EXISTS idx_agent_module_installs_project
+  ON agent_module_installs(project_id, installed_at DESC);
 
 CREATE TABLE IF NOT EXISTS entitlement_sources (
   id TEXT PRIMARY KEY,

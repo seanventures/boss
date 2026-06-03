@@ -30,14 +30,23 @@ phases:
       - cap_not_exceeded
     on_failure:
       create_decision: increase_budget_or_defer
+  - id: agent_module_resolution
+    owner_role: vp_agents
+    inputs: [ImplementationPlan, BudgetReservation]
+    outputs: [AgentModuleSelection]
+    gates:
+      - installed_agent_module_selected_for_job_kind
+      - module_policy_allows_workload
+      - role_lineage_recorded
   - id: software_factory_sandbox
     owner_role: software_engineer
     skill: software_factory.codex_pr_proposal
-    inputs: [ImplementationPlan, BudgetReservation]
+    inputs: [ImplementationPlan, BudgetReservation, AgentModuleSelection]
     outputs: [DiffArtifact, TestReport, ReviewPacket]
     gates:
       - tests_passed_or_explained
       - review_packet_present
+      - agent_module_runtime_applied
   - id: pr_decision
     owner_role: release_manager
     inputs: [ReviewPacket]

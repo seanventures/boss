@@ -1,10 +1,11 @@
 import type { CommandProposeRequest } from "@boss/api-client";
 
-import { PROJECT_ID } from "./client";
+import { PROJECT_ID, resolveProjectId } from "./client";
 
 export function buildCommandRequest(
   commandInput: FormDataEntryValue | null,
   deadlineInput: FormDataEntryValue | null,
+  projectId = PROJECT_ID,
 ): CommandProposeRequest {
   const command =
     typeof commandInput === "string" ? commandInput.trim() : "";
@@ -18,7 +19,7 @@ export function buildCommandRequest(
   }
 
   return {
-    project_id: PROJECT_ID,
+    project_id: resolveProjectId(projectId),
     command,
     constraints,
   };

@@ -35,6 +35,17 @@ def test_status_returns_seeded_project(client):
     assert "top_risks" in payload
 
 
+def test_list_projects_returns_seeded_project_scope(client):
+    response = client.get("/v1/projects")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["items"]
+    assert payload["items"][0]["id"] == "boss-dogfood"
+    assert payload["items"][0]["workspace_name"] == "Dogfood"
+    assert payload["items"][0]["org_name"] == "BOSS"
+
+
 def test_metatron_status_query_returns_fresh_answer_and_references(client):
     response = client.post(
         "/v1/metatron/query",
@@ -83,6 +94,41 @@ def test_metatron_budget_query_returns_reservation_references(client):
     )
 
 
+def test_metatron_activity_query_returns_event_references(client, engine):
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                """
+                INSERT INTO events (id, project_id, event_type, actor, entity_type, entity_id, data)
+                VALUES (
+                    'evt_metatron_activity',
+                    'boss-dogfood',
+                    'artifact.created',
+                    'tester',
+                    'artifact',
+                    'art_metatron_activity',
+                    '{"message":"Activity query should see this event."}'::jsonb
+                )
+                """
+            )
+        )
+
+    response = client.post(
+        "/v1/metatron/query",
+        json={
+            "project_id": "boss-dogfood",
+            "question": "What changed recently?",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["category"] == "activity"
+    assert payload["references"]
+    assert payload["references"][0]["object_type"] == "artifact"
+    assert "artifact.created" in payload["answer"]
+
+
 def test_metatron_task_scope_returns_task_lineage(client):
     created = client.post(
         "/v1/commands/propose",
@@ -109,6 +155,18 @@ def test_metatron_task_scope_returns_task_lineage(client):
     assert payload["category"] == "task"
     assert task_id in {reference["object_id"] for reference in payload["references"]}
     assert "artifact" in {reference["object_type"] for reference in payload["references"]}
+
+
+def test_bootstrap_seed_keeps_roles_unique(client):
+    reseed = client.post("/v1/bootstrap/seed")
+    assert reseed.status_code == 200
+    response = client.get("/v1/roles", params={"project_id": "boss-dogfood"})
+
+    assert response.status_code == 200
+    payload = response.json()
+    role_keys = [role["role_key"] for role in payload["items"]]
+    assert len(role_keys) == len(set(role_keys))
+    assert "metatron" in role_keys
 
 
 def test_health_snapshot_refresh_persists_summary_and_risks(client, engine):
@@ -207,8 +265,24 @@ def test_role_detail_returns_loaded_spec(client):
     assert payload["display_name"] == "Metatron"
     assert payload["autonomy_level"] == 1
     assert payload["trust_score"] == 50
-    assert payload["spec"]["mission"].startswith("Omnipresent CEO interface")
-    assert "WhatChangedDigest" in payload["spec"]["output_contracts"]
+    assert payload["source_module_id"] == "metatron_operator_v1"
+    assert payload["source_module_version"] == "1.0.0"
+    assert payload["spec"]["mission"].startswith("Watch the system")
+    assert "StatusAnswer" in payload["spec"]["output_contracts"]
+
+
+def test_seed_installs_default_agent_modules(client):
+    response = client.get("/v1/agent-modules", params={"project_id": "boss-dogfood"})
+
+    assert response.status_code == 200
+    payload = response.json()
+    modules = {item["module_id"]: item for item in payload["items"]}
+    assert modules["metatron_operator_v1"]["installed"] is True
+    assert modules["codex_software_engineer_v1"]["installed"] is True
+    assert "plan.command" in modules["metatron_operator_v1"]["job_kinds"]
+    assert "software_factory.propose_pr" in modules["codex_software_engineer_v1"][
+        "job_kinds"
+    ]
 
 
 def test_role_review_creates_upgrade_recommendation_when_role_is_eligible(client):
@@ -326,6 +400,9 @@ def test_approved_role_autonomy_change_updates_role_level(client):
 def test_pack_install_is_idempotent_for_new_project(client, engine):
     with engine.begin() as connection:
         connection.execute(text("DELETE FROM events WHERE project_id = 'boss-lab'"))
+        connection.execute(
+            text("DELETE FROM agent_module_installs WHERE project_id = 'boss-lab'")
+        )
         connection.execute(text("DELETE FROM roles WHERE project_id = 'boss-lab'"))
         connection.execute(
             text("DELETE FROM pack_installs WHERE project_id = 'boss-lab'")
@@ -376,6 +453,144 @@ def test_pack_install_is_idempotent_for_new_project(client, engine):
     pack = client.get("/v1/packs/core_v1", params={"project_id": "boss-lab"})
     assert pack.status_code == 200
     assert pack.json()["installed"] is True
+
+
+def test_agent_module_install_is_idempotent_and_updates_role_lineage(client, engine):
+    with engine.begin() as connection:
+        connection.execute(text("DELETE FROM events WHERE project_id = 'boss-lab'"))
+        connection.execute(
+            text("DELETE FROM agent_module_installs WHERE project_id = 'boss-lab'")
+        )
+        connection.execute(text("DELETE FROM roles WHERE project_id = 'boss-lab'"))
+        connection.execute(
+            text("DELETE FROM pack_installs WHERE project_id = 'boss-lab'")
+        )
+        connection.execute(text("DELETE FROM projects WHERE id = 'boss-lab'"))
+        connection.execute(
+            text(
+                """
+                INSERT INTO projects (id, workspace_id, name, slug)
+                VALUES ('boss-lab', 'ws_boss', 'BOSS Lab', 'boss-lab')
+                """
+            )
+        )
+
+    first = client.post(
+        "/v1/agent-modules/install",
+        json={
+            "project_id": "boss-lab",
+            "module_id": "codex_software_engineer_v1",
+            "actor": "ceo",
+            "config": {"branch_prefix": "catalog/"},
+        },
+    )
+    assert first.status_code == 201
+    first_payload = first.json()
+    assert first_payload["module_id"] == "codex_software_engineer_v1"
+    assert first_payload["install_status"] == "installed"
+    assert first_payload["role_result"]["role_key"] == "software_engineer"
+
+    second = client.post(
+        "/v1/agent-modules/install",
+        json={
+            "project_id": "boss-lab",
+            "module_id": "codex_software_engineer_v1",
+            "actor": "ceo",
+            "config": {"branch_prefix": "catalog/"},
+        },
+    )
+    assert second.status_code == 201
+    assert second.json()["install_status"] == "already_installed"
+
+    role = client.get(
+        "/v1/roles/software_engineer", params={"project_id": "boss-lab"}
+    )
+    assert role.status_code == 200
+    role_payload = role.json()
+    assert role_payload["source_module_id"] == "codex_software_engineer_v1"
+    assert role_payload["source_module_version"] == "1.0.0"
+
+    module = client.get(
+        "/v1/agent-modules/codex_software_engineer_v1",
+        params={"project_id": "boss-lab"},
+    )
+    assert module.status_code == 200
+    assert module.json()["config"]["branch_prefix"] == "catalog/"
+
+    task = client.post(
+        "/v1/tasks",
+        json={
+            "project_id": "boss-lab",
+            "title": "Catalog proposal task",
+            "dedupe_key": "catalog-proposal-task",
+        },
+    )
+    assert task.status_code == 201
+    task_id = task.json()["id"]
+
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                """
+                INSERT INTO artifacts (
+                    id, project_id, task_id, artifact_type, title, uri, content, content_hash
+                )
+                VALUES (
+                    'art_catalog_plan', 'boss-lab', :task_id, 'plan_draft', 'Catalog plan',
+                    'file://artifacts/catalog-plan.json',
+                    CAST(:content AS JSONB), 'hash-catalog-plan'
+                )
+                """
+            ),
+            {"task_id": task_id, "content": json.dumps({"summary": "Catalog plan"})},
+        )
+        connection.execute(
+            text(
+                """
+                INSERT INTO decisions (
+                    id, project_id, task_id, question, recommendation, options, risk_tier,
+                    cost_summary, default_action, status
+                )
+                VALUES (
+                    'dec_catalog_plan', 'boss-lab', :task_id, 'Review plan draft for catalog task',
+                    CAST(:recommendation AS JSONB), '[]'::jsonb, 2, '{}'::jsonb, 'hold', 'pending'
+                )
+                """
+            ),
+            {
+                "task_id": task_id,
+                "recommendation": json.dumps(
+                    {
+                        "action": "review_plan_draft",
+                        "artifact_id": "art_catalog_plan",
+                    }
+                ),
+            },
+        )
+
+    approve = client.post(
+        "/v1/decisions/dec_catalog_plan/approve",
+        json={"actor": "ceo", "note": "Queue the catalog-backed proposal."},
+    )
+    assert approve.status_code == 200
+
+    with engine.begin() as connection:
+        queued_job = connection.execute(
+            text(
+                """
+                SELECT payload
+                FROM jobs
+                WHERE project_id = 'boss-lab'
+                  AND kind = 'software_factory.propose_pr'
+                ORDER BY created_at DESC
+                LIMIT 1
+                """
+            )
+        ).mappings().one()
+
+    payload = queued_job["payload"]
+    assert payload["agent_module_id"] == "codex_software_engineer_v1"
+    assert payload["branch_name"].startswith("catalog/proposal-")
 
 
 def test_skill_registry_and_seeded_entitlement_sources_are_visible(client):
@@ -2138,6 +2353,7 @@ def test_approving_plan_decision_queues_follow_on_pr_job(client, engine):
     assert payload["reservation_id"] == reservation["id"]
     assert payload["title"].startswith("BOSS proposal:")
     assert payload["branch_name"].startswith("boss/proposal-")
+    assert payload["agent_module_id"] == "codex_software_engineer_v1"
     assert payload["files"][0]["path"].startswith("proposals/")
 
     events = client.get("/v1/events", params={"project_id": "boss-dogfood"})

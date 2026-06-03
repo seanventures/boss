@@ -9,12 +9,14 @@ from sqlalchemy.engine import Connection
 from ..config import Settings
 from .core import create_artifact, emit_event, make_id
 from .jobs import JobLeaseService
+from .specpack import SpecPackService
 
 
 class CommandIntakeService:
     def __init__(self, settings: Settings):
         self.settings = settings
         self.jobs = JobLeaseService(settings)
+        self.specpack = SpecPackService(settings)
 
     def create_task(
         self,
@@ -101,6 +103,21 @@ class CommandIntakeService:
                 "next_expected_artifact": "plan_draft",
             },
         )
+        default_module = self.specpack.find_default_agent_module_for_job_kind(
+            connection,
+            project_id,
+            "plan.command",
+        )
+        module_descriptor = None
+        if isinstance(default_module, dict):
+            role = default_module.get("role") or {}
+            module_descriptor = {
+                "id": default_module.get("id"),
+                "version": default_module.get("version"),
+                "display_name": default_module.get("display_name"),
+                "role_key": role.get("role_key") or role.get("role_id"),
+                "prompt_bundle": default_module.get("prompt_bundle") or {},
+            }
         job = self.jobs.create_job(
             connection,
             project_id=project_id,
@@ -111,6 +128,7 @@ class CommandIntakeService:
                 "command": command,
                 "constraints": constraints or {},
                 "artifact_id": artifact_id,
+                "agent_module": module_descriptor,
             },
         )
         return {

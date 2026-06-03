@@ -2,7 +2,7 @@ import {
   BossApiError,
   type StatusResponse,
 } from "@boss/api-client";
-import { client, PROJECT_ID } from "./client";
+import { client, PROJECT_ID, resolveProjectId } from "./client";
 
 export type StatusCard = {
   projectId: string;
@@ -22,12 +22,12 @@ export type StatusCard = {
   blockedReason?: string;
 };
 
-export function placeholderStatus(reason: string): StatusCard {
+export function placeholderStatus(reason: string, projectId = PROJECT_ID): StatusCard {
   return {
-    projectId: PROJECT_ID,
-    projectName: "BOSS dogfood bootstrap",
+    projectId: resolveProjectId(projectId),
+    projectName: resolveProjectId(projectId),
     workspaceName: "Awaiting API",
-    orgName: "BOSS",
+    orgName: "Unknown org",
     databaseConnected: false,
     apiReachable: false,
     budgetState: "unknown",
@@ -62,15 +62,16 @@ function mapStatus(payload: StatusResponse): StatusCard {
   };
 }
 
-export async function fetchStatus(): Promise<StatusCard> {
+export async function fetchStatus(projectId = PROJECT_ID): Promise<StatusCard> {
   try {
-    return mapStatus(await client.getStatus(PROJECT_ID));
+    return mapStatus(await client.getStatus(resolveProjectId(projectId)));
   } catch (error) {
     if (error instanceof BossApiError) {
-      return placeholderStatus(`API returned ${error.status}`);
+      return placeholderStatus(`API returned ${error.status}`, projectId);
     }
     return placeholderStatus(
       error instanceof Error ? error.message : "Unknown API error",
+      projectId,
     );
   }
 }

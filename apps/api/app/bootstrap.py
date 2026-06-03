@@ -77,6 +77,18 @@ def seed() -> None:
             settings.core_pack_id,
             "bootstrap",
         )
+        specpack.install_agent_module(
+            connection,
+            settings.default_project_id,
+            "metatron_operator_v1",
+            "bootstrap",
+        )
+        specpack.install_agent_module(
+            connection,
+            settings.default_project_id,
+            "codex_software_engineer_v1",
+            "bootstrap",
+        )
         entitlements.seed_default_sources(
             connection,
             settings.default_project_id,

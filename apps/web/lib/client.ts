@@ -6,4 +6,8 @@ export const API_URL =
 export const PROJECT_ID =
   process.env.NEXT_PUBLIC_BOSS_PROJECT_ID ?? "boss-dogfood";
 
+export function resolveProjectId(projectId?: string): string {
+  return projectId?.trim() || PROJECT_ID;
+}
+
 export const client = createBossApiClient({ baseUrl: API_URL });

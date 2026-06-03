@@ -19,6 +19,7 @@ from .github_adapter import (
 )
 from .openai_adapter import OpenAIAdapter
 from .receipts import ReceiptService
+from .specpack import SpecPackService
 
 
 class SoftwareFactoryService:
@@ -29,6 +30,7 @@ class SoftwareFactoryService:
         self.github = GitHubAdapter(settings)
         self.openai = OpenAIAdapter(settings)
         self.entitlements = EntitlementBrokerService(settings)
+        self.specpack = SpecPackService(settings)
 
     def _validation_follow_up(
         self, validation: PullRequestValidationResult
@@ -148,6 +150,66 @@ class SoftwareFactoryService:
             }
         }
 
+    def _resolve_agent_module(
+        self,
+        connection: Connection,
+        project_id: str,
+        *,
+        requested_module_id: Optional[str],
+        job_kind: str,
+    ) -> dict | None:
+        if requested_module_id:
+            return self.specpack.resolve_installed_agent_module(
+                connection, project_id, requested_module_id
+            )
+        return self.specpack.find_default_agent_module_for_job_kind(
+            connection, project_id, job_kind
+        )
+
+    def _module_prompt(
+        self, module_spec: dict | None, bundle_key: str
+    ) -> Optional[str]:
+        if not module_spec:
+            return None
+        prompt_bundle = module_spec.get("prompt_bundle") or {}
+        value = prompt_bundle.get(bundle_key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+        return None
+
+    def _module_preferred_capabilities(
+        self, module_spec: dict | None, fallback: list[str]
+    ) -> list[str]:
+        if not module_spec:
+            return fallback
+        runtime = module_spec.get("runtime") or {}
+        preferred = runtime.get("preferred_capabilities")
+        if isinstance(preferred, list):
+            cleaned = [item for item in preferred if isinstance(item, str) and item]
+            if cleaned:
+                return cleaned
+        return fallback
+
+    def _merge_system_prompts(self, *parts: Optional[str]) -> Optional[str]:
+        merged = [part.strip() for part in parts if isinstance(part, str) and part.strip()]
+        if not merged:
+            return None
+        return "\n\n".join(merged)
+
+    def _module_descriptor(self, module_spec: dict | None) -> dict:
+        if not module_spec:
+            return {}
+        role = module_spec.get("role") or {}
+        return {
+            "id": module_spec.get("id"),
+            "version": module_spec.get("version"),
+            "display_name": module_spec.get("display_name"),
+            "publisher": module_spec.get("publisher"),
+            "category": module_spec.get("category"),
+            "role_key": role.get("role_key") or role.get("role_id"),
+            "config": module_spec.get("config") or {},
+        }
+
     def create_plan_artifact(
         self,
         connection: Connection,
@@ -157,6 +219,7 @@ class SoftwareFactoryService:
         prompt: str,
         system_prompt: Optional[str],
         created_by_job_id: Optional[str] = None,
+        agent_module_id: Optional[str] = None,
     ) -> dict:
         reservation = self.budget.assert_active_reservation(
             connection, project_id, reservation_id
@@ -173,12 +236,20 @@ class SoftwareFactoryService:
             )
             return {"status": "blocked", "decision_id": decision_id}
 
+        module_spec = self._resolve_agent_module(
+            connection,
+            project_id,
+            requested_module_id=agent_module_id,
+            job_kind="openai.plan",
+        )
         route = self._route_model_execution(
             connection,
             project_id,
             task_id=None,
             task_kind="planning",
-            preferred_capabilities=["planning", "summarization"],
+            preferred_capabilities=self._module_preferred_capabilities(
+                module_spec, ["planning", "summarization"]
+            ),
         )
         if route.get("blocked"):
             self.budget.release(
@@ -221,7 +292,13 @@ class SoftwareFactoryService:
 
         try:
             provider_ref, output_text = self.openai.create_text_response(
-                prompt, system_prompt, route["model_id"]
+                prompt,
+                self._merge_system_prompts(
+                    self._module_prompt(module_spec, "system"),
+                    self._module_prompt(module_spec, "planning"),
+                    system_prompt,
+                ),
+                route["model_id"],
             )
         except IntegrationConfigurationError as error:
             self.receipts.mark_failed(
@@ -279,7 +356,11 @@ class SoftwareFactoryService:
             None,
             "plan_draft",
             "OpenAI plan draft",
-            {"prompt": prompt, "output_text": output_text},
+            {
+                "prompt": prompt,
+                "output_text": output_text,
+                "agent_module": self._module_descriptor(module_spec),
+            },
             created_by_job_id=created_by_job_id,
         )
         self.receipts.mark_succeeded(
@@ -310,6 +391,9 @@ class SoftwareFactoryService:
                 "routing_log_id": route["route_decision_log_id"],
                 "source_id": route["source_id"],
                 "model_id": route["model_id"],
+                "agent_module_id": (
+                    module_spec.get("id") if isinstance(module_spec, dict) else None
+                ),
             },
         )
         return {
@@ -613,6 +697,7 @@ class SoftwareFactoryService:
         summary: str,
         files: list[FileChange],
         created_by_job_id: Optional[str] = None,
+        agent_module_id: Optional[str] = None,
     ) -> dict:
         reservation = self.budget.assert_active_reservation(
             connection, project_id, reservation_id
@@ -629,12 +714,20 @@ class SoftwareFactoryService:
             )
             return {"status": "blocked", "decision_id": decision_id}
 
+        module_spec = self._resolve_agent_module(
+            connection,
+            project_id,
+            requested_module_id=agent_module_id,
+            job_kind="software_factory.propose_pr",
+        )
         route = self._route_model_execution(
             connection,
             project_id,
             task_id=task_id,
             task_kind="review",
-            preferred_capabilities=["review", "coding", "summarization"],
+            preferred_capabilities=self._module_preferred_capabilities(
+                module_spec, ["review", "coding", "summarization"]
+            ),
         )
         if route.get("blocked"):
             self.budget.release(
@@ -692,10 +785,14 @@ class SoftwareFactoryService:
                     f"Summary: {summary}\n"
                     f"Files: {json.dumps([file.model_dump() for file in files], indent=2)}"
                 ),
-                (
-                    "Return concise markdown with these sections: implementation summary, "
-                    "tests added or still needed, risk hotspots, rollback plan, confidence, "
-                    "and recommendation."
+                self._merge_system_prompts(
+                    self._module_prompt(module_spec, "system"),
+                    self._module_prompt(module_spec, "review_packet"),
+                    (
+                        "Return concise markdown with these sections: implementation summary, "
+                        "tests added or still needed, risk hotspots, rollback plan, confidence, "
+                        "and recommendation."
+                    ),
                 ),
                 route["model_id"],
             )
@@ -895,6 +992,7 @@ class SoftwareFactoryService:
                 "checks": validation_checks,
                 "required_follow_up": validation_follow_up,
                 "notes": review_text,
+                "agent_module": self._module_descriptor(module_spec),
             },
             created_by_job_id=created_by_job_id,
         )
@@ -920,6 +1018,7 @@ class SoftwareFactoryService:
                 "github_commits": commit_shas,
                 "openai_response_id": review_provider_ref,
                 "routing_log_id": route["route_decision_log_id"],
+                "agent_module": self._module_descriptor(module_spec),
             },
             created_by_job_id=created_by_job_id,
         )
@@ -939,6 +1038,9 @@ class SoftwareFactoryService:
                 "title": title,
                 "validation_status": validation.status,
                 "validation_summary": validation.summary,
+                "agent_module_id": (
+                    module_spec.get("id") if isinstance(module_spec, dict) else None
+                ),
             },
             {},
             "merge_decision_required",
@@ -978,6 +1080,9 @@ class SoftwareFactoryService:
                 "routing_log_id": route["route_decision_log_id"],
                 "source_id": route["source_id"],
                 "model_id": route["model_id"],
+                "agent_module_id": (
+                    module_spec.get("id") if isinstance(module_spec, dict) else None
+                ),
             },
         )
         return {

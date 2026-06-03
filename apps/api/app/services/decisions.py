@@ -12,6 +12,7 @@ from .core import create_artifact, emit_event, now_utc
 from .jobs import JobLeaseService
 from .role_governance import RoleGovernanceService
 from .self_improvement import SelfImprovementService
+from .specpack import SpecPackService
 
 
 class DecisionNotFoundError(Exception):
@@ -29,6 +30,7 @@ class DecisionService:
         self.jobs = JobLeaseService(settings)
         self.self_improvement = SelfImprovementService(settings)
         self.role_governance = RoleGovernanceService(settings)
+        self.specpack = SpecPackService(settings)
 
     def expire_overdue(
         self, connection: Connection, project_id: Optional[str] = None
@@ -562,6 +564,20 @@ class DecisionService:
             return
 
         task = self._task_context(connection, row["task_id"])
+        artifact_content = artifact["content"] or {}
+        module_descriptor = artifact_content.get("agent_module") or {}
+        agent_module_id = module_descriptor.get("id")
+        if not isinstance(agent_module_id, str) or not agent_module_id:
+            default_module = self.specpack.find_default_agent_module_for_job_kind(
+                connection,
+                row["project_id"],
+                "software_factory.propose_pr",
+            )
+            agent_module_id = (
+                default_module.get("id")
+                if isinstance(default_module, dict)
+                else None
+            )
         reservation = self.budget.reserve(
             connection,
             row["project_id"],
@@ -586,11 +602,22 @@ class DecisionService:
             return
 
         branch_suffix = row["task_id"] or row["id"]
-        branch_name = f"boss/proposal-{branch_suffix}"
+        branch_prefix = "boss/"
+        if agent_module_id:
+            module_spec = self.specpack.resolve_installed_agent_module(
+                connection, row["project_id"], agent_module_id
+            )
+            config = module_spec.get("config") or {}
+            configured_prefix = config.get("branch_prefix")
+            if isinstance(configured_prefix, str) and configured_prefix.strip():
+                branch_prefix = configured_prefix.strip()
+        if not branch_prefix.endswith("/"):
+            branch_prefix = f"{branch_prefix}/"
+        branch_name = f"{branch_prefix}proposal-{branch_suffix}"
         title = self._proposal_title(task)
-        summary = self._proposal_summary(task, artifact["content"] or {})
+        summary = self._proposal_summary(task, artifact_content)
         file_path = f"proposals/{branch_suffix}.md"
-        file_content = self._proposal_markdown(task, artifact["content"] or {}, actor)
+        file_content = self._proposal_markdown(task, artifact_content, actor)
         job = self.jobs.create_job(
             connection,
             project_id=row["project_id"],
@@ -606,6 +633,7 @@ class DecisionService:
                 "branch_name": branch_name,
                 "summary": summary,
                 "files": [{"path": file_path, "content": file_content}],
+                "agent_module_id": agent_module_id,
                 "requires_reservation": True,
             },
         )
@@ -626,6 +654,7 @@ class DecisionService:
                 "decision_id": row["id"],
                 "reservation_id": reservation["reservation_id"],
                 "kind": "software_factory.propose_pr",
+                "agent_module_id": agent_module_id,
             },
         )
 

@@ -46,6 +46,7 @@ def clean_tables(engine):
         connection.execute(text("DELETE FROM self_improvement_proposals"))
         connection.execute(text("DELETE FROM role_reviews"))
         connection.execute(text("DELETE FROM autonomy_changes"))
+        connection.execute(text("DELETE FROM agent_module_installs"))
         connection.execute(text("DELETE FROM receipts"))
         connection.execute(text("DELETE FROM deadletters"))
         connection.execute(text("DELETE FROM routing_logs"))
@@ -57,6 +58,18 @@ def clean_tables(engine):
             connection,
             settings.default_project_id,
             settings.core_pack_id,
+            "test-reset",
+        )
+        specpack.install_agent_module(
+            connection,
+            settings.default_project_id,
+            "metatron_operator_v1",
+            "test-reset",
+        )
+        specpack.install_agent_module(
+            connection,
+            settings.default_project_id,
+            "codex_software_engineer_v1",
             "test-reset",
         )
         connection.execute(

@@ -4,7 +4,7 @@ import {
   type OutboxMessageSummary,
 } from "@boss/api-client";
 
-import { client, PROJECT_ID } from "./client";
+import { client, PROJECT_ID, resolveProjectId } from "./client";
 
 export type OutboxFeedItem = {
   id: string;
@@ -62,27 +62,30 @@ function mapInbox(payload: InboxMessageSummary): InboxFeedItem {
   };
 }
 
-export function emptyOutboxFeed(reason?: string): OutboxFeed {
+export function emptyOutboxFeed(reason?: string, projectId = PROJECT_ID): OutboxFeed {
   return {
-    projectId: PROJECT_ID,
+    projectId: resolveProjectId(projectId),
     apiReachable: false,
     blockedReason: reason,
     items: [],
   };
 }
 
-export function emptyInboxFeed(reason?: string): InboxFeed {
+export function emptyInboxFeed(reason?: string, projectId = PROJECT_ID): InboxFeed {
   return {
-    projectId: PROJECT_ID,
+    projectId: resolveProjectId(projectId),
     apiReachable: false,
     blockedReason: reason,
     items: [],
   };
 }
 
-export async function fetchOutboxFeed(limit = 8): Promise<OutboxFeed> {
+export async function fetchOutboxFeed(
+  projectId = PROJECT_ID,
+  limit = 8,
+): Promise<OutboxFeed> {
   try {
-    const payload = await client.listOutboxMessages(PROJECT_ID, limit);
+    const payload = await client.listOutboxMessages(resolveProjectId(projectId), limit);
     return {
       projectId: payload.project_id,
       apiReachable: true,
@@ -90,17 +93,21 @@ export async function fetchOutboxFeed(limit = 8): Promise<OutboxFeed> {
     };
   } catch (error) {
     if (error instanceof BossApiError) {
-      return emptyOutboxFeed(`API returned ${error.status}`);
+      return emptyOutboxFeed(`API returned ${error.status}`, projectId);
     }
     return emptyOutboxFeed(
       error instanceof Error ? error.message : "Unknown API error",
+      projectId,
     );
   }
 }
 
-export async function fetchInboxFeed(limit = 8): Promise<InboxFeed> {
+export async function fetchInboxFeed(
+  projectId = PROJECT_ID,
+  limit = 8,
+): Promise<InboxFeed> {
   try {
-    const payload = await client.listInboxMessages(PROJECT_ID, limit);
+    const payload = await client.listInboxMessages(resolveProjectId(projectId), limit);
     return {
       projectId: payload.project_id,
       apiReachable: true,
@@ -108,10 +115,11 @@ export async function fetchInboxFeed(limit = 8): Promise<InboxFeed> {
     };
   } catch (error) {
     if (error instanceof BossApiError) {
-      return emptyInboxFeed(`API returned ${error.status}`);
+      return emptyInboxFeed(`API returned ${error.status}`, projectId);
     }
     return emptyInboxFeed(
       error instanceof Error ? error.message : "Unknown API error",
+      projectId,
     );
   }
 }

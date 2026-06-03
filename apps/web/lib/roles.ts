@@ -1,12 +1,14 @@
 import { BossApiError, type RoleSummary } from "@boss/api-client";
 
-import { client, PROJECT_ID } from "./client";
+import { client, PROJECT_ID, resolveProjectId } from "./client";
 
 export type RoleFeedItem = {
   id: string;
   roleKey: string;
   displayName: string;
   autonomyLevel: number;
+  sourceModuleId?: string;
+  sourceModuleVersion?: string;
   trustScore: number;
   successfulRuns: number;
   policyViolationCount: number;
@@ -30,6 +32,8 @@ function mapRole(payload: RoleSummary): RoleFeedItem {
     roleKey: payload.role_key,
     displayName: payload.display_name,
     autonomyLevel: payload.autonomy_level,
+    sourceModuleId: payload.source_module_id,
+    sourceModuleVersion: payload.source_module_version,
     trustScore: payload.trust_score,
     successfulRuns: payload.successful_runs,
     policyViolationCount: payload.policy_violation_count,
@@ -41,18 +45,18 @@ function mapRole(payload: RoleSummary): RoleFeedItem {
   };
 }
 
-export function emptyRoleFeed(reason?: string): RoleFeed {
+export function emptyRoleFeed(reason?: string, projectId = PROJECT_ID): RoleFeed {
   return {
-    projectId: PROJECT_ID,
+    projectId: resolveProjectId(projectId),
     apiReachable: false,
     blockedReason: reason,
     items: [],
   };
 }
 
-export async function fetchRoleFeed(): Promise<RoleFeed> {
+export async function fetchRoleFeed(projectId = PROJECT_ID): Promise<RoleFeed> {
   try {
-    const payload = await client.listRoles(PROJECT_ID);
+    const payload = await client.listRoles(resolveProjectId(projectId));
     return {
       projectId: payload.project_id,
       apiReachable: true,
@@ -60,10 +64,11 @@ export async function fetchRoleFeed(): Promise<RoleFeed> {
     };
   } catch (error) {
     if (error instanceof BossApiError) {
-      return emptyRoleFeed(`API returned ${error.status}`);
+      return emptyRoleFeed(`API returned ${error.status}`, projectId);
     }
     return emptyRoleFeed(
       error instanceof Error ? error.message : "Unknown API error",
+      projectId,
     );
   }
 }

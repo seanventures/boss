@@ -1,6 +1,6 @@
 import { BossApiError, type TaskSummary } from "@boss/api-client";
 
-import { client, PROJECT_ID } from "./client";
+import { client, PROJECT_ID, resolveProjectId } from "./client";
 
 export type TaskFeedItem = {
   id: string;
@@ -29,29 +29,33 @@ function mapTask(payload: TaskSummary): TaskFeedItem {
   };
 }
 
-export function emptyTaskFeed(reason?: string): TaskFeed {
+export function emptyTaskFeed(reason?: string, projectId = PROJECT_ID): TaskFeed {
   return {
-    projectId: PROJECT_ID,
+    projectId: resolveProjectId(projectId),
     apiReachable: false,
     blockedReason: reason,
     items: [],
   };
 }
 
-export async function fetchTaskFeed(limit = 8): Promise<TaskFeed> {
+export async function fetchTaskFeed(
+  projectId = PROJECT_ID,
+  limit = 8,
+): Promise<TaskFeed> {
   try {
-    const payload = await client.listTasks(PROJECT_ID);
+    const payload = await client.listTasks(resolveProjectId(projectId));
     return {
-      projectId: PROJECT_ID,
+      projectId: payload.items[0]?.project_id ?? resolveProjectId(projectId),
       apiReachable: true,
       items: payload.items.slice(0, limit).map(mapTask),
     };
   } catch (error) {
     if (error instanceof BossApiError) {
-      return emptyTaskFeed(`API returned ${error.status}`);
+      return emptyTaskFeed(`API returned ${error.status}`, projectId);
     }
     return emptyTaskFeed(
       error instanceof Error ? error.message : "Unknown API error",
+      projectId,
     );
   }
 }

@@ -451,9 +451,12 @@ class RoleGovernanceService:
                        trust_score, successful_runs, policy_violation_count,
                        duplicate_effect_attempt_count, hidden_failure_count,
                        low_quality_output_count, scope_violation_count,
+                       source_module_id, source_module_version,
                        last_reviewed_at, last_violation_at
                 FROM roles
                 WHERE project_id = :project_id AND role_key = :role_key
+                ORDER BY created_at DESC, id DESC
+                LIMIT 1
                 {lock_clause}
                 """
             ),
@@ -468,6 +471,8 @@ class RoleGovernanceService:
             "display_name": row["display_name"],
             "autonomy_level": int(row["autonomy_level"]),
             "spec": row["spec"] or {},
+            "source_module_id": row.get("source_module_id"),
+            "source_module_version": row.get("source_module_version"),
             "trust_score": int(row.get("trust_score") or 50),
             "successful_runs": int(row.get("successful_runs") or 0),
             "policy_violation_count": int(row.get("policy_violation_count") or 0),

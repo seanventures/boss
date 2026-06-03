@@ -4,6 +4,7 @@ import { BossApiError } from "@boss/api-client";
 
 vi.mock("../lib/client", () => ({
   PROJECT_ID: "boss-dogfood",
+  resolveProjectId: (projectId?: string) => projectId?.trim() || "boss-dogfood",
   client: {
     queryMetatron: vi.fn(),
   },

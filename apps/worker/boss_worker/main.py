@@ -57,7 +57,16 @@ def main() -> None:
             return
 
         while True:
-            ran_job = run_worker_cycle(client, settings)
+            try:
+                ran_job = run_worker_cycle(client, settings)
+            except Exception:
+                LOGGER.exception(
+                    "worker_cycle_failed worker_id=%s control_plane_url=%s",
+                    settings.worker_id,
+                    settings.control_plane_url,
+                )
+                time.sleep(settings.poll_interval_seconds)
+                continue
             if not ran_job:
                 time.sleep(settings.poll_interval_seconds)
     finally:

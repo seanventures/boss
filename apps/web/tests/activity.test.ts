@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { emptyAgentModuleFeed } from "../lib/agent-modules";
 import { emptyAuditSummary } from "../lib/audit";
 import { emptyArtifactFeed } from "../lib/artifacts";
 import { emptyInboxFeed, emptyOutboxFeed } from "../lib/comms";
@@ -45,6 +46,14 @@ describe("empty API feeds", () => {
     expect(feed.apiReachable).toBe(false);
     expect(feed.items).toEqual([]);
     expect(feed.blockedReason).toBe("pack api down");
+  });
+
+  it("returns an unavailable agent module feed", () => {
+    const feed = emptyAgentModuleFeed("agent module api down");
+
+    expect(feed.apiReachable).toBe(false);
+    expect(feed.items).toEqual([]);
+    expect(feed.blockedReason).toBe("agent module api down");
   });
 
   it("returns an unavailable role feed", () => {

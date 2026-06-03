@@ -1,6 +1,6 @@
 import { BossApiError, type PackSummary } from "@boss/api-client";
 
-import { client, PROJECT_ID } from "./client";
+import { client, PROJECT_ID, resolveProjectId } from "./client";
 
 export type PackFeedItem = {
   packId: string;
@@ -33,18 +33,18 @@ function mapPack(payload: PackSummary): PackFeedItem {
   };
 }
 
-export function emptyPackFeed(reason?: string): PackFeed {
+export function emptyPackFeed(reason?: string, projectId = PROJECT_ID): PackFeed {
   return {
-    projectId: PROJECT_ID,
+    projectId: resolveProjectId(projectId),
     apiReachable: false,
     blockedReason: reason,
     items: [],
   };
 }
 
-export async function fetchPackFeed(): Promise<PackFeed> {
+export async function fetchPackFeed(projectId = PROJECT_ID): Promise<PackFeed> {
   try {
-    const payload = await client.listPacks(PROJECT_ID);
+    const payload = await client.listPacks(resolveProjectId(projectId));
     return {
       projectId: payload.project_id,
       apiReachable: true,
@@ -52,10 +52,11 @@ export async function fetchPackFeed(): Promise<PackFeed> {
     };
   } catch (error) {
     if (error instanceof BossApiError) {
-      return emptyPackFeed(`API returned ${error.status}`);
+      return emptyPackFeed(`API returned ${error.status}`, projectId);
     }
     return emptyPackFeed(
       error instanceof Error ? error.message : "Unknown API error",
+      projectId,
     );
   }
 }

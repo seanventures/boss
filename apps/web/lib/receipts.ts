@@ -1,6 +1,6 @@
 import { BossApiError, type ReceiptResponse } from "@boss/api-client";
 
-import { client, PROJECT_ID } from "./client";
+import { client, PROJECT_ID, resolveProjectId } from "./client";
 
 export type ReceiptFeedItem = {
   id: string;
@@ -31,18 +31,21 @@ function mapReceipt(payload: ReceiptResponse): ReceiptFeedItem {
   };
 }
 
-export function emptyReceiptFeed(reason?: string): ReceiptFeed {
+export function emptyReceiptFeed(reason?: string, projectId = PROJECT_ID): ReceiptFeed {
   return {
-    projectId: PROJECT_ID,
+    projectId: resolveProjectId(projectId),
     apiReachable: false,
     blockedReason: reason,
     items: [],
   };
 }
 
-export async function fetchReceiptFeed(limit = 8): Promise<ReceiptFeed> {
+export async function fetchReceiptFeed(
+  projectId = PROJECT_ID,
+  limit = 8,
+): Promise<ReceiptFeed> {
   try {
-    const payload = await client.listReceipts(PROJECT_ID, limit);
+    const payload = await client.listReceipts(resolveProjectId(projectId), limit);
     return {
       projectId: payload.project_id,
       apiReachable: true,
@@ -50,10 +53,11 @@ export async function fetchReceiptFeed(limit = 8): Promise<ReceiptFeed> {
     };
   } catch (error) {
     if (error instanceof BossApiError) {
-      return emptyReceiptFeed(`API returned ${error.status}`);
+      return emptyReceiptFeed(`API returned ${error.status}`, projectId);
     }
     return emptyReceiptFeed(
       error instanceof Error ? error.message : "Unknown API error",
+      projectId,
     );
   }
 }

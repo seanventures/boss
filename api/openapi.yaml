@@ -8,6 +8,11 @@ paths:
       summary: Health check
       responses:
         '200': { description: OK }
+  /v1/projects:
+    get:
+      summary: List projects available to the current control-plane client
+      responses:
+        '200': { description: Project list }
   /v1/status:
     get:
       summary: Executive status summary
@@ -384,6 +389,51 @@ paths:
         '201': { description: Pack installed }
         '404': { description: Pack not found }
         '422': { description: Invalid pack or role spec }
+  /v1/agent-modules:
+    get:
+      summary: List packaged agent modules with install status for a project
+      parameters:
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Agent module list }
+  /v1/agent-modules/{module_id}:
+    get:
+      summary: Get packaged agent-module detail for a project
+      parameters:
+        - name: module_id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Agent module detail }
+        '404': { description: Agent module not found }
+  /v1/agent-modules/install:
+    post:
+      summary: Install a packaged agent module into a project
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id, module_id]
+              properties:
+                project_id: { type: string }
+                module_id: { type: string }
+                actor: { type: string, default: system }
+                config:
+                  type: object
+                  additionalProperties: true
+      responses:
+        '201': { description: Agent module installed }
+        '404': { description: Agent module not found }
   /v1/skills:
     get:
       summary: List registered control-plane skills from specpack
@@ -845,6 +895,7 @@ paths:
                 dedupe_key: { type: string }
                 prompt: { type: string }
                 system_prompt: { type: string }
+                agent_module_id: { type: string }
                 created_by_job_id: { type: string }
       responses:
         '200': { description: Plan artifact created, reused, or blocked }
@@ -867,6 +918,7 @@ paths:
                 title: { type: string }
                 branch_name: { type: string }
                 summary: { type: string }
+                agent_module_id: { type: string }
                 created_by_job_id: { type: string }
                 files:
                   type: array
@@ -943,6 +995,7 @@ paths:
                 title: { type: string }
                 branch_name: { type: string }
                 summary: { type: string }
+                agent_module_id: { type: string }
                 priority: { type: integer, default: 50 }
                 max_attempts: { type: integer, default: 3 }
                 files:

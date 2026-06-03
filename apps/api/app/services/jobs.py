@@ -567,6 +567,7 @@ class JobLeaseService:
                 "steps": result.get("steps", []),
                 "risks": result.get("risks", []),
                 "done_when": result.get("done_when", []),
+                "agent_module": result.get("agent_module") or payload.get("agent_module") or {},
             },
             created_by_job_id=job_row["id"],
         )

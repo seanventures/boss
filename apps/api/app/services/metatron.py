@@ -271,7 +271,7 @@ class MetatronService:
         rows = connection.execute(
             text(
                 """
-                SELECT id, event_type, object_type, object_id, payload, created_at
+                SELECT id, event_type, entity_type, entity_id, data, created_at
                 FROM events
                 WHERE project_id = :project_id
                 ORDER BY created_at DESC
@@ -289,10 +289,10 @@ class MetatronService:
             answer = "No recent events are recorded for this project yet."
         references = [
             self._reference(
-                str(row["object_type"] or "event"),
-                str(row["object_id"] or row["id"]),
+                str(row["entity_type"] or "event"),
+                str(row["entity_id"] or row["id"]),
                 str(row["event_type"]),
-                detail=str((row["payload"] or {}).get("message") or ""),
+                detail=str((row["data"] or {}).get("message") or ""),
                 created_at=row["created_at"],
             )
             for row in rows

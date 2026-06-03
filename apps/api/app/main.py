@@ -8,6 +8,10 @@ from .bootstrap import seed
 from .config import get_settings
 from .db import begin, database_is_reachable, get_engine
 from .schemas import (
+    AgentModuleDetail,
+    AgentModuleInstallRequest,
+    AgentModuleListResponse,
+    AgentModuleSummary,
     ArtifactDetail,
     ArtifactListResponse,
     ArtifactSummary,
@@ -58,6 +62,8 @@ from .schemas import (
     PackInstallRequest,
     PackListResponse,
     PackSummary,
+    ProjectListResponse,
+    ProjectSummary,
     PullRequestMergeJobRequest,
     PullRequestMergeRequest,
     PullRequestMergeResponse,
@@ -127,7 +133,12 @@ from .services.self_improvement import (
     SelfImprovementService,
 )
 from .services.software_factory import SoftwareFactoryService
-from .services.specpack import PackNotFoundError, RoleNotFoundError, SpecPackService
+from .services.specpack import (
+    AgentModuleNotFoundError,
+    PackNotFoundError,
+    RoleNotFoundError,
+    SpecPackService,
+)
 
 settings = get_settings()
 engine = get_engine(settings)
@@ -154,6 +165,19 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(title="BOSS Control Plane", version="0.2.0", lifespan=lifespan)
+
+
+def project_summary_from_row(row) -> ProjectSummary:
+    return ProjectSummary(
+        id=row["id"],
+        name=row["name"],
+        slug=row["slug"],
+        workspace_id=row["workspace_id"],
+        workspace_name=row["workspace_name"],
+        org_id=row["org_id"],
+        org_name=row["org_name"],
+        created_at=row["created_at"].isoformat(),
+    )
 
 
 def task_summary_from_row(row) -> TaskSummary:
@@ -405,6 +429,8 @@ def role_summary_from_service(payload) -> RoleSummary:
         role_key=payload["role_key"],
         display_name=payload["display_name"],
         autonomy_level=payload["autonomy_level"],
+        source_module_id=payload.get("source_module_id"),
+        source_module_version=payload.get("source_module_version"),
         trust_score=payload.get("trust_score", 50),
         successful_runs=payload.get("successful_runs", 0),
         policy_violation_count=payload.get("policy_violation_count", 0),
@@ -427,6 +453,8 @@ def role_detail_from_service(payload) -> RoleDetail:
         role_key=payload["role_key"],
         display_name=payload["display_name"],
         autonomy_level=payload["autonomy_level"],
+        source_module_id=payload.get("source_module_id"),
+        source_module_version=payload.get("source_module_version"),
         trust_score=payload.get("trust_score", 50),
         successful_runs=payload.get("successful_runs", 0),
         policy_violation_count=payload.get("policy_violation_count", 0),
@@ -478,6 +506,43 @@ def pack_detail_from_service(payload) -> PackDetail:
         **pack_summary_from_service(payload).model_dump(),
         role_count=payload.get("role_count"),
         role_results=payload.get("role_results") or [],
+        install_status=payload.get("install_status"),
+    )
+
+
+def agent_module_summary_from_service(payload) -> AgentModuleSummary:
+    return AgentModuleSummary(
+        module_id=payload["module_id"],
+        version=payload["version"],
+        display_name=payload["display_name"],
+        description=payload["description"],
+        publisher=payload["publisher"],
+        category=payload["category"],
+        status=payload["status"],
+        role_key=payload.get("role_key"),
+        job_kinds=payload.get("job_kinds") or [],
+        default_skill_ids=payload.get("default_skill_ids") or [],
+        tags=payload.get("tags") or [],
+        price_model=payload.get("price_model"),
+        price_usd_micros=payload.get("price_usd_micros"),
+        config_schema=payload.get("config_schema") or {},
+        installed=bool(payload["installed"]),
+        installed_by=payload.get("installed_by"),
+        installed_at=payload.get("installed_at"),
+        updated_at=payload.get("updated_at"),
+        installed_version=payload.get("installed_version"),
+        config=payload.get("config") or {},
+    )
+
+
+def agent_module_detail_from_service(payload) -> AgentModuleDetail:
+    return AgentModuleDetail(
+        **agent_module_summary_from_service(payload).model_dump(),
+        prompt_bundle=payload.get("prompt_bundle") or {},
+        runtime=payload.get("runtime") or {},
+        marketplace=payload.get("marketplace") or {},
+        role=payload.get("role") or {},
+        role_result=payload.get("role_result") or {},
         install_status=payload.get("install_status"),
     )
 
@@ -555,14 +620,34 @@ def health() -> HealthResponse:
     )
 
 
+@app.get("/v1/projects", response_model=ProjectListResponse)
+def list_projects() -> ProjectListResponse:
+    with begin(engine) as connection:
+        rows = connection.execute(
+            text(
+                """
+                SELECT p.id, p.name, p.slug, p.workspace_id, p.created_at,
+                       w.name AS workspace_name, o.id AS org_id, o.name AS org_name
+                FROM projects p
+                JOIN workspaces w ON w.id = p.workspace_id
+                JOIN orgs o ON o.id = w.org_id
+                ORDER BY o.name ASC, w.name ASC, p.name ASC
+                """
+            )
+        ).mappings().all()
+        return ProjectListResponse(
+            items=[project_summary_from_row(row) for row in rows]
+        )
+
+
 @app.get("/v1/status", response_model=StatusResponse)
 def status(project_id: str) -> StatusResponse:
     if not database_is_reachable(engine):
         return StatusResponse(
             project_id=project_id,
-            project_name="BOSS dogfood bootstrap",
+            project_name=project_id,
             workspace_name="Database unavailable",
-            org_name="BOSS",
+            org_name="Unknown org",
             database_connected=False,
             budget_state="unknown",
             pending_decisions=0,
@@ -1057,6 +1142,48 @@ def install_pack(payload: PackInstallRequest) -> PackDetail:
         return pack_detail_from_service(result)
 
 
+@app.get("/v1/agent-modules", response_model=AgentModuleListResponse)
+def list_agent_modules(project_id: str) -> AgentModuleListResponse:
+    with begin(engine) as connection:
+        modules = specpack.list_agent_modules_for_project(connection, project_id)
+        return AgentModuleListResponse(
+            project_id=project_id,
+            items=[agent_module_summary_from_service(module) for module in modules],
+        )
+
+
+@app.get("/v1/agent-modules/{module_id}", response_model=AgentModuleDetail)
+def get_agent_module(module_id: str, project_id: str) -> AgentModuleDetail:
+    with begin(engine) as connection:
+        try:
+            module = specpack.get_agent_module_for_project(
+                connection, project_id, module_id
+            )
+        except AgentModuleNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        return agent_module_detail_from_service(module)
+
+
+@app.post(
+    "/v1/agent-modules/install",
+    response_model=AgentModuleDetail,
+    status_code=201,
+)
+def install_agent_module(payload: AgentModuleInstallRequest) -> AgentModuleDetail:
+    with begin(engine) as connection:
+        try:
+            module = specpack.install_agent_module(
+                connection,
+                payload.project_id,
+                payload.module_id,
+                payload.actor,
+                payload.config,
+            )
+        except AgentModuleNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        return agent_module_detail_from_service(module)
+
+
 @app.get("/v1/skills", response_model=SkillListResponse)
 def list_skills() -> SkillListResponse:
     return SkillListResponse(
@@ -1541,15 +1668,19 @@ def execute_decision(
 @app.post("/v1/openai/plans", response_model=OpenAIPlanResponse)
 def create_openai_plan(payload: OpenAIPlanRequest) -> OpenAIPlanResponse:
     with begin(engine) as connection:
-        result = software_factory.create_plan_artifact(
-            connection,
-            payload.project_id,
-            payload.reservation_id,
-            payload.dedupe_key,
-            payload.prompt,
-            payload.system_prompt,
-            payload.created_by_job_id,
-        )
+        try:
+            result = software_factory.create_plan_artifact(
+                connection,
+                payload.project_id,
+                payload.reservation_id,
+                payload.dedupe_key,
+                payload.prompt,
+                payload.system_prompt,
+                payload.created_by_job_id,
+                payload.agent_module_id,
+            )
+        except AgentModuleNotFoundError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
         return OpenAIPlanResponse(**result)
 
 
@@ -1558,18 +1689,22 @@ def create_pull_request_proposal(
     payload: PullRequestProposalRequest,
 ) -> PullRequestProposalResponse:
     with begin(engine) as connection:
-        result = software_factory.propose_pull_request(
-            connection,
-            payload.project_id,
-            payload.task_id,
-            payload.reservation_id,
-            payload.dedupe_key,
-            payload.title,
-            payload.branch_name,
-            payload.summary,
-            payload.files,
-            payload.created_by_job_id,
-        )
+        try:
+            result = software_factory.propose_pull_request(
+                connection,
+                payload.project_id,
+                payload.task_id,
+                payload.reservation_id,
+                payload.dedupe_key,
+                payload.title,
+                payload.branch_name,
+                payload.summary,
+                payload.files,
+                payload.created_by_job_id,
+                payload.agent_module_id,
+            )
+        except AgentModuleNotFoundError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
         return PullRequestProposalResponse(**result)
 
 
@@ -1633,6 +1768,7 @@ def queue_pull_request_proposal(
                 "branch_name": payload.branch_name,
                 "summary": payload.summary,
                 "files": [file.model_dump() for file in payload.files],
+                "agent_module_id": payload.agent_module_id,
                 "requires_reservation": True,
             },
             priority=payload.priority,

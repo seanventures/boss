@@ -34,6 +34,21 @@ class HealthResponse(BaseModel):
     openai_configured: bool
 
 
+class ProjectSummary(BaseModel):
+    id: str
+    name: str
+    slug: str
+    workspace_id: str
+    workspace_name: str
+    org_id: str
+    org_name: str
+    created_at: str
+
+
+class ProjectListResponse(BaseModel):
+    items: list[ProjectSummary]
+
+
 class StatusResponse(BaseModel):
     project_id: str
     project_name: str
@@ -186,6 +201,7 @@ class OpenAIPlanRequest(BaseModel):
     dedupe_key: str
     prompt: str
     system_prompt: Optional[str] = None
+    agent_module_id: Optional[str] = None
     created_by_job_id: Optional[str] = None
 
 
@@ -212,6 +228,7 @@ class PullRequestProposalRequest(BaseModel):
     branch_name: str
     summary: str
     files: list[FileChange]
+    agent_module_id: Optional[str] = None
     created_by_job_id: Optional[str] = None
 
 
@@ -833,6 +850,8 @@ class RoleSummary(BaseModel):
     role_key: str
     display_name: str
     autonomy_level: int
+    source_module_id: Optional[str] = None
+    source_module_version: Optional[str] = None
     trust_score: int
     successful_runs: int = 0
     policy_violation_count: int = 0
@@ -950,6 +969,50 @@ class PackInstallRequest(BaseModel):
     project_id: str
     pack_id: str
     actor: str = "system"
+
+
+class AgentModuleSummary(BaseModel):
+    module_id: str
+    version: str
+    display_name: str
+    description: str
+    publisher: str
+    category: str
+    status: str
+    role_key: Optional[str] = None
+    job_kinds: list[str] = Field(default_factory=list)
+    default_skill_ids: list[str] = Field(default_factory=list)
+    tags: list[str] = Field(default_factory=list)
+    price_model: Optional[str] = None
+    price_usd_micros: Optional[int] = None
+    config_schema: dict[str, Any] = Field(default_factory=dict)
+    installed: bool
+    installed_by: Optional[str] = None
+    installed_at: Optional[str] = None
+    updated_at: Optional[str] = None
+    installed_version: Optional[str] = None
+    config: dict[str, Any] = Field(default_factory=dict)
+
+
+class AgentModuleDetail(AgentModuleSummary):
+    prompt_bundle: dict[str, Any] = Field(default_factory=dict)
+    runtime: dict[str, Any] = Field(default_factory=dict)
+    marketplace: dict[str, Any] = Field(default_factory=dict)
+    role: dict[str, Any] = Field(default_factory=dict)
+    role_result: dict[str, Any] = Field(default_factory=dict)
+    install_status: Optional[str] = None
+
+
+class AgentModuleListResponse(BaseModel):
+    project_id: str
+    items: list[AgentModuleSummary]
+
+
+class AgentModuleInstallRequest(BaseModel):
+    project_id: str
+    module_id: str
+    actor: str = "system"
+    config: dict[str, Any] = Field(default_factory=dict)
 
 
 class SkillSummary(BaseModel):

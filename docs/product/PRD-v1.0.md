@@ -43,6 +43,7 @@ The first user is a founder/CEO/product builder using AI to create software and 
 - Budget Control Center
 - Durable execution runtime
 - Role system and company packs
+- Agent Modules and Marketplace
 - Software Factory
 - Skills Registry and model routing
 - Model Entitlement Broker
@@ -89,11 +90,27 @@ The first user is a founder/CEO/product builder using AI to create software and 
 - Core Pack v1 includes Metatron, COO, CAO, CTO, PM, Designer, QA, Release, Program Manager, and VP Agents.
 - Roles cannot operate outside scope without policy escalation.
 
+### Agent Modules and Marketplace
+
+- Agent logic must be packageable as a contained install unit rather than living only inside the monolith.
+- A packaged `AgentModule` may include:
+  - role charter
+  - prompt bundle
+  - runtime job kinds
+  - default skill bindings
+  - install-time configuration schema
+  - marketplace metadata
+- Projects must be able to install, inspect, and version these modules independently of company packs.
+- Runtime execution should resolve through the installed module when one governs the job kind, so prompt/config/skill behavior is grounded in the module rather than hidden service defaults.
+- Roles created or updated by a module must preserve lineage back to the originating module and version.
+- The marketplace model must support future packaging, sale, and distribution of worker agents without forcing direct code edits in the BOSS core.
+
 ### Software Factory
 
 - The dogfood path is spec -> plan -> chunked implementation -> tests -> review packet -> merge decision.
 - Real software changes require tests or an explicit test-gap note.
 - Merge and deploy remain approval gated.
+- When an installed software-engineering module governs a software-factory job kind, its prompt bundle, configuration, and runtime defaults should be used to shape execution.
 
 ### Model Entitlement Broker
 
