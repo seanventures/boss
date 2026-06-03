@@ -43,6 +43,7 @@ class BudgetReserveRequest(BaseModel):
     category: str
     amount_usd_micros: int = Field(gt=0)
     reason: str
+    job_id: Optional[str] = None
     expires_in_minutes: int = Field(default=30, ge=5, le=240)
 
 
@@ -54,6 +55,38 @@ class BudgetReserveResponse(BaseModel):
     message: str
 
 
+class BudgetQuoteRequest(BaseModel):
+    project_id: str
+    category: str
+    amount_usd_micros: int = Field(gt=0)
+    reason: str
+
+
+class BudgetQuoteResponse(BaseModel):
+    allowed: bool
+    category: str
+    reason: str
+    requested_usd_micros: int
+    budget_state: str
+    post_reservation_budget_state: str
+    cap_usd_micros: int
+    available_usd_micros: int
+    post_reservation_available_usd_micros: int
+
+
+class BudgetReleaseRequest(BaseModel):
+    project_id: str
+    reservation_id: str
+    reason: str
+
+
+class BudgetReleaseResponse(BaseModel):
+    status: str
+    reservation_id: str
+    budget_state: str
+    message: str
+
+
 class BudgetStatusResponse(BaseModel):
     scope_type: str
     scope_id: str
@@ -61,6 +94,12 @@ class BudgetStatusResponse(BaseModel):
     cap_usd_micros: int
     reserved_usd_micros: int
     actual_usd_micros: int
+    available_usd_micros: int
+    committed_usd_micros: int
+    burn_approx_usd_micros: int
+    utilization_ratio: float
+    active_reservations_count: int
+    top_cost_drivers: list[dict[str, Any]]
 
 
 class OpenAIPlanRequest(BaseModel):
@@ -77,6 +116,7 @@ class OpenAIPlanResponse(BaseModel):
     receipt_id: Optional[str] = None
     output_text: Optional[str] = None
     decision_id: Optional[str] = None
+    message: Optional[str] = None
 
 
 class FileChange(BaseModel):
@@ -131,6 +171,8 @@ class JobCreateRequest(BaseModel):
     kind: str
     task_id: Optional[str] = None
     payload: dict[str, Any] = Field(default_factory=dict)
+    requires_reservation: bool = False
+    reservation_id: Optional[str] = None
     priority: int = Field(default=100, ge=0)
     max_attempts: int = Field(default=3, ge=1, le=20)
     run_after_seconds: int = Field(default=0, ge=0, le=86_400)

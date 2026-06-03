@@ -103,6 +103,8 @@ paths:
                 task_id: { type: string }
                 kind: { type: string }
                 payload: { type: object }
+                requires_reservation: { type: boolean, default: false }
+                reservation_id: { type: string }
                 priority: { type: integer, default: 100 }
                 max_attempts: { type: integer, default: 3 }
                 run_after_seconds: { type: integer, default: 0 }
@@ -192,11 +194,58 @@ paths:
           schema: { type: string }
       responses:
         '200': { description: Budget status }
+  /v1/budget/quote:
+    post:
+      summary: Quote a spend request against the active project budget
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id, category, amount_usd_micros, reason]
+              properties:
+                project_id: { type: string }
+                category: { type: string }
+                amount_usd_micros: { type: integer }
+                reason: { type: string }
+      responses:
+        '200': { description: Quote result }
   /v1/budget/reserve:
     post:
       summary: Internal budget reservation endpoint
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id, category, amount_usd_micros, reason]
+              properties:
+                project_id: { type: string }
+                category: { type: string }
+                amount_usd_micros: { type: integer }
+                reason: { type: string }
+                job_id: { type: string }
+                expires_in_minutes: { type: integer, default: 30 }
       responses:
         '201': { description: Reservation created or denied }
+  /v1/budget/release:
+    post:
+      summary: Release an active reservation without consuming spend
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id, reservation_id, reason]
+              properties:
+                project_id: { type: string }
+                reservation_id: { type: string }
+                reason: { type: string }
+      responses:
+        '200': { description: Reservation released or current status returned }
   /v1/openai/plans:
     post:
       summary: Create a real OpenAI-backed plan artifact behind a reservation

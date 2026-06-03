@@ -81,12 +81,20 @@ If a required credential is missing, the API must fail closed and create visible
 - `POST /v1/worker/complete`
 - `POST /v1/worker/fail`
 - `GET /v1/budget/status`
+- `POST /v1/budget/quote`
 - `POST /v1/budget/reserve`
+- `POST /v1/budget/release`
 - `GET /v1/decisions/inbox`
 - `GET /v1/events`
 - `POST /v1/openai/plans`
 - `POST /v1/software-factory/proposals`
 - `GET /v1/receipts/{dedupe_key}`
+
+## Budget-governor behavior
+
+- Spendy work should follow `quote -> reserve -> execute -> consume/release`.
+- Reused or blocked spendy effects release their reservation instead of leaving budget locked.
+- Spend-gated jobs without an active reservation are not leased; they create a visible decision and are cancelled explicitly rather than running silently.
 
 ## GitHub bootstrap
 

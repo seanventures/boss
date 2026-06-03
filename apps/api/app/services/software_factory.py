@@ -76,6 +76,12 @@ class SoftwareFactoryService:
             {"prompt": prompt, "system_prompt": system_prompt},
         )
         if not created and receipt["status"] == "succeeded":
+            self.budget.release(
+                connection,
+                project_id,
+                reservation_id,
+                "Released reservation because the effect was already satisfied by a prior receipt.",
+            )
             return {
                 "status": "reused",
                 "artifact_id": receipt["result"].get("artifact_id"),
@@ -91,6 +97,12 @@ class SoftwareFactoryService:
             self.receipts.mark_failed(
                 connection, receipt["id"], {"message": str(error)}
             )
+            self.budget.release(
+                connection,
+                project_id,
+                reservation_id,
+                "Released reservation because OpenAI credentials are not configured.",
+            )
             decision_id = create_blocking_decision(
                 connection,
                 project_id,
@@ -100,7 +112,35 @@ class SoftwareFactoryService:
                 {},
                 "missing_openai_credentials",
             )
-            return {"status": "blocked", "decision_id": decision_id}
+            return {
+                "status": "blocked",
+                "decision_id": decision_id,
+                "message": str(error),
+            }
+        except Exception as error:
+            self.receipts.mark_failed(
+                connection, receipt["id"], {"message": str(error)}
+            )
+            self.budget.release(
+                connection,
+                project_id,
+                reservation_id,
+                "Released reservation because the OpenAI plan call failed.",
+            )
+            emit_event(
+                connection,
+                project_id,
+                "software_factory.plan_failed",
+                "coding_worker",
+                "receipt",
+                receipt["id"],
+                {"message": str(error)},
+            )
+            return {
+                "status": "failed",
+                "receipt_id": receipt["id"],
+                "message": str(error),
+            }
 
         artifact_id = create_artifact(
             connection,
@@ -186,6 +226,12 @@ class SoftwareFactoryService:
             },
         )
         if not created and pr_receipt["status"] == "succeeded":
+            self.budget.release(
+                connection,
+                project_id,
+                reservation_id,
+                "Released reservation because the PR effect was already satisfied by a prior receipt.",
+            )
             result = pr_receipt["result"] or {}
             return {
                 "status": "reused",
@@ -214,6 +260,12 @@ class SoftwareFactoryService:
             self.receipts.mark_failed(
                 connection, pr_receipt["id"], {"message": str(error)}
             )
+            self.budget.release(
+                connection,
+                project_id,
+                reservation_id,
+                "Released reservation because OpenAI credentials are not configured.",
+            )
             decision_id = create_blocking_decision(
                 connection,
                 project_id,
@@ -223,7 +275,35 @@ class SoftwareFactoryService:
                 {},
                 "missing_openai_credentials",
             )
-            return {"status": "blocked", "decision_id": decision_id}
+            return {
+                "status": "blocked",
+                "decision_id": decision_id,
+                "message": str(error),
+            }
+        except Exception as error:
+            self.receipts.mark_failed(
+                connection, pr_receipt["id"], {"message": str(error)}
+            )
+            self.budget.release(
+                connection,
+                project_id,
+                reservation_id,
+                "Released reservation because the review-packet generation failed.",
+            )
+            emit_event(
+                connection,
+                project_id,
+                "software_factory.pull_request_failed",
+                "coding_worker",
+                "receipt",
+                pr_receipt["id"],
+                {"message": str(error)},
+            )
+            return {
+                "status": "failed",
+                "receipt_id": pr_receipt["id"],
+                "message": str(error),
+            }
 
         try:
             self.github.ensure_branch(branch_name)
@@ -251,6 +331,12 @@ class SoftwareFactoryService:
             self.receipts.mark_failed(
                 connection, pr_receipt["id"], {"message": str(error)}
             )
+            self.budget.release(
+                connection,
+                project_id,
+                reservation_id,
+                "Released reservation because GitHub credentials are not configured.",
+            )
             decision_id = create_blocking_decision(
                 connection,
                 project_id,
@@ -260,7 +346,35 @@ class SoftwareFactoryService:
                 {},
                 "missing_github_credentials",
             )
-            return {"status": "blocked", "decision_id": decision_id}
+            return {
+                "status": "blocked",
+                "decision_id": decision_id,
+                "message": str(error),
+            }
+        except Exception as error:
+            self.receipts.mark_failed(
+                connection, pr_receipt["id"], {"message": str(error)}
+            )
+            self.budget.release(
+                connection,
+                project_id,
+                reservation_id,
+                "Released reservation because sandbox PR creation failed.",
+            )
+            emit_event(
+                connection,
+                project_id,
+                "software_factory.pull_request_failed",
+                "coding_worker",
+                "receipt",
+                pr_receipt["id"],
+                {"message": str(error)},
+            )
+            return {
+                "status": "failed",
+                "receipt_id": pr_receipt["id"],
+                "message": str(error),
+            }
 
         artifact_id = create_artifact(
             connection,

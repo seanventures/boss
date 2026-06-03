@@ -10,6 +10,7 @@ from sqlalchemy import bindparam, text
 from sqlalchemy.engine import Connection
 
 from ..config import Settings
+from .budget import BudgetGovernor
 from .core import (
     create_artifact,
     create_blocking_decision,
@@ -26,6 +27,7 @@ class LeaseNotFoundError(RuntimeError):
 class JobLeaseService:
     def __init__(self, settings: Settings):
         self.settings = settings
+        self.budget = BudgetGovernor(settings)
 
     def create_job(
         self,
@@ -100,88 +102,119 @@ class JobLeaseService:
         current_time = now_utc()
         lease_expires_at = current_time + timedelta(seconds=lease_ttl_seconds)
 
-        statement = text(
+        candidate_statement = text(
             """
-            WITH candidate AS (
-                SELECT id, status
-                FROM jobs
-                WHERE kind IN :capabilities
-                  AND run_after <= :now_utc
-                  AND (
-                    status IN ('queued', 'failed_retryable')
-                    OR (status = 'leased' AND lease_expires_at <= :now_utc)
-                  )
-                ORDER BY
-                  CASE status
-                    WHEN 'leased' THEN 0
-                    WHEN 'failed_retryable' THEN 1
-                    ELSE 2
-                  END,
-                  priority ASC,
-                  created_at ASC
-                LIMIT 1
-                FOR UPDATE SKIP LOCKED
-            )
-            UPDATE jobs
-            SET status = 'leased',
-                lease_owner = :worker_id,
-                lease_token_hash = :lease_token_hash,
-                lease_expires_at = :lease_expires_at,
-                heartbeat_at = :now_utc,
-                attempt = jobs.attempt + 1,
-                updated_at = :now_utc
-            FROM candidate
-            WHERE jobs.id = candidate.id
-            RETURNING
-                jobs.id,
-                jobs.project_id,
-                jobs.task_id,
-                jobs.kind,
-                jobs.payload,
-                jobs.attempt,
-                jobs.max_attempts,
-                jobs.lease_expires_at,
-                candidate.status AS previous_status
+            SELECT id, project_id, task_id, kind, payload, attempt, max_attempts, status
+            FROM jobs
+            WHERE kind IN :capabilities
+              AND run_after <= :now_utc
+              AND (
+                status IN ('queued', 'failed_retryable')
+                OR (status = 'leased' AND lease_expires_at <= :now_utc)
+              )
+            ORDER BY
+              CASE status
+                WHEN 'leased' THEN 0
+                WHEN 'failed_retryable' THEN 1
+                ELSE 2
+              END,
+              priority ASC,
+              created_at ASC
+            LIMIT 10
+            FOR UPDATE SKIP LOCKED
             """
         ).bindparams(bindparam("capabilities", expanding=True))
-        row = connection.execute(
-            statement,
+        candidates = connection.execute(
+            candidate_statement,
             {
                 "capabilities": capabilities,
                 "now_utc": current_time,
-                "worker_id": worker_id,
-                "lease_token_hash": lease_token_hash,
-                "lease_expires_at": lease_expires_at,
             },
-        ).mappings().first()
-        if not row:
+        ).mappings().all()
+        if not candidates:
             return None
 
-        event_type = (
-            "job.lease_reclaimed"
-            if row["previous_status"] == "leased"
-            else "job.leased"
-        )
-        emit_event(
-            connection,
-            row["project_id"],
-            event_type,
-            worker_id,
-            "job",
-            row["id"],
-            {"attempt": row["attempt"], "kind": row["kind"]},
-        )
-        return {
-            "id": row["id"],
-            "project_id": row["project_id"],
-            "task_id": row["task_id"],
-            "kind": row["kind"],
-            "payload": row["payload"] or {},
-            "attempt": row["attempt"],
-            "max_attempts": row["max_attempts"],
-            "lease_token": lease_token,
-            "lease_expires_at": row["lease_expires_at"].isoformat(),
-        }
+        for candidate in candidates:
+            payload = candidate["payload"] or {}
+            if self._requires_reservation(candidate["kind"], payload):
+                reservation_id = self._reservation_id_from_payload(payload)
+                reservation = (
+                    self.budget.assert_active_reservation(
+                        connection, candidate["project_id"], reservation_id
+                    )
+                    if reservation_id
+                    else None
+                )
+                if not reservation:
+                    self._cancel_budget_blocked_job(
+                        connection,
+                        candidate["project_id"],
+                        candidate["id"],
+                        candidate["task_id"],
+                        candidate["kind"],
+                        reservation_id,
+                    )
+                    continue
+
+            row = connection.execute(
+                text(
+                    """
+                    UPDATE jobs
+                    SET status = 'leased',
+                        lease_owner = :worker_id,
+                        lease_token_hash = :lease_token_hash,
+                        lease_expires_at = :lease_expires_at,
+                        heartbeat_at = :now_utc,
+                        attempt = jobs.attempt + 1,
+                        updated_at = :now_utc
+                    WHERE id = :job_id
+                    RETURNING
+                        id,
+                        project_id,
+                        task_id,
+                        kind,
+                        payload,
+                        attempt,
+                        max_attempts,
+                        lease_expires_at
+                    """
+                ),
+                {
+                    "job_id": candidate["id"],
+                    "worker_id": worker_id,
+                    "lease_token_hash": lease_token_hash,
+                    "lease_expires_at": lease_expires_at,
+                    "now_utc": current_time,
+                },
+            ).mappings().one()
+
+            event_type = (
+                "job.lease_reclaimed"
+                if candidate["status"] == "leased"
+                else "job.leased"
+            )
+            emit_event(
+                connection,
+                row["project_id"],
+                event_type,
+                worker_id,
+                "job",
+                row["id"],
+                {"attempt": row["attempt"], "kind": row["kind"]},
+            )
+            return {
+                "id": row["id"],
+                "project_id": row["project_id"],
+                "task_id": row["task_id"],
+                "kind": row["kind"],
+                "payload": row["payload"] or {},
+                "attempt": row["attempt"],
+                "max_attempts": row["max_attempts"],
+                "lease_token": lease_token,
+                "lease_expires_at": row["lease_expires_at"].isoformat(),
+            }
+
+        return None
 
     def heartbeat(
         self,
@@ -499,3 +532,66 @@ class JobLeaseService:
 
     def _hash_token(self, token: str) -> str:
         return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+    def _requires_reservation(self, kind: str, payload: dict[str, Any]) -> bool:
+        spendy_kinds = {
+            "openai.plan",
+            "github.pull_request",
+            "software_factory.propose_pr",
+        }
+        return bool(payload.get("requires_reservation")) or kind in spendy_kinds
+
+    def _reservation_id_from_payload(self, payload: dict[str, Any]) -> Optional[str]:
+        reservation_id = payload.get("reservation_id") or payload.get(
+            "budget_reservation_id"
+        )
+        return str(reservation_id) if reservation_id else None
+
+    def _cancel_budget_blocked_job(
+        self,
+        connection: Connection,
+        project_id: str,
+        job_id: str,
+        task_id: Optional[str],
+        kind: str,
+        reservation_id: Optional[str],
+    ) -> None:
+        connection.execute(
+            text(
+                """
+                UPDATE jobs
+                SET status = 'cancelled',
+                    last_error = CAST(:last_error AS JSONB),
+                    updated_at = :updated_at
+                WHERE id = :job_id
+                """
+            ),
+            {
+                "job_id": job_id,
+                "last_error": json.dumps(
+                    {
+                        "message": "Missing active reservation for spend-gated job.",
+                        "reservation_id": reservation_id,
+                    }
+                ),
+                "updated_at": now_utc(),
+            },
+        )
+        decision_id = create_blocking_decision(
+            connection,
+            project_id,
+            task_id,
+            f"Budget blocked spend-gated job: {kind}",
+            {"action": "create_budget_reservation"},
+            {"reservation_id": reservation_id},
+            "budget_missing_for_job",
+        )
+        emit_event(
+            connection,
+            project_id,
+            "job.cancelled_budget_blocked",
+            "budget_governor",
+            "job",
+            job_id,
+            {"decision_id": decision_id, "reservation_id": reservation_id},
+        )

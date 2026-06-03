@@ -76,6 +76,8 @@ export type JobCreateRequest = {
   kind: string;
   task_id?: string;
   payload?: Record<string, unknown>;
+  requires_reservation?: boolean;
+  reservation_id?: string;
   priority?: number;
   max_attempts?: number;
   run_after_seconds?: number;
@@ -155,6 +157,15 @@ export type BudgetStatusResponse = {
   cap_usd_micros: number;
   reserved_usd_micros: number;
   actual_usd_micros: number;
+  available_usd_micros: number;
+  committed_usd_micros: number;
+  burn_approx_usd_micros: number;
+  utilization_ratio: number;
+  active_reservations_count: number;
+  top_cost_drivers: Array<{
+    skill_or_model_id: string;
+    amount_usd_micros: number;
+  }>;
 };
 
 export type BudgetReserveRequest = {
@@ -162,6 +173,7 @@ export type BudgetReserveRequest = {
   category: string;
   amount_usd_micros: number;
   reason: string;
+  job_id?: string;
   expires_in_minutes?: number;
 };
 
@@ -169,6 +181,38 @@ export type BudgetReserveResponse = {
   status: string;
   reservation_id?: string;
   decision_id?: string;
+  budget_state: string;
+  message: string;
+};
+
+export type BudgetQuoteRequest = {
+  project_id: string;
+  category: string;
+  amount_usd_micros: number;
+  reason: string;
+};
+
+export type BudgetQuoteResponse = {
+  allowed: boolean;
+  category: string;
+  reason: string;
+  requested_usd_micros: number;
+  budget_state: string;
+  post_reservation_budget_state: string;
+  cap_usd_micros: number;
+  available_usd_micros: number;
+  post_reservation_available_usd_micros: number;
+};
+
+export type BudgetReleaseRequest = {
+  project_id: string;
+  reservation_id: string;
+  reason: string;
+};
+
+export type BudgetReleaseResponse = {
+  status: string;
+  reservation_id: string;
   budget_state: string;
   message: string;
 };
@@ -205,6 +249,7 @@ export type OpenAIPlanResponse = {
   receipt_id?: string;
   output_text?: string;
   decision_id?: string;
+  message?: string;
 };
 
 export type FileChange = {
@@ -387,8 +432,18 @@ export function createBossApiClient(config: BossApiClientConfig) {
         query: { scope_type: scopeType, scope_id: scopeId },
       });
     },
+    quoteBudget(payload: BudgetQuoteRequest) {
+      return request<BudgetQuoteResponse>("POST", "/v1/budget/quote", {
+        body: payload,
+      });
+    },
     reserveBudget(payload: BudgetReserveRequest) {
       return request<BudgetReserveResponse>("POST", "/v1/budget/reserve", {
+        body: payload,
+      });
+    },
+    releaseBudget(payload: BudgetReleaseRequest) {
+      return request<BudgetReleaseResponse>("POST", "/v1/budget/release", {
         body: payload,
       });
     },

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Optional
+from typing import Any, Optional
 
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
@@ -65,18 +65,31 @@ class BudgetGovernor:
                 "cap_usd_micros": 0,
                 "reserved_usd_micros": 0,
                 "actual_usd_micros": 0,
+                "available_usd_micros": 0,
+                "committed_usd_micros": 0,
+                "burn_approx_usd_micros": 0,
+                "utilization_ratio": 0.0,
+                "active_reservations_count": 0,
+                "top_cost_drivers": [],
+                "soft_cap_pct": 0.7,
+                "auto_lite_mode_pct": 0.85,
+                "freeze_provisioning_pct": 0.9,
             }
 
-        reserved = connection.execute(
+        reservation_snapshot = connection.execute(
             text(
                 """
-                SELECT COALESCE(SUM(amount_usd_micros), 0) AS total
+                SELECT
+                    COALESCE(SUM(amount_usd_micros), 0) AS total,
+                    COUNT(*) AS active_count
                 FROM budget_reservations
                 WHERE project_id = :project_id AND status = 'active'
                 """
             ),
             {"project_id": project_id},
-        ).scalar_one()
+        ).mappings().one()
+        reserved = int(reservation_snapshot["total"])
+        active_reservations_count = int(reservation_snapshot["active_count"])
 
         actual = connection.execute(
             text(
@@ -88,27 +101,97 @@ class BudgetGovernor:
             ),
             {"project_id": project_id},
         ).scalar_one()
+        actual = int(actual)
+
+        top_cost_drivers = [
+            {
+                "skill_or_model_id": row["skill_or_model_id"],
+                "amount_usd_micros": int(row["amount_usd_micros"]),
+            }
+            for row in connection.execute(
+                text(
+                    """
+                    SELECT
+                        skill_or_model_id,
+                        COALESCE(SUM(COALESCE(actual_usd_micros, estimated_usd_micros)), 0) AS amount_usd_micros
+                    FROM cost_receipts
+                    WHERE project_id = :project_id
+                    GROUP BY skill_or_model_id
+                    ORDER BY amount_usd_micros DESC, skill_or_model_id ASC
+                    LIMIT 5
+                    """
+                ),
+                {"project_id": project_id},
+            ).mappings().all()
+        ]
 
         cap = int(policy_row["daily_cap_usd_micros"])
-        utilization = 0 if cap == 0 else (reserved + actual) / cap
+        committed = reserved + actual
+        available = max(cap - committed, 0) if cap else 0
+        utilization = 0 if cap == 0 else committed / cap
         soft = float(policy_row["soft_cap_pct"])
         orange = float(policy_row["auto_lite_mode_pct"])
         red = float(policy_row["freeze_provisioning_pct"])
 
-        if utilization >= red:
-            budget_state = "red"
-        elif utilization >= orange:
-            budget_state = "orange"
-        elif utilization >= soft:
-            budget_state = "yellow"
-        else:
-            budget_state = "green"
+        budget_state = self._state_for_totals(
+            cap,
+            committed,
+            soft,
+            orange,
+            red,
+        )
 
         return {
             "budget_state": budget_state,
             "cap_usd_micros": cap,
-            "reserved_usd_micros": int(reserved),
-            "actual_usd_micros": int(actual),
+            "reserved_usd_micros": reserved,
+            "actual_usd_micros": actual,
+            "available_usd_micros": available,
+            "committed_usd_micros": committed,
+            "burn_approx_usd_micros": committed,
+            "utilization_ratio": round(utilization, 6),
+            "active_reservations_count": active_reservations_count,
+            "top_cost_drivers": top_cost_drivers,
+            "soft_cap_pct": soft,
+            "auto_lite_mode_pct": orange,
+            "freeze_provisioning_pct": red,
+        }
+
+    def quote(
+        self,
+        connection: Connection,
+        project_id: str,
+        category: str,
+        amount_usd_micros: int,
+        reason: str,
+    ) -> dict[str, Any]:
+        snapshot = self.status_for_project(connection, project_id)
+        total_after = (
+            snapshot["reserved_usd_micros"] + snapshot["actual_usd_micros"] + amount_usd_micros
+        )
+        allowed = snapshot["cap_usd_micros"] == 0 or total_after <= snapshot["cap_usd_micros"]
+        post_available = (
+            max(snapshot["cap_usd_micros"] - total_after, 0)
+            if snapshot["cap_usd_micros"]
+            else 0
+        )
+        post_state = self._state_for_totals(
+            snapshot["cap_usd_micros"],
+            total_after,
+            snapshot["soft_cap_pct"],
+            snapshot["auto_lite_mode_pct"],
+            snapshot["freeze_provisioning_pct"],
+        )
+        return {
+            "allowed": allowed,
+            "category": category,
+            "reason": reason,
+            "requested_usd_micros": amount_usd_micros,
+            "budget_state": snapshot["budget_state"],
+            "post_reservation_budget_state": post_state,
+            "cap_usd_micros": snapshot["cap_usd_micros"],
+            "available_usd_micros": snapshot["available_usd_micros"],
+            "post_reservation_available_usd_micros": post_available,
         }
 
     def reserve(
@@ -119,6 +202,7 @@ class BudgetGovernor:
         amount_usd_micros: int,
         reason: str,
         expires_in_minutes: int,
+        job_id: Optional[str] = None,
     ) -> dict:
         self.expire_stale_reservations(connection, project_id)
         snapshot = self.status_for_project(connection, project_id)
@@ -169,7 +253,7 @@ class BudgetGovernor:
                     status, reason, expires_at
                 )
                 VALUES (
-                    :id, NULL, :project_id, NULL, :category, :amount_usd_micros,
+                    :id, NULL, :project_id, :job_id, :category, :amount_usd_micros,
                     'active', :reason, :expires_at
                 )
                 """
@@ -177,6 +261,7 @@ class BudgetGovernor:
             {
                 "id": reservation_id,
                 "project_id": project_id,
+                "job_id": job_id,
                 "category": category,
                 "amount_usd_micros": amount_usd_micros,
                 "reason": reason,
@@ -190,7 +275,11 @@ class BudgetGovernor:
             "budget_governor",
             "budget_reservation",
             reservation_id,
-            {"category": category, "amount_usd_micros": amount_usd_micros},
+            {
+                "category": category,
+                "amount_usd_micros": amount_usd_micros,
+                "job_id": job_id,
+            },
         )
         fresh = self.status_for_project(connection, project_id)
         return {
@@ -199,6 +288,70 @@ class BudgetGovernor:
             "decision_id": None,
             "budget_state": fresh["budget_state"],
             "message": "Reservation created.",
+        }
+
+    def release(
+        self,
+        connection: Connection,
+        project_id: str,
+        reservation_id: str,
+        reason: str,
+    ) -> dict[str, Any]:
+        self.expire_stale_reservations(connection, project_id)
+        row = connection.execute(
+            text(
+                """
+                SELECT id, status, category, amount_usd_micros
+                FROM budget_reservations
+                WHERE id = :reservation_id AND project_id = :project_id
+                """
+            ),
+            {"reservation_id": reservation_id, "project_id": project_id},
+        ).mappings().first()
+        if not row:
+            return {
+                "status": "not_found",
+                "reservation_id": reservation_id,
+                "budget_state": self.status_for_project(connection, project_id)["budget_state"],
+                "message": "Reservation not found.",
+            }
+        if row["status"] != "active":
+            return {
+                "status": row["status"],
+                "reservation_id": reservation_id,
+                "budget_state": self.status_for_project(connection, project_id)["budget_state"],
+                "message": f"Reservation is already {row['status']}.",
+            }
+
+        connection.execute(
+            text(
+                """
+                UPDATE budget_reservations
+                SET status = 'released'
+                WHERE id = :reservation_id
+                """
+            ),
+            {"reservation_id": reservation_id},
+        )
+        emit_event(
+            connection,
+            project_id,
+            "budget.reservation_released",
+            "budget_governor",
+            "budget_reservation",
+            reservation_id,
+            {
+                "reason": reason,
+                "category": row["category"],
+                "amount_usd_micros": int(row["amount_usd_micros"]),
+            },
+        )
+        snapshot = self.status_for_project(connection, project_id)
+        return {
+            "status": "released",
+            "reservation_id": reservation_id,
+            "budget_state": snapshot["budget_state"],
+            "message": reason,
         }
 
     def assert_active_reservation(
@@ -276,3 +429,22 @@ class BudgetGovernor:
             reservation_id,
             {"receipt_id": receipt_id, "category": category},
         )
+
+    def _state_for_totals(
+        self,
+        cap_usd_micros: int,
+        committed_usd_micros: int,
+        soft_cap_pct: float,
+        auto_lite_mode_pct: float,
+        freeze_provisioning_pct: float,
+    ) -> str:
+        if cap_usd_micros == 0:
+            return "unknown"
+        utilization = committed_usd_micros / cap_usd_micros
+        if utilization >= freeze_provisioning_pct:
+            return "red"
+        if utilization >= auto_lite_mode_pct:
+            return "orange"
+        if utilization >= soft_cap_pct:
+            return "yellow"
+        return "green"

@@ -19,7 +19,26 @@ from apps.api.app.db import database_is_reachable, get_engine
 from apps.api.app.main import app
 
 
+def quote_budget(
+    client: TestClient, project_id: str, category: str, amount: int, reason: str
+) -> None:
+    response = client.post(
+        "/v1/budget/quote",
+        json={
+            "project_id": project_id,
+            "category": category,
+            "amount_usd_micros": amount,
+            "reason": reason,
+        },
+    )
+    response.raise_for_status()
+    payload = response.json()
+    if not payload["allowed"]:
+        raise SystemExit(json.dumps(payload, indent=2))
+
+
 def reserve_budget(client: TestClient, project_id: str, category: str, amount: int, reason: str) -> str:
+    quote_budget(client, project_id, category, amount, reason)
     response = client.post(
         "/v1/budget/reserve",
         json={

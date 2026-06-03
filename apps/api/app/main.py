@@ -7,6 +7,10 @@ from .bootstrap import seed
 from .config import get_settings
 from .db import begin, database_is_reachable, get_engine
 from .schemas import (
+    BudgetQuoteRequest,
+    BudgetQuoteResponse,
+    BudgetReleaseRequest,
+    BudgetReleaseResponse,
     BudgetStatusResponse,
     BudgetReserveRequest,
     BudgetReserveResponse,
@@ -245,12 +249,25 @@ def get_task(task_id: str) -> TaskSummary:
 @app.post("/v1/jobs", response_model=JobSummary, status_code=201)
 def create_job(payload: JobCreateRequest) -> JobSummary:
     with begin(engine) as connection:
+        job_payload = {
+            **payload.payload,
+            **(
+                {"requires_reservation": True}
+                if payload.requires_reservation
+                else {}
+            ),
+            **(
+                {"reservation_id": payload.reservation_id}
+                if payload.reservation_id
+                else {}
+            ),
+        }
         result = jobs.create_job(
             connection,
             project_id=payload.project_id,
             task_id=payload.task_id,
             kind=payload.kind,
-            payload=payload.payload,
+            payload=job_payload,
             priority=payload.priority,
             max_attempts=payload.max_attempts,
             run_after_seconds=payload.run_after_seconds,
@@ -278,7 +295,26 @@ def budget_status(scope_type: str, scope_id: str) -> BudgetStatusResponse:
             cap_usd_micros=snapshot["cap_usd_micros"],
             reserved_usd_micros=snapshot["reserved_usd_micros"],
             actual_usd_micros=snapshot["actual_usd_micros"],
+            available_usd_micros=snapshot["available_usd_micros"],
+            committed_usd_micros=snapshot["committed_usd_micros"],
+            burn_approx_usd_micros=snapshot["burn_approx_usd_micros"],
+            utilization_ratio=snapshot["utilization_ratio"],
+            active_reservations_count=snapshot["active_reservations_count"],
+            top_cost_drivers=snapshot["top_cost_drivers"],
         )
+
+
+@app.post("/v1/budget/quote", response_model=BudgetQuoteResponse)
+def quote_budget(payload: BudgetQuoteRequest) -> BudgetQuoteResponse:
+    with begin(engine) as connection:
+        result = budget.quote(
+            connection,
+            payload.project_id,
+            payload.category,
+            payload.amount_usd_micros,
+            payload.reason,
+        )
+        return BudgetQuoteResponse(**result)
 
 
 @app.post("/v1/budget/reserve", response_model=BudgetReserveResponse, status_code=201)
@@ -291,8 +327,21 @@ def reserve_budget(payload: BudgetReserveRequest) -> BudgetReserveResponse:
             payload.amount_usd_micros,
             payload.reason,
             payload.expires_in_minutes,
+            payload.job_id,
         )
         return BudgetReserveResponse(**result)
+
+
+@app.post("/v1/budget/release", response_model=BudgetReleaseResponse)
+def release_budget(payload: BudgetReleaseRequest) -> BudgetReleaseResponse:
+    with begin(engine) as connection:
+        result = budget.release(
+            connection,
+            payload.project_id,
+            payload.reservation_id,
+            payload.reason,
+        )
+        return BudgetReleaseResponse(**result)
 
 
 @app.post("/v1/worker/poll", response_model=WorkerPollResponse)

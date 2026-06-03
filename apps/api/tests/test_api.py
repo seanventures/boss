@@ -92,6 +92,65 @@ def test_budget_status_returns_project_snapshot(client):
     assert payload["scope_id"] == "boss-dogfood"
     assert payload["budget_state"] == "green"
     assert payload["cap_usd_micros"] > 0
+    assert payload["available_usd_micros"] == payload["cap_usd_micros"]
+    assert payload["committed_usd_micros"] == 0
+    assert payload["active_reservations_count"] == 0
+    assert payload["top_cost_drivers"] == []
+
+
+def test_budget_quote_returns_allowed_projection(client):
+    response = client.post(
+        "/v1/budget/quote",
+        json={
+            "project_id": "boss-dogfood",
+            "category": "model",
+            "amount_usd_micros": 250_000,
+            "reason": "quote a model call",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["allowed"] is True
+    assert payload["requested_usd_micros"] == 250_000
+    assert payload["budget_state"] == "green"
+    assert payload["post_reservation_available_usd_micros"] < payload["available_usd_micros"]
+
+
+def test_budget_release_frees_active_reservation(client):
+    reserve = client.post(
+        "/v1/budget/reserve",
+        json={
+            "project_id": "boss-dogfood",
+            "category": "tool",
+            "amount_usd_micros": 250_000,
+            "reason": "reserve then release",
+        },
+    )
+    assert reserve.status_code == 201
+    reservation_id = reserve.json()["reservation_id"]
+
+    release = client.post(
+        "/v1/budget/release",
+        json={
+            "project_id": "boss-dogfood",
+            "reservation_id": reservation_id,
+            "reason": "No external effect was executed.",
+        },
+    )
+    assert release.status_code == 200
+    payload = release.json()
+    assert payload["status"] == "released"
+    assert payload["reservation_id"] == reservation_id
+
+    status = client.get(
+        "/v1/budget/status",
+        params={"scope_type": "project", "scope_id": "boss-dogfood"},
+    )
+    assert status.status_code == 200
+    status_payload = status.json()
+    assert status_payload["reserved_usd_micros"] == 0
+    assert status_payload["active_reservations_count"] == 0
 
 
 def test_budget_denial_is_visible_in_decision_inbox_and_event_feed(client):
@@ -425,3 +484,84 @@ def test_worker_complete_creates_plan_artifact_and_decision(client):
     assert payload["status"] == "succeeded"
     assert payload["artifact_id"]
     assert payload["decision_id"]
+
+
+def test_spend_gated_job_without_reservation_is_not_leased(client, engine):
+    created = client.post(
+        "/v1/jobs",
+        json={
+            "project_id": "boss-dogfood",
+            "kind": "openai.plan",
+            "requires_reservation": True,
+            "payload": {"prompt": "Plan a task."},
+        },
+    )
+    assert created.status_code == 201
+    job_id = created.json()["id"]
+
+    poll = client.post(
+        "/v1/worker/poll",
+        json={
+            "worker_id": "worker-budget",
+            "capabilities": ["openai.plan"],
+            "lease_ttl_seconds": 60,
+        },
+    )
+    assert poll.status_code == 200
+    assert poll.json()["status"] == "idle"
+
+    with engine.begin() as connection:
+        job_status = connection.execute(
+            text("SELECT status FROM jobs WHERE id = :job_id"),
+            {"job_id": job_id},
+        ).scalar_one()
+        decision_count = connection.execute(
+            text(
+                """
+                SELECT COUNT(*) FROM decisions
+                WHERE project_id = 'boss-dogfood'
+                  AND question = 'Budget blocked spend-gated job: openai.plan'
+                """
+            )
+        ).scalar_one()
+    assert job_status == "cancelled"
+    assert decision_count == 1
+
+
+def test_spend_gated_job_with_reservation_can_be_leased(client):
+    reserve = client.post(
+        "/v1/budget/reserve",
+        json={
+            "project_id": "boss-dogfood",
+            "category": "model",
+            "amount_usd_micros": 250_000,
+            "reason": "Lease an OpenAI-backed job.",
+        },
+    )
+    assert reserve.status_code == 201
+    reservation_id = reserve.json()["reservation_id"]
+
+    created = client.post(
+        "/v1/jobs",
+        json={
+            "project_id": "boss-dogfood",
+            "kind": "openai.plan",
+            "requires_reservation": True,
+            "reservation_id": reservation_id,
+            "payload": {"prompt": "Plan a task."},
+        },
+    )
+    assert created.status_code == 201
+
+    poll = client.post(
+        "/v1/worker/poll",
+        json={
+            "worker_id": "worker-budget",
+            "capabilities": ["openai.plan"],
+            "lease_ttl_seconds": 60,
+        },
+    )
+    assert poll.status_code == 200
+    payload = poll.json()
+    assert payload["status"] == "leased"
+    assert payload["job"]["kind"] == "openai.plan"
