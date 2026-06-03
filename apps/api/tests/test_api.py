@@ -915,6 +915,167 @@ def test_decision_can_request_revision_and_then_blocks_approval(client):
     assert "decision.revision_requested" in event_types
 
 
+def test_self_improvement_proposal_runs_through_canary_rollout_and_rollback(
+    client, engine
+):
+    created = client.post(
+        "/v1/self-improvement/proposals",
+        json={
+            "project_id": "boss-dogfood",
+            "title": "Tighten decision inbox defaults",
+            "summary": "Improve default-action handling and observability for expired decisions.",
+            "change_ref": "https://github.com/seanheiney/boss/pull/42",
+            "diff_summary": "Adjust decision expiry handling and add stronger audit markers.",
+            "expected_impact": ["Lower decision latency", "Fewer unsafe expirations"],
+            "test_plan": ["Add API transition tests", "Run smoke suite"],
+            "canary_scope": ["dogfood workspace only", "decision inbox traffic"],
+            "rollback_plan": ["Revert PR", "Disable rollout flag"],
+            "success_metrics": ["No expired high-risk decision executes", "No silent drops"],
+            "actor": "vp_agents",
+            "risk_tier": 2,
+        },
+    )
+    assert created.status_code == 201
+    created_payload = created.json()
+    proposal_id = created_payload["id"]
+    task_id = created_payload["task_id"]
+    canary_decision_id = created_payload["current_decision_id"]
+    assert created_payload["status"] == "proposed"
+    assert created_payload["proposal_artifact_id"]
+
+    approve_canary = client.post(
+        f"/v1/decisions/{canary_decision_id}/approve",
+        json={"actor": "ceo", "note": "Run the dogfood canary."},
+    )
+    assert approve_canary.status_code == 200
+
+    proposal_after_canary_approval = client.get(
+        f"/v1/self-improvement/proposals/{proposal_id}"
+    )
+    assert proposal_after_canary_approval.status_code == 200
+    assert proposal_after_canary_approval.json()["status"] == "canary_approved"
+
+    canary = client.post(
+        f"/v1/self-improvement/proposals/{proposal_id}/canary",
+        json={
+            "actor": "release_manager",
+            "outcome": "succeeded",
+            "summary": "Dogfood canary stayed within expected error and cost bounds.",
+            "metrics": {"decision_latency_delta_pct": -12},
+            "evidence_refs": ["evt_canary_1"],
+        },
+    )
+    assert canary.status_code == 200
+    canary_payload = canary.json()
+    rollout_decision_id = canary_payload["current_decision_id"]
+    assert canary_payload["status"] == "canary_succeeded"
+    assert canary_payload["canary_artifact_id"]
+    assert rollout_decision_id
+
+    approve_rollout = client.post(
+        f"/v1/decisions/{rollout_decision_id}/approve",
+        json={"actor": "ceo", "note": "Promote to full dogfood rollout."},
+    )
+    assert approve_rollout.status_code == 200
+
+    rollout_ready = client.get(f"/v1/self-improvement/proposals/{proposal_id}")
+    assert rollout_ready.status_code == 200
+    assert rollout_ready.json()["status"] == "rollout_approved"
+
+    rollout = client.post(
+        f"/v1/self-improvement/proposals/{proposal_id}/rollout",
+        json={
+            "actor": "release_manager",
+            "summary": "Rolled out to the dogfood control plane.",
+            "external_ref": "deploy://dogfood/2026-06-01/self-improvement-42",
+            "metrics": {"deadletter_rate": 0},
+            "evidence_refs": ["art_rollout_1"],
+        },
+    )
+    assert rollout.status_code == 200
+    rollout_payload = rollout.json()
+    assert rollout_payload["status"] == "rolled_out"
+    assert rollout_payload["rollout_artifact_id"]
+
+    rollback = client.post(
+        f"/v1/self-improvement/proposals/{proposal_id}/rollback",
+        json={
+            "actor": "release_manager",
+            "reason": "Rollback after regression review.",
+            "external_ref": "rollback://dogfood/2026-06-01/self-improvement-42",
+            "metrics": {"policy_violation_count": 1},
+            "evidence_refs": ["art_rollback_1"],
+        },
+    )
+    assert rollback.status_code == 200
+    rollback_payload = rollback.json()
+    assert rollback_payload["status"] == "rolled_back"
+    assert rollback_payload["rollback_artifact_id"]
+
+    with engine.begin() as connection:
+        task_status = connection.execute(
+            text("SELECT status FROM tasks WHERE id = :task_id"),
+            {"task_id": task_id},
+        ).scalar_one()
+        artifact_types = [
+            row[0]
+            for row in connection.execute(
+                text(
+                    """
+                    SELECT artifact_type
+                    FROM artifacts
+                    WHERE task_id = :task_id
+                    ORDER BY created_at ASC
+                    """
+                ),
+                {"task_id": task_id},
+            ).all()
+        ]
+
+    assert task_status == "rolled_back"
+    assert "self_improvement_proposal" in artifact_types
+    assert "self_improvement_canary_report" in artifact_types
+    assert "self_improvement_rollout_record" in artifact_types
+    assert "self_improvement_rollback_record" in artifact_types
+
+
+def test_self_improvement_revision_request_updates_proposal_status(client):
+    created = client.post(
+        "/v1/self-improvement/proposals",
+        json={
+            "project_id": "boss-dogfood",
+            "title": "Refine budget governor events",
+            "summary": "Improve event detail for budget denials.",
+            "change_ref": "https://github.com/seanheiney/boss/pull/77",
+            "diff_summary": "Expand denial event payloads.",
+            "expected_impact": ["Better operator clarity"],
+            "test_plan": ["Decision API coverage"],
+            "canary_scope": ["dogfood only"],
+            "rollback_plan": ["Revert PR"],
+            "success_metrics": ["Clearer denial event feed"],
+        },
+    )
+    assert created.status_code == 201
+    proposal_id = created.json()["id"]
+    decision_id = created.json()["current_decision_id"]
+
+    revise = client.post(
+        f"/v1/decisions/{decision_id}/revise",
+        json={
+            "actor": "ceo",
+            "note": "Add a stronger rollback story before canarying this.",
+        },
+    )
+    assert revise.status_code == 200
+
+    proposal = client.get(f"/v1/self-improvement/proposals/{proposal_id}")
+    assert proposal.status_code == 200
+    payload = proposal.json()
+    assert payload["status"] == "revision_requested"
+    assert payload["status_note"] == "Add a stronger rollback story before canarying this."
+    assert payload["current_decision_id"] is None
+
+
 def test_approved_decision_can_be_manually_executed_with_evidence(client, engine):
     with engine.begin() as connection:
         connection.execute(

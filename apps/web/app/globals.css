@@ -234,6 +234,11 @@ a {
   gap: 12px;
 }
 
+.button-stack {
+  display: grid;
+  gap: 10px;
+}
+
 .decision-note {
   min-height: 88px;
 }

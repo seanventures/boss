@@ -87,6 +87,12 @@ The dogfood seed also registers the initial entitlement-source inventory from `p
 - `POST /v1/tasks`
 - `GET /v1/jobs/{job_id}`
 - `GET /v1/tasks/{task_id}`
+- `GET /v1/self-improvement/proposals`
+- `POST /v1/self-improvement/proposals`
+- `GET /v1/self-improvement/proposals/{proposal_id}`
+- `POST /v1/self-improvement/proposals/{proposal_id}/canary`
+- `POST /v1/self-improvement/proposals/{proposal_id}/rollout`
+- `POST /v1/self-improvement/proposals/{proposal_id}/rollback`
 - `GET /v1/artifacts`
 - `GET /v1/artifacts/{artifact_id}`
 - `GET /v1/roles`
@@ -158,6 +164,13 @@ The dogfood seed also registers the initial entitlement-source inventory from `p
 - `comms.outbox.deliver` is a leased worker job kind, so real sends still require a job lease, a reservation, and a receipt.
 - Slack is the first provider surface in this slice, but it is fail-closed by default behind `BOSS_SLACK_REAL_SEND_ALLOWED=false`. Real sends require both that flag and `BOSS_SLACK_WEBHOOK_URL`.
 - Outbox job failures propagate into message status and deadletters so the comms plane honors the `no silent drops` invariant.
+
+## Self-improvement lane
+
+- BOSS now tracks self-improvement through a durable `self_improvement_proposals` workflow instead of burying product changes in ad hoc notes or chat.
+- Creating a proposal requires a change reference, diff summary, test plan, canary scope, rollback plan, and success metrics. The control plane turns that into a task, proposal artifact, and canary approval decision.
+- Decision outcomes are now connected to proposal state. Approval advances the proposal, revision requests reopen it explicitly, and rejection leaves a visible rejected state instead of silent drift.
+- Successful canaries automatically create the next rollout approval decision. Rollout and rollback are both recorded as first-class artifacts so BOSS can prove how it changed itself.
 
 ## GitHub bootstrap
 

@@ -10,6 +10,7 @@ import { emptyPackFeed } from "../lib/packs";
 import { emptyReceiptFeed } from "../lib/receipts";
 import { emptyRoleFeed } from "../lib/roles";
 import { emptyRoutingLogFeed } from "../lib/routing";
+import { emptySelfImprovementFeed } from "../lib/self-improvement";
 import { emptySkillFeed } from "../lib/skills";
 
 describe("empty API feeds", () => {
@@ -107,5 +108,13 @@ describe("empty API feeds", () => {
     expect(feed.apiReachable).toBe(false);
     expect(feed.items).toEqual([]);
     expect(feed.blockedReason).toBe("inbox api down");
+  });
+
+  it("returns an unavailable self-improvement feed", () => {
+    const feed = emptySelfImprovementFeed("self improvement api down");
+
+    expect(feed.apiReachable).toBe(false);
+    expect(feed.items).toEqual([]);
+    expect(feed.blockedReason).toBe("self improvement api down");
   });
 });

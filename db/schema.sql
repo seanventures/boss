@@ -158,6 +158,34 @@ ALTER TABLE decisions ADD COLUMN IF NOT EXISTS executed_at TIMESTAMPTZ;
 ALTER TABLE decisions ADD COLUMN IF NOT EXISTS resolution_note TEXT;
 ALTER TABLE decisions ADD COLUMN IF NOT EXISTS external_ref TEXT;
 
+CREATE TABLE IF NOT EXISTS self_improvement_proposals (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id),
+  task_id TEXT NOT NULL REFERENCES tasks(id),
+  title TEXT NOT NULL,
+  summary TEXT NOT NULL,
+  change_ref TEXT NOT NULL,
+  diff_summary TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'proposed',
+  risk_tier INTEGER NOT NULL DEFAULT 2,
+  expected_impact JSONB NOT NULL DEFAULT '[]'::jsonb,
+  test_plan JSONB NOT NULL DEFAULT '[]'::jsonb,
+  canary_scope JSONB NOT NULL DEFAULT '[]'::jsonb,
+  rollback_plan JSONB NOT NULL DEFAULT '[]'::jsonb,
+  success_metrics JSONB NOT NULL DEFAULT '[]'::jsonb,
+  status_note TEXT,
+  proposal_artifact_id TEXT REFERENCES artifacts(id),
+  current_decision_id TEXT REFERENCES decisions(id),
+  canary_artifact_id TEXT REFERENCES artifacts(id),
+  rollout_artifact_id TEXT REFERENCES artifacts(id),
+  rollback_artifact_id TEXT REFERENCES artifacts(id),
+  created_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_self_improvement_proposals_project
+  ON self_improvement_proposals(project_id, created_at DESC);
+
 CREATE TABLE IF NOT EXISTS jobs (
   id TEXT PRIMARY KEY,
   project_id TEXT NOT NULL REFERENCES projects(id),

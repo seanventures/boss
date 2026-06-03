@@ -70,6 +70,13 @@ from .schemas import (
     RoutingLogListResponse,
     RoutingPreviewRequest,
     RoutingPreviewResponse,
+    SelfImprovementCanaryRequest,
+    SelfImprovementProposalCreateRequest,
+    SelfImprovementProposalDetail,
+    SelfImprovementProposalListResponse,
+    SelfImprovementProposalSummary,
+    SelfImprovementRollbackRequest,
+    SelfImprovementRolloutRequest,
     SkillListResponse,
     SkillSummary,
     StatusResponse,
@@ -101,6 +108,11 @@ from .services.entitlements import EntitlementBrokerService, SkillNotFoundError
 from .services.intake import CommandIntakeService
 from .services.jobs import JobLeaseService, LeaseNotFoundError
 from .services.receipts import ReceiptService
+from .services.self_improvement import (
+    InvalidSelfImprovementTransitionError,
+    SelfImprovementProposalNotFoundError,
+    SelfImprovementService,
+)
 from .services.software_factory import SoftwareFactoryService
 from .services.specpack import PackNotFoundError, RoleNotFoundError, SpecPackService
 
@@ -116,6 +128,7 @@ specpack = SpecPackService(settings)
 entitlements = EntitlementBrokerService(settings)
 audit = AuditTrailService(settings)
 comms = CommsService(settings)
+self_improvement = SelfImprovementService(settings)
 
 
 @asynccontextmanager
@@ -186,6 +199,38 @@ def decision_card_from_row(row) -> DecisionCard:
         created_at=row["created_at"].isoformat(),
         updated_at=row["updated_at"].isoformat(),
     )
+
+
+def self_improvement_summary_from_row(row) -> SelfImprovementProposalSummary:
+    return SelfImprovementProposalSummary(
+        id=row["id"],
+        project_id=row["project_id"],
+        task_id=row["task_id"],
+        title=row["title"],
+        summary=row["summary"],
+        change_ref=row["change_ref"],
+        diff_summary=row["diff_summary"],
+        status=row["status"],
+        risk_tier=row["risk_tier"],
+        expected_impact=row.get("expected_impact") or [],
+        test_plan=row.get("test_plan") or [],
+        canary_scope=row.get("canary_scope") or [],
+        rollback_plan=row.get("rollback_plan") or [],
+        success_metrics=row.get("success_metrics") or [],
+        status_note=row.get("status_note"),
+        proposal_artifact_id=row.get("proposal_artifact_id"),
+        current_decision_id=row.get("current_decision_id"),
+        canary_artifact_id=row.get("canary_artifact_id"),
+        rollout_artifact_id=row.get("rollout_artifact_id"),
+        rollback_artifact_id=row.get("rollback_artifact_id"),
+        created_by=row["created_by"],
+        created_at=row["created_at"].isoformat(),
+        updated_at=row["updated_at"].isoformat(),
+    )
+
+
+def self_improvement_detail_from_row(row) -> SelfImprovementProposalDetail:
+    return SelfImprovementProposalDetail(**self_improvement_summary_from_row(row).model_dump())
 
 
 def artifact_summary_from_row(row) -> ArtifactSummary:
@@ -605,6 +650,140 @@ def get_task(task_id: str) -> TaskSummary:
         if not row:
             raise HTTPException(status_code=404, detail="Task not found")
         return task_summary_from_row(row)
+
+
+@app.get(
+    "/v1/self-improvement/proposals",
+    response_model=SelfImprovementProposalListResponse,
+)
+def list_self_improvement_proposals(
+    project_id: str, limit: int = 25
+) -> SelfImprovementProposalListResponse:
+    if limit < 1 or limit > 200:
+        raise HTTPException(status_code=400, detail="limit must be between 1 and 200.")
+    with begin(engine) as connection:
+        rows = self_improvement.list_proposals(connection, project_id, limit)
+        return SelfImprovementProposalListResponse(
+            project_id=project_id,
+            items=[self_improvement_summary_from_row(row) for row in rows],
+        )
+
+
+@app.post(
+    "/v1/self-improvement/proposals",
+    response_model=SelfImprovementProposalDetail,
+    status_code=201,
+)
+def create_self_improvement_proposal(
+    payload: SelfImprovementProposalCreateRequest,
+) -> SelfImprovementProposalDetail:
+    with begin(engine) as connection:
+        row = self_improvement.create_proposal(
+            connection,
+            project_id=payload.project_id,
+            title=payload.title,
+            summary=payload.summary,
+            change_ref=payload.change_ref,
+            diff_summary=payload.diff_summary,
+            expected_impact=payload.expected_impact,
+            test_plan=payload.test_plan,
+            canary_scope=payload.canary_scope,
+            rollback_plan=payload.rollback_plan,
+            success_metrics=payload.success_metrics,
+            actor=payload.actor,
+            risk_tier=payload.risk_tier,
+        )
+        return self_improvement_detail_from_row(row)
+
+
+@app.get(
+    "/v1/self-improvement/proposals/{proposal_id}",
+    response_model=SelfImprovementProposalDetail,
+)
+def get_self_improvement_proposal(
+    proposal_id: str,
+) -> SelfImprovementProposalDetail:
+    with begin(engine) as connection:
+        try:
+            row = self_improvement.get_proposal(connection, proposal_id)
+        except SelfImprovementProposalNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        return self_improvement_detail_from_row(row)
+
+
+@app.post(
+    "/v1/self-improvement/proposals/{proposal_id}/canary",
+    response_model=SelfImprovementProposalDetail,
+)
+def record_self_improvement_canary(
+    proposal_id: str, payload: SelfImprovementCanaryRequest
+) -> SelfImprovementProposalDetail:
+    with begin(engine) as connection:
+        try:
+            row = self_improvement.record_canary_result(
+                connection,
+                proposal_id,
+                payload.actor,
+                payload.outcome,
+                payload.summary,
+                payload.metrics,
+                payload.evidence_refs,
+            )
+        except SelfImprovementProposalNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except (InvalidSelfImprovementTransitionError, ValueError) as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        return self_improvement_detail_from_row(row)
+
+
+@app.post(
+    "/v1/self-improvement/proposals/{proposal_id}/rollout",
+    response_model=SelfImprovementProposalDetail,
+)
+def record_self_improvement_rollout(
+    proposal_id: str, payload: SelfImprovementRolloutRequest
+) -> SelfImprovementProposalDetail:
+    with begin(engine) as connection:
+        try:
+            row = self_improvement.record_rollout(
+                connection,
+                proposal_id,
+                payload.actor,
+                payload.summary,
+                payload.external_ref,
+                payload.metrics,
+                payload.evidence_refs,
+            )
+        except SelfImprovementProposalNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except InvalidSelfImprovementTransitionError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        return self_improvement_detail_from_row(row)
+
+
+@app.post(
+    "/v1/self-improvement/proposals/{proposal_id}/rollback",
+    response_model=SelfImprovementProposalDetail,
+)
+def rollback_self_improvement_proposal(
+    proposal_id: str, payload: SelfImprovementRollbackRequest
+) -> SelfImprovementProposalDetail:
+    with begin(engine) as connection:
+        try:
+            row = self_improvement.rollback(
+                connection,
+                proposal_id,
+                payload.actor,
+                payload.reason,
+                payload.external_ref,
+                payload.metrics,
+                payload.evidence_refs,
+            )
+        except SelfImprovementProposalNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except InvalidSelfImprovementTransitionError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        return self_improvement_detail_from_row(row)
 
 
 @app.get("/v1/artifacts", response_model=ArtifactListResponse)

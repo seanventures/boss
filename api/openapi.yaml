@@ -69,6 +69,132 @@ paths:
           schema: { type: string }
       responses:
         '200': { description: Task }
+  /v1/self-improvement/proposals:
+    get:
+      summary: List self-improvement proposals for a project
+      parameters:
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, default: 25 }
+      responses:
+        '200': { description: Self-improvement proposal list }
+    post:
+      summary: Create a governed self-improvement proposal
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                [project_id, title, summary, change_ref, diff_summary]
+              properties:
+                project_id: { type: string }
+                title: { type: string }
+                summary: { type: string }
+                change_ref: { type: string }
+                diff_summary: { type: string }
+                expected_impact:
+                  type: array
+                  items: { type: string }
+                test_plan:
+                  type: array
+                  items: { type: string }
+                canary_scope:
+                  type: array
+                  items: { type: string }
+                rollback_plan:
+                  type: array
+                  items: { type: string }
+                success_metrics:
+                  type: array
+                  items: { type: string }
+                actor: { type: string, default: vp_agents }
+                risk_tier: { type: integer, default: 2 }
+      responses:
+        '201': { description: Self-improvement proposal created }
+  /v1/self-improvement/proposals/{proposal_id}:
+    get:
+      summary: Get self-improvement proposal detail
+      parameters:
+        - name: proposal_id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Self-improvement proposal detail }
+        '404': { description: Proposal not found }
+  /v1/self-improvement/proposals/{proposal_id}/canary:
+    post:
+      summary: Record the result of a self-improvement canary
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [outcome, summary]
+              properties:
+                actor: { type: string, default: release_manager }
+                outcome: { type: string }
+                summary: { type: string }
+                metrics: { type: object }
+                evidence_refs:
+                  type: array
+                  items: { type: string }
+      responses:
+        '200': { description: Canary result recorded }
+        '404': { description: Proposal not found }
+        '409': { description: Invalid proposal state }
+  /v1/self-improvement/proposals/{proposal_id}/rollout:
+    post:
+      summary: Record rollout of an approved self-improvement change
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [summary]
+              properties:
+                actor: { type: string, default: release_manager }
+                summary: { type: string }
+                external_ref: { type: string }
+                metrics: { type: object }
+                evidence_refs:
+                  type: array
+                  items: { type: string }
+      responses:
+        '200': { description: Rollout recorded }
+        '404': { description: Proposal not found }
+        '409': { description: Invalid proposal state }
+  /v1/self-improvement/proposals/{proposal_id}/rollback:
+    post:
+      summary: Record rollback of a self-improvement rollout
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                actor: { type: string, default: release_manager }
+                reason: { type: string }
+                external_ref: { type: string }
+                metrics: { type: object }
+                evidence_refs:
+                  type: array
+                  items: { type: string }
+      responses:
+        '200': { description: Rollback recorded }
+        '404': { description: Proposal not found }
+        '409': { description: Invalid proposal state }
   /v1/artifacts:
     get:
       summary: List artifacts

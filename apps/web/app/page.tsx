@@ -2,7 +2,11 @@ import {
   createReplayBundleAction,
   installPackAction,
   queueOutboxMessageAction,
+  recordSelfImprovementCanaryAction,
+  recordSelfImprovementRolloutAction,
   resolveDecisionAction,
+  rollbackSelfImprovementProposalAction,
+  submitSelfImprovementProposalAction,
   submitOutboxDraftAction,
   submitCommandAction,
 } from "./actions";
@@ -17,6 +21,7 @@ import { fetchPackFeed } from "../lib/packs";
 import { fetchReceiptFeed } from "../lib/receipts";
 import { fetchRoleFeed } from "../lib/roles";
 import { fetchRoutingLogFeed } from "../lib/routing";
+import { fetchSelfImprovementFeed } from "../lib/self-improvement";
 import { fetchSkillFeed } from "../lib/skills";
 import { fetchStatus } from "../lib/status";
 import { fetchTaskFeed } from "../lib/tasks";
@@ -103,6 +108,7 @@ export default async function HomePage() {
     skills,
     receipts,
     auditSummary,
+    selfImprovement,
     outbox,
     inbox,
   ] =
@@ -120,6 +126,7 @@ export default async function HomePage() {
       fetchSkillFeed(),
       fetchReceiptFeed(),
       fetchAuditSummary(),
+      fetchSelfImprovementFeed(),
       fetchOutboxFeed(),
       fetchInboxFeed(),
     ]);
@@ -340,6 +347,176 @@ export default async function HomePage() {
                       <code className="mono">
                         {receipt.createdByJobId ?? receipt.id}
                       </code>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </article>
+          </div>
+        </section>
+
+        <section className="panel-stack">
+          <div className="section-head">
+            <div>
+              <span className="eyebrow">Self-Improvement</span>
+              <h2>Change BOSS only through governed rollout steps.</h2>
+            </div>
+            <p className="status-meta">
+              Every self-improvement now becomes a task, proposal artifact, approval gate, canary report, rollout record, and rollback record.
+            </p>
+          </div>
+
+          <div className="stack-grid">
+            <article className="stack-card">
+              <h3>Propose an improvement</h3>
+              <form action={submitSelfImprovementProposalAction} className="composer compact">
+                <label className="field">
+                  <span>Title</span>
+                  <input
+                    name="title"
+                    className="input"
+                    placeholder="Tighten decision expiry defaults"
+                    required
+                  />
+                </label>
+                <label className="field">
+                  <span>Summary</span>
+                  <textarea
+                    name="summary"
+                    rows={3}
+                    className="textarea"
+                    placeholder="Describe the product or control-plane improvement."
+                    required
+                  />
+                </label>
+                <label className="field">
+                  <span>PR or diff reference</span>
+                  <input
+                    name="change_ref"
+                    className="input"
+                    placeholder="https://github.com/seanheiney/boss/pull/123"
+                    required
+                  />
+                </label>
+                <label className="field">
+                  <span>Diff summary</span>
+                  <textarea
+                    name="diff_summary"
+                    rows={3}
+                    className="textarea"
+                    placeholder="Summarize what will change and why."
+                    required
+                  />
+                </label>
+                <label className="field">
+                  <span>Expected impact</span>
+                  <textarea
+                    name="expected_impact"
+                    rows={3}
+                    className="textarea"
+                    placeholder={"One item per line\nLower decision latency\nStronger audit visibility"}
+                  />
+                </label>
+                <label className="field">
+                  <span>Test plan</span>
+                  <textarea
+                    name="test_plan"
+                    rows={3}
+                    className="textarea"
+                    placeholder={"One item per line\nAPI tests\nSmoke suite"}
+                  />
+                </label>
+                <label className="field">
+                  <span>Canary scope</span>
+                  <textarea
+                    name="canary_scope"
+                    rows={2}
+                    className="textarea"
+                    placeholder={"One item per line\ndogfood workspace only"}
+                  />
+                </label>
+                <label className="field">
+                  <span>Rollback plan</span>
+                  <textarea
+                    name="rollback_plan"
+                    rows={2}
+                    className="textarea"
+                    placeholder={"One item per line\nRevert PR\nDisable flag"}
+                  />
+                </label>
+                <label className="field">
+                  <span>Success metrics</span>
+                  <textarea
+                    name="success_metrics"
+                    rows={2}
+                    className="textarea"
+                    placeholder={"One item per line\nNo unsafe expirations"}
+                  />
+                </label>
+                <button className="button secondary" type="submit">
+                  Submit improvement proposal
+                </button>
+              </form>
+            </article>
+
+            <article className="stack-card">
+              <h3>Proposal pipeline</h3>
+              {!selfImprovement.apiReachable ? (
+                <p className="detail">
+                  {selfImprovement.blockedReason ?? "Self-improvement API is unavailable."}
+                </p>
+              ) : selfImprovement.items.length === 0 ? (
+                <p className="detail">No self-improvement proposals have been created yet.</p>
+              ) : (
+                <div className="feed-list">
+                  {selfImprovement.items.map((proposal) => (
+                    <div className="feed-row" key={proposal.id}>
+                      <div>
+                        <h4>{proposal.title}</h4>
+                        <p className="detail">
+                          {proposal.status} / risk {proposal.riskTier} / {formatDateTime(proposal.updatedAt)}
+                        </p>
+                        <p className="detail">{proposal.changeRef}</p>
+                        <p className="detail">
+                          {proposal.currentDecisionId
+                            ? `Pending decision: ${proposal.currentDecisionId}`
+                            : proposal.statusNote ?? proposal.summary}
+                        </p>
+                      </div>
+                      {proposal.status === "canary_approved" ? (
+                        <div className="button-stack">
+                          <form action={recordSelfImprovementCanaryAction}>
+                            <input type="hidden" name="proposal_id" value={proposal.id} />
+                            <input type="hidden" name="outcome" value="succeeded" />
+                            <button className="button secondary" type="submit">
+                              Record canary success
+                            </button>
+                          </form>
+                          <form action={recordSelfImprovementCanaryAction}>
+                            <input type="hidden" name="proposal_id" value={proposal.id} />
+                            <input type="hidden" name="outcome" value="failed" />
+                            <button className="button secondary" type="submit">
+                              Record canary failure
+                            </button>
+                          </form>
+                        </div>
+                      ) : proposal.status === "rollout_approved" ? (
+                        <form action={recordSelfImprovementRolloutAction}>
+                          <input type="hidden" name="proposal_id" value={proposal.id} />
+                          <button className="button secondary" type="submit">
+                            Record rollout
+                          </button>
+                        </form>
+                      ) : proposal.status === "rolled_out" ? (
+                        <form action={rollbackSelfImprovementProposalAction}>
+                          <input type="hidden" name="proposal_id" value={proposal.id} />
+                          <button className="button secondary" type="submit">
+                            Record rollback
+                          </button>
+                        </form>
+                      ) : (
+                        <code className="mono">{proposal.id}</code>
+                      )}
                     </div>
                   ))}
                 </div>

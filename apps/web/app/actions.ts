@@ -133,3 +133,101 @@ export async function queueOutboxMessageAction(formData: FormData): Promise<void
   });
   revalidatePath("/");
 }
+
+function parseLines(value: FormDataEntryValue | null): string[] {
+  if (typeof value !== "string") {
+    return [];
+  }
+  return value
+    .split("\n")
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+export async function submitSelfImprovementProposalAction(
+  formData: FormData,
+): Promise<void> {
+  const title = formData.get("title");
+  const summary = formData.get("summary");
+  const changeRef = formData.get("change_ref");
+  const diffSummary = formData.get("diff_summary");
+
+  if (typeof title !== "string" || !title.trim()) {
+    throw new Error("title is required");
+  }
+  if (typeof summary !== "string" || !summary.trim()) {
+    throw new Error("summary is required");
+  }
+  if (typeof changeRef !== "string" || !changeRef.trim()) {
+    throw new Error("change_ref is required");
+  }
+  if (typeof diffSummary !== "string" || !diffSummary.trim()) {
+    throw new Error("diff_summary is required");
+  }
+
+  await client.createSelfImprovementProposal({
+    project_id: process.env.NEXT_PUBLIC_BOSS_PROJECT_ID ?? "boss-dogfood",
+    title: title.trim(),
+    summary: summary.trim(),
+    change_ref: changeRef.trim(),
+    diff_summary: diffSummary.trim(),
+    expected_impact: parseLines(formData.get("expected_impact")),
+    test_plan: parseLines(formData.get("test_plan")),
+    canary_scope: parseLines(formData.get("canary_scope")),
+    rollback_plan: parseLines(formData.get("rollback_plan")),
+    success_metrics: parseLines(formData.get("success_metrics")),
+    actor: "executive_console",
+    risk_tier: 2,
+  });
+  revalidatePath("/");
+}
+
+export async function recordSelfImprovementCanaryAction(
+  formData: FormData,
+): Promise<void> {
+  const proposalId = formData.get("proposal_id");
+  const outcome = formData.get("outcome");
+  if (typeof proposalId !== "string" || !proposalId) {
+    throw new Error("proposal_id is required");
+  }
+  if (outcome !== "succeeded" && outcome !== "failed") {
+    throw new Error("outcome must be succeeded or failed");
+  }
+  await client.recordSelfImprovementCanary(proposalId, {
+    actor: "executive_console",
+    outcome,
+    summary:
+      outcome === "succeeded"
+        ? "Recorded from the executive console after canary validation."
+        : "Recorded from the executive console after canary failure review.",
+  });
+  revalidatePath("/");
+}
+
+export async function recordSelfImprovementRolloutAction(
+  formData: FormData,
+): Promise<void> {
+  const proposalId = formData.get("proposal_id");
+  if (typeof proposalId !== "string" || !proposalId) {
+    throw new Error("proposal_id is required");
+  }
+  await client.recordSelfImprovementRollout(proposalId, {
+    actor: "executive_console",
+    summary: "Recorded from the executive console after rollout completion.",
+  });
+  revalidatePath("/");
+}
+
+export async function rollbackSelfImprovementProposalAction(
+  formData: FormData,
+): Promise<void> {
+  const proposalId = formData.get("proposal_id");
+  if (typeof proposalId !== "string" || !proposalId) {
+    throw new Error("proposal_id is required");
+  }
+  await client.rollbackSelfImprovementProposal(proposalId, {
+    actor: "executive_console",
+    reason: "Rollback recorded from the executive console.",
+  });
+  revalidatePath("/");
+}

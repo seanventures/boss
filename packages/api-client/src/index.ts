@@ -59,6 +59,78 @@ export type TaskCreateRequest = {
   required_artifacts?: string[];
 };
 
+export type SelfImprovementProposalCreateRequest = {
+  project_id: string;
+  title: string;
+  summary: string;
+  change_ref: string;
+  diff_summary: string;
+  expected_impact?: string[];
+  test_plan?: string[];
+  canary_scope?: string[];
+  rollback_plan?: string[];
+  success_metrics?: string[];
+  actor?: string;
+  risk_tier?: number;
+};
+
+export type SelfImprovementProposalSummary = {
+  id: string;
+  project_id: string;
+  task_id: string;
+  title: string;
+  summary: string;
+  change_ref: string;
+  diff_summary: string;
+  status: string;
+  risk_tier: number;
+  expected_impact: string[];
+  test_plan: string[];
+  canary_scope: string[];
+  rollback_plan: string[];
+  success_metrics: string[];
+  status_note?: string;
+  proposal_artifact_id?: string;
+  current_decision_id?: string;
+  canary_artifact_id?: string;
+  rollout_artifact_id?: string;
+  rollback_artifact_id?: string;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type SelfImprovementProposalDetail = SelfImprovementProposalSummary;
+
+export type SelfImprovementProposalListResponse = {
+  project_id: string;
+  items: SelfImprovementProposalSummary[];
+};
+
+export type SelfImprovementCanaryRequest = {
+  actor?: string;
+  outcome: string;
+  summary: string;
+  metrics?: Record<string, unknown>;
+  evidence_refs?: string[];
+};
+
+export type SelfImprovementRolloutRequest = {
+  actor?: string;
+  summary: string;
+  external_ref?: string;
+  metrics?: Record<string, unknown>;
+  evidence_refs?: string[];
+};
+
+export type SelfImprovementRollbackRequest = {
+  actor?: string;
+  reason: string;
+  external_ref?: string;
+  metrics?: Record<string, unknown>;
+  evidence_refs?: string[];
+};
+
 export type JobSummary = {
   id: string;
   project_id: string;
@@ -846,6 +918,58 @@ export function createBossApiClient(config: BossApiClientConfig) {
     },
     getTask(taskId: string) {
       return request<TaskSummary>("GET", `/v1/tasks/${encodeURIComponent(taskId)}`);
+    },
+    listSelfImprovementProposals(projectId: string, limit = 25) {
+      return request<SelfImprovementProposalListResponse>(
+        "GET",
+        "/v1/self-improvement/proposals",
+        {
+          query: { project_id: projectId, limit },
+        },
+      );
+    },
+    createSelfImprovementProposal(payload: SelfImprovementProposalCreateRequest) {
+      return request<SelfImprovementProposalDetail>(
+        "POST",
+        "/v1/self-improvement/proposals",
+        { body: payload },
+      );
+    },
+    getSelfImprovementProposal(proposalId: string) {
+      return request<SelfImprovementProposalDetail>(
+        "GET",
+        `/v1/self-improvement/proposals/${encodeURIComponent(proposalId)}`,
+      );
+    },
+    recordSelfImprovementCanary(
+      proposalId: string,
+      payload: SelfImprovementCanaryRequest,
+    ) {
+      return request<SelfImprovementProposalDetail>(
+        "POST",
+        `/v1/self-improvement/proposals/${encodeURIComponent(proposalId)}/canary`,
+        { body: payload },
+      );
+    },
+    recordSelfImprovementRollout(
+      proposalId: string,
+      payload: SelfImprovementRolloutRequest,
+    ) {
+      return request<SelfImprovementProposalDetail>(
+        "POST",
+        `/v1/self-improvement/proposals/${encodeURIComponent(proposalId)}/rollout`,
+        { body: payload },
+      );
+    },
+    rollbackSelfImprovementProposal(
+      proposalId: string,
+      payload: SelfImprovementRollbackRequest,
+    ) {
+      return request<SelfImprovementProposalDetail>(
+        "POST",
+        `/v1/self-improvement/proposals/${encodeURIComponent(proposalId)}/rollback`,
+        { body: payload },
+      );
     },
     listArtifacts(projectId: string, limit = 25) {
       return request<ArtifactListResponse>("GET", "/v1/artifacts", {

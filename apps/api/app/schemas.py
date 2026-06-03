@@ -330,6 +330,80 @@ class TaskCreateRequest(BaseModel):
     required_artifacts: list[str] = Field(default_factory=list)
 
 
+class SelfImprovementProposalCreateRequest(BaseModel):
+    project_id: str
+    title: str
+    summary: str
+    change_ref: str
+    diff_summary: str
+    expected_impact: list[str] = Field(default_factory=list)
+    test_plan: list[str] = Field(default_factory=list)
+    canary_scope: list[str] = Field(default_factory=list)
+    rollback_plan: list[str] = Field(default_factory=list)
+    success_metrics: list[str] = Field(default_factory=list)
+    actor: str = "vp_agents"
+    risk_tier: int = Field(default=2, ge=1, le=3)
+
+
+class SelfImprovementProposalSummary(BaseModel):
+    id: str
+    project_id: str
+    task_id: str
+    title: str
+    summary: str
+    change_ref: str
+    diff_summary: str
+    status: str
+    risk_tier: int
+    expected_impact: list[str] = Field(default_factory=list)
+    test_plan: list[str] = Field(default_factory=list)
+    canary_scope: list[str] = Field(default_factory=list)
+    rollback_plan: list[str] = Field(default_factory=list)
+    success_metrics: list[str] = Field(default_factory=list)
+    status_note: Optional[str] = None
+    proposal_artifact_id: Optional[str] = None
+    current_decision_id: Optional[str] = None
+    canary_artifact_id: Optional[str] = None
+    rollout_artifact_id: Optional[str] = None
+    rollback_artifact_id: Optional[str] = None
+    created_by: str
+    created_at: str
+    updated_at: str
+
+
+class SelfImprovementProposalDetail(SelfImprovementProposalSummary):
+    pass
+
+
+class SelfImprovementProposalListResponse(BaseModel):
+    project_id: str
+    items: list[SelfImprovementProposalSummary]
+
+
+class SelfImprovementCanaryRequest(BaseModel):
+    actor: str = "release_manager"
+    outcome: str
+    summary: str
+    metrics: dict[str, Any] = Field(default_factory=dict)
+    evidence_refs: list[str] = Field(default_factory=list)
+
+
+class SelfImprovementRolloutRequest(BaseModel):
+    actor: str = "release_manager"
+    summary: str
+    external_ref: Optional[str] = None
+    metrics: dict[str, Any] = Field(default_factory=dict)
+    evidence_refs: list[str] = Field(default_factory=list)
+
+
+class SelfImprovementRollbackRequest(BaseModel):
+    actor: str = "release_manager"
+    reason: str
+    external_ref: Optional[str] = None
+    metrics: dict[str, Any] = Field(default_factory=dict)
+    evidence_refs: list[str] = Field(default_factory=list)
+
+
 class DecisionCard(BaseModel):
     id: str
     task_id: Optional[str] = None

@@ -10,6 +10,7 @@ from ..config import Settings
 from .budget import BudgetGovernor
 from .core import create_artifact, emit_event, now_utc
 from .jobs import JobLeaseService
+from .self_improvement import SelfImprovementService
 
 
 class DecisionNotFoundError(Exception):
@@ -25,6 +26,7 @@ class DecisionService:
         self.settings = settings
         self.budget = BudgetGovernor(settings)
         self.jobs = JobLeaseService(settings)
+        self.self_improvement = SelfImprovementService(settings)
 
     def expire_overdue(
         self, connection: Connection, project_id: Optional[str] = None
@@ -206,6 +208,10 @@ class DecisionService:
                     "default_action": row["default_action"] or "hold",
                 },
             )
+            refreshed = self.get_row(connection, decision_id)
+            self._handle_non_approved_follow_on(
+                connection, refreshed, action="reject", actor=actor, note=note
+            )
             return self.get_row(connection, decision_id)
 
         if action == "revise":
@@ -242,6 +248,10 @@ class DecisionService:
                     "to_status": "revision_requested",
                     "note": note.strip(),
                 },
+            )
+            refreshed = self.get_row(connection, decision_id)
+            self._handle_non_approved_follow_on(
+                connection, refreshed, action="revise", actor=actor, note=note
             )
             return self.get_row(connection, decision_id)
 
@@ -390,6 +400,29 @@ class DecisionService:
                 )
             else:
                 self._create_merge_gate_block(connection, row, actor, recommendation)
+        elif action in {"self_improvement.begin_canary", "self_improvement.rollout"}:
+            self.self_improvement.apply_decision_outcome(
+                connection, row, "approve", actor, row.get("resolution_note")
+            )
+
+    def _handle_non_approved_follow_on(
+        self,
+        connection: Connection,
+        row: dict[str, Any],
+        *,
+        action: str,
+        actor: str,
+        note: Optional[str],
+    ) -> None:
+        recommendation = row["recommendation"] or {}
+        recommendation_action = recommendation.get("action")
+        if recommendation_action in {
+            "self_improvement.begin_canary",
+            "self_improvement.rollout",
+        }:
+            self.self_improvement.apply_decision_outcome(
+                connection, row, action, actor, note
+            )
 
     def _queue_pr_proposal_from_plan(
         self,
