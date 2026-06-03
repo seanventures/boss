@@ -275,6 +275,7 @@ class TaskCreateRequest(BaseModel):
 
 class DecisionCard(BaseModel):
     id: str
+    task_id: Optional[str] = None
     question: str
     status: str
     risk_tier: int
@@ -282,6 +283,9 @@ class DecisionCard(BaseModel):
     recommendation: dict[str, Any]
     options: list[dict[str, Any]]
     cost_summary: dict[str, Any]
+    deadline_at: Optional[str] = None
+    approved_by: Optional[str] = None
+    approved_at: Optional[str] = None
     created_at: str
     updated_at: str
 
@@ -289,6 +293,11 @@ class DecisionCard(BaseModel):
 class DecisionInboxResponse(BaseModel):
     project_id: str
     items: list[DecisionCard]
+
+
+class DecisionActionRequest(BaseModel):
+    actor: str = "executive_console"
+    note: Optional[str] = None
 
 
 class EventItem(BaseModel):

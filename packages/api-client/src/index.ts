@@ -219,6 +219,7 @@ export type BudgetReleaseResponse = {
 
 export type DecisionCard = {
   id: string;
+  task_id?: string;
   question: string;
   status: string;
   risk_tier: number;
@@ -226,6 +227,9 @@ export type DecisionCard = {
   recommendation: Record<string, unknown>;
   options: Array<Record<string, unknown>>;
   cost_summary: Record<string, unknown>;
+  deadline_at?: string;
+  approved_by?: string;
+  approved_at?: string;
   created_at: string;
   updated_at: string;
 };
@@ -233,6 +237,11 @@ export type DecisionCard = {
 export type DecisionInboxResponse = {
   project_id: string;
   items: DecisionCard[];
+};
+
+export type DecisionActionRequest = {
+  actor?: string;
+  note?: string;
 };
 
 export type OpenAIPlanRequest = {
@@ -451,6 +460,20 @@ export function createBossApiClient(config: BossApiClientConfig) {
       return request<DecisionInboxResponse>("GET", "/v1/decisions/inbox", {
         query: { project_id: projectId },
       });
+    },
+    approveDecision(decisionId: string, payload: DecisionActionRequest = {}) {
+      return request<DecisionCard>(
+        "POST",
+        `/v1/decisions/${encodeURIComponent(decisionId)}/approve`,
+        { body: payload },
+      );
+    },
+    rejectDecision(decisionId: string, payload: DecisionActionRequest = {}) {
+      return request<DecisionCard>(
+        "POST",
+        `/v1/decisions/${encodeURIComponent(decisionId)}/reject`,
+        { body: payload },
+      );
     },
     createOpenAIPlan(payload: OpenAIPlanRequest) {
       return request<OpenAIPlanResponse>("POST", "/v1/openai/plans", {

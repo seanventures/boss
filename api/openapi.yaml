@@ -60,7 +60,7 @@ paths:
         '200': { description: Task }
   /v1/decisions/inbox:
     get:
-      summary: List pending decisions for inbox
+      summary: List decisions for inbox with pending items first
       parameters:
         - name: project_id
           in: query
@@ -76,8 +76,19 @@ paths:
           in: path
           required: true
           schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                actor: { type: string, default: executive_console }
+                note: { type: string }
       responses:
         '200': { description: Approved }
+        '404': { description: Decision not found }
+        '409': { description: Invalid transition }
   /v1/decisions/{decision_id}/reject:
     post:
       summary: Reject decision
@@ -86,8 +97,19 @@ paths:
           in: path
           required: true
           schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                actor: { type: string, default: executive_console }
+                note: { type: string }
       responses:
         '200': { description: Rejected }
+        '404': { description: Decision not found }
+        '409': { description: Invalid transition }
   /v1/jobs:
     post:
       summary: Create job

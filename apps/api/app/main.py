@@ -16,6 +16,7 @@ from .schemas import (
     BudgetReserveResponse,
     CommandProposeRequest,
     CommandProposeResponse,
+    DecisionActionRequest,
     DecisionCard,
     DecisionInboxResponse,
     EventFeedResponse,
@@ -43,6 +44,11 @@ from .schemas import (
     WorkerPollResponse,
 )
 from .services.budget import BudgetGovernor
+from .services.decisions import (
+    DecisionNotFoundError,
+    DecisionService,
+    InvalidDecisionTransitionError,
+)
 from .services.intake import CommandIntakeService
 from .services.jobs import JobLeaseService, LeaseNotFoundError
 from .services.receipts import ReceiptService
@@ -55,6 +61,7 @@ intake = CommandIntakeService(settings)
 jobs = JobLeaseService(settings)
 receipts = ReceiptService()
 software_factory = SoftwareFactoryService(settings)
+decisions = DecisionService()
 
 
 @asynccontextmanager
@@ -95,6 +102,25 @@ def job_summary_from_row(row) -> JobSummary:
     )
 
 
+def decision_card_from_row(row) -> DecisionCard:
+    return DecisionCard(
+        id=row["id"],
+        task_id=row.get("task_id"),
+        question=row["question"],
+        status=row["status"],
+        risk_tier=row["risk_tier"],
+        default_action=row["default_action"],
+        recommendation=row["recommendation"] or {},
+        options=row["options"] or [],
+        cost_summary=row["cost_summary"] or {},
+        deadline_at=row["deadline_at"].isoformat() if row["deadline_at"] else None,
+        approved_by=row["approved_by"],
+        approved_at=row["approved_at"].isoformat() if row["approved_at"] else None,
+        created_at=row["created_at"].isoformat(),
+        updated_at=row["updated_at"].isoformat(),
+    )
+
+
 @app.get("/health", response_model=HealthResponse)
 def health() -> HealthResponse:
     return HealthResponse(
@@ -121,6 +147,7 @@ def status(project_id: str) -> StatusResponse:
         )
 
     with begin(engine) as connection:
+        decisions.expire_overdue(connection, project_id)
         row = connection.execute(
             text(
                 """
@@ -411,11 +438,13 @@ def worker_fail(payload: WorkerFailRequest) -> WorkerFailResponse:
 @app.get("/v1/decisions/inbox", response_model=DecisionInboxResponse)
 def decision_inbox(project_id: str) -> DecisionInboxResponse:
     with begin(engine) as connection:
+        decisions.expire_overdue(connection, project_id)
         rows = connection.execute(
             text(
                 """
-                SELECT id, question, status, risk_tier, default_action,
-                       recommendation, options, cost_summary, created_at, updated_at
+                SELECT id, task_id, question, status, risk_tier, default_action,
+                       recommendation, options, cost_summary, deadline_at,
+                       approved_by, approved_at, created_at, updated_at
                 FROM decisions
                 WHERE project_id = :project_id
                 ORDER BY
@@ -426,23 +455,50 @@ def decision_inbox(project_id: str) -> DecisionInboxResponse:
             ),
             {"project_id": project_id},
         ).mappings().all()
+        return DecisionInboxResponse(
+            project_id=project_id,
+            items=[decision_card_from_row(row) for row in rows],
+        )
 
-        items = [
-            DecisionCard(
-                id=row["id"],
-                question=row["question"],
-                status=row["status"],
-                risk_tier=row["risk_tier"],
-                default_action=row["default_action"],
-                recommendation=row["recommendation"] or {},
-                options=row["options"] or [],
-                cost_summary=row["cost_summary"] or {},
-                created_at=row["created_at"].isoformat(),
-                updated_at=row["updated_at"].isoformat(),
+
+@app.post("/v1/decisions/{decision_id}/approve", response_model=DecisionCard)
+def approve_decision(
+    decision_id: str, payload: DecisionActionRequest
+) -> DecisionCard:
+    with begin(engine) as connection:
+        try:
+            row = decisions.transition(
+                connection,
+                decision_id,
+                action="approve",
+                actor=payload.actor,
+                note=payload.note,
             )
-            for row in rows
-        ]
-        return DecisionInboxResponse(project_id=project_id, items=items)
+        except DecisionNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except InvalidDecisionTransitionError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        return decision_card_from_row(row)
+
+
+@app.post("/v1/decisions/{decision_id}/reject", response_model=DecisionCard)
+def reject_decision(
+    decision_id: str, payload: DecisionActionRequest
+) -> DecisionCard:
+    with begin(engine) as connection:
+        try:
+            row = decisions.transition(
+                connection,
+                decision_id,
+                action="reject",
+                actor=payload.actor,
+                note=payload.note,
+            )
+        except DecisionNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except InvalidDecisionTransitionError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        return decision_card_from_row(row)
 
 
 @app.post("/v1/openai/plans", response_model=OpenAIPlanResponse)

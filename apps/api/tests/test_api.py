@@ -180,6 +180,106 @@ def test_budget_denial_is_visible_in_decision_inbox_and_event_feed(client):
     assert "budget.reservation_denied" in event_types
 
 
+def test_decision_can_be_approved_and_emits_audit_event(client):
+    denial = client.post(
+        "/v1/budget/reserve",
+        json={
+            "project_id": "boss-dogfood",
+            "category": "model",
+            "amount_usd_micros": 100_000_000,
+            "reason": "force denial",
+        },
+    )
+    assert denial.status_code == 201
+    decision_id = denial.json()["decision_id"]
+
+    approve = client.post(
+        f"/v1/decisions/{decision_id}/approve",
+        json={"actor": "ceo", "note": "Budget increase is acceptable."},
+    )
+    assert approve.status_code == 200
+    payload = approve.json()
+    assert payload["id"] == decision_id
+    assert payload["status"] == "approved"
+    assert payload["approved_by"] == "ceo"
+    assert payload["approved_at"]
+
+    status = client.get("/v1/status", params={"project_id": "boss-dogfood"})
+    assert status.status_code == 200
+    assert status.json()["pending_decisions"] == 0
+
+    events = client.get("/v1/events", params={"project_id": "boss-dogfood"})
+    assert events.status_code == 200
+    event_types = [item["event_type"] for item in events.json()["items"]]
+    assert "decision.approved" in event_types
+
+
+def test_decision_can_be_rejected_and_cannot_be_reapproved(client):
+    denial = client.post(
+        "/v1/budget/reserve",
+        json={
+            "project_id": "boss-dogfood",
+            "category": "model",
+            "amount_usd_micros": 100_000_000,
+            "reason": "force denial",
+        },
+    )
+    assert denial.status_code == 201
+    decision_id = denial.json()["decision_id"]
+
+    reject = client.post(
+        f"/v1/decisions/{decision_id}/reject",
+        json={"actor": "ceo", "note": "Keep the guardrail in place."},
+    )
+    assert reject.status_code == 200
+    payload = reject.json()
+    assert payload["status"] == "rejected"
+    assert payload["approved_by"] is None
+    assert payload["approved_at"] is None
+
+    duplicate_approve = client.post(
+        f"/v1/decisions/{decision_id}/approve",
+        json={"actor": "ceo"},
+    )
+    assert duplicate_approve.status_code == 409
+
+    events = client.get("/v1/events", params={"project_id": "boss-dogfood"})
+    assert events.status_code == 200
+    event_types = [item["event_type"] for item in events.json()["items"]]
+    assert "decision.rejected" in event_types
+
+
+def test_overdue_pending_decisions_expire_to_safe_default(client, engine):
+    deadline_at = datetime.now(timezone.utc) - timedelta(minutes=1)
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                """
+                INSERT INTO decisions (
+                    id, project_id, task_id, question, recommendation, options, risk_tier,
+                    cost_summary, deadline_at, default_action, status
+                )
+                VALUES (
+                    'dec_expired_for_inbox', 'boss-dogfood', NULL, 'Expired decision',
+                    '{}'::jsonb, '[]'::jsonb, 2, '{}'::jsonb, :deadline_at, 'hold', 'pending'
+                )
+                """
+            ),
+            {"deadline_at": deadline_at},
+        )
+
+    inbox = client.get("/v1/decisions/inbox", params={"project_id": "boss-dogfood"})
+    assert inbox.status_code == 200
+    payload = inbox.json()
+    assert payload["items"][0]["id"] == "dec_expired_for_inbox"
+    assert payload["items"][0]["status"] == "expired"
+    assert payload["items"][0]["default_action"] == "hold"
+
+    events = client.get("/v1/events", params={"project_id": "boss-dogfood"})
+    assert events.status_code == 200
+    assert "decision.expired" in [item["event_type"] for item in events.json()["items"]]
+
+
 def test_expired_reservations_are_reclassified_before_budget_status(client, engine):
     expired_at = datetime.now(timezone.utc) - timedelta(minutes=10)
     with engine.begin() as connection:

@@ -1,8 +1,8 @@
 import {
   BossApiError,
-  createBossApiClient,
   type StatusResponse,
 } from "@boss/api-client";
+import { client, PROJECT_ID } from "./client";
 
 export type StatusCard = {
   projectId: string;
@@ -16,13 +16,6 @@ export type StatusCard = {
   openTasks: number;
   blockedReason?: string;
 };
-
-const API_URL =
-  process.env.NEXT_PUBLIC_BOSS_API_URL?.replace(/\/$/, "") ??
-  "http://127.0.0.1:8000";
-const PROJECT_ID =
-  process.env.NEXT_PUBLIC_BOSS_PROJECT_ID ?? "boss-dogfood";
-const client = createBossApiClient({ baseUrl: API_URL });
 
 export function placeholderStatus(reason: string): StatusCard {
   return {

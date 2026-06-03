@@ -63,16 +63,18 @@ def create_blocking_decision(
     reason: str,
 ) -> str:
     decision_id = make_id("dec")
+    deadline_at = now_utc() + timedelta(hours=24)
     connection.execute(
         text(
             """
             INSERT INTO decisions (
                 id, project_id, task_id, question, recommendation, options, risk_tier,
-                cost_summary, default_action, status
+                cost_summary, deadline_at, default_action, status
             )
             VALUES (
                 :id, :project_id, :task_id, :question, CAST(:recommendation AS JSONB),
-                CAST(:options AS JSONB), 2, CAST(:cost_summary AS JSONB), 'hold', 'pending'
+                CAST(:options AS JSONB), 2, CAST(:cost_summary AS JSONB), :deadline_at,
+                'hold', 'pending'
             )
             """
         ),
@@ -89,6 +91,7 @@ def create_blocking_decision(
                 ]
             ),
             "cost_summary": json.dumps(cost_summary),
+            "deadline_at": deadline_at,
         },
     )
     emit_event(
@@ -98,7 +101,7 @@ def create_blocking_decision(
         "system",
         "decision",
         decision_id,
-        {"reason": reason},
+        {"reason": reason, "deadline_at": deadline_at.isoformat(), "default_action": "hold"},
     )
     return decision_id
 
