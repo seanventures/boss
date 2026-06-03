@@ -62,7 +62,7 @@ intake = CommandIntakeService(settings)
 jobs = JobLeaseService(settings)
 receipts = ReceiptService()
 software_factory = SoftwareFactoryService(settings)
-decisions = DecisionService()
+decisions = DecisionService(settings)
 
 
 @asynccontextmanager

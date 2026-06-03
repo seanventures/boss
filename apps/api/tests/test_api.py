@@ -606,6 +606,100 @@ def test_worker_complete_creates_plan_artifact_and_decision(client):
     assert payload["decision_id"]
 
 
+def test_approving_plan_decision_queues_follow_on_pr_job(client, engine):
+    created = client.post(
+        "/v1/jobs",
+        json={
+            "project_id": "boss-dogfood",
+            "kind": "plan.generate",
+            "payload": {"command": "Prepare the next sandbox proposal."},
+        },
+    )
+    assert created.status_code == 201
+    job_id = created.json()["id"]
+
+    leased = client.post(
+        "/v1/worker/poll",
+        json={
+            "worker_id": "worker-a",
+            "capabilities": ["plan.generate"],
+            "lease_ttl_seconds": 60,
+        },
+    ).json()["job"]
+    client.post(
+        "/v1/worker/heartbeat",
+        json={
+            "worker_id": "worker-a",
+            "job_id": job_id,
+            "lease_token": leased["lease_token"],
+            "lease_ttl_seconds": 60,
+        },
+    )
+    complete = client.post(
+        "/v1/worker/complete",
+        json={
+            "worker_id": "worker-a",
+            "job_id": job_id,
+            "lease_token": leased["lease_token"],
+            "result": {
+                "summary": "Prepare the next sandbox proposal.",
+                "objectives": ["Prepare the next sandbox proposal."],
+                "steps": ["Draft the proposal markdown."],
+                "risks": ["Budget could block execution."],
+                "done_when": ["A sandbox PR proposal job is queued."],
+            },
+        },
+    )
+    assert complete.status_code == 200
+    decision_id = complete.json()["decision_id"]
+
+    approve = client.post(
+        f"/v1/decisions/{decision_id}/approve",
+        json={"actor": "ceo", "note": "Proceed to sandbox proposal."},
+    )
+    assert approve.status_code == 200
+
+    with engine.begin() as connection:
+        reservation = connection.execute(
+            text(
+                """
+                SELECT id, status, category, amount_usd_micros
+                FROM budget_reservations
+                WHERE project_id = 'boss-dogfood'
+                ORDER BY created_at DESC
+                LIMIT 1
+                """
+            )
+        ).mappings().one()
+        next_job = connection.execute(
+            text(
+                """
+                SELECT kind, status, payload
+                FROM jobs
+                WHERE project_id = 'boss-dogfood'
+                  AND kind = 'software_factory.propose_pr'
+                ORDER BY created_at DESC
+                LIMIT 1
+                """
+            )
+        ).mappings().one()
+
+    assert reservation["status"] == "active"
+    assert reservation["category"] == "tool"
+    assert int(reservation["amount_usd_micros"]) == 500_000
+    assert next_job["status"] == "queued"
+    payload = next_job["payload"]
+    assert payload["reservation_id"] == reservation["id"]
+    assert payload["title"].startswith("BOSS proposal:")
+    assert payload["branch_name"].startswith("boss/proposal-")
+    assert payload["files"][0]["path"].startswith("proposals/")
+
+    events = client.get("/v1/events", params={"project_id": "boss-dogfood"})
+    assert events.status_code == 200
+    event_types = [item["event_type"] for item in events.json()["items"]]
+    assert "decision.follow_on_job_queued" in event_types
+
+
 def test_spend_gated_job_without_reservation_is_not_leased(client, engine):
     created = client.post(
         "/v1/jobs",

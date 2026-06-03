@@ -42,6 +42,9 @@ class Settings(BaseSettings):
     burst_cap_usd_micros_per_min: int = Field(
         default=100_000, alias="BOSS_BURST_CAP_USD_MICROS_PER_MIN"
     )
+    software_factory_pr_budget_usd_micros: int = Field(
+        default=500_000, alias="BOSS_SOFTWARE_FACTORY_PR_BUDGET_USD_MICROS"
+    )
 
     @property
     def repo_root(self) -> Path:

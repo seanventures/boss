@@ -1,11 +1,14 @@
 from __future__ import annotations
 
-from typing import Optional
+from typing import Any, Optional
 
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
+from ..config import Settings
+from .budget import BudgetGovernor
 from .core import emit_event, now_utc
+from .jobs import JobLeaseService
 
 
 class DecisionNotFoundError(Exception):
@@ -17,6 +20,11 @@ class InvalidDecisionTransitionError(Exception):
 
 
 class DecisionService:
+    def __init__(self, settings: Settings):
+        self.settings = settings
+        self.budget = BudgetGovernor(settings)
+        self.jobs = JobLeaseService(settings)
+
     def expire_overdue(
         self, connection: Connection, project_id: Optional[str] = None
     ) -> int:
@@ -156,4 +164,181 @@ class DecisionService:
                 "default_action": row["default_action"] or "hold",
             },
         )
+        if status == "approved":
+            self._handle_approved_follow_on(connection, row, actor)
         return self.get_row(connection, decision_id)
+
+    def _handle_approved_follow_on(
+        self, connection: Connection, row: dict[str, Any], actor: str
+    ) -> None:
+        recommendation = row["recommendation"] or {}
+        if recommendation.get("action") != "review_plan_draft":
+            return
+
+        artifact_id = recommendation.get("artifact_id")
+        if not isinstance(artifact_id, str) or not artifact_id:
+            emit_event(
+                connection,
+                row["project_id"],
+                "decision.follow_on_skipped",
+                actor,
+                "decision",
+                row["id"],
+                {"reason": "missing_plan_artifact_id"},
+            )
+            return
+
+        artifact = connection.execute(
+            text(
+                """
+                SELECT content
+                FROM artifacts
+                WHERE id = :artifact_id AND project_id = :project_id
+                """
+            ),
+            {"artifact_id": artifact_id, "project_id": row["project_id"]},
+        ).mappings().first()
+        if not artifact:
+            emit_event(
+                connection,
+                row["project_id"],
+                "decision.follow_on_skipped",
+                actor,
+                "decision",
+                row["id"],
+                {"reason": "plan_artifact_not_found", "artifact_id": artifact_id},
+            )
+            return
+
+        task = self._task_context(connection, row["task_id"])
+        reservation = self.budget.reserve(
+            connection,
+            row["project_id"],
+            "tool",
+            self.settings.software_factory_pr_budget_usd_micros,
+            "Approved plan draft; queue sandbox PR proposal.",
+            60,
+        )
+        if reservation["status"] != "reserved":
+            emit_event(
+                connection,
+                row["project_id"],
+                "decision.follow_on_budget_blocked",
+                actor,
+                "decision",
+                row["id"],
+                {
+                    "budget_decision_id": reservation.get("decision_id"),
+                    "requested_usd_micros": self.settings.software_factory_pr_budget_usd_micros,
+                },
+            )
+            return
+
+        branch_suffix = row["task_id"] or row["id"]
+        branch_name = f"boss/proposal-{branch_suffix}"
+        title = self._proposal_title(task)
+        summary = self._proposal_summary(task, artifact["content"] or {})
+        file_path = f"proposals/{branch_suffix}.md"
+        file_content = self._proposal_markdown(task, artifact["content"] or {}, actor)
+        job = self.jobs.create_job(
+            connection,
+            project_id=row["project_id"],
+            task_id=row["task_id"],
+            kind="software_factory.propose_pr",
+            priority=40,
+            payload={
+                "project_id": row["project_id"],
+                "reservation_id": reservation["reservation_id"],
+                "dedupe_key": f"approved-plan-proposal-{row['id']}",
+                "title": title,
+                "branch_name": branch_name,
+                "summary": summary,
+                "files": [{"path": file_path, "content": file_content}],
+                "requires_reservation": True,
+            },
+        )
+        emit_event(
+            connection,
+            row["project_id"],
+            "decision.follow_on_job_queued",
+            actor,
+            "job",
+            job["id"],
+            {
+                "decision_id": row["id"],
+                "reservation_id": reservation["reservation_id"],
+                "kind": "software_factory.propose_pr",
+            },
+        )
+
+    def _task_context(
+        self, connection: Connection, task_id: Optional[str]
+    ) -> Optional[dict[str, Any]]:
+        if not task_id:
+            return None
+        task = connection.execute(
+            text(
+                """
+                SELECT id, title, description, inputs
+                FROM tasks
+                WHERE id = :task_id
+                """
+            ),
+            {"task_id": task_id},
+        ).mappings().first()
+        return dict(task) if task else None
+
+    def _proposal_title(self, task: Optional[dict[str, Any]]) -> str:
+        if not task:
+            return "BOSS sandbox proposal"
+        title = task.get("title")
+        if isinstance(title, str) and title.strip():
+            return f"BOSS proposal: {title[:80]}"
+        return "BOSS sandbox proposal"
+
+    def _proposal_summary(
+        self, task: Optional[dict[str, Any]], plan_content: dict[str, Any]
+    ) -> str:
+        if task:
+            description = task.get("description")
+            if isinstance(description, str) and description.strip():
+                return description
+        summary = plan_content.get("summary")
+        if isinstance(summary, str) and summary.strip():
+            return summary
+        return "Create a sandbox PR proposal from an approved BOSS plan draft."
+
+    def _proposal_markdown(
+        self,
+        task: Optional[dict[str, Any]],
+        plan_content: dict[str, Any],
+        actor: str,
+    ) -> str:
+        command = None
+        if task:
+            inputs = task.get("inputs")
+            if isinstance(inputs, dict):
+                command = inputs.get("command")
+        if not isinstance(command, str) or not command.strip():
+            command = self._proposal_summary(task, plan_content)
+
+        lines = [
+            "# BOSS Approved Plan Proposal",
+            "",
+            f"- Approved by: {actor}",
+            f"- Command: {command}",
+            "",
+            "## Objectives",
+        ]
+        for objective in plan_content.get("objectives", []):
+            lines.append(f"- {objective}")
+        lines.extend(["", "## Steps"])
+        for step in plan_content.get("steps", []):
+            lines.append(f"- {step}")
+        lines.extend(["", "## Risks"])
+        for risk in plan_content.get("risks", []):
+            lines.append(f"- {risk}")
+        lines.extend(["", "## Done When"])
+        for item in plan_content.get("done_when", []):
+            lines.append(f"- {item}")
+        return "\n".join(lines) + "\n"

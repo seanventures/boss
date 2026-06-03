@@ -98,6 +98,7 @@ If a required credential is missing, the API must fail closed and create visible
 - Reused or blocked spendy effects release their reservation instead of leaving budget locked.
 - Spend-gated jobs without an active reservation are not leased; they create a visible decision and are cancelled explicitly rather than running silently.
 - Real sandbox PR proposals can now be queued as leased jobs so GitHub/OpenAI execution runs through `reservation -> job -> lease -> receipt -> artifact -> decision`.
+- Approving a plan-review decision now auto-reserves the configured sandbox proposal budget and queues the next `software_factory.propose_pr` job instead of stopping at decision state only.
 
 ## GitHub bootstrap
 
