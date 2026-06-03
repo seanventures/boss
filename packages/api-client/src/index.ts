@@ -32,6 +32,8 @@ export type AuthSessionResponse = {
   transport_authenticated: boolean;
   actor_binding_required: boolean;
   principal_member_id?: string;
+  auth_method?: string;
+  oidc_enabled: boolean;
   message: string;
 };
 
@@ -55,6 +57,37 @@ export type ProjectMemberListResponse = {
 };
 
 export type ProjectMemberUpsertRequest = {
+  project_id: string;
+  member_id: string;
+  display_name: string;
+  member_type?: string;
+  role_keys?: string[];
+  permissions?: string[];
+  actor?: string;
+};
+
+export type OrgMemberSummary = {
+  id: string;
+  org_id: string;
+  project_id?: string;
+  member_id: string;
+  display_name: string;
+  member_type: string;
+  role_keys: string[];
+  permissions: string[];
+  status: string;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type OrgMemberListResponse = {
+  org_id: string;
+  items: OrgMemberSummary[];
+};
+
+export type OrgMemberUpsertRequest = {
+  org_id: string;
   project_id: string;
   member_id: string;
   display_name: string;
@@ -1572,6 +1605,551 @@ export type RoutingLogListResponse = {
   items: RoutingLogItem[];
 };
 
+export type ProviderAccountSummary = {
+  id: string;
+  project_id: string;
+  provider: string;
+  account_label: string;
+  credential_ref?: string;
+  scopes: string[];
+  status: string;
+  read_only: boolean;
+  deploy_capable: boolean;
+  billing_readable: boolean;
+  destructive_actions_disabled: boolean;
+  capabilities: string[];
+  missing_permissions: string[];
+  last_test_status?: string;
+  last_tested_at?: string;
+  last_error?: Record<string, unknown>;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ProviderAccountListResponse = {
+  project_id: string;
+  items: ProviderAccountSummary[];
+};
+
+export type ProviderAccountCreateRequest = {
+  project_id: string;
+  provider: string;
+  account_label: string;
+  credential_ref?: string;
+  scopes?: string[];
+  read_only?: boolean;
+  deploy_capable?: boolean;
+  billing_readable?: boolean;
+  destructive_actions_disabled?: boolean;
+  actor?: string;
+};
+
+export type ProviderHealthSummary = {
+  id: string;
+  project_id: string;
+  provider_account_id?: string;
+  provider: string;
+  status: string;
+  api_available: boolean;
+  rate_limit_status: string;
+  usage_cap_status: string;
+  last_checked_at: string;
+  detail: Record<string, unknown>;
+  created_at: string;
+};
+
+export type ProviderHealthListResponse = {
+  project_id: string;
+  items: ProviderHealthSummary[];
+};
+
+export type ProviderConnectionTestResponse = {
+  status: string;
+  provider_account: ProviderAccountSummary;
+  provider_health: ProviderHealthSummary;
+  detail: Record<string, unknown>;
+};
+
+export type ResourceSyncRequest = {
+  project_id: string;
+  provider_account_id?: string;
+  actor?: string;
+};
+
+export type ResourceSyncRunSummary = {
+  id: string;
+  status: string;
+  provider?: string;
+  provider_account_id?: string;
+  resources_seen: number;
+  resources_changed: number;
+  costs_seen: number;
+  provider_health_id?: string;
+  drift_report_id?: string;
+  deadletter_id?: string;
+  error?: Record<string, unknown>;
+};
+
+export type ResourceSyncResponse = {
+  project_id: string;
+  runs: ResourceSyncRunSummary[];
+  resources_seen: number;
+  resources_changed: number;
+  costs_seen: number;
+};
+
+export type ExternalResourceSummary = {
+  id: string;
+  project_id: string;
+  provider_account_id?: string;
+  provider: string;
+  resource_type: string;
+  external_id: string;
+  name: string;
+  state: string;
+  ownership: string;
+  environment: string;
+  owner_role?: string;
+  task_id?: string;
+  deployment_target_id?: string;
+  receipt_id?: string;
+  budget_allocation_id?: string;
+  health_status: string;
+  estimated_monthly_usd_micros?: number;
+  actual_monthly_usd_micros?: number;
+  cost_confidence: string;
+  last_seen_at: string;
+  tags: string[];
+  metadata: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ExternalResourceListResponse = {
+  project_id: string;
+  items: ExternalResourceSummary[];
+};
+
+export type CostEventSummary = {
+  id: string;
+  project_id: string;
+  provider_account_id?: string;
+  external_resource_id?: string;
+  billing_account_id?: string;
+  task_id?: string;
+  role_key?: string;
+  provider: string;
+  category: string;
+  amount_usd_micros: number;
+  cost_layer: string;
+  confidence: string;
+  source_ref?: string;
+  period_start?: string;
+  period_end?: string;
+  receipt_id?: string;
+  metadata: Record<string, unknown>;
+  created_at: string;
+};
+
+export type CostEventListResponse = {
+  project_id: string;
+  items: CostEventSummary[];
+};
+
+export type CostAnomalySummary = {
+  id: string;
+  project_id: string;
+  provider_account_id?: string;
+  cost_event_id?: string;
+  decision_id?: string;
+  provider: string;
+  anomaly_type: string;
+  severity: string;
+  status: string;
+  amount_usd_micros: number;
+  threshold_usd_micros: number;
+  summary: string;
+  recommended_actions: Array<Record<string, unknown>>;
+  created_at: string;
+  resolved_at?: string;
+};
+
+export type CostAnomalyListResponse = {
+  project_id: string;
+  items: CostAnomalySummary[];
+};
+
+export type DriftReportSummary = {
+  id: string;
+  project_id: string;
+  provider_account_id?: string;
+  classification: string;
+  summary: string;
+  unmanaged_count: number;
+  orphaned_count: number;
+  security_impacting_count: number;
+  production_impacting_count: number;
+  recommendations: Array<Record<string, unknown>>;
+  created_at: string;
+};
+
+export type DriftReportListResponse = {
+  project_id: string;
+  items: DriftReportSummary[];
+};
+
+export type ReconciliationRunSummary = {
+  id: string;
+  project_id: string;
+  provider_account_id?: string;
+  provider?: string;
+  status: string;
+  resources_seen: number;
+  resources_changed: number;
+  costs_seen: number;
+  started_by: string;
+  started_at: string;
+  finished_at?: string;
+  error?: Record<string, unknown>;
+  metadata: Record<string, unknown>;
+};
+
+export type ReconciliationRunListResponse = {
+  project_id: string;
+  items: ReconciliationRunSummary[];
+};
+
+export type DeploymentTargetSummary = {
+  id: string;
+  project_id: string;
+  app_name: string;
+  repo: string;
+  environment: string;
+  provider_account_id?: string;
+  target_kind: string;
+  target_ref: string;
+  domains: string[];
+  required_resources: Array<Record<string, unknown>>;
+  secret_refs: string[];
+  health_checks: Array<Record<string, unknown>>;
+  rollback_points: Array<Record<string, unknown>>;
+  status: string;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type DeploymentTargetListResponse = {
+  project_id: string;
+  items: DeploymentTargetSummary[];
+};
+
+export type DeploymentTargetCreateRequest = {
+  project_id: string;
+  app_name: string;
+  repo: string;
+  environment: string;
+  provider_account_id?: string;
+  target_kind: string;
+  target_ref: string;
+  domains?: string[];
+  required_resources?: Array<Record<string, unknown>>;
+  secret_refs?: string[];
+  health_checks?: Array<Record<string, unknown>>;
+  rollback_points?: Array<Record<string, unknown>>;
+  actor?: string;
+};
+
+export type DeploymentRunSummary = {
+  id: string;
+  project_id: string;
+  deployment_target_id: string;
+  changeset_id?: string;
+  decision_id?: string;
+  release_artifact_id?: string;
+  health_artifact_id?: string;
+  rollback_artifact_id?: string;
+  app_name: string;
+  environment: string;
+  repo: string;
+  target_kind: string;
+  target_ref: string;
+  commit_ref?: string;
+  status: string;
+  release_packet: Record<string, unknown>;
+  health_check_results: Array<Record<string, unknown>>;
+  rollback_plan: string[];
+  release_receipt_ids: Array<Record<string, unknown>>;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+  started_at?: string;
+  finished_at?: string;
+  failure_reason?: string;
+};
+
+export type DeploymentRunListResponse = {
+  project_id: string;
+  items: DeploymentRunSummary[];
+};
+
+export type DeploymentRunCreateRequest = {
+  project_id: string;
+  deployment_target_id: string;
+  commit_ref?: string;
+  release_packet?: Record<string, unknown>;
+  expected_cost_usd_micros?: number;
+  reservation_id?: string;
+  actor?: string;
+};
+
+export type DeploymentRunHealthCheckRequest = {
+  actor?: string;
+};
+
+export type DeploymentRunHealthCheckResponse = {
+  deployment_run: DeploymentRunSummary;
+  health_artifact_id: string;
+  rollback_artifact_id?: string;
+  decision_id?: string;
+};
+
+export type ChangeSetOperationRequest = {
+  skill_id: string;
+  action: string;
+  resource_type: string;
+  resource_ref?: string;
+  desired_state?: Record<string, unknown>;
+  risk_tier?: number;
+  destructive?: boolean;
+  production_affecting?: boolean;
+};
+
+export type ChangeSetSummary = {
+  id: string;
+  project_id: string;
+  provider_account_id?: string;
+  title: string;
+  summary: string;
+  status: string;
+  risk_tier: number;
+  operations: Array<Record<string, unknown>>;
+  expected_cost_usd_micros: number;
+  cost_quote: Record<string, unknown>;
+  reservation_id?: string;
+  approval_decision_id?: string;
+  rollback_plan: string[];
+  expected_receipts: Array<Record<string, unknown>>;
+  policy_result: Record<string, unknown>;
+  created_by: string;
+  approved_by?: string;
+  approved_at?: string;
+  applied_by?: string;
+  applied_at?: string;
+  failure_reason?: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ChangeSetListResponse = {
+  project_id: string;
+  items: ChangeSetSummary[];
+};
+
+export type ChangeSetCreateRequest = {
+  project_id: string;
+  provider_account_id?: string;
+  title: string;
+  summary: string;
+  operations: ChangeSetOperationRequest[];
+  expected_cost_usd_micros?: number;
+  reservation_id?: string;
+  rollback_plan?: string[];
+  risk_tier?: number;
+  approval_required?: boolean;
+  actor?: string;
+};
+
+export type ChangeSetApproveRequest = {
+  actor?: string;
+};
+
+export type ChangeSetApplyRequest = {
+  actor?: string;
+  created_by_job_id?: string;
+  dry_run?: boolean;
+};
+
+export type ResourceReceiptSummary = {
+  id: string;
+  project_id: string;
+  changeset_id?: string;
+  operation_id?: string;
+  provider_account_id?: string;
+  receipt_id?: string;
+  dedupe_key: string;
+  provider: string;
+  action: string;
+  resource_type: string;
+  resource_ref?: string;
+  status: string;
+  provider_ref?: string;
+  request_hash: string;
+  result?: Record<string, unknown>;
+  error?: Record<string, unknown>;
+  created_by_job_id?: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ResourceReceiptListResponse = {
+  project_id: string;
+  items: ResourceReceiptSummary[];
+};
+
+export type WorkerPoolSummary = {
+  id: string;
+  project_id: string;
+  pool_key: string;
+  kind: string;
+  provider_account_id?: string;
+  provider?: string;
+  status: string;
+  current_workers: number;
+  desired_workers: number;
+  min_workers: number;
+  max_workers: number;
+  max_queue_depth_per_worker: number;
+  cost_per_worker_hour_usd_micros: number;
+  capabilities: string[];
+  metadata: Record<string, unknown>;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type WorkerPoolListResponse = {
+  project_id: string;
+  items: WorkerPoolSummary[];
+};
+
+export type WorkerPoolUpsertRequest = {
+  project_id: string;
+  pool_key: string;
+  kind?: string;
+  provider_account_id?: string;
+  current_workers?: number;
+  desired_workers?: number;
+  min_workers?: number;
+  max_workers?: number;
+  max_queue_depth_per_worker?: number;
+  cost_per_worker_hour_usd_micros?: number;
+  capabilities?: string[];
+  metadata?: Record<string, unknown>;
+  actor?: string;
+};
+
+export type ScalePlanSummary = {
+  id: string;
+  project_id: string;
+  worker_pool_id?: string;
+  status: string;
+  trigger_reason: string;
+  queue_depth: number;
+  running_jobs: number;
+  leased_jobs: number;
+  retryable_jobs: number;
+  current_workers: number;
+  desired_workers_before: number;
+  desired_workers_after: number;
+  target_workers: number;
+  budget_state: string;
+  budget_available_usd_micros: number;
+  estimated_hourly_delta_usd_micros: number;
+  provider_health_status?: string;
+  actions: Array<Record<string, unknown>>;
+  recommendations: Array<Record<string, unknown>>;
+  changeset_id?: string;
+  decision_id?: string;
+  created_by: string;
+  created_at: string;
+  applied_at?: string;
+};
+
+export type ScalePlanListResponse = {
+  project_id: string;
+  items: ScalePlanSummary[];
+};
+
+export type ScalePlanRunRequest = {
+  project_id: string;
+  worker_pool_id?: string;
+  cloud_spillover_enabled?: boolean;
+  actor?: string;
+};
+
+export type ScalePlanRunResponse = {
+  scale_plan: ScalePlanSummary;
+  worker_pool: WorkerPoolSummary;
+  budget_state: string;
+  queue: Record<string, number>;
+  provider_health: Record<string, unknown>;
+  changeset_id?: string;
+  decision_id?: string;
+};
+
+export type ResourceJanitorRunRequest = {
+  project_id: string;
+  provider_account_id?: string;
+  max_candidates?: number;
+  actor?: string;
+};
+
+export type ResourceJanitorCandidateSummary = {
+  external_resource_id: string;
+  provider_account_id?: string;
+  provider: string;
+  resource_type: string;
+  external_id: string;
+  name: string;
+  environment: string;
+  ownership: string;
+  health_status: string;
+  estimated_monthly_savings_usd_micros: number;
+  cost_confidence: string;
+  cleanup_skill_id: string;
+  destructive: boolean;
+};
+
+export type ResourceJanitorSkippedSummary = {
+  external_resource_id: string;
+  provider: string;
+  resource_type?: string;
+  external_id: string;
+  reason: string;
+};
+
+export type ResourceJanitorRunResponse = {
+  status: string;
+  project_id: string;
+  artifact_id: string;
+  candidate_count: number;
+  skipped_count: number;
+  estimated_monthly_savings_usd_micros: number;
+  candidates: ResourceJanitorCandidateSummary[];
+  skipped: ResourceJanitorSkippedSummary[];
+  changesets: ChangeSetSummary[];
+};
+
+export type ChangeSetApplyResponse = {
+  status: string;
+  changeset: ChangeSetSummary;
+  resource_receipts: ResourceReceiptSummary[];
+  expected_receipts?: Array<Record<string, unknown>>;
+  decision_id?: string;
+};
+
 export type DeadletterItem = {
   id: string;
   project_id?: string;
@@ -1701,6 +2279,16 @@ export function createBossApiClient(config: BossApiClientConfig) {
     },
     upsertProjectMember(payload: ProjectMemberUpsertRequest) {
       return request<ProjectMemberSummary>("POST", "/v1/members", {
+        body: payload,
+      });
+    },
+    listOrgMembers(orgId: string, projectId: string, actor = "ceo") {
+      return request<OrgMemberListResponse>("GET", "/v1/org-members", {
+        query: { org_id: orgId, project_id: projectId, actor },
+      });
+    },
+    upsertOrgMember(payload: OrgMemberUpsertRequest) {
+      return request<OrgMemberSummary>("POST", "/v1/org-members", {
         body: payload,
       });
     },
@@ -1987,6 +2575,163 @@ export function createBossApiClient(config: BossApiClientConfig) {
       return request<RoutingLogListResponse>("GET", "/v1/router/logs", {
         query: { project_id: projectId, limit },
       });
+    },
+    listProviderAccounts(projectId: string) {
+      return request<ProviderAccountListResponse>("GET", "/v1/providers", {
+        query: { project_id: projectId },
+      });
+    },
+    createProviderAccount(payload: ProviderAccountCreateRequest) {
+      return request<ProviderAccountSummary>("POST", "/v1/providers", {
+        body: payload,
+      });
+    },
+    testProviderAccount(providerAccountId: string, projectId: string, actor = "ceo") {
+      return request<ProviderConnectionTestResponse>(
+        "POST",
+        `/v1/providers/${encodeURIComponent(providerAccountId)}/test`,
+        { query: { project_id: projectId, actor } },
+      );
+    },
+    listExternalResources(
+      projectId: string,
+      options?: { provider?: string; ownership?: string; limit?: number },
+    ) {
+      return request<ExternalResourceListResponse>("GET", "/v1/resources", {
+        query: {
+          project_id: projectId,
+          provider: options?.provider,
+          ownership: options?.ownership,
+          limit: options?.limit,
+        },
+      });
+    },
+    syncExternalResources(payload: ResourceSyncRequest) {
+      return request<ResourceSyncResponse>("POST", "/v1/resources/sync", {
+        body: payload,
+      });
+    },
+    listProviderCosts(projectId: string, limit = 100) {
+      return request<CostEventListResponse>("GET", "/v1/costs", {
+        query: { project_id: projectId, limit },
+      });
+    },
+    listProviderCostAnomalies(projectId: string, limit = 100) {
+      return request<CostAnomalyListResponse>("GET", "/v1/cost-anomalies", {
+        query: { project_id: projectId, limit },
+      });
+    },
+    listChangeSets(projectId: string, status?: string, limit = 100) {
+      return request<ChangeSetListResponse>("GET", "/v1/changesets", {
+        query: { project_id: projectId, status, limit },
+      });
+    },
+    createChangeSet(payload: ChangeSetCreateRequest) {
+      return request<ChangeSetSummary>("POST", "/v1/changesets", {
+        body: payload,
+      });
+    },
+    approveChangeSet(changesetId: string, payload: ChangeSetApproveRequest = {}) {
+      return request<ChangeSetSummary>(
+        "POST",
+        `/v1/changesets/${encodeURIComponent(changesetId)}/approve`,
+        { body: payload },
+      );
+    },
+    applyChangeSet(changesetId: string, payload: ChangeSetApplyRequest = {}) {
+      return request<ChangeSetApplyResponse>(
+        "POST",
+        `/v1/changesets/${encodeURIComponent(changesetId)}/apply`,
+        { body: payload },
+      );
+    },
+    listResourceReceipts(projectId: string, limit = 100) {
+      return request<ResourceReceiptListResponse>("GET", "/v1/resource-receipts", {
+        query: { project_id: projectId, limit },
+      });
+    },
+    listWorkerPools(projectId: string) {
+      return request<WorkerPoolListResponse>("GET", "/v1/worker-pools", {
+        query: { project_id: projectId },
+      });
+    },
+    upsertWorkerPool(payload: WorkerPoolUpsertRequest) {
+      return request<WorkerPoolSummary>("POST", "/v1/worker-pools", {
+        body: payload,
+      });
+    },
+    listScalePlans(projectId: string, limit = 50) {
+      return request<ScalePlanListResponse>("GET", "/v1/autoscaler/plans", {
+        query: { project_id: projectId, limit },
+      });
+    },
+    runAutoscalerPlan(payload: ScalePlanRunRequest) {
+      return request<ScalePlanRunResponse>("POST", "/v1/autoscaler/plans", {
+        body: payload,
+      });
+    },
+    runResourceJanitor(payload: ResourceJanitorRunRequest) {
+      return request<ResourceJanitorRunResponse>(
+        "POST",
+        "/v1/resource-janitor/run",
+        { body: payload },
+      );
+    },
+    listDeploymentTargets(projectId: string) {
+      return request<DeploymentTargetListResponse>("GET", "/v1/deployments", {
+        query: { project_id: projectId },
+      });
+    },
+    createDeploymentTarget(payload: DeploymentTargetCreateRequest) {
+      return request<DeploymentTargetSummary>("POST", "/v1/deployments", {
+        body: payload,
+      });
+    },
+    listDeploymentRuns(projectId: string, limit = 50) {
+      return request<DeploymentRunListResponse>("GET", "/v1/deployment-runs", {
+        query: { project_id: projectId, limit },
+      });
+    },
+    createDeploymentRun(payload: DeploymentRunCreateRequest) {
+      return request<DeploymentRunSummary>("POST", "/v1/deployment-runs", {
+        body: payload,
+      });
+    },
+    runDeploymentHealthCheck(
+      deploymentRunId: string,
+      payload: DeploymentRunHealthCheckRequest = {},
+    ) {
+      return request<DeploymentRunHealthCheckResponse>(
+        "POST",
+        `/v1/deployment-runs/${encodeURIComponent(
+          deploymentRunId,
+        )}/health-check`,
+        { body: payload },
+      );
+    },
+    listProviderHealth(
+      projectId: string,
+      options?: { providerAccountId?: string; limit?: number },
+    ) {
+      return request<ProviderHealthListResponse>("GET", "/v1/provider-health", {
+        query: {
+          project_id: projectId,
+          provider_account_id: options?.providerAccountId,
+          limit: options?.limit,
+        },
+      });
+    },
+    listDriftReports(projectId: string, limit = 100) {
+      return request<DriftReportListResponse>("GET", "/v1/drift-reports", {
+        query: { project_id: projectId, limit },
+      });
+    },
+    listReconciliationRuns(projectId: string, limit = 100) {
+      return request<ReconciliationRunListResponse>(
+        "GET",
+        "/v1/reconciliation-runs",
+        { query: { project_id: projectId, limit } },
+      );
     },
     listOutboxMessages(projectId: string, limit = 50) {
       return request<OutboxMessageListResponse>("GET", "/v1/comms/outbox", {

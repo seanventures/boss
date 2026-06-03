@@ -27,6 +27,12 @@ class Settings(BaseSettings):
     digitalocean_token: Optional[str] = Field(
         default=None, alias="BOSS_DIGITALOCEAN_TOKEN"
     )
+    cloudflare_api_token: Optional[str] = Field(
+        default=None, alias="BOSS_CLOUDFLARE_API_TOKEN"
+    )
+    supabase_access_token: Optional[str] = Field(
+        default=None, alias="BOSS_SUPABASE_ACCESS_TOKEN"
+    )
     digitalocean_default_image: str = Field(
         default="ubuntu-24-04-x64",
         alias="BOSS_DIGITALOCEAN_DEFAULT_IMAGE",
@@ -71,6 +77,22 @@ class Settings(BaseSettings):
     api_key_principals: str = Field(
         default="",
         alias="BOSS_API_KEY_PRINCIPALS",
+    )
+    oidc_enabled: bool = Field(default=False, alias="BOSS_OIDC_ENABLED")
+    oidc_issuer: Optional[str] = Field(default=None, alias="BOSS_OIDC_ISSUER")
+    oidc_audience: Optional[str] = Field(default=None, alias="BOSS_OIDC_AUDIENCE")
+    oidc_jwks_url: Optional[str] = Field(default=None, alias="BOSS_OIDC_JWKS_URL")
+    oidc_principal_claim: str = Field(
+        default="boss_member_id",
+        alias="BOSS_OIDC_PRINCIPAL_CLAIM",
+    )
+    oidc_allowed_algorithms: str = Field(
+        default="RS256,ES256",
+        alias="BOSS_OIDC_ALLOWED_ALGORITHMS",
+    )
+    oidc_subject_principals: str = Field(
+        default="",
+        alias="BOSS_OIDC_SUBJECT_PRINCIPALS",
     )
     openai_model: str = Field(default="gpt-5.2-codex", alias="BOSS_OPENAI_MODEL")
     github_token: Optional[str] = Field(
@@ -214,6 +236,36 @@ class Settings(BaseSettings):
             if token.strip() and member_id.strip():
                 principal_map[token.strip()] = member_id.strip()
         return principal_map
+
+    @property
+    def oidc_algorithm_values(self) -> tuple[str, ...]:
+        return tuple(
+            algorithm.strip()
+            for algorithm in self.oidc_allowed_algorithms.replace("\n", ",").split(",")
+            if algorithm.strip()
+        )
+
+    @property
+    def oidc_subject_principal_map(self) -> dict[str, str]:
+        principal_map: dict[str, str] = {}
+        for entry in self.oidc_subject_principals.replace("\n", ",").split(","):
+            cleaned = entry.strip()
+            if not cleaned:
+                continue
+            delimiter = "=" if "=" in cleaned else ":"
+            subject, _, member_id = cleaned.partition(delimiter)
+            if subject.strip() and member_id.strip():
+                principal_map[subject.strip()] = member_id.strip()
+        return principal_map
+
+    @property
+    def oidc_configured(self) -> bool:
+        return bool(
+            self.oidc_issuer
+            and self.oidc_audience
+            and self.oidc_jwks_url
+            and self.oidc_algorithm_values
+        )
 
     @property
     def digitalocean_tag_values(self) -> tuple[str, ...]:

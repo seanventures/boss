@@ -4,10 +4,14 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import pytest
+import jwt
+from cryptography.hazmat.primitives.asymmetric import rsa
 from sqlalchemy import text
 
 from apps.api.app import main as api_main
+from apps.api.app.services import oidc as oidc_module
 from apps.api.app.services.digitalocean_adapter import (
+    AppDeploymentResult,
     DropletProvisionResult,
     DropletTerminationResult,
 )
@@ -19,6 +23,8 @@ from apps.api.app.services.github_adapter import (
     PullRequestValidationCheck,
     PullRequestValidationResult,
 )
+from apps.api.app.services.oidc import OidcPrincipal
+from apps.api.app.services.resource_plane import InventoryResource, ProviderCostRecord
 
 
 def create_local_validation_repo(tmp_path, branch_name: str):
@@ -373,6 +379,147 @@ def test_unbound_api_key_fails_closed_when_principal_binding_is_configured(clien
         api_main.settings.api_key_principals = previous_principals
 
 
+def test_oidc_principal_binding_reports_session_and_blocks_impersonation(
+    client,
+    monkeypatch,
+):
+    previous_required = api_main.settings.require_api_auth
+    previous_oidc_enabled = api_main.settings.oidc_enabled
+    previous_oidc_issuer = api_main.settings.oidc_issuer
+    previous_oidc_audience = api_main.settings.oidc_audience
+    previous_oidc_jwks_url = api_main.settings.oidc_jwks_url
+    api_main.settings.require_api_auth = False
+    api_main.settings.oidc_enabled = True
+    api_main.settings.oidc_issuer = "https://issuer.example.com"
+    api_main.settings.oidc_audience = "boss-api"
+    api_main.settings.oidc_jwks_url = "https://issuer.example.com/.well-known/jwks.json"
+
+    def verify_oidc_token(token: str) -> OidcPrincipal:
+        assert token == "oidc-token"
+        return OidcPrincipal(
+            member_id="ceo",
+            subject="sub-ceo",
+            issuer="https://issuer.example.com",
+            claims={"sub": "sub-ceo", "boss_member_id": "ceo"},
+        )
+
+    monkeypatch.setattr(api_main.oidc_auth, "verify_bearer_token", verify_oidc_token)
+    try:
+        session = client.get(
+            "/v1/auth/session",
+            headers=auth_headers("oidc-token"),
+        )
+        assert session.status_code == 200
+        assert session.json()["principal_member_id"] == "ceo"
+        assert session.json()["auth_method"] == "oidc"
+        assert session.json()["oidc_enabled"] is True
+        assert session.json()["actor_binding_required"] is True
+
+        denied = client.post(
+            "/v1/commands/propose",
+            headers=auth_headers("oidc-token"),
+            json={
+                "project_id": "boss-dogfood",
+                "command": "Attempt to act as a different member with OIDC.",
+                "actor": "executive_console",
+            },
+        )
+        assert denied.status_code == 403
+        assert "ceo" in denied.json()["detail"]
+
+        allowed = client.post(
+            "/v1/commands/propose",
+            headers=auth_headers("oidc-token"),
+            json={
+                "project_id": "boss-dogfood",
+                "command": "Create an OIDC principal-bound command intake record.",
+                "actor": "ceo",
+            },
+        )
+        assert allowed.status_code == 201
+    finally:
+        api_main.settings.require_api_auth = previous_required
+        api_main.settings.oidc_enabled = previous_oidc_enabled
+        api_main.settings.oidc_issuer = previous_oidc_issuer
+        api_main.settings.oidc_audience = previous_oidc_audience
+        api_main.settings.oidc_jwks_url = previous_oidc_jwks_url
+
+
+def test_oidc_enabled_without_provider_config_fails_closed(client):
+    previous_required = api_main.settings.require_api_auth
+    previous_oidc_enabled = api_main.settings.oidc_enabled
+    previous_oidc_issuer = api_main.settings.oidc_issuer
+    previous_oidc_audience = api_main.settings.oidc_audience
+    previous_oidc_jwks_url = api_main.settings.oidc_jwks_url
+    api_main.settings.require_api_auth = False
+    api_main.settings.oidc_enabled = True
+    api_main.settings.oidc_issuer = None
+    api_main.settings.oidc_audience = None
+    api_main.settings.oidc_jwks_url = None
+    try:
+        response = client.get("/v1/projects", headers=auth_headers("oidc-token"))
+        assert response.status_code == 503
+        assert "OIDC authentication is enabled" in response.json()["detail"]
+    finally:
+        api_main.settings.require_api_auth = previous_required
+        api_main.settings.oidc_enabled = previous_oidc_enabled
+        api_main.settings.oidc_issuer = previous_oidc_issuer
+        api_main.settings.oidc_audience = previous_oidc_audience
+        api_main.settings.oidc_jwks_url = previous_oidc_jwks_url
+
+
+def test_oidc_authenticator_verifies_signed_jwt_and_member_claim(monkeypatch):
+    previous_oidc_enabled = api_main.settings.oidc_enabled
+    previous_oidc_issuer = api_main.settings.oidc_issuer
+    previous_oidc_audience = api_main.settings.oidc_audience
+    previous_oidc_jwks_url = api_main.settings.oidc_jwks_url
+    previous_oidc_principal_claim = api_main.settings.oidc_principal_claim
+    api_main.settings.oidc_enabled = True
+    api_main.settings.oidc_issuer = "https://issuer.example.com"
+    api_main.settings.oidc_audience = "boss-api"
+    api_main.settings.oidc_jwks_url = "https://issuer.example.com/.well-known/jwks.json"
+    api_main.settings.oidc_principal_claim = "boss_member_id"
+    private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    public_key = private_key.public_key()
+    token = jwt.encode(
+        {
+            "iss": "https://issuer.example.com",
+            "aud": "boss-api",
+            "sub": "sub-ceo",
+            "boss_member_id": "ceo",
+            "exp": datetime.now(timezone.utc) + timedelta(minutes=5),
+        },
+        private_key,
+        algorithm="RS256",
+        headers={"kid": "boss-test-key"},
+    )
+
+    class FakeSigningKey:
+        key = public_key
+
+    class FakeJwksClient:
+        def get_signing_key_from_jwt(self, _token: str):
+            return FakeSigningKey()
+
+    monkeypatch.setattr(
+        oidc_module,
+        "jwks_client_for_url",
+        lambda _jwks_url: FakeJwksClient(),
+    )
+    try:
+        principal = api_main.oidc_auth.verify_bearer_token(token)
+    finally:
+        api_main.settings.oidc_enabled = previous_oidc_enabled
+        api_main.settings.oidc_issuer = previous_oidc_issuer
+        api_main.settings.oidc_audience = previous_oidc_audience
+        api_main.settings.oidc_jwks_url = previous_oidc_jwks_url
+        api_main.settings.oidc_principal_claim = previous_oidc_principal_claim
+
+    assert principal.member_id == "ceo"
+    assert principal.subject == "sub-ceo"
+    assert principal.issuer == "https://issuer.example.com"
+
+
 def test_api_key_principal_binding_applies_to_decision_transitions(client, engine):
     previous_required = api_main.settings.require_api_auth
     previous_keys = api_main.settings.api_keys
@@ -497,6 +644,80 @@ def test_project_member_upsert_requires_member_manage_permission(client):
     assert payload["created_by"] == "ceo"
 
 
+def test_org_member_delegation_authorizes_projects_in_same_org(client, engine):
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                """
+                INSERT INTO projects (id, workspace_id, name, slug)
+                VALUES ('boss-org-rbac', 'ws_boss', 'BOSS org RBAC', 'boss-org-rbac')
+                ON CONFLICT (workspace_id, slug) DO NOTHING
+                """
+            )
+        )
+
+    created = client.post(
+        "/v1/org-members",
+        json={
+            "org_id": "org_boss",
+            "project_id": "boss-dogfood",
+            "member_id": "org_delegate",
+            "display_name": "Org Delegate",
+            "member_type": "human",
+            "role_keys": ["operator"],
+            "permissions": ["command_submit"],
+            "actor": "ceo",
+        },
+    )
+    assert created.status_code == 201
+    assert created.json()["org_id"] == "org_boss"
+
+    listed = client.get(
+        "/v1/org-members",
+        params={"org_id": "org_boss", "project_id": "boss-dogfood", "actor": "ceo"},
+    )
+    assert listed.status_code == 200
+    assert any(item["member_id"] == "org_delegate" for item in listed.json()["items"])
+
+    project_members = client.get(
+        "/v1/members",
+        params={"project_id": "boss-org-rbac"},
+    )
+    assert project_members.status_code == 200
+    assert any(
+        item["member_id"] == "org_delegate"
+        and "command_submit" in item["permissions"]
+        for item in project_members.json()["items"]
+    )
+
+    command = client.post(
+        "/v1/commands/propose",
+        json={
+            "project_id": "boss-org-rbac",
+            "command": "Org delegated actor can submit scoped work.",
+            "actor": "org_delegate",
+        },
+    )
+    assert command.status_code == 201
+
+
+def test_org_member_upsert_requires_authorized_project_member(client):
+    denied = client.post(
+        "/v1/org-members",
+        json={
+            "org_id": "org_boss",
+            "project_id": "boss-dogfood",
+            "member_id": "blocked_org_delegate",
+            "display_name": "Blocked Org Delegate",
+            "member_type": "human",
+            "role_keys": ["operator"],
+            "permissions": ["command_submit"],
+            "actor": "release_manager",
+        },
+    )
+    assert denied.status_code == 403
+
+
 def test_break_glass_grant_enables_temporary_permission_and_postmortem(client):
     grant = client.post(
         "/v1/break-glass/grants",
@@ -535,6 +756,52 @@ def test_break_glass_grant_enables_temporary_permission_and_postmortem(client):
     assert "break_glass.granted" in event_types
     assert "break_glass.postmortem_task_created" in event_types
     assert "break_glass.used" in event_types
+
+
+def test_break_glass_grant_can_target_org_member(client):
+    created = client.post(
+        "/v1/org-members",
+        json={
+            "org_id": "org_boss",
+            "project_id": "boss-dogfood",
+            "member_id": "org_release_manager",
+            "display_name": "Org Release Manager",
+            "member_type": "human",
+            "role_keys": ["release_manager"],
+            "permissions": ["decision_resolve"],
+            "actor": "ceo",
+        },
+    )
+    assert created.status_code == 201
+
+    grant = client.post(
+        "/v1/break-glass/grants",
+        json={
+            "project_id": "boss-dogfood",
+            "target_member_id": "org_release_manager",
+            "reason": "Emergency org delegate escalation for an incident.",
+            "scope": {"incident_id": "inc-org-break-glass"},
+            "granted_permissions": ["member_manage"],
+            "ttl_minutes": 30,
+            "actor": "ceo",
+        },
+    )
+    assert grant.status_code == 201
+    assert grant.json()["target_member_id"] == "org_release_manager"
+
+    created_project_member = client.post(
+        "/v1/members",
+        json={
+            "project_id": "boss-dogfood",
+            "member_id": "org_emergency_operator",
+            "display_name": "Org Emergency Operator",
+            "member_type": "human",
+            "role_keys": ["operator"],
+            "permissions": ["health_refresh"],
+            "actor": "org_release_manager",
+        },
+    )
+    assert created_project_member.status_code == 201
 
 
 def test_break_glass_revoke_removes_temporary_permission(client):
@@ -875,14 +1142,20 @@ def test_seed_installs_core_pack_and_roles(client):
     assert core_pack["installed"] is True
     assert core_pack["installed_version"] == "1.0.0"
     assert "metatron" in core_pack["roles"]
+    assert "providerops_manager" in core_pack["roles"]
+    assert "finops_sentinel" in core_pack["roles"]
+    assert "resource_janitor" in core_pack["roles"]
 
     roles = client.get("/v1/roles", params={"project_id": "boss-dogfood"})
     assert roles.status_code == 200
     role_payload = roles.json()
-    assert len(role_payload["items"]) >= 9
+    assert len(role_payload["items"]) >= 12
     role_keys = [item["role_key"] for item in role_payload["items"]]
     assert "metatron" in role_keys
     assert "cto" in role_keys
+    assert "providerops_manager" in role_keys
+    assert "finops_sentinel" in role_keys
+    assert "resource_janitor" in role_keys
 
 
 def test_role_detail_returns_loaded_spec(client):
@@ -1230,7 +1503,7 @@ def test_pack_install_is_idempotent_for_new_project(client, engine):
     first_payload = first.json()
     assert first_payload["pack_id"] == "core_v1"
     assert first_payload["install_status"] == "installed"
-    assert first_payload["role_count"] == 9
+    assert first_payload["role_count"] == 12
 
     second = client.post(
         "/v1/packs/install",
@@ -1247,11 +1520,14 @@ def test_pack_install_is_idempotent_for_new_project(client, engine):
         "cao",
         "coo",
         "cto",
+        "finops_sentinel",
         "metatron",
         "pm",
         "program_manager",
+        "providerops_manager",
         "qa",
         "release_manager",
+        "resource_janitor",
         "vp_agents",
     ]
 
@@ -1444,6 +1720,2832 @@ def test_skill_spec_validator_rejects_mock_or_incomplete_specs():
             },
             "test skill",
         )
+
+
+def test_provider_account_create_and_test_missing_credentials_are_visible(client):
+    previous = api_main.resource_plane.settings.digitalocean_token
+    api_main.resource_plane.settings.digitalocean_token = None
+    try:
+        created = client.post(
+            "/v1/providers",
+            json={
+                "project_id": "boss-dogfood",
+                "provider": "digitalocean",
+                "account_label": "sandbox-do",
+                "scopes": ["read"],
+                "read_only": True,
+                "billing_readable": True,
+                "actor": "ceo",
+            },
+        )
+        assert created.status_code == 201
+        provider = created.json()
+        assert provider["credential_ref"] == "env:BOSS_DIGITALOCEAN_TOKEN"
+        assert provider["last_test_status"] is None
+
+        tested = client.post(
+            f"/v1/providers/{provider['id']}/test",
+            params={"project_id": "boss-dogfood", "actor": "ceo"},
+        )
+    finally:
+        api_main.resource_plane.settings.digitalocean_token = previous
+
+    assert tested.status_code == 200
+    payload = tested.json()
+    assert payload["status"] == "failed"
+    assert payload["provider_account"]["last_test_status"] == "failed"
+    assert "provider_credentials_or_permissions" in payload["provider_account"][
+        "missing_permissions"
+    ]
+    assert payload["provider_health"]["status"] == "degraded"
+    assert payload["provider_health"]["api_available"] is False
+
+    health = client.get(
+        "/v1/provider-health",
+        params={"project_id": "boss-dogfood"},
+    )
+    assert health.status_code == 200
+    assert health.json()["items"][0]["provider"] == "digitalocean"
+
+    events = client.get("/v1/events", params={"project_id": "boss-dogfood"})
+    assert any(
+        item["event_type"] == "provider.connection_tested"
+        and item["entity_id"] == provider["id"]
+        for item in events.json()["items"]
+    )
+
+
+def test_provider_sync_missing_credentials_creates_deadletter(client):
+    previous = api_main.resource_plane.settings.cloudflare_api_token
+    api_main.resource_plane.settings.cloudflare_api_token = None
+    try:
+        created = client.post(
+            "/v1/providers",
+            json={
+                "project_id": "boss-dogfood",
+                "provider": "cloudflare",
+                "account_label": "sandbox-cloudflare",
+                "scopes": ["zones:read"],
+                "actor": "ceo",
+            },
+        )
+        assert created.status_code == 201
+        provider = created.json()
+
+        synced = client.post(
+            "/v1/resources/sync",
+            json={
+                "project_id": "boss-dogfood",
+                "provider_account_id": provider["id"],
+                "actor": "ceo",
+            },
+        )
+    finally:
+        api_main.resource_plane.settings.cloudflare_api_token = previous
+
+    assert synced.status_code == 200
+    payload = synced.json()
+    assert payload["runs"][0]["status"] == "failed"
+    assert payload["runs"][0]["deadletter_id"]
+    assert payload["resources_seen"] == 0
+
+    deadletters = client.get("/v1/deadletters", params={"project_id": "boss-dogfood"})
+    assert deadletters.status_code == 200
+    assert any(
+        item["source_kind"] == "provider_sync"
+        and item["source_id"] == payload["runs"][0]["id"]
+        for item in deadletters.json()["items"]
+    )
+
+
+def test_provider_sync_records_real_inventory_from_adapter_boundary(client, monkeypatch):
+    previous = api_main.resource_plane.settings.digitalocean_token
+    api_main.resource_plane.settings.digitalocean_token = "test-do-token"
+    monkeypatch.setattr(
+        api_main.resource_plane,
+        "_sync_inventory",
+        lambda provider, credential: [
+            InventoryResource(
+                provider="digitalocean",
+                resource_type="droplet",
+                external_id="12345",
+                name="manual-preview-droplet",
+                state="active",
+                ownership="discovered_unmanaged",
+                environment="preview",
+                health_status="active",
+                tags=["preview"],
+                metadata={"region": "nyc3", "size": "s-1vcpu-1gb"},
+            )
+        ],
+    )
+    try:
+        provider = client.post(
+            "/v1/providers",
+            json={
+                "project_id": "boss-dogfood",
+                "provider": "digitalocean",
+                "account_label": "sandbox-do",
+                "scopes": ["read"],
+                "actor": "ceo",
+            },
+        ).json()
+
+        synced = client.post(
+            "/v1/resources/sync",
+            json={
+                "project_id": "boss-dogfood",
+                "provider_account_id": provider["id"],
+                "actor": "ceo",
+            },
+        )
+    finally:
+        api_main.resource_plane.settings.digitalocean_token = previous
+
+    assert synced.status_code == 200
+    assert synced.json()["resources_seen"] == 1
+    assert synced.json()["resources_changed"] == 1
+
+    resources = client.get(
+        "/v1/resources",
+        params={"project_id": "boss-dogfood", "provider": "digitalocean"},
+    )
+    assert resources.status_code == 200
+    resource = resources.json()["items"][0]
+    assert resource["name"] == "manual-preview-droplet"
+    assert resource["ownership"] == "discovered_unmanaged"
+
+    drift = client.get("/v1/drift-reports", params={"project_id": "boss-dogfood"})
+    assert drift.status_code == 200
+    assert drift.json()["items"][0]["classification"] == "cost-impacting"
+
+
+def test_provider_sync_records_billing_cost_events_idempotently(client, monkeypatch):
+    previous = api_main.resource_plane.settings.openai_api_key
+    api_main.resource_plane.settings.openai_api_key = "test-openai-key"
+    period_start = datetime(2026, 6, 1, tzinfo=timezone.utc)
+    period_end = datetime(2026, 6, 2, tzinfo=timezone.utc)
+    monkeypatch.setattr(api_main.resource_plane, "_sync_inventory", lambda _provider, _credential: [])
+    monkeypatch.setattr(
+        api_main.resource_plane,
+        "_sync_billing",
+        lambda _provider, _credential: [
+            ProviderCostRecord(
+                provider="openai",
+                category="model",
+                amount_usd_micros=123_450,
+                cost_layer="observed",
+                confidence="provider_reported",
+                source_ref="openai.organization.costs:2026-06-01:project_a",
+                period_start=period_start,
+                period_end=period_end,
+                billing_account_external_id="openai:organization",
+                billing_account_label="OpenAI Organization Costs",
+                metadata={
+                    "provider_source": "organization_costs",
+                    "project_id": "project_a",
+                },
+            )
+        ],
+    )
+    try:
+        provider = client.post(
+            "/v1/providers",
+            json={
+                "project_id": "boss-dogfood",
+                "provider": "openai",
+                "account_label": "openai-admin",
+                "scopes": ["billing:read"],
+                "billing_readable": True,
+                "actor": "ceo",
+            },
+        ).json()
+
+        first_sync = client.post(
+            "/v1/resources/sync",
+            json={
+                "project_id": "boss-dogfood",
+                "provider_account_id": provider["id"],
+                "actor": "ceo",
+            },
+        )
+        second_sync = client.post(
+            "/v1/resources/sync",
+            json={
+                "project_id": "boss-dogfood",
+                "provider_account_id": provider["id"],
+                "actor": "ceo",
+            },
+        )
+    finally:
+        api_main.resource_plane.settings.openai_api_key = previous
+
+    assert first_sync.status_code == 200
+    assert first_sync.json()["costs_seen"] == 1
+    assert first_sync.json()["runs"][0]["costs_seen"] == 1
+    assert second_sync.status_code == 200
+    assert second_sync.json()["costs_seen"] == 0
+    assert second_sync.json()["runs"][0]["costs_seen"] == 0
+
+    costs = client.get("/v1/costs", params={"project_id": "boss-dogfood"})
+    assert costs.status_code == 200
+    cost_items = [
+        item
+        for item in costs.json()["items"]
+        if item["source_ref"] == "openai.organization.costs:2026-06-01:project_a"
+    ]
+    assert len(cost_items) == 1
+    cost_event = cost_items[0]
+    assert cost_event["provider"] == "openai"
+    assert cost_event["amount_usd_micros"] == 123_450
+    assert cost_event["cost_layer"] == "observed"
+    assert cost_event["confidence"] == "provider_reported"
+    assert cost_event["billing_account_id"]
+    assert cost_event["metadata"]["provider_source"] == "organization_costs"
+    assert cost_event["receipt_id"] is None
+
+    events = client.get("/v1/events", params={"project_id": "boss-dogfood"})
+    assert any(
+        item["event_type"] == "provider.cost_event_recorded"
+        and item["entity_id"] == cost_event["id"]
+        for item in events.json()["items"]
+    )
+
+
+def test_provider_sync_unsupported_billing_provider_deadletters(client, monkeypatch):
+    previous = api_main.resource_plane.settings.cloudflare_api_token
+    api_main.resource_plane.settings.cloudflare_api_token = "test-cloudflare-token"
+    monkeypatch.setattr(api_main.resource_plane, "_sync_inventory", lambda _provider, _credential: [])
+    try:
+        provider = client.post(
+            "/v1/providers",
+            json={
+                "project_id": "boss-dogfood",
+                "provider": "cloudflare",
+                "account_label": "cloudflare-billing",
+                "scopes": ["billing:read"],
+                "billing_readable": True,
+                "actor": "ceo",
+            },
+        ).json()
+
+        synced = client.post(
+            "/v1/resources/sync",
+            json={
+                "project_id": "boss-dogfood",
+                "provider_account_id": provider["id"],
+                "actor": "ceo",
+            },
+        )
+    finally:
+        api_main.resource_plane.settings.cloudflare_api_token = previous
+
+    assert synced.status_code == 200
+    run = synced.json()["runs"][0]
+    assert run["status"] == "failed"
+    assert run["costs_seen"] == 0
+    assert run["deadletter_id"]
+    assert "Billing sync is not implemented" in run["error"]["message"]
+
+    deadletters = client.get("/v1/deadletters", params={"project_id": "boss-dogfood"})
+    assert any(
+        item["source_kind"] == "provider_sync"
+        and item["source_id"] == run["id"]
+        for item in deadletters.json()["items"]
+    )
+
+
+def test_provider_cost_parsers_preserve_confidence_and_units():
+    openai_records = api_main.resource_plane._openai_cost_records(
+        {
+            "data": [
+                {
+                    "start_time": 1_780_272_000,
+                    "end_time": 1_780_358_400,
+                    "results": [
+                        {
+                            "amount": {"currency": "usd", "value": 1.2345},
+                            "project_id": "proj_123",
+                            "line_item": "responses",
+                        }
+                    ],
+                }
+            ]
+        }
+    )
+    anthropic_records = api_main.resource_plane._anthropic_cost_records(
+        {
+            "data": [
+                {
+                    "starting_at": "2026-06-01T00:00:00Z",
+                    "ending_at": "2026-06-02T00:00:00Z",
+                    "results": [
+                        {
+                            "amount": "123.45",
+                            "currency": "USD",
+                            "model": "claude-sonnet-4-20250514",
+                            "cost_type": "tokens",
+                        }
+                    ],
+                }
+            ]
+        }
+    )
+    digitalocean_records = api_main.resource_plane._digitalocean_cost_records(
+        {
+            "billing_history": [
+                {
+                    "invoice_uuid": "inv_1",
+                    "type": "Invoice",
+                    "amount": "12.34",
+                    "date": "2026-06-01T00:00:00Z",
+                    "description": "Monthly invoice",
+                }
+            ]
+        }
+    )
+
+    assert openai_records[0].amount_usd_micros == 1_234_500
+    assert openai_records[0].confidence == "provider_reported"
+    assert anthropic_records[0].amount_usd_micros == 1_234_500
+    assert anthropic_records[0].metadata["amount_unit"] == "lowest_currency_unit"
+    assert anthropic_records[0].confidence == "provider_reported"
+    assert digitalocean_records[0].amount_usd_micros == 12_340_000
+    assert digitalocean_records[0].cost_layer == "reconciled"
+    assert digitalocean_records[0].confidence == "invoice_reconciled"
+
+
+def test_provider_changeset_requires_approval_and_receipts_failed_actuation(client):
+    provider = client.post(
+        "/v1/providers",
+        json={
+            "project_id": "boss-dogfood",
+            "provider": "digitalocean",
+            "account_label": "sandbox-do",
+            "scopes": ["read", "write"],
+            "read_only": False,
+            "destructive_actions_disabled": False,
+            "actor": "ceo",
+        },
+    ).json()
+    reservation_id = reserve_for_infra_provision(client, "Reserve provider changeset.")
+    created = client.post(
+        "/v1/changesets",
+        json={
+            "project_id": "boss-dogfood",
+            "provider_account_id": provider["id"],
+            "title": "Create preview worker droplet",
+            "summary": "Provision a small preview worker through ProviderOps.",
+            "expected_cost_usd_micros": 250_000,
+            "reservation_id": reservation_id,
+            "rollback_plan": ["Destroy the droplet through an approved cleanup ChangeSet."],
+            "operations": [
+                {
+                    "skill_id": "digitalocean.droplet.create",
+                    "action": "create",
+                    "resource_type": "droplet",
+                    "desired_state": {"region": "nyc3", "size": "s-1vcpu-1gb"},
+                    "risk_tier": 3,
+                    "production_affecting": False,
+                }
+            ],
+            "actor": "ceo",
+        },
+    )
+    assert created.status_code == 201
+    changeset = created.json()
+    assert changeset["status"] == "pending_approval"
+    assert changeset["approval_decision_id"]
+    assert changeset["expected_receipts"][0]["dedupe_key"].startswith(
+        f"resource_plane:{changeset['id']}:0"
+    )
+
+    blocked_apply = client.post(
+        f"/v1/changesets/{changeset['id']}/apply",
+        json={"actor": "ceo"},
+    )
+    assert blocked_apply.status_code == 422
+
+    approved = client.post(
+        f"/v1/changesets/{changeset['id']}/approve",
+        json={"actor": "ceo"},
+    )
+    assert approved.status_code == 200
+    assert approved.json()["status"] == "approved"
+
+    applied = client.post(
+        f"/v1/changesets/{changeset['id']}/apply",
+        json={"actor": "ceo"},
+    )
+    assert applied.status_code == 200
+    payload = applied.json()
+    assert payload["status"] == "deadlettered"
+    assert payload["changeset"]["status"] == "deadlettered"
+    assert payload["resource_receipts"][0]["status"] == "failed"
+    assert payload["resource_receipts"][0]["receipt_id"]
+
+    receipts = client.get(
+        "/v1/resource-receipts",
+        params={"project_id": "boss-dogfood"},
+    )
+    assert receipts.status_code == 200
+    assert len(receipts.json()["items"]) == 1
+
+    budget_status = client.get(
+        "/v1/budget/status",
+        params={"scope_type": "project", "scope_id": "boss-dogfood"},
+    )
+    assert budget_status.status_code == 200
+    assert budget_status.json()["reserved_usd_micros"] == 0
+
+    deadletters = client.get("/v1/deadletters", params={"project_id": "boss-dogfood"})
+    assert any(
+        item["source_kind"] == "resource_receipt"
+        and item["payload"]["changeset_id"] == changeset["id"]
+        for item in deadletters.json()["items"]
+    )
+
+
+def test_provider_changeset_digitalocean_droplet_create_succeeds_with_receipts(
+    client, monkeypatch
+):
+    previous_token = api_main.resource_plane.settings.digitalocean_token
+    previous_allowed = api_main.resource_plane.settings.infra_real_provision_allowed
+    api_main.resource_plane.settings.digitalocean_token = "do-test-token"
+    api_main.resource_plane.settings.infra_real_provision_allowed = True
+    adapter_calls = []
+
+    def fake_create_droplet(**kwargs):
+        adapter_calls.append(kwargs)
+        return DropletProvisionResult(
+            droplet_id="123456",
+            name=kwargs["name"],
+            region=kwargs["region"],
+            size=kwargs["size"],
+            status="active",
+            api_url="https://api.digitalocean.com/v2/droplets/123456",
+        )
+
+    monkeypatch.setattr(
+        api_main.resource_plane.digitalocean,
+        "create_droplet",
+        fake_create_droplet,
+    )
+    try:
+        provider = client.post(
+            "/v1/providers",
+            json={
+                "project_id": "boss-dogfood",
+                "provider": "digitalocean",
+                "account_label": "write-do",
+                "scopes": ["droplet:write"],
+                "read_only": False,
+                "destructive_actions_disabled": False,
+                "actor": "ceo",
+            },
+        ).json()
+        reservation_id = reserve_for_infra_provision(
+            client,
+            "Reserve DigitalOcean droplet ChangeSet budget.",
+        )
+        created = client.post(
+            "/v1/changesets",
+            json={
+                "project_id": "boss-dogfood",
+                "provider_account_id": provider["id"],
+                "title": "Create preview droplet",
+                "summary": "Provision a preview droplet through ProviderOps.",
+                "expected_cost_usd_micros": 250_000,
+                "reservation_id": reservation_id,
+                "rollback_plan": ["Destroy the droplet through a cleanup ChangeSet."],
+                "operations": [
+                    {
+                        "skill_id": "digitalocean.droplet.create",
+                        "action": "create",
+                        "resource_type": "droplet",
+                        "resource_ref": "boss-preview-worker",
+                        "desired_state": {
+                            "name": "boss-preview-worker",
+                            "region": "nyc3",
+                            "size": "s-1vcpu-1gb",
+                            "tags": ["preview"],
+                            "environment": "preview",
+                        },
+                        "risk_tier": 3,
+                    }
+                ],
+                "actor": "ceo",
+            },
+        )
+        assert created.status_code == 201
+        changeset = created.json()
+        client.post(
+            f"/v1/changesets/{changeset['id']}/approve",
+            json={"actor": "ceo"},
+        )
+        applied = client.post(
+            f"/v1/changesets/{changeset['id']}/apply",
+            json={"actor": "ceo"},
+        )
+    finally:
+        api_main.resource_plane.settings.digitalocean_token = previous_token
+        api_main.resource_plane.settings.infra_real_provision_allowed = previous_allowed
+
+    assert applied.status_code == 200
+    payload = applied.json()
+    assert payload["status"] == "applied"
+    assert adapter_calls == [
+        {
+            "name": "boss-preview-worker",
+            "region": "nyc3",
+            "size": "s-1vcpu-1gb",
+            "tags": ["boss-managed", "boss-providerops"],
+            "user_tags": ["preview"],
+        }
+    ]
+    receipt = payload["resource_receipts"][0]
+    assert receipt["status"] == "succeeded"
+    assert receipt["provider_ref"].endswith("/droplets/123456")
+
+    resources = client.get(
+        "/v1/resources",
+        params={"project_id": "boss-dogfood", "provider": "digitalocean"},
+    )
+    assert resources.status_code == 200
+    resource = resources.json()["items"][0]
+    assert resource["external_id"] == "123456"
+    assert resource["name"] == "boss-preview-worker"
+    assert resource["state"] == "active"
+    assert resource["ownership"] == "managed_by_boss"
+    assert resource["receipt_id"] == receipt["receipt_id"]
+
+    costs = client.get("/v1/costs", params={"project_id": "boss-dogfood"})
+    assert costs.status_code == 200
+    assert costs.json()["items"][0]["provider"] == "digitalocean"
+    assert costs.json()["items"][0]["receipt_id"] == receipt["receipt_id"]
+
+
+def test_provider_changeset_digitalocean_droplet_destroy_succeeds_with_receipts(
+    client, monkeypatch
+):
+    previous_token = api_main.resource_plane.settings.digitalocean_token
+    previous_allowed = api_main.resource_plane.settings.infra_real_provision_allowed
+    api_main.resource_plane.settings.digitalocean_token = "do-test-token"
+    api_main.resource_plane.settings.infra_real_provision_allowed = True
+    deleted = []
+
+    def fake_delete_droplet(droplet_id):
+        deleted.append(droplet_id)
+        return DropletTerminationResult(
+            droplet_id=droplet_id,
+            api_url=f"https://api.digitalocean.com/v2/droplets/{droplet_id}",
+        )
+
+    monkeypatch.setattr(
+        api_main.resource_plane.digitalocean,
+        "delete_droplet",
+        fake_delete_droplet,
+    )
+    try:
+        provider = client.post(
+            "/v1/providers",
+            json={
+                "project_id": "boss-dogfood",
+                "provider": "digitalocean",
+                "account_label": "cleanup-do",
+                "scopes": ["droplet:write"],
+                "read_only": False,
+                "destructive_actions_disabled": False,
+                "actor": "ceo",
+            },
+        ).json()
+        created = client.post(
+            "/v1/changesets",
+            json={
+                "project_id": "boss-dogfood",
+                "provider_account_id": provider["id"],
+                "title": "Destroy preview droplet",
+                "summary": "Delete an approved preview droplet through ProviderOps.",
+                "expected_cost_usd_micros": 0,
+                "rollback_plan": ["Recreate from the recorded droplet spec if needed."],
+                "operations": [
+                    {
+                        "skill_id": "digitalocean.droplet.destroy",
+                        "action": "destroy",
+                        "resource_type": "droplet",
+                        "resource_ref": "123456",
+                        "desired_state": {
+                            "droplet_id": "123456",
+                            "name": "boss-preview-worker",
+                        },
+                        "risk_tier": 3,
+                        "destructive": True,
+                    }
+                ],
+                "actor": "ceo",
+            },
+        )
+        assert created.status_code == 201
+        changeset = created.json()
+        assert changeset["status"] == "pending_approval"
+        client.post(
+            f"/v1/changesets/{changeset['id']}/approve",
+            json={"actor": "ceo"},
+        )
+        applied = client.post(
+            f"/v1/changesets/{changeset['id']}/apply",
+            json={"actor": "ceo"},
+        )
+    finally:
+        api_main.resource_plane.settings.digitalocean_token = previous_token
+        api_main.resource_plane.settings.infra_real_provision_allowed = previous_allowed
+
+    assert applied.status_code == 200
+    payload = applied.json()
+    assert payload["status"] == "applied"
+    assert deleted == ["123456"]
+    receipt = payload["resource_receipts"][0]
+    assert receipt["status"] == "succeeded"
+    assert receipt["provider_ref"].endswith("/droplets/123456")
+
+    resources = client.get(
+        "/v1/resources",
+        params={"project_id": "boss-dogfood", "provider": "digitalocean"},
+    )
+    assert resources.status_code == 200
+    resource = resources.json()["items"][0]
+    assert resource["external_id"] == "123456"
+    assert resource["state"] == "deleted"
+    assert resource["health_status"] == "deleted"
+    assert resource["receipt_id"] == receipt["receipt_id"]
+
+
+def test_provider_changeset_cloudflare_dns_upsert_writes_receipts_and_resource(
+    client, monkeypatch
+):
+    previous = api_main.resource_plane.settings.cloudflare_api_token
+    api_main.resource_plane.settings.cloudflare_api_token = "cf-test-token"
+    adapter_calls = []
+
+    def fake_cloudflare_dns_upsert(credential, operation):
+        adapter_calls.append({"credential": credential, "operation": operation})
+        return {
+            "provider_ref": "cloudflare:dns_record:dns-record-123",
+            "resource_external_id": "dns-record-123",
+            "resource_name": "preview.example.com",
+            "resource_type": "dns_record",
+            "state": "active",
+            "health_status": "active",
+            "operation": "created",
+            "zone_id": "zone-123",
+            "record": {
+                "id": "dns-record-123",
+                "type": "A",
+                "name": "preview.example.com",
+                "content": "192.0.2.10",
+                "ttl": 1,
+                "proxied": False,
+            },
+            "api_success": True,
+        }
+
+    monkeypatch.setattr(
+        api_main.resource_plane,
+        "_cloudflare_dns_record_upsert",
+        fake_cloudflare_dns_upsert,
+    )
+    try:
+        provider = client.post(
+            "/v1/providers",
+            json={
+                "project_id": "boss-dogfood",
+                "provider": "cloudflare",
+                "account_label": "write-cloudflare",
+                "scopes": ["dns:write"],
+                "read_only": False,
+                "actor": "ceo",
+            },
+        ).json()
+        reservation_id = reserve_for_infra_provision(
+            client,
+            "Reserve DNS provider ChangeSet budget.",
+        )
+        created = client.post(
+            "/v1/changesets",
+            json={
+                "project_id": "boss-dogfood",
+                "provider_account_id": provider["id"],
+                "title": "Create preview DNS record",
+                "summary": "Point preview.example.com at the approved preview service.",
+                "expected_cost_usd_micros": 250_000,
+                "reservation_id": reservation_id,
+                "rollback_plan": ["Restore or delete the prior DNS record value."],
+                "operations": [
+                    {
+                        "skill_id": "cloudflare.dns.record.upsert",
+                        "action": "upsert",
+                        "resource_type": "dns_record",
+                        "resource_ref": "preview.example.com",
+                        "desired_state": {
+                            "zone_id": "zone-123",
+                            "record_type": "A",
+                            "name": "preview.example.com",
+                            "value": "192.0.2.10",
+                            "ttl": 1,
+                            "proxied": False,
+                            "environment": "preview",
+                        },
+                        "risk_tier": 2,
+                    }
+                ],
+                "actor": "ceo",
+            },
+        )
+        assert created.status_code == 201
+        changeset = created.json()
+        assert changeset["status"] == "pending_approval"
+
+        approved = client.post(
+            f"/v1/changesets/{changeset['id']}/approve",
+            json={"actor": "ceo"},
+        )
+        assert approved.status_code == 200
+        applied = client.post(
+            f"/v1/changesets/{changeset['id']}/apply",
+            json={"actor": "ceo"},
+        )
+    finally:
+        api_main.resource_plane.settings.cloudflare_api_token = previous
+
+    assert applied.status_code == 200
+    payload = applied.json()
+    assert payload["status"] == "applied"
+    assert payload["changeset"]["status"] == "applied"
+    assert len(adapter_calls) == 1
+    assert adapter_calls[0]["credential"] == "cf-test-token"
+    assert adapter_calls[0]["operation"]["skill_id"] == "cloudflare.dns.record.upsert"
+    receipt = payload["resource_receipts"][0]
+    assert receipt["status"] == "succeeded"
+    assert receipt["receipt_id"]
+    assert receipt["provider_ref"] == "cloudflare:dns_record:dns-record-123"
+
+    resources = client.get(
+        "/v1/resources",
+        params={"project_id": "boss-dogfood", "provider": "cloudflare"},
+    )
+    assert resources.status_code == 200
+    resource = resources.json()["items"][0]
+    assert resource["external_id"] == "dns-record-123"
+    assert resource["ownership"] == "managed_by_boss"
+    assert resource["state"] == "active"
+    assert resource["receipt_id"] == receipt["receipt_id"]
+    assert resource["metadata"]["resource_receipt_id"] == receipt["id"]
+
+    costs = client.get("/v1/costs", params={"project_id": "boss-dogfood"})
+    assert costs.status_code == 200
+    cost_event = costs.json()["items"][0]
+    assert cost_event["provider"] == "cloudflare"
+    assert cost_event["amount_usd_micros"] == 250_000
+    assert cost_event["cost_layer"] == "observed"
+    assert cost_event["confidence"] == "estimated_from_price_catalog"
+    assert cost_event["source_ref"] == changeset["id"]
+    assert cost_event["receipt_id"] == receipt["receipt_id"]
+    assert cost_event["metadata"]["resource_receipt_ids"] == [receipt["id"]]
+
+    health = client.get(
+        "/v1/provider-health",
+        params={"project_id": "boss-dogfood", "provider": "cloudflare"},
+    )
+    assert health.status_code == 200
+    assert health.json()["items"][0]["status"] == "healthy"
+
+    deadletters = client.get("/v1/deadletters", params={"project_id": "boss-dogfood"})
+    assert not any(
+        item["source_kind"] == "resource_receipt"
+        and item["payload"]["changeset_id"] == changeset["id"]
+        for item in deadletters.json()["items"]
+    )
+
+
+def test_provider_changeset_cloudflare_r2_bucket_create_writes_receipts_and_resource(
+    client, monkeypatch
+):
+    previous = api_main.resource_plane.settings.cloudflare_api_token
+    api_main.resource_plane.settings.cloudflare_api_token = "cf-test-token"
+    r2_requests = []
+
+    class FakeR2Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "success": True,
+                "result": {
+                    "name": "boss-artifacts-staging",
+                    "location": "enam",
+                    "jurisdiction": "default",
+                    "storage_class": "Standard",
+                    "creation_date": "2026-06-03T00:00:00Z",
+                },
+            }
+
+    class FakeR2Client:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            return False
+
+        def post(self, url, headers, json):
+            r2_requests.append({"url": url, "headers": headers, "json": json})
+            return FakeR2Response()
+
+    monkeypatch.setattr(
+        "apps.api.app.services.resource_plane.httpx.Client",
+        FakeR2Client,
+    )
+    try:
+        provider = client.post(
+            "/v1/providers",
+            json={
+                "project_id": "boss-dogfood",
+                "provider": "cloudflare",
+                "account_label": "r2-cloudflare",
+                "scopes": ["read", "write"],
+                "read_only": False,
+                "deploy_capable": False,
+                "destructive_actions_disabled": True,
+                "actor": "ceo",
+            },
+        ).json()
+        reservation_id = reserve_for_infra_provision(
+            client,
+            "Reserve Cloudflare R2 bucket budget.",
+        )
+        created = client.post(
+            "/v1/changesets",
+            json={
+                "project_id": "boss-dogfood",
+                "provider_account_id": provider["id"],
+                "title": "Create staging artifact bucket",
+                "summary": "Create an R2 bucket for staging artifacts.",
+                "operations": [
+                    {
+                        "skill_id": "cloudflare.r2.bucket.create",
+                        "action": "create",
+                        "resource_type": "r2_bucket",
+                        "resource_ref": "boss-artifacts-staging",
+                        "desired_state": {
+                            "account_id": "cf-account-123",
+                            "bucket_name": "boss-artifacts-staging",
+                            "locationHint": "enam",
+                            "storageClass": "Standard",
+                            "jurisdiction": "default",
+                        },
+                        "risk_tier": 2,
+                        "destructive": False,
+                        "production_affecting": False,
+                    }
+                ],
+                "expected_cost_usd_micros": 120_000,
+                "reservation_id": reservation_id,
+                "rollback_plan": [
+                    "Delete the staging R2 bucket only after confirming it is empty."
+                ],
+                "risk_tier": 2,
+                "approval_required": True,
+                "actor": "ceo",
+            },
+        )
+        assert created.status_code == 201
+        changeset = created.json()
+        approved = client.post(
+            f"/v1/changesets/{changeset['id']}/approve",
+            json={"actor": "ceo"},
+        )
+        assert approved.status_code == 200
+        applied = client.post(
+            f"/v1/changesets/{changeset['id']}/apply",
+            json={"actor": "ceo"},
+        )
+    finally:
+        api_main.resource_plane.settings.cloudflare_api_token = previous
+
+    assert applied.status_code == 200
+    payload = applied.json()
+    assert payload["status"] == "applied"
+    assert len(r2_requests) == 1
+    request = r2_requests[0]
+    assert request["url"].endswith("/accounts/cf-account-123/r2/buckets")
+    assert request["headers"]["Authorization"] == "Bearer cf-test-token"
+    assert request["headers"]["cf-r2-jurisdiction"] == "default"
+    assert request["json"] == {
+        "name": "boss-artifacts-staging",
+        "locationHint": "enam",
+        "storageClass": "Standard",
+    }
+
+    receipt = payload["resource_receipts"][0]
+    assert receipt["status"] == "succeeded"
+    assert receipt["provider_ref"] == "cloudflare:r2_bucket:boss-artifacts-staging"
+
+    resources = client.get(
+        "/v1/resources",
+        params={"project_id": "boss-dogfood", "provider": "cloudflare"},
+    )
+    assert resources.status_code == 200
+    resource = resources.json()["items"][0]
+    assert resource["external_id"] == "boss-artifacts-staging"
+    assert resource["resource_type"] == "r2_bucket"
+    assert resource["receipt_id"] == receipt["receipt_id"]
+    assert resource["metadata"]["provider_result"]["storage_class"] == "Standard"
+
+    costs = client.get("/v1/costs", params={"project_id": "boss-dogfood"})
+    assert costs.status_code == 200
+    cost_event = costs.json()["items"][0]
+    assert cost_event["provider"] == "cloudflare"
+    assert cost_event["amount_usd_micros"] == 120_000
+    assert cost_event["receipt_id"] == receipt["receipt_id"]
+
+    health = client.get(
+        "/v1/provider-health",
+        params={"project_id": "boss-dogfood", "provider": "cloudflare"},
+    )
+    assert health.status_code == 200
+    assert health.json()["items"][0]["status"] == "healthy"
+
+
+def test_provider_changeset_supabase_project_pause_is_destructive_and_receipted(
+    client, monkeypatch
+):
+    previous = api_main.resource_plane.settings.supabase_access_token
+    api_main.resource_plane.settings.supabase_access_token = "sbp-test-token"
+    pause_requests = []
+
+    class FakeSupabasePauseResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {}
+
+    class FakeSupabasePauseClient:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            return False
+
+        def post(self, url, headers):
+            pause_requests.append({"url": url, "headers": headers})
+            return FakeSupabasePauseResponse()
+
+    monkeypatch.setattr(
+        "apps.api.app.services.resource_plane.httpx.Client",
+        FakeSupabasePauseClient,
+    )
+    try:
+        provider = client.post(
+            "/v1/providers",
+            json={
+                "project_id": "boss-dogfood",
+                "provider": "supabase",
+                "account_label": "cleanup-supabase",
+                "scopes": ["read", "write"],
+                "read_only": False,
+                "deploy_capable": False,
+                "destructive_actions_disabled": False,
+                "actor": "ceo",
+            },
+        ).json()
+        created = client.post(
+            "/v1/changesets",
+            json={
+                "project_id": "boss-dogfood",
+                "provider_account_id": provider["id"],
+                "title": "Pause idle Supabase staging project",
+                "summary": "Pause an idle staging Supabase project after approval.",
+                "operations": [
+                    {
+                        "skill_id": "supabase.project.pause",
+                        "action": "pause",
+                        "resource_type": "project",
+                        "resource_ref": "supabase-project-ref",
+                        "desired_state": {
+                            "project_ref": "supabase-project-ref",
+                            "name": "boss-staging-db",
+                            "reason": "idle staging cleanup",
+                        },
+                        "risk_tier": 3,
+                        "destructive": True,
+                        "production_affecting": False,
+                    }
+                ],
+                "expected_cost_usd_micros": 0,
+                "rollback_plan": ["Restore the Supabase project before resuming staging."],
+                "risk_tier": 3,
+                "approval_required": True,
+                "actor": "ceo",
+            },
+        )
+        assert created.status_code == 201
+        changeset = created.json()
+        approved = client.post(
+            f"/v1/changesets/{changeset['id']}/approve",
+            json={"actor": "ceo"},
+        )
+        assert approved.status_code == 200
+        applied = client.post(
+            f"/v1/changesets/{changeset['id']}/apply",
+            json={"actor": "ceo"},
+        )
+    finally:
+        api_main.resource_plane.settings.supabase_access_token = previous
+
+    assert applied.status_code == 200
+    payload = applied.json()
+    assert payload["status"] == "applied"
+    assert pause_requests == [
+        {
+            "url": "https://api.supabase.com/v1/projects/supabase-project-ref/pause",
+            "headers": {
+                "Authorization": "Bearer sbp-test-token",
+                "Accept": "application/json",
+            },
+        }
+    ]
+    receipt = payload["resource_receipts"][0]
+    assert receipt["status"] == "succeeded"
+    assert receipt["provider_ref"] == "supabase:project:supabase-project-ref:paused"
+
+    resources = client.get(
+        "/v1/resources",
+        params={"project_id": "boss-dogfood", "provider": "supabase"},
+    )
+    assert resources.status_code == 200
+    resource = resources.json()["items"][0]
+    assert resource["external_id"] == "supabase-project-ref"
+    assert resource["resource_type"] == "project"
+    assert resource["state"] == "draining"
+    assert resource["health_status"] == "paused"
+    assert resource["receipt_id"] == receipt["receipt_id"]
+
+
+def test_provider_changeset_supabase_project_create_uses_secret_ref_without_persisting_secret(
+    client, monkeypatch
+):
+    previous = api_main.resource_plane.settings.supabase_access_token
+    api_main.resource_plane.settings.supabase_access_token = "sbp-test-token"
+    monkeypatch.setenv("BOSS_TEST_SUPABASE_DB_PASS", "super-secret-db-pass")
+    create_requests = []
+
+    class FakeSupabaseCreateResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "id": "project-id-123",
+                "ref": "created-project-ref",
+                "organization_slug": "boss-org",
+                "name": "boss-created-db",
+                "region": "us-east-1",
+                "status": "COMING_UP",
+            }
+
+    class FakeSupabaseCreateClient:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            return False
+
+        def post(self, url, headers, json):
+            create_requests.append({"url": url, "headers": headers, "json": json})
+            return FakeSupabaseCreateResponse()
+
+    monkeypatch.setattr(
+        "apps.api.app.services.resource_plane.httpx.Client",
+        FakeSupabaseCreateClient,
+    )
+    try:
+        provider = client.post(
+            "/v1/providers",
+            json={
+                "project_id": "boss-dogfood",
+                "provider": "supabase",
+                "account_label": "create-supabase",
+                "scopes": ["read", "write"],
+                "read_only": False,
+                "deploy_capable": False,
+                "destructive_actions_disabled": True,
+                "actor": "ceo",
+            },
+        ).json()
+        reservation_id = reserve_for_infra_provision(
+            client,
+            "Reserve Supabase project creation budget.",
+        )
+        created = client.post(
+            "/v1/changesets",
+            json={
+                "project_id": "boss-dogfood",
+                "provider_account_id": provider["id"],
+                "title": "Create Supabase staging project",
+                "summary": "Create a Supabase project for staging database work.",
+                "operations": [
+                    {
+                        "skill_id": "supabase.project.create",
+                        "action": "create",
+                        "resource_type": "project",
+                        "resource_ref": "boss-created-db",
+                        "desired_state": {
+                            "name": "boss-created-db",
+                            "organization_slug": "boss-org",
+                            "region": "us-east-1",
+                            "desired_instance_size": "nano",
+                            "db_pass_secret_ref": "env:BOSS_TEST_SUPABASE_DB_PASS",
+                        },
+                        "risk_tier": 3,
+                        "destructive": False,
+                        "production_affecting": False,
+                    }
+                ],
+                "expected_cost_usd_micros": 500_000,
+                "reservation_id": reservation_id,
+                "rollback_plan": ["Pause or delete the staging project after validation."],
+                "risk_tier": 3,
+                "approval_required": True,
+                "actor": "ceo",
+            },
+        )
+        assert created.status_code == 201
+        changeset = created.json()
+        approved = client.post(
+            f"/v1/changesets/{changeset['id']}/approve",
+            json={"actor": "ceo"},
+        )
+        assert approved.status_code == 200
+        applied = client.post(
+            f"/v1/changesets/{changeset['id']}/apply",
+            json={"actor": "ceo"},
+        )
+    finally:
+        api_main.resource_plane.settings.supabase_access_token = previous
+
+    assert applied.status_code == 200
+    payload = applied.json()
+    assert payload["status"] == "applied"
+    assert len(create_requests) == 1
+    request = create_requests[0]
+    assert request["url"] == "https://api.supabase.com/v1/projects"
+    assert request["headers"]["Authorization"] == "Bearer sbp-test-token"
+    assert request["json"]["name"] == "boss-created-db"
+    assert request["json"]["organization_slug"] == "boss-org"
+    assert request["json"]["db_pass"] == "super-secret-db-pass"
+
+    receipt = payload["resource_receipts"][0]
+    assert receipt["status"] == "succeeded"
+    assert receipt["provider_ref"] == "supabase:project:created-project-ref"
+
+    resources = client.get(
+        "/v1/resources",
+        params={"project_id": "boss-dogfood", "provider": "supabase"},
+    )
+    assert resources.status_code == 200
+    resource = resources.json()["items"][0]
+    assert resource["external_id"] == "created-project-ref"
+    assert resource["resource_type"] == "project"
+    assert resource["state"] == "provisioning"
+    assert resource["health_status"] == "COMING_UP"
+    assert resource["receipt_id"] == receipt["receipt_id"]
+    assert "db_pass" not in resource["metadata"]["provider_result"]
+    assert "super-secret-db-pass" not in json.dumps(resource["metadata"])
+
+    costs = client.get("/v1/costs", params={"project_id": "boss-dogfood"})
+    assert costs.status_code == 200
+    cost_event = costs.json()["items"][0]
+    assert cost_event["provider"] == "supabase"
+    assert cost_event["amount_usd_micros"] == 500_000
+    assert cost_event["receipt_id"] == receipt["receipt_id"]
+
+
+def test_provider_cost_anomaly_applies_read_only_kill_switch(
+    client, engine, monkeypatch
+):
+    previous = api_main.resource_plane.settings.cloudflare_api_token
+    api_main.resource_plane.settings.cloudflare_api_token = "cf-test-token"
+    monkeypatch.setattr(
+        api_main.resource_plane,
+        "_cloudflare_dns_record_upsert",
+        lambda credential, operation: {
+            "provider_ref": "cloudflare:dns_record:expensive-dns-record",
+            "resource_external_id": "expensive-dns-record",
+            "resource_name": "expensive-preview.example.com",
+            "resource_type": "dns_record",
+            "state": "active",
+            "health_status": "active",
+            "operation": "created",
+            "zone_id": "zone-123",
+            "record": {
+                "id": "expensive-dns-record",
+                "type": "A",
+                "name": "expensive-preview.example.com",
+                "content": "192.0.2.20",
+                "ttl": 1,
+            },
+            "api_success": True,
+        },
+    )
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                """
+                UPDATE budget_policies
+                SET daily_cap_usd_micros = 300000,
+                    freeze_provisioning_pct = 0.80
+                WHERE scope_type = 'project' AND scope_id = 'boss-dogfood'
+                """
+            )
+        )
+    try:
+        provider = client.post(
+            "/v1/providers",
+            json={
+                "project_id": "boss-dogfood",
+                "provider": "cloudflare",
+                "account_label": "cost-guard-cloudflare",
+                "scopes": ["dns:write"],
+                "read_only": False,
+                "actor": "ceo",
+            },
+        ).json()
+        reservation_id = reserve_for_infra_provision(
+            client,
+            "Reserve provider spend anomaly proof.",
+        )
+        created = client.post(
+            "/v1/changesets",
+            json={
+                "project_id": "boss-dogfood",
+                "provider_account_id": provider["id"],
+                "title": "Create costly preview DNS record",
+                "summary": "Trigger provider cost anomaly from observed ChangeSet cost.",
+                "expected_cost_usd_micros": 250_000,
+                "reservation_id": reservation_id,
+                "rollback_plan": ["Delete the preview DNS record."],
+                "operations": [
+                    {
+                        "skill_id": "cloudflare.dns.record.upsert",
+                        "action": "upsert",
+                        "resource_type": "dns_record",
+                        "resource_ref": "expensive-preview.example.com",
+                        "desired_state": {
+                            "zone_id": "zone-123",
+                            "record_type": "A",
+                            "name": "expensive-preview.example.com",
+                            "value": "192.0.2.20",
+                            "environment": "preview",
+                        },
+                        "risk_tier": 2,
+                    }
+                ],
+                "actor": "ceo",
+            },
+        )
+        assert created.status_code == 201
+        changeset = created.json()
+        client.post(
+            f"/v1/changesets/{changeset['id']}/approve",
+            json={"actor": "ceo"},
+        )
+        applied = client.post(
+            f"/v1/changesets/{changeset['id']}/apply",
+            json={"actor": "ceo"},
+        )
+    finally:
+        api_main.resource_plane.settings.cloudflare_api_token = previous
+
+    assert applied.status_code == 200
+    assert applied.json()["status"] == "applied"
+
+    anomalies = client.get(
+        "/v1/cost-anomalies",
+        params={"project_id": "boss-dogfood"},
+    )
+    assert anomalies.status_code == 200
+    anomaly = anomalies.json()["items"][0]
+    assert anomaly["anomaly_type"] == "provider_spend_freeze_threshold_crossed"
+    assert anomaly["severity"] == "orange"
+    assert anomaly["amount_usd_micros"] == 250_000
+    assert anomaly["threshold_usd_micros"] == 240_000
+    assert anomaly["decision_id"]
+    assert anomaly["recommended_actions"][0]["action"] == "provider_read_only_mode_applied"
+
+    providers = client.get("/v1/providers", params={"project_id": "boss-dogfood"})
+    guarded_provider = next(
+        item for item in providers.json()["items"] if item["id"] == provider["id"]
+    )
+    assert guarded_provider["read_only"] is True
+    assert guarded_provider["last_error"]["reason"] == (
+        "provider_spend_freeze_threshold_crossed"
+    )
+
+    blocked = client.post(
+        "/v1/changesets",
+        json={
+            "project_id": "boss-dogfood",
+            "provider_account_id": provider["id"],
+            "title": "Second DNS write after kill switch",
+            "summary": "This must fail closed because the provider is read-only.",
+            "expected_cost_usd_micros": 0,
+            "rollback_plan": ["Delete the DNS record."],
+            "operations": [
+                {
+                    "skill_id": "cloudflare.dns.record.upsert",
+                    "action": "upsert",
+                    "resource_type": "dns_record",
+                    "desired_state": {
+                        "zone_id": "zone-123",
+                        "record_type": "A",
+                        "name": "blocked.example.com",
+                        "value": "192.0.2.30",
+                    },
+                    "risk_tier": 2,
+                }
+            ],
+            "actor": "ceo",
+        },
+    )
+    assert blocked.status_code == 422
+    assert "read-only" in blocked.json()["detail"]
+
+    events = client.get("/v1/events", params={"project_id": "boss-dogfood"})
+    event_types = [item["event_type"] for item in events.json()["items"]]
+    assert "provider.cost_anomaly_detected" in event_types
+    assert "provider.read_only_kill_switch_applied" in event_types
+
+
+def test_provider_changeset_missing_credentials_deadletters_without_provider_call(
+    client, monkeypatch
+):
+    previous = api_main.resource_plane.settings.cloudflare_api_token
+    api_main.resource_plane.settings.cloudflare_api_token = None
+
+    def unexpected_cloudflare_dns_upsert(credential, operation):
+        raise AssertionError("adapter should not run without credentials")
+
+    monkeypatch.setattr(
+        api_main.resource_plane,
+        "_cloudflare_dns_record_upsert",
+        unexpected_cloudflare_dns_upsert,
+    )
+    try:
+        provider = client.post(
+            "/v1/providers",
+            json={
+                "project_id": "boss-dogfood",
+                "provider": "cloudflare",
+                "account_label": "missing-token-cloudflare",
+                "scopes": ["dns:write"],
+                "read_only": False,
+                "actor": "ceo",
+            },
+        ).json()
+        created = client.post(
+            "/v1/changesets",
+            json={
+                "project_id": "boss-dogfood",
+                "provider_account_id": provider["id"],
+                "title": "Create preview DNS record",
+                "summary": "Point preview.example.com at the approved preview service.",
+                "expected_cost_usd_micros": 0,
+                "rollback_plan": ["Restore or delete the prior DNS record value."],
+                "operations": [
+                    {
+                        "skill_id": "cloudflare.dns.record.upsert",
+                        "action": "upsert",
+                        "resource_type": "dns_record",
+                        "resource_ref": "preview.example.com",
+                        "desired_state": {
+                            "zone_id": "zone-123",
+                            "record_type": "A",
+                            "name": "preview.example.com",
+                            "value": "192.0.2.10",
+                        },
+                        "risk_tier": 2,
+                    }
+                ],
+                "actor": "ceo",
+            },
+        )
+        assert created.status_code == 201
+        changeset = created.json()
+        client.post(
+            f"/v1/changesets/{changeset['id']}/approve",
+            json={"actor": "ceo"},
+        )
+        applied = client.post(
+            f"/v1/changesets/{changeset['id']}/apply",
+            json={"actor": "ceo"},
+        )
+    finally:
+        api_main.resource_plane.settings.cloudflare_api_token = previous
+
+    assert applied.status_code == 200
+    payload = applied.json()
+    assert payload["status"] == "deadlettered"
+    receipt = payload["resource_receipts"][0]
+    assert receipt["status"] == "failed"
+    assert receipt["error"]["error_type"] == "ProviderCredentialError"
+
+    health = client.get(
+        "/v1/provider-health",
+        params={"project_id": "boss-dogfood", "provider": "cloudflare"},
+    )
+    assert health.status_code == 200
+    assert health.json()["items"][0]["status"] == "degraded"
+
+    deadletters = client.get("/v1/deadletters", params={"project_id": "boss-dogfood"})
+    assert any(
+        item["source_kind"] == "resource_receipt"
+        and item["payload"]["changeset_id"] == changeset["id"]
+        for item in deadletters.json()["items"]
+    )
+
+
+def test_provider_changeset_blocks_destructive_action_when_disabled(client):
+    provider = client.post(
+        "/v1/providers",
+        json={
+            "project_id": "boss-dogfood",
+            "provider": "digitalocean",
+            "account_label": "read-only-do",
+            "scopes": ["read"],
+            "read_only": False,
+            "destructive_actions_disabled": True,
+            "actor": "ceo",
+        },
+    ).json()
+    response = client.post(
+        "/v1/changesets",
+        json={
+            "project_id": "boss-dogfood",
+            "provider_account_id": provider["id"],
+            "title": "Destroy orphaned droplet",
+            "summary": "Attempt cleanup.",
+            "rollback_plan": ["Restore from snapshot."],
+            "operations": [
+                {
+                    "skill_id": "digitalocean.droplet.destroy",
+                    "action": "destroy",
+                    "resource_type": "droplet",
+                    "resource_ref": "12345",
+                    "destructive": True,
+                    "risk_tier": 3,
+                }
+            ],
+            "actor": "ceo",
+        },
+    )
+    assert response.status_code == 422
+    assert "destructive actions disabled" in response.json()["detail"]
+
+
+def test_autoscaler_scales_local_worker_pool_from_queue_pressure(client):
+    pool = client.post(
+        "/v1/worker-pools",
+        json={
+            "project_id": "boss-dogfood",
+            "pool_key": "local-fast",
+            "kind": "local",
+            "current_workers": 0,
+            "desired_workers": 0,
+            "min_workers": 0,
+            "max_workers": 3,
+            "max_queue_depth_per_worker": 2,
+            "capabilities": ["plan.command"],
+            "actor": "ceo",
+        },
+    )
+    assert pool.status_code == 201
+    pool_id = pool.json()["id"]
+
+    for index in range(5):
+        created = client.post(
+            "/v1/jobs",
+            json={
+                "project_id": "boss-dogfood",
+                "kind": "plan.command",
+                "payload": {"index": index},
+                "priority": 50,
+            },
+        )
+        assert created.status_code == 201
+
+    planned = client.post(
+        "/v1/autoscaler/plans",
+        json={
+            "project_id": "boss-dogfood",
+            "worker_pool_id": pool_id,
+            "actor": "ceo",
+        },
+    )
+    assert planned.status_code == 200
+    payload = planned.json()
+    plan = payload["scale_plan"]
+    assert plan["status"] == "applied"
+    assert plan["trigger_reason"] == "queue_pressure"
+    assert plan["queue_depth"] == 5
+    assert plan["desired_workers_before"] == 0
+    assert plan["desired_workers_after"] == 2
+    assert plan["target_workers"] == 2
+    assert plan["actions"][0]["action"] == "scale_local_workers"
+    assert plan["recommendations"][0]["action"] == "request_capacity_limit_review"
+    assert payload["worker_pool"]["desired_workers"] == 2
+
+    pools = client.get("/v1/worker-pools", params={"project_id": "boss-dogfood"})
+    assert pools.status_code == 200
+    assert pools.json()["items"][0]["desired_workers"] == 2
+
+    plans = client.get(
+        "/v1/autoscaler/plans",
+        params={"project_id": "boss-dogfood"},
+    )
+    assert plans.status_code == 200
+    assert plans.json()["items"][0]["id"] == plan["id"]
+
+    events = client.get("/v1/events", params={"project_id": "boss-dogfood"})
+    event_types = [item["event_type"] for item in events.json()["items"]]
+    assert "worker_pool.desired_capacity_changed" in event_types
+    assert "autoscaler.plan_created" in event_types
+
+
+def test_autoscaler_red_budget_enters_degraded_mode_and_creates_decision(
+    client,
+    engine,
+):
+    pool = client.post(
+        "/v1/worker-pools",
+        json={
+            "project_id": "boss-dogfood",
+            "pool_key": "local-drain",
+            "kind": "local",
+            "current_workers": 2,
+            "desired_workers": 2,
+            "min_workers": 0,
+            "max_workers": 3,
+            "actor": "ceo",
+        },
+    )
+    assert pool.status_code == 201
+    pool_id = pool.json()["id"]
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                """
+                UPDATE budget_policies
+                SET daily_cap_usd_micros = 1000,
+                    monthly_cap_usd_micros = 1000
+                WHERE scope_type = 'project' AND scope_id = 'boss-dogfood'
+                """
+            )
+        )
+        connection.execute(
+            text(
+                """
+                INSERT INTO cost_receipts (
+                    id, project_id, category, skill_or_model_id,
+                    estimated_usd_micros, actual_usd_micros, status
+                )
+                VALUES (
+                    'cost_autoscaler_red', 'boss-dogfood', 'provider',
+                    'digitalocean.droplet.create', 950, 950, 'actual'
+                )
+                """
+            )
+        )
+
+    planned = client.post(
+        "/v1/autoscaler/plans",
+        json={
+            "project_id": "boss-dogfood",
+            "worker_pool_id": pool_id,
+            "actor": "ceo",
+        },
+    )
+    assert planned.status_code == 200
+    payload = planned.json()
+    plan = payload["scale_plan"]
+    assert payload["budget_state"] == "red"
+    assert plan["status"] == "applied"
+    assert plan["trigger_reason"] == "budget_state_red"
+    assert plan["desired_workers_before"] == 2
+    assert plan["desired_workers_after"] == 0
+    assert plan["decision_id"]
+    actions = [item["action"] for item in plan["actions"]]
+    assert "enter_degraded_mode" in actions
+    assert "pause_noncritical_work" in actions
+    assert "drain_workers" in actions
+
+    decisions = client.get("/v1/decisions/inbox", params={"project_id": "boss-dogfood"})
+    assert decisions.status_code == 200
+    assert any(
+        item["id"] == plan["decision_id"]
+        and item["recommendation"]["autoscaler_guardrail"]
+        == "budget_governor_wins_over_autoscaler"
+        for item in decisions.json()["items"]
+    )
+
+
+def test_autoscaler_cloud_spillover_creates_reserved_changeset_not_provider_call(client):
+    provider = client.post(
+        "/v1/providers",
+        json={
+            "project_id": "boss-dogfood",
+            "provider": "digitalocean",
+            "account_label": "autoscaler-do",
+            "scopes": ["read", "write"],
+            "read_only": False,
+            "destructive_actions_disabled": False,
+            "actor": "ceo",
+        },
+    ).json()
+    pool = client.post(
+        "/v1/worker-pools",
+        json={
+            "project_id": "boss-dogfood",
+            "pool_key": "cloud-spillover",
+            "kind": "cloud",
+            "provider_account_id": provider["id"],
+            "current_workers": 0,
+            "desired_workers": 0,
+            "min_workers": 0,
+            "max_workers": 2,
+            "max_queue_depth_per_worker": 1,
+            "cost_per_worker_hour_usd_micros": 500_000,
+            "capabilities": ["software_factory.propose_pr"],
+            "actor": "ceo",
+        },
+    )
+    assert pool.status_code == 201
+    pool_id = pool.json()["id"]
+    for index in range(2):
+        created = client.post(
+            "/v1/jobs",
+            json={
+                "project_id": "boss-dogfood",
+                "kind": "software_factory.propose_pr",
+                "payload": {
+                    "index": index,
+                    "requires_reservation": False,
+                },
+                "priority": 40,
+            },
+        )
+        assert created.status_code == 201
+
+    planned = client.post(
+        "/v1/autoscaler/plans",
+        json={
+            "project_id": "boss-dogfood",
+            "worker_pool_id": pool_id,
+            "cloud_spillover_enabled": True,
+            "actor": "ceo",
+        },
+    )
+    assert planned.status_code == 200
+    payload = planned.json()
+    plan = payload["scale_plan"]
+    assert plan["status"] == "pending_approval"
+    assert plan["estimated_hourly_delta_usd_micros"] == 1_000_000
+    assert plan["changeset_id"]
+    assert plan["decision_id"]
+    assert plan["actions"][0]["action"] == "propose_cloud_workers"
+    assert payload["worker_pool"]["desired_workers"] == 0
+
+    changesets = client.get(
+        "/v1/changesets",
+        params={"project_id": "boss-dogfood"},
+    )
+    assert changesets.status_code == 200
+    changeset = changesets.json()["items"][0]
+    assert changeset["id"] == plan["changeset_id"]
+    assert changeset["status"] == "pending_approval"
+    assert changeset["reservation_id"]
+    assert changeset["operations"][0]["skill_id"] == "digitalocean.droplet.create"
+    assert changeset["operations"][0]["desired_state"]["count"] == 2
+
+    receipts = client.get(
+        "/v1/resource-receipts",
+        params={"project_id": "boss-dogfood"},
+    )
+    assert receipts.status_code == 200
+    assert receipts.json()["items"] == []
+
+
+def test_resource_janitor_proposes_cleanup_changeset_for_orphaned_resource(
+    client,
+    monkeypatch,
+):
+    previous = api_main.resource_plane.settings.digitalocean_token
+    api_main.resource_plane.settings.digitalocean_token = "do-token"
+    monkeypatch.setattr(
+        api_main.resource_plane,
+        "_sync_inventory",
+        lambda provider, credential: [
+            InventoryResource(
+                provider="digitalocean",
+                resource_type="droplet",
+                external_id="orphan-123",
+                name="orphan-preview-worker",
+                state="active",
+                ownership="orphaned",
+                environment="preview",
+                health_status="active",
+                tags=["preview"],
+                metadata={
+                    "region": "nyc3",
+                    "size": "s-1vcpu-1gb",
+                    "ttl_expired": True,
+                },
+                estimated_monthly_usd_micros=1_200_000,
+                cost_confidence="estimated_from_price_catalog",
+            )
+        ],
+    )
+    try:
+        provider = client.post(
+            "/v1/providers",
+            json={
+                "project_id": "boss-dogfood",
+                "provider": "digitalocean",
+                "account_label": "janitor-do",
+                "scopes": ["read", "write"],
+                "read_only": False,
+                "destructive_actions_disabled": False,
+                "actor": "ceo",
+            },
+        ).json()
+        synced = client.post(
+            "/v1/resources/sync",
+            json={
+                "project_id": "boss-dogfood",
+                "provider_account_id": provider["id"],
+                "actor": "ceo",
+            },
+        )
+    finally:
+        api_main.resource_plane.settings.digitalocean_token = previous
+
+    assert synced.status_code == 200
+
+    janitor = client.post(
+        "/v1/resource-janitor/run",
+        json={
+            "project_id": "boss-dogfood",
+            "provider_account_id": provider["id"],
+            "actor": "ceo",
+        },
+    )
+    assert janitor.status_code == 200
+    payload = janitor.json()
+    assert payload["status"] == "completed"
+    assert payload["candidate_count"] == 1
+    assert payload["estimated_monthly_savings_usd_micros"] == 1_200_000
+    assert payload["candidates"][0]["cleanup_skill_id"] == "digitalocean.droplet.destroy"
+    assert payload["changesets"][0]["status"] == "pending_approval"
+    assert payload["changesets"][0]["operations"][0]["resource_ref"] == "orphan-123"
+    assert payload["changesets"][0]["policy_result"]["janitor_proposal"] is True
+    assert payload["artifact_id"].startswith("art_")
+
+    artifacts = client.get(
+        "/v1/artifacts",
+        params={"project_id": "boss-dogfood", "limit": 5},
+    )
+    assert any(
+        item["artifact_type"] == "resource_janitor_report"
+        for item in artifacts.json()["items"]
+    )
+
+    duplicate = client.post(
+        "/v1/resource-janitor/run",
+        json={
+            "project_id": "boss-dogfood",
+            "provider_account_id": provider["id"],
+            "actor": "ceo",
+        },
+    )
+    assert duplicate.status_code == 200
+    assert duplicate.json()["candidate_count"] == 0
+    assert duplicate.json()["skipped"][0]["reason"] == "open_cleanup_changeset_exists"
+
+
+def test_resource_janitor_never_auto_proposes_production_deletion(
+    client,
+    monkeypatch,
+):
+    previous = api_main.resource_plane.settings.digitalocean_token
+    api_main.resource_plane.settings.digitalocean_token = "do-token"
+    monkeypatch.setattr(
+        api_main.resource_plane,
+        "_sync_inventory",
+        lambda provider, credential: [
+            InventoryResource(
+                provider="digitalocean",
+                resource_type="droplet",
+                external_id="prod-123",
+                name="production-worker",
+                state="active",
+                ownership="orphaned",
+                environment="production",
+                health_status="active",
+                tags=["production"],
+                metadata={"ttl_expired": True},
+                estimated_monthly_usd_micros=2_500_000,
+                cost_confidence="estimated_from_price_catalog",
+            )
+        ],
+    )
+    try:
+        provider = client.post(
+            "/v1/providers",
+            json={
+                "project_id": "boss-dogfood",
+                "provider": "digitalocean",
+                "account_label": "janitor-prod-do",
+                "scopes": ["read", "write"],
+                "read_only": False,
+                "destructive_actions_disabled": False,
+                "actor": "ceo",
+            },
+        ).json()
+        client.post(
+            "/v1/resources/sync",
+            json={
+                "project_id": "boss-dogfood",
+                "provider_account_id": provider["id"],
+                "actor": "ceo",
+            },
+        )
+    finally:
+        api_main.resource_plane.settings.digitalocean_token = previous
+
+    janitor = client.post(
+        "/v1/resource-janitor/run",
+        json={
+            "project_id": "boss-dogfood",
+            "provider_account_id": provider["id"],
+            "actor": "ceo",
+        },
+    )
+    assert janitor.status_code == 200
+    payload = janitor.json()
+    assert payload["candidate_count"] == 0
+    assert payload["changesets"] == []
+    assert payload["skipped"][0]["reason"] == "production_resource_requires_manual_review"
+
+
+def test_deployment_target_registry_is_api_driven(client):
+    created = client.post(
+        "/v1/deployments",
+        json={
+            "project_id": "boss-dogfood",
+            "app_name": "boss-api",
+            "repo": "seanheiney/boss",
+            "environment": "staging",
+            "target_kind": "cloudflare.worker",
+            "target_ref": "boss-api-staging",
+            "domains": ["staging-api.boss.local"],
+            "required_resources": [{"kind": "worker"}],
+            "secret_refs": ["env:OPENAI_API_KEY"],
+            "health_checks": [{"url": "https://staging-api.boss.local/health"}],
+            "rollback_points": [{"ref": "previous-worker-version"}],
+            "actor": "ceo",
+        },
+    )
+    assert created.status_code == 201
+    payload = created.json()
+    assert payload["status"] == "created"
+    assert payload["domains"] == ["staging-api.boss.local"]
+
+    deployments = client.get(
+        "/v1/deployments",
+        params={"project_id": "boss-dogfood"},
+    )
+    assert deployments.status_code == 200
+    assert deployments.json()["items"][0]["app_name"] == "boss-api"
+
+
+def test_deployment_run_plans_changeset_and_release_packet(client):
+    provider = client.post(
+        "/v1/providers",
+        json={
+            "project_id": "boss-dogfood",
+            "provider": "digitalocean",
+            "account_label": "deploy-do",
+            "scopes": ["read", "write", "deploy"],
+            "read_only": False,
+            "deploy_capable": True,
+            "destructive_actions_disabled": False,
+            "actor": "ceo",
+        },
+    ).json()
+    target = client.post(
+        "/v1/deployments",
+        json={
+            "project_id": "boss-dogfood",
+            "app_name": "boss-api",
+            "repo": "seanheiney/boss",
+            "environment": "staging",
+            "provider_account_id": provider["id"],
+            "target_kind": "digitalocean_app",
+            "target_ref": "app-123",
+            "domains": ["staging-api.boss.local"],
+            "health_checks": [
+                {
+                    "name": "api health",
+                    "url": "https://staging-api.boss.local/health",
+                    "expected_status": 200,
+                }
+            ],
+            "rollback_points": [{"ref": "previous-app-spec"}],
+            "actor": "ceo",
+        },
+    ).json()
+
+    planned = client.post(
+        "/v1/deployment-runs",
+        json={
+            "project_id": "boss-dogfood",
+            "deployment_target_id": target["id"],
+            "commit_ref": "abc123",
+            "release_packet": {"review_packet_id": "art_review"},
+            "actor": "ceo",
+        },
+    )
+    assert planned.status_code == 201
+    payload = planned.json()
+    assert payload["status"] == "created"
+    assert payload["changeset_id"]
+    assert payload["release_artifact_id"]
+    assert payload["rollback_plan"] == ["previous-app-spec"]
+    assert payload["release_receipt_ids"][0]["skill_id"] == "digitalocean.app.deploy"
+
+    changesets = client.get(
+        "/v1/changesets",
+        params={"project_id": "boss-dogfood"},
+    )
+    assert changesets.status_code == 200
+    changeset = changesets.json()["items"][0]
+    assert changeset["id"] == payload["changeset_id"]
+    assert changeset["status"] == "pending_approval"
+    assert changeset["operations"][0]["skill_id"] == "digitalocean.app.deploy"
+    assert changeset["operations"][0]["desired_state"]["release_artifact_id"] == payload[
+        "release_artifact_id"
+    ]
+    assert changeset["operations"][0]["desired_state"]["commit_ref"] == "abc123"
+
+    artifact = client.get(f"/v1/artifacts/{payload['release_artifact_id']}")
+    assert artifact.status_code == 200
+    assert artifact.json()["artifact_type"] == "deployment_release_packet"
+
+    receipts = client.get(
+        "/v1/resource-receipts",
+        params={"project_id": "boss-dogfood"},
+    )
+    assert receipts.status_code == 200
+    assert receipts.json()["items"] == []
+
+
+def test_deployment_run_digitalocean_app_apply_marks_deployed(
+    client, monkeypatch
+):
+    previous_token = api_main.resource_plane.settings.digitalocean_token
+    previous_allowed = api_main.resource_plane.settings.infra_real_provision_allowed
+    api_main.resource_plane.settings.digitalocean_token = "do-test-token"
+    api_main.resource_plane.settings.infra_real_provision_allowed = True
+    deployment_calls = []
+
+    def fake_create_app_deployment(**kwargs):
+        deployment_calls.append(kwargs)
+        return AppDeploymentResult(
+            app_id=kwargs["app_id"],
+            deployment_id="dep-123",
+            status="active",
+            phase="deploying",
+            api_url=(
+                "https://api.digitalocean.com/v2/apps/"
+                f"{kwargs['app_id']}/deployments/dep-123"
+            ),
+        )
+
+    monkeypatch.setattr(
+        api_main.resource_plane.digitalocean,
+        "create_app_deployment",
+        fake_create_app_deployment,
+    )
+    try:
+        provider = client.post(
+            "/v1/providers",
+            json={
+                "project_id": "boss-dogfood",
+                "provider": "digitalocean",
+                "account_label": "deploy-do",
+                "scopes": ["read", "write", "deploy"],
+                "read_only": False,
+                "deploy_capable": True,
+                "destructive_actions_disabled": False,
+                "actor": "ceo",
+            },
+        ).json()
+        target = client.post(
+            "/v1/deployments",
+            json={
+                "project_id": "boss-dogfood",
+                "app_name": "boss-api",
+                "repo": "seanheiney/boss",
+                "environment": "staging",
+                "provider_account_id": provider["id"],
+                "target_kind": "digitalocean_app",
+                "target_ref": "app-123",
+                "domains": ["staging-api.boss.local"],
+                "health_checks": [
+                    {
+                        "name": "api health",
+                        "url": "https://staging-api.boss.local/health",
+                        "expected_status": 200,
+                    }
+                ],
+                "rollback_points": [{"ref": "previous-app-spec"}],
+                "actor": "ceo",
+            },
+        ).json()
+        reservation_id = reserve_for_infra_provision(
+            client,
+            "Reserve DigitalOcean app deployment budget.",
+        )
+        planned = client.post(
+            "/v1/deployment-runs",
+            json={
+                "project_id": "boss-dogfood",
+                "deployment_target_id": target["id"],
+                "commit_ref": "abc123",
+                "release_packet": {"review_packet_id": "art_review"},
+                "expected_cost_usd_micros": 250_000,
+                "reservation_id": reservation_id,
+                "actor": "ceo",
+            },
+        )
+        assert planned.status_code == 201
+        run = planned.json()
+        approved = client.post(
+            f"/v1/changesets/{run['changeset_id']}/approve",
+            json={"actor": "ceo"},
+        )
+        assert approved.status_code == 200
+        applied = client.post(
+            f"/v1/changesets/{run['changeset_id']}/apply",
+            json={"actor": "ceo"},
+        )
+    finally:
+        api_main.resource_plane.settings.digitalocean_token = previous_token
+        api_main.resource_plane.settings.infra_real_provision_allowed = previous_allowed
+
+    assert applied.status_code == 200
+    payload = applied.json()
+    assert payload["status"] == "applied"
+    assert deployment_calls == [{"app_id": "app-123", "force_build": True}]
+    receipt = payload["resource_receipts"][0]
+    assert receipt["status"] == "succeeded"
+    assert receipt["provider_ref"].endswith("/apps/app-123/deployments/dep-123")
+
+    deployment_runs = client.get(
+        "/v1/deployment-runs",
+        params={"project_id": "boss-dogfood"},
+    )
+    assert deployment_runs.status_code == 200
+    deployed_run = deployment_runs.json()["items"][0]
+    assert deployed_run["id"] == run["id"]
+    assert deployed_run["status"] == "deployed"
+
+    resources = client.get(
+        "/v1/resources",
+        params={"project_id": "boss-dogfood", "provider": "digitalocean"},
+    )
+    assert resources.status_code == 200
+    resource = resources.json()["items"][0]
+    assert resource["external_id"] == "dep-123"
+    assert resource["resource_type"] == "app_deployment"
+    assert resource["metadata"]["provider_result"]["deployment_id"] == "dep-123"
+
+    costs = client.get("/v1/costs", params={"project_id": "boss-dogfood"})
+    assert costs.status_code == 200
+    cost_event = costs.json()["items"][0]
+    assert cost_event["provider"] == "digitalocean"
+    assert cost_event["amount_usd_micros"] == 250_000
+    assert cost_event["cost_layer"] == "observed"
+    assert cost_event["confidence"] == "estimated_from_price_catalog"
+    assert cost_event["source_ref"] == run["changeset_id"]
+    assert cost_event["receipt_id"] == receipt["receipt_id"]
+    assert cost_event["metadata"]["resource_receipt_ids"] == [receipt["id"]]
+
+    events = client.get("/v1/events", params={"project_id": "boss-dogfood"})
+    assert any(
+        item["event_type"] == "deployment_run.deployed"
+        and item["entity_id"] == run["id"]
+        for item in events.json()["items"]
+    )
+
+
+def test_deployment_run_cloudflare_worker_apply_marks_deployed(
+    client, monkeypatch
+):
+    previous_token = api_main.resource_plane.settings.cloudflare_api_token
+    api_main.resource_plane.settings.cloudflare_api_token = "cf-test-token"
+    worker_requests = []
+
+    class FakeCloudflareResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "success": True,
+                "result": {
+                    "id": "boss-worker",
+                    "etag": "etag-worker-123",
+                },
+            }
+
+    class FakeCloudflareClient:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            return False
+
+        def put(self, url, headers, files):
+            worker_requests.append(
+                {
+                    "url": url,
+                    "headers": headers,
+                    "files": files,
+                }
+            )
+            return FakeCloudflareResponse()
+
+    monkeypatch.setattr(
+        "apps.api.app.services.resource_plane.httpx.Client",
+        FakeCloudflareClient,
+    )
+    try:
+        provider = client.post(
+            "/v1/providers",
+            json={
+                "project_id": "boss-dogfood",
+                "provider": "cloudflare",
+                "account_label": "deploy-cloudflare-worker",
+                "scopes": ["read", "write", "deploy"],
+                "read_only": False,
+                "deploy_capable": True,
+                "destructive_actions_disabled": True,
+                "actor": "ceo",
+            },
+        ).json()
+        target = client.post(
+            "/v1/deployments",
+            json={
+                "project_id": "boss-dogfood",
+                "app_name": "boss-edge-worker",
+                "repo": "seanheiney/boss",
+                "environment": "staging",
+                "provider_account_id": provider["id"],
+                "target_kind": "cloudflare_worker",
+                "target_ref": "boss-worker",
+                "domains": ["edge.boss.local"],
+                "required_resources": [
+                    {
+                        "type": "worker_script",
+                        "account_id": "cf-account-123",
+                        "script_name": "boss-worker",
+                        "main_module": "worker.js",
+                        "compatibility_date": "2026-06-03",
+                        "script_content": (
+                            "export default { async fetch() { "
+                            "return new Response('ok'); } }"
+                        ),
+                    }
+                ],
+                "health_checks": [],
+                "rollback_points": [{"ref": "previous-worker-version"}],
+                "actor": "ceo",
+            },
+        ).json()
+        reservation_id = reserve_for_infra_provision(
+            client,
+            "Reserve Cloudflare worker deployment budget.",
+        )
+        planned = client.post(
+            "/v1/deployment-runs",
+            json={
+                "project_id": "boss-dogfood",
+                "deployment_target_id": target["id"],
+                "commit_ref": "def456",
+                "release_packet": {"review_packet_id": "art_worker_review"},
+                "expected_cost_usd_micros": 100_000,
+                "reservation_id": reservation_id,
+                "actor": "ceo",
+            },
+        )
+        assert planned.status_code == 201
+        run = planned.json()
+        approved = client.post(
+            f"/v1/changesets/{run['changeset_id']}/approve",
+            json={"actor": "ceo"},
+        )
+        assert approved.status_code == 200
+        applied = client.post(
+            f"/v1/changesets/{run['changeset_id']}/apply",
+            json={"actor": "ceo"},
+        )
+    finally:
+        api_main.resource_plane.settings.cloudflare_api_token = previous_token
+
+    assert applied.status_code == 200
+    payload = applied.json()
+    assert payload["status"] == "applied"
+    assert len(worker_requests) == 1
+    request = worker_requests[0]
+    assert request["url"].endswith(
+        "/accounts/cf-account-123/workers/scripts/boss-worker"
+    )
+    assert request["headers"]["Authorization"] == "Bearer cf-test-token"
+    metadata = json.loads(request["files"]["metadata"][1])
+    assert metadata["main_module"] == "worker.js"
+    assert metadata["compatibility_date"] == "2026-06-03"
+    assert request["files"]["worker.js"][1].startswith("export default")
+
+    receipt = payload["resource_receipts"][0]
+    assert receipt["status"] == "succeeded"
+    assert receipt["provider"] == "cloudflare"
+    assert receipt["provider_ref"] == "cloudflare:worker:boss-worker"
+
+    resources = client.get(
+        "/v1/resources",
+        params={"project_id": "boss-dogfood", "provider": "cloudflare"},
+    )
+    assert resources.status_code == 200
+    resource = resources.json()["items"][0]
+    assert resource["external_id"] == "boss-worker"
+    assert resource["resource_type"] == "worker"
+    assert resource["ownership"] == "managed_by_boss"
+    assert resource["receipt_id"] == receipt["receipt_id"]
+    assert resource["metadata"]["provider_result"]["etag"] == "etag-worker-123"
+
+    costs = client.get("/v1/costs", params={"project_id": "boss-dogfood"})
+    assert costs.status_code == 200
+    cost_event = costs.json()["items"][0]
+    assert cost_event["provider"] == "cloudflare"
+    assert cost_event["amount_usd_micros"] == 100_000
+    assert cost_event["receipt_id"] == receipt["receipt_id"]
+
+    deployment_runs = client.get(
+        "/v1/deployment-runs",
+        params={"project_id": "boss-dogfood"},
+    )
+    assert deployment_runs.status_code == 200
+    deployed_run = deployment_runs.json()["items"][0]
+    assert deployed_run["id"] == run["id"]
+    assert deployed_run["status"] == "deployed"
+
+
+def test_deployment_run_cloudflare_pages_apply_marks_deployed(
+    client, monkeypatch
+):
+    previous_token = api_main.resource_plane.settings.cloudflare_api_token
+    api_main.resource_plane.settings.cloudflare_api_token = "cf-test-token"
+    pages_requests = []
+
+    class FakePagesResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "success": True,
+                "result": {
+                    "id": "pages-deploy-123",
+                    "project_name": "boss-pages",
+                    "url": "https://boss-pages.pages.dev",
+                    "environment": "preview",
+                    "latest_stage": {"status": "success"},
+                },
+            }
+
+    class FakePagesClient:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            return False
+
+        def post(self, url, headers, files):
+            pages_requests.append(
+                {
+                    "url": url,
+                    "headers": headers,
+                    "files": files,
+                }
+            )
+            return FakePagesResponse()
+
+    monkeypatch.setattr(
+        "apps.api.app.services.resource_plane.httpx.Client",
+        FakePagesClient,
+    )
+    try:
+        provider = client.post(
+            "/v1/providers",
+            json={
+                "project_id": "boss-dogfood",
+                "provider": "cloudflare",
+                "account_label": "deploy-cloudflare-pages",
+                "scopes": ["read", "write", "deploy"],
+                "read_only": False,
+                "deploy_capable": True,
+                "destructive_actions_disabled": True,
+                "actor": "ceo",
+            },
+        ).json()
+        target = client.post(
+            "/v1/deployments",
+            json={
+                "project_id": "boss-dogfood",
+                "app_name": "boss-pages",
+                "repo": "seanheiney/boss",
+                "environment": "staging",
+                "provider_account_id": provider["id"],
+                "target_kind": "cloudflare_pages",
+                "target_ref": "boss-pages",
+                "domains": ["pages.boss.local"],
+                "required_resources": [
+                    {
+                        "type": "cloudflare_pages",
+                        "account_id": "cf-account-123",
+                        "project_name": "boss-pages",
+                        "branch": "staging",
+                        "commit_message": "Deploy staging pages",
+                        "commit_dirty": False,
+                    }
+                ],
+                "health_checks": [],
+                "rollback_points": [{"ref": "previous-pages-deployment"}],
+                "actor": "ceo",
+            },
+        ).json()
+        reservation_id = reserve_for_infra_provision(
+            client,
+            "Reserve Cloudflare Pages deployment budget.",
+        )
+        planned = client.post(
+            "/v1/deployment-runs",
+            json={
+                "project_id": "boss-dogfood",
+                "deployment_target_id": target["id"],
+                "commit_ref": "abc999",
+                "release_packet": {"review_packet_id": "art_pages_review"},
+                "expected_cost_usd_micros": 90_000,
+                "reservation_id": reservation_id,
+                "actor": "ceo",
+            },
+        )
+        assert planned.status_code == 201
+        run = planned.json()
+        changesets = client.get(
+            "/v1/changesets",
+            params={"project_id": "boss-dogfood"},
+        ).json()
+        changeset = next(
+            item
+            for item in changesets["items"]
+            if item["id"] == run["changeset_id"]
+        )
+        assert changeset["operations"][0]["skill_id"] == "cloudflare.pages.deploy"
+        approved = client.post(
+            f"/v1/changesets/{run['changeset_id']}/approve",
+            json={"actor": "ceo"},
+        )
+        assert approved.status_code == 200
+        applied = client.post(
+            f"/v1/changesets/{run['changeset_id']}/apply",
+            json={"actor": "ceo"},
+        )
+    finally:
+        api_main.resource_plane.settings.cloudflare_api_token = previous_token
+
+    assert applied.status_code == 200
+    payload = applied.json()
+    assert payload["status"] == "applied"
+    assert len(pages_requests) == 1
+    request = pages_requests[0]
+    assert request["url"].endswith(
+        "/accounts/cf-account-123/pages/projects/boss-pages/deployments"
+    )
+    assert request["headers"]["Authorization"] == "Bearer cf-test-token"
+    assert request["files"]["branch"][1] == "staging"
+    assert request["files"]["commit_hash"][1] == "abc999"
+    assert request["files"]["commit_message"][1] == "Deploy staging pages"
+    assert request["files"]["commit_dirty"][1] == "false"
+
+    receipt = payload["resource_receipts"][0]
+    assert receipt["status"] == "succeeded"
+    assert receipt["provider"] == "cloudflare"
+    assert receipt["provider_ref"] == (
+        "cloudflare:pages_deployment:pages-deploy-123"
+    )
+
+    resources = client.get(
+        "/v1/resources",
+        params={"project_id": "boss-dogfood", "provider": "cloudflare"},
+    )
+    assert resources.status_code == 200
+    resource = resources.json()["items"][0]
+    assert resource["external_id"] == "pages-deploy-123"
+    assert resource["resource_type"] == "pages_deployment"
+    assert resource["health_status"] == "success"
+    assert resource["receipt_id"] == receipt["receipt_id"]
+
+    costs = client.get("/v1/costs", params={"project_id": "boss-dogfood"})
+    assert costs.status_code == 200
+    cost_event = costs.json()["items"][0]
+    assert cost_event["provider"] == "cloudflare"
+    assert cost_event["amount_usd_micros"] == 90_000
+    assert cost_event["receipt_id"] == receipt["receipt_id"]
+
+    deployment_runs = client.get(
+        "/v1/deployment-runs",
+        params={"project_id": "boss-dogfood"},
+    )
+    assert deployment_runs.status_code == 200
+    deployed_run = deployment_runs.json()["items"][0]
+    assert deployed_run["id"] == run["id"]
+    assert deployed_run["status"] == "deployed"
+
+
+def test_deployment_run_supabase_migration_apply_marks_deployed(
+    client, monkeypatch
+):
+    previous_token = api_main.resource_plane.settings.supabase_access_token
+    api_main.resource_plane.settings.supabase_access_token = "sbp-test-token"
+    migration_requests = []
+
+    class FakeSupabaseResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "version": "20260603000000",
+                "name": "create_boss_test_table",
+            }
+
+    class FakeSupabaseClient:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            return False
+
+        def post(self, url, headers, json):
+            migration_requests.append(
+                {
+                    "url": url,
+                    "headers": headers,
+                    "json": json,
+                }
+            )
+            return FakeSupabaseResponse()
+
+    monkeypatch.setattr(
+        "apps.api.app.services.resource_plane.httpx.Client",
+        FakeSupabaseClient,
+    )
+    try:
+        provider = client.post(
+            "/v1/providers",
+            json={
+                "project_id": "boss-dogfood",
+                "provider": "supabase",
+                "account_label": "deploy-supabase",
+                "scopes": ["read", "write", "deploy"],
+                "read_only": False,
+                "deploy_capable": True,
+                "destructive_actions_disabled": True,
+                "actor": "ceo",
+            },
+        ).json()
+        target = client.post(
+            "/v1/deployments",
+            json={
+                "project_id": "boss-dogfood",
+                "app_name": "boss-db",
+                "repo": "seanheiney/boss",
+                "environment": "staging",
+                "provider_account_id": provider["id"],
+                "target_kind": "supabase_migration",
+                "target_ref": "supabase-project-ref",
+                "domains": [],
+                "required_resources": [
+                    {
+                        "type": "supabase_migration",
+                        "project_ref": "supabase-project-ref",
+                        "migration_name": "create_boss_test_table",
+                        "sql": (
+                            "create table if not exists public.boss_test "
+                            "(id bigint primary key);"
+                        ),
+                        "rollback": "drop table if exists public.boss_test;",
+                    }
+                ],
+                "health_checks": [],
+                "rollback_points": [{"ref": "drop table if exists public.boss_test"}],
+                "actor": "ceo",
+            },
+        ).json()
+        reservation_id = reserve_for_infra_provision(
+            client,
+            "Reserve Supabase migration budget.",
+        )
+        planned = client.post(
+            "/v1/deployment-runs",
+            json={
+                "project_id": "boss-dogfood",
+                "deployment_target_id": target["id"],
+                "commit_ref": "fed789",
+                "release_packet": {"review_packet_id": "art_db_review"},
+                "expected_cost_usd_micros": 75_000,
+                "reservation_id": reservation_id,
+                "actor": "ceo",
+            },
+        )
+        assert planned.status_code == 201
+        run = planned.json()
+        approved = client.post(
+            f"/v1/changesets/{run['changeset_id']}/approve",
+            json={"actor": "ceo"},
+        )
+        assert approved.status_code == 200
+        applied = client.post(
+            f"/v1/changesets/{run['changeset_id']}/apply",
+            json={"actor": "ceo"},
+        )
+    finally:
+        api_main.resource_plane.settings.supabase_access_token = previous_token
+
+    assert applied.status_code == 200
+    payload = applied.json()
+    assert payload["status"] == "applied"
+    assert len(migration_requests) == 1
+    request = migration_requests[0]
+    assert request["url"].endswith(
+        "/v1/projects/supabase-project-ref/database/migrations"
+    )
+    assert request["headers"]["Authorization"] == "Bearer sbp-test-token"
+    assert request["json"]["name"] == "create_boss_test_table"
+    assert request["json"]["query"].startswith("create table if not exists")
+    assert request["json"]["rollback"].startswith("drop table")
+
+    receipt = payload["resource_receipts"][0]
+    assert receipt["status"] == "succeeded"
+    assert receipt["provider"] == "supabase"
+    assert receipt["provider_ref"] == (
+        "supabase:migration:supabase-project-ref:20260603000000"
+    )
+
+    resources = client.get(
+        "/v1/resources",
+        params={"project_id": "boss-dogfood", "provider": "supabase"},
+    )
+    assert resources.status_code == 200
+    resource = resources.json()["items"][0]
+    assert resource["external_id"] == "20260603000000"
+    assert resource["resource_type"] == "migration"
+    assert resource["ownership"] == "managed_by_boss"
+    assert resource["receipt_id"] == receipt["receipt_id"]
+    assert resource["metadata"]["provider_result"]["migration_name"] == (
+        "create_boss_test_table"
+    )
+
+    costs = client.get("/v1/costs", params={"project_id": "boss-dogfood"})
+    assert costs.status_code == 200
+    cost_event = costs.json()["items"][0]
+    assert cost_event["provider"] == "supabase"
+    assert cost_event["amount_usd_micros"] == 75_000
+    assert cost_event["receipt_id"] == receipt["receipt_id"]
+
+    deployment_runs = client.get(
+        "/v1/deployment-runs",
+        params={"project_id": "boss-dogfood"},
+    )
+    assert deployment_runs.status_code == 200
+    deployed_run = deployment_runs.json()["items"][0]
+    assert deployed_run["id"] == run["id"]
+    assert deployed_run["status"] == "deployed"
+
+
+def test_deployment_run_spendy_plan_requires_budget_reservation(client):
+    provider = client.post(
+        "/v1/providers",
+        json={
+            "project_id": "boss-dogfood",
+            "provider": "cloudflare",
+            "account_label": "deploy-cloudflare",
+            "scopes": ["read", "write", "deploy"],
+            "read_only": False,
+            "deploy_capable": True,
+            "actor": "ceo",
+        },
+    ).json()
+    target = client.post(
+        "/v1/deployments",
+        json={
+            "project_id": "boss-dogfood",
+            "app_name": "boss-web",
+            "repo": "seanheiney/boss",
+            "environment": "staging",
+            "provider_account_id": provider["id"],
+            "target_kind": "cloudflare_worker",
+            "target_ref": "boss-web-staging",
+            "health_checks": [{"url": "https://boss-web-staging.example/health"}],
+            "rollback_points": [{"ref": "previous-worker"}],
+            "actor": "ceo",
+        },
+    ).json()
+
+    planned = client.post(
+        "/v1/deployment-runs",
+        json={
+            "project_id": "boss-dogfood",
+            "deployment_target_id": target["id"],
+            "expected_cost_usd_micros": 250_000,
+            "actor": "ceo",
+        },
+    )
+    assert planned.status_code == 201
+    payload = planned.json()
+    assert payload["status"] == "failed"
+    assert "BudgetReservation" in payload["failure_reason"]
+    assert payload["decision_id"]
+
+    inbox = client.get("/v1/decisions/inbox", params={"project_id": "boss-dogfood"})
+    assert inbox.status_code == 200
+    assert any(
+        item["id"] == payload["decision_id"]
+        and item["recommendation"]["action"] == "reserve_budget_before_deployment"
+        for item in inbox.json()["items"]
+    )
+
+
+def test_deployment_health_check_records_success_artifact(client, monkeypatch):
+    monkeypatch.setattr(
+        api_main.resource_plane,
+        "_run_http_health_check",
+        lambda check: {
+            "name": check.get("name", "health"),
+            "url": check["url"],
+            "status": "passed",
+            "status_code": 200,
+            "expected_status": 200,
+        },
+    )
+    target = client.post(
+        "/v1/deployments",
+        json={
+            "project_id": "boss-dogfood",
+            "app_name": "local-boss",
+            "repo": "seanheiney/boss",
+            "environment": "local",
+            "target_kind": "local",
+            "target_ref": "localhost",
+            "health_checks": [
+                {
+                    "name": "local health",
+                    "url": "http://127.0.0.1:8000/health",
+                    "expected_status": 200,
+                }
+            ],
+            "rollback_points": [{"ref": "previous-local"}],
+            "actor": "ceo",
+        },
+    ).json()
+    run = client.post(
+        "/v1/deployment-runs",
+        json={
+            "project_id": "boss-dogfood",
+            "deployment_target_id": target["id"],
+            "commit_ref": "local-sha",
+            "actor": "ceo",
+        },
+    ).json()
+    assert run["changeset_id"] is None
+
+    checked = client.post(
+        f"/v1/deployment-runs/{run['id']}/health-check",
+        json={"actor": "ceo"},
+    )
+    assert checked.status_code == 200
+    payload = checked.json()
+    assert payload["deployment_run"]["status"] == "healthy"
+    assert payload["health_artifact_id"]
+    assert payload["decision_id"] is None
+
+    runs = client.get(
+        "/v1/deployment-runs",
+        params={"project_id": "boss-dogfood"},
+    )
+    assert runs.status_code == 200
+    assert runs.json()["items"][0]["health_check_results"][0]["status"] == "passed"
+
+
+def test_deployment_health_failure_creates_rollback_decision(client, monkeypatch):
+    monkeypatch.setattr(
+        api_main.resource_plane,
+        "_run_http_health_check",
+        lambda check: {
+            "name": check.get("name", "health"),
+            "url": check["url"],
+            "status": "failed",
+            "status_code": 503,
+            "expected_status": 200,
+        },
+    )
+    target = client.post(
+        "/v1/deployments",
+        json={
+            "project_id": "boss-dogfood",
+            "app_name": "local-boss-fail",
+            "repo": "seanheiney/boss",
+            "environment": "staging",
+            "target_kind": "local",
+            "target_ref": "localhost-fail",
+            "health_checks": [
+                {
+                    "name": "staging health",
+                    "url": "http://127.0.0.1:8000/health",
+                    "expected_status": 200,
+                }
+            ],
+            "rollback_points": [{"ref": "previous-staging"}],
+            "actor": "ceo",
+        },
+    ).json()
+    run = client.post(
+        "/v1/deployment-runs",
+        json={
+            "project_id": "boss-dogfood",
+            "deployment_target_id": target["id"],
+            "actor": "ceo",
+        },
+    ).json()
+
+    checked = client.post(
+        f"/v1/deployment-runs/{run['id']}/health-check",
+        json={"actor": "ceo"},
+    )
+    assert checked.status_code == 200
+    payload = checked.json()
+    assert payload["deployment_run"]["status"] == "rollback_pending"
+    assert payload["deployment_run"]["failure_reason"] == "Deployment health checks failed."
+    assert payload["rollback_artifact_id"]
+    assert payload["decision_id"]
+
+    artifact = client.get(f"/v1/artifacts/{payload['rollback_artifact_id']}")
+    assert artifact.status_code == 200
+    assert artifact.json()["artifact_type"] == "deployment_rollback_plan"
+
+    inbox = client.get("/v1/decisions/inbox", params={"project_id": "boss-dogfood"})
+    assert inbox.status_code == 200
+    assert any(item["id"] == payload["decision_id"] for item in inbox.json()["items"])
 
 
 def test_router_preview_selects_openai_api_and_writes_log(client):
@@ -7914,11 +11016,13 @@ def test_command_to_deploy_flow_completes_task_when_deploy_policy_enabled(
         assert rollout["current_stage"] == "release_readiness"
         assert rollout["health_verification_status"] == "passed"
         assert rollout["stages"][2]["status"] == "passed"
-        assert receipt_kinds == [
-            "github.pull_request.create",
-            "github.pull_request.merge",
-            "github.deployment.create",
-        ]
+        assert sorted(receipt_kinds) == sorted(
+            [
+                "github.pull_request.create",
+                "github.pull_request.merge",
+                "github.deployment.create",
+            ]
+        )
 
         rollouts = client.get(
             "/v1/software-factory/rollouts",

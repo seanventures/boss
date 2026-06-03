@@ -36,6 +36,8 @@ describe("createBossApiClient", () => {
           transport_authenticated: true,
           actor_binding_required: true,
           principal_member_id: "ceo",
+          auth_method: "api_key",
+          oidc_enabled: false,
           message: "Authenticated as project member 'ceo'.",
         }),
         {
@@ -54,6 +56,57 @@ describe("createBossApiClient", () => {
     expect(urls).toEqual(["http://127.0.0.1:8000/v1/auth/session"]);
     expect(session.principal_member_id).toBe("ceo");
     expect(session.actor_binding_required).toBe(true);
+  });
+
+  it("manages org members through the API contract", async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const orgMember = {
+      id: "om_org_boss_delegate",
+      org_id: "org_boss",
+      project_id: "boss-dogfood",
+      member_id: "org_delegate",
+      display_name: "Org Delegate",
+      member_type: "human",
+      role_keys: ["operator"],
+      permissions: ["command_submit"],
+      status: "active",
+      created_by: "ceo",
+      created_at: "2026-06-03T00:00:00Z",
+      updated_at: "2026-06-03T00:00:00Z",
+    };
+    const responses = [
+      { status: 200, body: { org_id: "org_boss", items: [orgMember] } },
+      { status: 201, body: orgMember },
+    ];
+    const fetchImpl = async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({ url: String(input), init });
+      const response = responses.shift();
+      return new Response(JSON.stringify(response?.body ?? {}), {
+        status: response?.status ?? 500,
+        headers: { "Content-Type": "application/json" },
+      });
+    };
+    const client = createBossApiClient({
+      baseUrl: "http://127.0.0.1:8000",
+      fetchImpl,
+    });
+
+    const listed = await client.listOrgMembers("org_boss", "boss-dogfood", "ceo");
+    const upserted = await client.upsertOrgMember({
+      org_id: "org_boss",
+      project_id: "boss-dogfood",
+      member_id: "org_delegate",
+      display_name: "Org Delegate",
+      role_keys: ["operator"],
+      permissions: ["command_submit"],
+      actor: "ceo",
+    });
+
+    expect(listed.items[0].member_id).toBe("org_delegate");
+    expect(upserted.org_id).toBe("org_boss");
+    expect(calls[0].url).toContain("/v1/org-members?org_id=org_boss");
+    expect(calls[1].url).toBe("http://127.0.0.1:8000/v1/org-members");
+    expect(calls[1].init?.method).toBe("POST");
   });
 
   it("creates compliance evidence bundles through the API contract", async () => {
@@ -375,6 +428,439 @@ describe("createBossApiClient", () => {
     expect(review.decision_id).toBe("dec_infra_request");
     expect(resources.items[0].provider).toBe("digitalocean");
     expect(termination.status).toBe("terminated");
+  });
+
+  it("routes ProviderOps lifecycle calls through the shared API contract", async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const providerAccount = {
+      id: "pa_1",
+      project_id: "boss-dogfood",
+      provider: "digitalocean",
+      account_label: "DO sandbox",
+      scopes: ["read"],
+      status: "needs_test",
+      read_only: true,
+      deploy_capable: false,
+      billing_readable: true,
+      destructive_actions_disabled: true,
+      capabilities: [],
+      missing_permissions: [],
+      created_by: "ceo",
+      created_at: "2026-06-03T00:00:00Z",
+      updated_at: "2026-06-03T00:00:00Z",
+    };
+    const providerHealth = {
+      id: "ph_1",
+      project_id: "boss-dogfood",
+      provider_account_id: "pa_1",
+      provider: "digitalocean",
+      status: "ok",
+      api_available: true,
+      rate_limit_status: "unknown",
+      usage_cap_status: "unknown",
+      last_checked_at: "2026-06-03T00:00:00Z",
+      detail: {},
+      created_at: "2026-06-03T00:00:00Z",
+    };
+    const changeSet = {
+      id: "chg_1",
+      project_id: "boss-dogfood",
+      provider_account_id: "pa_1",
+      title: "Create staging DNS",
+      summary: "Upsert staging record",
+      status: "pending_approval",
+      risk_tier: 2,
+      operations: [],
+      expected_cost_usd_micros: 1000,
+      cost_quote: {},
+      rollback_plan: ["delete DNS record"],
+      expected_receipts: [],
+      policy_result: {},
+      created_by: "ceo",
+      created_at: "2026-06-03T00:00:00Z",
+      updated_at: "2026-06-03T00:00:00Z",
+    };
+    const resourceReceipt = {
+      id: "rr_1",
+      project_id: "boss-dogfood",
+      changeset_id: "chg_1",
+      dedupe_key: "resource:chg_1:op_1",
+      provider: "digitalocean",
+      action: "digitalocean.droplet.create",
+      resource_type: "droplet",
+      status: "failed",
+      request_hash: "hash",
+      created_at: "2026-06-03T00:00:00Z",
+      updated_at: "2026-06-03T00:00:00Z",
+    };
+    const workerPool = {
+      id: "wp_1",
+      project_id: "boss-dogfood",
+      pool_key: "local-default",
+      kind: "local",
+      status: "active",
+      current_workers: 0,
+      desired_workers: 1,
+      min_workers: 0,
+      max_workers: 2,
+      max_queue_depth_per_worker: 5,
+      cost_per_worker_hour_usd_micros: 0,
+      capabilities: ["plan.command"],
+      metadata: {},
+      created_by: "ceo",
+      created_at: "2026-06-03T00:00:00Z",
+      updated_at: "2026-06-03T00:00:00Z",
+    };
+    const scalePlan = {
+      id: "scp_1",
+      project_id: "boss-dogfood",
+      worker_pool_id: "wp_1",
+      status: "applied",
+      trigger_reason: "queue_pressure",
+      queue_depth: 6,
+      running_jobs: 0,
+      leased_jobs: 0,
+      retryable_jobs: 0,
+      current_workers: 0,
+      desired_workers_before: 0,
+      desired_workers_after: 1,
+      target_workers: 1,
+      budget_state: "green",
+      budget_available_usd_micros: 10_000_000,
+      estimated_hourly_delta_usd_micros: 0,
+      provider_health_status: "unknown",
+      actions: [{ action: "scale_local_workers" }],
+      recommendations: [],
+      created_by: "ceo",
+      created_at: "2026-06-03T00:00:00Z",
+    };
+    const deploymentRun = {
+      id: "deprun_1",
+      project_id: "boss-dogfood",
+      deployment_target_id: "dt_1",
+      changeset_id: "chg_1",
+      release_artifact_id: "art_release",
+      health_artifact_id: "art_health",
+      app_name: "BOSS",
+      environment: "staging",
+      repo: "seanheiney/boss",
+      target_kind: "digitalocean_app",
+      target_ref: "app",
+      commit_ref: "abc123",
+      status: "healthy",
+      release_packet: {},
+      health_check_results: [{ status: "passed" }],
+      rollback_plan: ["previous app spec"],
+      release_receipt_ids: [],
+      created_by: "ceo",
+      created_at: "2026-06-03T00:00:00Z",
+      updated_at: "2026-06-03T00:00:00Z",
+    };
+    const responses = [
+      { status: 200, body: { project_id: "boss-dogfood", items: [providerAccount] } },
+      { status: 201, body: providerAccount },
+      {
+        status: 200,
+        body: {
+          status: "ok",
+          provider_account: providerAccount,
+          provider_health: providerHealth,
+          detail: {},
+        },
+      },
+      {
+        status: 201,
+        body: {
+          project_id: "boss-dogfood",
+          runs: [
+            {
+              id: "rrun_1",
+              status: "completed",
+              resources_seen: 1,
+              resources_changed: 1,
+              costs_seen: 1,
+            },
+          ],
+          resources_seen: 1,
+          resources_changed: 1,
+          costs_seen: 1,
+        },
+      },
+      {
+        status: 200,
+        body: {
+          project_id: "boss-dogfood",
+          items: [
+            {
+              id: "res_1",
+              project_id: "boss-dogfood",
+              provider_account_id: "pa_1",
+              provider: "digitalocean",
+              resource_type: "droplet",
+              external_id: "123",
+              name: "boss-staging",
+              state: "active",
+              ownership: "discovered_unmanaged",
+              environment: "staging",
+              health_status: "unknown",
+              cost_confidence: "unknown",
+              last_seen_at: "2026-06-03T00:00:00Z",
+              tags: [],
+              metadata: {},
+              created_at: "2026-06-03T00:00:00Z",
+              updated_at: "2026-06-03T00:00:00Z",
+            },
+          ],
+        },
+      },
+      { status: 200, body: { project_id: "boss-dogfood", items: [] } },
+      {
+        status: 200,
+        body: {
+          project_id: "boss-dogfood",
+          items: [
+            {
+              id: "canom_1",
+              project_id: "boss-dogfood",
+              provider_account_id: "pa_1",
+              cost_event_id: "cost_1",
+              decision_id: "dec_1",
+              provider: "digitalocean",
+              anomaly_type: "provider_spend_freeze_threshold_crossed",
+              severity: "orange",
+              status: "open",
+              amount_usd_micros: 250000,
+              threshold_usd_micros: 200000,
+              summary: "Provider spend crossed threshold.",
+              recommended_actions: [],
+              created_at: "2026-06-03T00:00:00Z",
+            },
+          ],
+        },
+      },
+      { status: 201, body: changeSet },
+      { status: 200, body: { ...changeSet, status: "approved", approved_by: "ceo" } },
+      {
+        status: 200,
+        body: {
+          status: "failed",
+          changeset: { ...changeSet, status: "failed" },
+          resource_receipts: [resourceReceipt],
+        },
+      },
+      { status: 200, body: { project_id: "boss-dogfood", items: [resourceReceipt] } },
+      { status: 200, body: { project_id: "boss-dogfood", items: [workerPool] } },
+      { status: 201, body: workerPool },
+      { status: 200, body: { project_id: "boss-dogfood", items: [scalePlan] } },
+      {
+        status: 200,
+        body: {
+          scale_plan: scalePlan,
+          worker_pool: workerPool,
+          budget_state: "green",
+          queue: { queue_depth: 6 },
+          provider_health: { status: "unknown" },
+        },
+      },
+      {
+        status: 200,
+        body: {
+          status: "completed",
+          project_id: "boss-dogfood",
+          artifact_id: "art_janitor",
+          candidate_count: 1,
+          skipped_count: 0,
+          estimated_monthly_savings_usd_micros: 250000,
+          candidates: [
+            {
+              external_resource_id: "res_1",
+              provider_account_id: "pa_1",
+              provider: "digitalocean",
+              resource_type: "droplet",
+              external_id: "123",
+              name: "boss-staging",
+              environment: "staging",
+              ownership: "orphaned",
+              health_status: "active",
+              estimated_monthly_savings_usd_micros: 250000,
+              cost_confidence: "estimated_from_price_catalog",
+              cleanup_skill_id: "digitalocean.droplet.destroy",
+              destructive: true,
+            },
+          ],
+          skipped: [],
+          changesets: [changeSet],
+        },
+      },
+      {
+        status: 201,
+        body: {
+          id: "dt_1",
+          project_id: "boss-dogfood",
+          app_name: "BOSS",
+          repo: "seanheiney/boss",
+          environment: "staging",
+          provider_account_id: "pa_1",
+          target_kind: "digitalocean_app",
+          target_ref: "app",
+          domains: ["staging.example.com"],
+          required_resources: [],
+          secret_refs: ["sec_db"],
+          health_checks: [],
+          rollback_points: [],
+          status: "created",
+          created_by: "ceo",
+          created_at: "2026-06-03T00:00:00Z",
+          updated_at: "2026-06-03T00:00:00Z",
+        },
+      },
+      { status: 200, body: { project_id: "boss-dogfood", items: [] } },
+      { status: 200, body: { project_id: "boss-dogfood", items: [deploymentRun] } },
+      { status: 201, body: deploymentRun },
+      {
+        status: 200,
+        body: {
+          deployment_run: deploymentRun,
+          health_artifact_id: "art_health",
+        },
+      },
+      { status: 200, body: { project_id: "boss-dogfood", items: [providerHealth] } },
+      { status: 200, body: { project_id: "boss-dogfood", items: [] } },
+      { status: 200, body: { project_id: "boss-dogfood", items: [] } },
+    ];
+    const fetchImpl = async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({ url: String(input), init });
+      const next = responses.shift();
+      if (!next) {
+        throw new Error("unexpected extra request");
+      }
+      return new Response(JSON.stringify(next.body), {
+        status: next.status,
+        headers: { "Content-Type": "application/json" },
+      });
+    };
+    const client = createBossApiClient({
+      baseUrl: "http://127.0.0.1:8000",
+      fetchImpl,
+    });
+
+    await client.listProviderAccounts("boss-dogfood");
+    await client.createProviderAccount({
+      project_id: "boss-dogfood",
+      provider: "digitalocean",
+      account_label: "DO sandbox",
+      read_only: true,
+      actor: "ceo",
+    });
+    await client.testProviderAccount("pa_1", "boss-dogfood", "ceo");
+    await client.syncExternalResources({ project_id: "boss-dogfood", provider_account_id: "pa_1" });
+    await client.listExternalResources("boss-dogfood", {
+      provider: "digitalocean",
+      ownership: "discovered_unmanaged",
+      limit: 25,
+    });
+    await client.listProviderCosts("boss-dogfood", 10);
+    await client.listProviderCostAnomalies("boss-dogfood", 10);
+    await client.createChangeSet({
+      project_id: "boss-dogfood",
+      provider_account_id: "pa_1",
+      title: "Create staging DNS",
+      summary: "Upsert staging record",
+      operations: [
+        {
+          skill_id: "cloudflare.dns.record.upsert",
+          action: "cloudflare.dns.record.upsert",
+          resource_type: "dns_record",
+          risk_tier: 2,
+          production_affecting: false,
+        },
+      ],
+      expected_cost_usd_micros: 1000,
+      rollback_plan: ["delete DNS record"],
+      actor: "ceo",
+    });
+    await client.approveChangeSet("chg_1", { actor: "ceo" });
+    await client.applyChangeSet("chg_1", { actor: "system" });
+    await client.listResourceReceipts("boss-dogfood", 10);
+    await client.listWorkerPools("boss-dogfood");
+    await client.upsertWorkerPool({
+      project_id: "boss-dogfood",
+      pool_key: "local-default",
+      kind: "local",
+      actor: "ceo",
+    });
+    await client.listScalePlans("boss-dogfood", 5);
+    await client.runAutoscalerPlan({
+      project_id: "boss-dogfood",
+      worker_pool_id: "wp_1",
+      actor: "ceo",
+    });
+    await client.runResourceJanitor({
+      project_id: "boss-dogfood",
+      provider_account_id: "pa_1",
+      max_candidates: 5,
+      actor: "ceo",
+    });
+    await client.createDeploymentTarget({
+      project_id: "boss-dogfood",
+      app_name: "BOSS",
+      repo: "seanheiney/boss",
+      environment: "staging",
+      provider_account_id: "pa_1",
+      target_kind: "digitalocean_app",
+      target_ref: "app",
+      domains: ["staging.example.com"],
+      secret_refs: ["sec_db"],
+      actor: "ceo",
+    });
+    await client.listDeploymentTargets("boss-dogfood");
+    await client.listDeploymentRuns("boss-dogfood", 5);
+    await client.createDeploymentRun({
+      project_id: "boss-dogfood",
+      deployment_target_id: "dt_1",
+      commit_ref: "abc123",
+      actor: "ceo",
+    });
+    await client.runDeploymentHealthCheck("deprun_1", { actor: "ceo" });
+    await client.listProviderHealth("boss-dogfood", { providerAccountId: "pa_1", limit: 5 });
+    await client.listDriftReports("boss-dogfood", 5);
+    await client.listReconciliationRuns("boss-dogfood", 5);
+
+    expect(calls.map((call) => call.url)).toEqual([
+      "http://127.0.0.1:8000/v1/providers?project_id=boss-dogfood",
+      "http://127.0.0.1:8000/v1/providers",
+      "http://127.0.0.1:8000/v1/providers/pa_1/test?project_id=boss-dogfood&actor=ceo",
+      "http://127.0.0.1:8000/v1/resources/sync",
+      "http://127.0.0.1:8000/v1/resources?project_id=boss-dogfood&provider=digitalocean&ownership=discovered_unmanaged&limit=25",
+      "http://127.0.0.1:8000/v1/costs?project_id=boss-dogfood&limit=10",
+      "http://127.0.0.1:8000/v1/cost-anomalies?project_id=boss-dogfood&limit=10",
+      "http://127.0.0.1:8000/v1/changesets",
+      "http://127.0.0.1:8000/v1/changesets/chg_1/approve",
+      "http://127.0.0.1:8000/v1/changesets/chg_1/apply",
+      "http://127.0.0.1:8000/v1/resource-receipts?project_id=boss-dogfood&limit=10",
+      "http://127.0.0.1:8000/v1/worker-pools?project_id=boss-dogfood",
+      "http://127.0.0.1:8000/v1/worker-pools",
+      "http://127.0.0.1:8000/v1/autoscaler/plans?project_id=boss-dogfood&limit=5",
+      "http://127.0.0.1:8000/v1/autoscaler/plans",
+      "http://127.0.0.1:8000/v1/resource-janitor/run",
+      "http://127.0.0.1:8000/v1/deployments",
+      "http://127.0.0.1:8000/v1/deployments?project_id=boss-dogfood",
+      "http://127.0.0.1:8000/v1/deployment-runs?project_id=boss-dogfood&limit=5",
+      "http://127.0.0.1:8000/v1/deployment-runs",
+      "http://127.0.0.1:8000/v1/deployment-runs/deprun_1/health-check",
+      "http://127.0.0.1:8000/v1/provider-health?project_id=boss-dogfood&provider_account_id=pa_1&limit=5",
+      "http://127.0.0.1:8000/v1/drift-reports?project_id=boss-dogfood&limit=5",
+      "http://127.0.0.1:8000/v1/reconciliation-runs?project_id=boss-dogfood&limit=5",
+    ]);
+    expect(JSON.parse(String(calls[7].init?.body))).toMatchObject({
+      provider_account_id: "pa_1",
+      operations: [
+        expect.objectContaining({
+          action: "cloudflare.dns.record.upsert",
+          production_affecting: false,
+        }),
+      ],
+    });
   });
 
   it("passes task hierarchy fields through task creation", async () => {

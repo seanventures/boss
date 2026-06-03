@@ -5,7 +5,7 @@ skills:
     mock_mode: false
     description: Create a Supabase project through a budgeted, approved ChangeSet.
     data_boundary: confidential
-    input_schema: { org_ref: string, name: string, region: string, plan: string }
+    input_schema: { org_ref: string, name: string, region: string, plan: string, db_pass_secret_ref: string }
     output_schema: { project_ref: string, resource_receipt_id: string }
     cost: { estimator: provider_plan, category: database }
     retry: { max_attempts: 1, backoff: none }

@@ -57,6 +57,8 @@ class AuthSessionResponse(BaseModel):
     transport_authenticated: bool
     actor_binding_required: bool
     principal_member_id: Optional[str] = None
+    auth_method: Optional[str] = None
+    oidc_enabled: bool = False
     message: str
 
 
@@ -90,6 +92,53 @@ class ProjectMemberUpsertRequest(BaseModel):
 
     @model_validator(mode="after")
     def validate_member_fields(self) -> "ProjectMemberUpsertRequest":
+        self.member_id = _require_text(self.member_id, "member_id")
+        self.display_name = _require_text(self.display_name, "display_name")
+        self.member_type = _require_text(self.member_type, "member_type")
+        self.role_keys = _require_non_empty_string_list(
+            self.role_keys, "role_keys"
+        )
+        self.permissions = _require_non_empty_string_list(
+            self.permissions, "permissions"
+        )
+        self.actor = _require_text(self.actor, "actor")
+        return self
+
+
+class OrgMemberSummary(BaseModel):
+    id: str
+    org_id: str
+    project_id: Optional[str] = None
+    member_id: str
+    display_name: str
+    member_type: str
+    role_keys: list[str]
+    permissions: list[str]
+    status: str
+    created_by: str
+    created_at: str
+    updated_at: str
+
+
+class OrgMemberListResponse(BaseModel):
+    org_id: str
+    items: list[OrgMemberSummary]
+
+
+class OrgMemberUpsertRequest(BaseModel):
+    org_id: str
+    project_id: str
+    member_id: str
+    display_name: str
+    member_type: str = "human"
+    role_keys: list[str] = Field(default_factory=list)
+    permissions: list[str] = Field(default_factory=list)
+    actor: str = "ceo"
+
+    @model_validator(mode="after")
+    def validate_org_member_fields(self) -> "OrgMemberUpsertRequest":
+        self.org_id = _require_text(self.org_id, "org_id")
+        self.project_id = _require_text(self.project_id, "project_id")
         self.member_id = _require_text(self.member_id, "member_id")
         self.display_name = _require_text(self.display_name, "display_name")
         self.member_type = _require_text(self.member_type, "member_type")
@@ -1751,4 +1800,604 @@ class RoutingLogListResponse(BaseModel):
     items: list[RoutingLogItem]
 
 
+class ProviderAccountSummary(BaseModel):
+    id: str
+    project_id: str
+    provider: str
+    account_label: str
+    credential_ref: Optional[str] = None
+    scopes: list[str]
+    status: str
+    read_only: bool
+    deploy_capable: bool
+    billing_readable: bool
+    destructive_actions_disabled: bool
+    capabilities: list[str]
+    missing_permissions: list[str]
+    last_test_status: Optional[str] = None
+    last_tested_at: Optional[str] = None
+    last_error: Optional[dict[str, Any]] = None
+    created_by: str
+    created_at: str
+    updated_at: str
+
+
+class ProviderAccountListResponse(BaseModel):
+    project_id: str
+    items: list[ProviderAccountSummary]
+
+
+class ProviderAccountCreateRequest(BaseModel):
+    project_id: str
+    provider: str
+    account_label: str
+    credential_ref: Optional[str] = None
+    scopes: list[str] = Field(default_factory=list)
+    read_only: bool = True
+    deploy_capable: bool = False
+    billing_readable: bool = False
+    destructive_actions_disabled: bool = True
+    actor: str = "ceo"
+
+    @model_validator(mode="after")
+    def validate_provider_account(self) -> "ProviderAccountCreateRequest":
+        self.provider = _require_text(self.provider, "provider").lower()
+        self.account_label = _require_text(self.account_label, "account_label")
+        self.actor = _require_text(self.actor, "actor")
+        return self
+
+
+class ProviderConnectionTestResponse(BaseModel):
+    status: str
+    provider_account: ProviderAccountSummary
+    provider_health: "ProviderHealthSummary"
+    detail: dict[str, Any] = Field(default_factory=dict)
+
+
+class ResourceSyncRequest(BaseModel):
+    project_id: str
+    provider_account_id: Optional[str] = None
+    actor: str = "ceo"
+
+    @model_validator(mode="after")
+    def validate_sync_request(self) -> "ResourceSyncRequest":
+        self.actor = _require_text(self.actor, "actor")
+        return self
+
+
+class ResourceSyncRunSummary(BaseModel):
+    id: str
+    status: str
+    provider: Optional[str] = None
+    provider_account_id: Optional[str] = None
+    resources_seen: int
+    resources_changed: int
+    costs_seen: int = 0
+    provider_health_id: Optional[str] = None
+    drift_report_id: Optional[str] = None
+    deadletter_id: Optional[str] = None
+    error: Optional[dict[str, Any]] = None
+
+
+class ResourceSyncResponse(BaseModel):
+    project_id: str
+    runs: list[ResourceSyncRunSummary]
+    resources_seen: int
+    resources_changed: int
+    costs_seen: int = 0
+
+
+class ExternalResourceSummary(BaseModel):
+    id: str
+    project_id: str
+    provider_account_id: Optional[str] = None
+    provider: str
+    resource_type: str
+    external_id: str
+    name: str
+    state: str
+    ownership: str
+    environment: str
+    owner_role: Optional[str] = None
+    task_id: Optional[str] = None
+    deployment_target_id: Optional[str] = None
+    receipt_id: Optional[str] = None
+    budget_allocation_id: Optional[str] = None
+    health_status: str
+    estimated_monthly_usd_micros: Optional[int] = None
+    actual_monthly_usd_micros: Optional[int] = None
+    cost_confidence: str
+    last_seen_at: str
+    tags: list[str]
+    metadata: dict[str, Any]
+    created_at: str
+    updated_at: str
+
+
+class ExternalResourceListResponse(BaseModel):
+    project_id: str
+    items: list[ExternalResourceSummary]
+
+
+class CostEventSummary(BaseModel):
+    id: str
+    project_id: str
+    provider_account_id: Optional[str] = None
+    external_resource_id: Optional[str] = None
+    billing_account_id: Optional[str] = None
+    task_id: Optional[str] = None
+    role_key: Optional[str] = None
+    provider: str
+    category: str
+    amount_usd_micros: int
+    cost_layer: str
+    confidence: str
+    source_ref: Optional[str] = None
+    period_start: Optional[str] = None
+    period_end: Optional[str] = None
+    receipt_id: Optional[str] = None
+    metadata: dict[str, Any]
+    created_at: str
+
+
+class CostEventListResponse(BaseModel):
+    project_id: str
+    items: list[CostEventSummary]
+
+
+class CostAnomalySummary(BaseModel):
+    id: str
+    project_id: str
+    provider_account_id: Optional[str] = None
+    cost_event_id: Optional[str] = None
+    decision_id: Optional[str] = None
+    provider: str
+    anomaly_type: str
+    severity: str
+    status: str
+    amount_usd_micros: int
+    threshold_usd_micros: int
+    summary: str
+    recommended_actions: list[dict[str, Any]]
+    created_at: str
+    resolved_at: Optional[str] = None
+
+
+class CostAnomalyListResponse(BaseModel):
+    project_id: str
+    items: list[CostAnomalySummary]
+
+
+class ProviderHealthSummary(BaseModel):
+    id: str
+    project_id: str
+    provider_account_id: Optional[str] = None
+    provider: str
+    status: str
+    api_available: bool
+    rate_limit_status: str
+    usage_cap_status: str
+    last_checked_at: str
+    detail: dict[str, Any]
+    created_at: str
+
+
+class ProviderHealthListResponse(BaseModel):
+    project_id: str
+    items: list[ProviderHealthSummary]
+
+
+class DriftReportSummary(BaseModel):
+    id: str
+    project_id: str
+    provider_account_id: Optional[str] = None
+    classification: str
+    summary: str
+    unmanaged_count: int
+    orphaned_count: int
+    security_impacting_count: int
+    production_impacting_count: int
+    recommendations: list[dict[str, Any]]
+    created_at: str
+
+
+class DriftReportListResponse(BaseModel):
+    project_id: str
+    items: list[DriftReportSummary]
+
+
+class ReconciliationRunSummary(BaseModel):
+    id: str
+    project_id: str
+    provider_account_id: Optional[str] = None
+    provider: Optional[str] = None
+    status: str
+    resources_seen: int
+    resources_changed: int
+    costs_seen: int
+    started_by: str
+    started_at: str
+    finished_at: Optional[str] = None
+    error: Optional[dict[str, Any]] = None
+    metadata: dict[str, Any]
+
+
+class ReconciliationRunListResponse(BaseModel):
+    project_id: str
+    items: list[ReconciliationRunSummary]
+
+
+class DeploymentTargetSummary(BaseModel):
+    id: str
+    project_id: str
+    app_name: str
+    repo: str
+    environment: str
+    provider_account_id: Optional[str] = None
+    target_kind: str
+    target_ref: str
+    domains: list[str]
+    required_resources: list[dict[str, Any]]
+    secret_refs: list[str]
+    health_checks: list[dict[str, Any]]
+    rollback_points: list[dict[str, Any]]
+    status: str
+    created_by: str
+    created_at: str
+    updated_at: str
+
+
+class DeploymentTargetListResponse(BaseModel):
+    project_id: str
+    items: list[DeploymentTargetSummary]
+
+
+class DeploymentTargetCreateRequest(BaseModel):
+    project_id: str
+    app_name: str
+    repo: str
+    environment: str
+    provider_account_id: Optional[str] = None
+    target_kind: str
+    target_ref: str
+    domains: list[str] = Field(default_factory=list)
+    required_resources: list[dict[str, Any]] = Field(default_factory=list)
+    secret_refs: list[str] = Field(default_factory=list)
+    health_checks: list[dict[str, Any]] = Field(default_factory=list)
+    rollback_points: list[dict[str, Any]] = Field(default_factory=list)
+    actor: str = "ceo"
+
+
+class DeploymentRunSummary(BaseModel):
+    id: str
+    project_id: str
+    deployment_target_id: str
+    changeset_id: Optional[str] = None
+    decision_id: Optional[str] = None
+    release_artifact_id: Optional[str] = None
+    health_artifact_id: Optional[str] = None
+    rollback_artifact_id: Optional[str] = None
+    app_name: str
+    environment: str
+    repo: str
+    target_kind: str
+    target_ref: str
+    commit_ref: Optional[str] = None
+    status: str
+    release_packet: dict[str, Any]
+    health_check_results: list[dict[str, Any]]
+    rollback_plan: list[str]
+    release_receipt_ids: list[dict[str, Any]]
+    created_by: str
+    created_at: str
+    updated_at: str
+    started_at: Optional[str] = None
+    finished_at: Optional[str] = None
+    failure_reason: Optional[str] = None
+
+
+class DeploymentRunListResponse(BaseModel):
+    project_id: str
+    items: list[DeploymentRunSummary]
+
+
+class DeploymentRunCreateRequest(BaseModel):
+    project_id: str
+    deployment_target_id: str
+    commit_ref: Optional[str] = None
+    release_packet: dict[str, Any] = Field(default_factory=dict)
+    expected_cost_usd_micros: int = Field(default=0, ge=0)
+    reservation_id: Optional[str] = None
+    actor: str = "release_manager"
+
+    @model_validator(mode="after")
+    def validate_deployment_run_create(self) -> "DeploymentRunCreateRequest":
+        self.project_id = _require_text(self.project_id, "project_id")
+        self.deployment_target_id = _require_text(
+            self.deployment_target_id,
+            "deployment_target_id",
+        )
+        self.actor = _require_text(self.actor, "actor")
+        return self
+
+
+class DeploymentRunHealthCheckRequest(BaseModel):
+    actor: str = "deployment_manager"
+
+    @model_validator(mode="after")
+    def validate_deployment_run_health_check(
+        self,
+    ) -> "DeploymentRunHealthCheckRequest":
+        self.actor = _require_text(self.actor, "actor")
+        return self
+
+
+class DeploymentRunHealthCheckResponse(BaseModel):
+    deployment_run: DeploymentRunSummary
+    health_artifact_id: str
+    rollback_artifact_id: Optional[str] = None
+    decision_id: Optional[str] = None
+
+
+class ChangeSetOperationRequest(BaseModel):
+    skill_id: str
+    action: str
+    resource_type: str
+    resource_ref: Optional[str] = None
+    desired_state: dict[str, Any] = Field(default_factory=dict)
+    risk_tier: int = Field(default=2, ge=0, le=3)
+    destructive: bool = False
+    production_affecting: bool = False
+
+
+class ChangeSetSummary(BaseModel):
+    id: str
+    project_id: str
+    provider_account_id: Optional[str] = None
+    title: str
+    summary: str
+    status: str
+    risk_tier: int
+    operations: list[dict[str, Any]]
+    expected_cost_usd_micros: int
+    cost_quote: dict[str, Any]
+    reservation_id: Optional[str] = None
+    approval_decision_id: Optional[str] = None
+    rollback_plan: list[str]
+    expected_receipts: list[dict[str, Any]]
+    policy_result: dict[str, Any]
+    created_by: str
+    approved_by: Optional[str] = None
+    approved_at: Optional[str] = None
+    applied_by: Optional[str] = None
+    applied_at: Optional[str] = None
+    failure_reason: Optional[str] = None
+    created_at: str
+    updated_at: str
+
+
+class ChangeSetListResponse(BaseModel):
+    project_id: str
+    items: list[ChangeSetSummary]
+
+
+class ChangeSetCreateRequest(BaseModel):
+    project_id: str
+    provider_account_id: Optional[str] = None
+    title: str
+    summary: str
+    operations: list[ChangeSetOperationRequest]
+    expected_cost_usd_micros: int = Field(default=0, ge=0)
+    reservation_id: Optional[str] = None
+    rollback_plan: list[str] = Field(default_factory=list)
+    risk_tier: int = Field(default=2, ge=0, le=3)
+    approval_required: bool = True
+    actor: str = "ceo"
+
+
+class ChangeSetApproveRequest(BaseModel):
+    actor: str = "ceo"
+
+
+class ChangeSetApplyRequest(BaseModel):
+    actor: str = "ceo"
+    created_by_job_id: Optional[str] = None
+    dry_run: bool = False
+
+
+class ResourceReceiptSummary(BaseModel):
+    id: str
+    project_id: str
+    changeset_id: Optional[str] = None
+    operation_id: Optional[str] = None
+    provider_account_id: Optional[str] = None
+    receipt_id: Optional[str] = None
+    dedupe_key: str
+    provider: str
+    action: str
+    resource_type: str
+    resource_ref: Optional[str] = None
+    status: str
+    provider_ref: Optional[str] = None
+    request_hash: str
+    result: Optional[dict[str, Any]] = None
+    error: Optional[dict[str, Any]] = None
+    created_by_job_id: Optional[str] = None
+    created_at: str
+    updated_at: str
+
+
+class ResourceReceiptListResponse(BaseModel):
+    project_id: str
+    items: list[ResourceReceiptSummary]
+
+
+class WorkerPoolSummary(BaseModel):
+    id: str
+    project_id: str
+    pool_key: str
+    kind: str
+    provider_account_id: Optional[str] = None
+    provider: Optional[str] = None
+    status: str
+    current_workers: int
+    desired_workers: int
+    min_workers: int
+    max_workers: int
+    max_queue_depth_per_worker: int
+    cost_per_worker_hour_usd_micros: int
+    capabilities: list[str]
+    metadata: dict[str, Any]
+    created_by: str
+    created_at: str
+    updated_at: str
+
+
+class WorkerPoolListResponse(BaseModel):
+    project_id: str
+    items: list[WorkerPoolSummary]
+
+
+class WorkerPoolUpsertRequest(BaseModel):
+    project_id: str
+    pool_key: str
+    kind: str = "local"
+    provider_account_id: Optional[str] = None
+    current_workers: int = Field(default=0, ge=0)
+    desired_workers: int = Field(default=0, ge=0)
+    min_workers: int = Field(default=0, ge=0)
+    max_workers: int = Field(default=1, ge=0)
+    max_queue_depth_per_worker: int = Field(default=5, ge=1)
+    cost_per_worker_hour_usd_micros: int = Field(default=0, ge=0)
+    capabilities: list[str] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    actor: str = "providerops_manager"
+
+    @model_validator(mode="after")
+    def validate_worker_pool(self) -> "WorkerPoolUpsertRequest":
+        self.project_id = _require_text(self.project_id, "project_id")
+        self.pool_key = _require_text(self.pool_key, "pool_key")
+        self.kind = _require_text(self.kind, "kind").lower()
+        self.actor = _require_text(self.actor, "actor")
+        if self.kind not in {"local", "cloud"}:
+            raise ValueError("kind must be local or cloud.")
+        if self.min_workers > self.max_workers:
+            raise ValueError("min_workers cannot exceed max_workers.")
+        if self.desired_workers > self.max_workers:
+            raise ValueError("desired_workers cannot exceed max_workers.")
+        return self
+
+
+class ScalePlanSummary(BaseModel):
+    id: str
+    project_id: str
+    worker_pool_id: Optional[str] = None
+    status: str
+    trigger_reason: str
+    queue_depth: int
+    running_jobs: int
+    leased_jobs: int
+    retryable_jobs: int
+    current_workers: int
+    desired_workers_before: int
+    desired_workers_after: int
+    target_workers: int
+    budget_state: str
+    budget_available_usd_micros: int
+    estimated_hourly_delta_usd_micros: int
+    provider_health_status: Optional[str] = None
+    actions: list[dict[str, Any]]
+    recommendations: list[dict[str, Any]]
+    changeset_id: Optional[str] = None
+    decision_id: Optional[str] = None
+    created_by: str
+    created_at: str
+    applied_at: Optional[str] = None
+
+
+class ScalePlanListResponse(BaseModel):
+    project_id: str
+    items: list[ScalePlanSummary]
+
+
+class ScalePlanRunRequest(BaseModel):
+    project_id: str
+    worker_pool_id: Optional[str] = None
+    cloud_spillover_enabled: bool = False
+    actor: str = "providerops_manager"
+
+    @model_validator(mode="after")
+    def validate_scale_plan_request(self) -> "ScalePlanRunRequest":
+        self.project_id = _require_text(self.project_id, "project_id")
+        self.actor = _require_text(self.actor, "actor")
+        return self
+
+
+class ScalePlanRunResponse(BaseModel):
+    scale_plan: ScalePlanSummary
+    worker_pool: WorkerPoolSummary
+    budget_state: str
+    queue: dict[str, int]
+    provider_health: dict[str, Any]
+    changeset_id: Optional[str] = None
+    decision_id: Optional[str] = None
+
+
+class ResourceJanitorRunRequest(BaseModel):
+    project_id: str
+    provider_account_id: Optional[str] = None
+    max_candidates: int = Field(default=10, ge=1, le=100)
+    actor: str = "resource_janitor"
+
+    @model_validator(mode="after")
+    def validate_janitor_request(self) -> "ResourceJanitorRunRequest":
+        self.actor = _require_text(self.actor, "actor")
+        return self
+
+
+class ResourceJanitorCandidateSummary(BaseModel):
+    external_resource_id: str
+    provider_account_id: Optional[str] = None
+    provider: str
+    resource_type: str
+    external_id: str
+    name: str
+    environment: str
+    ownership: str
+    health_status: str
+    estimated_monthly_savings_usd_micros: int
+    cost_confidence: str
+    cleanup_skill_id: str
+    destructive: bool
+
+
+class ResourceJanitorSkippedSummary(BaseModel):
+    external_resource_id: str
+    provider: str
+    resource_type: Optional[str] = None
+    external_id: str
+    reason: str
+
+
+class ResourceJanitorRunResponse(BaseModel):
+    status: str
+    project_id: str
+    artifact_id: str
+    candidate_count: int
+    skipped_count: int
+    estimated_monthly_savings_usd_micros: int
+    candidates: list[ResourceJanitorCandidateSummary]
+    skipped: list[ResourceJanitorSkippedSummary]
+    changesets: list[ChangeSetSummary]
+
+
+class ChangeSetApplyResponse(BaseModel):
+    status: str
+    changeset: ChangeSetSummary
+    resource_receipts: list[ResourceReceiptSummary]
+    expected_receipts: Optional[list[dict[str, Any]]] = None
+    decision_id: Optional[str] = None
+
+
 AuditExportResponse.model_rebuild()
+ProviderConnectionTestResponse.model_rebuild()

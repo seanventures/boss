@@ -54,16 +54,15 @@ class HealthSnapshotService:
         ).scalar_one_or_none()
 
         queue_state = {
-            "queued_jobs": int(task_counts.get("__unused__", 0)),  # placeholder overwritten below
+            "queued_jobs": int(
+                job_counts.get("queued", 0) + job_counts.get("failed_retryable", 0)
+            ),
+            "leased_jobs": int(
+                job_counts.get("leased", 0) + job_counts.get("running", 0)
+            ),
+            "retryable_jobs": int(job_counts.get("failed_retryable", 0)),
+            "succeeded_jobs": int(job_counts.get("succeeded", 0)),
         }
-        queue_state["queued_jobs"] = int(
-            job_counts.get("queued", 0) + job_counts.get("failed_retryable", 0)
-        )
-        queue_state["leased_jobs"] = int(
-            job_counts.get("leased", 0) + job_counts.get("running", 0)
-        )
-        queue_state["retryable_jobs"] = int(job_counts.get("failed_retryable", 0))
-        queue_state["succeeded_jobs"] = int(job_counts.get("succeeded", 0))
 
         workload_state = {
             "open_tasks": int(task_counts.get("open", 0)),

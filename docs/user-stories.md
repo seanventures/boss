@@ -16,6 +16,20 @@ Acceptance criteria:
 - Given an unknown or unauthorized actor, when the command is submitted, then BOSS rejects it and emits a visible `policy.denied` event when the project exists.
 - Given the API or database is unavailable, when the console loads, then it shows a visible blocked state instead of pretending work was accepted.
 
+### Story SEC-001: Authenticate API Clients
+
+As an operator, I want BOSS API access protected by API keys or OIDC bearer JWTs, so that customer and console clients can use the API without bypassing project-member permissions.
+
+Acceptance criteria:
+
+- Given API-key auth is required, when a `/v1/*` request lacks a valid configured key, then BOSS rejects it while leaving `/health` public.
+- Given API-key principal binding is configured, when a valid key tries to act as another member, then BOSS rejects the write before business logic runs.
+- Given OIDC auth is enabled and configured with issuer, audience, and JWKS URL, when a signed bearer JWT resolves to a project member through claim or subject mapping, then BOSS accepts transport authentication and applies the same actor permission checks as API keys.
+- Given OIDC auth is enabled without issuer, audience, or JWKS config, when a `/v1/*` request presents a bearer token, then BOSS fails closed with a visible configuration error.
+- Given an OIDC token cannot resolve to a project member, when a write action claims an actor, then BOSS rejects the request before the action executes.
+- Given an org-level delegate has explicit permissions, when they act in any project under the same org, then BOSS authorizes them through `org_members` without duplicating a project member row.
+- Given an org-level delegate lacks the required permission or the target project belongs to another org, when they attempt a write action, then BOSS rejects the request before the action executes.
+
 ### Story CEO-002: Review Decisions
 
 As a founder/CEO, I want clear decision cards with costs, risks, deadlines, defaults, and options, so that I can safely approve or reject material actions.
@@ -185,6 +199,12 @@ Acceptance criteria:
 - Given an agent proposes a provider write, when BOSS models the request, then it creates a `ChangeSet` containing resource diffs, risk tier, cost quote, budget reservation requirement, approvals needed, rollback plan, and expected receipts.
 - Given the ChangeSet is destructive or production-affecting, when approval is missing, then BOSS holds the action and does not call the provider.
 - Given a ChangeSet is approved and budget-reserved, when a worker applies it, then each provider call creates a `ResourceReceipt` with a dedupe key and reconciliation verifies the resulting provider state.
+- Given an approved Cloudflare DNS record upsert ChangeSet with valid credentials, when BOSS applies it, then the Resource Plane Kernel calls the official Cloudflare API adapter, marks the Receipt and ResourceReceipt succeeded, and links the managed DNS resource to the receipt.
+- Given an approved Cloudflare R2 bucket creation ChangeSet with valid credentials and an active BudgetReservation, when BOSS applies it, then the Resource Plane Kernel calls the official Cloudflare R2 API, writes Receipt and ResourceReceipt records, creates an observed CostEvent, and links the managed bucket resource to the receipt.
+- Given an approved DigitalOcean droplet create or destroy ChangeSet with valid credentials and explicit real-provisioning policy, when BOSS applies it, then the Resource Plane Kernel uses the official DigitalOcean adapter, writes a ResourceReceipt, and updates the managed resource inventory.
+- Given an approved Supabase project creation ChangeSet with valid Management API credentials, an active BudgetReservation, and an env-backed database password SecretRef, when BOSS applies it, then the Resource Plane Kernel calls the official Supabase project-create endpoint, writes Receipt and ResourceReceipt records, creates an observed CostEvent, links the managed project resource, and never persists the raw database password.
+- Given an approved destructive Supabase project pause ChangeSet with valid credentials and rollback instructions, when BOSS applies it, then the Resource Plane Kernel calls the official Supabase pause endpoint, writes Receipt and ResourceReceipt records, and updates the managed project resource to a paused state.
+- Given Cloudflare DNS credentials are missing, when an approved DNS ChangeSet is applied, then BOSS records failed Receipt and ResourceReceipt records, marks provider health degraded, creates a deadletter, and does not call the provider adapter.
 
 ### Story RPL-004: Track Provider Costs
 
@@ -194,7 +214,12 @@ Acceptance criteria:
 
 - Given provider billing APIs return exact or reported spend, when cost sync runs, then BOSS records cost events with `exact_call_metered`, `provider_reported`, or `invoice_reconciled` confidence.
 - Given exact billing is unavailable, when BOSS estimates spend, then the cost event is labeled `estimated_from_price_catalog` or `unknown` and is never displayed as exact.
+- Given billing-readable DigitalOcean, OpenAI, or Anthropic provider accounts have valid env-backed credentials, when read-only ProviderOps sync runs, then BOSS ingests official billing/cost report data into duplicate-safe `CostEvent` records linked to `BillingAccount` records and confidence labels.
+- Given a provider account is not billing-readable, when read-only ProviderOps sync runs, then BOSS skips billing endpoints and records only supported inventory/reconciliation evidence.
+- Given a billing-readable provider has no implemented official billing endpoint, when read-only ProviderOps sync runs, then BOSS marks the reconciliation failed, records provider health degradation, and creates a visible deadletter rather than inventing a cost estimate.
+- Given a spendy ProviderOps ChangeSet applies successfully before billing reconciliation, when the Resource Plane records the result, then BOSS creates an observed `CostEvent` linked to the Receipt and ResourceReceipt with `estimated_from_price_catalog` confidence.
 - Given observed spend exceeds policy thresholds, when the ledger updates, then BOSS emits an anomaly event and can apply budget kill switches such as read-only provider mode, local-only mode, or freeze provisioning.
+- Given observed provider spend crosses the project freeze threshold, when the CostEvent is recorded, then BOSS creates a `CostAnomaly`, switches the provider account to read-only mode, creates a decision card, and blocks subsequent provider write ChangeSets until reviewed.
 
 ### Story RPL-005: Manage Deployments and Drift
 
@@ -203,8 +228,45 @@ As a Deployment Manager, I want deployments and drift reports connected to provi
 Acceptance criteria:
 
 - Given an app has deployment targets, when a deployment run is planned, then BOSS links repo, environments, resources, domains, SecretRefs, health checks, release receipts, and rollback points.
+- Given a deployment target requires a provider write, when a deployment run is planned, then BOSS creates a release-packet artifact and an approval-gated ChangeSet rather than calling the provider directly.
+- Given an approved Cloudflare Worker deployment ChangeSet with valid credentials and a deployable Worker script descriptor, when BOSS applies it, then the Resource Plane Kernel calls the official Cloudflare Workers API, writes Receipt and ResourceReceipt records, creates an observed CostEvent when a reservation exists, links the managed Worker resource, and marks the DeploymentRun deployed.
+- Given an approved Git-connected Cloudflare Pages deployment ChangeSet with valid credentials and Pages project metadata, when BOSS applies it, then the Resource Plane Kernel calls the official Cloudflare Pages deployment API, writes Receipt and ResourceReceipt records, creates an observed CostEvent when a reservation exists, links the managed Pages deployment resource, and marks the DeploymentRun deployed.
+- Given an approved DigitalOcean App Platform deployment ChangeSet with valid credentials and an active BudgetReservation, when BOSS applies it, then the Resource Plane Kernel calls the official DigitalOcean adapter, writes Receipt and ResourceReceipt records, creates an observed CostEvent, links the managed app deployment resource, and marks the DeploymentRun deployed.
+- Given an approved Supabase migration deployment ChangeSet with valid Management API credentials and migration SQL, when BOSS applies it, then the Resource Plane Kernel calls the official Supabase migrations endpoint, writes Receipt and ResourceReceipt records, creates an observed CostEvent when a reservation exists, links the managed migration resource, and marks the DeploymentRun deployed.
+- Given a deployment run has health checks, when health validation runs, then BOSS performs real HTTP health checks, writes a health-report artifact, and marks the run healthy or rollback-pending.
+- Given a health check fails, when BOSS records the result, then it creates rollback evidence and a decision card instead of silently treating the deploy as successful.
 - Given provider inventory diverges from BOSS desired state, when drift detection runs, then BOSS classifies drift as benign, risky, cost-impacting, security-impacting, or production-impacting and proposes remediation.
 - Given production resources would be deleted or production DNS would change, when a remediation is proposed, then BOSS requires explicit approval and rollback plan before actuation.
+
+### Story RPL-006: Propose Resource Janitor Cleanups
+
+As a Resource Janitor, I want orphaned or expired non-production resources converted into cleanup ChangeSets, so that waste can be reduced without silent deletion or provider bypass.
+
+Acceptance criteria:
+
+- Given orphaned or TTL-expired non-production resources exist in the Resource Inventory Graph, when the janitor runs, then BOSS creates a `resource_janitor_report` artifact with candidates, skipped resources, savings estimates, cost confidence, and linked cleanup ChangeSets.
+- Given a cleanup action would be destructive, when the janitor proposes it, then the resulting ChangeSet requires explicit approval, rollback steps, and a ResourceReceipt before any provider actuation can occur.
+- Given a candidate resource is production, unsupported, read-only, destructive-disabled, or already covered by an open cleanup ChangeSet, when the janitor runs, then BOSS skips it with a visible reason instead of deleting or duplicating proposals.
+
+### Story RPL-007: Install ProviderOps Operating Roles
+
+As a founder/operator, I want the core company pack to install ProviderOps Manager, FinOps Sentinel, and Resource Janitor roles, so that provider inventory, cost control, and cleanup proposals have accountable owners from workspace bootstrap.
+
+Acceptance criteria:
+
+- Given the `core_v1` company pack is installed, when BOSS seeds or installs the pack into a project, then ProviderOps Manager, FinOps Sentinel, and Resource Janitor roles are created with complete RoleSpec contracts.
+- Given a ProviderOps role performs work, when it needs provider evidence, then it must use typed Resource Plane skills and references instead of raw provider secrets or direct provider API calls.
+- Given provider writes, destructive cleanup, budget increases, or production DNS/deploy changes are proposed, when a ProviderOps role reviews them, then the role must escalate through ChangeSets, approvals, BudgetReservations, and ResourceReceipts instead of executing directly.
+
+### Story RPL-008: Plan Budget-Aware Capacity Changes
+
+As a ProviderOps Manager, I want BOSS to scale local worker capacity and propose cloud spillover only when budget, provider health, and approval policy allow it, so that queue pressure is handled without bypassing the Budget Governor.
+
+Acceptance criteria:
+
+- Given queued jobs exceed current worker-pool capacity and local capacity is available, when the autoscaler runs, then BOSS records a `ScalePlan`, updates local desired capacity, and emits worker-pool and autoscaler events.
+- Given the project is in red budget state, when the autoscaler runs, then BOSS enters degraded-mode recommendations, drains desired capacity to the safe minimum, and creates a decision instead of scaling up.
+- Given cloud spillover is enabled, queue pressure exists, and budget headroom is available, when the autoscaler runs against a cloud worker pool, then BOSS creates a BudgetReservation-backed, approval-required ChangeSet and does not call the provider directly.
 
 ### Story OPS-004: Deliver Governed Email
 
@@ -253,11 +315,13 @@ Acceptance criteria:
 
 ### Story ADM-002: Control Project Actors
 
-As an admin, I want project-scoped member actors and permissions, so that API writes are not accepted from arbitrary caller-supplied names.
+As an admin, I want project-scoped and org-scoped member actors and permissions, so that API writes are not accepted from arbitrary caller-supplied names.
 
 Acceptance criteria:
 
 - Given a seeded project, when members are listed, then CEO, system, Metatron, VP Agents, release manager, and executive-console actors exist.
+- Given an authorized admin, when an org delegate is created, then the delegate can act across projects in the same org only with explicitly granted permissions.
+- Given the executive console loads, when org delegates are available to the selected actor, then they are visible in the actor switcher and Org Delegation management panel.
 - Given a write request, when the actor lacks the required permission, then BOSS returns `403` and records `policy.denied`.
 - Given a member-management request, when the actor has `member_manage`, then BOSS creates or updates the member and emits an event.
 
@@ -268,6 +332,7 @@ As an admin, I want emergency access to require identity, reason, scope, TTL, ev
 Acceptance criteria:
 
 - Given an authorized requester, when break-glass access is granted, then BOSS records target member, requester, reason, scope, granted permissions, TTL, events, and a postmortem task.
+- Given the target is an org delegate for the project org, when break-glass access is granted, then BOSS resolves the target through the same member directory fallback used by runtime permission checks.
 - Given a target member with an active unexpired grant, when they perform a granted action, then BOSS allows the action and emits `break_glass.used`.
 - Given a revoked or expired grant, when the target member attempts the privileged action, then BOSS denies the action and keeps the grant visible through the API.
 

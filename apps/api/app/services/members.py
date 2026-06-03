@@ -57,6 +57,7 @@ class MemberDirectoryService:
                     "budget_manage",
                     "entitlement_manage",
                     "infra_provision",
+                    "providerops_manage",
                 ],
             },
             {
@@ -69,6 +70,7 @@ class MemberDirectoryService:
                     "audit_export",
                     "health_refresh",
                     "infra_provision",
+                    "providerops_manage",
                 ],
             },
             {
@@ -129,6 +131,7 @@ class MemberDirectoryService:
                     "budget_manage",
                     "entitlement_manage",
                     "infra_provision",
+                    "providerops_manage",
                 ],
             },
             {
@@ -151,6 +154,7 @@ class MemberDirectoryService:
                     "budget_manage",
                     "entitlement_manage",
                     "infra_provision",
+                    "providerops_manage",
                 ],
             },
         ]
@@ -169,7 +173,7 @@ class MemberDirectoryService:
             )
 
     def list_members(self, connection: Connection, project_id: str) -> list[dict[str, Any]]:
-        rows = connection.execute(
+        project_rows = connection.execute(
             text(
                 """
                 SELECT id, project_id, member_id, display_name, member_type, role_keys,
@@ -181,7 +185,46 @@ class MemberDirectoryService:
             ),
             {"project_id": project_id},
         ).mappings().all()
-        return [self._serialize_member(row) for row in rows]
+        org_rows = connection.execute(
+            text(
+                """
+                SELECT om.id, :project_id AS project_id, om.member_id,
+                       om.display_name, om.member_type, om.role_keys,
+                       om.permissions, om.status, om.created_by,
+                       om.created_at, om.updated_at
+                FROM org_members om
+                JOIN workspaces w ON w.org_id = om.org_id
+                JOIN projects p ON p.workspace_id = w.id
+                WHERE p.id = :project_id
+                  AND om.status = 'active'
+                  AND NOT EXISTS (
+                    SELECT 1
+                    FROM project_members pm
+                    WHERE pm.project_id = :project_id
+                      AND pm.member_id = om.member_id
+                      AND pm.status = 'active'
+                  )
+                ORDER BY om.member_type ASC, om.display_name ASC, om.member_id ASC
+                """
+            ),
+            {"project_id": project_id},
+        ).mappings().all()
+        return [self._serialize_member(row) for row in [*project_rows, *org_rows]]
+
+    def list_org_members(self, connection: Connection, org_id: str) -> list[dict[str, Any]]:
+        rows = connection.execute(
+            text(
+                """
+                SELECT id, org_id, member_id, display_name, member_type, role_keys,
+                       permissions, status, created_by, created_at, updated_at
+                FROM org_members
+                WHERE org_id = :org_id
+                ORDER BY member_type ASC, display_name ASC, member_id ASC
+                """
+            ),
+            {"org_id": org_id},
+        ).mappings().all()
+        return [self._serialize_org_member(row) for row in rows]
 
     def get_member(
         self,
@@ -209,6 +252,35 @@ class MemberDirectoryService:
                 f"Actor '{member_id}' is not an active member of project '{project_id}'."
             )
         return self._serialize_member(row)
+
+    def get_org_member(
+        self,
+        connection: Connection,
+        org_id: str,
+        member_id: str,
+        *,
+        project_id: Optional[str] = None,
+    ) -> dict[str, Any]:
+        row = connection.execute(
+            text(
+                """
+                SELECT id, org_id, :project_id AS project_id, member_id,
+                       display_name, member_type, role_keys, permissions,
+                       status, created_by, created_at, updated_at
+                FROM org_members
+                WHERE org_id = :org_id AND member_id = :member_id
+                """
+            ),
+            {"org_id": org_id, "member_id": member_id, "project_id": project_id},
+        ).mappings().first()
+        if not row or row["status"] != "active":
+            raise ProjectMemberNotFoundError(
+                f"Actor '{member_id}' is not an active member of org '{org_id}'."
+            )
+        payload = self._serialize_org_member(row)
+        if project_id:
+            payload["project_id"] = project_id
+        return payload
 
     def upsert_member(
         self,
@@ -302,6 +374,96 @@ class MemberDirectoryService:
         member["upsert_status"] = install_status
         return member
 
+    def upsert_org_member(
+        self,
+        connection: Connection,
+        *,
+        org_id: str,
+        member_id: str,
+        display_name: str,
+        member_type: str,
+        role_keys: list[str],
+        permissions: list[str],
+        actor: str,
+    ) -> dict[str, Any]:
+        normalized_member_id = member_id.strip()
+        normalized_display_name = display_name.strip()
+        normalized_type = member_type.strip() or "human"
+        normalized_roles = self._normalize_tokens(role_keys)
+        normalized_permissions = self._normalize_tokens(permissions)
+        existing = connection.execute(
+            text(
+                """
+                SELECT id, display_name, member_type, role_keys, permissions, status
+                FROM org_members
+                WHERE org_id = :org_id AND member_id = :member_id
+                """
+            ),
+            {"org_id": org_id, "member_id": normalized_member_id},
+        ).mappings().first()
+        member_row_id = existing["id"] if existing else f"om_{org_id}_{normalized_member_id}"
+        upsert_status = "already_present"
+        if (
+            not existing
+            or existing["display_name"] != normalized_display_name
+            or existing["member_type"] != normalized_type
+            or (existing["role_keys"] or []) != normalized_roles
+            or (existing["permissions"] or []) != normalized_permissions
+            or existing["status"] != "active"
+        ):
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO org_members (
+                        id, org_id, member_id, display_name, member_type,
+                        role_keys, permissions, status, created_by
+                    )
+                    VALUES (
+                        :id, :org_id, :member_id, :display_name, :member_type,
+                        CAST(:role_keys AS JSONB), CAST(:permissions AS JSONB),
+                        'active', :created_by
+                    )
+                    ON CONFLICT (org_id, member_id) DO UPDATE
+                    SET display_name = EXCLUDED.display_name,
+                        member_type = EXCLUDED.member_type,
+                        role_keys = EXCLUDED.role_keys,
+                        permissions = EXCLUDED.permissions,
+                        status = EXCLUDED.status,
+                        created_by = EXCLUDED.created_by,
+                        updated_at = now()
+                    """
+                ),
+                {
+                    "id": member_row_id,
+                    "org_id": org_id,
+                    "member_id": normalized_member_id,
+                    "display_name": normalized_display_name,
+                    "member_type": normalized_type,
+                    "role_keys": json.dumps(normalized_roles),
+                    "permissions": json.dumps(normalized_permissions),
+                    "created_by": actor,
+                },
+            )
+            upsert_status = "updated" if existing else "created"
+            emit_event(
+                connection,
+                self._first_project_for_org(connection, org_id),
+                "org_member.upserted",
+                actor,
+                "org_member",
+                member_row_id,
+                {
+                    "org_id": org_id,
+                    "member_id": normalized_member_id,
+                    "member_type": normalized_type,
+                    "role_keys": normalized_roles,
+                    "permissions": normalized_permissions,
+                },
+            )
+        member = self.get_org_member(connection, org_id, normalized_member_id)
+        member["upsert_status"] = upsert_status
+        return member
+
     def require_member(
         self,
         connection: Connection,
@@ -311,7 +473,10 @@ class MemberDirectoryService:
         permission: Optional[str] = None,
         role_keys_any: Optional[list[str]] = None,
     ) -> dict[str, Any]:
-        member = self.get_member(connection, project_id, actor)
+        try:
+            member = self.get_member(connection, project_id, actor)
+        except ProjectMemberNotFoundError:
+            member = self._get_org_member_for_project(connection, project_id, actor)
         if permission and permission not in (member.get("permissions") or []):
             grant = self._active_break_glass_grant(
                 connection,
@@ -339,6 +504,68 @@ class MemberDirectoryService:
                     f"Actor '{actor}' does not hold one of the required roles: {', '.join(role_keys_any)}."
                 )
         return member
+
+    def org_id_for_project(self, connection: Connection, project_id: str) -> str:
+        org_id = connection.execute(
+            text(
+                """
+                SELECT o.id
+                FROM projects p
+                JOIN workspaces w ON w.id = p.workspace_id
+                JOIN orgs o ON o.id = w.org_id
+                WHERE p.id = :project_id
+                """
+            ),
+            {"project_id": project_id},
+        ).scalar_one_or_none()
+        if not org_id:
+            raise ProjectMemberNotFoundError(f"Project '{project_id}' was not found.")
+        return str(org_id)
+
+    def project_belongs_to_org(
+        self,
+        connection: Connection,
+        *,
+        project_id: str,
+        org_id: str,
+    ) -> bool:
+        found = connection.execute(
+            text(
+                """
+                SELECT 1
+                FROM projects p
+                JOIN workspaces w ON w.id = p.workspace_id
+                WHERE p.id = :project_id AND w.org_id = :org_id
+                """
+            ),
+            {"project_id": project_id, "org_id": org_id},
+        ).scalar_one_or_none()
+        return bool(found)
+
+    def _get_org_member_for_project(
+        self,
+        connection: Connection,
+        project_id: str,
+        actor: str,
+    ) -> dict[str, Any]:
+        org_id = self.org_id_for_project(connection, project_id)
+        return self.get_org_member(connection, org_id, actor, project_id=project_id)
+
+    def _first_project_for_org(self, connection: Connection, org_id: str) -> str:
+        project_id = connection.execute(
+            text(
+                """
+                SELECT p.id
+                FROM projects p
+                JOIN workspaces w ON w.id = p.workspace_id
+                WHERE w.org_id = :org_id
+                ORDER BY p.created_at ASC, p.id ASC
+                LIMIT 1
+                """
+            ),
+            {"org_id": org_id},
+        ).scalar_one_or_none()
+        return str(project_id or org_id)
 
     def require_decision_actor(
         self,
@@ -452,6 +679,22 @@ class MemberDirectoryService:
         return {
             "id": row["id"],
             "project_id": row["project_id"],
+            "member_id": row["member_id"],
+            "display_name": row["display_name"],
+            "member_type": row["member_type"],
+            "role_keys": row.get("role_keys") or [],
+            "permissions": row.get("permissions") or [],
+            "status": row["status"],
+            "created_by": row["created_by"],
+            "created_at": row["created_at"].isoformat(),
+            "updated_at": row["updated_at"].isoformat(),
+        }
+
+    def _serialize_org_member(self, row: Any) -> dict[str, Any]:
+        return {
+            "id": row["id"],
+            "org_id": row["org_id"],
+            "project_id": row.get("project_id"),
             "member_id": row["member_id"],
             "display_name": row["display_name"],
             "member_type": row["member_type"],

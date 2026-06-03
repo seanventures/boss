@@ -288,6 +288,21 @@ a {
   gap: 8px;
 }
 
+.checkbox-field {
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  border: 1px solid rgba(162, 199, 255, 0.14);
+  border-radius: 16px;
+  padding: 12px 14px;
+  background: rgba(4, 10, 18, 0.42);
+}
+
+.checkbox-field input {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--accent);
+}
+
 .field span {
   font-size: 0.78rem;
   letter-spacing: 0.14em;

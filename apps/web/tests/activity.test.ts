@@ -9,6 +9,7 @@ import { emptyDeadletterFeed } from "../lib/deadletters";
 import { emptyEntitlementFeed } from "../lib/entitlements";
 import { emptyPackFeed } from "../lib/packs";
 import { emptyHealthSnapshotFeed } from "../lib/health-snapshots";
+import { emptyProviderOpsFeed } from "../lib/providerops";
 import { emptyReceiptFeed } from "../lib/receipts";
 import { emptyRoleFeed } from "../lib/roles";
 import { emptyRoutingLogFeed } from "../lib/routing";
@@ -70,6 +71,15 @@ describe("empty API feeds", () => {
     expect(feed.apiReachable).toBe(false);
     expect(feed.items).toEqual([]);
     expect(feed.blockedReason).toBe("entitlement api down");
+  });
+
+  it("returns an unavailable ProviderOps feed", () => {
+    const feed = emptyProviderOpsFeed("providerops api down");
+
+    expect(feed.apiReachable).toBe(false);
+    expect(feed.providerAccounts).toEqual([]);
+    expect(feed.summary.resourceCount).toBe(0);
+    expect(feed.blockedReason).toBe("providerops api down");
   });
 
   it("returns an unavailable health snapshot feed", () => {

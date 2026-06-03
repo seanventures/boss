@@ -1,0 +1,55 @@
+kind: ObjectSpec
+id: DeploymentRun
+version: 0.1.0
+description: Governed deployment execution record linked to a DeploymentTarget, release packet, ChangeSet, health checks, rollback evidence, and decisions.
+fields:
+  - name: id
+    type: string
+  - name: project_id
+    type: string
+  - name: deployment_target_id
+    type: string
+  - name: changeset_id
+    type: string
+  - name: decision_id
+    type: string
+  - name: release_artifact_id
+    type: string
+  - name: health_artifact_id
+    type: string
+  - name: rollback_artifact_id
+    type: string
+  - name: app_name
+    type: string
+  - name: environment
+    type: enum
+    values: [local, preview, staging, production]
+  - name: commit_ref
+    type: string
+  - name: status
+    type: enum
+    values: [created, building, deploying, deployed, healthy, unhealthy, rollback_pending, rolling_back, rolled_back, failed]
+  - name: release_packet
+    type: object
+  - name: health_check_results
+    type: array
+  - name: rollback_plan
+    type: array
+  - name: release_receipt_ids
+    type: array
+state_machine:
+  created: [building, deploying, healthy, rollback_pending, failed]
+  building: [deploying, failed]
+  deploying: [deployed, failed]
+  deployed: [healthy, unhealthy, rollback_pending]
+  healthy: [deploying, rollback_pending, unhealthy]
+  unhealthy: [rollback_pending, deploying, failed]
+  rollback_pending: [rolling_back, failed]
+  rolling_back: [rolled_back, failed]
+  rolled_back: [deploying]
+  failed: [created]
+rules:
+  provider_deployment_requires_changeset: true
+  spendy_deployment_requires_budget_reservation: true
+  staging_or_production_requires_approval: true
+  health_failure_creates_decision_or_rollback: true

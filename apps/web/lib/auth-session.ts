@@ -8,6 +8,8 @@ export type AuthSessionFeed = {
   transportAuthenticated: boolean;
   actorBindingRequired: boolean;
   principalMemberId?: string;
+  authMethod?: string;
+  oidcEnabled: boolean;
   message: string;
   blockedReason?: string;
 };
@@ -19,6 +21,8 @@ function mapAuthSession(payload: AuthSessionResponse): AuthSessionFeed {
     transportAuthenticated: payload.transport_authenticated,
     actorBindingRequired: payload.actor_binding_required,
     principalMemberId: payload.principal_member_id,
+    authMethod: payload.auth_method,
+    oidcEnabled: payload.oidc_enabled,
     message: payload.message,
   };
 }
@@ -29,6 +33,7 @@ export function emptyAuthSession(reason?: string): AuthSessionFeed {
     authRequired: false,
     transportAuthenticated: false,
     actorBindingRequired: false,
+    oidcEnabled: false,
     message: "Auth session state is unavailable.",
     blockedReason: reason,
   };

@@ -2,11 +2,34 @@
 
 All notable changes to BOSS are documented in this file.
 
-## Unreleased
+## v0.3.0 - 2026-06-03
+
+This release ships the Elastic Resource Plane / ProviderOps module as core BOSS infrastructure.
 
 ### Added
 
 - Added Elastic Resource Plane / ProviderOps as a core BOSS module; added provider/resource inventory, billing ledger, ChangeSets, resource receipts, deployment registry, drift detection, Resource Janitor, ProviderOps roles, budget-aware provider actuation, and clarified OpenClaw is not the BOSS foundation.
+- Added the first ProviderOps runtime slice with Resource Plane tables, provider-account APIs, official read-only adapter tests/syncs, ChangeSet approval/apply gates, ResourceReceipts, provider health, drift/reconciliation feeds, deployment targets, API-client support, and fail-closed credential/provider-write behavior.
+- Added the ProviderOps executive-console dashboard for provider registration/testing, inventory sync, Resource Explorer, ChangeSet Review, Deployment Registry, provider health, drift, costs, reconciliation, and ResourceReceipt visibility.
+- Added Resource Janitor cleanup proposal runs that create report artifacts and approval-required cleanup ChangeSets while skipping production resources, unsupported cleanup skills, read-only/destructive-disabled provider accounts, and duplicate open cleanup proposals.
+- Updated Core Pack v1 to install ProviderOps Manager, FinOps Sentinel, and Resource Janitor roles along with Resource Plane policy, provider workflows, and provider skill catalogs.
+- Added Budget-Aware Autoscaler worker pools and ScalePlans, including local desired-capacity updates, red-budget degraded-mode decisions, and cloud spillover ChangeSet proposals backed by BudgetReservations.
+- Added DeploymentRun planning with release-packet artifacts, provider deployment ChangeSet linkage, spendy-deploy reservation enforcement, real health-check reports, rollback artifacts, and health-failure decisions.
+- Added real Cloudflare DNS record upsert actuation behind ProviderOps ChangeSet approval, Receipt, ResourceReceipt, provider-health, and managed-resource inventory gates while keeping unsupported provider skills fail-closed.
+- Added real Cloudflare R2 bucket creation behind ProviderOps ChangeSet approval, BudgetReservation, Receipt, ResourceReceipt, provider-health, managed-resource inventory, and observed CostEvent gates.
+- Added real Cloudflare Worker deployment actuation behind DeploymentRun-planned ChangeSets, approvals, deployable script descriptors, ResourceReceipts, managed Worker resources, observed CostEvents, and DeploymentRun status updates.
+- Added real Git-connected Cloudflare Pages deployment actuation behind DeploymentRun-planned ChangeSets, approvals, Pages project descriptors, ResourceReceipts, managed Pages deployment resources, observed CostEvents, and DeploymentRun status updates.
+- Added real DigitalOcean droplet create/destroy ProviderOps actuation through the official adapter, gated by ChangeSets, approvals, BudgetReservations for spendy creates, ResourceReceipts, and the explicit real-provisioning policy switch.
+- Added real DigitalOcean App Platform deployment actuation through DeploymentRun-planned ChangeSets, approvals, BudgetReservations, ResourceReceipts, managed deployment resources, observed CostEvents, and DeploymentRun status updates.
+- Added real Supabase migration apply actuation through DeploymentRun-planned ChangeSets, approvals, Management API credentials, ResourceReceipts, managed migration resources, observed CostEvents, and DeploymentRun status updates.
+- Added real Supabase project creation actuation through approved, budget-reserved ChangeSets with env-backed database password SecretRefs and tests proving raw database passwords are not persisted.
+- Added real destructive Supabase project pause actuation through approved ChangeSets, rollback instructions, provider destructive-action gates, ResourceReceipts, and managed project resource updates.
+- Added read-only ProviderOps billing ingestion for DigitalOcean billing history, OpenAI organization costs, and Anthropic organization cost reports, including duplicate-safe CostEvents, BillingAccount linkage, cost confidence labels, and unsupported-provider deadletters.
+- Added standards-based OIDC bearer JWT transport authentication with JWKS signature verification, issuer/audience checks, project-member principal resolution, API-session visibility, and fail-closed missing-provider-config handling.
+- Added delegated org-wide RBAC with `org_members`, API-driven org-member management, same-org project authorization fallback, and tests proving org delegates can act across projects without per-project duplication.
+- Added console Org Delegation management, org-delegate actor selection, auth-session method/OIDC visibility, and break-glass support for same-org delegated member targets.
+- Added spendy ProviderOps ChangeSet-to-CostEvent recording so successful provider actuation writes receipt-linked observed cost events with explicit confidence labels before provider billing reconciliation.
+- Added ProviderOps CostAnomalies and read-only provider kill switches when observed provider spend crosses the budget freeze threshold, with decision cards and dashboard visibility.
 
 ## v0.2.0 - 2026-06-02
 

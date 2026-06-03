@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: BOSS Control Plane API
-  version: 0.1.0
+  version: 0.2.1
 security:
   - BossBearerAuth: []
   - BossApiKeyAuth: []
@@ -19,9 +19,9 @@ paths:
         '200': { description: Project list }
   /v1/auth/session:
     get:
-      summary: Inspect transport authentication and API-key principal binding
+      summary: Inspect transport authentication, OIDC state, and principal binding
       responses:
-        '200': { description: Auth session and principal binding state }
+        '200': { description: Auth session, auth method, OIDC state, and principal binding state }
   /v1/members:
     get:
       summary: List active project members and system actors
@@ -71,6 +71,50 @@ paths:
       responses:
         '200': { description: Project member }
         '404': { description: Member not found }
+  /v1/org-members:
+    get:
+      summary: List delegated org members for an org
+      parameters:
+        - name: org_id
+          in: query
+          required: true
+          schema: { type: string }
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+        - name: actor
+          in: query
+          required: false
+          schema: { type: string, default: ceo }
+      responses:
+        '200': { description: Org-level member delegates visible to authorized project member managers }
+        '403': { description: Actor is not allowed to manage members }
+    post:
+      summary: Upsert an org-level delegated member
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [org_id, project_id, member_id, display_name, role_keys, permissions]
+              properties:
+                org_id: { type: string }
+                project_id: { type: string }
+                member_id: { type: string }
+                display_name: { type: string }
+                member_type: { type: string, default: human }
+                role_keys:
+                  type: array
+                  items: { type: string }
+                permissions:
+                  type: array
+                  items: { type: string }
+                actor: { type: string, default: ceo }
+      responses:
+        '201': { description: Org member upserted and usable across projects in the org }
+        '403': { description: Actor is not allowed to manage members }
   /v1/break-glass/grants:
     get:
       summary: List break-glass access grants
@@ -105,7 +149,7 @@ paths:
                 ttl_minutes: { type: integer, default: 60 }
                 actor: { type: string, default: ceo }
       responses:
-        '201': { description: Break-glass grant created }
+        '201': { description: Break-glass grant created for a project member or same-org delegated member }
         '403': { description: Actor is not allowed to grant emergency access }
   /v1/break-glass/grants/{grant_id}/revoke:
     post:
@@ -899,6 +943,467 @@ paths:
           schema: { type: integer, default: 25 }
       responses:
         '200': { description: Routing log list including data_boundary classifications }
+  /v1/providers:
+    get:
+      summary: List ProviderOps provider accounts for a project
+      parameters:
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Provider account list with capability and permission status }
+    post:
+      summary: Register a provider account without granting raw credentials to agents
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id, provider, account_label]
+              properties:
+                project_id: { type: string }
+                provider:
+                  type: string
+                  enum: [digitalocean, cloudflare, supabase, openai, anthropic]
+                account_label: { type: string }
+                credential_ref: { type: string }
+                scopes:
+                  type: array
+                  items: { type: string }
+                read_only: { type: boolean, default: true }
+                deploy_capable: { type: boolean, default: false }
+                billing_readable: { type: boolean, default: false }
+                destructive_actions_disabled: { type: boolean, default: true }
+                actor: { type: string, default: ceo }
+      responses:
+        '201': { description: Provider account registered }
+        '403': { description: Actor is not allowed to manage ProviderOps }
+  /v1/providers/{provider_account_id}/test:
+    post:
+      summary: Test a provider account through the policy-guarded adapter boundary
+      parameters:
+        - name: provider_account_id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+        - name: actor
+          in: query
+          required: false
+          schema: { type: string, default: ceo }
+      responses:
+        '200': { description: Connection test result and provider-health record }
+        '404': { description: Provider account not found }
+  /v1/resources:
+    get:
+      summary: List normalized external resources from the Resource Inventory Graph
+      parameters:
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+        - name: provider
+          in: query
+          required: false
+          schema: { type: string }
+        - name: ownership
+          in: query
+          required: false
+          schema: { type: string }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, default: 100 }
+      responses:
+        '200': { description: External resource inventory with ownership, health, cost confidence, and links }
+  /v1/resources/sync:
+    post:
+      summary: Run read-only provider inventory and billing reconciliation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id]
+              properties:
+                project_id: { type: string }
+                provider_account_id: { type: string }
+                actor: { type: string, default: system }
+      responses:
+        '201': { description: Reconciliation runs with resources seen, costs seen, and drift/deadletter status }
+        '403': { description: Actor is not allowed to run ProviderOps sync }
+  /v1/costs:
+    get:
+      summary: List ProviderOps cost ledger events
+      parameters:
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, default: 100 }
+      responses:
+        '200': { description: Cost events with cost layer and confidence labels }
+  /v1/cost-anomalies:
+    get:
+      summary: List ProviderOps cost anomalies and kill-switch decisions
+      parameters:
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, default: 100 }
+      responses:
+        '200': { description: Cost anomalies with severity, threshold, decision, and recommended kill-switch actions }
+  /v1/changesets:
+    get:
+      summary: List Resource Plane ChangeSets
+      parameters:
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+        - name: status
+          in: query
+          required: false
+          schema: { type: string }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, default: 100 }
+      responses:
+        '200': { description: ChangeSets with policy result, quote, approval, and receipt expectations }
+    post:
+      summary: Create a quoted and policy-checked Resource Plane ChangeSet
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id, title, summary, operations]
+              properties:
+                project_id: { type: string }
+                provider_account_id: { type: string }
+                title: { type: string }
+                summary: { type: string }
+                operations:
+                  type: array
+                  items:
+                    type: object
+                    required: [skill_id, action, resource_type]
+                expected_cost_usd_micros: { type: integer, default: 0 }
+                reservation_id: { type: string }
+                rollback_plan:
+                  type: array
+                  items: { type: string }
+                risk_tier: { type: integer, default: 1 }
+                approval_required: { type: boolean, default: true }
+                actor: { type: string, default: ceo }
+      responses:
+        '201': { description: ChangeSet created in pending_approval or approved state }
+        '403': { description: Actor is not allowed to manage ProviderOps }
+  /v1/changesets/{changeset_id}/approve:
+    post:
+      summary: Approve a pending Resource Plane ChangeSet
+      parameters:
+        - name: changeset_id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                actor: { type: string, default: ceo }
+      responses:
+        '200': { description: ChangeSet approved with event audit trail }
+        '404': { description: ChangeSet not found }
+  /v1/changesets/{changeset_id}/apply:
+    post:
+      summary: Apply an approved ChangeSet and write ResourceReceipts
+      parameters:
+        - name: changeset_id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                actor: { type: string, default: system }
+                created_by_job_id: { type: string }
+                dry_run: { type: boolean, default: false }
+      responses:
+        '200': { description: Apply result with ResourceReceipts or decision/deadletter details }
+        '404': { description: ChangeSet not found }
+  /v1/resource-receipts:
+    get:
+      summary: List Resource Plane receipts
+      parameters:
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, default: 100 }
+      responses:
+        '200': { description: Resource receipts linked to ChangeSets, providers, and general receipts }
+  /v1/worker-pools:
+    get:
+      summary: List Budget-Aware Autoscaler worker pools
+      parameters:
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Worker pools with current/desired capacity, provider scope, capabilities, and cost hints }
+    post:
+      summary: Register or update a worker pool
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id, pool_key]
+              properties:
+                project_id: { type: string }
+                pool_key: { type: string }
+                kind: { type: string, enum: [local, cloud], default: local }
+                provider_account_id: { type: string }
+                current_workers: { type: integer, minimum: 0, default: 0 }
+                desired_workers: { type: integer, minimum: 0, default: 0 }
+                min_workers: { type: integer, minimum: 0, default: 0 }
+                max_workers: { type: integer, minimum: 0, default: 1 }
+                max_queue_depth_per_worker: { type: integer, minimum: 1, default: 5 }
+                cost_per_worker_hour_usd_micros: { type: integer, minimum: 0, default: 0 }
+                capabilities: { type: array, items: { type: string } }
+                metadata: { type: object }
+                actor: { type: string, default: providerops_manager }
+      responses:
+        '201': { description: Worker pool created or updated }
+        '403': { description: Actor is not allowed to manage ProviderOps }
+        '422': { description: Invalid worker-pool configuration or provider account }
+  /v1/autoscaler/plans:
+    get:
+      summary: List Budget-Aware Autoscaler scale plans
+      parameters:
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, default: 50, minimum: 1, maximum: 200 }
+      responses:
+        '200': { description: Persisted scale plans with queue, budget, provider health, actions, decisions, and ChangeSet links }
+    post:
+      summary: Run the Budget-Aware Autoscaler planner
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id]
+              properties:
+                project_id: { type: string }
+                worker_pool_id: { type: string }
+                cloud_spillover_enabled: { type: boolean, default: false }
+                actor: { type: string, default: providerops_manager }
+      responses:
+        '200': { description: ScalePlan result; local desired capacity may be applied and cloud spillover may create a reserved ChangeSet }
+        '403': { description: Actor is not allowed to manage ProviderOps }
+        '422': { description: Invalid worker pool or unsupported cloud spillover operation }
+  /v1/resource-janitor/run:
+    post:
+      summary: Run Resource Janitor and propose approval-gated cleanup ChangeSets
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id]
+              properties:
+                project_id: { type: string }
+                provider_account_id: { type: string }
+                max_candidates: { type: integer, default: 10, minimum: 1, maximum: 100 }
+                actor: { type: string, default: resource_janitor }
+      responses:
+        '200': { description: Janitor report artifact, candidates, skips, savings estimate, and cleanup ChangeSets }
+        '403': { description: Actor is not allowed to manage ProviderOps }
+        '404': { description: Provider account not found }
+  /v1/deployments:
+    get:
+      summary: List ProviderOps deployment targets
+      parameters:
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Deployment targets with environments, resource refs, secrets, and rollback points }
+    post:
+      summary: Register a deployment target in the Deployment Registry
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id, app_name, repo, environment, target_kind, target_ref]
+              properties:
+                project_id: { type: string }
+                app_name: { type: string }
+                repo: { type: string }
+                environment: { type: string }
+                provider_account_id: { type: string }
+                target_kind: { type: string }
+                target_ref: { type: string }
+                domains:
+                  type: array
+                  items: { type: string }
+                required_resources:
+                  type: array
+                  items: { type: object }
+                secret_refs:
+                  type: array
+                  items: { type: string }
+                health_checks:
+                  type: array
+                  items: { type: object }
+                rollback_points:
+                  type: array
+                  items: { type: object }
+                actor: { type: string, default: ceo }
+      responses:
+        '201': { description: Deployment target registered }
+        '403': { description: Actor is not allowed to manage ProviderOps }
+  /v1/deployment-runs:
+    get:
+      summary: List Deployment Registry runs
+      parameters:
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, default: 50, minimum: 1, maximum: 200 }
+      responses:
+        '200': { description: Deployment runs with release packet, ChangeSet, health, rollback, and decision links }
+    post:
+      summary: Plan a DeploymentRun through release packet and ChangeSet gates
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id, deployment_target_id]
+              properties:
+                project_id: { type: string }
+                deployment_target_id: { type: string }
+                commit_ref: { type: string }
+                release_packet: { type: object }
+                expected_cost_usd_micros: { type: integer, minimum: 0, default: 0 }
+                reservation_id: { type: string }
+                actor: { type: string, default: release_manager }
+      responses:
+        '201': { description: DeploymentRun created; provider writes are modeled as approval-gated ChangeSets }
+        '403': { description: Actor is not allowed to manage ProviderOps }
+        '422': { description: Invalid target, provider account, or unsupported deployment skill }
+  /v1/deployment-runs/{deployment_run_id}/health-check:
+    post:
+      summary: Run real DeploymentRun health checks and write health/rollback artifacts
+      parameters:
+        - name: deployment_run_id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                actor: { type: string, default: deployment_manager }
+      responses:
+        '200': { description: Health report artifact, rollback artifact when needed, and optional decision id }
+        '403': { description: Actor is not allowed to manage ProviderOps }
+        '404': { description: DeploymentRun not found }
+        '422': { description: Deployment ChangeSet is not applied or health check config is invalid }
+  /v1/provider-health:
+    get:
+      summary: List provider health observations
+      parameters:
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+        - name: provider_account_id
+          in: query
+          required: false
+          schema: { type: string }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, default: 100 }
+      responses:
+        '200': { description: Provider health, API availability, quota, and rate-limit status }
+  /v1/drift-reports:
+    get:
+      summary: List provider drift reports
+      parameters:
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, default: 100 }
+      responses:
+        '200': { description: Drift reports classifying unmanaged, orphaned, security, and production impact }
+  /v1/reconciliation-runs:
+    get:
+      summary: List Resource Plane reconciliation runs
+      parameters:
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, default: 100 }
+      responses:
+        '200': { description: Provider inventory and cost reconciliation run history }
   /v1/comms/outbox:
     get:
       summary: List outbound communication records for a project
@@ -1928,7 +2433,7 @@ components:
     BossBearerAuth:
       type: http
       scheme: bearer
-      description: Set when `BOSS_REQUIRE_API_AUTH=true`.
+      description: Set to a configured API key when `BOSS_REQUIRE_API_AUTH=true`, or to a verified OIDC JWT when `BOSS_OIDC_ENABLED=true`.
     BossApiKeyAuth:
       type: apiKey
       in: header

@@ -192,24 +192,45 @@ Resource Plane Kernel tables should include:
 
 These tables should use org/workspace/project scope, stable IDs, timestamps, lifecycle states, data boundary classifications, and event emission on material changes.
 
-## API Endpoints, Planned
+## API Endpoints, Active Runtime Contract
 
-These endpoints are planned product/API surfaces. They should not be added to the active OpenAPI runtime contract until implemented.
+These endpoints are implemented runtime surfaces and should remain aligned with `api/openapi.yaml`, the typed API client, and console server actions.
 
+- `GET /v1/auth/session`
+- `GET /v1/projects`
+- `GET /v1/members`
+- `POST /v1/members`
+- `GET /v1/org-members`
+- `POST /v1/org-members`
+- `GET /v1/break-glass/grants`
+- `POST /v1/break-glass/grants`
 - `GET /v1/providers`
 - `POST /v1/providers`
 - `POST /v1/providers/{id}/test`
 - `GET /v1/resources`
 - `POST /v1/resources/sync`
 - `GET /v1/costs`
+- `GET /v1/cost-anomalies`
 - `GET /v1/changesets`
 - `POST /v1/changesets`
 - `POST /v1/changesets/{id}/approve`
 - `POST /v1/changesets/{id}/apply`
+- `GET /v1/resource-receipts`
+- `GET /v1/worker-pools`
+- `POST /v1/worker-pools`
+- `GET /v1/autoscaler/plans`
+- `POST /v1/autoscaler/plans`
+- `POST /v1/resource-janitor/run`
 - `GET /v1/deployments`
 - `POST /v1/deployments`
+- `GET /v1/deployment-runs`
+- `POST /v1/deployment-runs`
+- `POST /v1/deployment-runs/{id}/health-check`
 - `GET /v1/provider-health`
 - `GET /v1/drift-reports`
+- `GET /v1/reconciliation-runs`
+
+Unsupported future providers or skills must fail closed with visible deadletters, decisions, receipts, or provider-health records rather than returning synthetic success.
 
 ## Local Runner Integration
 

@@ -2,7 +2,7 @@
 
 BOSS, the Business Operating System Sentinel, is a financially controlled autonomous company operating system. This repository is the real control plane and dogfood environment for BOSS itself.
 
-Current release: `v0.2.1`
+Current release: `v0.3.0`
 
 ## Operating invariants
 
@@ -19,6 +19,7 @@ This repo does not use fake providers or synthetic side effects. The first real 
 - GitHub for branch, commit, and pull-request creation against `seanheiney/boss-sandbox`
 - OpenAI for coding and planning calls via `OPENAI_API_KEY`
 - DigitalOcean for sandbox droplet provisioning only when `BOSS_INFRA_REAL_PROVISION_ALLOWED=true`
+- ProviderOps read-only inventory and health checks for DigitalOcean, Cloudflare, Supabase, OpenAI, and Anthropic through official APIs only
 
 If a required credential is missing, the API must fail closed and create visible decisions and events rather than silently degrading to a mock path.
 
@@ -56,6 +57,7 @@ If a required credential is missing, the API must fail closed and create visible
 - Docker with Compose
 - GitHub credentials available through `BOSS_GITHUB_TOKEN`, `GITHUB_TOKEN`, or the macOS keychain
 - `OPENAI_API_KEY`
+- Optional ProviderOps credentials for read-only connection tests, inventory sync, and billing sync: `BOSS_DIGITALOCEAN_TOKEN`, `BOSS_CLOUDFLARE_API_TOKEN`, `BOSS_SUPABASE_ACCESS_TOKEN`, `OPENAI_API_KEY` or `OPENAI_ADMIN_KEY`, and `ANTHROPIC_API_KEY` or `ANTHROPIC_ADMIN_KEY`. Supabase project creation ChangeSets should reference a local env-backed `SecretRef` such as `env:BOSS_SUPABASE_PROJECT_DB_PASS` for the database password.
 
 ## Setup
 
@@ -93,11 +95,15 @@ The console is also actor-scoped through the project member directory. The seed 
 
 Denied write attempts emit `policy.denied` events when BOSS can resolve the target project, keeping permission failures visible in the audit feed.
 
-The dogfood seed now installs the spec-backed `core_v1` company pack into `boss-dogfood`, which provisions the default operating roles from `packages/specpack/roles`.
+The dogfood seed now installs the spec-backed `core_v1` company pack into `boss-dogfood`, which provisions the default operating roles from `packages/specpack/roles`, including ProviderOps Manager, FinOps Sentinel, and Resource Janitor for governed resource-plane operations.
 
 The dogfood seed now also installs the first packaged agent modules, including `metatron_operator_v1` and `codex_software_engineer_v1`, so role lineage, prompt bundles, and runtime job defaults are grounded in installable marketplace units instead of only pack metadata.
 
 The dogfood seed also registers the initial entitlement-source inventory from `packages/specpack/models/providers.yaml`, and brokered OpenAI planning/review calls now write routing logs before execution.
+
+ProviderOps now exposes the first Resource Plane Kernel slice. Provider accounts, provider-health checks, resource syncs, ChangeSets, deployment targets, drift reports, reconciliation runs, ResourceReceipts, CostEvents, and CostAnomalies are API-driven and audit-backed. Read-only inventory, connection testing, and billing sync are supported for the configured providers through official APIs. Billing-readable provider accounts can ingest DigitalOcean billing history, OpenAI organization costs, and Anthropic organization cost reports into duplicate-safe CostEvents with confidence labels. Provider writes must be modeled as ChangeSets; Cloudflare DNS record upsert, Cloudflare R2 bucket create, Cloudflare Worker deployment, Git-connected Cloudflare Pages deployment, DigitalOcean droplet create/destroy, DigitalOcean App Platform deployment, Supabase project create/pause, and Supabase migration apply are the first supported write skills, spendy successful actuation creates receipt-linked CostEvents with confidence labels, threshold-crossing observed provider spend switches the provider account to read-only mode with a decision card, and unsupported skills or missing credentials fail closed with ResourceReceipts/deadletters.
+
+The executive console now includes a ProviderOps dashboard covering provider connection registration/testing, read-only resource sync, resource inventory, Resource Janitor cleanup proposals, worker-pool/autoscaler review, ChangeSet review/approval/application gates, deployment target registration, DeploymentRun planning and health checks, provider health, drift, cost, reconciliation, and ResourceReceipt visibility.
 
 ## API authentication
 
@@ -111,6 +117,10 @@ Clients may send either:
 If API authentication is required but no keys are configured, BOSS fails closed with `503` rather than accepting unauthenticated requests. The web console sends `BOSS_API_KEY` or `NEXT_PUBLIC_BOSS_API_KEY` through the shared API client when configured. Workers also send `BOSS_API_KEY` or `BOSS_WORKER_API_KEY` when polling the control plane.
 
 For multi-actor environments, set `BOSS_API_KEY_PRINCIPALS` to comma-separated `api-key:member_id` or `api-key=member_id` entries. When configured, a valid API key is bound to that project member principal, and mutation payloads cannot claim a different `actor`. `GET /v1/auth/session` reports whether API auth is required, whether principal binding is active, and the resolved member id.
+
+BOSS can also accept real OIDC bearer JWTs for `/v1/*` transport authentication by setting `BOSS_OIDC_ENABLED=true`, `BOSS_OIDC_ISSUER`, `BOSS_OIDC_AUDIENCE`, and `BOSS_OIDC_JWKS_URL`. The token must resolve to an existing project member through `BOSS_OIDC_PRINCIPAL_CLAIM` or `BOSS_OIDC_SUBJECT_PRINCIPALS`; otherwise BOSS fails closed before any write action can claim an actor.
+
+For delegated org-wide RBAC, `POST /v1/org-members` creates an org-level member with explicit permissions. Org members can act in any project under the same org through the same `require_project_actor` checks, while cross-org access remains blocked.
 
 ## Current control-plane endpoints
 
@@ -163,6 +173,30 @@ For multi-actor environments, set `BOSS_API_KEY_PRINCIPALS` to comma-separated `
 - `POST /v1/entitlements/sources`
 - `POST /v1/router/preview`
 - `GET /v1/router/logs`
+- `GET /v1/providers`
+- `POST /v1/providers`
+- `POST /v1/providers/{provider_account_id}/test`
+- `GET /v1/resources`
+- `POST /v1/resources/sync`
+- `GET /v1/costs`
+- `GET /v1/changesets`
+- `POST /v1/changesets`
+- `POST /v1/changesets/{changeset_id}/approve`
+- `POST /v1/changesets/{changeset_id}/apply`
+- `GET /v1/resource-receipts`
+- `GET /v1/worker-pools`
+- `POST /v1/worker-pools`
+- `GET /v1/autoscaler/plans`
+- `POST /v1/autoscaler/plans`
+- `POST /v1/resource-janitor/run`
+- `GET /v1/deployments`
+- `POST /v1/deployments`
+- `GET /v1/deployment-runs`
+- `POST /v1/deployment-runs`
+- `POST /v1/deployment-runs/{deployment_run_id}/health-check`
+- `GET /v1/provider-health`
+- `GET /v1/drift-reports`
+- `GET /v1/reconciliation-runs`
 - `GET /v1/comms/outbox`
 - `POST /v1/comms/outbox`
 - `POST /v1/comms/outbox/{message_id}/queue`

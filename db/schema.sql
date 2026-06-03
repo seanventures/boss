@@ -40,6 +40,23 @@ CREATE TABLE IF NOT EXISTS project_members (
 CREATE INDEX IF NOT EXISTS idx_project_members_project
   ON project_members(project_id, member_id);
 
+CREATE TABLE IF NOT EXISTS org_members (
+  id TEXT PRIMARY KEY,
+  org_id TEXT NOT NULL REFERENCES orgs(id),
+  member_id TEXT NOT NULL,
+  display_name TEXT NOT NULL,
+  member_type TEXT NOT NULL DEFAULT 'human',
+  role_keys JSONB NOT NULL DEFAULT '[]'::jsonb,
+  permissions JSONB NOT NULL DEFAULT '[]'::jsonb,
+  status TEXT NOT NULL DEFAULT 'active',
+  created_by TEXT NOT NULL DEFAULT 'bootstrap',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(org_id, member_id)
+);
+CREATE INDEX IF NOT EXISTS idx_org_members_org
+  ON org_members(org_id, member_id, status);
+
 CREATE TABLE IF NOT EXISTS break_glass_grants (
   id TEXT PRIMARY KEY,
   project_id TEXT NOT NULL REFERENCES projects(id),
@@ -488,6 +505,424 @@ CREATE TABLE IF NOT EXISTS infra_resources (
 );
 CREATE INDEX IF NOT EXISTS idx_infra_resources_project
   ON infra_resources(project_id, status, expires_at, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS secret_refs (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id),
+  ref_kind TEXT NOT NULL DEFAULT 'env',
+  ref_key TEXT NOT NULL,
+  provider TEXT,
+  status TEXT NOT NULL DEFAULT 'active',
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(project_id, ref_kind, ref_key)
+);
+CREATE INDEX IF NOT EXISTS idx_secret_refs_project
+  ON secret_refs(project_id, provider, status);
+
+CREATE TABLE IF NOT EXISTS provider_adapters (
+  id TEXT PRIMARY KEY,
+  provider TEXT NOT NULL,
+  adapter_key TEXT NOT NULL,
+  display_name TEXT NOT NULL,
+  adapter_kind TEXT NOT NULL DEFAULT 'official_api',
+  status TEXT NOT NULL DEFAULT 'available',
+  capabilities JSONB NOT NULL DEFAULT '[]'::jsonb,
+  policy JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(provider, adapter_key)
+);
+
+CREATE TABLE IF NOT EXISTS provider_accounts (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id),
+  provider TEXT NOT NULL,
+  account_label TEXT NOT NULL,
+  credential_ref TEXT,
+  scopes JSONB NOT NULL DEFAULT '[]'::jsonb,
+  status TEXT NOT NULL DEFAULT 'active',
+  read_only BOOLEAN NOT NULL DEFAULT true,
+  deploy_capable BOOLEAN NOT NULL DEFAULT false,
+  billing_readable BOOLEAN NOT NULL DEFAULT false,
+  destructive_actions_disabled BOOLEAN NOT NULL DEFAULT true,
+  capabilities JSONB NOT NULL DEFAULT '[]'::jsonb,
+  missing_permissions JSONB NOT NULL DEFAULT '[]'::jsonb,
+  last_test_status TEXT,
+  last_tested_at TIMESTAMPTZ,
+  last_error JSONB,
+  created_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(project_id, provider, account_label)
+);
+CREATE INDEX IF NOT EXISTS idx_provider_accounts_project
+  ON provider_accounts(project_id, provider, status);
+
+CREATE TABLE IF NOT EXISTS capabilities (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id),
+  provider_account_id TEXT NOT NULL REFERENCES provider_accounts(id),
+  capability_key TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'available',
+  detected_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+  UNIQUE(provider_account_id, capability_key)
+);
+
+CREATE TABLE IF NOT EXISTS external_resources (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id),
+  provider_account_id TEXT REFERENCES provider_accounts(id),
+  provider TEXT NOT NULL,
+  resource_type TEXT NOT NULL,
+  external_id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  state TEXT NOT NULL DEFAULT 'discovered_unmanaged',
+  ownership TEXT NOT NULL DEFAULT 'discovered_unmanaged',
+  environment TEXT NOT NULL DEFAULT 'unknown',
+  owner_role TEXT,
+  task_id TEXT REFERENCES tasks(id),
+  deployment_target_id TEXT,
+  receipt_id TEXT,
+  budget_allocation_id TEXT,
+  health_status TEXT NOT NULL DEFAULT 'unknown',
+  estimated_monthly_usd_micros BIGINT,
+  actual_monthly_usd_micros BIGINT,
+  cost_confidence TEXT NOT NULL DEFAULT 'unknown',
+  last_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  tags JSONB NOT NULL DEFAULT '[]'::jsonb,
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(project_id, provider, external_id)
+);
+CREATE INDEX IF NOT EXISTS idx_external_resources_project
+  ON external_resources(project_id, provider, ownership, state, last_seen_at DESC);
+
+CREATE TABLE IF NOT EXISTS billing_accounts (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id),
+  provider_account_id TEXT REFERENCES provider_accounts(id),
+  provider TEXT NOT NULL,
+  external_billing_id TEXT,
+  label TEXT NOT NULL,
+  currency TEXT NOT NULL DEFAULT 'USD',
+  billing_period JSONB NOT NULL DEFAULT '{}'::jsonb,
+  status TEXT NOT NULL DEFAULT 'active',
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_billing_accounts_project
+  ON billing_accounts(project_id, provider, status);
+
+CREATE TABLE IF NOT EXISTS cost_events (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id),
+  provider_account_id TEXT REFERENCES provider_accounts(id),
+  external_resource_id TEXT REFERENCES external_resources(id),
+  billing_account_id TEXT REFERENCES billing_accounts(id),
+  task_id TEXT REFERENCES tasks(id),
+  role_key TEXT,
+  provider TEXT NOT NULL,
+  category TEXT NOT NULL,
+  amount_usd_micros BIGINT NOT NULL,
+  cost_layer TEXT NOT NULL DEFAULT 'observed',
+  confidence TEXT NOT NULL,
+  source_ref TEXT,
+  period_start TIMESTAMPTZ,
+  period_end TIMESTAMPTZ,
+  receipt_id TEXT,
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_cost_events_project
+  ON cost_events(project_id, provider, category, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS cost_anomalies (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id),
+  provider_account_id TEXT REFERENCES provider_accounts(id),
+  cost_event_id TEXT REFERENCES cost_events(id),
+  decision_id TEXT REFERENCES decisions(id),
+  provider TEXT NOT NULL,
+  anomaly_type TEXT NOT NULL,
+  severity TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'open',
+  amount_usd_micros BIGINT NOT NULL,
+  threshold_usd_micros BIGINT NOT NULL,
+  summary TEXT NOT NULL,
+  recommended_actions JSONB NOT NULL DEFAULT '[]'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  resolved_at TIMESTAMPTZ,
+  UNIQUE(project_id, cost_event_id, anomaly_type)
+);
+CREATE INDEX IF NOT EXISTS idx_cost_anomalies_project
+  ON cost_anomalies(project_id, status, severity, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS commitments (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id),
+  provider_account_id TEXT REFERENCES provider_accounts(id),
+  external_resource_id TEXT REFERENCES external_resources(id),
+  provider TEXT NOT NULL,
+  commitment_type TEXT NOT NULL,
+  amount_usd_micros BIGINT NOT NULL,
+  period_start TIMESTAMPTZ NOT NULL,
+  period_end TIMESTAMPTZ NOT NULL,
+  status TEXT NOT NULL DEFAULT 'active',
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_commitments_project
+  ON commitments(project_id, provider, status, period_end);
+
+CREATE TABLE IF NOT EXISTS deployment_targets (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id),
+  app_name TEXT NOT NULL,
+  repo TEXT NOT NULL,
+  environment TEXT NOT NULL,
+  provider_account_id TEXT REFERENCES provider_accounts(id),
+  target_kind TEXT NOT NULL,
+  target_ref TEXT NOT NULL,
+  domains JSONB NOT NULL DEFAULT '[]'::jsonb,
+  required_resources JSONB NOT NULL DEFAULT '[]'::jsonb,
+  secret_refs JSONB NOT NULL DEFAULT '[]'::jsonb,
+  health_checks JSONB NOT NULL DEFAULT '[]'::jsonb,
+  rollback_points JSONB NOT NULL DEFAULT '[]'::jsonb,
+  status TEXT NOT NULL DEFAULT 'created',
+  created_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(project_id, app_name, environment)
+);
+CREATE INDEX IF NOT EXISTS idx_deployment_targets_project
+  ON deployment_targets(project_id, app_name, environment, status);
+
+CREATE TABLE IF NOT EXISTS changesets (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id),
+  provider_account_id TEXT REFERENCES provider_accounts(id),
+  title TEXT NOT NULL,
+  summary TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'draft',
+  risk_tier INTEGER NOT NULL DEFAULT 2,
+  operations JSONB NOT NULL DEFAULT '[]'::jsonb,
+  expected_cost_usd_micros BIGINT NOT NULL DEFAULT 0,
+  cost_quote JSONB NOT NULL DEFAULT '{}'::jsonb,
+  reservation_id TEXT,
+  approval_decision_id TEXT REFERENCES decisions(id),
+  rollback_plan JSONB NOT NULL DEFAULT '[]'::jsonb,
+  expected_receipts JSONB NOT NULL DEFAULT '[]'::jsonb,
+  policy_result JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_by TEXT NOT NULL,
+  approved_by TEXT,
+  approved_at TIMESTAMPTZ,
+  applied_by TEXT,
+  applied_at TIMESTAMPTZ,
+  failure_reason TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_changesets_project
+  ON changesets(project_id, status, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS deployment_runs (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id),
+  deployment_target_id TEXT NOT NULL REFERENCES deployment_targets(id),
+  changeset_id TEXT REFERENCES changesets(id),
+  decision_id TEXT REFERENCES decisions(id),
+  release_artifact_id TEXT REFERENCES artifacts(id),
+  health_artifact_id TEXT REFERENCES artifacts(id),
+  rollback_artifact_id TEXT REFERENCES artifacts(id),
+  app_name TEXT NOT NULL,
+  environment TEXT NOT NULL,
+  repo TEXT NOT NULL,
+  target_kind TEXT NOT NULL,
+  target_ref TEXT NOT NULL,
+  commit_ref TEXT,
+  status TEXT NOT NULL DEFAULT 'created',
+  release_packet JSONB NOT NULL DEFAULT '{}'::jsonb,
+  health_check_results JSONB NOT NULL DEFAULT '[]'::jsonb,
+  rollback_plan JSONB NOT NULL DEFAULT '[]'::jsonb,
+  release_receipt_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
+  created_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  started_at TIMESTAMPTZ,
+  finished_at TIMESTAMPTZ,
+  failure_reason TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_deployment_runs_project
+  ON deployment_runs(project_id, status, created_at DESC);
+ALTER TABLE deployment_runs ADD COLUMN IF NOT EXISTS decision_id TEXT REFERENCES decisions(id);
+
+CREATE TABLE IF NOT EXISTS changeset_operations (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id),
+  changeset_id TEXT NOT NULL REFERENCES changesets(id),
+  provider_account_id TEXT REFERENCES provider_accounts(id),
+  operation_index INTEGER NOT NULL,
+  skill_id TEXT NOT NULL,
+  action TEXT NOT NULL,
+  resource_type TEXT NOT NULL,
+  resource_ref TEXT,
+  desired_state JSONB NOT NULL DEFAULT '{}'::jsonb,
+  risk_tier INTEGER NOT NULL DEFAULT 2,
+  destructive BOOLEAN NOT NULL DEFAULT false,
+  production_affecting BOOLEAN NOT NULL DEFAULT false,
+  status TEXT NOT NULL DEFAULT 'pending',
+  resource_receipt_id TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(changeset_id, operation_index)
+);
+
+CREATE TABLE IF NOT EXISTS resource_receipts (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id),
+  changeset_id TEXT REFERENCES changesets(id),
+  operation_id TEXT REFERENCES changeset_operations(id),
+  provider_account_id TEXT REFERENCES provider_accounts(id),
+  receipt_id TEXT REFERENCES receipts(id),
+  dedupe_key TEXT NOT NULL,
+  provider TEXT NOT NULL,
+  action TEXT NOT NULL,
+  resource_type TEXT NOT NULL,
+  resource_ref TEXT,
+  status TEXT NOT NULL DEFAULT 'in_progress',
+  provider_ref TEXT,
+  request_hash TEXT NOT NULL,
+  result JSONB,
+  error JSONB,
+  created_by_job_id TEXT REFERENCES jobs(id),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(project_id, dedupe_key)
+);
+CREATE INDEX IF NOT EXISTS idx_resource_receipts_project
+  ON resource_receipts(project_id, provider, status, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS provider_health (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id),
+  provider_account_id TEXT REFERENCES provider_accounts(id),
+  provider TEXT NOT NULL,
+  status TEXT NOT NULL,
+  api_available BOOLEAN NOT NULL DEFAULT false,
+  rate_limit_status TEXT NOT NULL DEFAULT 'unknown',
+  usage_cap_status TEXT NOT NULL DEFAULT 'unknown',
+  last_checked_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  detail JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_provider_health_project
+  ON provider_health(project_id, provider, last_checked_at DESC);
+
+CREATE TABLE IF NOT EXISTS worker_pools (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id),
+  pool_key TEXT NOT NULL,
+  kind TEXT NOT NULL DEFAULT 'local',
+  provider_account_id TEXT REFERENCES provider_accounts(id),
+  provider TEXT,
+  status TEXT NOT NULL DEFAULT 'active',
+  current_workers INTEGER NOT NULL DEFAULT 0,
+  desired_workers INTEGER NOT NULL DEFAULT 0,
+  min_workers INTEGER NOT NULL DEFAULT 0,
+  max_workers INTEGER NOT NULL DEFAULT 1,
+  max_queue_depth_per_worker INTEGER NOT NULL DEFAULT 5,
+  cost_per_worker_hour_usd_micros BIGINT NOT NULL DEFAULT 0,
+  capabilities JSONB NOT NULL DEFAULT '[]'::jsonb,
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(project_id, pool_key)
+);
+CREATE INDEX IF NOT EXISTS idx_worker_pools_project
+  ON worker_pools(project_id, status, kind);
+
+CREATE TABLE IF NOT EXISTS scale_plans (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id),
+  worker_pool_id TEXT REFERENCES worker_pools(id),
+  status TEXT NOT NULL,
+  trigger_reason TEXT NOT NULL,
+  queue_depth INTEGER NOT NULL DEFAULT 0,
+  running_jobs INTEGER NOT NULL DEFAULT 0,
+  leased_jobs INTEGER NOT NULL DEFAULT 0,
+  retryable_jobs INTEGER NOT NULL DEFAULT 0,
+  current_workers INTEGER NOT NULL DEFAULT 0,
+  desired_workers_before INTEGER NOT NULL DEFAULT 0,
+  desired_workers_after INTEGER NOT NULL DEFAULT 0,
+  target_workers INTEGER NOT NULL DEFAULT 0,
+  budget_state TEXT NOT NULL,
+  budget_available_usd_micros BIGINT NOT NULL DEFAULT 0,
+  estimated_hourly_delta_usd_micros BIGINT NOT NULL DEFAULT 0,
+  provider_health_status TEXT,
+  actions JSONB NOT NULL DEFAULT '[]'::jsonb,
+  recommendations JSONB NOT NULL DEFAULT '[]'::jsonb,
+  changeset_id TEXT REFERENCES changesets(id),
+  decision_id TEXT REFERENCES decisions(id),
+  created_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  applied_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_scale_plans_project
+  ON scale_plans(project_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS drift_reports (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id),
+  provider_account_id TEXT REFERENCES provider_accounts(id),
+  classification TEXT NOT NULL,
+  summary TEXT NOT NULL,
+  unmanaged_count INTEGER NOT NULL DEFAULT 0,
+  orphaned_count INTEGER NOT NULL DEFAULT 0,
+  security_impacting_count INTEGER NOT NULL DEFAULT 0,
+  production_impacting_count INTEGER NOT NULL DEFAULT 0,
+  recommendations JSONB NOT NULL DEFAULT '[]'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_drift_reports_project
+  ON drift_reports(project_id, classification, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS resource_policies (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id),
+  policy_key TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'active',
+  body JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(project_id, policy_key)
+);
+
+CREATE TABLE IF NOT EXISTS reconciliation_runs (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id),
+  provider_account_id TEXT REFERENCES provider_accounts(id),
+  provider TEXT,
+  status TEXT NOT NULL DEFAULT 'running',
+  resources_seen INTEGER NOT NULL DEFAULT 0,
+  resources_changed INTEGER NOT NULL DEFAULT 0,
+  costs_seen INTEGER NOT NULL DEFAULT 0,
+  started_by TEXT NOT NULL,
+  started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  finished_at TIMESTAMPTZ,
+  error JSONB,
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb
+);
+CREATE INDEX IF NOT EXISTS idx_reconciliation_runs_project
+  ON reconciliation_runs(project_id, started_at DESC);
 
 CREATE TABLE IF NOT EXISTS budget_policies (
   id TEXT PRIMARY KEY,

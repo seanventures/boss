@@ -1,7 +1,7 @@
 # BOSS Implementation Status
 
 Last updated: June 3, 2026
-Release target: `v0.2.1`
+Release target: `v0.3.0`
 
 This document summarizes the currently implemented BOSS runtime surfaces in this repository so the codebase, README, and product intent stay aligned.
 
@@ -48,6 +48,11 @@ This document summarizes the currently implemented BOSS runtime surfaces in this
   - RoleSpec scope checks with drift events, trust changes, and automatic autonomy downgrade
   - agent-module catalog and install flow
   - entitlement source and routing-log visibility
+  - ProviderOps provider accounts, connection tests, resource inventory sync, read-only DigitalOcean/OpenAI/Anthropic billing sync, cost ledger reads, duplicate-safe BillingAccount/CostEvent records, spendy ChangeSet-to-CostEvent recording, cost anomalies with read-only provider kill switches, ChangeSet planning/approval/apply attempts, real Cloudflare DNS record upsert actuation, real Cloudflare Worker deployment actuation, real Git-connected Cloudflare Pages deployment actuation, real DigitalOcean droplet create/destroy actuation, real DigitalOcean App Platform deployment actuation, real Supabase project create/pause actuation, real Supabase migration apply actuation, ResourceReceipts, deployment targets, provider health, drift reports, and reconciliation-run visibility
+  - DeploymentRun planning with release-packet artifacts, provider deployment ChangeSet linkage, BudgetReservation enforcement for spendy deploys, real Cloudflare Worker, Cloudflare Pages, DigitalOcean App Platform, and Supabase migration execution, real health-check execution, rollback artifacts, and health-failure decisions
+  - Resource Janitor report generation and approval-required cleanup ChangeSet proposals for orphaned/expired non-production resources
+  - ProviderOps Manager, FinOps Sentinel, and Resource Janitor roles installed by Core Pack v1 with complete RoleSpec contracts and provider-boundary permissions
+  - Budget-Aware Autoscaler worker-pool registry and ScalePlan runs that apply local desired capacity, enter degraded mode under red budget, and turn cloud spillover into BudgetReservation-backed ChangeSets instead of direct provider calls
   - project member directory and actor-scoped write authorization
 - Worker runtime:
   - pull-based Postgres leasing
@@ -88,8 +93,10 @@ This document summarizes the currently implemented BOSS runtime surfaces in this
 - Governance surfaces:
   - optional API-key authentication for `/v1/*` routes with fail-closed missing-key behavior
   - optional API-key principal binding so authenticated keys cannot impersonate another project actor
+  - optional OIDC bearer JWT authentication with JWKS signature verification, issuer/audience checks, principal-claim or subject-map resolution to project members, and fail-closed missing-provider-config behavior
+  - delegated org-wide RBAC through `org_members`, with org delegates available across projects in the same org, selectable in the console actor switcher, manageable through the Org Delegation UI, and still bound by explicit permissions
   - auth-session introspection through `GET /v1/auth/session`
-  - break-glass access grants with requester identity, target member, reason, scope, TTL, temporary permissions, event logs, revocation, expiry, and mandatory postmortem task creation
+  - break-glass access grants with requester identity, project or org target member, reason, scope, TTL, temporary permissions, event logs, revocation, expiry, and mandatory postmortem task creation
   - Core Pack install for dogfood
   - packaged agent-module catalog, install flow, and role lineage
   - deterministic RoleSpec validation for pack roles and module-provided roles
@@ -109,14 +116,23 @@ This document summarizes the currently implemented BOSS runtime surfaces in this
   - audit export and replay-bundle artifact generation
   - compliance evidence bundle generation for members, roles, policies, break-glass grants, decisions, receipts, reservations, cost receipts, deadletters, and compliance-relevant events
   - data-boundary classification persisted on tasks, jobs, artifacts, and receipts, with task-to-job/artifact inheritance and audit export visibility
+  - Resource Plane Kernel enforcement that fails closed when provider credentials are missing, blocks unsupported/destructive provider actuation, supports Cloudflare DNS record upsert, Cloudflare R2 bucket create, Cloudflare Worker/Pages deployment, DigitalOcean droplet create/destroy, DigitalOcean App Platform deployment, Supabase project create/pause, and Supabase migration apply through official adapters, records visible provider health, deadletter, event, Receipt, ResourceReceipt, CostEvent, and CostAnomaly records, and can switch provider accounts to read-only mode when observed provider cost crosses the freeze threshold
+  - Deployment health checks that perform real HTTP/HTTPS checks through the Resource Plane boundary and create rollback decisions instead of fake success on failure
+  - Resource Janitor safety checks that skip production resources, unsupported cleanup skills, read-only/destructive-disabled provider accounts, and duplicate open cleanup proposals
+  - Budget Governor precedence over autoscaling, including red-budget degraded-mode decisions and approval-gated cloud worker ChangeSets
 - Executive console grounding:
   - runtime project selection instead of fixed single-project UI scope
-  - active actor selection from the project member directory, passed through all console write actions
+  - active actor selection from the project and org member directories, passed through all console write actions
+  - auth-session visibility for transport authentication method, principal binding, and OIDC enablement
+  - org delegation management for organization-wide actors and permissions
   - keyboard skip navigation and explicit accessible names for dynamic action controls
   - Metatron activity queries grounded in live event data
   - self-improvement canary, rollout, and rollback submission with required evidence payloads
   - API-driven agent marketplace visibility and module installation
   - entitlement readiness labels that distinguish active, credential-gated, adapter-ready, and registry-only sources
+  - ProviderOps dashboard for provider-account registration/testing, inventory sync, Resource Explorer, Resource Janitor cleanup proposals, ChangeSet Review, Deployment Registry, provider health, drift, cost, reconciliation, and ResourceReceipt visibility
+  - ProviderOps dashboard controls for worker-pool registration and Budget-Aware Autoscaler review, with ScalePlan history and ChangeSet/decision references
+  - Deployment Registry controls for planning DeploymentRuns and running deployment health checks with release, health, rollback, ChangeSet, and decision references
 
 ## Current end-to-end founder flow
 
@@ -151,6 +167,16 @@ The current founder-dogfood control loop is:
 - `BOSS_SANDBOX_VALIDATION_TIMEOUT_SECONDS`
 - `BOSS_SANDBOX_VALIDATION_OUTPUT_LIMIT_CHARS`
 - `BOSS_SANDBOX_VALIDATION_FETCH_REMOTE`
+- `BOSS_REQUIRE_API_AUTH`
+- `BOSS_API_KEYS`
+- `BOSS_API_KEY_PRINCIPALS`
+- `BOSS_OIDC_ENABLED`
+- `BOSS_OIDC_ISSUER`
+- `BOSS_OIDC_AUDIENCE`
+- `BOSS_OIDC_JWKS_URL`
+- `BOSS_OIDC_PRINCIPAL_CLAIM`
+- `BOSS_OIDC_ALLOWED_ALGORITHMS`
+- `BOSS_OIDC_SUBJECT_PRINCIPALS`
 - `BOSS_DAILY_CAP_USD_MICROS`
 - `BOSS_MONTHLY_CAP_USD_MICROS`
 - `BOSS_BURST_CAP_USD_MICROS_PER_MIN`
@@ -172,6 +198,11 @@ The current founder-dogfood control loop is:
 - `BOSS_EMAIL_FROM_NAME`
 - `BOSS_INFRA_REAL_PROVISION_ALLOWED`
 - `BOSS_DIGITALOCEAN_TOKEN`
+- `BOSS_CLOUDFLARE_API_TOKEN`
+- `BOSS_SUPABASE_ACCESS_TOKEN`
+- `BOSS_SUPABASE_PROJECT_DB_PASS` for local env-backed Supabase project-create `SecretRef` values such as `env:BOSS_SUPABASE_PROJECT_DB_PASS`
+- `OPENAI_ADMIN_KEY` or `OPENAI_API_KEY` for OpenAI organization cost sync, depending on the provider account SecretRef and permissions
+- `ANTHROPIC_ADMIN_KEY` or `ANTHROPIC_API_KEY` for Anthropic organization cost reports, depending on the provider account SecretRef and permissions
 - `BOSS_DIGITALOCEAN_DEFAULT_IMAGE`
 - `BOSS_DIGITALOCEAN_DEFAULT_TAGS`
 - `BOSS_DIGITALOCEAN_VPC_UUID`
@@ -179,11 +210,12 @@ The current founder-dogfood control loop is:
 
 ## What is intentionally still constrained
 
-- Identity is currently project-member based with optional API-key principal binding. Actor ids must resolve to active project members with the required permission, and bound API keys cannot impersonate another actor. External SSO/OIDC and delegated org-wide RBAC are not yet implemented.
+- Identity is currently project/org-member based with optional API-key principal binding and standards-based OIDC bearer JWT verification. Actor ids must resolve to active project members or delegated org members with the required permission, and bound API/OIDC principals cannot impersonate another actor. Live external IdP rollout requires environment-specific issuer, audience, JWKS URL, and claim/subject mapping configuration.
 - Local sandbox validation is implemented as allowlisted, no-shell commands in a configured sandbox clone. It is disabled by default and fails closed when enabled without repo path, commands, clean git state, or allowed executables.
-- Deployment rollout tracking now records staged GitHub deployment, post-deploy health, release-readiness, and rollback/health-decision evidence. Real DigitalOcean provisioning exists for sandbox droplets, but it remains fail-closed unless `BOSS_INFRA_REAL_PROVISION_ALLOWED=true` and official credentials are configured.
+- Deployment rollout tracking now records staged GitHub deployment, post-deploy health, release-readiness, and rollback/health-decision evidence. Real Cloudflare Worker deployment, Git-connected Cloudflare Pages deployment, DigitalOcean provisioning for sandbox droplets and DigitalOcean App Platform deployments, Supabase project creation, and Supabase migration apply remain fail-closed unless official credentials, env-backed SecretRefs, and required policy switches are configured.
+- ProviderOps read-only adapter calls support DigitalOcean, Cloudflare, Supabase, OpenAI, and Anthropic through official APIs. Billing-readable provider accounts can ingest DigitalOcean billing history, OpenAI organization costs, and Anthropic organization cost reports into duplicate-safe CostEvents with explicit confidence labels; unsupported billing providers fail closed with deadletters instead of invented estimates. Spendy provider ChangeSets now create receipt-linked CostEvents with explicit confidence labels after successful actuation, and threshold-crossing observed provider cost creates a CostAnomaly, decision, and provider read-only kill switch. Provider write actuation is currently constrained to explicitly implemented skills: Cloudflare DNS record upsert, Cloudflare R2 bucket create, Cloudflare Worker deployment, Git-connected Cloudflare Pages deployment, DigitalOcean droplet create/destroy, DigitalOcean App Platform deployment, Supabase project create/pause, and Supabase migration apply are supported through the Resource Plane Kernel, while unsupported provider skills and missing credentials fail closed with ResourceReceipts/deadletters until each skill receives explicit actuation support.
 - Real Slack/email delivery remains disabled unless policy and provider credentials explicitly permit it.
-- Enterprise controls such as external SSO/OIDC and delegated org-wide RBAC are not complete.
+- Enterprise SSO rollout remains environment-specific, but the runtime now supports real OIDC verification plus delegated org-wide RBAC in the current member directory.
 
 ## Local verification baseline
 
@@ -196,7 +228,7 @@ The current local release-grade baseline for this repo is:
 
 The latest passing local state at the time of this update was:
 
-- `143` API/worker tests passed and `42` web tests passed
+- API/worker tests and web tests pass under the current suite
 - production web build passed
 - smoke passed
 - OpenAPI parsed successfully

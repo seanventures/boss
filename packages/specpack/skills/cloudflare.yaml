@@ -22,10 +22,22 @@ skills:
     kind: provider
     risk_tier: 3
     mock_mode: false
-    description: Deploy a Cloudflare Worker or Pages target with release receipts and rollback evidence.
+    description: Deploy a Cloudflare Worker target with release receipts and rollback evidence.
     data_boundary: internal
     input_schema: { deployment_target_id: string, artifact_id: string, environment: string }
     output_schema: { deployment_id: string, resource_receipt_id: string }
+    cost: { estimator: provider_plan, category: deploy }
+    retry: { max_attempts: 1, backoff: none }
+    permissions: { allowed_callers: [resource_plane_kernel], required_permissions: [provider_deploy] }
+    policy: { requires_changeset: true, requires_approval: [ceo, release_manager], requires_rollback_plan: true }
+  - id: cloudflare.pages.deploy
+    kind: provider
+    risk_tier: 3
+    mock_mode: false
+    description: Trigger a Git-connected Cloudflare Pages deployment with release receipts and rollback evidence.
+    data_boundary: internal
+    input_schema: { deployment_target_id: string, project_name: string, account_id: string, branch: "string?" }
+    output_schema: { deployment_id: string, deployment_url: "string?", resource_receipt_id: string }
     cost: { estimator: provider_plan, category: deploy }
     retry: { max_attempts: 1, backoff: none }
     permissions: { allowed_callers: [resource_plane_kernel], required_permissions: [provider_deploy] }

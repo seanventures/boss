@@ -44,12 +44,30 @@ from .schemas import (
     ComplianceEvidenceBundleRequest,
     ComplianceEvidenceBundleResponse,
     ComplianceEvidenceCounts,
+    ChangeSetApplyRequest,
+    ChangeSetApplyResponse,
+    ChangeSetApproveRequest,
+    ChangeSetCreateRequest,
+    ChangeSetListResponse,
+    ChangeSetSummary,
+    CostAnomalyListResponse,
+    CostAnomalySummary,
+    CostEventListResponse,
+    CostEventSummary,
+    CostReceiptSummary,
     DepartmentCreateRequest,
     DepartmentListResponse,
     DepartmentSummary,
     DeploymentRolloutListResponse,
     DeploymentRolloutSummary,
-    CostReceiptSummary,
+    DeploymentRunCreateRequest,
+    DeploymentRunHealthCheckRequest,
+    DeploymentRunHealthCheckResponse,
+    DeploymentRunListResponse,
+    DeploymentRunSummary,
+    DeploymentTargetCreateRequest,
+    DeploymentTargetListResponse,
+    DeploymentTargetSummary,
     DecisionActionRequest,
     DecisionCard,
     DecisionDigestRequest,
@@ -57,11 +75,15 @@ from .schemas import (
     DecisionInboxResponse,
     DeadletterItem,
     DeadletterListResponse,
+    DriftReportListResponse,
+    DriftReportSummary,
     EntitlementSourceListResponse,
     EntitlementSourceSummary,
     EntitlementSourceUpsertRequest,
     EventFeedResponse,
     EventItem,
+    ExternalResourceListResponse,
+    ExternalResourceSummary,
     HealthResponse,
     HealthSnapshotListResponse,
     HealthSnapshotRefreshRequest,
@@ -91,6 +113,9 @@ from .schemas import (
     MeetingCreateRequest,
     MeetingListResponse,
     MeetingSummary,
+    OrgMemberListResponse,
+    OrgMemberSummary,
+    OrgMemberUpsertRequest,
     OutboxDeliveryResponse,
     OutboxMessageCreateRequest,
     OutboxMessageListResponse,
@@ -111,6 +136,12 @@ from .schemas import (
     PolicyRecordCreateRequest,
     PolicyRecordListResponse,
     PolicyRecordSummary,
+    ProviderAccountCreateRequest,
+    ProviderAccountListResponse,
+    ProviderAccountSummary,
+    ProviderConnectionTestResponse,
+    ProviderHealthListResponse,
+    ProviderHealthSummary,
     PullRequestMergeJobRequest,
     PullRequestMergeRequest,
     PullRequestMergeResponse,
@@ -119,8 +150,19 @@ from .schemas import (
     PullRequestProposalResponse,
     ReceiptListResponse,
     ReceiptResponse,
+    ReconciliationRunListResponse,
+    ReconciliationRunSummary,
     ReplayBundleRequest,
     ReplayBundleResponse,
+    ResourceJanitorCandidateSummary,
+    ResourceJanitorRunRequest,
+    ResourceJanitorRunResponse,
+    ResourceJanitorSkippedSummary,
+    ResourceReceiptListResponse,
+    ResourceReceiptSummary,
+    ResourceSyncRequest,
+    ResourceSyncResponse,
+    ResourceSyncRunSummary,
     RoleAutonomyCheckRequest,
     RoleAutonomyCheckResponse,
     RoleGovernanceDetail,
@@ -144,6 +186,10 @@ from .schemas import (
     SelfImprovementProposalSummary,
     SelfImprovementRollbackRequest,
     SelfImprovementRolloutRequest,
+    ScalePlanListResponse,
+    ScalePlanRunRequest,
+    ScalePlanRunResponse,
+    ScalePlanSummary,
     SkillListResponse,
     SkillSummary,
     StatusResponse,
@@ -156,6 +202,9 @@ from .schemas import (
     WorkerFailResponse,
     WorkerHeartbeatRequest,
     WorkerHeartbeatResponse,
+    WorkerPoolListResponse,
+    WorkerPoolSummary,
+    WorkerPoolUpsertRequest,
     WorkerPollRequest,
     WorkerPollResponse,
 )
@@ -188,7 +237,17 @@ from .services.members import (
     ProjectMemberPermissionError,
 )
 from .services.metatron import MetatronScopeNotFoundError, MetatronService
+from .services.oidc import (
+    OidcAuthenticationError,
+    OidcAuthenticator,
+    OidcConfigurationError,
+)
 from .services.receipts import ReceiptService
+from .services.resource_plane import (
+    ChangeSetNotFoundError,
+    ProviderAccountNotFoundError,
+    ResourcePlaneService,
+)
 from .services.role_governance import RoleGovernanceService
 from .services.self_improvement import (
     InvalidSelfImprovementTransitionError,
@@ -223,6 +282,8 @@ role_governance = RoleGovernanceService(settings)
 members = MemberDirectoryService(settings)
 canonical = CanonicalObjectService()
 break_glass = BreakGlassService()
+resource_plane = ResourcePlaneService(settings)
+oidc_auth = OidcAuthenticator(settings)
 current_api_principal: ContextVar[Optional[str]] = ContextVar(
     "current_api_principal",
     default=None,
@@ -230,6 +291,10 @@ current_api_principal: ContextVar[Optional[str]] = ContextVar(
 current_transport_authenticated: ContextVar[bool] = ContextVar(
     "current_transport_authenticated",
     default=False,
+)
+current_auth_method: ContextVar[Optional[str]] = ContextVar(
+    "current_auth_method",
+    default=None,
 )
 
 
@@ -256,23 +321,36 @@ def extract_api_token(request: Request) -> Optional[str]:
     return token.strip()
 
 
+def extract_bearer_token(request: Request) -> Optional[str]:
+    auth_value = request.headers.get("authorization")
+    if not auth_value:
+        return None
+    scheme, _, token = auth_value.partition(" ")
+    if scheme.lower() != "bearer" or not token.strip():
+        return None
+    return token.strip()
+
+
 def api_token_allowed(token: str, allowed_tokens: tuple[str, ...]) -> bool:
     return any(compare_digest(token, allowed) for allowed in allowed_tokens)
 
 
 @app.middleware("http")
-async def require_api_key_for_v1(request: Request, call_next):
-    if not request.url.path.startswith("/v1/") or not settings.require_api_auth:
+async def require_transport_auth_for_v1(request: Request, call_next):
+    auth_required = settings.require_api_auth or settings.oidc_enabled
+    if not request.url.path.startswith("/v1/") or not auth_required:
         principal_token = current_api_principal.set(None)
         authenticated_token = current_transport_authenticated.set(False)
+        auth_method_token = current_auth_method.set(None)
         try:
             return await call_next(request)
         finally:
             current_api_principal.reset(principal_token)
             current_transport_authenticated.reset(authenticated_token)
+            current_auth_method.reset(auth_method_token)
 
     allowed_tokens = settings.api_key_values
-    if not allowed_tokens:
+    if settings.require_api_auth and not allowed_tokens and not settings.oidc_enabled:
         return JSONResponse(
             status_code=503,
             content={
@@ -281,34 +359,54 @@ async def require_api_key_for_v1(request: Request, call_next):
         )
 
     token = extract_api_token(request)
-    if not token or not api_token_allowed(token, allowed_tokens):
-        return JSONResponse(
-            status_code=401,
-            content={"detail": "Valid BOSS API key required."},
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-
-    principal_map = settings.api_key_principal_map
-    principal = principal_map.get(token)
-    if principal_map and not principal:
-        return JSONResponse(
-            status_code=401,
-            content={
-                "detail": (
-                    "API key is valid for transport authentication but is not "
-                    "bound to a project member principal."
+    principal: Optional[str] = None
+    auth_method: Optional[str] = None
+    if token and allowed_tokens and api_token_allowed(token, allowed_tokens):
+        principal_map = settings.api_key_principal_map
+        principal = principal_map.get(token)
+        if principal_map and not principal:
+            return JSONResponse(
+                status_code=401,
+                content={
+                    "detail": (
+                        "API key is valid for transport authentication but is not "
+                        "bound to a project member principal."
+                    )
+                },
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        auth_method = "api_key"
+    elif settings.oidc_enabled:
+        bearer_token = extract_bearer_token(request)
+        if bearer_token:
+            try:
+                principal = oidc_auth.verify_bearer_token(bearer_token).member_id
+            except OidcConfigurationError as error:
+                return JSONResponse(status_code=503, content={"detail": str(error)})
+            except OidcAuthenticationError as error:
+                return JSONResponse(
+                    status_code=401,
+                    content={"detail": str(error)},
+                    headers={"WWW-Authenticate": "Bearer"},
                 )
-            },
+            auth_method = "oidc"
+
+    if not auth_method:
+        return JSONResponse(
+            status_code=401,
+            content={"detail": "Valid BOSS API key or OIDC bearer token required."},
             headers={"WWW-Authenticate": "Bearer"},
         )
 
     principal_token = current_api_principal.set(principal)
     authenticated_token = current_transport_authenticated.set(True)
+    auth_method_token = current_auth_method.set(auth_method)
     try:
         return await call_next(request)
     finally:
         current_api_principal.reset(principal_token)
         current_transport_authenticated.reset(authenticated_token)
+        current_auth_method.reset(auth_method_token)
 
 
 def project_summary_from_row(row) -> ProjectSummary:
@@ -328,6 +426,23 @@ def project_member_summary_from_service(payload) -> ProjectMemberSummary:
     return ProjectMemberSummary(
         id=payload["id"],
         project_id=payload["project_id"],
+        member_id=payload["member_id"],
+        display_name=payload["display_name"],
+        member_type=payload["member_type"],
+        role_keys=payload.get("role_keys") or [],
+        permissions=payload.get("permissions") or [],
+        status=payload["status"],
+        created_by=payload["created_by"],
+        created_at=payload["created_at"],
+        updated_at=payload["updated_at"],
+    )
+
+
+def org_member_summary_from_service(payload) -> OrgMemberSummary:
+    return OrgMemberSummary(
+        id=payload["id"],
+        org_id=payload["org_id"],
+        project_id=payload.get("project_id"),
         member_id=payload["member_id"],
         display_name=payload["display_name"],
         member_type=payload["member_type"],
@@ -488,6 +603,26 @@ def record_budget_denial_event(
             )
     except Exception:
         return
+
+
+def project_id_for_changeset(connection, changeset_id: str) -> str:
+    row = connection.execute(
+        text("SELECT project_id FROM changesets WHERE id = :changeset_id"),
+        {"changeset_id": changeset_id},
+    ).mappings().first()
+    if not row:
+        raise HTTPException(status_code=404, detail="ChangeSet not found.")
+    return row["project_id"]
+
+
+def project_id_for_deployment_run(connection, deployment_run_id: str) -> str:
+    row = connection.execute(
+        text("SELECT project_id FROM deployment_runs WHERE id = :deployment_run_id"),
+        {"deployment_run_id": deployment_run_id},
+    ).mappings().first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Deployment run not found.")
+    return row["project_id"]
 
 
 def task_summary_from_row(row) -> TaskSummary:
@@ -1018,21 +1153,28 @@ def health() -> HealthResponse:
 @app.get("/v1/auth/session", response_model=AuthSessionResponse)
 def auth_session() -> AuthSessionResponse:
     principal = current_api_principal.get()
-    binding_required = bool(settings.api_key_principal_map)
+    auth_method = current_auth_method.get()
+    binding_required = bool(settings.api_key_principal_map) or settings.oidc_enabled
     transport_authenticated = current_transport_authenticated.get()
-    if not settings.require_api_auth:
+    auth_required = settings.require_api_auth or settings.oidc_enabled
+    if not auth_required:
         message = "API authentication is disabled for this runtime."
+    elif settings.oidc_enabled and not settings.oidc_configured:
+        message = "OIDC authentication is enabled but not fully configured."
     elif binding_required and principal:
-        message = f"Authenticated as project member '{principal}'."
+        method_label = auth_method or "transport"
+        message = f"Authenticated as project member '{principal}' via {method_label}."
     elif binding_required:
-        message = "API key principal binding is required but no principal was resolved."
+        message = "Transport principal binding is required but no principal was resolved."
     else:
         message = "Transport API key is valid; actor binding is not configured."
     return AuthSessionResponse(
-        auth_required=settings.require_api_auth,
+        auth_required=auth_required,
         transport_authenticated=transport_authenticated,
         actor_binding_required=binding_required,
         principal_member_id=principal,
+        auth_method=auth_method,
+        oidc_enabled=settings.oidc_enabled,
         message=message,
     )
 
@@ -1103,6 +1245,54 @@ def upsert_project_member(
         return project_member_summary_from_service(member)
 
 
+@app.get("/v1/org-members", response_model=OrgMemberListResponse)
+def list_org_members(org_id: str, project_id: str, actor: str = "ceo") -> OrgMemberListResponse:
+    with begin(engine) as connection:
+        if not members.project_belongs_to_org(
+            connection,
+            project_id=project_id,
+            org_id=org_id,
+        ):
+            raise HTTPException(
+                status_code=404,
+                detail=f"Project '{project_id}' is not in org '{org_id}'.",
+            )
+        require_project_actor(connection, project_id, actor, "member_manage")
+        return OrgMemberListResponse(
+            org_id=org_id,
+            items=[
+                org_member_summary_from_service(member)
+                for member in members.list_org_members(connection, org_id)
+            ],
+        )
+
+
+@app.post("/v1/org-members", response_model=OrgMemberSummary, status_code=201)
+def upsert_org_member(payload: OrgMemberUpsertRequest) -> OrgMemberSummary:
+    with begin(engine) as connection:
+        if not members.project_belongs_to_org(
+            connection,
+            project_id=payload.project_id,
+            org_id=payload.org_id,
+        ):
+            raise HTTPException(
+                status_code=404,
+                detail=f"Project '{payload.project_id}' is not in org '{payload.org_id}'.",
+            )
+        require_project_actor(connection, payload.project_id, payload.actor, "member_manage")
+        member = members.upsert_org_member(
+            connection,
+            org_id=payload.org_id,
+            member_id=payload.member_id,
+            display_name=payload.display_name,
+            member_type=payload.member_type,
+            role_keys=payload.role_keys,
+            permissions=payload.permissions,
+            actor=payload.actor,
+        )
+        return org_member_summary_from_service(member)
+
+
 @app.get("/v1/break-glass/grants", response_model=BreakGlassGrantListResponse)
 def list_break_glass_grants(
     project_id: str,
@@ -1138,7 +1328,11 @@ def create_break_glass_grant(
             "member_manage",
         )
         try:
-            members.get_member(connection, payload.project_id, payload.target_member_id)
+            members.require_member(
+                connection,
+                payload.project_id,
+                payload.target_member_id,
+            )
             grant = break_glass.create_grant(
                 connection,
                 project_id=payload.project_id,
@@ -2111,6 +2305,591 @@ def list_routing_logs(project_id: str, limit: int = 25) -> RoutingLogListRespons
         return RoutingLogListResponse(
             project_id=project_id,
             items=[routing_log_item_from_service(item) for item in items],
+        )
+
+
+@app.get("/v1/providers", response_model=ProviderAccountListResponse)
+def list_provider_accounts(project_id: str) -> ProviderAccountListResponse:
+    with begin(engine) as connection:
+        items = resource_plane.list_provider_accounts(connection, project_id)
+        return ProviderAccountListResponse(
+            project_id=project_id,
+            items=[ProviderAccountSummary(**item) for item in items],
+        )
+
+
+@app.post("/v1/providers", response_model=ProviderAccountSummary, status_code=201)
+def create_provider_account(
+    payload: ProviderAccountCreateRequest,
+) -> ProviderAccountSummary:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection,
+            payload.project_id,
+            payload.actor,
+            "providerops_manage",
+        )
+        try:
+            item = resource_plane.create_provider_account(
+                connection,
+                project_id=payload.project_id,
+                provider=payload.provider,
+                account_label=payload.account_label,
+                credential_ref=payload.credential_ref,
+                scopes=payload.scopes,
+                read_only=payload.read_only,
+                deploy_capable=payload.deploy_capable,
+                billing_readable=payload.billing_readable,
+                destructive_actions_disabled=payload.destructive_actions_disabled,
+                actor=payload.actor,
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        return ProviderAccountSummary(**item)
+
+
+@app.post("/v1/providers/{provider_account_id}/test", response_model=ProviderConnectionTestResponse)
+def test_provider_account(
+    provider_account_id: str,
+    project_id: str,
+    actor: str = "ceo",
+) -> ProviderConnectionTestResponse:
+    with begin(engine) as connection:
+        require_project_actor(connection, project_id, actor, "providerops_manage")
+        try:
+            result = resource_plane.test_provider_account(
+                connection,
+                project_id=project_id,
+                provider_account_id=provider_account_id,
+                actor=actor,
+            )
+        except ProviderAccountNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        return ProviderConnectionTestResponse(
+            status=result["status"],
+            provider_account=ProviderAccountSummary(**result["provider_account"]),
+            provider_health=ProviderHealthSummary(**result["provider_health"]),
+            detail=result.get("detail") or {},
+        )
+
+
+@app.get("/v1/resources", response_model=ExternalResourceListResponse)
+def list_external_resources(
+    project_id: str,
+    provider: Optional[str] = None,
+    ownership: Optional[str] = None,
+    limit: int = 100,
+) -> ExternalResourceListResponse:
+    if limit < 1 or limit > 500:
+        raise HTTPException(status_code=400, detail="limit must be between 1 and 500.")
+    with begin(engine) as connection:
+        items = resource_plane.list_resources(
+            connection,
+            project_id,
+            provider=provider,
+            ownership=ownership,
+            limit=limit,
+        )
+        return ExternalResourceListResponse(
+            project_id=project_id,
+            items=[ExternalResourceSummary(**item) for item in items],
+        )
+
+
+@app.post("/v1/resources/sync", response_model=ResourceSyncResponse)
+def sync_external_resources(payload: ResourceSyncRequest) -> ResourceSyncResponse:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection,
+            payload.project_id,
+            payload.actor,
+            "providerops_manage",
+        )
+        try:
+            result = resource_plane.sync_resources(
+                connection,
+                project_id=payload.project_id,
+                provider_account_id=payload.provider_account_id,
+                actor=payload.actor,
+            )
+        except ProviderAccountNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        return ResourceSyncResponse(
+            project_id=result["project_id"],
+            runs=[ResourceSyncRunSummary(**item) for item in result["runs"]],
+            resources_seen=result["resources_seen"],
+            resources_changed=result["resources_changed"],
+            costs_seen=result["costs_seen"],
+        )
+
+
+@app.get("/v1/costs", response_model=CostEventListResponse)
+def list_provider_costs(project_id: str, limit: int = 100) -> CostEventListResponse:
+    if limit < 1 or limit > 500:
+        raise HTTPException(status_code=400, detail="limit must be between 1 and 500.")
+    with begin(engine) as connection:
+        items = resource_plane.list_cost_events(connection, project_id, limit=limit)
+        return CostEventListResponse(
+            project_id=project_id,
+            items=[CostEventSummary(**item) for item in items],
+        )
+
+
+@app.get("/v1/cost-anomalies", response_model=CostAnomalyListResponse)
+def list_provider_cost_anomalies(
+    project_id: str,
+    limit: int = 100,
+) -> CostAnomalyListResponse:
+    if limit < 1 or limit > 500:
+        raise HTTPException(status_code=400, detail="limit must be between 1 and 500.")
+    with begin(engine) as connection:
+        items = resource_plane.list_cost_anomalies(connection, project_id, limit=limit)
+        return CostAnomalyListResponse(
+            project_id=project_id,
+            items=[CostAnomalySummary(**item) for item in items],
+        )
+
+
+@app.get("/v1/changesets", response_model=ChangeSetListResponse)
+def list_changesets(
+    project_id: str,
+    status: Optional[str] = None,
+    limit: int = 100,
+) -> ChangeSetListResponse:
+    if limit < 1 or limit > 500:
+        raise HTTPException(status_code=400, detail="limit must be between 1 and 500.")
+    with begin(engine) as connection:
+        items = resource_plane.list_changesets(
+            connection,
+            project_id,
+            status=status,
+            limit=limit,
+        )
+        return ChangeSetListResponse(
+            project_id=project_id,
+            items=[ChangeSetSummary(**item) for item in items],
+        )
+
+
+@app.post("/v1/changesets", response_model=ChangeSetSummary, status_code=201)
+def create_changeset(payload: ChangeSetCreateRequest) -> ChangeSetSummary:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection,
+            payload.project_id,
+            payload.actor,
+            "providerops_manage",
+        )
+        try:
+            item = resource_plane.create_changeset(
+                connection,
+                project_id=payload.project_id,
+                provider_account_id=payload.provider_account_id,
+                title=payload.title,
+                summary=payload.summary,
+                operations=[
+                    operation.model_dump() for operation in payload.operations
+                ],
+                expected_cost_usd_micros=payload.expected_cost_usd_micros,
+                reservation_id=payload.reservation_id,
+                rollback_plan=payload.rollback_plan,
+                risk_tier=payload.risk_tier,
+                approval_required=payload.approval_required,
+                actor=payload.actor,
+            )
+        except (ProviderAccountNotFoundError, ValueError) as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        return ChangeSetSummary(**item)
+
+
+@app.post("/v1/changesets/{changeset_id}/approve", response_model=ChangeSetSummary)
+def approve_changeset(
+    changeset_id: str,
+    payload: ChangeSetApproveRequest,
+) -> ChangeSetSummary:
+    with begin(engine) as connection:
+        project_id = project_id_for_changeset(connection, changeset_id)
+        require_project_actor(
+            connection,
+            project_id,
+            payload.actor,
+            "providerops_manage",
+        )
+        try:
+            item = resource_plane.approve_changeset(
+                connection,
+                changeset_id=changeset_id,
+                actor=payload.actor,
+            )
+        except (ChangeSetNotFoundError, ValueError) as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        return ChangeSetSummary(**item)
+
+
+@app.post("/v1/changesets/{changeset_id}/apply", response_model=ChangeSetApplyResponse)
+def apply_changeset(
+    changeset_id: str,
+    payload: ChangeSetApplyRequest,
+) -> ChangeSetApplyResponse:
+    with begin(engine) as connection:
+        project_id = project_id_for_changeset(connection, changeset_id)
+        require_project_actor(
+            connection,
+            project_id,
+            payload.actor,
+            "providerops_manage",
+        )
+        try:
+            result = resource_plane.apply_changeset(
+                connection,
+                changeset_id=changeset_id,
+                actor=payload.actor,
+                created_by_job_id=payload.created_by_job_id,
+                dry_run=payload.dry_run,
+            )
+        except (ChangeSetNotFoundError, ValueError) as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        return ChangeSetApplyResponse(
+            status=result["status"],
+            changeset=ChangeSetSummary(**result["changeset"]),
+            resource_receipts=[
+                ResourceReceiptSummary(**item)
+                for item in result.get("resource_receipts", [])
+            ],
+            expected_receipts=result.get("expected_receipts"),
+            decision_id=result.get("decision_id"),
+        )
+
+
+@app.get("/v1/resource-receipts", response_model=ResourceReceiptListResponse)
+def list_resource_receipts(
+    project_id: str,
+    limit: int = 100,
+) -> ResourceReceiptListResponse:
+    if limit < 1 or limit > 500:
+        raise HTTPException(status_code=400, detail="limit must be between 1 and 500.")
+    with begin(engine) as connection:
+        items = resource_plane.list_resource_receipts(
+            connection,
+            project_id,
+            limit=limit,
+        )
+        return ResourceReceiptListResponse(
+            project_id=project_id,
+            items=[ResourceReceiptSummary(**item) for item in items],
+        )
+
+
+@app.get("/v1/worker-pools", response_model=WorkerPoolListResponse)
+def list_worker_pools(project_id: str) -> WorkerPoolListResponse:
+    with begin(engine) as connection:
+        items = resource_plane.list_worker_pools(connection, project_id)
+        return WorkerPoolListResponse(
+            project_id=project_id,
+            items=[WorkerPoolSummary(**item) for item in items],
+        )
+
+
+@app.post("/v1/worker-pools", response_model=WorkerPoolSummary, status_code=201)
+def upsert_worker_pool(payload: WorkerPoolUpsertRequest) -> WorkerPoolSummary:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection,
+            payload.project_id,
+            payload.actor,
+            "providerops_manage",
+        )
+        try:
+            item = resource_plane.upsert_worker_pool(
+                connection,
+                project_id=payload.project_id,
+                pool_key=payload.pool_key,
+                kind=payload.kind,
+                provider_account_id=payload.provider_account_id,
+                current_workers=payload.current_workers,
+                desired_workers=payload.desired_workers,
+                min_workers=payload.min_workers,
+                max_workers=payload.max_workers,
+                max_queue_depth_per_worker=payload.max_queue_depth_per_worker,
+                cost_per_worker_hour_usd_micros=payload.cost_per_worker_hour_usd_micros,
+                capabilities=payload.capabilities,
+                metadata=payload.metadata,
+                actor=payload.actor,
+            )
+        except (ProviderAccountNotFoundError, ValueError) as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        return WorkerPoolSummary(**item)
+
+
+@app.get("/v1/autoscaler/plans", response_model=ScalePlanListResponse)
+def list_scale_plans(project_id: str, limit: int = 50) -> ScalePlanListResponse:
+    if limit < 1 or limit > 200:
+        raise HTTPException(status_code=400, detail="limit must be between 1 and 200.")
+    with begin(engine) as connection:
+        items = resource_plane.list_scale_plans(
+            connection,
+            project_id,
+            limit=limit,
+        )
+        return ScalePlanListResponse(
+            project_id=project_id,
+            items=[ScalePlanSummary(**item) for item in items],
+        )
+
+
+@app.post("/v1/autoscaler/plans", response_model=ScalePlanRunResponse)
+def run_autoscaler_plan(payload: ScalePlanRunRequest) -> ScalePlanRunResponse:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection,
+            payload.project_id,
+            payload.actor,
+            "providerops_manage",
+        )
+        try:
+            result = resource_plane.run_autoscaler_plan(
+                connection,
+                project_id=payload.project_id,
+                worker_pool_id=payload.worker_pool_id,
+                cloud_spillover_enabled=payload.cloud_spillover_enabled,
+                actor=payload.actor,
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        return ScalePlanRunResponse(
+            scale_plan=ScalePlanSummary(**result["scale_plan"]),
+            worker_pool=WorkerPoolSummary(**result["worker_pool"]),
+            budget_state=result["budget_state"],
+            queue=result["queue"],
+            provider_health=result["provider_health"],
+            changeset_id=result["changeset_id"],
+            decision_id=result["decision_id"],
+        )
+
+
+@app.post("/v1/resource-janitor/run", response_model=ResourceJanitorRunResponse)
+def run_resource_janitor(payload: ResourceJanitorRunRequest) -> ResourceJanitorRunResponse:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection,
+            payload.project_id,
+            payload.actor,
+            "providerops_manage",
+        )
+        try:
+            result = resource_plane.run_resource_janitor(
+                connection,
+                project_id=payload.project_id,
+                provider_account_id=payload.provider_account_id,
+                max_candidates=payload.max_candidates,
+                actor=payload.actor,
+            )
+        except ProviderAccountNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        return ResourceJanitorRunResponse(
+            status=result["status"],
+            project_id=result["project_id"],
+            artifact_id=result["artifact_id"],
+            candidate_count=result["candidate_count"],
+            skipped_count=result["skipped_count"],
+            estimated_monthly_savings_usd_micros=result[
+                "estimated_monthly_savings_usd_micros"
+            ],
+            candidates=[
+                ResourceJanitorCandidateSummary(**item)
+                for item in result["candidates"]
+            ],
+            skipped=[
+                ResourceJanitorSkippedSummary(**item)
+                for item in result["skipped"]
+            ],
+            changesets=[
+                ChangeSetSummary(**item)
+                for item in result["changesets"]
+            ],
+        )
+
+
+@app.get("/v1/deployments", response_model=DeploymentTargetListResponse)
+def list_deployment_targets(project_id: str) -> DeploymentTargetListResponse:
+    with begin(engine) as connection:
+        items = resource_plane.list_deployment_targets(connection, project_id)
+        return DeploymentTargetListResponse(
+            project_id=project_id,
+            items=[DeploymentTargetSummary(**item) for item in items],
+        )
+
+
+@app.post("/v1/deployments", response_model=DeploymentTargetSummary, status_code=201)
+def create_deployment_target(
+    payload: DeploymentTargetCreateRequest,
+) -> DeploymentTargetSummary:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection,
+            payload.project_id,
+            payload.actor,
+            "providerops_manage",
+        )
+        try:
+            item = resource_plane.create_deployment_target(
+                connection,
+                project_id=payload.project_id,
+                app_name=payload.app_name,
+                repo=payload.repo,
+                environment=payload.environment,
+                provider_account_id=payload.provider_account_id,
+                target_kind=payload.target_kind,
+                target_ref=payload.target_ref,
+                domains=payload.domains,
+                required_resources=payload.required_resources,
+                secret_refs=payload.secret_refs,
+                health_checks=payload.health_checks,
+                rollback_points=payload.rollback_points,
+                actor=payload.actor,
+            )
+        except (ProviderAccountNotFoundError, ValueError) as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        return DeploymentTargetSummary(**item)
+
+
+@app.get("/v1/deployment-runs", response_model=DeploymentRunListResponse)
+def list_deployment_runs(
+    project_id: str,
+    limit: int = 50,
+) -> DeploymentRunListResponse:
+    if limit < 1 or limit > 200:
+        raise HTTPException(status_code=400, detail="limit must be between 1 and 200.")
+    with begin(engine) as connection:
+        items = resource_plane.list_deployment_runs(
+            connection,
+            project_id,
+            limit=limit,
+        )
+        return DeploymentRunListResponse(
+            project_id=project_id,
+            items=[DeploymentRunSummary(**item) for item in items],
+        )
+
+
+@app.post("/v1/deployment-runs", response_model=DeploymentRunSummary, status_code=201)
+def create_deployment_run(
+    payload: DeploymentRunCreateRequest,
+) -> DeploymentRunSummary:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection,
+            payload.project_id,
+            payload.actor,
+            "providerops_manage",
+        )
+        try:
+            item = resource_plane.plan_deployment_run(
+                connection,
+                project_id=payload.project_id,
+                deployment_target_id=payload.deployment_target_id,
+                commit_ref=payload.commit_ref,
+                release_packet=payload.release_packet,
+                expected_cost_usd_micros=payload.expected_cost_usd_micros,
+                reservation_id=payload.reservation_id,
+                actor=payload.actor,
+            )
+        except (ProviderAccountNotFoundError, ValueError) as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        return DeploymentRunSummary(**item)
+
+
+@app.post(
+    "/v1/deployment-runs/{deployment_run_id}/health-check",
+    response_model=DeploymentRunHealthCheckResponse,
+)
+def run_deployment_health_check(
+    deployment_run_id: str,
+    payload: DeploymentRunHealthCheckRequest,
+) -> DeploymentRunHealthCheckResponse:
+    with begin(engine) as connection:
+        project_id = project_id_for_deployment_run(connection, deployment_run_id)
+        require_project_actor(
+            connection,
+            project_id,
+            payload.actor,
+            "providerops_manage",
+        )
+        try:
+            result = resource_plane.run_deployment_health_checks(
+                connection,
+                project_id=project_id,
+                deployment_run_id=deployment_run_id,
+                actor=payload.actor,
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        return DeploymentRunHealthCheckResponse(
+            deployment_run=DeploymentRunSummary(**result["deployment_run"]),
+            health_artifact_id=result["health_artifact_id"],
+            rollback_artifact_id=result["rollback_artifact_id"],
+            decision_id=result["decision_id"],
+        )
+
+
+@app.get("/v1/provider-health", response_model=ProviderHealthListResponse)
+def list_provider_health(
+    project_id: str,
+    provider_account_id: Optional[str] = None,
+    limit: int = 100,
+) -> ProviderHealthListResponse:
+    if limit < 1 or limit > 500:
+        raise HTTPException(status_code=400, detail="limit must be between 1 and 500.")
+    with begin(engine) as connection:
+        items = resource_plane.list_provider_health(
+            connection,
+            project_id,
+            provider_account_id=provider_account_id,
+            limit=limit,
+        )
+        return ProviderHealthListResponse(
+            project_id=project_id,
+            items=[ProviderHealthSummary(**item) for item in items],
+        )
+
+
+@app.get("/v1/drift-reports", response_model=DriftReportListResponse)
+def list_drift_reports(
+    project_id: str,
+    limit: int = 100,
+) -> DriftReportListResponse:
+    if limit < 1 or limit > 500:
+        raise HTTPException(status_code=400, detail="limit must be between 1 and 500.")
+    with begin(engine) as connection:
+        items = resource_plane.list_drift_reports(
+            connection,
+            project_id,
+            limit=limit,
+        )
+        return DriftReportListResponse(
+            project_id=project_id,
+            items=[DriftReportSummary(**item) for item in items],
+        )
+
+
+@app.get("/v1/reconciliation-runs", response_model=ReconciliationRunListResponse)
+def list_reconciliation_runs(
+    project_id: str,
+    limit: int = 100,
+) -> ReconciliationRunListResponse:
+    if limit < 1 or limit > 500:
+        raise HTTPException(status_code=400, detail="limit must be between 1 and 500.")
+    with begin(engine) as connection:
+        items = resource_plane.list_reconciliation_runs(
+            connection,
+            project_id,
+            limit=limit,
+        )
+        return ReconciliationRunListResponse(
+            project_id=project_id,
+            items=[ReconciliationRunSummary(**item) for item in items],
         )
 
 

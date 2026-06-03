@@ -1,0 +1,316 @@
+import { describe, expect, it, vi } from "vitest";
+
+import { BossApiError } from "@boss/api-client";
+
+vi.mock("../lib/client", () => ({
+  PROJECT_ID: "boss-dogfood",
+  resolveProjectId: (projectId?: string) => projectId?.trim() || "boss-dogfood",
+  client: {
+    listProviderAccounts: vi.fn(),
+    listExternalResources: vi.fn(),
+    listProviderCosts: vi.fn(),
+    listProviderCostAnomalies: vi.fn(),
+    listChangeSets: vi.fn(),
+    listResourceReceipts: vi.fn(),
+    listDeploymentTargets: vi.fn(),
+    listDeploymentRuns: vi.fn(),
+    listProviderHealth: vi.fn(),
+    listDriftReports: vi.fn(),
+    listReconciliationRuns: vi.fn(),
+    listWorkerPools: vi.fn(),
+    listScalePlans: vi.fn(),
+  },
+}));
+
+describe("ProviderOps feed", async () => {
+  const { client } = await import("../lib/client");
+  const { fetchProviderOpsFeed } = await import("../lib/providerops");
+
+  it("maps ProviderOps API payloads into dashboard summary data", async () => {
+    vi.mocked(client.listProviderAccounts).mockResolvedValueOnce({
+      project_id: "boss-dogfood",
+      items: [
+        {
+          id: "pa_1",
+          project_id: "boss-dogfood",
+          provider: "cloudflare",
+          account_label: "Cloudflare sandbox",
+          credential_ref: "env:BOSS_CLOUDFLARE_API_TOKEN",
+          scopes: ["read"],
+          status: "active",
+          read_only: true,
+          deploy_capable: false,
+          billing_readable: true,
+          destructive_actions_disabled: true,
+          capabilities: ["cloudflare.zone.list"],
+          missing_permissions: [],
+          last_test_status: "ok",
+          last_tested_at: "2026-06-03T12:00:00Z",
+          created_by: "ceo",
+          created_at: "2026-06-03T11:00:00Z",
+          updated_at: "2026-06-03T12:00:00Z",
+        },
+      ],
+    });
+    vi.mocked(client.listExternalResources).mockResolvedValueOnce({
+      project_id: "boss-dogfood",
+      items: [
+        {
+          id: "res_1",
+          project_id: "boss-dogfood",
+          provider_account_id: "pa_1",
+          provider: "cloudflare",
+          resource_type: "zone",
+          external_id: "zone_123",
+          name: "example.com",
+          state: "active",
+          ownership: "discovered_unmanaged",
+          environment: "production",
+          health_status: "ok",
+          cost_confidence: "unknown",
+          last_seen_at: "2026-06-03T12:00:00Z",
+          tags: [],
+          metadata: {},
+          created_at: "2026-06-03T12:00:00Z",
+          updated_at: "2026-06-03T12:00:00Z",
+        },
+      ],
+    });
+    vi.mocked(client.listProviderCosts).mockResolvedValueOnce({
+      project_id: "boss-dogfood",
+      items: [
+        {
+          id: "cost_1",
+          project_id: "boss-dogfood",
+          provider: "cloudflare",
+          category: "dns",
+          amount_usd_micros: 250_000,
+          cost_layer: "observed",
+          confidence: "provider_reported",
+          metadata: {},
+          created_at: "2026-06-03T12:00:00Z",
+        },
+      ],
+    });
+    vi.mocked(client.listProviderCostAnomalies).mockResolvedValueOnce({
+      project_id: "boss-dogfood",
+      items: [
+        {
+          id: "canom_1",
+          project_id: "boss-dogfood",
+          provider_account_id: "pa_1",
+          cost_event_id: "cost_1",
+          decision_id: "dec_1",
+          provider: "cloudflare",
+          anomaly_type: "provider_spend_freeze_threshold_crossed",
+          severity: "orange",
+          status: "open",
+          amount_usd_micros: 250_000,
+          threshold_usd_micros: 200_000,
+          summary: "Cloudflare spend crossed the freeze threshold.",
+          recommended_actions: [{ action: "provider_read_only_mode_applied" }],
+          created_at: "2026-06-03T12:00:00Z",
+        },
+      ],
+    });
+    vi.mocked(client.listChangeSets).mockResolvedValueOnce({
+      project_id: "boss-dogfood",
+      items: [
+        {
+          id: "chg_1",
+          project_id: "boss-dogfood",
+          provider_account_id: "pa_1",
+          title: "Upsert staging DNS",
+          summary: "Create a staging record.",
+          status: "pending_approval",
+          risk_tier: 2,
+          operations: [{ action: "cloudflare.dns.record.upsert" }],
+          expected_cost_usd_micros: 1_000,
+          cost_quote: {},
+          rollback_plan: ["delete record"],
+          expected_receipts: [],
+          policy_result: {},
+          created_by: "ceo",
+          created_at: "2026-06-03T12:00:00Z",
+          updated_at: "2026-06-03T12:00:00Z",
+        },
+      ],
+    });
+    vi.mocked(client.listResourceReceipts).mockResolvedValueOnce({
+      project_id: "boss-dogfood",
+      items: [],
+    });
+    vi.mocked(client.listDeploymentTargets).mockResolvedValueOnce({
+      project_id: "boss-dogfood",
+      items: [],
+    });
+    vi.mocked(client.listDeploymentRuns).mockResolvedValueOnce({
+      project_id: "boss-dogfood",
+      items: [
+        {
+          id: "deprun_1",
+          project_id: "boss-dogfood",
+          deployment_target_id: "dt_1",
+          changeset_id: "chg_1",
+          release_artifact_id: "art_release",
+          app_name: "BOSS",
+          environment: "staging",
+          repo: "seanheiney/boss",
+          target_kind: "digitalocean_app",
+          target_ref: "app",
+          commit_ref: "abc123",
+          status: "created",
+          release_packet: {},
+          health_check_results: [],
+          rollback_plan: ["previous release"],
+          release_receipt_ids: [],
+          created_by: "ceo",
+          created_at: "2026-06-03T12:00:00Z",
+          updated_at: "2026-06-03T12:00:00Z",
+        },
+      ],
+    });
+    vi.mocked(client.listProviderHealth).mockResolvedValueOnce({
+      project_id: "boss-dogfood",
+      items: [
+        {
+          id: "ph_1",
+          project_id: "boss-dogfood",
+          provider_account_id: "pa_1",
+          provider: "cloudflare",
+          status: "ok",
+          api_available: true,
+          rate_limit_status: "unknown",
+          usage_cap_status: "unknown",
+          last_checked_at: "2026-06-03T12:00:00Z",
+          detail: {},
+          created_at: "2026-06-03T12:00:00Z",
+        },
+      ],
+    });
+    vi.mocked(client.listDriftReports).mockResolvedValueOnce({
+      project_id: "boss-dogfood",
+      items: [
+        {
+          id: "drift_1",
+          project_id: "boss-dogfood",
+          provider_account_id: "pa_1",
+          classification: "cost_impacting",
+          summary: "Unmanaged zone discovered.",
+          unmanaged_count: 1,
+          orphaned_count: 0,
+          security_impacting_count: 0,
+          production_impacting_count: 1,
+          recommendations: [],
+          created_at: "2026-06-03T12:00:00Z",
+        },
+      ],
+    });
+    vi.mocked(client.listReconciliationRuns).mockResolvedValueOnce({
+      project_id: "boss-dogfood",
+      items: [],
+    });
+    vi.mocked(client.listWorkerPools).mockResolvedValueOnce({
+      project_id: "boss-dogfood",
+      items: [
+        {
+          id: "wp_1",
+          project_id: "boss-dogfood",
+          pool_key: "local-default",
+          kind: "local",
+          status: "active",
+          current_workers: 1,
+          desired_workers: 2,
+          min_workers: 0,
+          max_workers: 3,
+          max_queue_depth_per_worker: 5,
+          cost_per_worker_hour_usd_micros: 0,
+          capabilities: ["plan.command"],
+          metadata: {},
+          created_by: "ceo",
+          created_at: "2026-06-03T12:00:00Z",
+          updated_at: "2026-06-03T12:00:00Z",
+        },
+      ],
+    });
+    vi.mocked(client.listScalePlans).mockResolvedValueOnce({
+      project_id: "boss-dogfood",
+      items: [
+        {
+          id: "scp_1",
+          project_id: "boss-dogfood",
+          worker_pool_id: "wp_1",
+          status: "applied",
+          trigger_reason: "queue_pressure",
+          queue_depth: 7,
+          running_jobs: 0,
+          leased_jobs: 0,
+          retryable_jobs: 0,
+          current_workers: 1,
+          desired_workers_before: 1,
+          desired_workers_after: 2,
+          target_workers: 2,
+          budget_state: "green",
+          budget_available_usd_micros: 10_000_000,
+          estimated_hourly_delta_usd_micros: 0,
+          provider_health_status: "unknown",
+          actions: [{ action: "scale_local_workers" }],
+          recommendations: [],
+          created_by: "ceo",
+          created_at: "2026-06-03T12:00:00Z",
+        },
+      ],
+    });
+
+    const feed = await fetchProviderOpsFeed();
+
+    expect(feed.apiReachable).toBe(true);
+    expect(feed.summary).toMatchObject({
+      connectedProviders: 1,
+      healthyProviders: 1,
+      openChangeSets: 1,
+      resourceCount: 1,
+      unmanagedResourceCount: 1,
+      spendUsdMicros: 250_000,
+      openCostAnomalies: 1,
+      desiredWorkerCount: 2,
+      openScalePlans: 0,
+      activeDeploymentRuns: 1,
+    });
+    expect(feed.providerAccounts[0]).toMatchObject({
+      accountLabel: "Cloudflare sandbox",
+      credentialRef: "env:BOSS_CLOUDFLARE_API_TOKEN",
+      destructiveActionsDisabled: true,
+    });
+    expect(feed.workerPools[0]).toMatchObject({
+      poolKey: "local-default",
+      desiredWorkers: 2,
+    });
+    expect(feed.costAnomalies[0]).toMatchObject({
+      provider: "cloudflare",
+      severity: "orange",
+      decisionId: "dec_1",
+    });
+    expect(feed.scalePlans[0]).toMatchObject({
+      triggerReason: "queue_pressure",
+      queueDepth: 7,
+    });
+    expect(feed.deploymentRuns[0]).toMatchObject({
+      appName: "BOSS",
+      changesetId: "chg_1",
+    });
+  });
+
+  it("returns an unavailable state when a ProviderOps endpoint fails", async () => {
+    vi.mocked(client.listProviderAccounts).mockRejectedValueOnce(
+      new BossApiError("request failed", 503, {}),
+    );
+
+    const feed = await fetchProviderOpsFeed();
+
+    expect(feed.apiReachable).toBe(false);
+    expect(feed.projectId).toBe("boss-dogfood");
+    expect(feed.summary.connectedProviders).toBe(0);
+    expect(feed.blockedReason).toBe("API returned 503");
+  });
+});

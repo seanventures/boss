@@ -24,6 +24,15 @@ class DropletTerminationResult:
     api_url: str
 
 
+@dataclass
+class AppDeploymentResult:
+    app_id: str
+    deployment_id: str
+    status: str
+    phase: str
+    api_url: str
+
+
 class DigitalOceanAdapter:
     def __init__(self, settings: Settings):
         self.settings = settings
@@ -95,4 +104,31 @@ class DigitalOceanAdapter:
         return DropletTerminationResult(
             droplet_id=str(droplet_id),
             api_url=f"https://api.digitalocean.com/v2/droplets/{droplet_id}",
+        )
+
+    def create_app_deployment(
+        self,
+        *,
+        app_id: str,
+        force_build: bool,
+    ) -> AppDeploymentResult:
+        response = httpx.post(
+            f"https://api.digitalocean.com/v2/apps/{app_id}/deployments",
+            headers=self._headers(),
+            json={"force_build": force_build},
+            timeout=30.0,
+        )
+        response.raise_for_status()
+        deployment = response.json()["deployment"]
+        deployment_id = str(deployment["id"])
+        phase = str(deployment.get("phase") or deployment.get("status") or "pending")
+        return AppDeploymentResult(
+            app_id=app_id,
+            deployment_id=deployment_id,
+            status=str(deployment.get("status") or phase),
+            phase=phase,
+            api_url=(
+                "https://api.digitalocean.com/v2/apps/"
+                f"{app_id}/deployments/{deployment_id}"
+            ),
         )

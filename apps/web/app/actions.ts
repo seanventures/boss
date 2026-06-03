@@ -67,6 +67,45 @@ function parseOptionalJsonObject(
   return parsed as Record<string, unknown>;
 }
 
+function parseOptionalJsonArray(
+  value: FormDataEntryValue | null,
+  fieldName: string,
+): Array<Record<string, unknown>> {
+  if (typeof value !== "string" || !value.trim()) {
+    return [];
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    throw new Error(`${fieldName} must be valid JSON`);
+  }
+  if (!Array.isArray(parsed)) {
+    throw new Error(`${fieldName} must be a JSON array`);
+  }
+  if (parsed.some((item) => !item || Array.isArray(item) || typeof item !== "object")) {
+    throw new Error(`${fieldName} must contain only JSON objects`);
+  }
+  return parsed as Array<Record<string, unknown>>;
+}
+
+function parseProviderOpsCheckbox(
+  formData: FormData,
+  name: string,
+  defaultValue: boolean,
+): boolean {
+  const values = formData.getAll(name).filter((value) => typeof value === "string");
+  if (values.length === 0) {
+    return defaultValue;
+  }
+  return values.some((value) => value === "true" || value === "on");
+}
+
+function getOptionalString(formData: FormData, name: string): string | undefined {
+  const value = formData.get(name);
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
 export async function resolveDecisionAction(formData: FormData): Promise<void> {
   const decisionId = formData.get("decision_id");
   const action = formData.get("action");
@@ -175,6 +214,32 @@ export async function revokeBreakGlassGrantAction(
   await client.revokeBreakGlassGrant(grantId.trim(), {
     actor: getActor(formData),
     reason: reason.trim(),
+  });
+  revalidatePath("/");
+}
+
+export async function upsertOrgMemberAction(formData: FormData): Promise<void> {
+  const orgId = formData.get("org_id");
+  const memberId = formData.get("member_id");
+  const displayName = formData.get("display_name");
+  if (typeof orgId !== "string" || !orgId.trim()) {
+    throw new Error("org_id is required");
+  }
+  if (typeof memberId !== "string" || !memberId.trim()) {
+    throw new Error("member_id is required");
+  }
+  if (typeof displayName !== "string" || !displayName.trim()) {
+    throw new Error("display_name is required");
+  }
+  await client.upsertOrgMember({
+    org_id: orgId.trim(),
+    project_id: getProjectId(formData),
+    member_id: memberId.trim(),
+    display_name: displayName.trim(),
+    member_type: getOptionalString(formData, "member_type") ?? "human",
+    role_keys: parseLines(formData.get("role_keys")),
+    permissions: parseLines(formData.get("permissions")),
+    actor: getActor(formData),
   });
   revalidatePath("/");
 }
@@ -294,6 +359,289 @@ export async function createDecisionDigestAction(
     low_risk_max: 1,
     urgent_risk_min: 2,
     dedupe_key: `decision-digest-${Date.now()}`,
+  });
+  revalidatePath("/");
+}
+
+export async function createProviderAccountAction(
+  formData: FormData,
+): Promise<void> {
+  const provider = formData.get("provider");
+  const accountLabel = formData.get("account_label");
+  if (typeof provider !== "string" || !provider.trim()) {
+    throw new Error("provider is required");
+  }
+  if (typeof accountLabel !== "string" || !accountLabel.trim()) {
+    throw new Error("account_label is required");
+  }
+  await client.createProviderAccount({
+    project_id: getProjectId(formData),
+    provider: provider.trim(),
+    account_label: accountLabel.trim(),
+    credential_ref: getOptionalString(formData, "credential_ref"),
+    scopes: parseLines(formData.get("scopes")),
+    read_only: parseProviderOpsCheckbox(formData, "read_only", true),
+    deploy_capable: parseProviderOpsCheckbox(formData, "deploy_capable", false),
+    billing_readable: parseProviderOpsCheckbox(
+      formData,
+      "billing_readable",
+      false,
+    ),
+    destructive_actions_disabled: parseProviderOpsCheckbox(
+      formData,
+      "destructive_actions_disabled",
+      true,
+    ),
+    actor: getActor(formData),
+  });
+  revalidatePath("/");
+}
+
+export async function testProviderAccountAction(formData: FormData): Promise<void> {
+  const providerAccountId = formData.get("provider_account_id");
+  if (typeof providerAccountId !== "string" || !providerAccountId.trim()) {
+    throw new Error("provider_account_id is required");
+  }
+  await client.testProviderAccount(
+    providerAccountId.trim(),
+    getProjectId(formData),
+    getActor(formData),
+  );
+  revalidatePath("/");
+}
+
+export async function syncProviderResourcesAction(
+  formData: FormData,
+): Promise<void> {
+  await client.syncExternalResources({
+    project_id: getProjectId(formData),
+    provider_account_id: getOptionalString(formData, "provider_account_id"),
+    actor: getActor(formData),
+  });
+  revalidatePath("/");
+}
+
+export async function runResourceJanitorAction(formData: FormData): Promise<void> {
+  const maxCandidates = Number(formData.get("max_candidates") ?? 10);
+  await client.runResourceJanitor({
+    project_id: getProjectId(formData),
+    provider_account_id: getOptionalString(formData, "provider_account_id"),
+    max_candidates: Number.isFinite(maxCandidates) ? maxCandidates : 10,
+    actor: getActor(formData),
+  });
+  revalidatePath("/");
+}
+
+export async function upsertWorkerPoolAction(formData: FormData): Promise<void> {
+  const poolKey = formData.get("pool_key");
+  const kind = formData.get("kind");
+  if (typeof poolKey !== "string" || !poolKey.trim()) {
+    throw new Error("pool_key is required");
+  }
+  if (typeof kind !== "string" || !kind.trim()) {
+    throw new Error("kind is required");
+  }
+  const currentWorkers = Number(formData.get("current_workers") ?? 0);
+  const desiredWorkers = Number(formData.get("desired_workers") ?? 0);
+  const minWorkers = Number(formData.get("min_workers") ?? 0);
+  const maxWorkers = Number(formData.get("max_workers") ?? 1);
+  const maxQueueDepthPerWorker = Number(
+    formData.get("max_queue_depth_per_worker") ?? 5,
+  );
+  const costPerWorkerHourUsdMicros = Number(
+    formData.get("cost_per_worker_hour_usd_micros") ?? 0,
+  );
+  await client.upsertWorkerPool({
+    project_id: getProjectId(formData),
+    pool_key: poolKey.trim(),
+    kind: kind.trim(),
+    provider_account_id: getOptionalString(formData, "provider_account_id"),
+    current_workers: Number.isFinite(currentWorkers) ? currentWorkers : 0,
+    desired_workers: Number.isFinite(desiredWorkers) ? desiredWorkers : 0,
+    min_workers: Number.isFinite(minWorkers) ? minWorkers : 0,
+    max_workers: Number.isFinite(maxWorkers) ? maxWorkers : 1,
+    max_queue_depth_per_worker: Number.isFinite(maxQueueDepthPerWorker)
+      ? maxQueueDepthPerWorker
+      : 5,
+    cost_per_worker_hour_usd_micros: Number.isFinite(
+      costPerWorkerHourUsdMicros,
+    )
+      ? costPerWorkerHourUsdMicros
+      : 0,
+    capabilities: parseLines(formData.get("capabilities")),
+    metadata: parseOptionalJsonObject(formData.get("metadata_json")),
+    actor: getActor(formData),
+  });
+  revalidatePath("/");
+}
+
+export async function runAutoscalerPlanAction(formData: FormData): Promise<void> {
+  await client.runAutoscalerPlan({
+    project_id: getProjectId(formData),
+    worker_pool_id: getOptionalString(formData, "worker_pool_id"),
+    cloud_spillover_enabled: parseProviderOpsCheckbox(
+      formData,
+      "cloud_spillover_enabled",
+      false,
+    ),
+    actor: getActor(formData),
+  });
+  revalidatePath("/");
+}
+
+export async function createChangeSetAction(formData: FormData): Promise<void> {
+  const title = formData.get("title");
+  const summary = formData.get("summary");
+  if (typeof title !== "string" || !title.trim()) {
+    throw new Error("title is required");
+  }
+  if (typeof summary !== "string" || !summary.trim()) {
+    throw new Error("summary is required");
+  }
+  const expectedCostUsdMicros = Number(
+    formData.get("expected_cost_usd_micros") ?? 0,
+  );
+  const riskTier = Number(formData.get("risk_tier") ?? 2);
+  const operations = parseOptionalJsonArray(
+    formData.get("operations_json"),
+    "operations_json",
+  );
+  if (operations.length === 0) {
+    throw new Error("operations_json must contain at least one operation");
+  }
+  await client.createChangeSet({
+    project_id: getProjectId(formData),
+    provider_account_id: getOptionalString(formData, "provider_account_id"),
+    title: title.trim(),
+    summary: summary.trim(),
+    operations: operations.map((operation) => ({
+      skill_id: String(operation.skill_id ?? ""),
+      action: String(operation.action ?? ""),
+      resource_type: String(operation.resource_type ?? ""),
+      resource_ref:
+        typeof operation.resource_ref === "string"
+          ? operation.resource_ref
+          : undefined,
+      desired_state:
+        operation.desired_state &&
+        !Array.isArray(operation.desired_state) &&
+        typeof operation.desired_state === "object"
+          ? (operation.desired_state as Record<string, unknown>)
+          : {},
+      risk_tier:
+        typeof operation.risk_tier === "number" ? operation.risk_tier : riskTier,
+      destructive: Boolean(operation.destructive),
+      production_affecting: Boolean(operation.production_affecting),
+    })),
+    expected_cost_usd_micros: Number.isFinite(expectedCostUsdMicros)
+      ? expectedCostUsdMicros
+      : 0,
+    rollback_plan: parseLines(formData.get("rollback_plan")),
+    risk_tier: Number.isFinite(riskTier) ? riskTier : 2,
+    actor: getActor(formData),
+  });
+  revalidatePath("/");
+}
+
+export async function approveChangeSetAction(formData: FormData): Promise<void> {
+  const changeSetId = formData.get("changeset_id");
+  if (typeof changeSetId !== "string" || !changeSetId.trim()) {
+    throw new Error("changeset_id is required");
+  }
+  await client.approveChangeSet(changeSetId.trim(), { actor: getActor(formData) });
+  revalidatePath("/");
+}
+
+export async function applyChangeSetAction(formData: FormData): Promise<void> {
+  const changeSetId = formData.get("changeset_id");
+  if (typeof changeSetId !== "string" || !changeSetId.trim()) {
+    throw new Error("changeset_id is required");
+  }
+  await client.applyChangeSet(changeSetId.trim(), { actor: getActor(formData) });
+  revalidatePath("/");
+}
+
+export async function createDeploymentTargetAction(
+  formData: FormData,
+): Promise<void> {
+  const appName = formData.get("app_name");
+  const repo = formData.get("repo");
+  const environment = formData.get("environment");
+  const targetKind = formData.get("target_kind");
+  const targetRef = formData.get("target_ref");
+  if (typeof appName !== "string" || !appName.trim()) {
+    throw new Error("app_name is required");
+  }
+  if (typeof repo !== "string" || !repo.trim()) {
+    throw new Error("repo is required");
+  }
+  if (typeof environment !== "string" || !environment.trim()) {
+    throw new Error("environment is required");
+  }
+  if (typeof targetKind !== "string" || !targetKind.trim()) {
+    throw new Error("target_kind is required");
+  }
+  if (typeof targetRef !== "string" || !targetRef.trim()) {
+    throw new Error("target_ref is required");
+  }
+  await client.createDeploymentTarget({
+    project_id: getProjectId(formData),
+    app_name: appName.trim(),
+    repo: repo.trim(),
+    environment: environment.trim(),
+    provider_account_id: getOptionalString(formData, "provider_account_id"),
+    target_kind: targetKind.trim(),
+    target_ref: targetRef.trim(),
+    domains: parseLines(formData.get("domains")),
+    secret_refs: parseLines(formData.get("secret_refs")),
+    required_resources: parseOptionalJsonArray(
+      formData.get("required_resources_json"),
+      "required_resources_json",
+    ),
+    health_checks: parseOptionalJsonArray(
+      formData.get("health_checks_json"),
+      "health_checks_json",
+    ),
+    rollback_points: parseOptionalJsonArray(
+      formData.get("rollback_points_json"),
+      "rollback_points_json",
+    ),
+    actor: getActor(formData),
+  });
+  revalidatePath("/");
+}
+
+export async function createDeploymentRunAction(formData: FormData): Promise<void> {
+  const deploymentTargetId = formData.get("deployment_target_id");
+  if (typeof deploymentTargetId !== "string" || !deploymentTargetId.trim()) {
+    throw new Error("deployment_target_id is required");
+  }
+  const expectedCostUsdMicros = Number(
+    formData.get("expected_cost_usd_micros") ?? 0,
+  );
+  await client.createDeploymentRun({
+    project_id: getProjectId(formData),
+    deployment_target_id: deploymentTargetId.trim(),
+    commit_ref: getOptionalString(formData, "commit_ref"),
+    release_packet: parseOptionalJsonObject(formData.get("release_packet_json")),
+    expected_cost_usd_micros: Number.isFinite(expectedCostUsdMicros)
+      ? expectedCostUsdMicros
+      : 0,
+    reservation_id: getOptionalString(formData, "reservation_id"),
+    actor: getActor(formData),
+  });
+  revalidatePath("/");
+}
+
+export async function runDeploymentHealthCheckAction(
+  formData: FormData,
+): Promise<void> {
+  const deploymentRunId = formData.get("deployment_run_id");
+  if (typeof deploymentRunId !== "string" || !deploymentRunId.trim()) {
+    throw new Error("deployment_run_id is required");
+  }
+  await client.runDeploymentHealthCheck(deploymentRunId.trim(), {
+    actor: getActor(formData),
   });
   revalidatePath("/");
 }

@@ -1,8 +1,14 @@
 import {
+  applyChangeSetAction,
+  approveChangeSetAction,
+  createChangeSetAction,
+  createDeploymentTargetAction,
+  createProviderAccountAction,
   createReplayBundleAction,
   createBreakGlassGrantAction,
   createComplianceEvidenceBundleAction,
   createDecisionDigestAction,
+  createDeploymentRunAction,
   installAgentModuleAction,
   installPackAction,
   queueOutboxMessageAction,
@@ -12,9 +18,16 @@ import {
   revokeBreakGlassGrantAction,
   resolveDecisionAction,
   rollbackSelfImprovementProposalAction,
+  runAutoscalerPlanAction,
+  runDeploymentHealthCheckAction,
+  runResourceJanitorAction,
   submitSelfImprovementProposalAction,
   submitOutboxDraftAction,
   submitCommandAction,
+  syncProviderResourcesAction,
+  testProviderAccountAction,
+  upsertOrgMemberAction,
+  upsertWorkerPoolAction,
 } from "./actions";
 import { fetchAuditSummary } from "../lib/audit";
 import { fetchArtifactFeed } from "../lib/artifacts";
@@ -31,9 +44,10 @@ import { fetchEntitlementFeed } from "../lib/entitlements";
 import { fetchActivityFeed } from "../lib/events";
 import { fetchHealthSnapshotFeed } from "../lib/health-snapshots";
 import { fetchInfrastructureResourceFeed } from "../lib/infrastructure";
-import { fetchMemberFeed } from "../lib/members";
+import { fetchMemberFeed, fetchOrgMemberFeed } from "../lib/members";
 import { fetchMetatronQuery } from "../lib/metatron";
 import { fetchPackFeed } from "../lib/packs";
+import { fetchProviderOpsFeed } from "../lib/providerops";
 import { fetchProjectFeed } from "../lib/projects";
 import { fetchReceiptFeed } from "../lib/receipts";
 import { fetchRoleFeed } from "../lib/roles";
@@ -201,6 +215,10 @@ export default async function HomePage({ searchParams }: HomePageProps) {
   )
     ? requestedProjectId
     : projects.items[0]?.id ?? requestedProjectId;
+  const activeProject = projects.items.find(
+    (project) => project.id === activeProjectId,
+  );
+  const activeOrgId = activeProject?.orgId ?? "org_boss";
   const [
     status,
     decisions,
@@ -215,6 +233,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
     entitlements,
     routingLogs,
     skills,
+    providerOps,
     receipts,
     infrastructureResources,
     budgetStatus,
@@ -225,6 +244,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
     outbox,
     inbox,
     members,
+    orgMembers,
     metatron,
     authSession,
     breakGlassGrants,
@@ -243,6 +263,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
       fetchEntitlementFeed(activeProjectId),
       fetchRoutingLogFeed(activeProjectId),
       fetchSkillFeed(),
+      fetchProviderOpsFeed(activeProjectId),
       fetchReceiptFeed(activeProjectId),
       fetchInfrastructureResourceFeed(activeProjectId),
       fetchBudgetStatus(activeProjectId),
@@ -253,6 +274,11 @@ export default async function HomePage({ searchParams }: HomePageProps) {
       fetchOutboxFeed(activeProjectId),
       fetchInboxFeed(activeProjectId),
       fetchMemberFeed(activeProjectId),
+      fetchOrgMemberFeed(
+        activeOrgId,
+        activeProjectId,
+        requestedActorId ?? "ceo",
+      ),
       fetchMetatronQuery(
         metatronQuestion,
         metatronTaskId,
@@ -266,14 +292,23 @@ export default async function HomePage({ searchParams }: HomePageProps) {
   const deadletterCount = deadletters.items.length;
   const disableCommandEntry = !status.apiReachable || !status.databaseConnected;
   const installedCorePack = packs.items.find((pack) => pack.installed);
+  const actorOptions = [
+    ...members.items.map((member) => ({ ...member, source: "project" as const })),
+    ...orgMembers.items
+      .filter(
+        (orgMember) =>
+          !members.items.some((member) => member.memberId === orgMember.memberId),
+      )
+      .map((member) => ({ ...member, source: "org" as const })),
+  ];
   const activeActorId =
     requestedActorId &&
-    members.items.some((member) => member.memberId === requestedActorId)
+    actorOptions.some((member) => member.memberId === requestedActorId)
       ? requestedActorId
-      : members.items.some((member) => member.memberId === "executive_console")
+      : actorOptions.some((member) => member.memberId === "executive_console")
         ? "executive_console"
-        : members.items[0]?.memberId ?? "executive_console";
-  const activeActor = members.items.find(
+        : actorOptions[0]?.memberId ?? "executive_console";
+  const activeActor = actorOptions.find(
     (member) => member.memberId === activeActorId,
   );
 
@@ -329,10 +364,10 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                       name="actor"
                       defaultValue={activeActorId}
                     >
-                      {members.items.length > 0 ? (
-                        members.items.map((member) => (
+                      {actorOptions.length > 0 ? (
+                        actorOptions.map((member) => (
                           <option key={member.id} value={member.memberId}>
-                            {member.displayName} ({member.memberId})
+                            {member.displayName} ({member.memberId}, {member.source})
                           </option>
                         ))
                       ) : (
@@ -356,9 +391,13 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               <p className="detail">
                 Active actor: {activeActor?.displayName ?? activeActorId} / roles{" "}
                 {activeActor?.roleKeys.join(", ") || "unknown"} / permissions{" "}
-                {activeActor?.permissions.length ?? 0}
+                {activeActor?.permissions.length ?? 0} / source{" "}
+                {activeActor?.source ?? "fallback"}
                 {!members.apiReachable && members.blockedReason
                   ? ` (${members.blockedReason})`
+                  : ""}
+                {!orgMembers.apiReachable && orgMembers.blockedReason
+                  ? ` (org members: ${orgMembers.blockedReason})`
                   : ""}
               </p>
             </div>
@@ -527,13 +566,19 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               {authSession.actorBindingRequired
                 ? authSession.principalMemberId ?? "Bound"
                 : authSession.authRequired
-                  ? "API key"
+                  ? authSession.authMethod ?? "API key"
                   : "Local"}
             </div>
             <p className="detail">
               {authSession.apiReachable
                 ? authSession.message
                 : authSession.blockedReason ?? "Auth session API unavailable."}
+            </p>
+            <p className="detail">
+              Transport:{" "}
+              {authSession.transportAuthenticated ? "authenticated" : "open"} /
+              method {authSession.authMethod ?? "none"} / OIDC{" "}
+              {authSession.oidcEnabled ? "enabled" : "disabled"}
             </p>
           </article>
           <article>
@@ -605,6 +650,122 @@ export default async function HomePage({ searchParams }: HomePageProps) {
         <section className="panel-stack">
           <div className="section-head">
             <div>
+              <span className="eyebrow">Org Delegation</span>
+              <h2>Organization-wide actors with scoped project authorization.</h2>
+            </div>
+            <p className="status-meta">
+              PRD 9.2 identity and access: delegated actors are explicit,
+              permissioned, and audited through `/v1/org-members`.
+            </p>
+          </div>
+
+          <div className="stack-grid">
+            <article className="stack-card">
+              <h3>Add or update org delegate</h3>
+              <form action={upsertOrgMemberAction} className="composer compact">
+                <input type="hidden" name="project_id" value={activeProjectId} />
+                <input type="hidden" name="org_id" value={activeOrgId} />
+                <input type="hidden" name="actor" value={activeActorId} />
+                <div className="input-grid">
+                  <label className="field">
+                    <span>Member ID</span>
+                    <input
+                      className="input"
+                      name="member_id"
+                      placeholder="ops_delegate"
+                      required
+                    />
+                  </label>
+                  <label className="field">
+                    <span>Display name</span>
+                    <input
+                      className="input"
+                      name="display_name"
+                      placeholder="Ops Delegate"
+                      required
+                    />
+                  </label>
+                </div>
+                <div className="input-grid">
+                  <label className="field">
+                    <span>Member type</span>
+                    <select className="input" name="member_type" defaultValue="human">
+                      <option value="human">Human</option>
+                      <option value="agent">Agent</option>
+                      <option value="service">Service</option>
+                    </select>
+                  </label>
+                  <label className="field">
+                    <span>Roles</span>
+                    <textarea
+                      className="textarea"
+                      name="role_keys"
+                      rows={3}
+                      placeholder={"One role per line\noperator\nprogram_manager"}
+                    />
+                  </label>
+                </div>
+                <label className="field">
+                  <span>Permissions</span>
+                  <textarea
+                    className="textarea"
+                    name="permissions"
+                    rows={4}
+                    placeholder={"One permission per line\ncommand_submit\ndecision_resolve\nmember_manage"}
+                    required
+                  />
+                </label>
+                <button className="button secondary" type="submit">
+                  Save org delegate
+                </button>
+              </form>
+            </article>
+
+            <article className="stack-card">
+              <h3>Delegates for {activeOrgId}</h3>
+              {!orgMembers.apiReachable ? (
+                <p className="detail">
+                  {orgMembers.blockedReason ??
+                    "Org-member API is unavailable for this actor."}
+                </p>
+              ) : orgMembers.items.length === 0 ? (
+                <p className="detail">
+                  No org-level delegates are configured for this organization.
+                </p>
+              ) : (
+                <div className="feed-list">
+                  {orgMembers.items.map((member) => (
+                    <div className="feed-row" key={member.id}>
+                      <div>
+                        <h4>
+                          {member.displayName} / {member.memberId}
+                        </h4>
+                        <p className="detail">
+                          Scope {member.orgId}
+                          {member.projectId ? ` / ${member.projectId}` : ""} /
+                          status {member.status}
+                        </p>
+                        <p className="detail">
+                          Roles: {member.roleKeys.join(", ") || "none"} /
+                          permissions: {member.permissions.join(", ") || "none"}
+                        </p>
+                        <p className="detail">
+                          Created by {member.createdBy} / updated{" "}
+                          {formatDateTime(member.updatedAt)}
+                        </p>
+                      </div>
+                      <code className="mono">org member</code>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </article>
+          </div>
+        </section>
+
+        <section className="panel-stack">
+          <div className="section-head">
+            <div>
               <span className="eyebrow">Break-Glass Access</span>
               <h2>Emergency RBAC with TTL and postmortem tasks.</h2>
             </div>
@@ -623,9 +784,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                 <label className="field">
                   <span>Target member</span>
                   <select className="input" name="target_member_id" required>
-                    {members.items.map((member) => (
+                    {actorOptions.map((member) => (
                       <option key={member.id} value={member.memberId}>
-                        {member.displayName} ({member.memberId})
+                        {member.displayName} ({member.memberId}, {member.source})
                       </option>
                     ))}
                   </select>
@@ -888,6 +1049,1053 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               </div>
             )}
           </article>
+        </section>
+
+        <section className="panel-stack">
+          <div className="section-head">
+            <div>
+              <span className="eyebrow">ProviderOps</span>
+              <h2>Elastic Resource Plane for real provider assets.</h2>
+            </div>
+            <p className="status-meta">
+              Provider APIs stay behind Resource Plane gates: ChangeSet, policy,
+              budget, approval, receipt, reconciliation.
+            </p>
+          </div>
+
+          {!providerOps.apiReachable ? (
+            <article className="stack-card">
+              <h3>ProviderOps unavailable</h3>
+              <p className="detail">
+                {providerOps.blockedReason ??
+                  "ProviderOps APIs are unavailable for this project."}
+              </p>
+            </article>
+          ) : (
+            <>
+              <div className="grid compact-grid">
+                <article>
+                  <h2>Connected Providers</h2>
+                  <div className="metric">
+                    {providerOps.summary.connectedProviders}
+                  </div>
+                  <p className="detail">
+                    {providerOps.providerAccounts.length} configured account
+                    {providerOps.providerAccounts.length === 1 ? "" : "s"}.
+                  </p>
+                </article>
+                <article>
+                  <h2>Provider Health</h2>
+                  <div className="metric">
+                    {providerOps.summary.healthyProviders}
+                  </div>
+                  <p className="detail">
+                    Healthy observations from official adapter tests and syncs.
+                  </p>
+                </article>
+                <article>
+                  <h2>Resources</h2>
+                  <div className="metric">
+                    {providerOps.summary.resourceCount}
+                  </div>
+                  <p className="detail">
+                    {providerOps.summary.unmanagedResourceCount} unmanaged /{" "}
+                    {providerOps.summary.orphanedSignalCount} orphan signals.
+                  </p>
+                </article>
+                <article>
+                  <h2>Open ChangeSets</h2>
+                  <div className="metric">
+                    {providerOps.summary.openChangeSets}
+                  </div>
+                  <p className="detail">
+                    Provider writes require explicit approval and receipts.{" "}
+                    {providerOps.summary.activeDeploymentRuns} active deployment
+                    run{providerOps.summary.activeDeploymentRuns === 1 ? "" : "s"}.
+                  </p>
+                </article>
+                <article>
+                  <h2>Observed Costs</h2>
+                  <div className="metric">
+                    {formatMicros(providerOps.summary.spendUsdMicros)}
+                  </div>
+                  <p className="detail">
+                    Cost ledger entries keep confidence labels visible.{" "}
+                    {providerOps.summary.openCostAnomalies} open anomaly
+                    {providerOps.summary.openCostAnomalies === 1 ? "" : "ies"}.
+                  </p>
+                </article>
+                <article>
+                  <h2>Worker Capacity</h2>
+                  <div className="metric">
+                    {providerOps.summary.desiredWorkerCount}
+                  </div>
+                  <p className="detail">
+                    Desired workers across {providerOps.workerPools.length} pool
+                    {providerOps.workerPools.length === 1 ? "" : "s"} /{" "}
+                    {providerOps.summary.openScalePlans} open scale plan
+                    {providerOps.summary.openScalePlans === 1 ? "" : "s"}.
+                  </p>
+                </article>
+              </div>
+
+              <div className="stack-grid">
+                <article className="stack-card">
+                  <h3>Provider Connection Center</h3>
+                  <form action={createProviderAccountAction} className="composer compact">
+                    <input type="hidden" name="project_id" value={activeProjectId} />
+                    <input type="hidden" name="actor" value={activeActorId} />
+                    <div className="input-grid">
+                      <label className="field">
+                        <span>Provider</span>
+                        <select className="input" name="provider" required>
+                          <option value="digitalocean">DigitalOcean</option>
+                          <option value="cloudflare">Cloudflare</option>
+                          <option value="supabase">Supabase</option>
+                          <option value="openai">OpenAI</option>
+                          <option value="anthropic">Anthropic</option>
+                        </select>
+                      </label>
+                      <label className="field">
+                        <span>Account label</span>
+                        <input
+                          className="input"
+                          name="account_label"
+                          placeholder="Sandbox account"
+                          required
+                        />
+                      </label>
+                    </div>
+                    <label className="field">
+                      <span>Credential ref</span>
+                      <input
+                        className="input"
+                        name="credential_ref"
+                        placeholder="env:BOSS_CLOUDFLARE_API_TOKEN"
+                      />
+                    </label>
+                    <label className="field">
+                      <span>Scopes</span>
+                      <textarea
+                        className="textarea"
+                        name="scopes"
+                        rows={3}
+                        placeholder={"One scope per line\nread\nbilling.read"}
+                      />
+                    </label>
+                    <div className="input-grid">
+                      <label className="field checkbox-field">
+                        <span>Read-only</span>
+                        <input
+                          name="read_only"
+                          type="checkbox"
+                          value="true"
+                          defaultChecked
+                        />
+                      </label>
+                      <label className="field checkbox-field">
+                        <span>Deploy-capable</span>
+                        <input name="deploy_capable" type="checkbox" value="true" />
+                      </label>
+                      <label className="field checkbox-field">
+                        <span>Billing-readable</span>
+                        <input name="billing_readable" type="checkbox" value="true" />
+                      </label>
+                      <label className="field checkbox-field">
+                        <span>Destructive actions disabled</span>
+                        <input
+                          name="destructive_actions_disabled"
+                          type="checkbox"
+                          value="true"
+                          defaultChecked
+                        />
+                      </label>
+                    </div>
+                    <button className="button secondary" type="submit">
+                      Register provider account
+                    </button>
+                  </form>
+
+                  <div className="feed-list">
+                    {providerOps.providerAccounts.length === 0 ? (
+                      <p className="detail">
+                        No provider accounts are registered yet.
+                      </p>
+                    ) : (
+                      providerOps.providerAccounts.map((account) => (
+                        <div className="feed-row" key={account.id}>
+                          <div>
+                            <h4>{account.accountLabel}</h4>
+                            <p className="detail">
+                              {account.provider} / {account.status} /{" "}
+                              {account.readOnly ? "read-only" : "write-capable"}
+                            </p>
+                            <p className="detail">
+                              {account.credentialRef ?? "No credential ref"} /{" "}
+                              {account.destructiveActionsDisabled
+                                ? "destructive disabled"
+                                : "destructive enabled"}
+                            </p>
+                            {account.lastTestStatus ? (
+                              <p className="detail">
+                                Last test {account.lastTestStatus}
+                                {account.lastTestedAt
+                                  ? ` at ${formatDateTime(account.lastTestedAt)}`
+                                  : ""}
+                              </p>
+                            ) : null}
+                          </div>
+                          <div className="button-stack">
+                            <form action={testProviderAccountAction}>
+                              <input
+                                type="hidden"
+                                name="provider_account_id"
+                                value={account.id}
+                              />
+                              <input
+                                type="hidden"
+                                name="project_id"
+                                value={activeProjectId}
+                              />
+                              <input
+                                type="hidden"
+                                name="actor"
+                                value={activeActorId}
+                              />
+                              <button className="button secondary" type="submit">
+                                Test
+                              </button>
+                            </form>
+                            <form action={syncProviderResourcesAction}>
+                              <input
+                                type="hidden"
+                                name="provider_account_id"
+                                value={account.id}
+                              />
+                              <input
+                                type="hidden"
+                                name="project_id"
+                                value={activeProjectId}
+                              />
+                              <input
+                                type="hidden"
+                                name="actor"
+                                value={activeActorId}
+                              />
+                              <button className="button secondary" type="submit">
+                                Sync
+                              </button>
+                            </form>
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </article>
+
+                <article className="stack-card">
+                  <h3>Resource Explorer</h3>
+                  <div className="button-stack">
+                    <form action={syncProviderResourcesAction}>
+                      <input type="hidden" name="project_id" value={activeProjectId} />
+                      <input type="hidden" name="actor" value={activeActorId} />
+                      <button className="button secondary" type="submit">
+                        Sync all providers
+                      </button>
+                    </form>
+                    <form action={runResourceJanitorAction} className="composer compact">
+                      <input type="hidden" name="project_id" value={activeProjectId} />
+                      <input type="hidden" name="actor" value={activeActorId} />
+                      <label className="field">
+                        <span>Janitor provider scope</span>
+                        <select className="input" name="provider_account_id">
+                          <option value="">All provider accounts</option>
+                          {providerOps.providerAccounts.map((account) => (
+                            <option key={account.id} value={account.id}>
+                              {account.provider} / {account.accountLabel}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <label className="field">
+                        <span>Max cleanup candidates</span>
+                        <input
+                          className="input"
+                          name="max_candidates"
+                          type="number"
+                          min={1}
+                          max={100}
+                          defaultValue={10}
+                        />
+                      </label>
+                      <button className="button secondary" type="submit">
+                        Run Resource Janitor
+                      </button>
+                      <p className="detail">
+                        Creates a report artifact and approval-required cleanup
+                        ChangeSets. It never deletes production resources or calls
+                        providers directly.
+                      </p>
+                    </form>
+                  </div>
+                  {providerOps.resources.length === 0 ? (
+                    <p className="detail">
+                      No external resources have been synced for this project.
+                    </p>
+                  ) : (
+                    <div className="feed-list">
+                      {providerOps.resources.slice(0, 8).map((resource) => (
+                        <div className="feed-row" key={resource.id}>
+                          <div>
+                            <h4>{resource.name}</h4>
+                            <p className="detail">
+                              {resource.provider} {resource.resourceType} /{" "}
+                              {resource.state} / {resource.ownership}
+                            </p>
+                            <p className="detail">
+                              {resource.environment} / health{" "}
+                              {resource.healthStatus} / cost{" "}
+                              {resource.costConfidence}
+                            </p>
+                            <p className="detail">
+                              Last seen {formatDateTime(resource.lastSeenAt)}
+                            </p>
+                          </div>
+                          <code className="mono">{resource.externalId}</code>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </article>
+
+                <article className="stack-card">
+                  <h3>Budget-Aware Autoscaler</h3>
+                  <form action={upsertWorkerPoolAction} className="composer compact">
+                    <input type="hidden" name="project_id" value={activeProjectId} />
+                    <input type="hidden" name="actor" value={activeActorId} />
+                    <div className="input-grid">
+                      <label className="field">
+                        <span>Pool key</span>
+                        <input
+                          className="input"
+                          name="pool_key"
+                          placeholder="local-default"
+                          required
+                        />
+                      </label>
+                      <label className="field">
+                        <span>Kind</span>
+                        <select className="input" name="kind" required>
+                          <option value="local">Local</option>
+                          <option value="cloud">Cloud</option>
+                        </select>
+                      </label>
+                    </div>
+                    <label className="field">
+                      <span>Provider account for cloud pools</span>
+                      <select className="input" name="provider_account_id">
+                        <option value="">No provider account</option>
+                        {providerOps.providerAccounts.map((account) => (
+                          <option key={account.id} value={account.id}>
+                            {account.provider} / {account.accountLabel}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <div className="input-grid">
+                      <label className="field">
+                        <span>Current workers</span>
+                        <input
+                          className="input"
+                          name="current_workers"
+                          type="number"
+                          min={0}
+                          defaultValue={0}
+                        />
+                      </label>
+                      <label className="field">
+                        <span>Desired workers</span>
+                        <input
+                          className="input"
+                          name="desired_workers"
+                          type="number"
+                          min={0}
+                          defaultValue={0}
+                        />
+                      </label>
+                    </div>
+                    <div className="input-grid">
+                      <label className="field">
+                        <span>Min workers</span>
+                        <input
+                          className="input"
+                          name="min_workers"
+                          type="number"
+                          min={0}
+                          defaultValue={0}
+                        />
+                      </label>
+                      <label className="field">
+                        <span>Max workers</span>
+                        <input
+                          className="input"
+                          name="max_workers"
+                          type="number"
+                          min={0}
+                          defaultValue={2}
+                        />
+                      </label>
+                    </div>
+                    <div className="input-grid">
+                      <label className="field">
+                        <span>Queue depth per worker</span>
+                        <input
+                          className="input"
+                          name="max_queue_depth_per_worker"
+                          type="number"
+                          min={1}
+                          defaultValue={5}
+                        />
+                      </label>
+                      <label className="field">
+                        <span>Hourly cost micros</span>
+                        <input
+                          className="input"
+                          name="cost_per_worker_hour_usd_micros"
+                          type="number"
+                          min={0}
+                          defaultValue={0}
+                        />
+                      </label>
+                    </div>
+                    <label className="field">
+                      <span>Capabilities</span>
+                      <textarea
+                        className="textarea"
+                        name="capabilities"
+                        rows={2}
+                        placeholder={"One capability per line\nsoftware_factory.propose_pr"}
+                      />
+                    </label>
+                    <button className="button secondary" type="submit">
+                      Register worker pool
+                    </button>
+                  </form>
+
+                  <form action={runAutoscalerPlanAction} className="composer compact">
+                    <input type="hidden" name="project_id" value={activeProjectId} />
+                    <input type="hidden" name="actor" value={activeActorId} />
+                    <label className="field">
+                      <span>Worker pool</span>
+                      <select className="input" name="worker_pool_id">
+                        <option value="">Default local pool</option>
+                        {providerOps.workerPools.map((pool) => (
+                          <option key={pool.id} value={pool.id}>
+                            {pool.kind} / {pool.poolKey} / desired{" "}
+                            {pool.desiredWorkers}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="field checkbox-field">
+                      <span>Allow cloud spillover proposal</span>
+                      <input
+                        name="cloud_spillover_enabled"
+                        type="checkbox"
+                        value="true"
+                      />
+                    </label>
+                    <button className="button secondary" type="submit">
+                      Run autoscaler review
+                    </button>
+                    <p className="detail">
+                      Local pool desired capacity may change immediately. Cloud
+                      scale-up is held as a BudgetReservation-backed ChangeSet for
+                      approval.
+                    </p>
+                  </form>
+
+                  {providerOps.workerPools.length === 0 ? (
+                    <p className="detail">
+                      No worker pools registered yet. Running autoscaler review can
+                      create the default local pool.
+                    </p>
+                  ) : (
+                    <div className="feed-list">
+                      {providerOps.workerPools.slice(0, 4).map((pool) => (
+                        <div className="feed-row" key={pool.id}>
+                          <div>
+                            <h4>{pool.poolKey}</h4>
+                            <p className="detail">
+                              {pool.kind} / current {pool.currentWorkers} /
+                              desired {pool.desiredWorkers} / max{" "}
+                              {pool.maxWorkers}
+                            </p>
+                            <p className="detail">
+                              Queue per worker {pool.maxQueueDepthPerWorker} /
+                              hourly cost{" "}
+                              {formatMicros(pool.costPerWorkerHourUsdMicros)}
+                            </p>
+                          </div>
+                          <code className="mono">{pool.provider ?? pool.status}</code>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {providerOps.scalePlans.length > 0 ? (
+                    <div className="feed-list">
+                      {providerOps.scalePlans.slice(0, 4).map((plan) => (
+                        <div className="feed-row" key={plan.id}>
+                          <div>
+                            <h4>
+                              {plan.status} / {titleCaseToken(plan.triggerReason)}
+                            </h4>
+                            <p className="detail">
+                              Queue {plan.queueDepth} / desired{" "}
+                              {plan.desiredWorkersBefore} to{" "}
+                              {plan.desiredWorkersAfter} / target{" "}
+                              {plan.targetWorkers}
+                            </p>
+                            <p className="detail">
+                              Budget {plan.budgetState} / hourly delta{" "}
+                              {formatMicros(plan.estimatedHourlyDeltaUsdMicros)}
+                            </p>
+                          </div>
+                          <code className="mono">
+                            {plan.changesetId ?? plan.decisionId ?? plan.id}
+                          </code>
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
+                </article>
+
+                <article className="stack-card">
+                  <h3>ChangeSet Review</h3>
+                  <form action={createChangeSetAction} className="composer compact">
+                    <input type="hidden" name="project_id" value={activeProjectId} />
+                    <input type="hidden" name="actor" value={activeActorId} />
+                    <label className="field">
+                      <span>Provider account</span>
+                      <select className="input" name="provider_account_id">
+                        <option value="">No provider account</option>
+                        {providerOps.providerAccounts.map((account) => (
+                          <option key={account.id} value={account.id}>
+                            {account.provider} / {account.accountLabel}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="field">
+                      <span>Title</span>
+                      <input
+                        className="input"
+                        name="title"
+                        placeholder="Create staging DNS record"
+                        required
+                      />
+                    </label>
+                    <label className="field">
+                      <span>Summary</span>
+                      <textarea
+                        className="textarea"
+                        name="summary"
+                        rows={2}
+                        placeholder="Explain the provider change and expected impact."
+                        required
+                      />
+                    </label>
+                    <label className="field">
+                      <span>Operations JSON</span>
+                      <textarea
+                        className="textarea"
+                        name="operations_json"
+                        rows={6}
+                        placeholder={'[{"skill_id":"cloudflare.dns.record.upsert","action":"cloudflare.dns.record.upsert","resource_type":"dns_record","risk_tier":2,"production_affecting":false}]'}
+                        required
+                      />
+                    </label>
+                    <div className="input-grid">
+                      <label className="field">
+                        <span>Expected cost micros</span>
+                        <input
+                          className="input"
+                          name="expected_cost_usd_micros"
+                          type="number"
+                          min={0}
+                          defaultValue={0}
+                        />
+                      </label>
+                      <label className="field">
+                        <span>Risk tier</span>
+                        <input
+                          className="input"
+                          name="risk_tier"
+                          type="number"
+                          min={1}
+                          max={4}
+                          defaultValue={2}
+                        />
+                      </label>
+                    </div>
+                    <label className="field">
+                      <span>Rollback plan</span>
+                      <textarea
+                        className="textarea"
+                        name="rollback_plan"
+                        rows={3}
+                        placeholder={"One rollback step per line\nDelete DNS record"}
+                        required
+                      />
+                    </label>
+                    <button className="button secondary" type="submit">
+                      Create ChangeSet
+                    </button>
+                  </form>
+
+                  {providerOps.changeSets.length === 0 ? (
+                    <p className="detail">No Resource Plane ChangeSets yet.</p>
+                  ) : (
+                    <div className="feed-list">
+                      {providerOps.changeSets.map((changeSet) => (
+                        <div className="feed-row" key={changeSet.id}>
+                          <div>
+                            <h4>{changeSet.title}</h4>
+                            <p className="detail">
+                              {changeSet.status} / risk {changeSet.riskTier} /{" "}
+                              {formatMicros(changeSet.expectedCostUsdMicros)}
+                            </p>
+                            <p className="detail">
+                              {changeSet.operations.length} operation
+                              {changeSet.operations.length === 1 ? "" : "s"} /{" "}
+                              {changeSet.reservationId ?? "no reservation"}
+                            </p>
+                            {changeSet.failureReason ? (
+                              <p className="detail">
+                                Failure: {changeSet.failureReason}
+                              </p>
+                            ) : null}
+                          </div>
+                          <div className="button-stack">
+                            {changeSet.status === "pending_approval" ? (
+                              <form action={approveChangeSetAction}>
+                                <input
+                                  type="hidden"
+                                  name="changeset_id"
+                                  value={changeSet.id}
+                                />
+                                <input
+                                  type="hidden"
+                                  name="project_id"
+                                  value={activeProjectId}
+                                />
+                                <input
+                                  type="hidden"
+                                  name="actor"
+                                  value={activeActorId}
+                                />
+                                <button className="button secondary" type="submit">
+                                  Approve
+                                </button>
+                              </form>
+                            ) : null}
+                            {changeSet.status === "approved" ? (
+                              <form action={applyChangeSetAction}>
+                                <input
+                                  type="hidden"
+                                  name="changeset_id"
+                                  value={changeSet.id}
+                                />
+                                <input
+                                  type="hidden"
+                                  name="project_id"
+                                  value={activeProjectId}
+                                />
+                                <input
+                                  type="hidden"
+                                  name="actor"
+                                  value={activeActorId}
+                                />
+                                <button className="button secondary" type="submit">
+                                  Apply
+                                </button>
+                              </form>
+                            ) : (
+                              <code className="mono">{changeSet.id}</code>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </article>
+
+                <article className="stack-card">
+                  <h3>Deployment Registry</h3>
+                  <form
+                    action={createDeploymentTargetAction}
+                    className="composer compact"
+                  >
+                    <input type="hidden" name="project_id" value={activeProjectId} />
+                    <input type="hidden" name="actor" value={activeActorId} />
+                    <div className="input-grid">
+                      <label className="field">
+                        <span>App name</span>
+                        <input
+                          className="input"
+                          name="app_name"
+                          placeholder="BOSS"
+                          required
+                        />
+                      </label>
+                      <label className="field">
+                        <span>Repo</span>
+                        <input
+                          className="input"
+                          name="repo"
+                          placeholder="seanheiney/boss"
+                          required
+                        />
+                      </label>
+                    </div>
+                    <div className="input-grid">
+                      <label className="field">
+                        <span>Environment</span>
+                        <select className="input" name="environment" required>
+                          <option value="local">Local</option>
+                          <option value="preview">Preview</option>
+                          <option value="staging">Staging</option>
+                          <option value="production">Production</option>
+                        </select>
+                      </label>
+                      <label className="field">
+                        <span>Provider account</span>
+                        <select className="input" name="provider_account_id">
+                          <option value="">No provider account</option>
+                          {providerOps.providerAccounts.map((account) => (
+                            <option key={account.id} value={account.id}>
+                              {account.provider} / {account.accountLabel}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    </div>
+                    <div className="input-grid">
+                      <label className="field">
+                        <span>Target kind</span>
+                        <input
+                          className="input"
+                          name="target_kind"
+                          placeholder="digitalocean_app"
+                          required
+                        />
+                      </label>
+                      <label className="field">
+                        <span>Target ref</span>
+                        <input
+                          className="input"
+                          name="target_ref"
+                          placeholder="app-id-or-service-name"
+                          required
+                        />
+                      </label>
+                    </div>
+                    <label className="field">
+                      <span>Domains</span>
+                      <textarea
+                        className="textarea"
+                        name="domains"
+                        rows={2}
+                        placeholder={"One domain per line\nstaging.example.com"}
+                      />
+                    </label>
+                    <label className="field">
+                      <span>Secret refs</span>
+                      <textarea
+                        className="textarea"
+                        name="secret_refs"
+                        rows={2}
+                        placeholder={"One secret ref per line\nsec_database_url"}
+                      />
+                    </label>
+                    <button className="button secondary" type="submit">
+                      Register deployment target
+                    </button>
+                  </form>
+
+                  <form action={createDeploymentRunAction} className="composer compact">
+                    <input type="hidden" name="project_id" value={activeProjectId} />
+                    <input type="hidden" name="actor" value={activeActorId} />
+                    <label className="field">
+                      <span>Deployment target</span>
+                      <select className="input" name="deployment_target_id" required>
+                        <option value="">Select target</option>
+                        {providerOps.deploymentTargets.map((target) => (
+                          <option key={target.id} value={target.id}>
+                            {target.appName} / {target.environment} /{" "}
+                            {target.targetKind}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <div className="input-grid">
+                      <label className="field">
+                        <span>Commit/ref</span>
+                        <input
+                          className="input"
+                          name="commit_ref"
+                          placeholder="git sha or image tag"
+                        />
+                      </label>
+                      <label className="field">
+                        <span>Expected cost micros</span>
+                        <input
+                          className="input"
+                          name="expected_cost_usd_micros"
+                          type="number"
+                          min={0}
+                          defaultValue={0}
+                        />
+                      </label>
+                    </div>
+                    <label className="field">
+                      <span>Budget reservation id</span>
+                      <input
+                        className="input"
+                        name="reservation_id"
+                        placeholder="Required for spendy deployment runs"
+                      />
+                    </label>
+                    <label className="field">
+                      <span>Release packet JSON</span>
+                      <textarea
+                        className="textarea"
+                        name="release_packet_json"
+                        rows={3}
+                        placeholder='{"review_packet_id":"art_...","ci_status":"passed"}'
+                      />
+                    </label>
+                    <button className="button secondary" type="submit">
+                      Plan deployment run
+                    </button>
+                    <p className="detail">
+                      Provider deployments are modeled as ChangeSets. Health checks
+                      run only after the ChangeSet is applied, or immediately for
+                      local targets with no provider write.
+                    </p>
+                  </form>
+
+                  {providerOps.deploymentTargets.length === 0 ? (
+                    <p className="detail">No deployment targets registered yet.</p>
+                  ) : (
+                    <div className="feed-list">
+                      {providerOps.deploymentTargets.map((target) => (
+                        <div className="feed-row" key={target.id}>
+                          <div>
+                            <h4>
+                              {target.appName} / {target.environment}
+                            </h4>
+                            <p className="detail">
+                              {target.repo} / {target.targetKind} / {target.status}
+                            </p>
+                            <p className="detail">
+                              Domains:{" "}
+                              {target.domains.length > 0
+                                ? target.domains.join(", ")
+                                : "none"}
+                            </p>
+                          </div>
+                          <code className="mono">{target.targetRef}</code>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {providerOps.deploymentRuns.length > 0 ? (
+                    <div className="feed-list">
+                      {providerOps.deploymentRuns.slice(0, 5).map((run) => (
+                        <div className="feed-row" key={run.id}>
+                          <div>
+                            <h4>
+                              {run.appName} / {run.environment} / {run.status}
+                            </h4>
+                            <p className="detail">
+                              {run.repo} / {run.targetKind} /{" "}
+                              {run.commitRef ?? "no ref"}
+                            </p>
+                            <p className="detail">
+                              ChangeSet {run.changesetId ?? "none"} / health{" "}
+                              {run.healthArtifactId ?? "not checked"}
+                            </p>
+                            {run.failureReason ? (
+                              <p className="detail">
+                                Failure: {run.failureReason}
+                              </p>
+                            ) : null}
+                          </div>
+                          <div className="button-stack">
+                            <form action={runDeploymentHealthCheckAction}>
+                              <input
+                                type="hidden"
+                                name="deployment_run_id"
+                                value={run.id}
+                              />
+                              <input
+                                type="hidden"
+                                name="project_id"
+                                value={activeProjectId}
+                              />
+                              <input
+                                type="hidden"
+                                name="actor"
+                                value={activeActorId}
+                              />
+                              <button className="button secondary" type="submit">
+                                Run health checks
+                              </button>
+                            </form>
+                            <code className="mono">
+                              {run.rollbackArtifactId ?? run.releaseArtifactId ?? run.id}
+                            </code>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
+                </article>
+
+                <article className="stack-card">
+                  <h3>Health, Drift, and Receipts</h3>
+                  <div className="feed-list">
+                    {providerOps.providerHealth.slice(0, 4).map((health) => (
+                      <div className="feed-row" key={health.id}>
+                        <div>
+                          <h4>{health.provider}</h4>
+                          <p className="detail">
+                            {health.status} / API{" "}
+                            {health.apiAvailable ? "available" : "unavailable"}
+                          </p>
+                          <p className="detail">
+                            Rate limit {health.rateLimitStatus} / cap{" "}
+                            {health.usageCapStatus}
+                          </p>
+                        </div>
+                        <code className="mono">
+                          {formatDateTime(health.lastCheckedAt)}
+                        </code>
+                      </div>
+                    ))}
+                    {providerOps.driftReports.slice(0, 3).map((report) => (
+                      <div className="feed-row" key={report.id}>
+                        <div>
+                          <h4>{titleCaseToken(report.classification)}</h4>
+                          <p className="detail">{report.summary}</p>
+                          <p className="detail">
+                            unmanaged {report.unmanagedCount} / orphaned{" "}
+                            {report.orphanedCount} / security{" "}
+                            {report.securityImpactingCount}
+                          </p>
+                        </div>
+                        <code className="mono">{report.id}</code>
+                      </div>
+                    ))}
+                    {providerOps.resourceReceipts.slice(0, 4).map((receipt) => (
+                      <div className="feed-row" key={receipt.id}>
+                        <div>
+                          <h4>{receipt.action}</h4>
+                          <p className="detail">
+                            {receipt.provider} / {receipt.resourceType} /{" "}
+                            {receipt.status}
+                          </p>
+                          <p className="detail">
+                            {receipt.providerRef ?? receipt.dedupeKey}
+                          </p>
+                        </div>
+                        <code className="mono">
+                          {receipt.changesetId ?? receipt.id}
+                        </code>
+                      </div>
+                    ))}
+                    {providerOps.providerHealth.length === 0 &&
+                    providerOps.driftReports.length === 0 &&
+                    providerOps.resourceReceipts.length === 0 ? (
+                      <p className="detail">
+                        No ProviderOps health, drift, or receipt records yet.
+                      </p>
+                    ) : null}
+                  </div>
+                </article>
+
+                <article className="stack-card">
+                  <h3>Cost and Reconciliation Ledger</h3>
+                  <div className="feed-list">
+                    {providerOps.costAnomalies.slice(0, 4).map((anomaly) => (
+                      <div className="feed-row" key={anomaly.id}>
+                        <div>
+                          <h4>
+                            {anomaly.provider} / {titleCaseToken(anomaly.severity)}{" "}
+                            anomaly
+                          </h4>
+                          <p className="detail">{anomaly.summary}</p>
+                          <p className="detail">
+                            threshold {formatMicros(anomaly.thresholdUsdMicros)} /
+                            observed {formatMicros(anomaly.amountUsdMicros)}
+                            {anomaly.decisionId
+                              ? ` / decision ${anomaly.decisionId}`
+                              : ""}
+                          </p>
+                        </div>
+                        <code className="mono">{anomaly.status}</code>
+                      </div>
+                    ))}
+                    {providerOps.costs.slice(0, 4).map((cost) => (
+                      <div className="feed-row" key={cost.id}>
+                        <div>
+                          <h4>
+                            {cost.provider} / {cost.category}
+                          </h4>
+                          <p className="detail">
+                            {formatMicros(cost.amountUsdMicros)} /{" "}
+                            {cost.costLayer} / {cost.confidence}
+                          </p>
+                          <p className="detail">
+                            {cost.sourceRef ?? formatDateTime(cost.createdAt)}
+                          </p>
+                        </div>
+                        <code className="mono">{cost.id}</code>
+                      </div>
+                    ))}
+                    {providerOps.reconciliationRuns.slice(0, 4).map((run) => (
+                      <div className="feed-row" key={run.id}>
+                        <div>
+                          <h4>
+                            {run.provider ?? "all providers"} / {run.status}
+                          </h4>
+                          <p className="detail">
+                            {run.resourcesSeen} resources seen /{" "}
+                            {run.resourcesChanged} changed / {run.costsSeen} costs
+                          </p>
+                          <p className="detail">
+                            Started by {run.startedBy} at{" "}
+                            {formatDateTime(run.startedAt)}
+                          </p>
+                        </div>
+                        <code className="mono">{run.id}</code>
+                      </div>
+                    ))}
+                    {providerOps.costAnomalies.length === 0 &&
+                    providerOps.costs.length === 0 &&
+                    providerOps.reconciliationRuns.length === 0 ? (
+                      <p className="detail">
+                        No provider cost or reconciliation records yet.
+                      </p>
+                    ) : null}
+                  </div>
+                </article>
+              </div>
+            </>
+          )}
         </section>
 
         <section className="panel-stack">
