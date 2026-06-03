@@ -108,6 +108,7 @@ class OpenAIPlanRequest(BaseModel):
     dedupe_key: str
     prompt: str
     system_prompt: Optional[str] = None
+    created_by_job_id: Optional[str] = None
 
 
 class OpenAIPlanResponse(BaseModel):
@@ -133,6 +134,7 @@ class PullRequestProposalRequest(BaseModel):
     branch_name: str
     summary: str
     files: list[FileChange]
+    created_by_job_id: Optional[str] = None
 
 
 class PullRequestProposalJobRequest(PullRequestProposalRequest):
@@ -162,6 +164,7 @@ class PullRequestMergeRequest(BaseModel):
     pull_request_url: str
     title: str
     branch_name: Optional[str] = None
+    created_by_job_id: Optional[str] = None
 
 
 class PullRequestMergeJobRequest(PullRequestMergeRequest):
@@ -183,12 +186,23 @@ class PullRequestMergeResponse(BaseModel):
 
 class ReceiptResponse(BaseModel):
     id: str
+    project_id: str
     dedupe_key: str
     effect_kind: str
     status: str
+    effect_scope: dict[str, Any] = Field(default_factory=dict)
+    payload_hash: Optional[str] = None
     provider_ref: Optional[str] = None
+    created_by_job_id: Optional[str] = None
     result: Optional[dict[str, Any]] = None
     error: Optional[dict[str, Any]] = None
+    created_at: str
+    updated_at: str
+
+
+class ReceiptListResponse(BaseModel):
+    project_id: str
+    items: list[ReceiptResponse]
 
 
 class JobSummary(BaseModel):
@@ -405,6 +419,89 @@ class DeadletterListResponse(BaseModel):
     items: list[DeadletterItem]
 
 
+class BudgetReservationSummary(BaseModel):
+    id: str
+    project_id: str
+    job_id: Optional[str] = None
+    category: str
+    amount_usd_micros: int
+    status: str
+    reason: Optional[str] = None
+    expires_at: str
+    created_at: str
+
+
+class CostReceiptSummary(BaseModel):
+    id: str
+    project_id: str
+    reservation_id: Optional[str] = None
+    receipt_id: Optional[str] = None
+    category: str
+    skill_or_model_id: str
+    estimated_usd_micros: int
+    actual_usd_micros: Optional[int] = None
+    status: str
+    created_at: str
+
+
+class AuditExportScope(BaseModel):
+    task_id: Optional[str] = None
+    decision_id: Optional[str] = None
+    job_id: Optional[str] = None
+
+
+class AuditExportCounts(BaseModel):
+    tasks: int
+    jobs: int
+    decisions: int
+    artifacts: int
+    receipts: int
+    budget_reservations: int
+    cost_receipts: int
+    routing_logs: int
+    deadletters: int
+    events: int
+
+
+class AuditExportResponse(BaseModel):
+    project_id: str
+    project_name: str
+    workspace_name: str
+    org_name: str
+    generated_at: str
+    scope: AuditExportScope
+    counts: AuditExportCounts
+    chain: dict[str, list[str]]
+    tasks: list[TaskSummary]
+    jobs: list[JobSummary]
+    decisions: list[DecisionCard]
+    artifacts: list[ArtifactSummary]
+    receipts: list[ReceiptResponse]
+    budget_reservations: list[BudgetReservationSummary]
+    cost_receipts: list[CostReceiptSummary]
+    routing_logs: list["RoutingLogItem"]
+    deadletters: list[DeadletterItem]
+    events: list[EventItem]
+
+
+class ReplayBundleRequest(BaseModel):
+    project_id: str
+    task_id: Optional[str] = None
+    decision_id: Optional[str] = None
+    job_id: Optional[str] = None
+    actor: str = "system"
+
+
+class ReplayBundleResponse(BaseModel):
+    status: str
+    artifact_id: str
+    project_id: str
+    artifact_type: str
+    created_at: str
+    scope: AuditExportScope
+    counts: AuditExportCounts
+
+
 class RoleSummary(BaseModel):
     id: str
     project_id: str
@@ -571,3 +668,6 @@ class RoutingLogItem(BaseModel):
 class RoutingLogListResponse(BaseModel):
     project_id: str
     items: list[RoutingLogItem]
+
+
+AuditExportResponse.model_rebuild()

@@ -509,6 +509,7 @@ paths:
                 dedupe_key: { type: string }
                 prompt: { type: string }
                 system_prompt: { type: string }
+                created_by_job_id: { type: string }
       responses:
         '200': { description: Plan artifact created, reused, or blocked }
   /v1/software-factory/proposals:
@@ -530,6 +531,7 @@ paths:
                 title: { type: string }
                 branch_name: { type: string }
                 summary: { type: string }
+                created_by_job_id: { type: string }
                 files:
                   type: array
                   items:
@@ -559,6 +561,7 @@ paths:
                 pull_request_url: { type: string }
                 title: { type: string }
                 branch_name: { type: string }
+                created_by_job_id: { type: string }
       responses:
         '200': { description: Sandbox PR merged, reused, blocked, or failed }
   /v1/software-factory/proposals/queue:
@@ -626,6 +629,62 @@ paths:
           schema: { type: string }
       responses:
         '200': { description: Receipt }
+  /v1/receipts:
+    get:
+      summary: List receipts for a project
+      parameters:
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, default: 50 }
+      responses:
+        '200': { description: Receipt list }
+  /v1/audit/export:
+    get:
+      summary: Export a reconstructable audit chain
+      parameters:
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+        - name: task_id
+          in: query
+          required: false
+          schema: { type: string }
+        - name: decision_id
+          in: query
+          required: false
+          schema: { type: string }
+        - name: job_id
+          in: query
+          required: false
+          schema: { type: string }
+      responses:
+        '200': { description: Audit export }
+        '404': { description: Unknown project }
+  /v1/audit/replay-bundles:
+    post:
+      summary: Create a replay-bundle artifact from the current audit chain
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id]
+              properties:
+                project_id: { type: string }
+                task_id: { type: string }
+                decision_id: { type: string }
+                job_id: { type: string }
+                actor: { type: string, default: system }
+      responses:
+        '201': { description: Replay bundle created }
+        '404': { description: Unknown project }
   /v1/events:
     get:
       summary: Event feed

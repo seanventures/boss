@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
 
+import { emptyAuditSummary } from "../lib/audit";
 import { emptyArtifactFeed } from "../lib/artifacts";
 import { emptyActivityFeed } from "../lib/events";
 import { emptyDeadletterFeed } from "../lib/deadletters";
 import { emptyEntitlementFeed } from "../lib/entitlements";
 import { emptyPackFeed } from "../lib/packs";
+import { emptyReceiptFeed } from "../lib/receipts";
 import { emptyRoleFeed } from "../lib/roles";
 import { emptyRoutingLogFeed } from "../lib/routing";
 import { emptySkillFeed } from "../lib/skills";
@@ -72,5 +74,21 @@ describe("empty API feeds", () => {
     expect(feed.apiReachable).toBe(false);
     expect(feed.items).toEqual([]);
     expect(feed.blockedReason).toBe("skill api down");
+  });
+
+  it("returns an unavailable receipt feed", () => {
+    const feed = emptyReceiptFeed("receipt api down");
+
+    expect(feed.apiReachable).toBe(false);
+    expect(feed.items).toEqual([]);
+    expect(feed.blockedReason).toBe("receipt api down");
+  });
+
+  it("returns an unavailable audit summary", () => {
+    const summary = emptyAuditSummary("audit api down");
+
+    expect(summary.apiReachable).toBe(false);
+    expect(summary.counts.receipts).toBe(0);
+    expect(summary.blockedReason).toBe("audit api down");
   });
 });

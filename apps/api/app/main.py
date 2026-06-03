@@ -1,4 +1,5 @@
 from contextlib import asynccontextmanager
+from typing import Optional
 
 from fastapi import FastAPI, HTTPException
 from sqlalchemy import text
@@ -10,8 +11,12 @@ from .schemas import (
     ArtifactDetail,
     ArtifactListResponse,
     ArtifactSummary,
+    AuditExportCounts,
+    AuditExportResponse,
+    AuditExportScope,
     BudgetQuoteRequest,
     BudgetQuoteResponse,
+    BudgetReservationSummary,
     BudgetReleaseRequest,
     BudgetReleaseResponse,
     BudgetStatusResponse,
@@ -19,6 +24,7 @@ from .schemas import (
     BudgetReserveResponse,
     CommandProposeRequest,
     CommandProposeResponse,
+    CostReceiptSummary,
     DecisionActionRequest,
     DecisionCard,
     DecisionInboxResponse,
@@ -45,7 +51,10 @@ from .schemas import (
     PullRequestProposalJobRequest,
     PullRequestProposalRequest,
     PullRequestProposalResponse,
+    ReceiptListResponse,
     ReceiptResponse,
+    ReplayBundleRequest,
+    ReplayBundleResponse,
     RoleDetail,
     RoleListResponse,
     RoleSummary,
@@ -68,6 +77,7 @@ from .schemas import (
     WorkerPollRequest,
     WorkerPollResponse,
 )
+from .services.audit import AuditTrailService
 from .services.budget import BudgetGovernor
 from .services.decisions import (
     DecisionNotFoundError,
@@ -91,6 +101,7 @@ software_factory = SoftwareFactoryService(settings)
 decisions = DecisionService(settings)
 specpack = SpecPackService(settings)
 entitlements = EntitlementBrokerService(settings)
+audit = AuditTrailService(settings)
 
 
 @asynccontextmanager
@@ -204,6 +215,69 @@ def deadletter_item_from_row(row) -> DeadletterItem:
     )
 
 
+def event_item_from_row(row) -> EventItem:
+    return EventItem(
+        id=row["id"],
+        event_type=row["event_type"],
+        actor=row["actor"],
+        entity_type=row["entity_type"],
+        entity_id=row["entity_id"],
+        data=row["data"] or {},
+        created_at=row["created_at"].isoformat(),
+    )
+
+
+def receipt_response_from_row(row) -> ReceiptResponse:
+    return ReceiptResponse(
+        id=row["id"],
+        project_id=row["project_id"],
+        dedupe_key=row["dedupe_key"],
+        effect_kind=row["effect_kind"],
+        effect_scope=row.get("effect_scope") or {},
+        payload_hash=row.get("payload_hash"),
+        status=row["status"],
+        provider_ref=row.get("provider_ref"),
+        created_by_job_id=row.get("created_by_job_id"),
+        result=row.get("result"),
+        error=row.get("error"),
+        created_at=row["created_at"].isoformat(),
+        updated_at=row["updated_at"].isoformat(),
+    )
+
+
+def budget_reservation_summary_from_row(row) -> BudgetReservationSummary:
+    return BudgetReservationSummary(
+        id=row["id"],
+        project_id=row["project_id"],
+        job_id=row.get("job_id"),
+        category=row["category"],
+        amount_usd_micros=int(row["amount_usd_micros"]),
+        status=row["status"],
+        reason=row.get("reason"),
+        expires_at=row["expires_at"].isoformat(),
+        created_at=row["created_at"].isoformat(),
+    )
+
+
+def cost_receipt_summary_from_row(row) -> CostReceiptSummary:
+    return CostReceiptSummary(
+        id=row["id"],
+        project_id=row["project_id"],
+        reservation_id=row.get("reservation_id"),
+        receipt_id=row.get("receipt_id"),
+        category=row["category"],
+        skill_or_model_id=row["skill_or_model_id"],
+        estimated_usd_micros=int(row["estimated_usd_micros"]),
+        actual_usd_micros=(
+            int(row["actual_usd_micros"])
+            if row.get("actual_usd_micros") is not None
+            else None
+        ),
+        status=row["status"],
+        created_at=row["created_at"].isoformat(),
+    )
+
+
 def role_summary_from_service(payload) -> RoleSummary:
     return RoleSummary(
         id=payload["id"],
@@ -312,7 +386,9 @@ def routing_log_item_from_service(payload) -> RoutingLogItem:
         denial_reason=payload.get("denial_reason"),
         rejected_sources=payload.get("rejected_sources") or [],
         decision=payload.get("decision") or {},
-        created_at=payload["created_at"],
+        created_at=payload["created_at"].isoformat()
+        if hasattr(payload["created_at"], "isoformat")
+        else payload["created_at"],
     )
 
 
@@ -680,6 +756,13 @@ def create_job(payload: JobCreateRequest) -> JobSummary:
             max_attempts=payload.max_attempts,
             run_after_seconds=payload.run_after_seconds,
         )
+        if payload.reservation_id:
+            budget.attach_job(
+                connection,
+                payload.project_id,
+                payload.reservation_id,
+                result["id"],
+            )
         return JobSummary(**result)
 
 
@@ -976,6 +1059,7 @@ def create_openai_plan(payload: OpenAIPlanRequest) -> OpenAIPlanResponse:
             payload.dedupe_key,
             payload.prompt,
             payload.system_prompt,
+            payload.created_by_job_id,
         )
         return OpenAIPlanResponse(**result)
 
@@ -995,6 +1079,7 @@ def create_pull_request_proposal(
             payload.branch_name,
             payload.summary,
             payload.files,
+            payload.created_by_job_id,
         )
         return PullRequestProposalResponse(**result)
 
@@ -1012,6 +1097,7 @@ def merge_pull_request(payload: PullRequestMergeRequest) -> PullRequestMergeResp
             payload.pull_request_url,
             payload.title,
             payload.branch_name,
+            payload.created_by_job_id,
         )
         return PullRequestMergeResponse(**result)
 
@@ -1039,6 +1125,12 @@ def queue_pull_request_proposal(
             },
             priority=payload.priority,
             max_attempts=payload.max_attempts,
+        )
+        budget.attach_job(
+            connection,
+            payload.project_id,
+            payload.reservation_id,
+            result["id"],
         )
         return JobSummary(**result)
 
@@ -1087,18 +1179,7 @@ def event_feed(project_id: str, limit: int = 50) -> EventFeedResponse:
             {"project_id": project_id, "limit": limit},
         ).mappings().all()
 
-        items = [
-            EventItem(
-                id=row["id"],
-                event_type=row["event_type"],
-                actor=row["actor"],
-                entity_type=row["entity_type"],
-                entity_id=row["entity_id"],
-                data=row["data"] or {},
-                created_at=row["created_at"].isoformat(),
-            )
-            for row in rows
-        ]
+        items = [event_item_from_row(row) for row in rows]
         return EventFeedResponse(project_id=project_id, items=items)
 
 
@@ -1126,6 +1207,19 @@ def list_deadletters(project_id: str, limit: int = 50) -> DeadletterListResponse
         )
 
 
+@app.get("/v1/receipts", response_model=ReceiptListResponse)
+def list_receipts(project_id: str, limit: int = 50) -> ReceiptListResponse:
+    if limit < 1 or limit > 200:
+        raise HTTPException(status_code=400, detail="limit must be between 1 and 200.")
+
+    with begin(engine) as connection:
+        items = receipts.list_by_project(connection, project_id, limit)
+        return ReceiptListResponse(
+            project_id=project_id,
+            items=[receipt_response_from_row(item) for item in items],
+        )
+
+
 @app.get("/v1/receipts/{dedupe_key}", response_model=ReceiptResponse)
 def get_receipt(dedupe_key: str) -> ReceiptResponse:
     with begin(engine) as connection:
@@ -1134,4 +1228,79 @@ def get_receipt(dedupe_key: str) -> ReceiptResponse:
         )
         if not receipt:
             raise HTTPException(status_code=404, detail="Receipt not found")
-        return ReceiptResponse(**receipt)
+        return receipt_response_from_row(receipt)
+
+
+@app.get("/v1/audit/export", response_model=AuditExportResponse)
+def export_audit_trail(
+    project_id: str,
+    task_id: Optional[str] = None,
+    decision_id: Optional[str] = None,
+    job_id: Optional[str] = None,
+) -> AuditExportResponse:
+    with begin(engine) as connection:
+        try:
+            payload = audit.export(
+                connection,
+                project_id,
+                task_id=task_id,
+                decision_id=decision_id,
+                job_id=job_id,
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        return AuditExportResponse(
+            project_id=payload["project_id"],
+            project_name=payload["project_name"],
+            workspace_name=payload["workspace_name"],
+            org_name=payload["org_name"],
+            generated_at=payload["generated_at"],
+            scope=AuditExportScope(**payload["scope"]),
+            counts=AuditExportCounts(**payload["counts"]),
+            chain=payload["chain"],
+            tasks=[task_summary_from_row(row) for row in payload["tasks"]],
+            jobs=[job_summary_from_row(row) for row in payload["jobs"]],
+            decisions=[decision_card_from_row(row) for row in payload["decisions"]],
+            artifacts=[artifact_summary_from_row(row) for row in payload["artifacts"]],
+            receipts=[receipt_response_from_row(row) for row in payload["receipts"]],
+            budget_reservations=[
+                budget_reservation_summary_from_row(row)
+                for row in payload["budget_reservations"]
+            ],
+            cost_receipts=[
+                cost_receipt_summary_from_row(row)
+                for row in payload["cost_receipts"]
+            ],
+            routing_logs=[
+                routing_log_item_from_service(row) for row in payload["routing_logs"]
+            ],
+            deadletters=[
+                deadletter_item_from_row(row) for row in payload["deadletters"]
+            ],
+            events=[event_item_from_row(row) for row in payload["events"]],
+        )
+
+
+@app.post("/v1/audit/replay-bundles", response_model=ReplayBundleResponse, status_code=201)
+def create_replay_bundle(payload: ReplayBundleRequest) -> ReplayBundleResponse:
+    with begin(engine) as connection:
+        try:
+            result = audit.create_replay_bundle(
+                connection,
+                payload.project_id,
+                actor=payload.actor,
+                task_id=payload.task_id,
+                decision_id=payload.decision_id,
+                job_id=payload.job_id,
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        return ReplayBundleResponse(
+            status=result["status"],
+            artifact_id=result["artifact_id"],
+            project_id=result["project_id"],
+            artifact_type=result["artifact_type"],
+            created_at=result["created_at"],
+            scope=AuditExportScope(**result["scope"]),
+            counts=AuditExportCounts(**result["counts"]),
+        )

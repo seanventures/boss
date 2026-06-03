@@ -267,6 +267,7 @@ export type OpenAIPlanRequest = {
   dedupe_key: string;
   prompt: string;
   system_prompt?: string;
+  created_by_job_id?: string;
 };
 
 export type OpenAIPlanResponse = {
@@ -292,6 +293,7 @@ export type PullRequestProposalRequest = {
   branch_name: string;
   summary: string;
   files: FileChange[];
+  created_by_job_id?: string;
 };
 
 export type PullRequestProposalJobRequest = PullRequestProposalRequest & {
@@ -321,6 +323,7 @@ export type PullRequestMergeRequest = {
   pull_request_url: string;
   title: string;
   branch_name?: string;
+  created_by_job_id?: string;
 };
 
 export type PullRequestMergeJobRequest = PullRequestMergeRequest & {
@@ -359,6 +362,110 @@ export type ArtifactDetail = ArtifactSummary & {
 export type ArtifactListResponse = {
   project_id: string;
   items: ArtifactSummary[];
+};
+
+export type ReceiptResponse = {
+  id: string;
+  project_id: string;
+  dedupe_key: string;
+  effect_kind: string;
+  effect_scope: Record<string, unknown>;
+  payload_hash?: string;
+  status: string;
+  provider_ref?: string;
+  created_by_job_id?: string;
+  result?: Record<string, unknown>;
+  error?: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ReceiptListResponse = {
+  project_id: string;
+  items: ReceiptResponse[];
+};
+
+export type BudgetReservationSummary = {
+  id: string;
+  project_id: string;
+  job_id?: string;
+  category: string;
+  amount_usd_micros: number;
+  status: string;
+  reason?: string;
+  expires_at: string;
+  created_at: string;
+};
+
+export type CostReceiptSummary = {
+  id: string;
+  project_id: string;
+  reservation_id?: string;
+  receipt_id?: string;
+  category: string;
+  skill_or_model_id: string;
+  estimated_usd_micros: number;
+  actual_usd_micros?: number;
+  status: string;
+  created_at: string;
+};
+
+export type AuditExportScope = {
+  task_id?: string;
+  decision_id?: string;
+  job_id?: string;
+};
+
+export type AuditExportCounts = {
+  tasks: number;
+  jobs: number;
+  decisions: number;
+  artifacts: number;
+  receipts: number;
+  budget_reservations: number;
+  cost_receipts: number;
+  routing_logs: number;
+  deadletters: number;
+  events: number;
+};
+
+export type AuditExportResponse = {
+  project_id: string;
+  project_name: string;
+  workspace_name: string;
+  org_name: string;
+  generated_at: string;
+  scope: AuditExportScope;
+  counts: AuditExportCounts;
+  chain: Record<string, string[]>;
+  tasks: TaskSummary[];
+  jobs: JobSummary[];
+  decisions: DecisionCard[];
+  artifacts: ArtifactSummary[];
+  receipts: ReceiptResponse[];
+  budget_reservations: BudgetReservationSummary[];
+  cost_receipts: CostReceiptSummary[];
+  routing_logs: RoutingLogItem[];
+  deadletters: DeadletterItem[];
+  events: EventItem[];
+};
+
+export type ReplayBundleRequest = {
+  project_id: string;
+  task_id?: string;
+  decision_id?: string;
+  job_id?: string;
+  actor?: string;
+};
+
+export type ReplayBundleResponse = {
+  status: string;
+  artifact_id: string;
+  project_id: string;
+  artifact_type: string;
+  created_at: string;
+  scope: AuditExportScope;
+  counts: AuditExportCounts;
 };
 
 export type RoleSummary = {
@@ -542,16 +649,6 @@ export type DeadletterItem = {
 export type DeadletterListResponse = {
   project_id: string;
   items: DeadletterItem[];
-};
-
-export type ReceiptResponse = {
-  id: string;
-  dedupe_key: string;
-  effect_kind: string;
-  status: string;
-  provider_ref?: string;
-  result?: Record<string, unknown>;
-  error?: Record<string, unknown>;
 };
 
 export type EventItem = {
@@ -858,6 +955,29 @@ export function createBossApiClient(config: BossApiClientConfig) {
         "GET",
         `/v1/receipts/${encodeURIComponent(dedupeKey)}`,
       );
+    },
+    listReceipts(projectId: string, limit = 50) {
+      return request<ReceiptListResponse>("GET", "/v1/receipts", {
+        query: { project_id: projectId, limit },
+      });
+    },
+    exportAuditTrail(
+      projectId: string,
+      scope?: { taskId?: string; decisionId?: string; jobId?: string },
+    ) {
+      return request<AuditExportResponse>("GET", "/v1/audit/export", {
+        query: {
+          project_id: projectId,
+          task_id: scope?.taskId,
+          decision_id: scope?.decisionId,
+          job_id: scope?.jobId,
+        },
+      });
+    },
+    createReplayBundle(payload: ReplayBundleRequest) {
+      return request<ReplayBundleResponse>("POST", "/v1/audit/replay-bundles", {
+        body: payload,
+      });
     },
     listEvents(projectId: string, limit = 50) {
       return request<EventFeedResponse>("GET", "/v1/events", {

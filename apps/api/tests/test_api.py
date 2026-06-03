@@ -1857,6 +1857,7 @@ def test_command_to_merge_flow_completes_task_when_merge_policy_enabled(
                 "branch_name": leased_pr_job["payload"]["branch_name"],
                 "summary": leased_pr_job["payload"]["summary"],
                 "files": leased_pr_job["payload"]["files"],
+                "created_by_job_id": leased_pr_job["id"],
             },
         )
         assert proposal_run.status_code == 200
@@ -1916,6 +1917,7 @@ def test_command_to_merge_flow_completes_task_when_merge_policy_enabled(
                 "pull_request_url": leased_merge_job["payload"]["pull_request_url"],
                 "title": leased_merge_job["payload"]["title"],
                 "branch_name": leased_merge_job["payload"].get("branch_name"),
+                "created_by_job_id": leased_merge_job["id"],
             },
         )
         assert merge_run.status_code == 200
@@ -1977,6 +1979,62 @@ def test_command_to_merge_flow_completes_task_when_merge_policy_enabled(
         assert "software_factory.pull_request_proposed" in event_types
         assert "software_factory.pull_request_merged" in event_types
         assert "task.completed" in event_types
+
+        receipt_list = client.get(
+            "/v1/receipts",
+            params={"project_id": "boss-dogfood", "limit": 10},
+        )
+        assert receipt_list.status_code == 200
+        receipt_payload = receipt_list.json()
+        assert receipt_payload["project_id"] == "boss-dogfood"
+        assert len(receipt_payload["items"]) == 2
+        assert {item["effect_kind"] for item in receipt_payload["items"]} == {
+            "github.pull_request.create",
+            "github.pull_request.merge",
+        }
+        assert {
+            item["created_by_job_id"] for item in receipt_payload["items"]
+        } == {leased_pr_job["id"], leased_merge_job["id"]}
+
+        audit_export = client.get(
+            "/v1/audit/export",
+            params={"project_id": "boss-dogfood", "task_id": task_id},
+        )
+        assert audit_export.status_code == 200
+        export_payload = audit_export.json()
+        assert export_payload["project_id"] == "boss-dogfood"
+        assert export_payload["scope"]["task_id"] == task_id
+        assert export_payload["counts"]["tasks"] == 1
+        assert export_payload["counts"]["jobs"] == 3
+        assert export_payload["counts"]["decisions"] == 2
+        assert export_payload["counts"]["receipts"] == 2
+        assert export_payload["counts"]["budget_reservations"] == 1
+        assert export_payload["counts"]["routing_logs"] >= 1
+        assert task_id in export_payload["chain"]["task_ids"]
+        assert leased_pr_job["id"] in export_payload["chain"]["job_ids"]
+        assert leased_merge_job["id"] in export_payload["chain"]["job_ids"]
+        assert pr_decision_id in export_payload["chain"]["decision_ids"]
+
+        replay_bundle = client.post(
+            "/v1/audit/replay-bundles",
+            json={
+                "project_id": "boss-dogfood",
+                "task_id": task_id,
+                "actor": "ceo",
+            },
+        )
+        assert replay_bundle.status_code == 201
+        replay_payload = replay_bundle.json()
+        assert replay_payload["status"] == "created"
+        assert replay_payload["artifact_type"] == "replay_bundle"
+        assert replay_payload["counts"]["receipts"] == 2
+
+        replay_artifact = client.get(f"/v1/artifacts/{replay_payload['artifact_id']}")
+        assert replay_artifact.status_code == 200
+        replay_artifact_payload = replay_artifact.json()
+        assert replay_artifact_payload["artifact_type"] == "replay_bundle"
+        assert replay_artifact_payload["content"]["counts"]["jobs"] == 3
+        assert leased_merge_job["id"] in replay_artifact_payload["content"]["chain"]["job_ids"]
     finally:
         api_main.decisions.settings.enable_sandbox_merge = previous
         api_main.software_factory.settings.openai_api_key = previous_openai

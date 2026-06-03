@@ -16,7 +16,9 @@ class ReceiptService:
         row = connection.execute(
             text(
                 """
-                SELECT id, dedupe_key, effect_kind, status, provider_ref, result, error
+                SELECT id, project_id, dedupe_key, effect_kind, effect_scope, payload_hash,
+                       status, provider_ref, created_by_job_id, result, error,
+                       created_at, updated_at
                 FROM receipts
                 WHERE org_id = :org_id AND dedupe_key = :dedupe_key
                 """
@@ -24,6 +26,25 @@ class ReceiptService:
             {"org_id": org_id, "dedupe_key": dedupe_key},
         ).mappings().first()
         return dict(row) if row else None
+
+    def list_by_project(
+        self, connection: Connection, project_id: str, limit: int
+    ) -> list[dict]:
+        rows = connection.execute(
+            text(
+                """
+                SELECT id, project_id, dedupe_key, effect_kind, effect_scope, payload_hash,
+                       status, provider_ref, created_by_job_id, result, error,
+                       created_at, updated_at
+                FROM receipts
+                WHERE project_id = :project_id
+                ORDER BY created_at DESC
+                LIMIT :limit
+                """
+            ),
+            {"project_id": project_id, "limit": limit},
+        ).mappings().all()
+        return [dict(row) for row in rows]
 
     def create_or_reuse(
         self,
@@ -35,6 +56,7 @@ class ReceiptService:
         effect_kind: str,
         effect_scope: dict,
         payload: dict,
+        created_by_job_id: Optional[str] = None,
     ) -> tuple[dict, bool]:
         existing = self.get_by_dedupe_key(connection, org_id, dedupe_key)
         if existing:
@@ -46,11 +68,11 @@ class ReceiptService:
                 """
                 INSERT INTO receipts (
                     id, org_id, workspace_id, project_id, dedupe_key, effect_kind,
-                    effect_scope, payload_hash, status
+                    effect_scope, payload_hash, status, created_by_job_id
                 )
                 VALUES (
                     :id, :org_id, :workspace_id, :project_id, :dedupe_key, :effect_kind,
-                    CAST(:effect_scope AS JSONB), :payload_hash, 'in_progress'
+                    CAST(:effect_scope AS JSONB), :payload_hash, 'in_progress', :created_by_job_id
                 )
                 """
             ),
@@ -63,6 +85,7 @@ class ReceiptService:
                 "effect_kind": effect_kind,
                 "effect_scope": json.dumps(effect_scope),
                 "payload_hash": json_hash(payload),
+                "created_by_job_id": created_by_job_id,
             },
         )
         emit_event(
@@ -77,12 +100,18 @@ class ReceiptService:
         return (
             {
                 "id": receipt_id,
+                "project_id": project_id,
                 "dedupe_key": dedupe_key,
                 "effect_kind": effect_kind,
                 "status": "in_progress",
+                "effect_scope": effect_scope,
+                "payload_hash": json_hash(payload),
                 "provider_ref": None,
+                "created_by_job_id": created_by_job_id,
                 "result": None,
                 "error": None,
+                "created_at": None,
+                "updated_at": None,
             },
             True,
         )

@@ -75,3 +75,11 @@ export async function installPackAction(formData: FormData): Promise<void> {
   });
   revalidatePath("/");
 }
+
+export async function createReplayBundleAction(): Promise<void> {
+  await client.createReplayBundle({
+    project_id: process.env.NEXT_PUBLIC_BOSS_PROJECT_ID ?? "boss-dogfood",
+    actor: "executive_console",
+  });
+  revalidatePath("/");
+}

@@ -114,6 +114,7 @@ class SoftwareFactoryService:
         dedupe_key: str,
         prompt: str,
         system_prompt: Optional[str],
+        created_by_job_id: Optional[str] = None,
     ) -> dict:
         reservation = self.budget.assert_active_reservation(
             connection, project_id, reservation_id
@@ -160,6 +161,7 @@ class SoftwareFactoryService:
                 "routing_log_id": route["route_decision_log_id"],
             },
             {"prompt": prompt, "system_prompt": system_prompt},
+            created_by_job_id=created_by_job_id,
         )
         if not created and receipt["status"] == "succeeded":
             self.budget.release(
@@ -236,6 +238,7 @@ class SoftwareFactoryService:
             "plan_draft",
             "OpenAI plan draft",
             {"prompt": prompt, "output_text": output_text},
+            created_by_job_id=created_by_job_id,
         )
         self.receipts.mark_succeeded(
             connection,
@@ -341,6 +344,7 @@ class SoftwareFactoryService:
         branch_name: str,
         summary: str,
         files: list[FileChange],
+        created_by_job_id: Optional[str] = None,
     ) -> dict:
         reservation = self.budget.assert_active_reservation(
             connection, project_id, reservation_id
@@ -388,6 +392,7 @@ class SoftwareFactoryService:
                 "summary": summary,
                 "files": [file.model_dump() for file in files],
             },
+            created_by_job_id=created_by_job_id,
         )
         if not created and pr_receipt["status"] == "succeeded":
             self.budget.release(
@@ -557,6 +562,7 @@ class SoftwareFactoryService:
                 "files_changed": [file.path for file in files],
                 "github_commits": commit_shas,
             },
+            created_by_job_id=created_by_job_id,
         )
         test_report_artifact_id = create_artifact(
             connection,
@@ -575,6 +581,7 @@ class SoftwareFactoryService:
                 ],
                 "notes": review_text,
             },
+            created_by_job_id=created_by_job_id,
         )
         artifact_id = create_artifact(
             connection,
@@ -596,6 +603,7 @@ class SoftwareFactoryService:
                 "openai_response_id": review_provider_ref,
                 "routing_log_id": route["route_decision_log_id"],
             },
+            created_by_job_id=created_by_job_id,
         )
         decision_id = create_blocking_decision(
             connection,
@@ -671,6 +679,7 @@ class SoftwareFactoryService:
         pull_request_url: str,
         title: str,
         branch_name: Optional[str],
+        created_by_job_id: Optional[str] = None,
     ) -> dict:
         if task_id is None:
             task_id = connection.execute(
@@ -702,6 +711,7 @@ class SoftwareFactoryService:
                 "pull_request_url": pull_request_url,
                 "branch_name": branch_name,
             },
+            created_by_job_id=created_by_job_id,
         )
         if not created and merge_receipt["status"] == "succeeded":
             self._mark_merge_completed(
@@ -778,6 +788,7 @@ class SoftwareFactoryService:
                 "message": merge.message,
                 "merge_method": self.settings.sandbox_merge_method,
             },
+            created_by_job_id=created_by_job_id,
         )
         result = {
             "artifact_id": artifact_id,

@@ -116,7 +116,10 @@ The dogfood seed also registers the initial entitlement-source inventory from `p
 - `POST /v1/software-factory/merges`
 - `POST /v1/software-factory/proposals/queue`
 - `POST /v1/software-factory/merges/queue`
+- `GET /v1/receipts`
 - `GET /v1/receipts/{dedupe_key}`
+- `GET /v1/audit/export`
+- `POST /v1/audit/replay-bundles`
 
 ## Budget-governor behavior
 
@@ -124,6 +127,13 @@ The dogfood seed also registers the initial entitlement-source inventory from `p
 - Reused or blocked spendy effects release their reservation instead of leaving budget locked.
 - Spend-gated jobs without an active reservation are not leased; they create a visible decision and are cancelled explicitly rather than running silently.
 - Real sandbox PR proposals can now be queued as leased jobs so GitHub/OpenAI execution runs through `reservation -> job -> lease -> receipt -> artifact -> decision`.
+
+## Audit and replay
+
+- `GET /v1/receipts` lists receipt-backed effects as first-class API objects for a project.
+- `GET /v1/audit/export` reconstructs the current command/task/job/decision/artifact/receipt/event chain, with optional task/job/decision scoping.
+- `POST /v1/audit/replay-bundles` persists that export as a durable `replay_bundle` artifact so the console and external clients can capture a point-in-time run packet.
+- Queued OpenAI, PR proposal, and merge work now stamps both artifacts and receipts with `created_by_job_id`, and PR-proposal reservations are attached to their worker jobs for tighter lineage.
 - Approving a plan-review decision now auto-reserves the configured sandbox proposal budget and queues the next `software_factory.propose_pr` job instead of stopping at decision state only.
 - Approving the final sandbox PR review decision creates a receipt-linked merge gate by default, and can queue a real `github.pull_request.merge` job only when `BOSS_ENABLE_SANDBOX_MERGE=true`.
 

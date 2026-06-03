@@ -482,6 +482,12 @@ class DecisionService:
                 "requires_reservation": True,
             },
         )
+        self.budget.attach_job(
+            connection,
+            row["project_id"],
+            reservation["reservation_id"],
+            job["id"],
+        )
         emit_event(
             connection,
             row["project_id"],

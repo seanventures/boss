@@ -366,6 +366,37 @@ class BudgetGovernor:
             "message": reason,
         }
 
+    def attach_job(
+        self,
+        connection: Connection,
+        project_id: str,
+        reservation_id: str,
+        job_id: str,
+    ) -> None:
+        connection.execute(
+            text(
+                """
+                UPDATE budget_reservations
+                SET job_id = :job_id
+                WHERE id = :reservation_id AND project_id = :project_id
+                """
+            ),
+            {
+                "job_id": job_id,
+                "reservation_id": reservation_id,
+                "project_id": project_id,
+            },
+        )
+        emit_event(
+            connection,
+            project_id,
+            "budget.reservation_attached",
+            "budget_governor",
+            "budget_reservation",
+            reservation_id,
+            {"job_id": job_id},
+        )
+
     def assert_active_reservation(
         self, connection: Connection, project_id: str, reservation_id: str
     ) -> Optional[dict]:

@@ -61,6 +61,7 @@ def execute_job(job: LeasedJob, client: ControlPlaneClient) -> dict[str, Any]:
                 "dedupe_key": job.payload["dedupe_key"],
                 "prompt": job.payload["prompt"],
                 "system_prompt": job.payload.get("system_prompt"),
+                "created_by_job_id": job.id,
             }
         )
         if result.get("status") == "failed":
@@ -77,6 +78,7 @@ def execute_job(job: LeasedJob, client: ControlPlaneClient) -> dict[str, Any]:
                 "branch_name": job.payload["branch_name"],
                 "summary": job.payload["summary"],
                 "files": job.payload["files"],
+                "created_by_job_id": job.id,
             }
         )
         if result.get("status") == "failed":
@@ -94,6 +96,7 @@ def execute_job(job: LeasedJob, client: ControlPlaneClient) -> dict[str, Any]:
                 "pull_request_url": job.payload["pull_request_url"],
                 "title": job.payload["title"],
                 "branch_name": job.payload.get("branch_name"),
+                "created_by_job_id": job.id,
             }
         )
         if result.get("status") == "failed":

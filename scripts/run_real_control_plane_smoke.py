@@ -96,6 +96,7 @@ def drain_worker_once(client: TestClient) -> dict | None:
                 "dedupe_key": job["payload"]["dedupe_key"],
                 "prompt": job["payload"]["prompt"],
                 "system_prompt": job["payload"].get("system_prompt"),
+                "created_by_job_id": job["id"],
             },
         )
     elif job["kind"] == "software_factory.propose_pr":
@@ -109,6 +110,7 @@ def drain_worker_once(client: TestClient) -> dict | None:
                 "branch_name": job["payload"]["branch_name"],
                 "summary": job["payload"]["summary"],
                 "files": job["payload"]["files"],
+                "created_by_job_id": job["id"],
             },
         )
     elif job["kind"] == "github.pull_request.merge":
@@ -122,6 +124,7 @@ def drain_worker_once(client: TestClient) -> dict | None:
                 "pull_request_url": job["payload"]["pull_request_url"],
                 "title": job["payload"]["title"],
                 "branch_name": job["payload"].get("branch_name"),
+                "created_by_job_id": job["id"],
             },
         )
     else:

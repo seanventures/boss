@@ -1,10 +1,17 @@
-import { installPackAction, resolveDecisionAction, submitCommandAction } from "./actions";
+import {
+  createReplayBundleAction,
+  installPackAction,
+  resolveDecisionAction,
+  submitCommandAction,
+} from "./actions";
+import { fetchAuditSummary } from "../lib/audit";
 import { fetchArtifactFeed } from "../lib/artifacts";
 import { fetchDeadletterFeed } from "../lib/deadletters";
 import { fetchDecisionFeed, type DecisionFeedItem } from "../lib/decisions";
 import { fetchEntitlementFeed } from "../lib/entitlements";
 import { fetchActivityFeed } from "../lib/events";
 import { fetchPackFeed } from "../lib/packs";
+import { fetchReceiptFeed } from "../lib/receipts";
 import { fetchRoleFeed } from "../lib/roles";
 import { fetchRoutingLogFeed } from "../lib/routing";
 import { fetchSkillFeed } from "../lib/skills";
@@ -91,6 +98,8 @@ export default async function HomePage() {
     entitlements,
     routingLogs,
     skills,
+    receipts,
+    auditSummary,
   ] =
     await Promise.all([
       fetchStatus(),
@@ -104,6 +113,8 @@ export default async function HomePage() {
       fetchEntitlementFeed(),
       fetchRoutingLogFeed(),
       fetchSkillFeed(),
+      fetchReceiptFeed(),
+      fetchAuditSummary(),
     ]);
 
   const deadletterCount = deadletters.items.length;
@@ -243,6 +254,91 @@ export default async function HomePage() {
               What changed is derived from immutable event records.
             </p>
           </article>
+        </section>
+
+        <section className="panel-stack">
+          <div className="section-head">
+            <div>
+              <span className="eyebrow">Audit & Replay</span>
+              <h2>Exportable lineage for real runs.</h2>
+            </div>
+            <p className="status-meta">
+              Every receipt, reservation, routing choice, and event should be reconstructable through the API.
+            </p>
+          </div>
+
+          <div className="stack-grid">
+            <article className="stack-card">
+              <h3>Audit export snapshot</h3>
+              {!auditSummary.apiReachable ? (
+                <p className="detail">
+                  {auditSummary.blockedReason ?? "Audit export is unavailable."}
+                </p>
+              ) : (
+                <>
+                  <div className="feed-list">
+                    <div className="feed-row">
+                      <div>
+                        <h4>{auditSummary.counts.tasks} tasks</h4>
+                        <p className="detail">
+                          {auditSummary.counts.jobs} jobs / {auditSummary.counts.decisions} decisions / {auditSummary.counts.artifacts} artifacts
+                        </p>
+                      </div>
+                      <span className="pill">{auditSummary.counts.receipts} receipts</span>
+                    </div>
+                    <div className="feed-row">
+                      <div>
+                        <h4>{auditSummary.counts.budgetReservations} reservations</h4>
+                        <p className="detail">
+                          {auditSummary.counts.routingLogs} routing logs / {auditSummary.counts.events} events
+                        </p>
+                      </div>
+                      <span className="pill">
+                        {auditSummary.generatedAt
+                          ? formatDateTime(auditSummary.generatedAt)
+                          : "live"}
+                      </span>
+                    </div>
+                  </div>
+                  <form action={createReplayBundleAction}>
+                    <button className="button secondary" type="submit">
+                      Create replay bundle
+                    </button>
+                  </form>
+                </>
+              )}
+            </article>
+
+            <article className="stack-card">
+              <h3>Recent receipts</h3>
+              {!receipts.apiReachable ? (
+                <p className="detail">
+                  {receipts.blockedReason ?? "Receipt API is unavailable."}
+                </p>
+              ) : receipts.items.length === 0 ? (
+                <p className="detail">No side-effect receipts have been recorded yet.</p>
+              ) : (
+                <div className="feed-list">
+                  {receipts.items.map((receipt) => (
+                    <div className="feed-row" key={receipt.id}>
+                      <div>
+                        <h4>{titleCaseToken(receipt.effectKind)}</h4>
+                        <p className="detail">
+                          {receipt.status} / {formatDateTime(receipt.createdAt)}
+                        </p>
+                        <p className="detail">
+                          {receipt.providerRef ?? receipt.dedupeKey}
+                        </p>
+                      </div>
+                      <code className="mono">
+                        {receipt.createdByJobId ?? receipt.id}
+                      </code>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </article>
+          </div>
         </section>
 
         <section className="panel-stack">
