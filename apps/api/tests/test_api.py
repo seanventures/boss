@@ -2111,6 +2111,292 @@ def test_spend_gated_job_with_reservation_can_be_leased(client):
     assert payload["job"]["kind"] == "openai.plan"
 
 
+def test_orange_budget_defers_non_critical_job_and_creates_decision(client, engine):
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                """
+                UPDATE budget_policies
+                SET daily_cap_usd_micros = 1_000_000,
+                    soft_cap_pct = 0.70,
+                    auto_lite_mode_pct = 0.85,
+                    freeze_provisioning_pct = 0.95
+                WHERE scope_type = 'project' AND scope_id = 'boss-dogfood'
+                """
+            )
+        )
+        connection.execute(
+            text(
+                """
+                INSERT INTO cost_receipts (
+                    id, project_id, category, skill_or_model_id, estimated_usd_micros,
+                    actual_usd_micros, status
+                )
+                VALUES (
+                    'cost_orange_budget', 'boss-dogfood', 'model', 'gpt-5.2-codex',
+                    860000, 860000, 'actual'
+                )
+                """
+            )
+        )
+
+    created = client.post(
+        "/v1/jobs",
+        json={
+            "project_id": "boss-dogfood",
+            "kind": "plan.generate",
+            "payload": {"command": "Defer this non-critical task."},
+        },
+    )
+    assert created.status_code == 201
+    job_id = created.json()["id"]
+
+    poll = client.post(
+        "/v1/worker/poll",
+        json={
+            "worker_id": "worker-orange",
+            "capabilities": ["plan.generate"],
+            "lease_ttl_seconds": 60,
+        },
+    )
+    assert poll.status_code == 200
+    assert poll.json()["status"] == "idle"
+
+    with engine.begin() as connection:
+        job = connection.execute(
+            text(
+                """
+                SELECT status, run_after, last_error
+                FROM jobs
+                WHERE id = :job_id
+                """
+            ),
+            {"job_id": job_id},
+        ).mappings().one()
+        decision = connection.execute(
+            text(
+                """
+                SELECT question, recommendation, cost_summary, status
+                FROM decisions
+                WHERE project_id = 'boss-dogfood'
+                  AND recommendation->>'action' = 'review_budget_policy'
+                  AND cost_summary->>'job_id' = :job_id
+                ORDER BY created_at DESC
+                LIMIT 1
+                """
+            ),
+            {"job_id": job_id},
+        ).mappings().one()
+
+    assert job["status"] == "queued"
+    assert job["last_error"]["reason"] == "orange_defers_non_critical_work"
+    assert decision["status"] == "pending"
+    assert "Budget state orange deferred job" in decision["question"]
+    assert decision["recommendation"]["budget_state"] == "orange"
+
+    events = client.get("/v1/events", params={"project_id": "boss-dogfood"})
+    assert events.status_code == 200
+    assert "job.deferred_budget_policy" in [
+        item["event_type"] for item in events.json()["items"]
+    ]
+
+
+def test_orange_budget_allows_high_priority_job(client, engine):
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                """
+                UPDATE budget_policies
+                SET daily_cap_usd_micros = 1_000_000,
+                    soft_cap_pct = 0.70,
+                    auto_lite_mode_pct = 0.85,
+                    freeze_provisioning_pct = 0.95
+                WHERE scope_type = 'project' AND scope_id = 'boss-dogfood'
+                """
+            )
+        )
+        connection.execute(
+            text(
+                """
+                INSERT INTO cost_receipts (
+                    id, project_id, category, skill_or_model_id, estimated_usd_micros,
+                    actual_usd_micros, status
+                )
+                VALUES (
+                    'cost_orange_allowed', 'boss-dogfood', 'model', 'gpt-5.2-codex',
+                    860000, 860000, 'actual'
+                )
+                """
+            )
+        )
+        connection.execute(
+            text(
+                """
+                INSERT INTO tasks (
+                    id, project_id, title, description, status, owner_role_id, priority,
+                    risk_tier, inputs, required_artifacts, budget_allocation_id, dedupe_key
+                )
+                VALUES (
+                    'task_orange_p1', 'boss-dogfood', 'Orange P1 task', 'critical enough',
+                    'open', NULL, 'p1', 1, '{}'::jsonb, '[]'::jsonb, NULL, 'task_orange_p1'
+                )
+                """
+            )
+        )
+
+    created = client.post(
+        "/v1/jobs",
+        json={
+            "project_id": "boss-dogfood",
+            "task_id": "task_orange_p1",
+            "kind": "plan.generate",
+            "payload": {"command": "Allow this high-priority task."},
+        },
+    )
+    assert created.status_code == 201
+
+    poll = client.post(
+        "/v1/worker/poll",
+        json={
+            "worker_id": "worker-orange-allow",
+            "capabilities": ["plan.generate"],
+            "lease_ttl_seconds": 60,
+        },
+    )
+    assert poll.status_code == 200
+    payload = poll.json()
+    assert payload["status"] == "leased"
+    assert payload["job"]["task_id"] == "task_orange_p1"
+
+
+def test_red_budget_halts_non_p0_job_and_freezes_tier2_merge(client, engine):
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                """
+                UPDATE budget_policies
+                SET daily_cap_usd_micros = 1_000_000,
+                    soft_cap_pct = 0.70,
+                    auto_lite_mode_pct = 0.80,
+                    freeze_provisioning_pct = 0.90
+                WHERE scope_type = 'project' AND scope_id = 'boss-dogfood'
+                """
+            )
+        )
+        connection.execute(
+            text(
+                """
+                INSERT INTO cost_receipts (
+                    id, project_id, category, skill_or_model_id, estimated_usd_micros,
+                    actual_usd_micros, status
+                )
+                VALUES (
+                    'cost_red_budget', 'boss-dogfood', 'model', 'gpt-5.2-codex',
+                    960000, 960000, 'actual'
+                )
+                """
+            )
+        )
+        connection.execute(
+            text(
+                """
+                INSERT INTO tasks (
+                    id, project_id, title, description, status, owner_role_id, priority,
+                    risk_tier, inputs, required_artifacts, budget_allocation_id, dedupe_key
+                )
+                VALUES (
+                    'task_red_p0', 'boss-dogfood', 'Red P0 task', 'keep running',
+                    'open', NULL, 'p0', 2, '{}'::jsonb, '[]'::jsonb, NULL, 'task_red_p0'
+                )
+                """
+            )
+        )
+    non_p0_job = client.post(
+        "/v1/jobs",
+        json={
+            "project_id": "boss-dogfood",
+            "kind": "plan.generate",
+            "payload": {"command": "Halt this non-p0 task."},
+        },
+    )
+    assert non_p0_job.status_code == 201
+    merge_job = client.post(
+        "/v1/software-factory/merges/queue",
+        json={
+            "project_id": "boss-dogfood",
+            "task_id": "task_red_p0",
+            "decision_id": "dec_red_merge",
+            "dedupe_key": "red-merge-job",
+            "pull_request_number": 7,
+            "pull_request_url": "https://github.com/seanheiney/boss-sandbox/pull/7",
+            "title": "Red merge",
+            "branch_name": "boss/red-merge",
+        },
+    )
+    assert merge_job.status_code == 201
+    p0_job = client.post(
+        "/v1/jobs",
+        json={
+            "project_id": "boss-dogfood",
+            "task_id": "task_red_p0",
+            "kind": "plan.generate",
+            "payload": {"command": "Allow this p0 task."},
+        },
+    )
+    assert p0_job.status_code == 201
+
+    poll_merge = client.post(
+        "/v1/worker/poll",
+        json={
+            "worker_id": "worker-red-merge",
+            "capabilities": ["github.pull_request.merge"],
+            "lease_ttl_seconds": 60,
+        },
+    )
+    assert poll_merge.status_code == 200
+    assert poll_merge.json()["status"] == "idle"
+
+    poll_plan = client.post(
+        "/v1/worker/poll",
+        json={
+            "worker_id": "worker-red-plan",
+            "capabilities": ["plan.generate"],
+            "lease_ttl_seconds": 60,
+        },
+    )
+    assert poll_plan.status_code == 200
+    payload = poll_plan.json()
+    assert payload["status"] == "leased"
+    assert payload["job"]["task_id"] == "task_red_p0"
+
+    with engine.begin() as connection:
+        deferred_non_p0 = connection.execute(
+            text(
+                """
+                SELECT status, last_error
+                FROM jobs
+                WHERE id = :job_id
+                """
+            ),
+            {"job_id": non_p0_job.json()["id"]},
+        ).mappings().one()
+        deferred_merge = connection.execute(
+            text(
+                """
+                SELECT status, last_error
+                FROM jobs
+                WHERE id = :job_id
+                """
+            ),
+            {"job_id": merge_job.json()["id"]},
+        ).mappings().one()
+
+    assert deferred_non_p0["status"] == "queued"
+    assert deferred_non_p0["last_error"]["reason"] == "red_halts_non_p0_work"
+    assert deferred_merge["status"] == "queued"
+    assert deferred_merge["last_error"]["reason"] == "red_freezes_tier2_effects"
+
+
 def test_queue_pr_proposal_job_is_leasable_and_completion_passes_through(client):
     reserve = client.post(
         "/v1/budget/reserve",

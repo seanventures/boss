@@ -146,6 +146,7 @@ The dogfood seed also registers the initial entitlement-source inventory from `p
 - Spendy work should follow `quote -> reserve -> execute -> consume/release`.
 - Reused or blocked spendy effects release their reservation instead of leaving budget locked.
 - Spend-gated jobs without an active reservation are not leased; they create a visible decision and are cancelled explicitly rather than running silently.
+- Lease-time budget states now affect execution behavior too: `orange` defers non-critical work, and `red` halts non-`p0` jobs while freezing higher-risk merge, deploy, and outbound communication effects behind visible decisions.
 - Real sandbox PR proposals can now be queued as leased jobs so GitHub/OpenAI execution runs through `reservation -> job -> lease -> receipt -> artifact -> decision`.
 
 ## Audit and replay

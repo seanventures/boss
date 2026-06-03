@@ -138,6 +138,23 @@ class JobLeaseService:
 
         for candidate in candidates:
             payload = candidate["payload"] or {}
+            budget_policy = self._budget_state_policy_for_job(
+                connection,
+                candidate["project_id"],
+                candidate["task_id"],
+                candidate["id"],
+                candidate["kind"],
+            )
+            if budget_policy is not None:
+                self._defer_for_budget_state(
+                    connection,
+                    candidate["project_id"],
+                    candidate["task_id"],
+                    candidate["id"],
+                    candidate["kind"],
+                    budget_policy,
+                )
+                continue
             if self._requires_reservation(candidate["kind"], payload):
                 reservation_id = self._reservation_id_from_payload(payload)
                 reservation = (
@@ -599,6 +616,186 @@ class JobLeaseService:
             "budget_reservation_id"
         )
         return str(reservation_id) if reservation_id else None
+
+    def _budget_state_policy_for_job(
+        self,
+        connection: Connection,
+        project_id: str,
+        task_id: Optional[str],
+        job_id: str,
+        kind: str,
+    ) -> Optional[dict[str, Any]]:
+        snapshot = self.budget.status_for_project(connection, project_id)
+        budget_state = snapshot["budget_state"]
+        if budget_state not in {"orange", "red"}:
+            return None
+
+        task_priority = "p2"
+        risk_tier = 0
+        if task_id:
+            task_row = connection.execute(
+                text(
+                    """
+                    SELECT priority, risk_tier
+                    FROM tasks
+                    WHERE id = :task_id
+                    """
+                ),
+                {"task_id": task_id},
+            ).mappings().first()
+            if task_row:
+                task_priority = str(task_row["priority"] or "p2").lower()
+                risk_tier = int(task_row["risk_tier"] or 0)
+
+        if budget_state == "orange" and task_priority not in {"p0", "p1"}:
+            return {
+                "budget_state": budget_state,
+                "task_priority": task_priority,
+                "risk_tier": risk_tier,
+                "defer_seconds": 300,
+                "reason": "orange_defers_non_critical_work",
+            }
+
+        high_impact_effects = {
+            "github.pull_request.merge",
+            "github.deployment.create",
+            "comms.outbox.deliver",
+        }
+        if budget_state == "red":
+            if task_priority != "p0":
+                return {
+                    "budget_state": budget_state,
+                    "task_priority": task_priority,
+                    "risk_tier": risk_tier,
+                    "defer_seconds": 900,
+                    "reason": "red_halts_non_p0_work",
+                }
+            if kind in high_impact_effects and risk_tier >= 2:
+                return {
+                    "budget_state": budget_state,
+                    "task_priority": task_priority,
+                    "risk_tier": risk_tier,
+                    "defer_seconds": 900,
+                    "reason": "red_freezes_tier2_effects",
+                }
+        return None
+
+    def _defer_for_budget_state(
+        self,
+        connection: Connection,
+        project_id: str,
+        task_id: Optional[str],
+        job_id: str,
+        kind: str,
+        policy: dict[str, Any],
+    ) -> None:
+        deferred_until = now_utc() + timedelta(seconds=int(policy["defer_seconds"]))
+        message = (
+            f"Budget state {policy['budget_state']} deferred job {kind} "
+            f"(priority {policy['task_priority']}, risk {policy['risk_tier']})."
+        )
+        connection.execute(
+            text(
+                """
+                UPDATE jobs
+                SET status = 'queued',
+                    run_after = :run_after,
+                    last_error = CAST(:last_error AS JSONB),
+                    updated_at = :updated_at
+                WHERE id = :job_id
+                """
+            ),
+            {
+                "job_id": job_id,
+                "run_after": deferred_until,
+                "last_error": json.dumps(
+                    {
+                        "message": message,
+                        "budget_state": policy["budget_state"],
+                        "reason": policy["reason"],
+                    }
+                ),
+                "updated_at": now_utc(),
+            },
+        )
+        decision_id = self._create_or_reuse_budget_policy_decision(
+            connection,
+            project_id,
+            task_id,
+            job_id,
+            kind,
+            policy,
+        )
+        emit_event(
+            connection,
+            project_id,
+            "job.deferred_budget_policy",
+            "budget_governor",
+            "job",
+            job_id,
+            {
+                "decision_id": decision_id,
+                "budget_state": policy["budget_state"],
+                "deferred_until": deferred_until.isoformat(),
+                "reason": policy["reason"],
+            },
+        )
+
+    def _create_or_reuse_budget_policy_decision(
+        self,
+        connection: Connection,
+        project_id: str,
+        task_id: Optional[str],
+        job_id: str,
+        kind: str,
+        policy: dict[str, Any],
+    ) -> str:
+        existing_id = connection.execute(
+            text(
+                """
+                SELECT id
+                FROM decisions
+                WHERE project_id = :project_id
+                  AND task_id IS NOT DISTINCT FROM :task_id
+                  AND status IN ('pending', 'delegated', 'approved')
+                  AND recommendation->>'action' = 'review_budget_policy'
+                  AND cost_summary->>'job_id' = :job_id
+                  AND cost_summary->>'budget_state' = :budget_state
+                ORDER BY created_at DESC
+                LIMIT 1
+                """
+            ),
+            {
+                "project_id": project_id,
+                "task_id": task_id,
+                "job_id": job_id,
+                "budget_state": policy["budget_state"],
+            },
+        ).scalar_one_or_none()
+        if existing_id:
+            return str(existing_id)
+
+        return create_blocking_decision(
+            connection,
+            project_id,
+            task_id,
+            f"Budget state {policy['budget_state']} deferred job: {kind}",
+            {
+                "action": "review_budget_policy",
+                "job_id": job_id,
+                "job_kind": kind,
+                "budget_state": policy["budget_state"],
+                "reason": policy["reason"],
+            },
+            {
+                "job_id": job_id,
+                "job_kind": kind,
+                "budget_state": policy["budget_state"],
+                "task_priority": policy["task_priority"],
+                "risk_tier": policy["risk_tier"],
+            },
+            "budget_state_deferred_job",
+        )
 
     def _cancel_budget_blocked_job(
         self,
