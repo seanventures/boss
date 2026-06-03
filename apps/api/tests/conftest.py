@@ -15,10 +15,14 @@ def database_url() -> str:
     return os.environ["DATABASE_URL"]
 
 
+@pytest.fixture(scope="session")
+def engine(database_url: str):
+    return create_engine(database_url, future=True)
+
+
 @pytest.fixture(scope="session", autouse=True)
-def seeded_database(database_url: str):
+def seeded_database(engine):
     get_settings.cache_clear()
-    engine = create_engine(database_url, future=True)
     try:
         with engine.connect() as connection:
             connection.execute(text("SELECT 1"))
@@ -29,8 +33,7 @@ def seeded_database(database_url: str):
 
 
 @pytest.fixture(autouse=True)
-def clean_tables(database_url: str):
-    engine = create_engine(database_url, future=True)
+def clean_tables(engine):
     with engine.begin() as connection:
         connection.execute(text("DELETE FROM cost_receipts"))
         connection.execute(text("DELETE FROM budget_reservations"))

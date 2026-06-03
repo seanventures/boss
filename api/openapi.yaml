@@ -133,6 +133,52 @@ paths:
       summary: Internal budget reservation endpoint
       responses:
         '201': { description: Reservation created or denied }
+  /v1/openai/plans:
+    post:
+      summary: Create a real OpenAI-backed plan artifact behind a reservation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id, reservation_id, dedupe_key, prompt]
+              properties:
+                project_id: { type: string }
+                reservation_id: { type: string }
+                dedupe_key: { type: string }
+                prompt: { type: string }
+                system_prompt: { type: string }
+      responses:
+        '200': { description: Plan artifact created, reused, or blocked }
+  /v1/software-factory/proposals:
+    post:
+      summary: Create a real sandbox pull request proposal behind a reservation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                [project_id, reservation_id, dedupe_key, title, branch_name, summary, files]
+              properties:
+                project_id: { type: string }
+                reservation_id: { type: string }
+                dedupe_key: { type: string }
+                title: { type: string }
+                branch_name: { type: string }
+                summary: { type: string }
+                files:
+                  type: array
+                  items:
+                    type: object
+                    required: [path, content]
+                    properties:
+                      path: { type: string }
+                      content: { type: string }
+      responses:
+        '200': { description: Sandbox PR created, reused, or blocked }
   /v1/receipts/{dedupe_key}:
     get:
       summary: Get receipt by dedupe key

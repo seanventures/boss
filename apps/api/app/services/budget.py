@@ -6,14 +6,46 @@ from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
 from ..config import Settings
-from .core import create_blocking_decision, emit_event, expires_at, make_id
+from .core import create_blocking_decision, emit_event, expires_at, make_id, now_utc
 
 
 class BudgetGovernor:
     def __init__(self, settings: Settings):
         self.settings = settings
 
+    def expire_stale_reservations(
+        self, connection: Connection, project_id: Optional[str] = None
+    ) -> list[str]:
+        rows = connection.execute(
+            text(
+                """
+                UPDATE budget_reservations
+                SET status = 'expired'
+                WHERE status = 'active'
+                  AND expires_at <= :now_utc
+                  AND (:project_id IS NULL OR project_id = :project_id)
+                RETURNING id, project_id
+                """
+            ),
+            {"now_utc": now_utc(), "project_id": project_id},
+        ).mappings().all()
+
+        expired_ids: list[str] = []
+        for row in rows:
+            expired_ids.append(row["id"])
+            emit_event(
+                connection,
+                row["project_id"],
+                "budget.reservation_expired",
+                "budget_governor",
+                "budget_reservation",
+                row["id"],
+                {},
+            )
+        return expired_ids
+
     def status_for_project(self, connection: Connection, project_id: str) -> dict:
+        self.expire_stale_reservations(connection, project_id)
         policy_row = connection.execute(
             text(
                 """
@@ -88,6 +120,7 @@ class BudgetGovernor:
         reason: str,
         expires_in_minutes: int,
     ) -> dict:
+        self.expire_stale_reservations(connection, project_id)
         snapshot = self.status_for_project(connection, project_id)
         total_after = (
             snapshot["reserved_usd_micros"] + snapshot["actual_usd_micros"] + amount_usd_micros
@@ -171,6 +204,7 @@ class BudgetGovernor:
     def assert_active_reservation(
         self, connection: Connection, project_id: str, reservation_id: str
     ) -> Optional[dict]:
+        self.expire_stale_reservations(connection, project_id)
         row = connection.execute(
             text(
                 """

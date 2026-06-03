@@ -4,7 +4,7 @@ PYTHON := $(VENV)/bin/python
 PIP := $(VENV)/bin/pip
 DATABASE_URL ?= postgresql+psycopg://boss:boss@localhost:5432/boss
 
-.PHONY: install install-node install-python dev test lint seed smoke sandbox-template
+.PHONY: install install-node install-python dev test lint seed smoke real-smoke-plan real-smoke-pr sandbox-template
 
 install: install-node install-python
 
@@ -36,7 +36,14 @@ smoke: install-python
 	docker compose -f infra/docker-compose.yml up -d db
 	DATABASE_URL=$(DATABASE_URL) $(PYTHON) -m apps.api.tests.smoke
 
+real-smoke-plan: install-python
+	docker compose -f infra/docker-compose.yml up -d db
+	DATABASE_URL=$(DATABASE_URL) $(PYTHON) scripts/run_real_control_plane_smoke.py
+
+real-smoke-pr: install-python
+	docker compose -f infra/docker-compose.yml up -d db
+	DATABASE_URL=$(DATABASE_URL) $(PYTHON) scripts/run_real_control_plane_smoke.py --with-pr
+
 sandbox-template:
 	mkdir -p tmp
 	rsync -a --delete templates/boss-sandbox/ tmp/boss-sandbox/
-

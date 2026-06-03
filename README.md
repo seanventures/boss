@@ -55,6 +55,24 @@ If a required credential is missing, the API must fail closed and create visible
 - `make lint`: run TypeScript and Python checks
 - `make seed`: apply schema and seed the dogfood org/workspace/project
 - `make smoke`: run a local schema/bootstrap smoke check
+- `make real-smoke-plan`: run a real reservation -> OpenAI plan flow against local Postgres
+- `make real-smoke-pr`: run a real reservation -> OpenAI plan -> sandbox PR proposal flow
+
+## Current control-plane endpoints
+
+- `GET /health`
+- `GET /v1/status`
+- `POST /v1/commands/propose`
+- `GET /v1/tasks`
+- `POST /v1/tasks`
+- `GET /v1/tasks/{task_id}`
+- `GET /v1/budget/status`
+- `POST /v1/budget/reserve`
+- `GET /v1/decisions/inbox`
+- `GET /v1/events`
+- `POST /v1/openai/plans`
+- `POST /v1/software-factory/proposals`
+- `GET /v1/receipts/{dedupe_key}`
 
 ## GitHub bootstrap
 

@@ -4,7 +4,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Optional
 
-from pydantic import Field
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -14,7 +14,9 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+psycopg://boss:boss@localhost:5432/boss"
     openai_api_key: Optional[str] = Field(default=None, alias="OPENAI_API_KEY")
     openai_model: str = Field(default="gpt-5.2-codex", alias="BOSS_OPENAI_MODEL")
-    github_token: Optional[str] = Field(default=None, alias="BOSS_GITHUB_TOKEN")
+    github_token: Optional[str] = Field(
+        default=None, validation_alias=AliasChoices("BOSS_GITHUB_TOKEN", "GITHUB_TOKEN")
+    )
     github_owner: str = Field(default="seanheiney", alias="BOSS_GITHUB_OWNER")
     github_repo: str = Field(default="boss", alias="BOSS_GITHUB_REPO")
     target_github_owner: str = Field(
