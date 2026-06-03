@@ -329,6 +329,15 @@ class DecisionCard(BaseModel):
     deadline_at: Optional[str] = None
     approved_by: Optional[str] = None
     approved_at: Optional[str] = None
+    delegated_to: Optional[str] = None
+    delegated_by: Optional[str] = None
+    delegated_at: Optional[str] = None
+    revision_requested_by: Optional[str] = None
+    revision_requested_at: Optional[str] = None
+    executed_by: Optional[str] = None
+    executed_at: Optional[str] = None
+    resolution_note: Optional[str] = None
+    external_ref: Optional[str] = None
     created_at: str
     updated_at: str
 
@@ -341,6 +350,8 @@ class DecisionInboxResponse(BaseModel):
 class DecisionActionRequest(BaseModel):
     actor: str = "executive_console"
     note: Optional[str] = None
+    delegate_to: Optional[str] = None
+    external_ref: Optional[str] = None
 
 
 class EventItem(BaseModel):

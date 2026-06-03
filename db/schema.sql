@@ -79,9 +79,27 @@ CREATE TABLE IF NOT EXISTS decisions (
   status TEXT NOT NULL DEFAULT 'pending',
   approved_by TEXT,
   approved_at TIMESTAMPTZ,
+  delegated_to TEXT,
+  delegated_by TEXT,
+  delegated_at TIMESTAMPTZ,
+  revision_requested_by TEXT,
+  revision_requested_at TIMESTAMPTZ,
+  executed_by TEXT,
+  executed_at TIMESTAMPTZ,
+  resolution_note TEXT,
+  external_ref TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+ALTER TABLE decisions ADD COLUMN IF NOT EXISTS delegated_to TEXT;
+ALTER TABLE decisions ADD COLUMN IF NOT EXISTS delegated_by TEXT;
+ALTER TABLE decisions ADD COLUMN IF NOT EXISTS delegated_at TIMESTAMPTZ;
+ALTER TABLE decisions ADD COLUMN IF NOT EXISTS revision_requested_by TEXT;
+ALTER TABLE decisions ADD COLUMN IF NOT EXISTS revision_requested_at TIMESTAMPTZ;
+ALTER TABLE decisions ADD COLUMN IF NOT EXISTS executed_by TEXT;
+ALTER TABLE decisions ADD COLUMN IF NOT EXISTS executed_at TIMESTAMPTZ;
+ALTER TABLE decisions ADD COLUMN IF NOT EXISTS resolution_note TEXT;
+ALTER TABLE decisions ADD COLUMN IF NOT EXISTS external_ref TEXT;
 
 CREATE TABLE IF NOT EXISTS jobs (
   id TEXT PRIMARY KEY,

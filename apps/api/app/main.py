@@ -125,6 +125,19 @@ def decision_card_from_row(row) -> DecisionCard:
         deadline_at=row["deadline_at"].isoformat() if row["deadline_at"] else None,
         approved_by=row["approved_by"],
         approved_at=row["approved_at"].isoformat() if row["approved_at"] else None,
+        delegated_to=row.get("delegated_to"),
+        delegated_by=row.get("delegated_by"),
+        delegated_at=row["delegated_at"].isoformat() if row.get("delegated_at") else None,
+        revision_requested_by=row.get("revision_requested_by"),
+        revision_requested_at=(
+            row["revision_requested_at"].isoformat()
+            if row.get("revision_requested_at")
+            else None
+        ),
+        executed_by=row.get("executed_by"),
+        executed_at=row["executed_at"].isoformat() if row.get("executed_at") else None,
+        resolution_note=row.get("resolution_note"),
+        external_ref=row.get("external_ref"),
         created_at=row["created_at"].isoformat(),
         updated_at=row["updated_at"].isoformat(),
     )
@@ -217,7 +230,7 @@ def status(project_id: str) -> StatusResponse:
             text(
                 """
                 SELECT COUNT(*) FROM decisions
-                WHERE project_id = :project_id AND status = 'pending'
+                WHERE project_id = :project_id AND status IN ('pending', 'delegated')
                 """
             ),
             {"project_id": project_id},
@@ -557,11 +570,19 @@ def decision_inbox(project_id: str) -> DecisionInboxResponse:
                 """
                 SELECT id, task_id, question, status, risk_tier, default_action,
                        recommendation, options, cost_summary, deadline_at,
-                       approved_by, approved_at, created_at, updated_at
+                       approved_by, approved_at, delegated_to, delegated_by,
+                       delegated_at, revision_requested_by, revision_requested_at,
+                       executed_by, executed_at, resolution_note, external_ref,
+                       created_at, updated_at
                 FROM decisions
                 WHERE project_id = :project_id
                 ORDER BY
-                    CASE status WHEN 'pending' THEN 0 ELSE 1 END,
+                    CASE status
+                        WHEN 'pending' THEN 0
+                        WHEN 'delegated' THEN 1
+                        WHEN 'approved' THEN 2
+                        ELSE 3
+                    END,
                     risk_tier DESC,
                     created_at DESC
                 """
@@ -586,6 +607,8 @@ def approve_decision(
                 action="approve",
                 actor=payload.actor,
                 note=payload.note,
+                delegate_to=payload.delegate_to,
+                external_ref=payload.external_ref,
             )
         except DecisionNotFoundError as error:
             raise HTTPException(status_code=404, detail=str(error)) from error
@@ -606,11 +629,85 @@ def reject_decision(
                 action="reject",
                 actor=payload.actor,
                 note=payload.note,
+                delegate_to=payload.delegate_to,
+                external_ref=payload.external_ref,
             )
         except DecisionNotFoundError as error:
             raise HTTPException(status_code=404, detail=str(error)) from error
         except InvalidDecisionTransitionError as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
+        return decision_card_from_row(row)
+
+
+@app.post("/v1/decisions/{decision_id}/revise", response_model=DecisionCard)
+def revise_decision(
+    decision_id: str, payload: DecisionActionRequest
+) -> DecisionCard:
+    with begin(engine) as connection:
+        try:
+            row = decisions.transition(
+                connection,
+                decision_id,
+                action="revise",
+                actor=payload.actor,
+                note=payload.note,
+                delegate_to=payload.delegate_to,
+                external_ref=payload.external_ref,
+            )
+        except DecisionNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except InvalidDecisionTransitionError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        return decision_card_from_row(row)
+
+
+@app.post("/v1/decisions/{decision_id}/delegate", response_model=DecisionCard)
+def delegate_decision(
+    decision_id: str, payload: DecisionActionRequest
+) -> DecisionCard:
+    with begin(engine) as connection:
+        try:
+            row = decisions.transition(
+                connection,
+                decision_id,
+                action="delegate",
+                actor=payload.actor,
+                note=payload.note,
+                delegate_to=payload.delegate_to,
+                external_ref=payload.external_ref,
+            )
+        except DecisionNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except InvalidDecisionTransitionError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        return decision_card_from_row(row)
+
+
+@app.post("/v1/decisions/{decision_id}/execute", response_model=DecisionCard)
+def execute_decision(
+    decision_id: str, payload: DecisionActionRequest
+) -> DecisionCard:
+    with begin(engine) as connection:
+        try:
+            row = decisions.transition(
+                connection,
+                decision_id,
+                action="execute",
+                actor=payload.actor,
+                note=payload.note,
+                delegate_to=payload.delegate_to,
+                external_ref=payload.external_ref,
+            )
+        except DecisionNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except InvalidDecisionTransitionError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
         return decision_card_from_row(row)
 
 

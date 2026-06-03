@@ -49,6 +49,30 @@ function titleCaseToken(value: string): string {
   return value.replaceAll("_", " ");
 }
 
+function decisionStatusDetail(decision: DecisionFeedItem): string {
+  if (decision.status === "delegated" && decision.delegatedTo) {
+    return `Delegated to ${decision.delegatedTo}${
+      decision.delegatedBy ? ` by ${decision.delegatedBy}` : ""
+    }${decision.delegatedAt ? ` at ${formatDeadline(decision.delegatedAt)}` : ""}.`;
+  }
+  if (decision.status === "revision_requested") {
+    return decision.resolutionNote
+      ? `Revision requested: ${decision.resolutionNote}`
+      : "Revision was requested on this decision.";
+  }
+  if (decision.status === "executed") {
+    return decision.externalRef
+      ? `Executed with evidence: ${decision.externalRef}`
+      : "This decision has been marked executed.";
+  }
+  if (decision.approvedBy) {
+    return `Approved by ${decision.approvedBy} at ${formatDeadline(
+      decision.approvedAt,
+    )}.`;
+  }
+  return "This card remains explicit until it is approved, rejected, delegated, revised, or safely expired.";
+}
+
 export default async function HomePage() {
   const [status, decisions, tasks, artifacts, events, deadletters] =
     await Promise.all([
@@ -365,7 +389,9 @@ export default async function HomePage() {
                   typeof decision.costSummary.estimated_usd_micros === "number"
                     ? decision.costSummary.estimated_usd_micros
                     : undefined;
-                const isPending = decision.status === "pending";
+                const isPending =
+                  decision.status === "pending" || decision.status === "delegated";
+                const isApproved = decision.status === "approved";
 
                 return (
                   <article className="decision-card" key={decision.id}>
@@ -409,19 +435,24 @@ export default async function HomePage() {
                     </div>
 
                     <div className="decision-footer">
-                      <p className="detail">
-                        {decision.approvedBy
-                          ? `Approved by ${decision.approvedBy} at ${formatDeadline(
-                              decision.approvedAt,
-                            )}.`
-                          : "This card remains explicit until it is approved, rejected, or safely expired."}
-                      </p>
+                      <p className="detail">{decisionStatusDetail(decision)}</p>
                       {isPending ? (
                         <form action={resolveDecisionAction} className="decision-actions">
                           <input
                             type="hidden"
                             name="decision_id"
                             value={decision.id}
+                          />
+                          <textarea
+                            className="textarea decision-note"
+                            name="note"
+                            rows={3}
+                            placeholder="Optional note or required revision request rationale."
+                          />
+                          <input
+                            className="input"
+                            name="delegate_to"
+                            placeholder="Delegate to role or approver"
                           />
                           <button className="button" name="action" value="approve">
                             Approve
@@ -432,6 +463,43 @@ export default async function HomePage() {
                             value="reject"
                           >
                             Reject
+                          </button>
+                          <button
+                            className="button secondary"
+                            name="action"
+                            value="revise"
+                          >
+                            Request revision
+                          </button>
+                          <button
+                            className="button secondary"
+                            name="action"
+                            value="delegate"
+                          >
+                            Delegate
+                          </button>
+                        </form>
+                      ) : null}
+                      {isApproved ? (
+                        <form action={resolveDecisionAction} className="decision-actions">
+                          <input
+                            type="hidden"
+                            name="decision_id"
+                            value={decision.id}
+                          />
+                          <textarea
+                            className="textarea decision-note"
+                            name="note"
+                            rows={2}
+                            placeholder="Record what was executed."
+                          />
+                          <input
+                            className="input"
+                            name="external_ref"
+                            placeholder="External reference (PR URL, commit SHA, ticket)"
+                          />
+                          <button className="button" name="action" value="execute">
+                            Mark executed
                           </button>
                         </form>
                       ) : null}

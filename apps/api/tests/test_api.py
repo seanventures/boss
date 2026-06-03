@@ -282,6 +282,165 @@ def test_decision_can_be_rejected_and_cannot_be_reapproved(client):
     assert "decision.rejected" in event_types
 
 
+def test_decision_can_be_delegated_and_then_approved(client):
+    denial = client.post(
+        "/v1/budget/reserve",
+        json={
+            "project_id": "boss-dogfood",
+            "category": "model",
+            "amount_usd_micros": 100_000_000,
+            "reason": "force denial",
+        },
+    )
+    assert denial.status_code == 201
+    decision_id = denial.json()["decision_id"]
+
+    delegate = client.post(
+        f"/v1/decisions/{decision_id}/delegate",
+        json={
+            "actor": "ceo",
+            "delegate_to": "release_manager",
+            "note": "Release manager should own this final call.",
+        },
+    )
+    assert delegate.status_code == 200
+    delegated_payload = delegate.json()
+    assert delegated_payload["status"] == "delegated"
+    assert delegated_payload["delegated_to"] == "release_manager"
+    assert delegated_payload["delegated_by"] == "ceo"
+    assert delegated_payload["delegated_at"]
+    assert delegated_payload["resolution_note"] == "Release manager should own this final call."
+
+    approve = client.post(
+        f"/v1/decisions/{decision_id}/approve",
+        json={"actor": "release_manager", "note": "Approved after delegated review."},
+    )
+    assert approve.status_code == 200
+    approved_payload = approve.json()
+    assert approved_payload["status"] == "approved"
+    assert approved_payload["approved_by"] == "release_manager"
+
+    events = client.get("/v1/events", params={"project_id": "boss-dogfood"})
+    assert events.status_code == 200
+    event_types = [item["event_type"] for item in events.json()["items"]]
+    assert "decision.delegated" in event_types
+    assert "decision.approved" in event_types
+
+
+def test_decision_can_request_revision_and_then_blocks_approval(client):
+    denial = client.post(
+        "/v1/budget/reserve",
+        json={
+            "project_id": "boss-dogfood",
+            "category": "model",
+            "amount_usd_micros": 100_000_000,
+            "reason": "force denial",
+        },
+    )
+    assert denial.status_code == 201
+    decision_id = denial.json()["decision_id"]
+
+    revise = client.post(
+        f"/v1/decisions/{decision_id}/revise",
+        json={
+            "actor": "ceo",
+            "note": "Revise the estimate and include lower-cost options.",
+        },
+    )
+    assert revise.status_code == 200
+    payload = revise.json()
+    assert payload["status"] == "revision_requested"
+    assert payload["revision_requested_by"] == "ceo"
+    assert payload["revision_requested_at"]
+    assert payload["resolution_note"] == "Revise the estimate and include lower-cost options."
+
+    approve = client.post(
+        f"/v1/decisions/{decision_id}/approve",
+        json={"actor": "ceo"},
+    )
+    assert approve.status_code == 409
+
+    events = client.get("/v1/events", params={"project_id": "boss-dogfood"})
+    assert events.status_code == 200
+    event_types = [item["event_type"] for item in events.json()["items"]]
+    assert "decision.revision_requested" in event_types
+
+
+def test_approved_decision_can_be_manually_executed_with_evidence(client, engine):
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                """
+                INSERT INTO tasks (
+                    id, project_id, title, description, status, priority, risk_tier, dedupe_key
+                )
+                VALUES (
+                    'task_manual_execute', 'boss-dogfood', 'Manual merge follow-on',
+                    'Track a manually executed follow-on action.', 'open', 'p1', 2,
+                    'manual-execute-task'
+                )
+                """
+            )
+        )
+        connection.execute(
+            text(
+                """
+                INSERT INTO decisions (
+                    id, project_id, task_id, question, recommendation, options, risk_tier,
+                    cost_summary, deadline_at, default_action, status, approved_by, approved_at
+                )
+                VALUES (
+                    'dec_manual_execute', 'boss-dogfood', 'task_manual_execute',
+                    'Record the manual sandbox merge.', '{}'::jsonb, '[]'::jsonb, 2,
+                    '{}'::jsonb, now() + interval '1 day', 'hold', 'approved',
+                    'ceo', now()
+                )
+                """
+            )
+        )
+
+    execute = client.post(
+        "/v1/decisions/dec_manual_execute/execute",
+        json={
+            "actor": "release_manager",
+            "note": "Merged manually after review in GitHub.",
+            "external_ref": "https://github.com/seanheiney/boss-sandbox/pull/42",
+        },
+    )
+    assert execute.status_code == 200
+    payload = execute.json()
+    assert payload["status"] == "executed"
+    assert payload["executed_by"] == "release_manager"
+    assert payload["executed_at"]
+    assert payload["external_ref"] == "https://github.com/seanheiney/boss-sandbox/pull/42"
+    assert payload["resolution_note"] == "Merged manually after review in GitHub."
+
+    with engine.begin() as connection:
+        task_status = connection.execute(
+            text("SELECT status FROM tasks WHERE id = 'task_manual_execute'")
+        ).scalar_one()
+        artifact_type = connection.execute(
+            text(
+                """
+                SELECT artifact_type
+                FROM artifacts
+                WHERE task_id = 'task_manual_execute'
+                ORDER BY created_at DESC
+                LIMIT 1
+                """
+            )
+        ).scalar_one()
+
+    assert task_status == "completed"
+    assert artifact_type == "manual_execution_record"
+
+    events = client.get("/v1/events", params={"project_id": "boss-dogfood"})
+    assert events.status_code == 200
+    event_types = [item["event_type"] for item in events.json()["items"]]
+    assert "decision.executed" in event_types
+    assert "task.completed" in event_types
+
+
 def test_overdue_pending_decisions_expire_to_safe_default(client, engine):
     deadline_at = datetime.now(timezone.utc) - timedelta(minutes=1)
     with engine.begin() as connection:

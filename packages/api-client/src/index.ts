@@ -236,6 +236,15 @@ export type DecisionCard = {
   deadline_at?: string;
   approved_by?: string;
   approved_at?: string;
+  delegated_to?: string;
+  delegated_by?: string;
+  delegated_at?: string;
+  revision_requested_by?: string;
+  revision_requested_at?: string;
+  executed_by?: string;
+  executed_at?: string;
+  resolution_note?: string;
+  external_ref?: string;
   created_at: string;
   updated_at: string;
 };
@@ -248,6 +257,8 @@ export type DecisionInboxResponse = {
 export type DecisionActionRequest = {
   actor?: string;
   note?: string;
+  delegate_to?: string;
+  external_ref?: string;
 };
 
 export type OpenAIPlanRequest = {
@@ -565,6 +576,27 @@ export function createBossApiClient(config: BossApiClientConfig) {
       return request<DecisionCard>(
         "POST",
         `/v1/decisions/${encodeURIComponent(decisionId)}/reject`,
+        { body: payload },
+      );
+    },
+    reviseDecision(decisionId: string, payload: DecisionActionRequest = {}) {
+      return request<DecisionCard>(
+        "POST",
+        `/v1/decisions/${encodeURIComponent(decisionId)}/revise`,
+        { body: payload },
+      );
+    },
+    delegateDecision(decisionId: string, payload: DecisionActionRequest = {}) {
+      return request<DecisionCard>(
+        "POST",
+        `/v1/decisions/${encodeURIComponent(decisionId)}/delegate`,
+        { body: payload },
+      );
+    },
+    executeDecision(decisionId: string, payload: DecisionActionRequest = {}) {
+      return request<DecisionCard>(
+        "POST",
+        `/v1/decisions/${encodeURIComponent(decisionId)}/execute`,
         { body: payload },
       );
     },

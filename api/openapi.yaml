@@ -146,6 +146,74 @@ paths:
         '200': { description: Rejected }
         '404': { description: Decision not found }
         '409': { description: Invalid transition }
+  /v1/decisions/{decision_id}/revise:
+    post:
+      summary: Request a revision to a pending decision
+      parameters:
+        - name: decision_id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                actor: { type: string, default: executive_console }
+                note: { type: string }
+      responses:
+        '200': { description: Revision requested }
+        '404': { description: Decision not found }
+        '409': { description: Invalid transition }
+        '422': { description: Validation error }
+  /v1/decisions/{decision_id}/delegate:
+    post:
+      summary: Delegate a pending decision to another role or owner
+      parameters:
+        - name: decision_id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                actor: { type: string, default: executive_console }
+                note: { type: string }
+                delegate_to: { type: string }
+      responses:
+        '200': { description: Delegated }
+        '404': { description: Decision not found }
+        '409': { description: Invalid transition }
+        '422': { description: Validation error }
+  /v1/decisions/{decision_id}/execute:
+    post:
+      summary: Mark an approved decision as manually executed with evidence
+      parameters:
+        - name: decision_id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                actor: { type: string, default: executive_console }
+                note: { type: string }
+                external_ref: { type: string }
+      responses:
+        '200': { description: Executed }
+        '404': { description: Decision not found }
+        '409': { description: Invalid transition }
+        '422': { description: Validation error }
   /v1/jobs:
     post:
       summary: Create job

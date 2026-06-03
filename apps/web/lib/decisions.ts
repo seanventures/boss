@@ -17,6 +17,15 @@ export type DecisionFeedItem = {
   deadlineAt?: string;
   approvedBy?: string;
   approvedAt?: string;
+  delegatedTo?: string;
+  delegatedBy?: string;
+  delegatedAt?: string;
+  revisionRequestedBy?: string;
+  revisionRequestedAt?: string;
+  executedBy?: string;
+  executedAt?: string;
+  resolutionNote?: string;
+  externalRef?: string;
   createdAt: string;
   updatedAt: string;
 };
@@ -42,6 +51,15 @@ function mapDecision(payload: ApiDecisionCard): DecisionFeedItem {
     deadlineAt: payload.deadline_at,
     approvedBy: payload.approved_by,
     approvedAt: payload.approved_at,
+    delegatedTo: payload.delegated_to,
+    delegatedBy: payload.delegated_by,
+    delegatedAt: payload.delegated_at,
+    revisionRequestedBy: payload.revision_requested_by,
+    revisionRequestedAt: payload.revision_requested_at,
+    executedBy: payload.executed_by,
+    executedAt: payload.executed_at,
+    resolutionNote: payload.resolution_note,
+    externalRef: payload.external_ref,
     createdAt: payload.created_at,
     updatedAt: payload.updated_at,
   };

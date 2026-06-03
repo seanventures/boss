@@ -40,7 +40,7 @@ class DecisionService:
                 f"""
                 SELECT id, project_id, default_action, deadline_at
                 FROM decisions
-                WHERE status = 'pending'
+                WHERE status IN ('pending', 'delegated')
                   AND deadline_at IS NOT NULL
                   AND deadline_at <= :now
                   {project_filter}
@@ -56,7 +56,7 @@ class DecisionService:
                     """
                     UPDATE decisions
                     SET status = 'expired', updated_at = :updated_at
-                    WHERE id = :decision_id AND status = 'pending'
+                    WHERE id = :decision_id AND status IN ('pending', 'delegated')
                     """
                 ),
                 {
@@ -92,7 +92,10 @@ class DecisionService:
                 f"""
                 SELECT id, project_id, task_id, question, status, risk_tier, default_action,
                        recommendation, options, cost_summary, deadline_at,
-                       approved_by, approved_at, created_at, updated_at
+                       approved_by, approved_at, delegated_to, delegated_by,
+                       delegated_at, revision_requested_by, revision_requested_at,
+                       executed_by, executed_at, resolution_note, external_ref,
+                       created_at, updated_at
                 FROM decisions
                 WHERE id = :decision_id
                 {lock_clause}
@@ -112,61 +115,265 @@ class DecisionService:
         action: str,
         actor: str,
         note: Optional[str],
+        delegate_to: Optional[str] = None,
+        external_ref: Optional[str] = None,
     ) -> dict:
-        if action not in {"approve", "reject"}:
+        if action not in {"approve", "reject", "revise", "delegate", "execute"}:
             raise ValueError(f"Unsupported action: {action}")
 
         row = self.get_row(connection, decision_id, for_update=True)
-        if row["status"] != "pending":
+        current_status = row["status"]
+        timestamp = now_utc()
+
+        if action in {"approve", "reject", "revise", "delegate"}:
+            if current_status not in {"pending", "delegated"}:
+                raise InvalidDecisionTransitionError(
+                    f"Decision is already {current_status} and cannot be {action}d."
+                )
+            deadline_at = row["deadline_at"]
+            if deadline_at and deadline_at <= timestamp:
+                self.expire_overdue(connection, row["project_id"])
+                raise InvalidDecisionTransitionError(
+                    "Decision deadline has passed and the safe default was applied."
+                )
+
+        if action == "approve":
+            connection.execute(
+                text(
+                    """
+                    UPDATE decisions
+                    SET status = 'approved',
+                        approved_by = :actor,
+                        approved_at = :timestamp,
+                        resolution_note = :note,
+                        updated_at = :timestamp
+                    WHERE id = :decision_id
+                    """
+                ),
+                {
+                    "decision_id": decision_id,
+                    "actor": actor,
+                    "timestamp": timestamp,
+                    "note": note,
+                },
+            )
+            emit_event(
+                connection,
+                row["project_id"],
+                "decision.approved",
+                actor,
+                "decision",
+                decision_id,
+                {
+                    "from_status": current_status,
+                    "to_status": "approved",
+                    "note": note,
+                    "default_action": row["default_action"] or "hold",
+                },
+            )
+            refreshed = self.get_row(connection, decision_id)
+            self._handle_approved_follow_on(connection, refreshed, actor)
+            return self.get_row(connection, decision_id)
+
+        if action == "reject":
+            connection.execute(
+                text(
+                    """
+                    UPDATE decisions
+                    SET status = 'rejected',
+                        resolution_note = :note,
+                        updated_at = :timestamp
+                    WHERE id = :decision_id
+                    """
+                ),
+                {
+                    "decision_id": decision_id,
+                    "note": note,
+                    "timestamp": timestamp,
+                },
+            )
+            emit_event(
+                connection,
+                row["project_id"],
+                "decision.rejected",
+                actor,
+                "decision",
+                decision_id,
+                {
+                    "from_status": current_status,
+                    "to_status": "rejected",
+                    "note": note,
+                    "default_action": row["default_action"] or "hold",
+                },
+            )
+            return self.get_row(connection, decision_id)
+
+        if action == "revise":
+            if not note or not note.strip():
+                raise ValueError("note is required when requesting revision")
+            connection.execute(
+                text(
+                    """
+                    UPDATE decisions
+                    SET status = 'revision_requested',
+                        revision_requested_by = :actor,
+                        revision_requested_at = :timestamp,
+                        resolution_note = :note,
+                        updated_at = :timestamp
+                    WHERE id = :decision_id
+                    """
+                ),
+                {
+                    "decision_id": decision_id,
+                    "actor": actor,
+                    "timestamp": timestamp,
+                    "note": note.strip(),
+                },
+            )
+            emit_event(
+                connection,
+                row["project_id"],
+                "decision.revision_requested",
+                actor,
+                "decision",
+                decision_id,
+                {
+                    "from_status": current_status,
+                    "to_status": "revision_requested",
+                    "note": note.strip(),
+                },
+            )
+            return self.get_row(connection, decision_id)
+
+        if action == "delegate":
+            if not delegate_to or not delegate_to.strip():
+                raise ValueError("delegate_to is required when delegating a decision")
+            delegate_target = delegate_to.strip()
+            connection.execute(
+                text(
+                    """
+                    UPDATE decisions
+                    SET status = 'delegated',
+                        delegated_to = :delegate_to,
+                        delegated_by = :actor,
+                        delegated_at = :timestamp,
+                        resolution_note = :note,
+                        updated_at = :timestamp
+                    WHERE id = :decision_id
+                    """
+                ),
+                {
+                    "decision_id": decision_id,
+                    "delegate_to": delegate_target,
+                    "actor": actor,
+                    "timestamp": timestamp,
+                    "note": note,
+                },
+            )
+            emit_event(
+                connection,
+                row["project_id"],
+                "decision.delegated",
+                actor,
+                "decision",
+                decision_id,
+                {
+                    "from_status": current_status,
+                    "to_status": "delegated",
+                    "delegate_to": delegate_target,
+                    "note": note,
+                },
+            )
+            return self.get_row(connection, decision_id)
+
+        if current_status != "approved":
             raise InvalidDecisionTransitionError(
-                f"Decision is already {row['status']} and cannot be {action}d."
+                f"Decision is {current_status} and cannot be executed."
+            )
+        if not (note and note.strip()) and not (external_ref and external_ref.strip()):
+            raise ValueError(
+                "note or external_ref is required when executing a decision manually"
             )
 
-        deadline_at = row["deadline_at"]
-        if deadline_at and deadline_at <= now_utc():
-            self.expire_overdue(connection, row["project_id"])
-            raise InvalidDecisionTransitionError(
-                "Decision deadline has passed and the safe default was applied."
-            )
-
-        status = "approved" if action == "approve" else "rejected"
-        approved_by = actor if action == "approve" else None
-        approved_at = now_utc() if action == "approve" else None
+        execution_note = note.strip() if isinstance(note, str) and note.strip() else None
+        external_reference = (
+            external_ref.strip()
+            if isinstance(external_ref, str) and external_ref.strip()
+            else None
+        )
+        execution_artifact_id = create_artifact(
+            connection,
+            self.settings,
+            row["project_id"],
+            row["task_id"],
+            "manual_execution_record",
+            f"Manual execution record for {row['question'][:80]}",
+            {
+                "decision_id": decision_id,
+                "question": row["question"],
+                "executed_by": actor,
+                "executed_at": timestamp.isoformat(),
+                "note": execution_note,
+                "external_ref": external_reference,
+            },
+        )
         connection.execute(
             text(
                 """
                 UPDATE decisions
-                SET status = :status,
-                    approved_by = :approved_by,
-                    approved_at = :approved_at,
-                    updated_at = :updated_at
+                SET status = 'executed',
+                    executed_by = :actor,
+                    executed_at = :timestamp,
+                    resolution_note = :note,
+                    external_ref = :external_ref,
+                    updated_at = :timestamp
                 WHERE id = :decision_id
                 """
             ),
             {
                 "decision_id": decision_id,
-                "status": status,
-                "approved_by": approved_by,
-                "approved_at": approved_at,
-                "updated_at": now_utc(),
+                "actor": actor,
+                "timestamp": timestamp,
+                "note": execution_note,
+                "external_ref": external_reference,
             },
         )
         emit_event(
             connection,
             row["project_id"],
-            f"decision.{status}",
+            "decision.executed",
             actor,
             "decision",
             decision_id,
             {
-                "from_status": "pending",
-                "to_status": status,
-                "note": note,
-                "default_action": row["default_action"] or "hold",
+                "from_status": current_status,
+                "to_status": "executed",
+                "artifact_id": execution_artifact_id,
+                "external_ref": external_reference,
             },
         )
-        if status == "approved":
-            self._handle_approved_follow_on(connection, row, actor)
+        if row["task_id"]:
+            updated = connection.execute(
+                text(
+                    """
+                    UPDATE tasks
+                    SET status = 'completed',
+                        updated_at = :timestamp
+                    WHERE id = :task_id AND status <> 'completed'
+                    """
+                ),
+                {"task_id": row["task_id"], "timestamp": timestamp},
+            )
+            if updated.rowcount == 1:
+                emit_event(
+                    connection,
+                    row["project_id"],
+                    "task.completed",
+                    actor,
+                    "task",
+                    row["task_id"],
+                    {"decision_id": decision_id},
+                )
         return self.get_row(connection, decision_id)
 
     def _handle_approved_follow_on(

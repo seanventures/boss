@@ -196,11 +196,13 @@ class SoftwareFactoryService:
                 """
                 UPDATE decisions
                 SET status = 'executed',
+                    executed_by = :actor,
+                    executed_at = now(),
                     updated_at = now()
                 WHERE id = :decision_id AND status = 'approved'
                 """
             ),
-            {"decision_id": decision_id},
+            {"decision_id": decision_id, "actor": actor},
         )
         if updated.rowcount == 1:
             emit_event(

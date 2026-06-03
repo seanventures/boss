@@ -230,7 +230,12 @@ a {
 
 .decision-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 12px;
+}
+
+.decision-note {
+  min-height: 88px;
 }
 
 .composer {
