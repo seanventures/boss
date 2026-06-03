@@ -4,7 +4,12 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import text
 
 from apps.api.app import main as api_main
-from apps.api.app.services.github_adapter import PullRequestMergeResult, PullRequestResult
+from apps.api.app.services.github_adapter import (
+    DeploymentResult,
+    DeploymentStatusResult,
+    PullRequestMergeResult,
+    PullRequestResult,
+)
 
 
 def test_health_returns_service_status(client):
@@ -26,6 +31,82 @@ def test_status_returns_seeded_project(client):
     assert "deadletters" in payload
     assert "active_jobs" in payload
     assert "top_risks" in payload
+
+
+def test_metatron_status_query_returns_fresh_answer_and_references(client):
+    response = client.post(
+        "/v1/metatron/query",
+        json={
+            "project_id": "boss-dogfood",
+            "question": "What is the current status?",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["category"] == "status"
+    assert "budget state" in payload["answer"]
+    assert payload["freshness_at"]
+    assert payload["references"]
+    assert payload["references"][0]["object_type"] in {"project", "task", "decision"}
+
+
+def test_metatron_budget_query_returns_reservation_references(client):
+    reserve = client.post(
+        "/v1/budget/reserve",
+        json={
+            "project_id": "boss-dogfood",
+            "category": "tool",
+            "amount_usd_micros": 125_000,
+            "reason": "Seed a reservation for Metatron budget status.",
+        },
+    )
+    assert reserve.status_code == 201
+
+    response = client.post(
+        "/v1/metatron/query",
+        json={
+            "project_id": "boss-dogfood",
+            "question": "How is the budget doing right now?",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["category"] == "budget"
+    assert "Available:" in payload["answer"]
+    assert any(
+        reference["object_type"] == "budget_reservation"
+        for reference in payload["references"]
+    )
+
+
+def test_metatron_task_scope_returns_task_lineage(client):
+    created = client.post(
+        "/v1/commands/propose",
+        json={
+            "project_id": "boss-dogfood",
+            "command": "Create a scoped task answer for Metatron.",
+            "constraints": {"deadline": "today"},
+        },
+    )
+    assert created.status_code == 201
+    task_id = created.json()["task_id"]
+
+    response = client.post(
+        "/v1/metatron/query",
+        json={
+            "project_id": "boss-dogfood",
+            "question": "What is happening with this task?",
+            "task_id": task_id,
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["category"] == "task"
+    assert task_id in {reference["object_id"] for reference in payload["references"]}
+    assert "artifact" in {reference["object_type"] for reference in payload["references"]}
 
 
 def test_health_snapshot_refresh_persists_summary_and_risks(client, engine):
@@ -2240,6 +2321,193 @@ def test_queue_merge_job_is_leasable_and_completion_passes_through(client):
     assert payload["merged_sha"] == "abc123"
 
 
+def test_approving_deployment_review_decision_creates_deploy_gate_block_artifact(
+    client, engine
+):
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                """
+                INSERT INTO decisions (
+                    id, project_id, task_id, question, recommendation, options, risk_tier,
+                    cost_summary, default_action, status
+                )
+                VALUES (
+                    'dec_review_deploy', 'boss-dogfood', NULL, 'Approve sandbox deployment to staging: Demo deploy',
+                    CAST(:recommendation AS JSONB), '[]'::jsonb, 2, '{}'::jsonb, 'hold', 'pending'
+                )
+                """
+            ),
+            {
+                "recommendation": json.dumps(
+                    {
+                        "action": "review_deployment",
+                        "pull_request_url": "https://github.com/seanheiney/boss-sandbox/pull/42",
+                        "branch_name": "boss/demo-pr",
+                        "title": "Demo deploy",
+                        "merged_sha": "merge-sha-42",
+                        "environment": "staging",
+                    }
+                )
+            },
+        )
+
+    approve = client.post(
+        "/v1/decisions/dec_review_deploy/approve",
+        json={"actor": "ceo", "note": "Manual deploy is acceptable."},
+    )
+    assert approve.status_code == 200
+    assert approve.json()["status"] == "approved"
+
+    with engine.begin() as connection:
+        deploy_gate = connection.execute(
+            text(
+                """
+                SELECT artifact_type, title, content
+                FROM artifacts
+                WHERE project_id = 'boss-dogfood' AND artifact_type = 'deployment_gate'
+                ORDER BY created_at DESC
+                LIMIT 1
+                """
+            )
+        ).mappings().one()
+        queued_jobs = connection.execute(
+            text(
+                """
+                SELECT COUNT(*) FROM jobs
+                WHERE project_id = 'boss-dogfood' AND kind = 'github.deployment.create'
+                """
+            )
+        ).scalar_one()
+
+    assert deploy_gate["artifact_type"] == "deployment_gate"
+    assert deploy_gate["title"] == "Deployment gate for Demo deploy"
+    assert deploy_gate["content"]["status"] == "blocked_manual_deploy_required"
+    assert deploy_gate["content"]["environment"] == "staging"
+    assert deploy_gate["content"]["merged_sha"] == "merge-sha-42"
+    assert queued_jobs == 0
+
+    events = client.get("/v1/events", params={"project_id": "boss-dogfood"})
+    assert events.status_code == 200
+    event_types = [item["event_type"] for item in events.json()["items"]]
+    assert "decision.follow_on_blocked" in event_types
+
+
+def test_queue_deployment_job_is_leasable_and_completion_passes_through(client):
+    queued = client.post(
+        "/v1/software-factory/deployments/queue",
+        json={
+            "project_id": "boss-dogfood",
+            "decision_id": "dec_deploy",
+            "dedupe_key": "queued-deploy",
+            "merged_sha": "merge-sha-42",
+            "pull_request_url": "https://github.com/seanheiney/boss-sandbox/pull/42",
+            "title": "Deploy Demo",
+            "branch_name": "boss/demo-pr",
+            "environment": "staging",
+        },
+    )
+    assert queued.status_code == 201
+    job_id = queued.json()["id"]
+
+    fetched = client.get(f"/v1/jobs/{job_id}")
+    assert fetched.status_code == 200
+    assert fetched.json()["kind"] == "github.deployment.create"
+
+    poll = client.post(
+        "/v1/worker/poll",
+        json={
+            "worker_id": "worker-deploy",
+            "capabilities": ["github.deployment.create"],
+            "lease_ttl_seconds": 60,
+        },
+    )
+    assert poll.status_code == 200
+    leased = poll.json()
+    assert leased["status"] == "leased"
+    assert leased["job"]["id"] == job_id
+
+    complete = client.post(
+        "/v1/worker/complete",
+        json={
+            "worker_id": "worker-deploy",
+            "job_id": job_id,
+            "lease_token": leased["job"]["lease_token"],
+            "result": {
+                "status": "created",
+                "artifact_id": "art_deploy",
+                "receipt_id": "rcpt_deploy",
+                "decision_id": "dec_deploy",
+                "environment": "staging",
+                "deployment_id": 12345,
+                "deployment_status": "success",
+                "deployment_url": "https://api.github.com/repos/seanheiney/boss-sandbox/deployments/12345",
+                "merged_sha": "merge-sha-42",
+            },
+        },
+    )
+    assert complete.status_code == 200
+    payload = complete.json()
+    assert payload["status"] == "succeeded"
+    assert payload["artifact_id"] == "art_deploy"
+    assert payload["receipt_id"] == "rcpt_deploy"
+    assert payload["decision_id"] == "dec_deploy"
+    assert payload["environment"] == "staging"
+    assert payload["deployment_id"] == 12345
+    assert payload["deployment_status"] == "success"
+
+
+def test_deployment_blocks_without_github_credentials(client, engine):
+    previous = api_main.software_factory.settings.github_token
+    api_main.software_factory.settings.github_token = None
+    try:
+        response = client.post(
+            "/v1/software-factory/deployments",
+            json={
+                "project_id": "boss-dogfood",
+                "decision_id": "dec_deploy_missing_github",
+                "dedupe_key": "missing-github-creds-deploy",
+                "merged_sha": "merge-sha-42",
+                "pull_request_url": "https://github.com/seanheiney/boss-sandbox/pull/42",
+                "title": "Deploy Demo",
+                "branch_name": "boss/demo-pr",
+                "environment": "staging",
+            },
+        )
+    finally:
+        api_main.software_factory.settings.github_token = previous
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "blocked"
+    assert payload["decision_id"]
+    assert "BOSS_GITHUB_TOKEN" in payload["message"]
+
+    with engine.begin() as connection:
+        decision_question = connection.execute(
+            text(
+                """
+                SELECT question
+                FROM decisions
+                WHERE id = :decision_id
+                """
+            ),
+            {"decision_id": payload["decision_id"]},
+        ).scalar_one()
+        deploy_artifact_count = connection.execute(
+            text(
+                """
+                SELECT COUNT(*)
+                FROM artifacts
+                WHERE project_id = 'boss-dogfood' AND artifact_type = 'deployment_result'
+                """
+            )
+        ).scalar_one()
+
+    assert decision_question == "GitHub integration is not configured"
+    assert deploy_artifact_count == 0
+
+
 def test_merge_blocks_without_github_credentials(client, engine):
     previous = api_main.software_factory.settings.github_token
     api_main.software_factory.settings.github_token = None
@@ -2613,4 +2881,395 @@ def test_command_to_merge_flow_completes_task_when_merge_policy_enabled(
         assert leased_merge_job["id"] in replay_artifact_payload["content"]["chain"]["job_ids"]
     finally:
         api_main.decisions.settings.enable_sandbox_merge = previous
+        api_main.software_factory.settings.openai_api_key = previous_openai
+
+
+def test_command_to_deploy_flow_completes_task_when_deploy_policy_enabled(
+    client, engine, monkeypatch
+):
+    previous_merge = api_main.decisions.settings.enable_sandbox_merge
+    previous_merge_factory = api_main.software_factory.settings.enable_sandbox_merge
+    previous_deploy = api_main.decisions.settings.enable_sandbox_deploy
+    previous_deploy_factory = api_main.software_factory.settings.enable_sandbox_deploy
+    previous_openai = api_main.software_factory.settings.openai_api_key
+    api_main.decisions.settings.enable_sandbox_merge = True
+    api_main.software_factory.settings.enable_sandbox_merge = True
+    api_main.decisions.settings.enable_sandbox_deploy = True
+    api_main.software_factory.settings.enable_sandbox_deploy = True
+    api_main.software_factory.settings.openai_api_key = "test-openai-key"
+    monkeypatch.setattr(
+        api_main.software_factory.openai,
+        "create_text_response",
+        lambda prompt, system_prompt=None, model=None: (
+            "resp_review_packet",
+            "## Implementation summary\n- Review packet generated for deploy test.",
+        ),
+    )
+    monkeypatch.setattr(
+        api_main.software_factory.github,
+        "ensure_branch",
+        lambda branch_name: "sha-base",
+    )
+    monkeypatch.setattr(
+        api_main.software_factory.github,
+        "upsert_file",
+        lambda branch_name, path, content, message: f"commit-{path}",
+    )
+    monkeypatch.setattr(
+        api_main.software_factory.github,
+        "create_pull_request",
+        lambda branch_name, title, body: PullRequestResult(
+            url="https://github.com/seanheiney/boss-sandbox/pull/199",
+            number=199,
+        ),
+    )
+    monkeypatch.setattr(
+        api_main.software_factory.github,
+        "merge_pull_request",
+        lambda pull_request_number, commit_title: PullRequestMergeResult(
+            sha="merge-sha-199",
+            merged=True,
+            message="Pull request successfully merged",
+        ),
+    )
+    monkeypatch.setattr(
+        api_main.software_factory.github,
+        "create_deployment",
+        lambda ref, environment, description: DeploymentResult(
+            id=777,
+            environment=environment,
+            sha=ref,
+            url="https://api.github.com/repos/seanheiney/boss-sandbox/deployments/777",
+        ),
+    )
+    monkeypatch.setattr(
+        api_main.software_factory.github,
+        "mark_deployment_success",
+        lambda deployment_id, environment, environment_url=None, description=None: DeploymentStatusResult(
+            state="success",
+            url="https://api.github.com/repos/seanheiney/boss-sandbox/deployments/777/statuses/1",
+            environment_url="https://example.com/staging/777",
+        ),
+    )
+
+    try:
+        created = client.post(
+            "/v1/commands/propose",
+            json={
+                "project_id": "boss-dogfood",
+                "command": "Ship the next sandbox deployment audit improvement.",
+                "constraints": {"deadline": "this week"},
+            },
+        )
+        assert created.status_code == 201
+        payload = created.json()
+        task_id = payload["task_id"]
+        command_job_id = payload["job_id"]
+
+        leased_plan = client.post(
+            "/v1/worker/poll",
+            json={
+                "worker_id": "worker-deploy-plan",
+                "capabilities": ["plan.command"],
+                "lease_ttl_seconds": 60,
+            },
+        )
+        assert leased_plan.status_code == 200
+        leased_plan_job = leased_plan.json()["job"]
+        assert leased_plan_job["id"] == command_job_id
+
+        client.post(
+            "/v1/worker/heartbeat",
+            json={
+                "worker_id": "worker-deploy-plan",
+                "job_id": command_job_id,
+                "lease_token": leased_plan_job["lease_token"],
+                "lease_ttl_seconds": 60,
+            },
+        ).raise_for_status()
+
+        completed_plan = client.post(
+            "/v1/worker/complete",
+            json={
+                "worker_id": "worker-deploy-plan",
+                "job_id": command_job_id,
+                "lease_token": leased_plan_job["lease_token"],
+                "result": {
+                    "summary": "Ship the next sandbox deployment audit improvement.",
+                    "objectives": ["Ship the next sandbox deployment audit improvement."],
+                    "steps": [
+                        "Prepare a reviewable proposal.",
+                        "Review and merge the sandbox PR.",
+                        "Approve and record the sandbox deployment.",
+                    ],
+                    "risks": ["Budget or provider credentials could block progress."],
+                    "done_when": [
+                        "The sandbox PR is merged, the sandbox deployment is recorded, and the task is completed."
+                    ],
+                },
+            },
+        )
+        assert completed_plan.status_code == 200
+        plan_decision_id = completed_plan.json()["decision_id"]
+
+        assert (
+            client.post(
+                f"/v1/decisions/{plan_decision_id}/approve",
+                json={"actor": "ceo", "note": "Proceed to PR proposal."},
+            ).status_code
+            == 200
+        )
+
+        leased_pr = client.post(
+            "/v1/worker/poll",
+            json={
+                "worker_id": "worker-deploy-pr",
+                "capabilities": ["software_factory.propose_pr"],
+                "lease_ttl_seconds": 60,
+            },
+        )
+        assert leased_pr.status_code == 200
+        leased_pr_job = leased_pr.json()["job"]
+        assert leased_pr_job["kind"] == "software_factory.propose_pr"
+
+        client.post(
+            "/v1/worker/heartbeat",
+            json={
+                "worker_id": "worker-deploy-pr",
+                "job_id": leased_pr_job["id"],
+                "lease_token": leased_pr_job["lease_token"],
+                "lease_ttl_seconds": 60,
+            },
+        ).raise_for_status()
+
+        proposal_run = client.post(
+            "/v1/software-factory/proposals",
+            json={
+                "project_id": leased_pr_job["project_id"],
+                "task_id": leased_pr_job["task_id"],
+                "reservation_id": leased_pr_job["payload"]["reservation_id"],
+                "dedupe_key": leased_pr_job["payload"]["dedupe_key"],
+                "title": leased_pr_job["payload"]["title"],
+                "branch_name": leased_pr_job["payload"]["branch_name"],
+                "summary": leased_pr_job["payload"]["summary"],
+                "files": leased_pr_job["payload"]["files"],
+                "created_by_job_id": leased_pr_job["id"],
+            },
+        )
+        assert proposal_run.status_code == 200
+        proposal_result = proposal_run.json()
+        assert proposal_result["status"] == "created"
+        pr_decision_id = proposal_result["decision_id"]
+
+        assert (
+            client.post(
+                "/v1/worker/complete",
+                json={
+                    "worker_id": "worker-deploy-pr",
+                    "job_id": leased_pr_job["id"],
+                    "lease_token": leased_pr_job["lease_token"],
+                    "result": proposal_result,
+                },
+            ).status_code
+            == 200
+        )
+
+        assert (
+            client.post(
+                f"/v1/decisions/{pr_decision_id}/approve",
+                json={"actor": "ceo", "note": "Merge the approved sandbox PR."},
+            ).status_code
+            == 200
+        )
+
+        leased_merge = client.post(
+            "/v1/worker/poll",
+            json={
+                "worker_id": "worker-deploy-merge",
+                "capabilities": ["github.pull_request.merge"],
+                "lease_ttl_seconds": 60,
+            },
+        )
+        assert leased_merge.status_code == 200
+        leased_merge_job = leased_merge.json()["job"]
+        assert leased_merge_job["kind"] == "github.pull_request.merge"
+
+        client.post(
+            "/v1/worker/heartbeat",
+            json={
+                "worker_id": "worker-deploy-merge",
+                "job_id": leased_merge_job["id"],
+                "lease_token": leased_merge_job["lease_token"],
+                "lease_ttl_seconds": 60,
+            },
+        ).raise_for_status()
+
+        merge_run = client.post(
+            "/v1/software-factory/merges",
+            json={
+                "project_id": leased_merge_job["project_id"],
+                "decision_id": leased_merge_job["payload"]["decision_id"],
+                "dedupe_key": leased_merge_job["payload"]["dedupe_key"],
+                "pull_request_number": leased_merge_job["payload"]["pull_request_number"],
+                "pull_request_url": leased_merge_job["payload"]["pull_request_url"],
+                "title": leased_merge_job["payload"]["title"],
+                "branch_name": leased_merge_job["payload"].get("branch_name"),
+                "created_by_job_id": leased_merge_job["id"],
+            },
+        )
+        assert merge_run.status_code == 200
+        merge_result = merge_run.json()
+        assert merge_result["status"] == "created"
+        assert merge_result["merged_sha"] == "merge-sha-199"
+        deploy_decision_id = merge_result["deployment_decision_id"]
+
+        complete_merge = client.post(
+            "/v1/worker/complete",
+            json={
+                "worker_id": "worker-deploy-merge",
+                "job_id": leased_merge_job["id"],
+                "lease_token": leased_merge_job["lease_token"],
+                "result": merge_result,
+            },
+        )
+        assert complete_merge.status_code == 200
+        assert complete_merge.json()["status"] == "succeeded"
+        assert complete_merge.json()["deployment_decision_id"] == deploy_decision_id
+
+        with engine.begin() as connection:
+            task_status_after_merge = connection.execute(
+                text("SELECT status FROM tasks WHERE id = :task_id"),
+                {"task_id": task_id},
+            ).scalar_one()
+            deploy_decision_status = connection.execute(
+                text("SELECT status FROM decisions WHERE id = :decision_id"),
+                {"decision_id": deploy_decision_id},
+            ).scalar_one()
+
+        assert task_status_after_merge == "open"
+        assert deploy_decision_status == "pending"
+
+        assert (
+            client.post(
+                f"/v1/decisions/{deploy_decision_id}/approve",
+                json={"actor": "ceo", "note": "Record the sandbox deployment."},
+            ).status_code
+            == 200
+        )
+
+        leased_deploy = client.post(
+            "/v1/worker/poll",
+            json={
+                "worker_id": "worker-deploy-release",
+                "capabilities": ["github.deployment.create"],
+                "lease_ttl_seconds": 60,
+            },
+        )
+        assert leased_deploy.status_code == 200
+        leased_deploy_job = leased_deploy.json()["job"]
+        assert leased_deploy_job["kind"] == "github.deployment.create"
+
+        client.post(
+            "/v1/worker/heartbeat",
+            json={
+                "worker_id": "worker-deploy-release",
+                "job_id": leased_deploy_job["id"],
+                "lease_token": leased_deploy_job["lease_token"],
+                "lease_ttl_seconds": 60,
+            },
+        ).raise_for_status()
+
+        deploy_run = client.post(
+            "/v1/software-factory/deployments",
+            json={
+                "project_id": leased_deploy_job["project_id"],
+                "decision_id": leased_deploy_job["payload"]["decision_id"],
+                "dedupe_key": leased_deploy_job["payload"]["dedupe_key"],
+                "merged_sha": leased_deploy_job["payload"]["merged_sha"],
+                "pull_request_url": leased_deploy_job["payload"]["pull_request_url"],
+                "title": leased_deploy_job["payload"]["title"],
+                "branch_name": leased_deploy_job["payload"].get("branch_name"),
+                "environment": leased_deploy_job["payload"]["environment"],
+                "created_by_job_id": leased_deploy_job["id"],
+            },
+        )
+        assert deploy_run.status_code == 200
+        deploy_result = deploy_run.json()
+        assert deploy_result["status"] == "created"
+        assert deploy_result["environment"] == "staging"
+        assert deploy_result["deployment_status"] == "success"
+
+        complete_deploy = client.post(
+            "/v1/worker/complete",
+            json={
+                "worker_id": "worker-deploy-release",
+                "job_id": leased_deploy_job["id"],
+                "lease_token": leased_deploy_job["lease_token"],
+                "result": deploy_result,
+            },
+        )
+        assert complete_deploy.status_code == 200
+        assert complete_deploy.json()["status"] == "succeeded"
+
+        with engine.begin() as connection:
+            task_status = connection.execute(
+                text("SELECT status FROM tasks WHERE id = :task_id"),
+                {"task_id": task_id},
+            ).scalar_one()
+            review_decision_status = connection.execute(
+                text("SELECT status FROM decisions WHERE id = :decision_id"),
+                {"decision_id": pr_decision_id},
+            ).scalar_one()
+            deployment_decision_status = connection.execute(
+                text("SELECT status FROM decisions WHERE id = :decision_id"),
+                {"decision_id": deploy_decision_id},
+            ).scalar_one()
+            artifact_types = [
+                row["artifact_type"]
+                for row in connection.execute(
+                    text(
+                        """
+                        SELECT artifact_type
+                        FROM artifacts
+                        WHERE project_id = 'boss-dogfood'
+                        ORDER BY created_at ASC
+                        """
+                    )
+                ).mappings().all()
+            ]
+            receipt_kinds = [
+                row["effect_kind"]
+                for row in connection.execute(
+                    text(
+                        """
+                        SELECT effect_kind
+                        FROM receipts
+                        WHERE project_id = 'boss-dogfood'
+                        ORDER BY created_at ASC
+                        """
+                    )
+                ).mappings().all()
+            ]
+
+        assert task_status == "completed"
+        assert review_decision_status == "executed"
+        assert deployment_decision_status == "executed"
+        assert "deployment_result" in artifact_types
+        assert receipt_kinds == [
+            "github.pull_request.create",
+            "github.pull_request.merge",
+            "github.deployment.create",
+        ]
+
+        events = client.get("/v1/events", params={"project_id": "boss-dogfood"})
+        assert events.status_code == 200
+        event_types = [item["event_type"] for item in events.json()["items"]]
+        assert "software_factory.deployment_review_requested" in event_types
+        assert "software_factory.deployment_created" in event_types
+        assert "task.completed" in event_types
+    finally:
+        api_main.decisions.settings.enable_sandbox_merge = previous_merge
+        api_main.software_factory.settings.enable_sandbox_merge = previous_merge_factory
+        api_main.decisions.settings.enable_sandbox_deploy = previous_deploy
+        api_main.software_factory.settings.enable_sandbox_deploy = previous_deploy_factory
         api_main.software_factory.settings.openai_api_key = previous_openai

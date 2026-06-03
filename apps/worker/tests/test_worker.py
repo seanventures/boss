@@ -79,6 +79,20 @@ class FakeControlPlaneClient:
             "merged_sha": "abc123",
         }
 
+    def create_deployment(self, payload):
+        self.calls.append(("create_deployment", payload))
+        return {
+            "status": "created",
+            "artifact_id": "art_deploy",
+            "receipt_id": "rcpt_deploy",
+            "decision_id": payload["decision_id"],
+            "environment": payload["environment"],
+            "deployment_id": 12345,
+            "deployment_status": "success",
+            "deployment_url": "https://api.github.com/repos/seanheiney/boss-sandbox/deployments/12345",
+            "merged_sha": payload["merged_sha"],
+        }
+
     def deliver_outbox_message(self, message_id, payload):
         self.calls.append(("deliver_outbox_message", message_id, payload))
         return {
@@ -310,5 +324,43 @@ def test_run_worker_cycle_executes_queued_pr_merge_job():
         "poll",
         "heartbeat",
         "merge_pull_request",
+        "complete",
+    ]
+
+
+def test_run_worker_cycle_executes_queued_deployment_job():
+    leased_job = LeasedJob(
+        id="job_deploy",
+        project_id="boss-dogfood",
+        task_id="tsk_test",
+        kind="github.deployment.create",
+        payload={
+            "decision_id": "dec_deploy",
+            "dedupe_key": "deploy-test",
+            "merged_sha": "abc123",
+            "pull_request_url": "https://github.com/seanheiney/boss-sandbox/pull/42",
+            "title": "Deploy Demo",
+            "branch_name": "boss/demo-pr",
+            "environment": "staging",
+        },
+        attempt=1,
+        max_attempts=3,
+        lease_token="lease_token",
+        lease_expires_at="future",
+    )
+    client = FakeControlPlaneClient(leased_job)
+    settings = SimpleNamespace(
+        worker_id="worker-test",
+        lease_ttl_seconds=60,
+        poll_interval_seconds=1,
+    )
+
+    ran_job = run_worker_cycle(client, settings)
+
+    assert ran_job is True
+    assert [call[0] for call in client.calls] == [
+        "poll",
+        "heartbeat",
+        "create_deployment",
         "complete",
     ]

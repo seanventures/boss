@@ -68,11 +68,14 @@ If a required credential is missing, the API must fail closed and create visible
 - `make real-smoke-plan`: run a real reservation -> OpenAI plan flow against local Postgres
 - `make real-smoke-pr`: run a real reservation -> queued PR job -> leased worker -> sandbox PR proposal flow
 - `make real-smoke-merge`: run the full sandbox PR proposal flow and, when merge policy is enabled, approve and execute the merge job
+- `make real-smoke-deploy`: run the full sandbox PR proposal -> merge -> deployment flow when both merge and deploy policies are enabled
 - `make worker-drain-once`: poll the control plane once and execute at most one leased job
 
 The database-backed commands now wait for Postgres readiness before seeding, testing, or smoke execution, which avoids race conditions during local startup.
 
 The executive console now supports API-driven CEO command intake plus live visibility into recent tasks, artifacts, events, decisions, deadletters, installed packs, and installed roles.
+
+The console also exposes a Metatron status-query surface. It answers scoped operational questions directly from the live control plane and returns freshness plus explicit references instead of free-form unsupported chat.
 
 The dogfood seed now installs the spec-backed `core_v1` company pack into `boss-dogfood`, which provisions the default operating roles from `packages/specpack/roles`.
 
@@ -82,6 +85,7 @@ The dogfood seed also registers the initial entitlement-source inventory from `p
 
 - `GET /health`
 - `GET /v1/status`
+- `POST /v1/metatron/query`
 - `GET /v1/health-snapshots`
 - `POST /v1/health-snapshots/refresh`
 - `POST /v1/commands/propose`
@@ -128,8 +132,10 @@ The dogfood seed also registers the initial entitlement-source inventory from `p
 - `POST /v1/openai/plans`
 - `POST /v1/software-factory/proposals`
 - `POST /v1/software-factory/merges`
+- `POST /v1/software-factory/deployments`
 - `POST /v1/software-factory/proposals/queue`
 - `POST /v1/software-factory/merges/queue`
+- `POST /v1/software-factory/deployments/queue`
 - `GET /v1/receipts`
 - `GET /v1/receipts/{dedupe_key}`
 - `GET /v1/audit/export`
@@ -150,6 +156,7 @@ The dogfood seed also registers the initial entitlement-source inventory from `p
 - Queued OpenAI, PR proposal, and merge work now stamps both artifacts and receipts with `created_by_job_id`, and PR-proposal reservations are attached to their worker jobs for tighter lineage.
 - Approving a plan-review decision now auto-reserves the configured sandbox proposal budget and queues the next `software_factory.propose_pr` job instead of stopping at decision state only.
 - Approving the final sandbox PR review decision creates a receipt-linked merge gate by default, and can queue a real `github.pull_request.merge` job only when `BOSS_ENABLE_SANDBOX_MERGE=true`.
+- When sandbox deploy policy is enabled, a successful merge creates a deployment review decision instead of silently treating merge as the terminal step. Approving that decision queues a real `github.deployment.create` job against the sandbox repository, backed by a receipt and a durable `deployment_result` artifact.
 
 ## Model entitlement broker
 

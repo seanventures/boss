@@ -505,8 +505,21 @@ class JobLeaseService:
                 "artifact_id": result.get("artifact_id"),
                 "decision_id": result.get("decision_id"),
                 "receipt_id": result.get("receipt_id"),
+                "deployment_decision_id": result.get("deployment_decision_id"),
                 "pull_request_url": result.get("pull_request_url"),
                 "branch_name": result.get("branch_name"),
+                "merged_sha": result.get("merged_sha"),
+            }
+
+        if job_row["kind"] == "github.deployment.create":
+            return {
+                "artifact_id": result.get("artifact_id"),
+                "decision_id": result.get("decision_id"),
+                "receipt_id": result.get("receipt_id"),
+                "environment": result.get("environment"),
+                "deployment_id": result.get("deployment_id"),
+                "deployment_status": result.get("deployment_status"),
+                "deployment_url": result.get("deployment_url"),
                 "merged_sha": result.get("merged_sha"),
             }
 

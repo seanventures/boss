@@ -19,6 +19,7 @@ import { fetchDecisionFeed, type DecisionFeedItem } from "../lib/decisions";
 import { fetchEntitlementFeed } from "../lib/entitlements";
 import { fetchActivityFeed } from "../lib/events";
 import { fetchHealthSnapshotFeed } from "../lib/health-snapshots";
+import { fetchMetatronQuery } from "../lib/metatron";
 import { fetchPackFeed } from "../lib/packs";
 import { fetchReceiptFeed } from "../lib/receipts";
 import { fetchRoleFeed } from "../lib/roles";
@@ -102,7 +103,25 @@ function decisionStatusDetail(decision: DecisionFeedItem): string {
   return "This card remains explicit until it is approved, rejected, delegated, revised, or safely expired.";
 }
 
-export default async function HomePage() {
+type HomePageProps = {
+  searchParams?: Promise<Record<string, string | string[] | undefined>>;
+};
+
+function getParam(value: string | string[] | undefined): string | undefined {
+  if (typeof value === "string" && value.trim()) {
+    return value.trim();
+  }
+  if (Array.isArray(value) && typeof value[0] === "string" && value[0].trim()) {
+    return value[0].trim();
+  }
+  return undefined;
+}
+
+export default async function HomePage({ searchParams }: HomePageProps) {
+  const resolvedSearchParams = searchParams ? await searchParams : undefined;
+  const metatronQuestion = getParam(resolvedSearchParams?.q);
+  const metatronTaskId = getParam(resolvedSearchParams?.task_id);
+  const metatronDecisionId = getParam(resolvedSearchParams?.decision_id);
   const [
     status,
     decisions,
@@ -121,6 +140,7 @@ export default async function HomePage() {
     selfImprovement,
     outbox,
     inbox,
+    metatron,
   ] =
     await Promise.all([
       fetchStatus(),
@@ -140,6 +160,11 @@ export default async function HomePage() {
       fetchSelfImprovementFeed(),
       fetchOutboxFeed(),
       fetchInboxFeed(),
+      fetchMetatronQuery(
+        metatronQuestion,
+        metatronTaskId,
+        metatronDecisionId,
+      ),
     ]);
 
   const deadletterCount = deadletters.items.length;
@@ -210,6 +235,103 @@ export default async function HomePage() {
               </p>
             </form>
           </div>
+        </section>
+
+        <section className="stack-grid">
+          <article className="stack-card">
+            <div className="section-head">
+              <div>
+                <span className="eyebrow">Metatron</span>
+                <h2>Status Query</h2>
+              </div>
+            </div>
+            <form method="get" className="composer">
+              <label className="field">
+                <span>Question</span>
+                <input
+                  className="input"
+                  name="q"
+                  defaultValue={metatronQuestion}
+                  placeholder="What changed, what is blocked, and what should I do next?"
+                />
+              </label>
+              <div className="input-grid">
+                <label className="field">
+                  <span>Task scope</span>
+                  <input
+                    className="input"
+                    name="task_id"
+                    defaultValue={metatronTaskId}
+                    placeholder="Optional task id"
+                  />
+                </label>
+                <label className="field">
+                  <span>Decision scope</span>
+                  <input
+                    className="input"
+                    name="decision_id"
+                    defaultValue={metatronDecisionId}
+                    placeholder="Optional decision id"
+                  />
+                </label>
+              </div>
+              <button className="button" type="submit">
+                Ask Metatron
+              </button>
+              <p className="detail">
+                Answers are generated from live control-plane state, include
+                freshness, and return explicit references.
+              </p>
+            </form>
+            {metatron ? (
+              <div className="decision-grid">
+                <div>
+                  <h4>Answer</h4>
+                  <p>{metatron.answer}</p>
+                  <p className="detail">
+                    {metatron.apiReachable
+                      ? `Fresh as of ${formatDateTime(metatron.freshnessAt)}.`
+                      : metatron.blockedReason}
+                  </p>
+                </div>
+                <div>
+                  <h4>Suggested actions</h4>
+                  {metatron.suggestedActions.length > 0 ? (
+                    <ul className="detail">
+                      {metatron.suggestedActions.map((item) => (
+                        <li key={item}>{item}</li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="detail">No suggested action.</p>
+                  )}
+                </div>
+                <div>
+                  <h4>References</h4>
+                  {metatron.references.length > 0 ? (
+                    <div className="feed-list">
+                      {metatron.references.map((reference) => (
+                        <div key={`${reference.objectType}:${reference.objectId}`}>
+                          <div>{reference.title}</div>
+                          <p className="detail">
+                            {reference.objectType} / {reference.objectId}
+                            {reference.status ? ` / ${reference.status}` : ""}
+                          </p>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="detail">No references returned.</p>
+                  )}
+                </div>
+              </div>
+            ) : (
+              <p className="detail">
+                Ask a scoped question to get a freshness-stamped answer from the
+                live control plane.
+              </p>
+            )}
+          </article>
         </section>
 
         <section className="grid">

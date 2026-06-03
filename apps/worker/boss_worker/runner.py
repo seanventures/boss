@@ -17,6 +17,7 @@ def capabilities() -> list[str]:
         "openai.plan",
         "software_factory.propose_pr",
         "github.pull_request.merge",
+        "github.deployment.create",
         "comms.outbox.deliver",
     ]
 
@@ -102,6 +103,23 @@ def execute_job(job: LeasedJob, client: ControlPlaneClient) -> dict[str, Any]:
         )
         if result.get("status") == "failed":
             raise RuntimeError(result.get("message") or "Pull-request merge failed.")
+        return result
+    if job.kind == "github.deployment.create":
+        result = client.create_deployment(
+            {
+                "project_id": job.project_id,
+                "decision_id": job.payload["decision_id"],
+                "dedupe_key": job.payload["dedupe_key"],
+                "merged_sha": job.payload["merged_sha"],
+                "pull_request_url": job.payload["pull_request_url"],
+                "title": job.payload["title"],
+                "branch_name": job.payload.get("branch_name"),
+                "environment": job.payload["environment"],
+                "created_by_job_id": job.id,
+            }
+        )
+        if result.get("status") == "failed":
+            raise RuntimeError(result.get("message") or "Deployment creation failed.")
         return result
     if job.kind == "comms.outbox.deliver":
         result = client.deliver_outbox_message(

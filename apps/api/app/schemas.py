@@ -30,6 +30,34 @@ class StatusResponse(BaseModel):
     blocked_reason: Optional[str] = None
 
 
+class MetatronReference(BaseModel):
+    object_type: str
+    object_id: str
+    title: str
+    status: Optional[str] = None
+    detail: Optional[str] = None
+    created_at: Optional[str] = None
+
+
+class MetatronQueryRequest(BaseModel):
+    project_id: str
+    question: str
+    task_id: Optional[str] = None
+    decision_id: Optional[str] = None
+    limit: int = Field(default=5, ge=1, le=25)
+
+
+class MetatronQueryResponse(BaseModel):
+    project_id: str
+    question: str
+    category: str
+    answer: str
+    freshness_at: str
+    references: list[MetatronReference] = Field(default_factory=list)
+    suggested_actions: list[str] = Field(default_factory=list)
+    top_risks: list[dict[str, Any]] = Field(default_factory=list)
+
+
 class HealthSnapshotSummary(BaseModel):
     id: str
     project_id: str
@@ -201,13 +229,45 @@ class PullRequestMergeJobRequest(PullRequestMergeRequest):
     max_attempts: int = Field(default=3, ge=1, le=20)
 
 
+class SandboxDeploymentRequest(BaseModel):
+    project_id: str
+    decision_id: str
+    dedupe_key: str
+    merged_sha: str
+    pull_request_url: str
+    title: str
+    environment: str
+    branch_name: Optional[str] = None
+    created_by_job_id: Optional[str] = None
+
+
+class SandboxDeploymentJobRequest(SandboxDeploymentRequest):
+    task_id: Optional[str] = None
+    priority: int = Field(default=20, ge=0)
+    max_attempts: int = Field(default=3, ge=1, le=20)
+
+
 class PullRequestMergeResponse(BaseModel):
     status: str
     artifact_id: Optional[str] = None
     receipt_id: Optional[str] = None
     decision_id: Optional[str] = None
+    deployment_decision_id: Optional[str] = None
     pull_request_url: Optional[str] = None
     branch_name: Optional[str] = None
+    merged_sha: Optional[str] = None
+    message: Optional[str] = None
+
+
+class SandboxDeploymentResponse(BaseModel):
+    status: str
+    artifact_id: Optional[str] = None
+    receipt_id: Optional[str] = None
+    decision_id: Optional[str] = None
+    environment: Optional[str] = None
+    deployment_id: Optional[int] = None
+    deployment_status: Optional[str] = None
+    deployment_url: Optional[str] = None
     merged_sha: Optional[str] = None
     message: Optional[str] = None
 
@@ -309,9 +369,14 @@ class WorkerCompleteResponse(BaseModel):
     test_report_artifact_id: Optional[str] = None
     decision_id: Optional[str] = None
     receipt_id: Optional[str] = None
+    deployment_decision_id: Optional[str] = None
     pull_request_url: Optional[str] = None
     merged_sha: Optional[str] = None
     branch_name: Optional[str] = None
+    environment: Optional[str] = None
+    deployment_id: Optional[int] = None
+    deployment_status: Optional[str] = None
+    deployment_url: Optional[str] = None
 
 
 class WorkerFailRequest(BaseModel):

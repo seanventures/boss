@@ -66,6 +66,7 @@ def drain_worker_once(client: TestClient) -> dict | None:
                 "openai.plan",
                 "software_factory.propose_pr",
                 "github.pull_request.merge",
+                "github.deployment.create",
             ],
             "lease_ttl_seconds": 60,
         },
@@ -124,6 +125,21 @@ def drain_worker_once(client: TestClient) -> dict | None:
                 "pull_request_url": job["payload"]["pull_request_url"],
                 "title": job["payload"]["title"],
                 "branch_name": job["payload"].get("branch_name"),
+                "created_by_job_id": job["id"],
+            },
+        )
+    elif job["kind"] == "github.deployment.create":
+        result = client.post(
+            "/v1/software-factory/deployments",
+            json={
+                "project_id": job["project_id"],
+                "decision_id": job["payload"]["decision_id"],
+                "dedupe_key": job["payload"]["dedupe_key"],
+                "merged_sha": job["payload"]["merged_sha"],
+                "pull_request_url": job["payload"]["pull_request_url"],
+                "title": job["payload"]["title"],
+                "branch_name": job["payload"].get("branch_name"),
+                "environment": job["payload"]["environment"],
                 "created_by_job_id": job["id"],
             },
         )
@@ -189,6 +205,11 @@ def main() -> None:
         "--with-merge",
         action="store_true",
         help="Approve the PR review decision and execute the merge job if merge policy is enabled.",
+    )
+    parser.add_argument(
+        "--with-deploy",
+        action="store_true",
+        help="Approve the deployment review decision and execute the deployment job if deploy policy is enabled.",
     )
     args = parser.parse_args()
 
@@ -274,6 +295,9 @@ def main() -> None:
         print("Worker completion:")
         print(json.dumps(completion_payload, indent=2))
 
+        if args.with_deploy and not args.with_merge:
+            raise SystemExit("--with-deploy requires --with-merge.")
+
         if not args.with_merge:
             return
         if not settings.enable_sandbox_merge:
@@ -293,6 +317,33 @@ def main() -> None:
         merge_completion = drain_worker_once(client)
         print("Merge worker completion:")
         print(json.dumps(merge_completion, indent=2))
+
+        if not args.with_deploy:
+            return
+        if not settings.enable_sandbox_deploy:
+            raise SystemExit(
+                "BOSS_ENABLE_SANDBOX_DEPLOY is false. Enable it before running --with-deploy."
+            )
+        deploy_decision_id = (
+            merge_completion.get("deployment_decision_id") if merge_completion else None
+        )
+        if not deploy_decision_id:
+            raise SystemExit(
+                "No deployment decision_id was returned from the merge execution."
+            )
+        deploy_approve = client.post(
+            f"/v1/decisions/{deploy_decision_id}/approve",
+            json={
+                "actor": "ceo",
+                "note": "Approve sandbox deployment for smoke validation.",
+            },
+        )
+        deploy_approve.raise_for_status()
+        print("Approved deployment review decision:")
+        print(json.dumps(deploy_approve.json(), indent=2))
+        deploy_completion = drain_worker_once(client)
+        print("Deployment worker completion:")
+        print(json.dumps(deploy_completion, indent=2))
 
 
 if __name__ == "__main__":

@@ -400,6 +400,13 @@ class DecisionService:
                 )
             else:
                 self._create_merge_gate_block(connection, row, actor, recommendation)
+        elif action == "review_deployment":
+            if self.settings.enable_sandbox_deploy:
+                self._queue_deployment_job_from_review(
+                    connection, row, actor, recommendation
+                )
+            else:
+                self._create_deploy_gate_block(connection, row, actor, recommendation)
         elif action in {"self_improvement.begin_canary", "self_improvement.rollout"}:
             self.self_improvement.apply_decision_outcome(
                 connection, row, "approve", actor, row.get("resolution_note")
@@ -637,6 +644,124 @@ class DecisionService:
                 "reason": "manual_merge_required",
                 "pull_request_url": recommendation.get("pull_request_url"),
                 "receipt_id": recommendation.get("receipt_id"),
+            },
+        )
+
+    def _queue_deployment_job_from_review(
+        self,
+        connection: Connection,
+        row: dict[str, Any],
+        actor: str,
+        recommendation: dict[str, Any],
+    ) -> None:
+        merged_sha = recommendation.get("merged_sha")
+        environment = recommendation.get("environment")
+        pull_request_url = recommendation.get("pull_request_url")
+        title = recommendation.get("title")
+        branch_name = recommendation.get("branch_name")
+        if not isinstance(merged_sha, str) or not merged_sha:
+            emit_event(
+                connection,
+                row["project_id"],
+                "decision.follow_on_skipped",
+                actor,
+                "decision",
+                row["id"],
+                {"reason": "missing_deployment_sha"},
+            )
+            return
+        if not isinstance(environment, str) or not environment:
+            environment = self.settings.sandbox_deploy_environment
+        if not isinstance(pull_request_url, str) or not pull_request_url:
+            emit_event(
+                connection,
+                row["project_id"],
+                "decision.follow_on_skipped",
+                actor,
+                "decision",
+                row["id"],
+                {"reason": "missing_deployment_pull_request_url"},
+            )
+            return
+        if not isinstance(title, str) or not title.strip():
+            title = row["question"]
+        if branch_name is not None and not isinstance(branch_name, str):
+            branch_name = None
+
+        job = self.jobs.create_job(
+            connection,
+            project_id=row["project_id"],
+            task_id=row["task_id"],
+            kind="github.deployment.create",
+            priority=15,
+            payload={
+                "project_id": row["project_id"],
+                "decision_id": row["id"],
+                "dedupe_key": f"approved-deploy-{row['id']}",
+                "merged_sha": merged_sha,
+                "pull_request_url": pull_request_url,
+                "title": title,
+                "branch_name": branch_name,
+                "environment": environment,
+            },
+        )
+        emit_event(
+            connection,
+            row["project_id"],
+            "decision.follow_on_job_queued",
+            actor,
+            "job",
+            job["id"],
+            {
+                "decision_id": row["id"],
+                "kind": "github.deployment.create",
+                "environment": environment,
+                "pull_request_url": pull_request_url,
+            },
+        )
+
+    def _create_deploy_gate_block(
+        self,
+        connection: Connection,
+        row: dict[str, Any],
+        actor: str,
+        recommendation: dict[str, Any],
+    ) -> None:
+        title = recommendation.get("title")
+        if not isinstance(title, str) or not title.strip():
+            title = row["question"]
+        deploy_gate_artifact_id = create_artifact(
+            connection,
+            self.settings,
+            row["project_id"],
+            row["task_id"],
+            "deployment_gate",
+            f"Deployment gate for {title}",
+            {
+                "status": "blocked_manual_deploy_required",
+                "reason": "Automatic sandbox deploy is disabled in this phase.",
+                "approved_review_decision_id": row["id"],
+                "approved_by": actor,
+                "pull_request_url": recommendation.get("pull_request_url"),
+                "branch_name": recommendation.get("branch_name"),
+                "merged_sha": recommendation.get("merged_sha"),
+                "environment": recommendation.get("environment")
+                or self.settings.sandbox_deploy_environment,
+                "next_action": "Run the sandbox deployment manually or enable the deploy policy.",
+            },
+        )
+        emit_event(
+            connection,
+            row["project_id"],
+            "decision.follow_on_blocked",
+            actor,
+            "artifact",
+            deploy_gate_artifact_id,
+            {
+                "decision_id": row["id"],
+                "blocked_action": "github.deployment.create",
+                "reason": "manual_deploy_required",
+                "pull_request_url": recommendation.get("pull_request_url"),
             },
         )
 

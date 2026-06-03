@@ -23,6 +23,34 @@ export type StatusResponse = {
   blocked_reason?: string;
 };
 
+export type MetatronReference = {
+  object_type: string;
+  object_id: string;
+  title: string;
+  status?: string;
+  detail?: string;
+  created_at?: string;
+};
+
+export type MetatronQueryRequest = {
+  project_id: string;
+  question: string;
+  task_id?: string;
+  decision_id?: string;
+  limit?: number;
+};
+
+export type MetatronQueryResponse = {
+  project_id: string;
+  question: string;
+  category: string;
+  answer: string;
+  freshness_at: string;
+  references: MetatronReference[];
+  suggested_actions: string[];
+  top_risks: Array<Record<string, unknown>>;
+};
+
 export type HealthSnapshotSummary = {
   id: string;
   project_id: string;
@@ -235,9 +263,14 @@ export type WorkerCompleteResponse = {
   test_report_artifact_id?: string;
   decision_id?: string;
   receipt_id?: string;
+  deployment_decision_id?: string;
   pull_request_url?: string;
   merged_sha?: string;
   branch_name?: string;
+  environment?: string;
+  deployment_id?: number;
+  deployment_status?: string;
+  deployment_url?: string;
 };
 
 export type WorkerFailRequest = {
@@ -437,8 +470,40 @@ export type PullRequestMergeResponse = {
   artifact_id?: string;
   receipt_id?: string;
   decision_id?: string;
+  deployment_decision_id?: string;
   pull_request_url?: string;
   branch_name?: string;
+  merged_sha?: string;
+  message?: string;
+};
+
+export type SandboxDeploymentRequest = {
+  project_id: string;
+  decision_id: string;
+  dedupe_key: string;
+  merged_sha: string;
+  pull_request_url: string;
+  title: string;
+  environment: string;
+  branch_name?: string;
+  created_by_job_id?: string;
+};
+
+export type SandboxDeploymentJobRequest = SandboxDeploymentRequest & {
+  task_id?: string;
+  priority?: number;
+  max_attempts?: number;
+};
+
+export type SandboxDeploymentResponse = {
+  status: string;
+  artifact_id?: string;
+  receipt_id?: string;
+  decision_id?: string;
+  environment?: string;
+  deployment_id?: number;
+  deployment_status?: string;
+  deployment_url?: string;
   merged_sha?: string;
   message?: string;
 };
@@ -921,6 +986,11 @@ export function createBossApiClient(config: BossApiClientConfig) {
         query: { project_id: projectId },
       });
     },
+    queryMetatron(payload: MetatronQueryRequest) {
+      return request<MetatronQueryResponse>("POST", "/v1/metatron/query", {
+        body: payload,
+      });
+    },
     listHealthSnapshots(projectId: string, limit = 25) {
       return request<HealthSnapshotListResponse>("GET", "/v1/health-snapshots", {
         query: { project_id: projectId, limit },
@@ -1211,6 +1281,15 @@ export function createBossApiClient(config: BossApiClientConfig) {
         },
       );
     },
+    createDeployment(payload: SandboxDeploymentRequest) {
+      return request<SandboxDeploymentResponse>(
+        "POST",
+        "/v1/software-factory/deployments",
+        {
+          body: payload,
+        },
+      );
+    },
     queuePullRequestProposalJob(payload: PullRequestProposalJobRequest) {
       return request<JobSummary>("POST", "/v1/software-factory/proposals/queue", {
         body: payload,
@@ -1218,6 +1297,11 @@ export function createBossApiClient(config: BossApiClientConfig) {
     },
     queuePullRequestMergeJob(payload: PullRequestMergeJobRequest) {
       return request<JobSummary>("POST", "/v1/software-factory/merges/queue", {
+        body: payload,
+      });
+    },
+    queueDeploymentJob(payload: SandboxDeploymentJobRequest) {
+      return request<JobSummary>("POST", "/v1/software-factory/deployments/queue", {
         body: payload,
       });
     },

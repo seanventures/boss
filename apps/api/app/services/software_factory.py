@@ -284,6 +284,31 @@ class SoftwareFactoryService:
         task_id: Optional[str],
         decision_id: str,
         actor: str,
+        *,
+        title: str,
+        pull_request_url: str,
+        branch_name: Optional[str],
+        merged_sha: str,
+    ) -> Optional[str]:
+        self._mark_decision_executed(connection, project_id, decision_id, actor)
+
+        if self.settings.enable_sandbox_deploy:
+            return self._ensure_deployment_review_decision(
+                connection,
+                project_id,
+                task_id,
+                title=title,
+                pull_request_url=pull_request_url,
+                branch_name=branch_name,
+                merged_sha=merged_sha,
+                actor=actor,
+            )
+
+        self._complete_task(connection, project_id, task_id, actor, decision_id)
+        return None
+
+    def _mark_decision_executed(
+        self, connection: Connection, project_id: str, decision_id: str, actor: str
     ) -> None:
         updated = connection.execute(
             text(
@@ -309,6 +334,14 @@ class SoftwareFactoryService:
                 {},
             )
 
+    def _complete_task(
+        self,
+        connection: Connection,
+        project_id: str,
+        task_id: Optional[str],
+        actor: str,
+        decision_id: str,
+    ) -> None:
         if not task_id:
             return
         task_updated = connection.execute(
@@ -332,6 +365,85 @@ class SoftwareFactoryService:
                 task_id,
                 {"decision_id": decision_id},
             )
+
+    def _ensure_deployment_review_decision(
+        self,
+        connection: Connection,
+        project_id: str,
+        task_id: Optional[str],
+        *,
+        title: str,
+        pull_request_url: str,
+        branch_name: Optional[str],
+        merged_sha: str,
+        actor: str,
+    ) -> str:
+        existing_id = None
+        if task_id:
+            existing_id = connection.execute(
+                text(
+                    """
+                    SELECT id
+                    FROM decisions
+                    WHERE project_id = :project_id
+                      AND task_id = :task_id
+                      AND recommendation->>'action' = 'review_deployment'
+                      AND recommendation->>'pull_request_url' = :pull_request_url
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                    """
+                ),
+                {
+                    "project_id": project_id,
+                    "task_id": task_id,
+                    "pull_request_url": pull_request_url,
+                },
+            ).scalar_one_or_none()
+        if existing_id:
+            return str(existing_id)
+
+        environment = self.settings.sandbox_deploy_environment
+        decision_id = create_blocking_decision(
+            connection,
+            project_id,
+            task_id,
+            f"Approve sandbox deployment to {environment}: {title}",
+            {
+                "action": "review_deployment",
+                "pull_request_url": pull_request_url,
+                "branch_name": branch_name,
+                "title": title,
+                "merged_sha": merged_sha,
+                "environment": environment,
+            },
+            {},
+            "deploy_decision_required",
+        )
+        emit_event(
+            connection,
+            project_id,
+            "software_factory.deployment_review_requested",
+            actor,
+            "decision",
+            decision_id,
+            {
+                "pull_request_url": pull_request_url,
+                "environment": environment,
+                "merged_sha": merged_sha,
+            },
+        )
+        return decision_id
+
+    def _mark_deployment_completed(
+        self,
+        connection: Connection,
+        project_id: str,
+        task_id: Optional[str],
+        decision_id: str,
+        actor: str,
+    ) -> None:
+        self._mark_decision_executed(connection, project_id, decision_id, actor)
+        self._complete_task(connection, project_id, task_id, actor, decision_id)
 
     def propose_pull_request(
         self,
@@ -714,12 +826,16 @@ class SoftwareFactoryService:
             created_by_job_id=created_by_job_id,
         )
         if not created and merge_receipt["status"] == "succeeded":
-            self._mark_merge_completed(
+            follow_on_decision_id = self._mark_merge_completed(
                 connection,
                 project_id,
                 task_id,
                 decision_id,
                 "release_manager",
+                title=title,
+                pull_request_url=pull_request_url,
+                branch_name=branch_name,
+                merged_sha=(merge_receipt.get("result") or {}).get("merged_sha") or "",
             )
             result = merge_receipt["result"] or {}
             return {
@@ -727,6 +843,8 @@ class SoftwareFactoryService:
                 "artifact_id": result.get("artifact_id"),
                 "receipt_id": merge_receipt["id"],
                 "decision_id": decision_id,
+                "deployment_decision_id": result.get("deployment_decision_id")
+                or follow_on_decision_id,
                 "pull_request_url": pull_request_url,
                 "branch_name": branch_name,
                 "merged_sha": result.get("merged_sha"),
@@ -796,18 +914,24 @@ class SoftwareFactoryService:
             "pull_request_url": pull_request_url,
             "branch_name": branch_name,
         }
-        self.receipts.mark_succeeded(
-            connection,
-            merge_receipt["id"],
-            pull_request_url,
-            result,
-        )
-        self._mark_merge_completed(
+        follow_on_decision_id = self._mark_merge_completed(
             connection,
             project_id,
             task_id,
             decision_id,
             "release_manager",
+            title=title,
+            pull_request_url=pull_request_url,
+            branch_name=branch_name,
+            merged_sha=merge.sha,
+        )
+        if follow_on_decision_id:
+            result["deployment_decision_id"] = follow_on_decision_id
+        self.receipts.mark_succeeded(
+            connection,
+            merge_receipt["id"],
+            pull_request_url,
+            result,
         )
         emit_event(
             connection,
@@ -827,7 +951,194 @@ class SoftwareFactoryService:
             "artifact_id": artifact_id,
             "receipt_id": merge_receipt["id"],
             "decision_id": decision_id,
+            "deployment_decision_id": follow_on_decision_id,
             "pull_request_url": pull_request_url,
             "branch_name": branch_name,
             "merged_sha": merge.sha,
+        }
+
+    def create_deployment(
+        self,
+        connection: Connection,
+        project_id: str,
+        task_id: Optional[str],
+        decision_id: str,
+        dedupe_key: str,
+        merged_sha: str,
+        pull_request_url: str,
+        title: str,
+        branch_name: Optional[str],
+        environment: str,
+        created_by_job_id: Optional[str] = None,
+    ) -> dict:
+        if task_id is None:
+            task_id = connection.execute(
+                text(
+                    """
+                    SELECT task_id
+                    FROM decisions
+                    WHERE id = :decision_id AND project_id = :project_id
+                    """
+                ),
+                {"decision_id": decision_id, "project_id": project_id},
+            ).scalar_one_or_none()
+
+        scope = self._scope(connection, project_id)
+        deployment_receipt, created = self.receipts.create_or_reuse(
+            connection,
+            scope["org_id"],
+            scope["workspace_id"],
+            project_id,
+            dedupe_key,
+            "github.deployment.create",
+            {
+                "repository": self.github.repository_full_name,
+                "environment": environment,
+                "sha": merged_sha,
+            },
+            {
+                "decision_id": decision_id,
+                "pull_request_url": pull_request_url,
+                "title": title,
+                "branch_name": branch_name,
+                "environment": environment,
+                "merged_sha": merged_sha,
+            },
+            created_by_job_id=created_by_job_id,
+        )
+        if not created and deployment_receipt["status"] == "succeeded":
+            self._mark_deployment_completed(
+                connection,
+                project_id,
+                task_id,
+                decision_id,
+                "release_manager",
+            )
+            result = deployment_receipt["result"] or {}
+            return {
+                "status": "reused",
+                "artifact_id": result.get("artifact_id"),
+                "receipt_id": deployment_receipt["id"],
+                "decision_id": decision_id,
+                "environment": result.get("environment"),
+                "deployment_id": result.get("deployment_id"),
+                "deployment_status": result.get("deployment_status"),
+                "deployment_url": result.get("deployment_url"),
+                "merged_sha": result.get("merged_sha"),
+            }
+
+        try:
+            deployment = self.github.create_deployment(
+                merged_sha,
+                environment,
+                f"BOSS sandbox deployment for {title}",
+            )
+            deployment_status = self.github.mark_deployment_success(
+                deployment.id,
+                environment,
+                description=f"BOSS recorded sandbox deployment for {title}",
+            )
+        except IntegrationConfigurationError as error:
+            self.receipts.mark_failed(
+                connection, deployment_receipt["id"], {"message": str(error)}
+            )
+            decision_id_block = create_blocking_decision(
+                connection,
+                project_id,
+                task_id,
+                "GitHub integration is not configured",
+                {"action": "provide_github_token"},
+                {},
+                "missing_github_credentials",
+            )
+            return {
+                "status": "blocked",
+                "decision_id": decision_id_block,
+                "message": str(error),
+            }
+        except Exception as error:
+            self.receipts.mark_failed(
+                connection, deployment_receipt["id"], {"message": str(error)}
+            )
+            emit_event(
+                connection,
+                project_id,
+                "software_factory.deployment_failed",
+                "release_manager",
+                "receipt",
+                deployment_receipt["id"],
+                {"message": str(error), "environment": environment},
+            )
+            return {
+                "status": "failed",
+                "receipt_id": deployment_receipt["id"],
+                "message": str(error),
+            }
+
+        artifact_id = create_artifact(
+            connection,
+            self.settings,
+            project_id,
+            task_id,
+            "deployment_result",
+            f"Deployment result for {title}",
+            {
+                "decision_id": decision_id,
+                "pull_request_url": pull_request_url,
+                "branch_name": branch_name,
+                "environment": environment,
+                "merged_sha": merged_sha,
+                "deployment_id": deployment.id,
+                "deployment_api_url": deployment.url,
+                "deployment_status": deployment_status.state,
+                "deployment_status_url": deployment_status.url,
+                "environment_url": deployment_status.environment_url,
+            },
+            created_by_job_id=created_by_job_id,
+        )
+        result = {
+            "artifact_id": artifact_id,
+            "environment": environment,
+            "deployment_id": deployment.id,
+            "deployment_status": deployment_status.state,
+            "deployment_url": deployment_status.url,
+            "merged_sha": merged_sha,
+        }
+        self.receipts.mark_succeeded(
+            connection,
+            deployment_receipt["id"],
+            deployment_status.url,
+            result,
+        )
+        self._mark_deployment_completed(
+            connection,
+            project_id,
+            task_id,
+            decision_id,
+            "release_manager",
+        )
+        emit_event(
+            connection,
+            project_id,
+            "software_factory.deployment_created",
+            "release_manager",
+            "artifact",
+            artifact_id,
+            {
+                "receipt_id": deployment_receipt["id"],
+                "environment": environment,
+                "deployment_id": deployment.id,
+                "merged_sha": merged_sha,
+            },
+        )
+        return {
+            "status": "created",
+            "artifact_id": artifact_id,
+            "receipt_id": deployment_receipt["id"],
+            "decision_id": decision_id,
+            "environment": environment,
+            "deployment_id": deployment.id,
+            "deployment_status": deployment_status.state,
+            "deployment_url": deployment_status.url,
+            "merged_sha": merged_sha,
         }

@@ -18,6 +18,25 @@ paths:
           schema: { type: string }
       responses:
         '200': { description: Status summary }
+  /v1/metatron/query:
+    post:
+      summary: Ask Metatron for a scoped, freshness-stamped status answer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id, question]
+              properties:
+                project_id: { type: string }
+                question: { type: string }
+                task_id: { type: string }
+                decision_id: { type: string }
+                limit: { type: integer, default: 5 }
+      responses:
+        '200': { description: Metatron answer with references }
+        '404': { description: Unknown project, task, or decision scope }
   /v1/health-snapshots:
     get:
       summary: List recent health snapshots for a project
@@ -833,6 +852,30 @@ paths:
                 created_by_job_id: { type: string }
       responses:
         '200': { description: Sandbox PR merged, reused, blocked, or failed }
+  /v1/software-factory/deployments:
+    post:
+      summary: Record a sandbox deployment behind a receipt-backed control-plane gate
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                [project_id, decision_id, dedupe_key, merged_sha, pull_request_url, title, environment]
+              properties:
+                project_id: { type: string }
+                task_id: { type: string }
+                decision_id: { type: string }
+                dedupe_key: { type: string }
+                merged_sha: { type: string }
+                pull_request_url: { type: string }
+                title: { type: string }
+                branch_name: { type: string }
+                environment: { type: string }
+                created_by_job_id: { type: string }
+      responses:
+        '200': { description: Sandbox deployment created, reused, blocked, or failed }
   /v1/software-factory/proposals/queue:
     post:
       summary: Queue a real sandbox PR proposal for leased worker execution
@@ -888,6 +931,31 @@ paths:
                 max_attempts: { type: integer, default: 3 }
       responses:
         '201': { description: Merge job queued }
+  /v1/software-factory/deployments/queue:
+    post:
+      summary: Queue a sandbox deployment record for leased worker execution
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                [project_id, decision_id, dedupe_key, merged_sha, pull_request_url, title, environment]
+              properties:
+                project_id: { type: string }
+                task_id: { type: string }
+                decision_id: { type: string }
+                dedupe_key: { type: string }
+                merged_sha: { type: string }
+                pull_request_url: { type: string }
+                title: { type: string }
+                branch_name: { type: string }
+                environment: { type: string }
+                priority: { type: integer, default: 20 }
+                max_attempts: { type: integer, default: 3 }
+      responses:
+        '201': { description: Deployment job queued }
   /v1/receipts/{dedupe_key}:
     get:
       summary: Get receipt by dedupe key

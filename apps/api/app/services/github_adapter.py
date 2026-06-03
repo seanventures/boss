@@ -26,6 +26,21 @@ class PullRequestMergeResult:
     message: str
 
 
+@dataclass
+class DeploymentResult:
+    id: int
+    environment: str
+    sha: str
+    url: str
+
+
+@dataclass
+class DeploymentStatusResult:
+    state: str
+    url: str
+    environment_url: Optional[str]
+
+
 class GitHubAdapter:
     def __init__(self, settings: Settings):
         self.settings = settings
@@ -141,4 +156,55 @@ class GitHubAdapter:
             sha=response["sha"],
             merged=bool(response["merged"]),
             message=response["message"],
+        )
+
+    def create_deployment(
+        self, ref: str, environment: str, description: str
+    ) -> DeploymentResult:
+        response = self._request(
+            "POST",
+            f"/repos/{self.repository_full_name}/deployments",
+            {
+                "ref": ref,
+                "environment": environment,
+                "description": description,
+                "auto_merge": False,
+                "required_contexts": [],
+                "production_environment": False,
+                "transient_environment": True,
+            },
+        )
+        return DeploymentResult(
+            id=int(response["id"]),
+            environment=response["environment"],
+            sha=response["sha"],
+            url=response["url"],
+        )
+
+    def mark_deployment_success(
+        self,
+        deployment_id: int,
+        environment: str,
+        *,
+        environment_url: Optional[str] = None,
+        description: Optional[str] = None,
+    ) -> DeploymentStatusResult:
+        response = self._request(
+            "POST",
+            f"/repos/{self.repository_full_name}/deployments/{deployment_id}/statuses",
+            {
+                "state": "success",
+                "environment": environment,
+                **(
+                    {"environment_url": environment_url}
+                    if environment_url
+                    else {}
+                ),
+                **({"description": description} if description else {}),
+            },
+        )
+        return DeploymentStatusResult(
+            state=response["state"],
+            url=response["url"],
+            environment_url=response.get("environment_url"),
         )

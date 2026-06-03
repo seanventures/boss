@@ -45,6 +45,8 @@ from .schemas import (
     JobCreateRequest,
     JobSummary,
     LeasedJob,
+    MetatronQueryRequest,
+    MetatronQueryResponse,
     OpenAIPlanRequest,
     OpenAIPlanResponse,
     OutboxDeliveryResponse,
@@ -73,6 +75,9 @@ from .schemas import (
     RoutingLogListResponse,
     RoutingPreviewRequest,
     RoutingPreviewResponse,
+    SandboxDeploymentJobRequest,
+    SandboxDeploymentRequest,
+    SandboxDeploymentResponse,
     SelfImprovementCanaryRequest,
     SelfImprovementProposalCreateRequest,
     SelfImprovementProposalDetail,
@@ -111,6 +116,7 @@ from .services.entitlements import EntitlementBrokerService, SkillNotFoundError
 from .services.health import HealthSnapshotService
 from .services.intake import CommandIntakeService
 from .services.jobs import JobLeaseService, LeaseNotFoundError
+from .services.metatron import MetatronScopeNotFoundError, MetatronService
 from .services.receipts import ReceiptService
 from .services.self_improvement import (
     InvalidSelfImprovementTransitionError,
@@ -134,6 +140,7 @@ audit = AuditTrailService(settings)
 comms = CommsService(settings)
 self_improvement = SelfImprovementService(settings)
 health_snapshots = HealthSnapshotService(settings)
+metatron = MetatronService(settings)
 
 
 @asynccontextmanager
@@ -588,6 +595,24 @@ def status(project_id: str) -> StatusResponse:
             ),
             blocked_reason=None if settings.github_token and settings.openai_api_key else "Missing GitHub or OpenAI credentials.",
         )
+
+
+@app.post("/v1/metatron/query", response_model=MetatronQueryResponse)
+def metatron_query(payload: MetatronQueryRequest) -> MetatronQueryResponse:
+    with begin(engine) as connection:
+        decisions.expire_overdue(connection, payload.project_id)
+        try:
+            result = metatron.answer_query(
+                connection,
+                payload.project_id,
+                payload.question,
+                task_id=payload.task_id,
+                decision_id=payload.decision_id,
+                limit=payload.limit,
+            )
+        except MetatronScopeNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        return MetatronQueryResponse(**result)
 
 
 @app.post("/v1/commands/propose", response_model=CommandProposeResponse, status_code=201)
@@ -1484,6 +1509,29 @@ def merge_pull_request(payload: PullRequestMergeRequest) -> PullRequestMergeResp
         return PullRequestMergeResponse(**result)
 
 
+@app.post(
+    "/v1/software-factory/deployments", response_model=SandboxDeploymentResponse
+)
+def create_sandbox_deployment(
+    payload: SandboxDeploymentRequest,
+) -> SandboxDeploymentResponse:
+    with begin(engine) as connection:
+        result = software_factory.create_deployment(
+            connection,
+            payload.project_id,
+            None,
+            payload.decision_id,
+            payload.dedupe_key,
+            payload.merged_sha,
+            payload.pull_request_url,
+            payload.title,
+            payload.branch_name,
+            payload.environment,
+            payload.created_by_job_id,
+        )
+        return SandboxDeploymentResponse(**result)
+
+
 @app.post("/v1/software-factory/proposals/queue", response_model=JobSummary, status_code=201)
 def queue_pull_request_proposal(
     payload: PullRequestProposalJobRequest,
@@ -1535,6 +1583,34 @@ def queue_pull_request_merge(
                 "pull_request_url": payload.pull_request_url,
                 "title": payload.title,
                 "branch_name": payload.branch_name,
+            },
+            priority=payload.priority,
+            max_attempts=payload.max_attempts,
+        )
+        return JobSummary(**result)
+
+
+@app.post(
+    "/v1/software-factory/deployments/queue",
+    response_model=JobSummary,
+    status_code=201,
+)
+def queue_sandbox_deployment(payload: SandboxDeploymentJobRequest) -> JobSummary:
+    with begin(engine) as connection:
+        result = jobs.create_job(
+            connection,
+            project_id=payload.project_id,
+            task_id=payload.task_id,
+            kind="github.deployment.create",
+            payload={
+                "project_id": payload.project_id,
+                "decision_id": payload.decision_id,
+                "dedupe_key": payload.dedupe_key,
+                "merged_sha": payload.merged_sha,
+                "pull_request_url": payload.pull_request_url,
+                "title": payload.title,
+                "branch_name": payload.branch_name,
+                "environment": payload.environment,
             },
             priority=payload.priority,
             max_attempts=payload.max_attempts,

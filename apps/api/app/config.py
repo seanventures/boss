@@ -68,8 +68,14 @@ class Settings(BaseSettings):
     enable_sandbox_merge: bool = Field(
         default=False, alias="BOSS_ENABLE_SANDBOX_MERGE"
     )
+    enable_sandbox_deploy: bool = Field(
+        default=False, alias="BOSS_ENABLE_SANDBOX_DEPLOY"
+    )
     sandbox_merge_method: str = Field(
         default="squash", alias="BOSS_SANDBOX_MERGE_METHOD"
+    )
+    sandbox_deploy_environment: str = Field(
+        default="staging", alias="BOSS_SANDBOX_DEPLOY_ENVIRONMENT"
     )
 
     @property
