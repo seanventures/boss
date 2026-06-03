@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from typing import Optional
 
+import httpx
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
@@ -485,6 +486,120 @@ class SoftwareFactoryService:
     ) -> None:
         self._mark_decision_executed(connection, project_id, decision_id, actor)
         self._complete_task(connection, project_id, task_id, actor, decision_id)
+
+    def _resolve_deployment_healthcheck_url(self) -> Optional[str]:
+        configured = self.settings.sandbox_deploy_healthcheck_url
+        if not configured:
+            return None
+        candidate = configured.strip()
+        return candidate or None
+
+    def _verify_deployment_health(self, healthcheck_url: str) -> dict:
+        try:
+            response = httpx.get(
+                healthcheck_url,
+                follow_redirects=True,
+                timeout=self.settings.sandbox_deploy_healthcheck_timeout_seconds,
+            )
+        except Exception as error:
+            return {
+                "status": "failed",
+                "healthcheck_url": healthcheck_url,
+                "summary": f"Deployment health check failed: {error}",
+                "http_status": None,
+            }
+
+        excerpt = response.text[:200].strip() if response.text else ""
+        if 200 <= response.status_code < 400:
+            return {
+                "status": "passed",
+                "healthcheck_url": healthcheck_url,
+                "summary": f"Deployment health check passed with HTTP {response.status_code}.",
+                "http_status": response.status_code,
+                "response_excerpt": excerpt,
+            }
+        return {
+            "status": "failed",
+            "healthcheck_url": healthcheck_url,
+            "summary": (
+                f"Deployment health check returned HTTP {response.status_code}."
+            ),
+            "http_status": response.status_code,
+            "response_excerpt": excerpt,
+        }
+
+    def _create_deployment_health_gate(
+        self,
+        connection: Connection,
+        project_id: str,
+        task_id: Optional[str],
+        *,
+        title: str,
+        environment: str,
+        pull_request_url: str,
+        branch_name: Optional[str],
+        merged_sha: str,
+        receipt_id: str,
+        deployment_id: int,
+        deployment_status_url: str,
+        verification: dict,
+        created_by_job_id: Optional[str] = None,
+    ) -> tuple[str, str]:
+        artifact_id = create_artifact(
+            connection,
+            self.settings,
+            project_id,
+            task_id,
+            "deployment_health_check",
+            f"Deployment health check for {title}",
+            {
+                "title": title,
+                "environment": environment,
+                "pull_request_url": pull_request_url,
+                "branch_name": branch_name,
+                "merged_sha": merged_sha,
+                "receipt_id": receipt_id,
+                "deployment_id": deployment_id,
+                "deployment_status_url": deployment_status_url,
+                "verification": verification,
+            },
+            created_by_job_id=created_by_job_id,
+        )
+        decision_id = create_blocking_decision(
+            connection,
+            project_id,
+            task_id,
+            f"Review failed sandbox deployment health check: {title}",
+            {
+                "action": "review_deployment_health",
+                "artifact_id": artifact_id,
+                "receipt_id": receipt_id,
+                "pull_request_url": pull_request_url,
+                "branch_name": branch_name,
+                "merged_sha": merged_sha,
+                "environment": environment,
+                "healthcheck_url": verification.get("healthcheck_url"),
+                "deployment_status_url": deployment_status_url,
+            },
+            {},
+            "deployment_health_verification_failed",
+        )
+        emit_event(
+            connection,
+            project_id,
+            "software_factory.deployment_health_blocked",
+            "release_manager",
+            "decision",
+            decision_id,
+            {
+                "receipt_id": receipt_id,
+                "artifact_id": artifact_id,
+                "environment": environment,
+                "healthcheck_url": verification.get("healthcheck_url"),
+                "summary": verification.get("summary"),
+            },
+        )
+        return artifact_id, decision_id
 
     def propose_pull_request(
         self,
@@ -1106,19 +1221,31 @@ class SoftwareFactoryService:
             created_by_job_id=created_by_job_id,
         )
         if not created and deployment_receipt["status"] == "succeeded":
-            self._mark_deployment_completed(
-                connection,
-                project_id,
-                task_id,
-                decision_id,
-                "release_manager",
-            )
             result = deployment_receipt["result"] or {}
+            health_status = result.get("health_verification_status")
+            if health_status in {None, "passed", "skipped_unconfigured"}:
+                self._mark_deployment_completed(
+                    connection,
+                    project_id,
+                    task_id,
+                    decision_id,
+                    "release_manager",
+                )
             return {
-                "status": "reused",
+                "status": (
+                    "reused"
+                    if health_status in {None, "passed", "skipped_unconfigured"}
+                    else "blocked"
+                ),
                 "artifact_id": result.get("artifact_id"),
                 "receipt_id": deployment_receipt["id"],
                 "decision_id": decision_id,
+                "health_decision_id": result.get("health_decision_id"),
+                "health_verification_artifact_id": result.get(
+                    "health_verification_artifact_id"
+                ),
+                "health_verification_status": health_status,
+                "healthcheck_url": result.get("healthcheck_url"),
                 "environment": result.get("environment"),
                 "deployment_id": result.get("deployment_id"),
                 "deployment_status": result.get("deployment_status"),
@@ -1131,11 +1258,6 @@ class SoftwareFactoryService:
                 merged_sha,
                 environment,
                 f"BOSS sandbox deployment for {title}",
-            )
-            deployment_status = self.github.mark_deployment_success(
-                deployment.id,
-                environment,
-                description=f"BOSS recorded sandbox deployment for {title}",
             )
         except IntegrationConfigurationError as error:
             self.receipts.mark_failed(
@@ -1174,6 +1296,67 @@ class SoftwareFactoryService:
                 "message": str(error),
             }
 
+        try:
+            healthcheck_url = self._resolve_deployment_healthcheck_url()
+            verification: Optional[dict] = None
+            health_verification_artifact_id: Optional[str] = None
+            health_decision_id: Optional[str] = None
+            if healthcheck_url:
+                verification = self._verify_deployment_health(healthcheck_url)
+                if verification["status"] == "passed":
+                    deployment_status = self.github.mark_deployment_success(
+                        deployment.id,
+                        environment,
+                        environment_url=healthcheck_url,
+                        description=(
+                            f"BOSS recorded sandbox deployment for {title} after "
+                            "health verification passed"
+                        ),
+                    )
+                else:
+                    deployment_status = self.github.mark_deployment_failure(
+                        deployment.id,
+                        environment,
+                        environment_url=healthcheck_url,
+                        description=(
+                            f"BOSS recorded sandbox deployment for {title}, but "
+                            "post-deploy health verification failed"
+                        ),
+                    )
+            else:
+                deployment_status = self.github.mark_deployment_success(
+                    deployment.id,
+                    environment,
+                    description=f"BOSS recorded sandbox deployment for {title}",
+                )
+                verification = {
+                    "status": "skipped_unconfigured",
+                    "healthcheck_url": None,
+                    "summary": (
+                        "Deployment health verification was skipped because "
+                        "BOSS_SANDBOX_DEPLOY_HEALTHCHECK_URL is not configured."
+                    ),
+                    "http_status": None,
+                }
+        except Exception as error:
+            self.receipts.mark_failed(
+                connection, deployment_receipt["id"], {"message": str(error)}
+            )
+            emit_event(
+                connection,
+                project_id,
+                "software_factory.deployment_failed",
+                "release_manager",
+                "receipt",
+                deployment_receipt["id"],
+                {"message": str(error), "environment": environment},
+            )
+            return {
+                "status": "failed",
+                "receipt_id": deployment_receipt["id"],
+                "message": str(error),
+            }
+
         artifact_id = create_artifact(
             connection,
             self.settings,
@@ -1192,9 +1375,33 @@ class SoftwareFactoryService:
                 "deployment_status": deployment_status.state,
                 "deployment_status_url": deployment_status.url,
                 "environment_url": deployment_status.environment_url,
+                "health_verification_status": verification["status"],
+                "health_verification_summary": verification["summary"],
+                "healthcheck_url": verification.get("healthcheck_url"),
+                "health_http_status": verification.get("http_status"),
+                "health_response_excerpt": verification.get("response_excerpt"),
             },
             created_by_job_id=created_by_job_id,
         )
+        if verification["status"] == "failed":
+            (
+                health_verification_artifact_id,
+                health_decision_id,
+            ) = self._create_deployment_health_gate(
+                connection,
+                project_id,
+                task_id,
+                title=title,
+                environment=environment,
+                pull_request_url=pull_request_url,
+                branch_name=branch_name,
+                merged_sha=merged_sha,
+                receipt_id=deployment_receipt["id"],
+                deployment_id=deployment.id,
+                deployment_status_url=deployment_status.url,
+                verification=verification,
+                created_by_job_id=created_by_job_id,
+            )
         result = {
             "artifact_id": artifact_id,
             "environment": environment,
@@ -1202,6 +1409,10 @@ class SoftwareFactoryService:
             "deployment_status": deployment_status.state,
             "deployment_url": deployment_status.url,
             "merged_sha": merged_sha,
+            "health_verification_status": verification["status"],
+            "healthcheck_url": verification.get("healthcheck_url"),
+            "health_verification_artifact_id": health_verification_artifact_id,
+            "health_decision_id": health_decision_id,
         }
         self.receipts.mark_succeeded(
             connection,
@@ -1209,32 +1420,42 @@ class SoftwareFactoryService:
             deployment_status.url,
             result,
         )
-        self._mark_deployment_completed(
-            connection,
-            project_id,
-            task_id,
-            decision_id,
-            "release_manager",
-        )
-        emit_event(
-            connection,
-            project_id,
-            "software_factory.deployment_created",
-            "release_manager",
-            "artifact",
-            artifact_id,
-            {
-                "receipt_id": deployment_receipt["id"],
-                "environment": environment,
-                "deployment_id": deployment.id,
-                "merged_sha": merged_sha,
-            },
-        )
+        if verification["status"] in {"passed", "skipped_unconfigured"}:
+            self._mark_deployment_completed(
+                connection,
+                project_id,
+                task_id,
+                decision_id,
+                "release_manager",
+            )
+            emit_event(
+                connection,
+                project_id,
+                "software_factory.deployment_created",
+                "release_manager",
+                "artifact",
+                artifact_id,
+                {
+                    "receipt_id": deployment_receipt["id"],
+                    "environment": environment,
+                    "deployment_id": deployment.id,
+                    "merged_sha": merged_sha,
+                    "health_verification_status": verification["status"],
+                },
+            )
         return {
-            "status": "created",
+            "status": (
+                "created"
+                if verification["status"] in {"passed", "skipped_unconfigured"}
+                else "blocked"
+            ),
             "artifact_id": artifact_id,
             "receipt_id": deployment_receipt["id"],
             "decision_id": decision_id,
+            "health_decision_id": health_decision_id,
+            "health_verification_artifact_id": health_verification_artifact_id,
+            "health_verification_status": verification["status"],
+            "healthcheck_url": verification.get("healthcheck_url"),
             "environment": environment,
             "deployment_id": deployment.id,
             "deployment_status": deployment_status.state,

@@ -3318,6 +3318,133 @@ def test_deployment_blocks_without_github_credentials(client, engine):
     assert deploy_artifact_count == 0
 
 
+def test_deployment_healthcheck_failure_creates_blocking_decision(client, engine, monkeypatch):
+    previous = api_main.software_factory.settings.sandbox_deploy_healthcheck_url
+    api_main.software_factory.settings.sandbox_deploy_healthcheck_url = (
+        "https://sandbox.example.test/health"
+    )
+    monkeypatch.setattr(
+        api_main.software_factory.github,
+        "create_deployment",
+        lambda ref, environment, description: DeploymentResult(
+            id=991,
+            environment=environment,
+            sha=ref,
+            url="https://api.github.com/repos/seanheiney/boss-sandbox/deployments/991",
+        ),
+    )
+    monkeypatch.setattr(
+        api_main.software_factory.github,
+        "mark_deployment_failure",
+        lambda deployment_id, environment, environment_url=None, description=None: DeploymentStatusResult(
+            state="failure",
+            url="https://api.github.com/repos/seanheiney/boss-sandbox/deployments/991/statuses/1",
+            environment_url=environment_url,
+        ),
+    )
+    monkeypatch.setattr(
+        api_main.software_factory,
+        "_verify_deployment_health",
+        lambda healthcheck_url: {
+            "status": "failed",
+            "healthcheck_url": healthcheck_url,
+            "summary": "Deployment health check returned HTTP 503.",
+            "http_status": 503,
+            "response_excerpt": "service unavailable",
+        },
+    )
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                """
+                INSERT INTO decisions (
+                    id, project_id, task_id, question, recommendation, options, risk_tier,
+                    cost_summary, default_action, status, approved_by, approved_at
+                )
+                VALUES (
+                    'dec_deploy_health_fail', 'boss-dogfood', NULL, 'Approve sandbox deployment to staging: Demo deploy',
+                    CAST(:recommendation AS JSONB), '[]'::jsonb, 2, '{}'::jsonb, 'hold',
+                    'approved', 'ceo', now()
+                )
+                """
+            ),
+            {
+                "recommendation": json.dumps(
+                    {
+                        "action": "review_deployment",
+                        "pull_request_url": "https://github.com/seanheiney/boss-sandbox/pull/42",
+                        "branch_name": "boss/demo-pr",
+                        "title": "Deploy Demo",
+                        "merged_sha": "merge-sha-42",
+                        "environment": "staging",
+                    }
+                )
+            },
+        )
+
+    try:
+        response = client.post(
+            "/v1/software-factory/deployments",
+            json={
+                "project_id": "boss-dogfood",
+                "decision_id": "dec_deploy_health_fail",
+                "dedupe_key": "deploy-health-fail",
+                "merged_sha": "merge-sha-42",
+                "pull_request_url": "https://github.com/seanheiney/boss-sandbox/pull/42",
+                "title": "Deploy Demo",
+                "branch_name": "boss/demo-pr",
+                "environment": "staging",
+            },
+        )
+    finally:
+        api_main.software_factory.settings.sandbox_deploy_healthcheck_url = previous
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "blocked"
+    assert payload["health_verification_status"] == "failed"
+    assert payload["healthcheck_url"] == "https://sandbox.example.test/health"
+    assert payload["health_decision_id"]
+    assert payload["health_verification_artifact_id"]
+    assert payload["deployment_status"] == "failure"
+
+    with engine.begin() as connection:
+        original_decision_status = connection.execute(
+            text("SELECT status FROM decisions WHERE id = 'dec_deploy_health_fail'")
+        ).scalar_one()
+        health_decision = connection.execute(
+            text(
+                """
+                SELECT question, recommendation, status
+                FROM decisions
+                WHERE id = :decision_id
+                """
+            ),
+            {"decision_id": payload["health_decision_id"]},
+        ).mappings().one()
+        health_artifact = connection.execute(
+            text(
+                """
+                SELECT artifact_type, content
+                FROM artifacts
+                WHERE id = :artifact_id
+                """
+            ),
+            {"artifact_id": payload["health_verification_artifact_id"]},
+        ).mappings().one()
+
+    assert original_decision_status == "approved"
+    assert "Review failed sandbox deployment health check" in health_decision["question"]
+    assert health_decision["recommendation"]["action"] == "review_deployment_health"
+    assert health_artifact["artifact_type"] == "deployment_health_check"
+    assert health_artifact["content"]["verification"]["http_status"] == 503
+
+    events = client.get("/v1/events", params={"project_id": "boss-dogfood"})
+    assert events.status_code == 200
+    event_types = [item["event_type"] for item in events.json()["items"]]
+    assert "software_factory.deployment_health_blocked" in event_types
+
+
 def test_merge_blocks_without_github_credentials(client, engine):
     previous = api_main.software_factory.settings.github_token
     api_main.software_factory.settings.github_token = None
@@ -3723,11 +3850,17 @@ def test_command_to_deploy_flow_completes_task_when_deploy_policy_enabled(
     previous_deploy = api_main.decisions.settings.enable_sandbox_deploy
     previous_deploy_factory = api_main.software_factory.settings.enable_sandbox_deploy
     previous_openai = api_main.software_factory.settings.openai_api_key
+    previous_healthcheck_url = (
+        api_main.software_factory.settings.sandbox_deploy_healthcheck_url
+    )
     api_main.decisions.settings.enable_sandbox_merge = True
     api_main.software_factory.settings.enable_sandbox_merge = True
     api_main.decisions.settings.enable_sandbox_deploy = True
     api_main.software_factory.settings.enable_sandbox_deploy = True
     api_main.software_factory.settings.openai_api_key = "test-openai-key"
+    api_main.software_factory.settings.sandbox_deploy_healthcheck_url = (
+        "https://example.com/staging/777"
+    )
     monkeypatch.setattr(
         api_main.software_factory.openai,
         "create_text_response",
@@ -3799,8 +3932,19 @@ def test_command_to_deploy_flow_completes_task_when_deploy_policy_enabled(
         lambda deployment_id, environment, environment_url=None, description=None: DeploymentStatusResult(
             state="success",
             url="https://api.github.com/repos/seanheiney/boss-sandbox/deployments/777/statuses/1",
-            environment_url="https://example.com/staging/777",
+            environment_url=environment_url or "https://example.com/staging/777",
         ),
+    )
+    monkeypatch.setattr(
+        api_main.software_factory,
+        "_verify_deployment_health",
+        lambda healthcheck_url: {
+            "status": "passed",
+            "healthcheck_url": healthcheck_url,
+            "summary": "Deployment health check passed with HTTP 200.",
+            "http_status": 200,
+            "response_excerpt": "ok",
+        },
     )
 
     try:
@@ -4049,6 +4193,8 @@ def test_command_to_deploy_flow_completes_task_when_deploy_policy_enabled(
         assert deploy_result["status"] == "created"
         assert deploy_result["environment"] == "staging"
         assert deploy_result["deployment_status"] == "success"
+        assert deploy_result["health_verification_status"] == "passed"
+        assert deploy_result["healthcheck_url"] == "https://example.com/staging/777"
 
         complete_deploy = client.post(
             "/v1/worker/complete",
@@ -4123,4 +4269,7 @@ def test_command_to_deploy_flow_completes_task_when_deploy_policy_enabled(
         api_main.software_factory.settings.enable_sandbox_merge = previous_merge_factory
         api_main.decisions.settings.enable_sandbox_deploy = previous_deploy
         api_main.software_factory.settings.enable_sandbox_deploy = previous_deploy_factory
+        api_main.software_factory.settings.sandbox_deploy_healthcheck_url = (
+            previous_healthcheck_url
+        )
         api_main.software_factory.settings.openai_api_key = previous_openai

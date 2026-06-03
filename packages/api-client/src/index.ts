@@ -502,6 +502,10 @@ export type SandboxDeploymentResponse = {
   artifact_id?: string;
   receipt_id?: string;
   decision_id?: string;
+  health_decision_id?: string;
+  health_verification_artifact_id?: string;
+  health_verification_status?: string;
+  healthcheck_url?: string;
   environment?: string;
   deployment_id?: number;
   deployment_status?: string;

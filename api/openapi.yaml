@@ -902,7 +902,7 @@ paths:
         '200': { description: Sandbox PR merged, reused, blocked, or failed }
   /v1/software-factory/deployments:
     post:
-      summary: Record a sandbox deployment behind a receipt-backed control-plane gate
+      summary: Record a sandbox deployment behind a receipt-backed control-plane gate, with optional post-deploy health verification
       requestBody:
         required: true
         content:
@@ -923,7 +923,7 @@ paths:
                 environment: { type: string }
                 created_by_job_id: { type: string }
       responses:
-        '200': { description: Sandbox deployment created, reused, blocked, or failed }
+        '200': { description: Sandbox deployment created, reused, blocked, or failed, including health-verification status when configured }
   /v1/software-factory/proposals/queue:
     post:
       summary: Queue a real sandbox PR proposal for leased worker execution

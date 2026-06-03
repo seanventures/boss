@@ -166,6 +166,7 @@ The dogfood seed also registers the initial entitlement-source inventory from `p
 - Approving the final sandbox PR review decision creates a receipt-linked merge gate by default, and can queue a real `github.pull_request.merge` job only when `BOSS_ENABLE_SANDBOX_MERGE=true`.
 - Even when merge policy is enabled, BOSS now blocks merge execution unless the linked sandbox validation report is in a passed state.
 - When sandbox deploy policy is enabled, a successful merge creates a deployment review decision instead of silently treating merge as the terminal step. Approving that decision queues a real `github.deployment.create` job against the sandbox repository, backed by a receipt and a durable `deployment_result` artifact.
+- If `BOSS_SANDBOX_DEPLOY_HEALTHCHECK_URL` is configured, BOSS now runs a real post-deploy HTTP health check and only treats the deploy as complete when that check passes. Failed verification creates a `deployment_health_check` artifact and a blocking follow-on decision instead of silently completing the rollout.
 
 ## Model entitlement broker
 

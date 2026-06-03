@@ -288,6 +288,10 @@ class SandboxDeploymentResponse(BaseModel):
     artifact_id: Optional[str] = None
     receipt_id: Optional[str] = None
     decision_id: Optional[str] = None
+    health_decision_id: Optional[str] = None
+    health_verification_artifact_id: Optional[str] = None
+    health_verification_status: Optional[str] = None
+    healthcheck_url: Optional[str] = None
     environment: Optional[str] = None
     deployment_id: Optional[int] = None
     deployment_status: Optional[str] = None

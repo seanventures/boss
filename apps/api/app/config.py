@@ -77,6 +77,12 @@ class Settings(BaseSettings):
     sandbox_deploy_environment: str = Field(
         default="staging", alias="BOSS_SANDBOX_DEPLOY_ENVIRONMENT"
     )
+    sandbox_deploy_healthcheck_url: Optional[str] = Field(
+        default=None, alias="BOSS_SANDBOX_DEPLOY_HEALTHCHECK_URL"
+    )
+    sandbox_deploy_healthcheck_timeout_seconds: int = Field(
+        default=10, alias="BOSS_SANDBOX_DEPLOY_HEALTHCHECK_TIMEOUT_SECONDS"
+    )
     sandbox_ci_timeout_seconds: int = Field(
         default=120, alias="BOSS_SANDBOX_CI_TIMEOUT_SECONDS"
     )

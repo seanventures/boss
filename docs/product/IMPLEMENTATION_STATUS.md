@@ -53,6 +53,7 @@ This document summarizes the currently implemented BOSS runtime surfaces in this
   - PR review approval -> merge gate or merge job, depending on policy
   - merge -> deployment review decision
   - deployment review approval -> deployment job, depending on policy
+  - optional post-deploy health verification with blocking follow-on decision on failure
 - Governance surfaces:
   - Core Pack install for dogfood
   - model entitlement broker with routing logs
@@ -74,7 +75,7 @@ The current founder-dogfood control loop is:
 7. BOSS captures GitHub check-run evidence into the test report and review packet.
 8. Approval of the PR review decision only queues merge work if validation passed and merge policy is enabled.
 9. Merge can create a deploy review decision.
-10. Deployment can be recorded through the GitHub Deployments API when deploy policy is enabled.
+10. Deployment can be recorded through the GitHub Deployments API when deploy policy is enabled, with optional post-deploy health verification when configured.
 
 ## Operational knobs already in use
 
@@ -82,6 +83,8 @@ The current founder-dogfood control loop is:
 - `BOSS_ENABLE_SANDBOX_DEPLOY`
 - `BOSS_SANDBOX_MERGE_METHOD`
 - `BOSS_SANDBOX_DEPLOY_ENVIRONMENT`
+- `BOSS_SANDBOX_DEPLOY_HEALTHCHECK_URL`
+- `BOSS_SANDBOX_DEPLOY_HEALTHCHECK_TIMEOUT_SECONDS`
 - `BOSS_SANDBOX_CI_TIMEOUT_SECONDS`
 - `BOSS_SANDBOX_CI_POLL_INTERVAL_SECONDS`
 - `BOSS_DAILY_CAP_USD_MICROS`
@@ -94,7 +97,7 @@ The current founder-dogfood control loop is:
 
 - Identity, membership, and RBAC are not yet implemented. Approval actor names are still caller-supplied.
 - The software factory captures real GitHub validation evidence, but it does not yet execute arbitrary sandbox test commands itself.
-- Deployment currently records real GitHub deployment state, but it is not yet a full health-verified staged rollout system.
+- Deployment can now run a real post-deploy HTTP health check when `BOSS_SANDBOX_DEPLOY_HEALTHCHECK_URL` is configured, but it is not yet a full health-verified staged rollout system.
 - Enterprise controls such as SSO, break-glass flows, and multi-user admin governance are not complete.
 
 ## Local verification baseline
@@ -107,7 +110,7 @@ The current local release-grade baseline for this repo is:
 
 The latest passing local state at the time of this update was:
 
-- `77` tests passed
+- `78` tests passed
 - smoke passed
 - OpenAPI parsed successfully
 

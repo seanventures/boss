@@ -229,6 +229,34 @@ class GitHubAdapter:
             environment_url=response.get("environment_url"),
         )
 
+    def mark_deployment_failure(
+        self,
+        deployment_id: int,
+        environment: str,
+        *,
+        environment_url: Optional[str] = None,
+        description: Optional[str] = None,
+    ) -> DeploymentStatusResult:
+        response = self._request(
+            "POST",
+            f"/repos/{self.repository_full_name}/deployments/{deployment_id}/statuses",
+            {
+                "state": "failure",
+                "environment": environment,
+                **(
+                    {"environment_url": environment_url}
+                    if environment_url
+                    else {}
+                ),
+                **({"description": description} if description else {}),
+            },
+        )
+        return DeploymentStatusResult(
+            state=response["state"],
+            url=response["url"],
+            environment_url=response.get("environment_url"),
+        )
+
     def wait_for_commit_checks(
         self,
         head_sha: str,
