@@ -1,0 +1,31 @@
+kind: ObjectSpec
+id: ResourceReceipt
+version: 0.1.0
+description: Provider/resource-specific side-effect proof linked to a ChangeSet.
+fields:
+  - name: id
+    type: string
+  - name: changeset_id
+    type: string
+  - name: external_resource_id
+    type: string
+  - name: provider_account_id
+    type: string
+  - name: dedupe_key
+    type: string
+  - name: effect_kind
+    type: string
+  - name: provider_ref
+    type: string
+  - name: payload_hash
+    type: string
+  - name: status
+    type: enum
+    values: [in_progress, succeeded, failed, cancelled]
+  - name: result
+    type: object
+  - name: error
+    type: object
+constraints:
+  unique:
+    - [provider_account_id, dedupe_key]

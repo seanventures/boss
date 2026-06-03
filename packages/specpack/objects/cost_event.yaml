@@ -1,0 +1,27 @@
+kind: ObjectSpec
+id: CostEvent
+version: 0.1.0
+description: Estimated, observed, or reconciled provider/model/resource cost event.
+fields:
+  - name: id
+    type: string
+  - name: provider_account_id
+    type: string
+  - name: external_resource_id
+    type: string
+  - name: changeset_id
+    type: string
+  - name: receipt_id
+    type: string
+  - name: amount_usd_micros
+    type: integer
+  - name: cost_layer
+    type: enum
+    values: [estimated, reserved, observed, reconciled]
+  - name: confidence
+    type: enum
+    values: [exact_call_metered, provider_reported, invoice_reconciled, estimated_from_price_catalog, unknown]
+  - name: attribution
+    type: object
+  - name: occurred_at
+    type: datetime

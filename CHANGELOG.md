@@ -2,6 +2,12 @@
 
 All notable changes to BOSS are documented in this file.
 
+## Unreleased
+
+### Added
+
+- Added Elastic Resource Plane / ProviderOps as a core BOSS module; added provider/resource inventory, billing ledger, ChangeSets, resource receipts, deployment registry, drift detection, Resource Janitor, ProviderOps roles, budget-aware provider actuation, and clarified OpenClaw is not the BOSS foundation.
+
 ## v0.2.0 - 2026-06-02
 
 This is the first clean founder-dogfood release cut from the current API-first control plane.

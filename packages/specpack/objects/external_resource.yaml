@@ -1,0 +1,56 @@
+kind: ObjectSpec
+id: ExternalResource
+version: 0.1.0
+description: Normalized provider resource inventory record.
+fields:
+  - name: id
+    type: string
+  - name: provider_account_id
+    type: string
+  - name: provider
+    type: string
+  - name: provider_resource_id
+    type: string
+  - name: resource_type
+    type: string
+  - name: name
+    type: string
+  - name: state
+    type: enum
+    values: [discovered_unmanaged, planned, quoted, reserved, pending_approval, provisioning, active, degraded, draining, pending_delete, deleted, orphaned, error]
+  - name: ownership
+    type: enum
+    values: [managed_by_boss, discovered_unmanaged, orphaned, external_manual]
+  - name: project_id
+    type: string
+  - name: task_id
+    type: string
+  - name: deployment_target_id
+    type: string
+  - name: receipt_ids
+    type: array
+  - name: estimated_monthly_usd_micros
+    type: integer
+  - name: actual_monthly_usd_micros
+    type: integer
+  - name: cost_confidence
+    type: enum
+    values: [exact_call_metered, provider_reported, invoice_reconciled, estimated_from_price_catalog, unknown]
+  - name: health
+    type: object
+  - name: last_seen_at
+    type: datetime
+state_machine:
+  discovered_unmanaged: [planned, orphaned, error]
+  planned: [quoted, error]
+  quoted: [reserved, pending_approval, error]
+  reserved: [pending_approval, provisioning, error]
+  pending_approval: [provisioning, planned, error]
+  provisioning: [active, error]
+  active: [degraded, draining, pending_delete, orphaned, error]
+  degraded: [active, draining, pending_delete, error]
+  draining: [pending_delete, active, error]
+  pending_delete: [deleted, error]
+  deleted: []
+  orphaned: [planned, pending_delete, error]
+  error: [planned, pending_delete]

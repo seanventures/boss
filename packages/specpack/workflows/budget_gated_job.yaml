@@ -16,7 +16,7 @@ phases:
   - id: execute
     actor: worker
     requires: [JobLease]
-    outputs: [Artifact, Receipt?]
+    outputs: [Artifact, "Receipt?"]
   - id: settle_budget
     actor: budget_governor
     outputs: [CostReceipt]

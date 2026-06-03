@@ -8,11 +8,12 @@ Build BOSS, the Business Operating System Sentinel: a financially controlled aut
 
 Before architecture or feature work, read:
 
-1. `docs/product/PRD-v1.0.md`
-2. `reference/boss_build_spec_pack/docs/TECHNICAL_SPEC.md`
+1. `docs/product/PRD-v1.1.md`
+2. `docs/product/TECHNICAL_SPEC-v1.1.md`
 3. `reference/boss_build_spec_pack/docs/CODEX_RUNBOOK.md`
 4. `packages/specpack/workflows/ceo_command_to_pr.yaml`
 5. `packages/specpack/policies/default_safety.yaml`
+6. `packages/specpack/policies/resource_plane_policy.yaml`
 
 ## Build order
 
@@ -31,6 +32,11 @@ Implement the smallest vertical slice first:
 - Every external or future external effect must be represented by a `Receipt` with a unique `dedupe_key`.
 - Every spendy action must be preceded by a `BudgetReservation`.
 - Every worker job must have a lease with TTL and heartbeat.
+- Every provider write must be represented by a `ChangeSet`.
+- Every provider action must be represented by a `ResourceReceipt`.
+- Destructive provider actions and production DNS/deploy changes require explicit approval and rollback plan.
+- Provider adapters are plugins; the Resource Plane Kernel is core BOSS infrastructure.
+- OpenClaw is not the BOSS durable runtime or foundation.
 - Every failure must be visible: retry, deadletter, or decision escalation. Never silently ignore errors.
 - Do not add autonomous self-modifying behavior. BOSS may propose changes as PRs/config diffs only.
 - Prefer small, reviewable PRs. Do not implement all packs/agents at once.

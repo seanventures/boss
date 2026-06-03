@@ -32,7 +32,8 @@ If a required credential is missing, the API must fail closed and create visible
 ## Repo layout
 
 - `AGENTS.md`: active repository rules
-- `docs/product/PRD-v1.0.md`: governing product intent
+- `docs/product/PRD-v1.1.md`: governing product intent
+- `docs/product/TECHNICAL_SPEC-v1.1.md`: active technical architecture companion
 - `docs/product/IMPLEMENTATION_STATUS.md`: shipped runtime status and current constraints
 - `CHANGELOG.md`: release notes
 - `api/openapi.yaml`: active API contract

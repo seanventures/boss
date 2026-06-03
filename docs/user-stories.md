@@ -2,7 +2,7 @@
 
 Last updated: June 3, 2026
 
-These stories are derived from `docs/product/PRD-v1.0.md`, `reference/boss_build_spec_pack/docs/TECHNICAL_SPEC.md`, `packages/specpack/workflows/ceo_command_to_pr.yaml`, and `packages/specpack/policies/default_safety.yaml`.
+These stories are derived from `docs/product/PRD-v1.1.md`, `docs/product/TECHNICAL_SPEC-v1.1.md`, `reference/boss_build_spec_pack/docs/CODEX_RUNBOOK.md`, `packages/specpack/workflows/ceo_command_to_pr.yaml`, `packages/specpack/workflows/providerops_readonly_sync.yaml`, `packages/specpack/workflows/changeset_apply_with_receipts.yaml`, `packages/specpack/workflows/deployment_run.yaml`, `packages/specpack/policies/default_safety.yaml`, and `packages/specpack/policies/resource_plane_policy.yaml`.
 
 ## Founder / CEO
 
@@ -153,6 +153,58 @@ Acceptance criteria:
 - Given a role checks an action listed in its RoleSpec `allowed_skills`, when the scope check endpoint is called, then BOSS allows the action and records a `role.scope_allowed` event without changing trust.
 - Given a role checks a skill matching `forbidden_skills`, when the scope check endpoint is called, then BOSS denies the action, creates a `role_scope_violation` artifact, emits visible events, increments scope/policy violation counters, lowers trust, and downgrades autonomy when possible.
 - Given a role checks a skill absent from `allowed_skills`, when the scope check endpoint is called, then BOSS treats it as out of scope rather than silently allowing it.
+
+## ProviderOps / Elastic Resource Plane
+
+### Story RPL-001: Connect Providers Safely
+
+As a ProviderOps Manager, I want provider accounts connected through scoped adapters and SecretRefs, so that BOSS can inspect provider resources without exposing raw secrets to agents.
+
+Acceptance criteria:
+
+- Given provider credentials are registered, when BOSS tests the connection, then it stores only a `SecretRef`, detects capabilities and missing permissions, and emits auditable provider-access events.
+- Given a provider is marked read-only or destructive-actions-disabled, when a write or destructive action is requested, then policy blocks the action before any provider call.
+- Given an agent needs provider data, when it requests access, then it receives typed Resource Plane outputs rather than raw credentials.
+
+### Story RPL-002: Inventory External Resources
+
+As a founder or operator, I want BOSS to discover and normalize external resources across providers, so that unmanaged, orphaned, costly, or production-critical assets are visible.
+
+Acceptance criteria:
+
+- Given connected DigitalOcean, Cloudflare, Supabase, OpenAI, or Anthropic providers, when read-only sync runs, then BOSS records normalized `ExternalResource`, `BillingAccount`, `CostEvent`, `ProviderHealth`, and `ReconciliationRun` objects.
+- Given a discovered resource, when the Resource Explorer renders, then it shows ownership classification, project/task/deployment links, health, last seen timestamp, estimated or actual cost, provider, environment, and owner role where known.
+- Given a resource is not linked to BOSS desired state, when reconciliation completes, then it is classified as discovered unmanaged, orphaned, external/manual, or managed by BOSS.
+
+### Story RPL-003: Govern Provider ChangeSets
+
+As a CEO or delegated approver, I want provider changes represented as ChangeSets with quotes, approvals, and rollback plans, so that cloud, DNS, database, and model-provider changes cannot bypass governance.
+
+Acceptance criteria:
+
+- Given an agent proposes a provider write, when BOSS models the request, then it creates a `ChangeSet` containing resource diffs, risk tier, cost quote, budget reservation requirement, approvals needed, rollback plan, and expected receipts.
+- Given the ChangeSet is destructive or production-affecting, when approval is missing, then BOSS holds the action and does not call the provider.
+- Given a ChangeSet is approved and budget-reserved, when a worker applies it, then each provider call creates a `ResourceReceipt` with a dedupe key and reconciliation verifies the resulting provider state.
+
+### Story RPL-004: Track Provider Costs
+
+As a FinOps Sentinel, I want provider costs reconciled by confidence level, so that estimates are not presented as exact spend and budget governance can act on real provider pressure.
+
+Acceptance criteria:
+
+- Given provider billing APIs return exact or reported spend, when cost sync runs, then BOSS records cost events with `exact_call_metered`, `provider_reported`, or `invoice_reconciled` confidence.
+- Given exact billing is unavailable, when BOSS estimates spend, then the cost event is labeled `estimated_from_price_catalog` or `unknown` and is never displayed as exact.
+- Given observed spend exceeds policy thresholds, when the ledger updates, then BOSS emits an anomaly event and can apply budget kill switches such as read-only provider mode, local-only mode, or freeze provisioning.
+
+### Story RPL-005: Manage Deployments and Drift
+
+As a Deployment Manager, I want deployments and drift reports connected to provider resources, DNS, health checks, receipts, and rollback points, so that release operations are auditable and recoverable.
+
+Acceptance criteria:
+
+- Given an app has deployment targets, when a deployment run is planned, then BOSS links repo, environments, resources, domains, SecretRefs, health checks, release receipts, and rollback points.
+- Given provider inventory diverges from BOSS desired state, when drift detection runs, then BOSS classifies drift as benign, risky, cost-impacting, security-impacting, or production-impacting and proposes remediation.
+- Given production resources would be deleted or production DNS would change, when a remediation is proposed, then BOSS requires explicit approval and rollback plan before actuation.
 
 ### Story OPS-004: Deliver Governed Email
 

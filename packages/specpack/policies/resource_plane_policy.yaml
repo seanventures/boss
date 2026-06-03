@@ -1,0 +1,38 @@
+kind: Policy
+id: resource_plane_policy
+version: 0.1.0
+scope:
+  type: org
+rules:
+  architecture:
+    provider_adapters_are_plugins: true
+    resource_plane_kernel_is_core: true
+    openclaw_not_foundation: true
+  provider_actions:
+    require_changeset_for_write: true
+    require_resource_receipt: true
+    require_dedupe_key: true
+    require_policy_check: true
+    require_approval_for_destructive: true
+    require_rollback_for_production_dns_or_deploy: true
+  secrets:
+    agents_receive_raw_provider_secrets: false
+    use_secret_ref_only: true
+    local_runner_may_hold_secret_material: true
+  budget:
+    spendy_actions_require_budget_reservation: true
+    budget_governor_wins_over_autoscaler: true
+    kill_switches:
+      freeze_all_provisioning: true
+      freeze_destructive_actions: true
+      freeze_model_api_spend: true
+      freeze_public_cloud_spillover: true
+      local_only_mode: true
+      read_only_provider_mode: true
+      drain_cloud_workers: true
+  drift:
+    never_auto_delete_production_resources: true
+    classify_drift: [benign, risky, cost_impacting, security_impacting, production_impacting]
+  cost_confidence:
+    values: [exact_call_metered, provider_reported, invoice_reconciled, estimated_from_price_catalog, unknown]
+    never_present_estimates_as_exact: true

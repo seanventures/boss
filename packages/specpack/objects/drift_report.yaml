@@ -1,0 +1,25 @@
+kind: ObjectSpec
+id: DriftReport
+version: 0.1.0
+description: Reconciliation finding comparing provider inventory with BOSS desired state.
+fields:
+  - name: id
+    type: string
+  - name: provider_account_id
+    type: string
+  - name: external_resource_id
+    type: string
+  - name: drift_class
+    type: enum
+    values: [benign, risky, cost_impacting, security_impacting, production_impacting]
+  - name: summary
+    type: string
+  - name: proposed_remediation
+    type: object
+  - name: changeset_id
+    type: string
+  - name: status
+    type: enum
+    values: [open, accepted, dismissed, remediated, deadlettered]
+rules:
+  production_drift_requires_approval_before_remediation: true

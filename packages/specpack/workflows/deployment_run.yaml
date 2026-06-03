@@ -1,0 +1,29 @@
+kind: WorkflowSpec
+id: deployment_run
+version: 0.1.0
+description: Governed deployment through DeploymentTarget, ChangeSet, health checks, receipts, and rollback evidence.
+phases:
+  - id: release_packet
+    actor: release_manager
+    outputs: [ReviewPacket, RollbackPlan]
+  - id: plan_deployment
+    actor: deployment_manager
+    outputs: [DeploymentTarget, ChangeSet]
+  - id: approve_deployment
+    actor: decision_inbox
+    outputs: [Decision]
+  - id: apply_provider_changes
+    actor: resource_plane_kernel
+    outputs: [ResourceReceipt]
+  - id: health_check
+    actor: resource_health_monitor
+    outputs: [ProviderHealth, Artifact]
+  - id: rollback_if_needed
+    actor: resource_plane_kernel
+    outputs: [ResourceReceipt]
+    optional: true
+rules:
+  staging_or_production_requires_approval: true
+  production_dns_requires_rollback_plan: true
+  health_failure_creates_decision_or_rollback: true
+  every_provider_effect_receipted: true

@@ -203,7 +203,8 @@ The latest passing local state at the time of this update was:
 
 ## Where to look next
 
-- Product intent: [PRD-v1.0.md](/Volumes/DataSSD1/test/boss/docs/product/PRD-v1.0.md)
+- Product intent: [PRD-v1.1.md](/Volumes/DataSSD1/test/boss/docs/product/PRD-v1.1.md)
+- Technical spec: [TECHNICAL_SPEC-v1.1.md](/Volumes/DataSSD1/test/boss/docs/product/TECHNICAL_SPEC-v1.1.md)
 - Active contract: [api/openapi.yaml](/Volumes/DataSSD1/test/boss/api/openapi.yaml)
 - Runtime overview: [README.md](/Volumes/DataSSD1/test/boss/README.md)
 - Entitlement policy: [MODEL_ENTITLEMENT_BROKER.md](/Volumes/DataSSD1/test/boss/docs/product/MODEL_ENTITLEMENT_BROKER.md)

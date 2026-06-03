@@ -1,0 +1,37 @@
+skills:
+  - id: supabase.project.create
+    kind: provider
+    risk_tier: 3
+    mock_mode: false
+    description: Create a Supabase project through a budgeted, approved ChangeSet.
+    data_boundary: confidential
+    input_schema: { org_ref: string, name: string, region: string, plan: string }
+    output_schema: { project_ref: string, resource_receipt_id: string }
+    cost: { estimator: provider_plan, category: database }
+    retry: { max_attempts: 1, backoff: none }
+    permissions: { allowed_callers: [resource_plane_kernel], required_permissions: [provider_database_write] }
+    policy: { requires_changeset: true, requires_budget_reservation: true, requires_approval: [ceo, cto], requires_resource_receipt: true }
+  - id: supabase.project.pause
+    kind: provider
+    risk_tier: 3
+    mock_mode: false
+    description: Pause an unused Supabase project through an approved cleanup ChangeSet.
+    data_boundary: confidential
+    input_schema: { project_ref: string, reason: string }
+    output_schema: { provider_ref: string, resource_receipt_id: string }
+    cost: { estimator: savings_estimate, category: database }
+    retry: { max_attempts: 1, backoff: none }
+    permissions: { allowed_callers: [resource_plane_kernel], required_permissions: [provider_database_pause] }
+    policy: { requires_changeset: true, requires_approval: [ceo], destructive: true, requires_resource_receipt: true }
+  - id: supabase.migration.apply
+    kind: provider
+    risk_tier: 3
+    mock_mode: false
+    description: Apply a Supabase migration with release receipts and rollback plan.
+    data_boundary: confidential
+    input_schema: { deployment_target_id: string, migration_artifact_id: string }
+    output_schema: { migration_ref: string, resource_receipt_id: string }
+    cost: { estimator: fixed, category: database }
+    retry: { max_attempts: 1, backoff: none }
+    permissions: { allowed_callers: [resource_plane_kernel], required_permissions: [provider_database_migrate] }
+    policy: { requires_changeset: true, requires_approval: [ceo, release_manager], requires_rollback_plan: true, requires_resource_receipt: true }

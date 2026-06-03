@@ -8,6 +8,8 @@ The Model Entitlement Broker is the control-plane service that decides which AI 
 
 BOSS must treat model access as governed capacity, not as an undifferentiated pool of "AI compute".
 
+In PRD v1.1, model-provider accounts, usage/cost sync, quota health, and API key ownership also participate in ProviderOps. The Model Entitlement Broker chooses eligible AI capacity; the Resource Plane Kernel tracks provider accounts, cost events, health, commitments, and receipts for provider-side actions.
+
 ## Supported source kinds
 
 - `official_cli`

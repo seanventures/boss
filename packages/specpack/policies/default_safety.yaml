@@ -46,6 +46,17 @@ rules:
     enforce_data_boundaries: true
     local_only_requires_approved_local_model: true
     restricted_requires_explicit_source_approval: true
+  resource_plane:
+    provider_adapters_are_plugins: true
+    resource_plane_kernel_is_core: true
+    require_changeset_for_provider_write: true
+    require_resource_receipt_for_provider_action: true
+    require_budget_reservation_for_spendy_provider_action: true
+    require_explicit_approval_for_destructive_action: true
+    require_rollback_plan_for_production_dns_or_deploy: true
+    forbid_raw_provider_secrets_in_agent_context: true
+    budget_governor_overrides_autoscaler: true
+    openclaw_not_foundation: true
   sandbox_real_mode:
     slack_real_send_allowed: false
     github_real_pr_allowed: true
