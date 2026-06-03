@@ -186,6 +186,21 @@ CREATE TABLE IF NOT EXISTS self_improvement_proposals (
 CREATE INDEX IF NOT EXISTS idx_self_improvement_proposals_project
   ON self_improvement_proposals(project_id, created_at DESC);
 
+CREATE TABLE IF NOT EXISTS health_snapshots (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id),
+  generated_by TEXT NOT NULL,
+  budget_state TEXT NOT NULL,
+  queue_state JSONB NOT NULL DEFAULT '{}'::jsonb,
+  workload_state JSONB NOT NULL DEFAULT '{}'::jsonb,
+  incident_state JSONB NOT NULL DEFAULT '{}'::jsonb,
+  top_risks JSONB NOT NULL DEFAULT '[]'::jsonb,
+  summary JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_health_snapshots_project
+  ON health_snapshots(project_id, created_at DESC);
+
 CREATE TABLE IF NOT EXISTS jobs (
   id TEXT PRIMARY KEY,
   project_id TEXT NOT NULL REFERENCES projects(id),

@@ -22,7 +22,35 @@ class StatusResponse(BaseModel):
     budget_state: str
     pending_decisions: int
     open_tasks: int
+    deadletters: int = 0
+    active_jobs: int = 0
+    top_risks: list[dict[str, Any]] = Field(default_factory=list)
+    latest_snapshot_id: Optional[str] = None
+    latest_snapshot_at: Optional[str] = None
     blocked_reason: Optional[str] = None
+
+
+class HealthSnapshotSummary(BaseModel):
+    id: str
+    project_id: str
+    generated_by: str
+    budget_state: str
+    queue_state: dict[str, Any] = Field(default_factory=dict)
+    workload_state: dict[str, Any] = Field(default_factory=dict)
+    incident_state: dict[str, Any] = Field(default_factory=dict)
+    top_risks: list[dict[str, Any]] = Field(default_factory=list)
+    summary: dict[str, Any] = Field(default_factory=dict)
+    created_at: str
+
+
+class HealthSnapshotListResponse(BaseModel):
+    project_id: str
+    items: list[HealthSnapshotSummary]
+
+
+class HealthSnapshotRefreshRequest(BaseModel):
+    project_id: str
+    actor: str = "metatron"
 
 
 class CommandProposeRequest(BaseModel):

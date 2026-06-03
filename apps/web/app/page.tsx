@@ -2,6 +2,7 @@ import {
   createReplayBundleAction,
   installPackAction,
   queueOutboxMessageAction,
+  refreshHealthSnapshotAction,
   recordSelfImprovementCanaryAction,
   recordSelfImprovementRolloutAction,
   resolveDecisionAction,
@@ -17,6 +18,7 @@ import { fetchDeadletterFeed } from "../lib/deadletters";
 import { fetchDecisionFeed, type DecisionFeedItem } from "../lib/decisions";
 import { fetchEntitlementFeed } from "../lib/entitlements";
 import { fetchActivityFeed } from "../lib/events";
+import { fetchHealthSnapshotFeed } from "../lib/health-snapshots";
 import { fetchPackFeed } from "../lib/packs";
 import { fetchReceiptFeed } from "../lib/receipts";
 import { fetchRoleFeed } from "../lib/roles";
@@ -69,6 +71,13 @@ function titleCaseToken(value: string): string {
   return value.replaceAll("_", " ");
 }
 
+function riskLabel(risk: Record<string, unknown>): string {
+  const title = typeof risk.title === "string" ? risk.title : "Unspecified risk";
+  const severity =
+    typeof risk.severity === "string" ? risk.severity.toUpperCase() : "UNKNOWN";
+  return `${severity} / ${title}`;
+}
+
 function decisionStatusDetail(decision: DecisionFeedItem): string {
   if (decision.status === "delegated" && decision.delegatedTo) {
     return `Delegated to ${decision.delegatedTo}${
@@ -100,6 +109,7 @@ export default async function HomePage() {
     tasks,
     artifacts,
     events,
+    healthSnapshots,
     deadletters,
     packs,
     roles,
@@ -118,6 +128,7 @@ export default async function HomePage() {
       fetchTaskFeed(),
       fetchArtifactFeed(),
       fetchActivityFeed(),
+      fetchHealthSnapshotFeed(),
       fetchDeadletterFeed(),
       fetchPackFeed(),
       fetchRoleFeed(),
@@ -234,6 +245,13 @@ export default async function HomePage() {
               missing.
             </p>
           </article>
+          <article>
+            <h2>Active Jobs</h2>
+            <div className="metric">{status.activeJobs}</div>
+            <p className="detail">
+              Leased or running jobs visible from the current control-plane state.
+            </p>
+          </article>
         </section>
 
         <section className="grid">
@@ -268,6 +286,96 @@ export default async function HomePage() {
               What changed is derived from immutable event records.
             </p>
           </article>
+          <article>
+            <h2>Deadletters</h2>
+            <div className="metric">{status.deadletters}</div>
+            <p className="detail">
+              Incidents must become visible deadletters or blocked states, never silent drops.
+            </p>
+          </article>
+        </section>
+
+        <section className="panel-stack">
+          <div className="section-head">
+            <div>
+              <span className="eyebrow">Health Snapshots</span>
+              <h2>Durable system state for what changed and what is risky.</h2>
+            </div>
+            <p className="status-meta">
+              Metatron-style visibility now has a canonical snapshot object with queue, budget, workload, and incident state.
+            </p>
+          </div>
+
+          <div className="stack-grid">
+            <article className="stack-card">
+              <h3>Live top risks</h3>
+              <p className="detail">
+                {status.latestSnapshotAt
+                  ? `Latest snapshot at ${formatDateTime(status.latestSnapshotAt)}.`
+                  : "No persisted health snapshot yet. Refresh one from the console."}
+              </p>
+              <form action={refreshHealthSnapshotAction}>
+                <button className="button secondary" type="submit">
+                  Refresh snapshot
+                </button>
+              </form>
+              <div className="feed-list">
+                {status.topRisks.length === 0 ? (
+                  <p className="detail">No current risk summary available.</p>
+                ) : (
+                  status.topRisks.map((risk, index) => (
+                    <div className="feed-row" key={`risk-${index}`}>
+                      <div>
+                        <h4>{riskLabel(risk)}</h4>
+                        <p className="detail">
+                          {typeof risk.detail === "string"
+                            ? risk.detail
+                            : "No additional risk detail."}
+                        </p>
+                      </div>
+                      <span className="pill">
+                        {typeof risk.category === "string"
+                          ? risk.category
+                          : "status"}
+                      </span>
+                    </div>
+                  ))
+                )}
+              </div>
+            </article>
+
+            <article className="stack-card">
+              <h3>Recent snapshots</h3>
+              {!healthSnapshots.apiReachable ? (
+                <p className="detail">
+                  {healthSnapshots.blockedReason ?? "Health snapshot API is unavailable."}
+                </p>
+              ) : healthSnapshots.items.length === 0 ? (
+                <p className="detail">No health snapshots have been persisted yet.</p>
+              ) : (
+                <div className="feed-list">
+                  {healthSnapshots.items.map((snapshot) => (
+                    <div className="feed-row" key={snapshot.id}>
+                      <div>
+                        <h4>
+                          {snapshot.budgetState} / {formatDateTime(snapshot.createdAt)}
+                        </h4>
+                        <p className="detail">
+                          {Number(snapshot.summary.open_tasks ?? 0)} open tasks /{" "}
+                          {Number(snapshot.summary.pending_decisions ?? 0)} pending decisions /{" "}
+                          {Number(snapshot.summary.deadletters ?? 0)} deadletters
+                        </p>
+                        <p className="detail">
+                          Generated by {snapshot.generatedBy}
+                        </p>
+                      </div>
+                      <code className="mono">{snapshot.id}</code>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </article>
+          </div>
         </section>
 
         <section className="panel-stack">

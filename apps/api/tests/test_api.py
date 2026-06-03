@@ -23,6 +23,76 @@ def test_status_returns_seeded_project(client):
     payload = response.json()
     assert payload["project_id"] == "boss-dogfood"
     assert payload["project_name"] == "BOSS dogfood bootstrap"
+    assert "deadletters" in payload
+    assert "active_jobs" in payload
+    assert "top_risks" in payload
+
+
+def test_health_snapshot_refresh_persists_summary_and_risks(client, engine):
+    denial = client.post(
+        "/v1/budget/reserve",
+        json={
+            "project_id": "boss-dogfood",
+            "category": "model",
+            "amount_usd_micros": 100_000_000,
+            "reason": "force health-risk decision",
+        },
+    )
+    assert denial.status_code == 201
+
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                """
+                INSERT INTO deadletters (id, project_id, source_kind, source_id, reason, payload)
+                VALUES (
+                    'dlq_health_1', 'boss-dogfood', 'job', 'job_health_1',
+                    'health test deadletter', '{}'::jsonb
+                )
+                """
+            )
+        )
+
+    refreshed = client.post(
+        "/v1/health-snapshots/refresh",
+        json={"project_id": "boss-dogfood", "actor": "metatron"},
+    )
+    assert refreshed.status_code == 201
+    payload = refreshed.json()
+    assert payload["project_id"] == "boss-dogfood"
+    assert payload["generated_by"] == "metatron"
+    assert payload["summary"]["deadletters"] == 1
+    assert payload["workload_state"]["pending_decisions"] >= 1
+    assert payload["top_risks"]
+    assert any(
+        risk["category"] == "incident" and "Deadletters" in risk["title"]
+        for risk in payload["top_risks"]
+    )
+
+    snapshots = client.get(
+        "/v1/health-snapshots",
+        params={"project_id": "boss-dogfood", "limit": 10},
+    )
+    assert snapshots.status_code == 200
+    snapshot_payload = snapshots.json()
+    assert snapshot_payload["items"]
+    assert snapshot_payload["items"][0]["id"] == payload["id"]
+
+
+def test_status_surfaces_latest_health_snapshot_metadata(client):
+    refreshed = client.post(
+        "/v1/health-snapshots/refresh",
+        json={"project_id": "boss-dogfood", "actor": "executive_console"},
+    )
+    assert refreshed.status_code == 201
+    snapshot_id = refreshed.json()["id"]
+
+    status = client.get("/v1/status", params={"project_id": "boss-dogfood"})
+    assert status.status_code == 200
+    payload = status.json()
+    assert payload["latest_snapshot_id"] == snapshot_id
+    assert payload["latest_snapshot_at"]
+    assert isinstance(payload["top_risks"], list)
 
 
 def test_seed_installs_core_pack_and_roles(client):

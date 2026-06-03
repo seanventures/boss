@@ -18,6 +18,35 @@ paths:
           schema: { type: string }
       responses:
         '200': { description: Status summary }
+  /v1/health-snapshots:
+    get:
+      summary: List recent health snapshots for a project
+      parameters:
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, default: 25 }
+      responses:
+        '200': { description: Health snapshot list }
+  /v1/health-snapshots/refresh:
+    post:
+      summary: Persist a fresh health snapshot for the project
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id]
+              properties:
+                project_id: { type: string }
+                actor: { type: string, default: metatron }
+      responses:
+        '201': { description: Health snapshot created }
   /v1/commands/propose:
     post:
       summary: Submit a CEO command and create an intake task/job

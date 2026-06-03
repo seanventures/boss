@@ -14,6 +14,11 @@ export type StatusCard = {
   budgetState: string;
   pendingDecisions: number;
   openTasks: number;
+  deadletters: number;
+  activeJobs: number;
+  topRisks: Array<Record<string, unknown>>;
+  latestSnapshotId?: string;
+  latestSnapshotAt?: string;
   blockedReason?: string;
 };
 
@@ -28,6 +33,11 @@ export function placeholderStatus(reason: string): StatusCard {
     budgetState: "unknown",
     pendingDecisions: 0,
     openTasks: 0,
+    deadletters: 0,
+    activeJobs: 0,
+    topRisks: [],
+    latestSnapshotId: undefined,
+    latestSnapshotAt: undefined,
     blockedReason: reason,
   };
 }
@@ -43,6 +53,11 @@ function mapStatus(payload: StatusResponse): StatusCard {
     budgetState: payload.budget_state,
     pendingDecisions: payload.pending_decisions,
     openTasks: payload.open_tasks,
+    deadletters: payload.deadletters,
+    activeJobs: payload.active_jobs,
+    topRisks: payload.top_risks,
+    latestSnapshotId: payload.latest_snapshot_id,
+    latestSnapshotAt: payload.latest_snapshot_at,
     blockedReason: payload.blocked_reason,
   };
 }

@@ -36,6 +36,9 @@ from .schemas import (
     EventFeedResponse,
     EventItem,
     HealthResponse,
+    HealthSnapshotListResponse,
+    HealthSnapshotRefreshRequest,
+    HealthSnapshotSummary,
     InboxMessageIngestRequest,
     InboxMessageListResponse,
     InboxMessageSummary,
@@ -105,6 +108,7 @@ from .services.decisions import (
     InvalidDecisionTransitionError,
 )
 from .services.entitlements import EntitlementBrokerService, SkillNotFoundError
+from .services.health import HealthSnapshotService
 from .services.intake import CommandIntakeService
 from .services.jobs import JobLeaseService, LeaseNotFoundError
 from .services.receipts import ReceiptService
@@ -129,6 +133,7 @@ entitlements = EntitlementBrokerService(settings)
 audit = AuditTrailService(settings)
 comms = CommsService(settings)
 self_improvement = SelfImprovementService(settings)
+health_snapshots = HealthSnapshotService(settings)
 
 
 @asynccontextmanager
@@ -231,6 +236,21 @@ def self_improvement_summary_from_row(row) -> SelfImprovementProposalSummary:
 
 def self_improvement_detail_from_row(row) -> SelfImprovementProposalDetail:
     return SelfImprovementProposalDetail(**self_improvement_summary_from_row(row).model_dump())
+
+
+def health_snapshot_summary_from_row(row) -> HealthSnapshotSummary:
+    return HealthSnapshotSummary(
+        id=row["id"],
+        project_id=row["project_id"],
+        generated_by=row["generated_by"],
+        budget_state=row["budget_state"],
+        queue_state=row.get("queue_state") or {},
+        workload_state=row.get("workload_state") or {},
+        incident_state=row.get("incident_state") or {},
+        top_risks=row.get("top_risks") or [],
+        summary=row.get("summary") or {},
+        created_at=row["created_at"].isoformat(),
+    )
 
 
 def artifact_summary_from_row(row) -> ArtifactSummary:
@@ -503,6 +523,11 @@ def status(project_id: str) -> StatusResponse:
             budget_state="unknown",
             pending_decisions=0,
             open_tasks=0,
+            deadletters=0,
+            active_jobs=0,
+            top_risks=[],
+            latest_snapshot_id=None,
+            latest_snapshot_at=None,
             blocked_reason="Postgres is not reachable.",
         )
 
@@ -542,6 +567,8 @@ def status(project_id: str) -> StatusResponse:
             {"project_id": project_id},
         ).scalar_one()
         budget_snapshot = budget.status_for_project(connection, project_id)
+        current_health = health_snapshots.current_state(connection, project_id)
+        latest_snapshot = health_snapshots.latest_snapshot(connection, project_id)
 
         return StatusResponse(
             project_id=row["project_id"],
@@ -552,6 +579,13 @@ def status(project_id: str) -> StatusResponse:
             budget_state=budget_snapshot["budget_state"],
             pending_decisions=int(pending_decisions),
             open_tasks=int(open_tasks),
+            deadletters=int(current_health["incident_state"]["deadletters"]),
+            active_jobs=int(current_health["queue_state"]["leased_jobs"]),
+            top_risks=current_health["top_risks"],
+            latest_snapshot_id=latest_snapshot["id"] if latest_snapshot else None,
+            latest_snapshot_at=(
+                latest_snapshot["created_at"].isoformat() if latest_snapshot else None
+            ),
             blocked_reason=None if settings.github_token and settings.openai_api_key else "Missing GitHub or OpenAI credentials.",
         )
 
@@ -784,6 +818,35 @@ def rollback_self_improvement_proposal(
         except InvalidSelfImprovementTransitionError as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
         return self_improvement_detail_from_row(row)
+
+
+@app.get("/v1/health-snapshots", response_model=HealthSnapshotListResponse)
+def list_health_snapshots(
+    project_id: str, limit: int = 25
+) -> HealthSnapshotListResponse:
+    if limit < 1 or limit > 200:
+        raise HTTPException(status_code=400, detail="limit must be between 1 and 200.")
+    with begin(engine) as connection:
+        rows = health_snapshots.list_snapshots(connection, project_id, limit)
+        return HealthSnapshotListResponse(
+            project_id=project_id,
+            items=[health_snapshot_summary_from_row(row) for row in rows],
+        )
+
+
+@app.post(
+    "/v1/health-snapshots/refresh",
+    response_model=HealthSnapshotSummary,
+    status_code=201,
+)
+def refresh_health_snapshot(
+    payload: HealthSnapshotRefreshRequest,
+) -> HealthSnapshotSummary:
+    with begin(engine) as connection:
+        row = health_snapshots.refresh_snapshot(
+            connection, payload.project_id, payload.actor
+        )
+        return health_snapshot_summary_from_row(row)
 
 
 @app.get("/v1/artifacts", response_model=ArtifactListResponse)

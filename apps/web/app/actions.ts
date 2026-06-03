@@ -63,6 +63,14 @@ export async function submitCommandAction(formData: FormData): Promise<void> {
   revalidatePath("/");
 }
 
+export async function refreshHealthSnapshotAction(): Promise<void> {
+  await client.refreshHealthSnapshot({
+    project_id: process.env.NEXT_PUBLIC_BOSS_PROJECT_ID ?? "boss-dogfood",
+    actor: "executive_console",
+  });
+  revalidatePath("/");
+}
+
 export async function installPackAction(formData: FormData): Promise<void> {
   const packId = formData.get("pack_id");
   if (typeof packId !== "string" || !packId) {

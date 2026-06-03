@@ -15,7 +15,35 @@ export type StatusResponse = {
   budget_state: string;
   pending_decisions: number;
   open_tasks: number;
+  deadletters: number;
+  active_jobs: number;
+  top_risks: Array<Record<string, unknown>>;
+  latest_snapshot_id?: string;
+  latest_snapshot_at?: string;
   blocked_reason?: string;
+};
+
+export type HealthSnapshotSummary = {
+  id: string;
+  project_id: string;
+  generated_by: string;
+  budget_state: string;
+  queue_state: Record<string, unknown>;
+  workload_state: Record<string, unknown>;
+  incident_state: Record<string, unknown>;
+  top_risks: Array<Record<string, unknown>>;
+  summary: Record<string, unknown>;
+  created_at: string;
+};
+
+export type HealthSnapshotListResponse = {
+  project_id: string;
+  items: HealthSnapshotSummary[];
+};
+
+export type HealthSnapshotRefreshRequest = {
+  project_id: string;
+  actor?: string;
 };
 
 export type CommandProposeRequest = {
@@ -892,6 +920,18 @@ export function createBossApiClient(config: BossApiClientConfig) {
       return request<StatusResponse>("GET", "/v1/status", {
         query: { project_id: projectId },
       });
+    },
+    listHealthSnapshots(projectId: string, limit = 25) {
+      return request<HealthSnapshotListResponse>("GET", "/v1/health-snapshots", {
+        query: { project_id: projectId, limit },
+      });
+    },
+    refreshHealthSnapshot(payload: HealthSnapshotRefreshRequest) {
+      return request<HealthSnapshotSummary>(
+        "POST",
+        "/v1/health-snapshots/refresh",
+        { body: payload },
+      );
     },
     proposeCommand(payload: CommandProposeRequest) {
       return request<CommandProposeResponse>("POST", "/v1/commands/propose", {

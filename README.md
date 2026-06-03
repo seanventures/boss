@@ -82,6 +82,8 @@ The dogfood seed also registers the initial entitlement-source inventory from `p
 
 - `GET /health`
 - `GET /v1/status`
+- `GET /v1/health-snapshots`
+- `POST /v1/health-snapshots/refresh`
 - `POST /v1/commands/propose`
 - `GET /v1/tasks`
 - `POST /v1/tasks`
@@ -171,6 +173,12 @@ The dogfood seed also registers the initial entitlement-source inventory from `p
 - Creating a proposal requires a change reference, diff summary, test plan, canary scope, rollback plan, and success metrics. The control plane turns that into a task, proposal artifact, and canary approval decision.
 - Decision outcomes are now connected to proposal state. Approval advances the proposal, revision requests reopen it explicitly, and rejection leaves a visible rejected state instead of silent drift.
 - Successful canaries automatically create the next rollout approval decision. Rollout and rollback are both recorded as first-class artifacts so BOSS can prove how it changed itself.
+
+## Health snapshots
+
+- BOSS now has a canonical `health_snapshots` object that captures queue state, workload state, incident state, budget state, and derived top risks for a project.
+- `GET /v1/status` now returns live top risks plus latest snapshot metadata, while `POST /v1/health-snapshots/refresh` persists a durable snapshot for audit and operator review.
+- Snapshot risk derivation currently covers deadletters, blocked or deadlettered outbox messages, budget pressure, high-risk pending decisions, retryable jobs, and missing provider credentials.
 
 ## GitHub bootstrap
 
