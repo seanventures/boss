@@ -2,9 +2,10 @@ SHELL := /bin/zsh
 VENV := .venv
 PYTHON := $(VENV)/bin/python
 PIP := $(VENV)/bin/pip
-DATABASE_URL ?= postgresql+psycopg://boss:boss@localhost:5432/boss
+BOSS_POSTGRES_PORT ?= 5432
+DATABASE_URL ?= postgresql+psycopg://boss:boss@localhost:$(BOSS_POSTGRES_PORT)/boss
 
-.PHONY: install install-node install-python dev test lint seed smoke real-smoke-plan real-smoke-pr real-smoke-merge worker-drain-once sandbox-template
+.PHONY: install install-node install-python wait-db dev test lint seed smoke real-smoke-plan real-smoke-pr real-smoke-merge worker-drain-once sandbox-template
 
 install: install-node install-python
 
@@ -18,11 +19,16 @@ $(PYTHON):
 	$(PIP) install --upgrade pip
 	$(PIP) install -r apps/api/requirements.txt -r apps/worker/requirements.txt
 
+wait-db: install-python
+	DATABASE_URL=$(DATABASE_URL) $(PYTHON) scripts/wait_for_postgres.py
+
 dev: install
 	docker compose -f infra/docker-compose.yml up -d db
+	DATABASE_URL=$(DATABASE_URL) $(PYTHON) scripts/wait_for_postgres.py
 	DATABASE_URL=$(DATABASE_URL) pnpm dev
 
 test: install-python install-node
+	DATABASE_URL=$(DATABASE_URL) $(PYTHON) scripts/wait_for_postgres.py
 	DATABASE_URL=$(DATABASE_URL) pnpm test
 
 lint: install-python install-node
@@ -30,22 +36,27 @@ lint: install-python install-node
 
 seed: install-python
 	docker compose -f infra/docker-compose.yml up -d db
+	DATABASE_URL=$(DATABASE_URL) $(PYTHON) scripts/wait_for_postgres.py
 	DATABASE_URL=$(DATABASE_URL) $(PYTHON) -m apps.api.app.bootstrap
 
 smoke: install-python
 	docker compose -f infra/docker-compose.yml up -d db
+	DATABASE_URL=$(DATABASE_URL) $(PYTHON) scripts/wait_for_postgres.py
 	DATABASE_URL=$(DATABASE_URL) $(PYTHON) -m apps.api.tests.smoke
 
 real-smoke-plan: install-python
 	docker compose -f infra/docker-compose.yml up -d db
+	DATABASE_URL=$(DATABASE_URL) $(PYTHON) scripts/wait_for_postgres.py
 	DATABASE_URL=$(DATABASE_URL) $(PYTHON) scripts/run_real_control_plane_smoke.py
 
 real-smoke-pr: install-python
 	docker compose -f infra/docker-compose.yml up -d db
+	DATABASE_URL=$(DATABASE_URL) $(PYTHON) scripts/wait_for_postgres.py
 	DATABASE_URL=$(DATABASE_URL) $(PYTHON) scripts/run_real_control_plane_smoke.py --with-pr
 
 real-smoke-merge: install-python
 	docker compose -f infra/docker-compose.yml up -d db
+	DATABASE_URL=$(DATABASE_URL) $(PYTHON) scripts/wait_for_postgres.py
 	DATABASE_URL=$(DATABASE_URL) $(PYTHON) scripts/run_real_control_plane_smoke.py --with-pr --with-merge
 
 worker-drain-once: install-python

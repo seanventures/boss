@@ -16,19 +16,31 @@ class BudgetGovernor:
     def expire_stale_reservations(
         self, connection: Connection, project_id: Optional[str] = None
     ) -> list[str]:
-        rows = connection.execute(
-            text(
+        query_params: dict[str, Any] = {"now_utc": now_utc()}
+        if project_id is None:
+            query = text(
                 """
                 UPDATE budget_reservations
                 SET status = 'expired'
                 WHERE status = 'active'
                   AND expires_at <= :now_utc
-                  AND (:project_id IS NULL OR project_id = :project_id)
                 RETURNING id, project_id
                 """
-            ),
-            {"now_utc": now_utc(), "project_id": project_id},
-        ).mappings().all()
+            )
+        else:
+            query = text(
+                """
+                UPDATE budget_reservations
+                SET status = 'expired'
+                WHERE status = 'active'
+                  AND expires_at <= :now_utc
+                  AND project_id = :project_id
+                RETURNING id, project_id
+                """
+            )
+            query_params["project_id"] = project_id
+
+        rows = connection.execute(query, query_params).mappings().all()
 
         expired_ids: list[str] = []
         for row in rows:

@@ -52,6 +52,7 @@ If a required credential is missing, the API must fail closed and create visible
 ## Setup
 
 1. Copy `.env.example` to `.env` and fill in the required secrets.
+   If `localhost:5432` is already occupied on your machine, set `BOSS_POSTGRES_PORT` and make `DATABASE_URL` match that port before starting BOSS.
 2. Run `make install`.
 3. Run `make seed`.
 4. Run `make dev`.
@@ -67,6 +68,8 @@ If a required credential is missing, the API must fail closed and create visible
 - `make real-smoke-pr`: run a real reservation -> queued PR job -> leased worker -> sandbox PR proposal flow
 - `make real-smoke-merge`: run the full sandbox PR proposal flow and, when merge policy is enabled, approve and execute the merge job
 - `make worker-drain-once`: poll the control plane once and execute at most one leased job
+
+The database-backed commands now wait for Postgres readiness before seeding, testing, or smoke execution, which avoids race conditions during local startup.
 
 ## Current control-plane endpoints
 

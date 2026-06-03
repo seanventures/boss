@@ -345,6 +345,66 @@ def test_openai_plan_blocks_without_reservation(client):
     assert payload["decision_id"]
 
 
+def test_openai_plan_blocks_without_credentials_and_releases_reservation(client, engine):
+    reserve = client.post(
+        "/v1/budget/reserve",
+        json={
+            "project_id": "boss-dogfood",
+            "category": "model",
+            "amount_usd_micros": 250_000,
+            "reason": "OpenAI plan without credentials.",
+        },
+    )
+    assert reserve.status_code == 201
+    reservation_id = reserve.json()["reservation_id"]
+
+    previous = api_main.software_factory.settings.openai_api_key
+    api_main.software_factory.settings.openai_api_key = None
+    try:
+        response = client.post(
+            "/v1/openai/plans",
+            json={
+                "project_id": "boss-dogfood",
+                "reservation_id": reservation_id,
+                "dedupe_key": "missing-openai-creds",
+                "prompt": "Create a plan.",
+            },
+        )
+    finally:
+        api_main.software_factory.settings.openai_api_key = previous
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "blocked"
+    assert payload["decision_id"]
+    assert "OPENAI_API_KEY" in payload["message"]
+
+    with engine.begin() as connection:
+        reservation_status = connection.execute(
+            text(
+                """
+                SELECT status
+                FROM budget_reservations
+                WHERE id = :reservation_id
+                """
+            ),
+            {"reservation_id": reservation_id},
+        ).scalar_one()
+        decision_question = connection.execute(
+            text(
+                """
+                SELECT question
+                FROM decisions
+                WHERE id = :decision_id
+                """
+            ),
+            {"decision_id": payload["decision_id"]},
+        ).scalar_one()
+
+    assert reservation_status == "released"
+    assert decision_question == "OpenAI integration is not configured"
+
+
 def test_two_workers_cannot_claim_same_job(client):
     created = client.post(
         "/v1/jobs",
@@ -1018,6 +1078,76 @@ def test_queue_pr_proposal_job_is_leasable_and_completion_passes_through(client)
     assert payload["pull_request_url"].endswith("/pull/1")
 
 
+def test_pr_proposal_blocks_without_github_credentials_and_releases_reservation(
+    client, engine, monkeypatch
+):
+    reserve = client.post(
+        "/v1/budget/reserve",
+        json={
+            "project_id": "boss-dogfood",
+            "category": "tool",
+            "amount_usd_micros": 500_000,
+            "reason": "PR proposal without GitHub credentials.",
+        },
+    )
+    assert reserve.status_code == 201
+    reservation_id = reserve.json()["reservation_id"]
+
+    monkeypatch.setattr(
+        api_main.software_factory.openai,
+        "create_text_response",
+        lambda prompt, system_prompt=None: ("resp_review_packet", "Review packet"),
+    )
+    previous = api_main.software_factory.settings.github_token
+    api_main.software_factory.settings.github_token = None
+    try:
+        response = client.post(
+            "/v1/software-factory/proposals",
+            json={
+                "project_id": "boss-dogfood",
+                "reservation_id": reservation_id,
+                "dedupe_key": "missing-github-creds-pr",
+                "title": "Sandbox PR",
+                "branch_name": "boss/missing-github-creds",
+                "summary": "Exercise fail-closed GitHub proposal behavior.",
+                "files": [{"path": "README.md", "content": "hello"}],
+            },
+        )
+    finally:
+        api_main.software_factory.settings.github_token = previous
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "blocked"
+    assert payload["decision_id"]
+    assert "BOSS_GITHUB_TOKEN" in payload["message"]
+
+    with engine.begin() as connection:
+        reservation_status = connection.execute(
+            text(
+                """
+                SELECT status
+                FROM budget_reservations
+                WHERE id = :reservation_id
+                """
+            ),
+            {"reservation_id": reservation_id},
+        ).scalar_one()
+        decision_question = connection.execute(
+            text(
+                """
+                SELECT question
+                FROM decisions
+                WHERE id = :decision_id
+                """
+            ),
+            {"decision_id": payload["decision_id"]},
+        ).scalar_one()
+
+    assert reservation_status == "released"
+    assert decision_question == "GitHub integration is not configured"
+
+
 def test_queue_merge_job_is_leasable_and_completion_passes_through(client):
     queued = client.post(
         "/v1/software-factory/merges/queue",
@@ -1076,3 +1206,53 @@ def test_queue_merge_job_is_leasable_and_completion_passes_through(client):
     assert payload["decision_id"] == "dec_merge"
     assert payload["pull_request_url"].endswith("/pull/42")
     assert payload["merged_sha"] == "abc123"
+
+
+def test_merge_blocks_without_github_credentials(client, engine):
+    previous = api_main.software_factory.settings.github_token
+    api_main.software_factory.settings.github_token = None
+    try:
+        response = client.post(
+            "/v1/software-factory/merges",
+            json={
+                "project_id": "boss-dogfood",
+                "decision_id": "dec_merge_missing_github",
+                "dedupe_key": "missing-github-creds-merge",
+                "pull_request_number": 42,
+                "pull_request_url": "https://github.com/seanheiney/boss-sandbox/pull/42",
+                "title": "Merge Demo",
+                "branch_name": "boss/demo-pr",
+            },
+        )
+    finally:
+        api_main.software_factory.settings.github_token = previous
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "blocked"
+    assert payload["decision_id"]
+    assert "BOSS_GITHUB_TOKEN" in payload["message"]
+
+    with engine.begin() as connection:
+        decision_question = connection.execute(
+            text(
+                """
+                SELECT question
+                FROM decisions
+                WHERE id = :decision_id
+                """
+            ),
+            {"decision_id": payload["decision_id"]},
+        ).scalar_one()
+        merge_artifact_count = connection.execute(
+            text(
+                """
+                SELECT COUNT(*)
+                FROM artifacts
+                WHERE project_id = 'boss-dogfood' AND artifact_type = 'merge_result'
+                """
+            )
+        ).scalar_one()
+
+    assert decision_question == "GitHub integration is not configured"
+    assert merge_artifact_count == 0

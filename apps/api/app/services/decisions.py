@@ -412,11 +412,11 @@ class DecisionService:
 
     def _proposal_title(self, task: Optional[dict[str, Any]]) -> str:
         if not task:
-            return "BOSS sandbox proposal"
+            return "BOSS proposal: sandbox proposal"
         title = task.get("title")
         if isinstance(title, str) and title.strip():
             return f"BOSS proposal: {title[:80]}"
-        return "BOSS sandbox proposal"
+        return "BOSS proposal: sandbox proposal"
 
     def _proposal_summary(
         self, task: Optional[dict[str, Any]], plan_content: dict[str, Any]
