@@ -1,11 +1,14 @@
 import {
   createReplayBundleAction,
   installPackAction,
+  queueOutboxMessageAction,
   resolveDecisionAction,
+  submitOutboxDraftAction,
   submitCommandAction,
 } from "./actions";
 import { fetchAuditSummary } from "../lib/audit";
 import { fetchArtifactFeed } from "../lib/artifacts";
+import { fetchInboxFeed, fetchOutboxFeed } from "../lib/comms";
 import { fetchDeadletterFeed } from "../lib/deadletters";
 import { fetchDecisionFeed, type DecisionFeedItem } from "../lib/decisions";
 import { fetchEntitlementFeed } from "../lib/entitlements";
@@ -100,6 +103,8 @@ export default async function HomePage() {
     skills,
     receipts,
     auditSummary,
+    outbox,
+    inbox,
   ] =
     await Promise.all([
       fetchStatus(),
@@ -115,6 +120,8 @@ export default async function HomePage() {
       fetchSkillFeed(),
       fetchReceiptFeed(),
       fetchAuditSummary(),
+      fetchOutboxFeed(),
+      fetchInboxFeed(),
     ]);
 
   const deadletterCount = deadletters.items.length;
@@ -333,6 +340,121 @@ export default async function HomePage() {
                       <code className="mono">
                         {receipt.createdByJobId ?? receipt.id}
                       </code>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </article>
+          </div>
+        </section>
+
+        <section className="panel-stack">
+          <div className="section-head">
+            <div>
+              <span className="eyebrow">Communications</span>
+              <h2>Outbox discipline before external sends.</h2>
+            </div>
+            <p className="status-meta">
+              Messages are drafted and queued through the API first. Real Slack delivery stays policy-gated and receipt-backed.
+            </p>
+          </div>
+
+          <div className="stack-grid">
+            <article className="stack-card">
+              <h3>Draft outbound message</h3>
+              <form action={submitOutboxDraftAction} className="composer compact">
+                <label className="field">
+                  <span>Channel</span>
+                  <input
+                    name="channel"
+                    className="input"
+                    placeholder="slack:#ops"
+                    required
+                  />
+                </label>
+                <label className="field">
+                  <span>Subject</span>
+                  <input
+                    name="subject"
+                    className="input"
+                    placeholder="Daily BOSS digest"
+                  />
+                </label>
+                <label className="field">
+                  <span>Body</span>
+                  <textarea
+                    name="body"
+                    rows={4}
+                    className="textarea"
+                    placeholder="Summarize what changed and what needs approval."
+                    required
+                  />
+                </label>
+                <button className="button secondary" type="submit">
+                  Create outbox draft
+                </button>
+              </form>
+            </article>
+
+            <article className="stack-card">
+              <h3>Recent outbox</h3>
+              {!outbox.apiReachable ? (
+                <p className="detail">
+                  {outbox.blockedReason ?? "Outbox API is unavailable."}
+                </p>
+              ) : outbox.items.length === 0 ? (
+                <p className="detail">No outbound messages have been drafted yet.</p>
+              ) : (
+                <div className="feed-list">
+                  {outbox.items.map((message) => (
+                    <div className="feed-row" key={message.id}>
+                      <div>
+                        <h4>{message.subject ?? message.channel}</h4>
+                        <p className="detail">
+                          {message.channel} / {message.status} / {formatDateTime(message.createdAt)}
+                        </p>
+                        <p className="detail">
+                          {message.receiptId ?? message.body}
+                        </p>
+                      </div>
+                      {message.status === "draft" ? (
+                        <form action={queueOutboxMessageAction}>
+                          <input type="hidden" name="message_id" value={message.id} />
+                          <button className="button secondary" type="submit">
+                            Queue send
+                          </button>
+                        </form>
+                      ) : (
+                        <code className="mono">{message.id}</code>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </article>
+
+            <article className="stack-card">
+              <h3>Recent inbox</h3>
+              {!inbox.apiReachable ? (
+                <p className="detail">
+                  {inbox.blockedReason ?? "Inbox API is unavailable."}
+                </p>
+              ) : inbox.items.length === 0 ? (
+                <p className="detail">No inbound messages have been ingested yet.</p>
+              ) : (
+                <div className="feed-list">
+                  {inbox.items.map((message) => (
+                    <div className="feed-row" key={message.id}>
+                      <div>
+                        <h4>{message.subject ?? message.channel}</h4>
+                        <p className="detail">
+                          {message.channel} / {message.status} / {formatDateTime(message.createdAt)}
+                        </p>
+                        <p className="detail">
+                          {message.rawRef ?? "No provider reference"}
+                        </p>
+                      </div>
+                      <code className="mono">{message.id}</code>
                     </div>
                   ))}
                 </div>

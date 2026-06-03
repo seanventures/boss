@@ -36,11 +36,19 @@ from .schemas import (
     EventFeedResponse,
     EventItem,
     HealthResponse,
+    InboxMessageIngestRequest,
+    InboxMessageListResponse,
+    InboxMessageSummary,
     JobCreateRequest,
     JobSummary,
     LeasedJob,
     OpenAIPlanRequest,
     OpenAIPlanResponse,
+    OutboxDeliveryResponse,
+    OutboxMessageCreateRequest,
+    OutboxMessageListResponse,
+    OutboxMessageSummary,
+    OutboxQueueRequest,
     PackDetail,
     PackInstallRequest,
     PackListResponse,
@@ -79,6 +87,11 @@ from .schemas import (
 )
 from .services.audit import AuditTrailService
 from .services.budget import BudgetGovernor
+from .services.comms import (
+    CommsService,
+    InvalidCreatedByJobError,
+    OutboxMessageNotFoundError,
+)
 from .services.decisions import (
     DecisionNotFoundError,
     DecisionService,
@@ -102,6 +115,7 @@ decisions = DecisionService(settings)
 specpack = SpecPackService(settings)
 entitlements = EntitlementBrokerService(settings)
 audit = AuditTrailService(settings)
+comms = CommsService(settings)
 
 
 @asynccontextmanager
@@ -224,6 +238,36 @@ def event_item_from_row(row) -> EventItem:
         entity_id=row["entity_id"],
         data=row["data"] or {},
         created_at=row["created_at"].isoformat(),
+    )
+
+
+def outbox_message_summary_from_row(row) -> OutboxMessageSummary:
+    return OutboxMessageSummary(
+        id=row["id"],
+        project_id=row["project_id"],
+        channel=row["channel"],
+        subject=row.get("subject"),
+        body=row["body"],
+        status=row["status"],
+        dedupe_key=row["dedupe_key"],
+        receipt_id=row.get("receipt_id"),
+        created_at=row["created_at"].isoformat(),
+        updated_at=row["updated_at"].isoformat(),
+    )
+
+
+def inbox_message_summary_from_row(row) -> InboxMessageSummary:
+    return InboxMessageSummary(
+        id=row["id"],
+        project_id=row.get("project_id"),
+        channel=row["channel"],
+        raw_ref=row.get("raw_ref"),
+        subject=row.get("subject"),
+        body=row["body"],
+        status=row["status"],
+        parsed=row.get("parsed") or {},
+        created_at=row["created_at"].isoformat(),
+        updated_at=row["updated_at"].isoformat(),
     )
 
 
@@ -728,6 +772,102 @@ def list_routing_logs(project_id: str, limit: int = 25) -> RoutingLogListRespons
             project_id=project_id,
             items=[routing_log_item_from_service(item) for item in items],
         )
+
+
+@app.get("/v1/comms/outbox", response_model=OutboxMessageListResponse)
+def list_outbox_messages(project_id: str, limit: int = 50) -> OutboxMessageListResponse:
+    if limit < 1 or limit > 200:
+        raise HTTPException(status_code=400, detail="limit must be between 1 and 200.")
+
+    with begin(engine) as connection:
+        items = comms.list_outbox_messages(connection, project_id, limit)
+        return OutboxMessageListResponse(
+            project_id=project_id,
+            items=[outbox_message_summary_from_row(item) for item in items],
+        )
+
+
+@app.post("/v1/comms/outbox", response_model=OutboxMessageSummary, status_code=201)
+def create_outbox_message(payload: OutboxMessageCreateRequest) -> OutboxMessageSummary:
+    with begin(engine) as connection:
+        item = comms.create_outbox_message(
+            connection,
+            payload.project_id,
+            payload.channel,
+            payload.subject,
+            payload.body,
+            payload.dedupe_key,
+            payload.actor,
+        )
+        return outbox_message_summary_from_row(item)
+
+
+@app.post("/v1/comms/outbox/{message_id}/queue", response_model=JobSummary, status_code=201)
+def queue_outbox_delivery(message_id: str, payload: OutboxQueueRequest) -> JobSummary:
+    with begin(engine) as connection:
+        try:
+            job = comms.queue_outbox_delivery(
+                connection,
+                payload.project_id,
+                message_id,
+                payload.reservation_id,
+                payload.dedupe_key,
+                payload.actor,
+                payload.priority,
+                payload.max_attempts,
+            )
+        except OutboxMessageNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        return JobSummary(**job)
+
+
+@app.post("/v1/comms/outbox/{message_id}/deliver", response_model=OutboxDeliveryResponse)
+def deliver_outbox_message(
+    message_id: str, payload: OutboxQueueRequest
+) -> OutboxDeliveryResponse:
+    with begin(engine) as connection:
+        try:
+            result = comms.deliver_outbox_message(
+                connection,
+                payload.project_id,
+                message_id,
+                payload.reservation_id,
+                payload.dedupe_key,
+                payload.created_by_job_id,
+            )
+        except OutboxMessageNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except InvalidCreatedByJobError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        return OutboxDeliveryResponse(**result)
+
+
+@app.get("/v1/comms/inbox", response_model=InboxMessageListResponse)
+def list_inbox_messages(project_id: str, limit: int = 50) -> InboxMessageListResponse:
+    if limit < 1 or limit > 200:
+        raise HTTPException(status_code=400, detail="limit must be between 1 and 200.")
+
+    with begin(engine) as connection:
+        items = comms.list_inbox_messages(connection, project_id, limit)
+        return InboxMessageListResponse(
+            project_id=project_id,
+            items=[inbox_message_summary_from_row(item) for item in items],
+        )
+
+
+@app.post("/v1/comms/inbox/ingest", response_model=InboxMessageSummary, status_code=201)
+def ingest_inbox_message(payload: InboxMessageIngestRequest) -> InboxMessageSummary:
+    with begin(engine) as connection:
+        item = comms.ingest_inbox_message(
+            connection,
+            payload.project_id,
+            payload.channel,
+            payload.body,
+            payload.actor,
+            subject=payload.subject,
+            raw_ref=payload.raw_ref,
+        )
+        return inbox_message_summary_from_row(item)
 
 
 @app.post("/v1/jobs", response_model=JobSummary, status_code=201)

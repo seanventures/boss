@@ -300,6 +300,351 @@ def test_artifact_list_and_detail_return_created_artifacts(client):
     assert detail["content"]["constraints"]["deadline"] == "today"
 
 
+def test_comms_outbox_and_inbox_are_visible(client):
+    outbox = client.post(
+        "/v1/comms/outbox",
+        json={
+            "project_id": "boss-dogfood",
+            "channel": "slack:#ops",
+            "subject": "BOSS digest",
+            "body": "System health summary.",
+            "dedupe_key": "outbox-digest-1",
+        },
+    )
+    assert outbox.status_code == 201
+    outbox_payload = outbox.json()
+    assert outbox_payload["status"] == "draft"
+
+    inbox = client.post(
+        "/v1/comms/inbox/ingest",
+        json={
+            "project_id": "boss-dogfood",
+            "channel": "email:founder",
+            "subject": "Need status",
+            "body": "What changed today?",
+            "raw_ref": "mailbox-123",
+        },
+    )
+    assert inbox.status_code == 201
+    inbox_payload = inbox.json()
+    assert inbox_payload["status"] == "received"
+
+    outbox_list = client.get(
+        "/v1/comms/outbox", params={"project_id": "boss-dogfood", "limit": 10}
+    )
+    assert outbox_list.status_code == 200
+    assert outbox_payload["id"] in [item["id"] for item in outbox_list.json()["items"]]
+
+    inbox_list = client.get(
+        "/v1/comms/inbox", params={"project_id": "boss-dogfood", "limit": 10}
+    )
+    assert inbox_list.status_code == 200
+    assert inbox_payload["id"] in [item["id"] for item in inbox_list.json()["items"]]
+
+
+def test_queue_outbox_delivery_creates_job_and_marks_message_queued(client, engine):
+    outbox = client.post(
+        "/v1/comms/outbox",
+        json={
+            "project_id": "boss-dogfood",
+            "channel": "slack:#ops",
+            "body": "Queue this message.",
+            "dedupe_key": "outbox-queue-1",
+        },
+    )
+    assert outbox.status_code == 201
+    message_id = outbox.json()["id"]
+
+    reserve = client.post(
+        "/v1/budget/reserve",
+        json={
+            "project_id": "boss-dogfood",
+            "category": "comms",
+            "amount_usd_micros": 50_000,
+            "reason": "Queue outbound Slack delivery.",
+        },
+    )
+    assert reserve.status_code == 201
+    reservation_id = reserve.json()["reservation_id"]
+
+    queued = client.post(
+        f"/v1/comms/outbox/{message_id}/queue",
+        json={
+            "project_id": "boss-dogfood",
+            "reservation_id": reservation_id,
+            "dedupe_key": "outbox-queue-job-1",
+        },
+    )
+    assert queued.status_code == 201
+    payload = queued.json()
+    assert payload["kind"] == "comms.outbox.deliver"
+
+    with engine.begin() as connection:
+        message_status = connection.execute(
+            text("SELECT status FROM outbox_messages WHERE id = :message_id"),
+            {"message_id": message_id},
+        ).scalar_one()
+        attached_job_id = connection.execute(
+            text(
+                "SELECT job_id FROM budget_reservations WHERE id = :reservation_id"
+            ),
+            {"reservation_id": reservation_id},
+        ).scalar_one()
+
+    assert message_status == "queued"
+    assert attached_job_id == payload["id"]
+
+
+def test_outbox_delivery_blocks_when_slack_delivery_is_disabled(client, engine):
+    outbox = client.post(
+        "/v1/comms/outbox",
+        json={
+            "project_id": "boss-dogfood",
+            "channel": "slack:#ops",
+            "body": "Blocked message.",
+            "dedupe_key": "outbox-blocked-1",
+        },
+    )
+    assert outbox.status_code == 201
+    message_id = outbox.json()["id"]
+
+    reserve = client.post(
+        "/v1/budget/reserve",
+        json={
+            "project_id": "boss-dogfood",
+            "category": "comms",
+            "amount_usd_micros": 50_000,
+            "reason": "Attempt blocked Slack delivery.",
+        },
+    )
+    assert reserve.status_code == 201
+    reservation_id = reserve.json()["reservation_id"]
+
+    previous_allowed = api_main.comms.settings.slack_real_send_allowed
+    previous_webhook = api_main.comms.settings.slack_webhook_url
+    api_main.comms.settings.slack_real_send_allowed = False
+    api_main.comms.settings.slack_webhook_url = None
+    try:
+        response = client.post(
+            f"/v1/comms/outbox/{message_id}/deliver",
+            json={
+                "project_id": "boss-dogfood",
+                "reservation_id": reservation_id,
+                "dedupe_key": "outbox-blocked-delivery-1",
+            },
+        )
+    finally:
+        api_main.comms.settings.slack_real_send_allowed = previous_allowed
+        api_main.comms.settings.slack_webhook_url = previous_webhook
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "blocked"
+    assert payload["decision_id"]
+    assert payload["receipt_id"]
+
+    with engine.begin() as connection:
+        reservation_status = connection.execute(
+            text("SELECT status FROM budget_reservations WHERE id = :reservation_id"),
+            {"reservation_id": reservation_id},
+        ).scalar_one()
+        outbox_status = connection.execute(
+            text("SELECT status FROM outbox_messages WHERE id = :message_id"),
+            {"message_id": message_id},
+        ).scalar_one()
+
+    assert reservation_status == "released"
+    assert outbox_status == "blocked"
+
+
+def test_outbox_delivery_succeeds_and_creates_receipt(client, engine, monkeypatch):
+    outbox = client.post(
+        "/v1/comms/outbox",
+        json={
+            "project_id": "boss-dogfood",
+            "channel": "slack:#ops",
+            "subject": "Deployment",
+            "body": "The sandbox change is ready for review.",
+            "dedupe_key": "outbox-success-1",
+        },
+    )
+    assert outbox.status_code == 201
+    message_id = outbox.json()["id"]
+
+    reserve = client.post(
+        "/v1/budget/reserve",
+        json={
+            "project_id": "boss-dogfood",
+            "category": "comms",
+            "amount_usd_micros": 50_000,
+            "reason": "Send real Slack message.",
+        },
+    )
+    assert reserve.status_code == 201
+    reservation_id = reserve.json()["reservation_id"]
+
+    previous_allowed = api_main.comms.settings.slack_real_send_allowed
+    previous_webhook = api_main.comms.settings.slack_webhook_url
+    api_main.comms.settings.slack_real_send_allowed = True
+    api_main.comms.settings.slack_webhook_url = "https://hooks.slack.com/services/test"
+    monkeypatch.setattr(
+        api_main.comms.slack,
+        "post_message",
+        lambda channel, subject, body: f"slack-webhook:{channel}",
+    )
+    try:
+        response = client.post(
+            f"/v1/comms/outbox/{message_id}/deliver",
+            json={
+                "project_id": "boss-dogfood",
+                "reservation_id": reservation_id,
+                "dedupe_key": "outbox-success-delivery-1",
+            },
+        )
+    finally:
+        api_main.comms.settings.slack_real_send_allowed = previous_allowed
+        api_main.comms.settings.slack_webhook_url = previous_webhook
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "created"
+    assert payload["receipt_id"]
+    assert payload["provider_ref"] == "slack-webhook:slack:#ops"
+
+    receipts = client.get(
+        "/v1/receipts", params={"project_id": "boss-dogfood", "limit": 10}
+    )
+    assert receipts.status_code == 200
+    receipt = receipts.json()["items"][0]
+    assert receipt["effect_kind"] == "slack.message.post"
+    assert receipt["created_by_job_id"] is None
+
+    with engine.begin() as connection:
+        outbox_row = connection.execute(
+            text(
+                """
+                SELECT status, receipt_id
+                FROM outbox_messages
+                WHERE id = :message_id
+                """
+            ),
+            {"message_id": message_id},
+        ).mappings().one()
+
+    assert outbox_row["status"] == "acked"
+    assert outbox_row["receipt_id"] == payload["receipt_id"]
+
+
+def test_outbox_delivery_rejects_unknown_created_by_job_id(client):
+    outbox = client.post(
+        "/v1/comms/outbox",
+        json={
+            "project_id": "boss-dogfood",
+            "channel": "slack:#ops",
+            "body": "This request should fail validation.",
+            "dedupe_key": "outbox-invalid-job-1",
+        },
+    )
+    assert outbox.status_code == 201
+    message_id = outbox.json()["id"]
+
+    reserve = client.post(
+        "/v1/budget/reserve",
+        json={
+            "project_id": "boss-dogfood",
+            "category": "comms",
+            "amount_usd_micros": 50_000,
+            "reason": "Validate created_by_job_id handling.",
+        },
+    )
+    assert reserve.status_code == 201
+
+    response = client.post(
+        f"/v1/comms/outbox/{message_id}/deliver",
+        json={
+            "project_id": "boss-dogfood",
+            "reservation_id": reserve.json()["reservation_id"],
+            "dedupe_key": "outbox-invalid-job-delivery-1",
+            "created_by_job_id": "job_missing",
+        },
+    )
+
+    assert response.status_code == 400
+    assert "created_by_job_id" in response.json()["detail"]
+
+
+def test_comms_job_failure_deadletters_outbox_message(client, engine):
+    outbox = client.post(
+        "/v1/comms/outbox",
+        json={
+            "project_id": "boss-dogfood",
+            "channel": "slack:#ops",
+            "body": "This message will deadletter.",
+            "dedupe_key": "outbox-deadletter-1",
+        },
+    )
+    assert outbox.status_code == 201
+    message_id = outbox.json()["id"]
+
+    reserve = client.post(
+        "/v1/budget/reserve",
+        json={
+            "project_id": "boss-dogfood",
+            "category": "comms",
+            "amount_usd_micros": 50_000,
+            "reason": "Queue a comms job that fails.",
+        },
+    )
+    assert reserve.status_code == 201
+    reservation_id = reserve.json()["reservation_id"]
+
+    queued = client.post(
+        f"/v1/comms/outbox/{message_id}/queue",
+        json={
+            "project_id": "boss-dogfood",
+            "reservation_id": reservation_id,
+            "dedupe_key": "outbox-deadletter-job-1",
+        },
+    )
+    assert queued.status_code == 201
+    job_id = queued.json()["id"]
+
+    poll = client.post(
+        "/v1/worker/poll",
+        json={
+            "worker_id": "worker-comms-deadletter",
+            "capabilities": ["comms.outbox.deliver"],
+            "lease_ttl_seconds": 60,
+        },
+    )
+    assert poll.status_code == 200
+    leased = poll.json()["job"]
+    assert leased["id"] == job_id
+
+    failed = client.post(
+        "/v1/worker/fail",
+        json={
+            "worker_id": "worker-comms-deadletter",
+            "job_id": job_id,
+            "lease_token": leased["lease_token"],
+            "error": {"message": "Slack webhook rejected the payload."},
+            "retryable": False,
+            "retry_delay_seconds": 0,
+        },
+    )
+    assert failed.status_code == 200
+    payload = failed.json()
+    assert payload["status"] == "deadlettered"
+    assert payload["deadletter_id"]
+
+    with engine.begin() as connection:
+        outbox_status = connection.execute(
+            text("SELECT status FROM outbox_messages WHERE id = :message_id"),
+            {"message_id": message_id},
+        ).scalar_one()
+    assert outbox_status == "deadlettered"
+
+
 def test_budget_denial_creates_decision(client):
     response = client.post(
         "/v1/budget/reserve",

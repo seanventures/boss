@@ -37,6 +37,8 @@ def clean_tables(engine):
     with engine.begin() as connection:
         connection.execute(text("DELETE FROM cost_receipts"))
         connection.execute(text("DELETE FROM budget_reservations"))
+        connection.execute(text("DELETE FROM inbox_messages"))
+        connection.execute(text("DELETE FROM outbox_messages"))
         connection.execute(text("DELETE FROM receipts"))
         connection.execute(text("DELETE FROM deadletters"))
         connection.execute(text("DELETE FROM routing_logs"))

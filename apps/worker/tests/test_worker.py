@@ -79,6 +79,15 @@ class FakeControlPlaneClient:
             "merged_sha": "abc123",
         }
 
+    def deliver_outbox_message(self, message_id, payload):
+        self.calls.append(("deliver_outbox_message", message_id, payload))
+        return {
+            "status": "created",
+            "message_id": message_id,
+            "receipt_id": "rcpt_comms",
+            "provider_ref": "slack-webhook:slack:#ops",
+        }
+
 
 def test_worker_starts_and_exits_cleanly():
     result = subprocess.run(
@@ -230,6 +239,40 @@ def test_run_worker_cycle_executes_queued_pr_proposal_job():
         "poll",
         "heartbeat",
         "create_pull_request_proposal",
+        "complete",
+    ]
+
+
+def test_run_worker_cycle_executes_queued_outbox_delivery_job():
+    leased_job = LeasedJob(
+        id="job_comms",
+        project_id="boss-dogfood",
+        task_id=None,
+        kind="comms.outbox.deliver",
+        payload={
+            "outbox_message_id": "out_test",
+            "reservation_id": "res_test",
+            "dedupe_key": "comms-test",
+        },
+        attempt=1,
+        max_attempts=3,
+        lease_token="lease_token",
+        lease_expires_at="future",
+    )
+    client = FakeControlPlaneClient(leased_job)
+    settings = SimpleNamespace(
+        worker_id="worker-test",
+        lease_ttl_seconds=60,
+        poll_interval_seconds=1,
+    )
+
+    ran_job = run_worker_cycle(client, settings)
+
+    assert ran_job is True
+    assert [call[0] for call in client.calls] == [
+        "poll",
+        "heartbeat",
+        "deliver_outbox_message",
         "complete",
     ]
 

@@ -468,6 +468,79 @@ export type ReplayBundleResponse = {
   counts: AuditExportCounts;
 };
 
+export type OutboxMessageCreateRequest = {
+  project_id: string;
+  channel: string;
+  subject?: string;
+  body: string;
+  dedupe_key: string;
+  actor?: string;
+};
+
+export type OutboxMessageSummary = {
+  id: string;
+  project_id: string;
+  channel: string;
+  subject?: string;
+  body: string;
+  status: string;
+  dedupe_key: string;
+  receipt_id?: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type OutboxMessageListResponse = {
+  project_id: string;
+  items: OutboxMessageSummary[];
+};
+
+export type OutboxQueueRequest = {
+  project_id: string;
+  reservation_id: string;
+  dedupe_key: string;
+  actor?: string;
+  priority?: number;
+  max_attempts?: number;
+  created_by_job_id?: string;
+};
+
+export type OutboxDeliveryResponse = {
+  status: string;
+  message_id?: string;
+  receipt_id?: string;
+  decision_id?: string;
+  provider_ref?: string;
+  message?: string;
+};
+
+export type InboxMessageIngestRequest = {
+  project_id: string;
+  channel: string;
+  subject?: string;
+  body: string;
+  raw_ref?: string;
+  actor?: string;
+};
+
+export type InboxMessageSummary = {
+  id: string;
+  project_id?: string;
+  channel: string;
+  raw_ref?: string;
+  subject?: string;
+  body: string;
+  status: string;
+  parsed: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+};
+
+export type InboxMessageListResponse = {
+  project_id: string;
+  items: InboxMessageSummary[];
+};
+
 export type RoleSummary = {
   id: string;
   project_id: string;
@@ -835,6 +908,40 @@ export function createBossApiClient(config: BossApiClientConfig) {
     listRoutingLogs(projectId: string, limit = 25) {
       return request<RoutingLogListResponse>("GET", "/v1/router/logs", {
         query: { project_id: projectId, limit },
+      });
+    },
+    listOutboxMessages(projectId: string, limit = 50) {
+      return request<OutboxMessageListResponse>("GET", "/v1/comms/outbox", {
+        query: { project_id: projectId, limit },
+      });
+    },
+    createOutboxMessage(payload: OutboxMessageCreateRequest) {
+      return request<OutboxMessageSummary>("POST", "/v1/comms/outbox", {
+        body: payload,
+      });
+    },
+    queueOutboxDelivery(messageId: string, payload: OutboxQueueRequest) {
+      return request<JobSummary>(
+        "POST",
+        `/v1/comms/outbox/${encodeURIComponent(messageId)}/queue`,
+        { body: payload },
+      );
+    },
+    deliverOutboxMessage(messageId: string, payload: OutboxQueueRequest) {
+      return request<OutboxDeliveryResponse>(
+        "POST",
+        `/v1/comms/outbox/${encodeURIComponent(messageId)}/deliver`,
+        { body: payload },
+      );
+    },
+    listInboxMessages(projectId: string, limit = 50) {
+      return request<InboxMessageListResponse>("GET", "/v1/comms/inbox", {
+        query: { project_id: projectId, limit },
+      });
+    },
+    ingestInboxMessage(payload: InboxMessageIngestRequest) {
+      return request<InboxMessageSummary>("POST", "/v1/comms/inbox/ingest", {
+        body: payload,
       });
     },
     pollWorker(payload: WorkerPollRequest) {

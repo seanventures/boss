@@ -18,6 +18,9 @@ class Settings(BaseSettings):
     )
     google_api_key: Optional[str] = Field(default=None, alias="GOOGLE_API_KEY")
     xai_api_key: Optional[str] = Field(default=None, alias="XAI_API_KEY")
+    slack_webhook_url: Optional[str] = Field(
+        default=None, alias="BOSS_SLACK_WEBHOOK_URL"
+    )
     openai_model: str = Field(default="gpt-5.2-codex", alias="BOSS_OPENAI_MODEL")
     github_token: Optional[str] = Field(
         default=None, validation_alias=AliasChoices("BOSS_GITHUB_TOKEN", "GITHUB_TOKEN")
@@ -55,6 +58,12 @@ class Settings(BaseSettings):
     )
     software_factory_pr_budget_usd_micros: int = Field(
         default=500_000, alias="BOSS_SOFTWARE_FACTORY_PR_BUDGET_USD_MICROS"
+    )
+    comms_message_budget_usd_micros: int = Field(
+        default=50_000, alias="BOSS_COMMS_MESSAGE_BUDGET_USD_MICROS"
+    )
+    slack_real_send_allowed: bool = Field(
+        default=False, alias="BOSS_SLACK_REAL_SEND_ALLOWED"
     )
     enable_sandbox_merge: bool = Field(
         default=False, alias="BOSS_ENABLE_SANDBOX_MERGE"

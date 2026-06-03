@@ -11,6 +11,7 @@ from sqlalchemy.engine import Connection
 
 from ..config import Settings
 from .budget import BudgetGovernor
+from .comms import CommsService
 from .core import (
     create_artifact,
     create_blocking_decision,
@@ -28,6 +29,7 @@ class JobLeaseService:
     def __init__(self, settings: Settings):
         self.settings = settings
         self.budget = BudgetGovernor(settings)
+        self.comms = CommsService(settings)
 
     def create_job(
         self,
@@ -358,6 +360,9 @@ class JobLeaseService:
                     "run_after": next_run_after.isoformat(),
                 },
             )
+            self._mark_related_message_retrying(
+                connection, row, retry_delay_seconds
+            )
             return {
                 "job_id": job_id,
                 "status": "failed_retryable",
@@ -432,6 +437,7 @@ class JobLeaseService:
             job_id,
             {"deadletter_id": deadletter_id},
         )
+        self._mark_related_message_deadlettered(connection, row, deadletter_id)
         return {
             "job_id": job_id,
             "status": "deadlettered",
@@ -504,6 +510,11 @@ class JobLeaseService:
                 "merged_sha": result.get("merged_sha"),
             }
 
+        if job_row["kind"] == "comms.outbox.deliver":
+            return {
+                "receipt_id": result.get("receipt_id"),
+            }
+
         if job_row["kind"] not in {"plan.command", "plan.generate"}:
             return {}
 
@@ -566,6 +577,7 @@ class JobLeaseService:
             "openai.plan",
             "github.pull_request",
             "software_factory.propose_pr",
+            "comms.outbox.deliver",
         }
         return bool(payload.get("requires_reservation")) or kind in spendy_kinds
 
@@ -622,4 +634,49 @@ class JobLeaseService:
             "job",
             job_id,
             {"decision_id": decision_id, "reservation_id": reservation_id},
+        )
+        if kind == "comms.outbox.deliver":
+            payload = connection.execute(
+                text("SELECT payload FROM jobs WHERE id = :job_id"),
+                {"job_id": job_id},
+            ).scalar_one_or_none() or {}
+            outbox_message_id = payload.get("outbox_message_id")
+            if outbox_message_id:
+                self.comms.mark_outbox_deadlettered(
+                    connection,
+                    project_id,
+                    str(outbox_message_id),
+                    decision_id,
+                )
+
+    def _mark_related_message_retrying(
+        self, connection: Connection, row, retry_delay_seconds: int
+    ) -> None:
+        if row["kind"] != "comms.outbox.deliver":
+            return
+        payload = row["payload"] or {}
+        outbox_message_id = payload.get("outbox_message_id")
+        if not outbox_message_id:
+            return
+        self.comms.mark_outbox_retrying(
+            connection,
+            row["project_id"],
+            str(outbox_message_id),
+            retry_delay_seconds,
+        )
+
+    def _mark_related_message_deadlettered(
+        self, connection: Connection, row, deadletter_id: str
+    ) -> None:
+        if row["kind"] != "comms.outbox.deliver":
+            return
+        payload = row["payload"] or {}
+        outbox_message_id = payload.get("outbox_message_id")
+        if not outbox_message_id:
+            return
+        self.comms.mark_outbox_deadlettered(
+            connection,
+            row["project_id"],
+            str(outbox_message_id),
+            deadletter_id,
         )

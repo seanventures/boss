@@ -502,6 +502,79 @@ class ReplayBundleResponse(BaseModel):
     counts: AuditExportCounts
 
 
+class OutboxMessageCreateRequest(BaseModel):
+    project_id: str
+    channel: str
+    subject: Optional[str] = None
+    body: str
+    dedupe_key: str
+    actor: str = "executive_console"
+
+
+class OutboxMessageSummary(BaseModel):
+    id: str
+    project_id: str
+    channel: str
+    subject: Optional[str] = None
+    body: str
+    status: str
+    dedupe_key: str
+    receipt_id: Optional[str] = None
+    created_at: str
+    updated_at: str
+
+
+class OutboxMessageListResponse(BaseModel):
+    project_id: str
+    items: list[OutboxMessageSummary]
+
+
+class OutboxQueueRequest(BaseModel):
+    project_id: str
+    reservation_id: str
+    dedupe_key: str
+    actor: str = "executive_console"
+    priority: int = Field(default=25, ge=0)
+    max_attempts: int = Field(default=3, ge=1, le=20)
+    created_by_job_id: Optional[str] = None
+
+
+class OutboxDeliveryResponse(BaseModel):
+    status: str
+    message_id: Optional[str] = None
+    receipt_id: Optional[str] = None
+    decision_id: Optional[str] = None
+    provider_ref: Optional[str] = None
+    message: Optional[str] = None
+
+
+class InboxMessageIngestRequest(BaseModel):
+    project_id: str
+    channel: str
+    subject: Optional[str] = None
+    body: str
+    raw_ref: Optional[str] = None
+    actor: str = "system"
+
+
+class InboxMessageSummary(BaseModel):
+    id: str
+    project_id: Optional[str] = None
+    channel: str
+    raw_ref: Optional[str] = None
+    subject: Optional[str] = None
+    body: str
+    status: str
+    parsed: dict[str, Any] = Field(default_factory=dict)
+    created_at: str
+    updated_at: str
+
+
+class InboxMessageListResponse(BaseModel):
+    project_id: str
+    items: list[InboxMessageSummary]
+
+
 class RoleSummary(BaseModel):
     id: str
     project_id: str

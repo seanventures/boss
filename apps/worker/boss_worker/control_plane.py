@@ -104,6 +104,15 @@ class ControlPlaneClient:
         response.raise_for_status()
         return response.json()
 
+    def deliver_outbox_message(
+        self, message_id: str, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        response = self._client.post(
+            f"/v1/comms/outbox/{message_id}/deliver", json=payload
+        )
+        response.raise_for_status()
+        return response.json()
+
     def fail(
         self,
         worker_id: str,

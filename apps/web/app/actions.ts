@@ -83,3 +83,53 @@ export async function createReplayBundleAction(): Promise<void> {
   });
   revalidatePath("/");
 }
+
+export async function submitOutboxDraftAction(formData: FormData): Promise<void> {
+  const channel = formData.get("channel");
+  const subject = formData.get("subject");
+  const body = formData.get("body");
+
+  if (typeof channel !== "string" || !channel.trim()) {
+    throw new Error("channel is required");
+  }
+  if (typeof body !== "string" || !body.trim()) {
+    throw new Error("body is required");
+  }
+
+  const dedupeKey = `outbox-${Date.now()}`;
+  await client.createOutboxMessage({
+    project_id: process.env.NEXT_PUBLIC_BOSS_PROJECT_ID ?? "boss-dogfood",
+    channel: channel.trim(),
+    subject: typeof subject === "string" && subject.trim() ? subject.trim() : undefined,
+    body: body.trim(),
+    dedupe_key: dedupeKey,
+    actor: "executive_console",
+  });
+  revalidatePath("/");
+}
+
+export async function queueOutboxMessageAction(formData: FormData): Promise<void> {
+  const messageId = formData.get("message_id");
+  if (typeof messageId !== "string" || !messageId) {
+    throw new Error("message_id is required");
+  }
+
+  const projectId = process.env.NEXT_PUBLIC_BOSS_PROJECT_ID ?? "boss-dogfood";
+  const reservation = await client.reserveBudget({
+    project_id: projectId,
+    category: "comms",
+    amount_usd_micros: 50_000,
+    reason: "Queue outbound communication from the executive console.",
+  });
+  if (reservation.status !== "reserved" || !reservation.reservation_id) {
+    throw new Error(reservation.message);
+  }
+
+  await client.queueOutboxDelivery(messageId, {
+    project_id: projectId,
+    reservation_id: reservation.reservation_id,
+    dedupe_key: `outbox-queue-${messageId}-${Date.now()}`,
+    actor: "executive_console",
+  });
+  revalidatePath("/");
+}

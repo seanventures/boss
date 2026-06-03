@@ -215,6 +215,120 @@ paths:
           schema: { type: integer, default: 25 }
       responses:
         '200': { description: Routing log list }
+  /v1/comms/outbox:
+    get:
+      summary: List outbound communication records for a project
+      parameters:
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, default: 50 }
+      responses:
+        '200': { description: Outbox list }
+    post:
+      summary: Create an outbox draft message
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id, channel, body, dedupe_key]
+              properties:
+                project_id: { type: string }
+                channel: { type: string }
+                subject: { type: string }
+                body: { type: string }
+                dedupe_key: { type: string }
+                actor: { type: string, default: executive_console }
+      responses:
+        '201': { description: Outbox draft created }
+  /v1/comms/outbox/{message_id}/queue:
+    post:
+      summary: Queue a receipt-gated outbound communication job
+      parameters:
+        - name: message_id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id, reservation_id, dedupe_key]
+              properties:
+                project_id: { type: string }
+                reservation_id: { type: string }
+                dedupe_key: { type: string }
+                actor: { type: string, default: executive_console }
+                priority: { type: integer, default: 25 }
+                max_attempts: { type: integer, default: 3 }
+      responses:
+        '201': { description: Communication job queued }
+        '404': { description: Outbox message not found }
+  /v1/comms/outbox/{message_id}/deliver:
+    post:
+      summary: Deliver a queued outbox message through the configured provider
+      parameters:
+        - name: message_id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id, reservation_id, dedupe_key]
+              properties:
+                project_id: { type: string }
+                reservation_id: { type: string }
+                dedupe_key: { type: string }
+                actor: { type: string, default: executive_console }
+                created_by_job_id: { type: string }
+      responses:
+        '200': { description: Communication delivered, blocked, reused, or failed }
+        '404': { description: Outbox message not found }
+  /v1/comms/inbox:
+    get:
+      summary: List inbound communication records for a project
+      parameters:
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, default: 50 }
+      responses:
+        '200': { description: Inbox list }
+  /v1/comms/inbox/ingest:
+    post:
+      summary: Record an inbound message in the inbox
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id, channel, body]
+              properties:
+                project_id: { type: string }
+                channel: { type: string }
+                subject: { type: string }
+                body: { type: string }
+                raw_ref: { type: string }
+                actor: { type: string, default: system }
+      responses:
+        '201': { description: Inbox message recorded }
   /v1/decisions/inbox:
     get:
       summary: List decisions for inbox with pending items first

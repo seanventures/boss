@@ -99,6 +99,12 @@ The dogfood seed also registers the initial entitlement-source inventory from `p
 - `POST /v1/entitlements/sources`
 - `POST /v1/router/preview`
 - `GET /v1/router/logs`
+- `GET /v1/comms/outbox`
+- `POST /v1/comms/outbox`
+- `POST /v1/comms/outbox/{message_id}/queue`
+- `POST /v1/comms/outbox/{message_id}/deliver`
+- `GET /v1/comms/inbox`
+- `POST /v1/comms/inbox/ingest`
 - `POST /v1/jobs`
 - `POST /v1/worker/poll`
 - `POST /v1/worker/heartbeat`
@@ -144,6 +150,14 @@ The dogfood seed also registers the initial entitlement-source inventory from `p
 - Router previews and brokered model calls write durable routing logs with selected source, selected model, denial reasons, and rejected alternatives.
 - OpenAI planning and review-packet generation now pass through the broker before execution.
 - The broker fails closed when no eligible runtime-backed source is available or when provider-policy constraints disallow the workload.
+
+## Communications plane
+
+- The comms slice now uses the canonical `outbox_messages` and `inbox_messages` tables instead of burying communication intent in chat.
+- Outbound communication follows `draft -> queued -> sending -> acked` when a real provider is enabled, or transitions to `blocked`, `retrying`, or `deadlettered` with visible events when it is not.
+- `comms.outbox.deliver` is a leased worker job kind, so real sends still require a job lease, a reservation, and a receipt.
+- Slack is the first provider surface in this slice, but it is fail-closed by default behind `BOSS_SLACK_REAL_SEND_ALLOWED=false`. Real sends require both that flag and `BOSS_SLACK_WEBHOOK_URL`.
+- Outbox job failures propagate into message status and deadletters so the comms plane honors the `no silent drops` invariant.
 
 ## GitHub bootstrap
 

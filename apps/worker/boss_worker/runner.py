@@ -17,6 +17,7 @@ def capabilities() -> list[str]:
         "openai.plan",
         "software_factory.propose_pr",
         "github.pull_request.merge",
+        "comms.outbox.deliver",
     ]
 
 
@@ -101,6 +102,19 @@ def execute_job(job: LeasedJob, client: ControlPlaneClient) -> dict[str, Any]:
         )
         if result.get("status") == "failed":
             raise RuntimeError(result.get("message") or "Pull-request merge failed.")
+        return result
+    if job.kind == "comms.outbox.deliver":
+        result = client.deliver_outbox_message(
+            job.payload["outbox_message_id"],
+            {
+                "project_id": job.project_id,
+                "reservation_id": job.payload["reservation_id"],
+                "dedupe_key": job.payload["dedupe_key"],
+                "created_by_job_id": job.id,
+            },
+        )
+        if result.get("status") == "failed":
+            raise RuntimeError(result.get("message") or "Outbound communication failed.")
         return result
     raise ValueError(f"Unsupported job kind: {job.kind}")
 

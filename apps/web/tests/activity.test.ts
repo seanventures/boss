@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { emptyAuditSummary } from "../lib/audit";
 import { emptyArtifactFeed } from "../lib/artifacts";
+import { emptyInboxFeed, emptyOutboxFeed } from "../lib/comms";
 import { emptyActivityFeed } from "../lib/events";
 import { emptyDeadletterFeed } from "../lib/deadletters";
 import { emptyEntitlementFeed } from "../lib/entitlements";
@@ -90,5 +91,21 @@ describe("empty API feeds", () => {
     expect(summary.apiReachable).toBe(false);
     expect(summary.counts.receipts).toBe(0);
     expect(summary.blockedReason).toBe("audit api down");
+  });
+
+  it("returns an unavailable outbox feed", () => {
+    const feed = emptyOutboxFeed("outbox api down");
+
+    expect(feed.apiReachable).toBe(false);
+    expect(feed.items).toEqual([]);
+    expect(feed.blockedReason).toBe("outbox api down");
+  });
+
+  it("returns an unavailable inbox feed", () => {
+    const feed = emptyInboxFeed("inbox api down");
+
+    expect(feed.apiReachable).toBe(false);
+    expect(feed.items).toEqual([]);
+    expect(feed.blockedReason).toBe("inbox api down");
   });
 });
