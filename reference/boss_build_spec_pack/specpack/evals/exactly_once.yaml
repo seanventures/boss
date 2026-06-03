@@ -1,0 +1,12 @@
+kind: EvalSpec
+id: exactly_once_receipts
+version: 0.1.0
+scenario: Attempt same mock side effect twice with same dedupe key.
+steps:
+  - create_receipt_in_progress
+  - complete_receipt_succeeded
+  - call_same_effect_again
+assertions:
+  - only_one_receipt_exists_for_scope_and_dedupe_key
+  - second_call_returns_existing_receipt
+  - provider_call_count_is_one_in_mock_adapter

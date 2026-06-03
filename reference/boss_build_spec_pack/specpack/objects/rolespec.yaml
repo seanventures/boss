@@ -1,0 +1,33 @@
+kind: ObjectSchema
+object: RoleSpec
+version: 0.1.0
+fields:
+  role_id: string
+  display_name: string
+  mission: string
+  primary_outcomes: { array: string }
+  boundaries:
+    type: object
+    fields:
+      must: { array: string }
+      must_not: { array: string }
+  decision_rights:
+    type: object
+    fields:
+      can_decide: { array: string }
+      must_escalate: { array: string }
+  cadence: object
+  permissions:
+    type: object
+    fields:
+      allowed_skills: { array: string }
+      forbidden_skills: { array: string }
+  comms_contract: object
+  output_contracts: { array: string }
+  eval_rubric: object
+  autonomy:
+    type: object
+    fields:
+      level: integer
+      upgrade_requires: { array: string }
+      downgrade_triggers: { array: string }

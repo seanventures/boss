@@ -1,0 +1,135 @@
+:root {
+  --page-bg: radial-gradient(circle at top left, #194a8d 0%, #0b1627 34%, #070c14 100%);
+  --panel: rgba(9, 17, 29, 0.72);
+  --panel-border: rgba(162, 199, 255, 0.22);
+  --muted: #89a1bc;
+  --text: #f4f7fb;
+  --accent: #7fd7c8;
+  --warning: #f2b25b;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  min-height: 100%;
+  background: #070c14;
+  color: var(--text);
+}
+
+body {
+  font-family: "Avenir Next", "Segoe UI", sans-serif;
+  background-image: var(--page-bg);
+}
+
+a {
+  color: inherit;
+}
+
+.shell {
+  min-height: 100vh;
+  padding: 56px 24px;
+}
+
+.frame {
+  width: min(1120px, 100%);
+  margin: 0 auto;
+  display: grid;
+  gap: 24px;
+}
+
+.hero,
+.grid article {
+  backdrop-filter: blur(18px);
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+  border-radius: 24px;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.22);
+}
+
+.hero {
+  padding: 32px;
+  display: grid;
+  gap: 12px;
+}
+
+.hero h1 {
+  margin: 0;
+  font-size: clamp(2.4rem, 4vw, 4.2rem);
+  line-height: 0.95;
+  letter-spacing: -0.04em;
+}
+
+.hero p,
+.detail,
+.grid p,
+.status-meta {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.6;
+}
+
+.eyebrow,
+.pill {
+  font-size: 0.78rem;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+.eyebrow {
+  color: var(--accent);
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 20px;
+}
+
+.grid article {
+  padding: 24px;
+  display: grid;
+  gap: 12px;
+}
+
+.grid h2 {
+  margin: 0;
+  font-size: 1rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.metric {
+  font-size: 2rem;
+  font-weight: 700;
+  letter-spacing: -0.04em;
+}
+
+.pill {
+  display: inline-flex;
+  width: fit-content;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: rgba(127, 215, 200, 0.12);
+  color: var(--accent);
+}
+
+.pill.warn {
+  background: rgba(242, 178, 91, 0.12);
+  color: var(--warning);
+}
+
+@media (max-width: 720px) {
+  .shell {
+    padding: 24px 16px;
+  }
+
+  .hero,
+  .grid article {
+    border-radius: 18px;
+  }
+}
+

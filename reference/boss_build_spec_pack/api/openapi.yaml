@@ -1,0 +1,155 @@
+openapi: 3.1.0
+info:
+  title: BOSS Control Plane API
+  version: 0.1.0
+paths:
+  /health:
+    get:
+      summary: Health check
+      responses:
+        '200': { description: OK }
+  /v1/status:
+    get:
+      summary: Executive status summary
+      parameters:
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Status summary }
+  /v1/commands/propose:
+    post:
+      summary: Submit a CEO command and create an intake task/job
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id, command]
+              properties:
+                project_id: { type: string }
+                command: { type: string }
+                constraints: { type: object }
+      responses:
+        '201': { description: Command accepted }
+  /v1/tasks:
+    get:
+      summary: List tasks
+      responses:
+        '200': { description: Task list }
+    post:
+      summary: Create task
+      responses:
+        '201': { description: Created }
+  /v1/tasks/{task_id}:
+    get:
+      summary: Get task
+      parameters:
+        - name: task_id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Task }
+  /v1/decisions/inbox:
+    get:
+      summary: List pending decisions for inbox
+      parameters:
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Decision cards }
+  /v1/decisions/{decision_id}/approve:
+    post:
+      summary: Approve decision
+      parameters:
+        - name: decision_id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Approved }
+  /v1/decisions/{decision_id}/reject:
+    post:
+      summary: Reject decision
+      parameters:
+        - name: decision_id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Rejected }
+  /v1/jobs:
+    post:
+      summary: Create job
+      responses:
+        '201': { description: Created }
+  /v1/worker/poll:
+    post:
+      summary: Worker polls for leased job
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [worker_id, capabilities]
+              properties:
+                worker_id: { type: string }
+                capabilities: { type: array, items: { type: string } }
+                max_jobs: { type: integer, default: 1 }
+      responses:
+        '200': { description: Job lease or empty response }
+  /v1/worker/heartbeat:
+    post:
+      summary: Renew job lease heartbeat
+      responses:
+        '200': { description: Heartbeat accepted }
+  /v1/worker/complete:
+    post:
+      summary: Complete or fail leased job
+      responses:
+        '200': { description: Completion recorded }
+  /v1/budget/status:
+    get:
+      summary: Budget status for scope
+      parameters:
+        - name: scope_type
+          in: query
+          required: true
+          schema: { type: string }
+        - name: scope_id
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Budget status }
+  /v1/budget/reserve:
+    post:
+      summary: Internal budget reservation endpoint
+      responses:
+        '201': { description: Reservation created or denied }
+  /v1/receipts/{dedupe_key}:
+    get:
+      summary: Get receipt by dedupe key
+      parameters:
+        - name: dedupe_key
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Receipt }
+  /v1/events:
+    get:
+      summary: Event feed
+      parameters:
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Events }

@@ -1,0 +1,143 @@
+providers:
+  - id: openai
+    allowed: true
+    description: Real OpenAI access through official CLI and API surfaces.
+    source_records:
+      - source_id: openai_codex_chatgpt
+        source_kind: official_cli
+        entitlement_kind: subscription
+        workload_classes_allowed: [owner_sandbox, single_tenant_customer]
+        multi_tenant_allowed: false
+        supported_models: [codex]
+        task_strengths: [coding, refactor, review]
+        policy_notes:
+          - Codex usage depends on the ChatGPT plan and counts toward agentic usage.
+          - API billing is managed separately from ChatGPT billing.
+          - Do not use consumer ChatGPT/Codex entitlements as shared backend infrastructure.
+      - source_id: openai_api
+        source_kind: official_api
+        entitlement_kind: usage_based_api
+        workload_classes_allowed: [owner_sandbox, single_tenant_customer, multi_tenant_customer, internal_batch]
+        multi_tenant_allowed: true
+        supported_models: [gpt-5.2-codex, gpt-5.2-codex-coder]
+        task_strengths: [coding, planning, summarization]
+        policy_notes:
+          - API usage requires separate billing and rate-limit governance.
+  - id: anthropic
+    allowed: true
+    description: Real Anthropic access through official Claude Code and API surfaces.
+    source_records:
+      - source_id: anthropic_claude_code
+        source_kind: official_cli
+        entitlement_kind: subscription
+        workload_classes_allowed: [owner_sandbox, single_tenant_customer]
+        multi_tenant_allowed: false
+        supported_models: [claude-sonnet, claude-opus]
+        task_strengths: [coding, review, planning]
+        policy_notes:
+          - Claude Code usage shares limits with Claude product usage.
+      - source_id: anthropic_api
+        source_kind: official_api
+        entitlement_kind: usage_based_api
+        workload_classes_allowed: [owner_sandbox, single_tenant_customer, multi_tenant_customer, internal_batch]
+        multi_tenant_allowed: true
+        supported_models: [claude-sonnet, claude-opus]
+        task_strengths: [coding, reasoning, review]
+  - id: google
+    allowed: true
+    description: Real Google access through Gemini CLI, Code Assist, and approved APIs.
+    source_records:
+      - source_id: google_gemini_cli
+        source_kind: official_cli
+        entitlement_kind: licensed_seat
+        workload_classes_allowed: [owner_sandbox, single_tenant_customer]
+        multi_tenant_allowed: false
+        supported_models: [gemini-cli]
+        task_strengths: [coding, planning]
+        policy_notes:
+          - Gemini Code Assist agent-mode and Gemini CLI quotas are combined.
+      - source_id: google_api
+        source_kind: official_api
+        entitlement_kind: usage_based_api
+        workload_classes_allowed: [owner_sandbox, single_tenant_customer, multi_tenant_customer, internal_batch]
+        multi_tenant_allowed: true
+        supported_models: [gemini-pro, gemini-flash]
+        task_strengths: [coding, planning, multimodal]
+  - id: cursor
+    allowed: true
+    description: Real Cursor CLI access for owner-authenticated automation workflows.
+    source_records:
+      - source_id: cursor_cli
+        source_kind: official_coding_agent
+        entitlement_kind: subscription
+        workload_classes_allowed: [owner_sandbox, single_tenant_customer]
+        multi_tenant_allowed: false
+        supported_models: [cursor-auto, openai, anthropic, google, xai]
+        task_strengths: [coding, automation, review]
+        policy_notes:
+          - Cursor markets the CLI for scripts and automation workflows.
+          - Cursor states that multiple agents can run in parallel.
+          - Do not treat a personal Cursor subscription as multi-tenant backend capacity.
+  - id: xai
+    allowed: true
+    description: Real xAI access through the official API.
+    source_records:
+      - source_id: xai_api
+        source_kind: official_api
+        entitlement_kind: usage_based_api
+        workload_classes_allowed: [owner_sandbox, single_tenant_customer, multi_tenant_customer, internal_batch]
+        multi_tenant_allowed: true
+        supported_models: [grok-4.3, grok-code-fast]
+        task_strengths: [coding, reasoning]
+        policy_notes:
+          - xAI API rate limits are per model and measured in RPM and TPM.
+          - Consumer services may be rate-limited at xAI's discretion.
+  - id: local
+    allowed: true
+    description: Approved local model capacity under explicit host and policy control.
+    source_records:
+      - source_id: approved_local_model_host
+        source_kind: approved_local_model
+        entitlement_kind: local_capacity
+        workload_classes_allowed: [owner_sandbox, single_tenant_customer, internal_batch]
+        multi_tenant_allowed: false
+        supported_models: [approved-local]
+        task_strengths: [privacy_sensitive, offline, low_cost_batch]
+        policy_notes:
+          - Local capacity requires explicit approval, observability, and reservation accounting.
+models:
+  - id: openai:gpt-5.2-codex
+    provider: openai
+    tier: cheap
+    strengths: [planning, summarization]
+    cost_class: token_metered
+    enabled: true
+  - id: openai:gpt-5.2-codex-coder
+    provider: openai
+    tier: cheap
+    strengths: [code, tests]
+    cost_class: token_metered
+    enabled: true
+routing_policy:
+  workload_class_defaults:
+    owner_sandbox:
+      preferred_source_kinds: [official_cli, official_coding_agent, official_api, approved_local_model]
+    single_tenant_customer:
+      preferred_source_kinds: [official_api, approved_local_model, official_cli]
+    multi_tenant_customer:
+      preferred_source_kinds: [official_api]
+    internal_batch:
+      preferred_source_kinds: [official_api, approved_local_model]
+  budget_states:
+    green: { allowed_tiers: [cheap, mid] }
+    yellow: { allowed_tiers: [cheap] }
+    orange: { allowed_tiers: [cheap], defer_non_p0: true }
+    red: { allowed_tiers: [], defer_non_p0: true }
+  disallowed_combinations:
+    - source_kind: official_cli
+      workload_class: multi_tenant_customer
+    - source_kind: official_coding_agent
+      workload_class: multi_tenant_customer
+  logging_required: true
+  fallback_tests_required: true
+  provider_rule_compliance_required: true

@@ -1,0 +1,49 @@
+kind: WorkflowSpec
+id: ceo_command_to_pr
+version: 0.1.0
+purpose: Convert a CEO command into a budget-gated software-factory PR proposal.
+phases:
+  - id: intake
+    owner_role: metatron
+    inputs: [raw_ceo_command]
+    outputs: [CommandIntake, Task]
+    gates:
+      - tenant_scope_valid
+  - id: product_spec
+    owner_role: pm
+    inputs: [Task]
+    outputs: [PRD, AcceptanceCriteria]
+    gates:
+      - acceptance_criteria_present
+  - id: technical_plan
+    owner_role: cto
+    inputs: [PRD]
+    outputs: [TechDesign, ImplementationPlan]
+    gates:
+      - risk_tier_assigned
+      - budget_quote_created
+  - id: budget_reserve
+    owner_role: deterministic_budget_governor
+    inputs: [ImplementationPlan]
+    outputs: [BudgetReservation]
+    gates:
+      - cap_not_exceeded
+    on_failure:
+      create_decision: increase_budget_or_defer
+  - id: software_factory_mock
+    owner_role: software_engineer
+    skill: software_factory.run_mock
+    inputs: [ImplementationPlan, BudgetReservation]
+    outputs: [DiffArtifact, TestReport, ReviewPacket]
+    gates:
+      - tests_passed_or_explained
+      - review_packet_present
+  - id: pr_decision
+    owner_role: release_manager
+    inputs: [ReviewPacket]
+    outputs: [Decision]
+    gates:
+      - decision_card_complete
+completion:
+  emits_events: true
+  artifacts_required: [PRD, TechDesign, ReviewPacket, Decision]

@@ -1,0 +1,48 @@
+kind: BossSpecPack
+id: boss-build-spec-pack-v0.1
+name: BOSS Build Spec Pack for Codex
+version: 0.1.0
+created_for: Build BOSS, the Business Operating System Sentinel, as its own first dogfood domain.
+recommended_stack:
+  web: Next.js + TypeScript + Tailwind
+  api: FastAPI + Pydantic + SQLAlchemy + Alembic
+  worker: Python worker polling Postgres leases
+  database: Postgres
+  object_storage_v0: local filesystem artifacts
+  model_gateway_later: LiteLLM
+  software_factory_later: OpenHands/Codex worker adapter
+install_order:
+  - Read README.md and AGENTS.md
+  - Run Codex prompt 00
+  - Run Codex prompt 01
+  - Run Codex prompt 02
+  - Run Codex prompt 03
+  - Run Codex prompt 04
+  - Run Codex prompt 05
+  - Run Codex prompt 06
+  - Run Codex prompt 07
+critical_invariants:
+  - no_external_effect_without_receipt
+  - no_spendy_action_without_budget_reservation
+  - no_worker_execution_without_lease
+  - no_silent_drops
+  - no_self_modification_without_pr_tests_approval_rollback
+files:
+  docs:
+    - docs/PRD.md
+    - docs/TECHNICAL_SPEC.md
+    - docs/CODEX_RUNBOOK.md
+    - docs/ROADMAP.md
+    - docs/BUILD_PLAN.md
+  codex:
+    - AGENTS.md
+    - .codex/config.example.toml
+    - codex/prompts/*.md
+  specpack:
+    - specpack/objects/*.yaml
+    - specpack/roles/*.yaml
+    - specpack/policies/*.yaml
+    - specpack/skills/*.yaml
+    - specpack/workflows/*.yaml
+    - specpack/evals/*.yaml
+    - specpack/models/*.yaml

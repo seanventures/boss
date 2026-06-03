@@ -1,0 +1,12 @@
+kind: ArtifactSchema
+artifact_type: ReviewPacket
+fields:
+  task_id: string
+  spec_artifact_id: string
+  implementation_summary: string
+  files_changed_or_mocked: array
+  tests_added_or_run: array
+  risk_hotspots: array
+  rollback_plan: string
+  confidence_score: number
+  recommendation: { enum: [approve, hold, revise] }

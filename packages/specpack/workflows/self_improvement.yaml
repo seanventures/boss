@@ -1,0 +1,24 @@
+kind: WorkflowSpec
+id: self_improvement
+version: 0.1.0
+purpose: Safely improve BOSS through artifacts, tests, canaries, approvals, and rollback.
+phases:
+  - observe
+  - propose
+  - test
+  - canary
+  - approval
+  - rollout
+  - monitor
+  - rollback_if_needed
+rules:
+  never_apply_directly: true
+  require_pr_or_config_diff: true
+  require_test_plan: true
+  require_rollback_plan: true
+  require_decision_for_rollout: true
+rollback_triggers:
+  - failure_rate_increase
+  - cost_increase_over_threshold
+  - trust_score_drop
+  - policy_violation

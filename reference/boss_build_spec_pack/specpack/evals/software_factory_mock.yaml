@@ -1,0 +1,17 @@
+kind: EvalSpec
+id: software_factory_mock
+version: 0.1.0
+scenario: CEO command generates mock PR proposal.
+steps:
+  - submit_command_build_decision_inbox
+  - generate_prd
+  - generate_tech_design
+  - reserve_budget
+  - run_software_factory_mock
+  - create_review_packet
+  - create_merge_decision
+assertions:
+  - prd_artifact_exists
+  - review_packet_artifact_exists
+  - decision_pending
+  - all_effects_have_receipts

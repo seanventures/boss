@@ -1,0 +1,17 @@
+kind: ObjectSchema
+object: PackSpec
+version: 0.1.0
+fields:
+  id: string
+  version: string
+  description: string
+  requires: { array: string }
+  installs:
+    type: object
+    fields:
+      roles: { array: string }
+      workflows: { array: string }
+      policies: { array: string }
+      skills: { array: string }
+      canaries: { array: string }
+  status: { enum: [draft, active, deprecated] }

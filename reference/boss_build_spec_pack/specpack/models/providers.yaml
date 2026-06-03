@@ -1,0 +1,32 @@
+providers:
+  - id: mock
+    allowed: true
+    description: Deterministic mock provider for tests and v0.
+  - id: openai
+    allowed: false
+    description: Enable after budget governor and model gateway are implemented.
+  - id: anthropic
+    allowed: false
+  - id: google
+    allowed: false
+models:
+  - id: mock:planner
+    provider: mock
+    tier: mock
+    strengths: [planning, summarization]
+    cost_class: zero
+    enabled: true
+  - id: mock:coder
+    provider: mock
+    tier: mock
+    strengths: [code, tests]
+    cost_class: zero
+    enabled: true
+routing_policy:
+  budget_states:
+    green: { allowed_tiers: [mock, cheap, mid] }
+    yellow: { allowed_tiers: [mock, cheap] }
+    orange: { allowed_tiers: [mock] }
+    red: { allowed_tiers: [mock], defer_non_p0: true }
+  logging_required: true
+  fallback_tests_required: true

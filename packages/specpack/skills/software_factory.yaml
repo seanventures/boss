@@ -1,0 +1,48 @@
+skills:
+  - id: software_factory.codex_pr_proposal
+    kind: software_factory
+    risk_tier: 2
+    mock_mode: false
+    description: Use a real Codex-backed software-factory run to produce a sandbox branch, review packet, and draft PR against the approved test repository.
+    input_schema:
+      task_id: string
+      spec_artifact_id: string
+      repo_ref: string
+      reservation_id: string
+    output_schema:
+      implementation_plan_artifact_id: string
+      branch_ref: string
+      test_report_artifact_id: string
+      review_packet_artifact_id: string
+      pr_url: string
+      pr_decision_id: string
+    cost:
+      estimator: runtime_plus_model
+      category: tool
+    policy:
+      requires_budget_reservation: true
+      requires_receipts_for_effects: true
+      allowed_targets:
+        - seanheiney/boss-sandbox
+      requires_approval_for_merge: true
+  - id: software_factory.openhands_run
+    kind: software_factory
+    risk_tier: 2
+    mock_mode: false
+    description: Later integration: run OpenHands-style coding worker in a sandbox to create PRs.
+    input_schema:
+      repo_url: string
+      issue_or_spec: string
+      branch_policy: string
+      max_runtime_minutes: integer
+    output_schema:
+      pr_url: string
+      logs_artifact_id: string
+      review_packet_artifact_id: string
+    cost:
+      estimator: runtime_plus_model
+      category: tool
+    policy:
+      requires_budget_reservation: true
+      requires_sandbox: true
+      requires_approval_for_real_pr: true

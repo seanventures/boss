@@ -1,0 +1,43 @@
+kind: ObjectSpec
+id: EntitlementSource
+version: 0.1.0
+description: A governed AI capacity source that BOSS may route work to.
+fields:
+  - name: source_id
+    type: string
+  - name: provider
+    type: string
+  - name: source_kind
+    type: enum
+    values: [official_cli, official_coding_agent, official_api, approved_local_model]
+  - name: entitlement_kind
+    type: enum
+    values: [subscription, usage_based_api, licensed_seat, local_capacity]
+  - name: owner_type
+    type: enum
+    values: [user, workspace, organization, host]
+  - name: owner_id
+    type: string
+  - name: workload_classes_allowed
+    type: array
+  - name: multi_tenant_allowed
+    type: boolean
+  - name: credential_ref
+    type: string
+  - name: cost_mode
+    type: enum
+    values: [subscription_metered, usage_metered, fixed_license, local_power]
+  - name: limit_shape
+    type: object
+  - name: supported_models
+    type: array
+  - name: task_strengths
+    type: array
+  - name: risk_tier_max
+    type: integer
+  - name: status
+    type: enum
+    values: [active, blocked, exhausted, disabled]
+  - name: policy_notes
+    type: array
+

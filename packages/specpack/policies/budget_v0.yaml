@@ -1,0 +1,26 @@
+kind: BudgetPolicy
+id: budget_v0_default
+version: 0.1.0
+scope:
+  type: project
+  id: boss-dogfood
+daily_cap_usd_micros: 10000000      # $10.00
+monthly_cap_usd_micros: 200000000   # $200.00
+burst_cap_usd_micros_per_min: 100000 # $0.10/min
+max_concurrent_jobs: 3
+max_workers_total: 2
+allowed_model_tiers: [cheap]
+soft_cap_pct: 0.70
+auto_lite_mode_pct: 0.85
+freeze_provisioning_pct: 0.90
+freeze_tier2_pct: 0.95
+allocations:
+  model: 0.50
+  tool: 0.20
+  infra: 0.20
+  comms: 0.05
+  storage: 0.05
+default_actions:
+  on_reservation_denied: create_decision_card
+  on_red_budget_state: freeze_non_p0_jobs
+  on_orange_budget_state: defer_noncritical_jobs

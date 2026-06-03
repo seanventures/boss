@@ -1,0 +1,21 @@
+services:
+  db:
+    image: postgres:16
+    container_name: boss-postgres
+    environment:
+      POSTGRES_DB: boss
+      POSTGRES_USER: boss
+      POSTGRES_PASSWORD: boss
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U boss -d boss"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    volumes:
+      - boss-postgres-data:/var/lib/postgresql/data
+
+volumes:
+  boss-postgres-data:
+

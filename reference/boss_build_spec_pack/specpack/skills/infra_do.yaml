@@ -1,0 +1,23 @@
+skills:
+  - id: infra.do.create_droplet_mock
+    kind: infra
+    risk_tier: 3
+    mock_mode: true
+    description: Mock DigitalOcean droplet creation for budget/commitment tests.
+    input_schema:
+      size: string
+      region: string
+      ttl_minutes: integer
+      tags: array
+    output_schema:
+      mock_droplet_id: string
+      commitment_id: string
+      receipt_id: string
+    cost:
+      estimator: hourly_commitment
+      category: infra
+    policy:
+      requires_budget_reservation: true
+      requires_receipt: true
+      requires_ttl: true
+      real_provisioning_allowed: false

@@ -1,0 +1,70 @@
+skills:
+  - id: model.route_via_entitlement_broker
+    kind: router
+    risk_tier: 1
+    mock_mode: false
+    description: Select an eligible AI capacity source based on task fit, provider rules, observed capacity, cost, quality, and risk.
+    input_schema:
+      task_kind: string
+      workload_class: string
+      risk_tier: integer
+      latency_target: string?
+      budget_state: string
+      preferred_capabilities: array
+    output_schema:
+      source_id: string?
+      provider: string?
+      model_id: string?
+      denial_reason: string?
+      rejected_sources: array
+      route_decision_log_id: string
+    cost:
+      estimator: fixed
+      category: model
+    policy:
+      requires_budget_reservation: false
+      requires_router_log: true
+      requires_provider_rule_compliance: true
+      denies_when_no_eligible_source: true
+  - id: model.generate_text
+    kind: model
+    risk_tier: 0
+    mock_mode: false
+    description: Generate text from an approved real model provider selected by the entitlement broker.
+    input_schema:
+      prompt: string
+      system: string?
+      max_output_tokens: integer
+      model_tier: string
+    output_schema:
+      text: string
+      usage: object
+    cost:
+      estimator: token_estimate
+      category: model
+    policy:
+      requires_budget_reservation: true
+      requires_router_log: true
+      requires_provider_rule_compliance: true
+    retry:
+      max_attempts: 2
+      backoff: exponential
+  - id: model.generate_code
+    kind: model
+    risk_tier: 1
+    mock_mode: false
+    description: Generate or edit code through a real coding-capable model selected by the entitlement broker, never directly committing changes.
+    input_schema:
+      repo_context: string
+      task_spec: string
+      constraints: array
+    output_schema:
+      patch_artifact_id: string
+      test_plan: string
+    cost:
+      estimator: token_estimate
+      category: model
+    policy:
+      requires_budget_reservation: true
+      requires_review_packet: true
+      requires_provider_rule_compliance: true

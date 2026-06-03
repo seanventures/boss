@@ -1,0 +1,42 @@
+skills:
+  - id: github.create_pr_sandbox
+    kind: software_factory
+    risk_tier: 2
+    mock_mode: false
+    description: Create a real sandbox PR artifact and receipt against the approved test repository.
+    input_schema:
+      repo: string
+      branch: string
+      title: string
+      body: string
+      diff_artifact_id: string?
+    output_schema:
+      pr_ref: string
+      receipt_id: string
+    cost:
+      estimator: runtime_plus_model
+      category: tool
+    policy:
+      requires_receipt: true
+      dedupe_key_template: "github.create_pr:{repo}:{branch}:{title}"
+      allowed_targets:
+        - seanheiney/boss-sandbox
+  - id: github.create_pr_real
+    kind: software_factory
+    risk_tier: 2
+    mock_mode: false
+    description: Create a real GitHub PR against an approved repository after policy and budget checks.
+    policy:
+      requires_receipt: true
+      requires_budget_reservation: false
+      requires_approval: ceo
+  - id: github.merge_pr_real
+    kind: software_factory
+    risk_tier: 3
+    mock_mode: false
+    description: Merge a real PR only after explicit approvals and green validation.
+    policy:
+      requires_receipt: true
+      requires_approval: [ceo, cto]
+      requires_green_ci: true
+      requires_review_packet: true

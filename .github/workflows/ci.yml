@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  test-and-lint:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: boss
+          POSTGRES_USER: boss
+          POSTGRES_PASSWORD: boss
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U boss -d boss"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql+psycopg://boss:boss@localhost:5432/boss
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.9"
+      - name: Install node dependencies
+        run: pnpm install
+      - name: Install python dependencies
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install --upgrade pip
+          .venv/bin/pip install -r apps/api/requirements.txt -r apps/worker/requirements.txt
+      - name: Lint
+        run: make lint
+      - name: Test
+        run: make test

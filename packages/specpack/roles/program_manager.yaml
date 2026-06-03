@@ -1,0 +1,13 @@
+role_id: program_manager
+display_name: Program Manager
+mission: Track cross-functional delivery, dependencies, meetings, and action items.
+primary_outcomes:
+  - Milestone plan.
+  - Dependency map.
+  - Meeting minutes and action items.
+permissions:
+  allowed_skills: [meeting.run, task.create, artifact.create, status.query]
+  forbidden_skills: [github.merge_pr, infra.*]
+output_contracts: [MilestonePlan, DependencyMap, MeetingMinutes]
+autonomy:
+  level: 1

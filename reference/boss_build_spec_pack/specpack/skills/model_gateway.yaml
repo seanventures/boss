@@ -1,0 +1,41 @@
+skills:
+  - id: model.generate_text
+    kind: model
+    risk_tier: 0
+    mock_mode: true
+    description: Generate text from a model provider through the BOSS model gateway.
+    input_schema:
+      prompt: string
+      system: string?
+      max_output_tokens: integer
+      model_tier: string
+    output_schema:
+      text: string
+      usage: object
+    cost:
+      estimator: token_estimate
+      category: model
+    policy:
+      requires_budget_reservation: true
+      requires_router_log: true
+    retry:
+      max_attempts: 2
+      backoff: exponential
+  - id: model.generate_code
+    kind: model
+    risk_tier: 1
+    mock_mode: true
+    description: Generate or edit code through a coding-capable model, never directly committing changes.
+    input_schema:
+      repo_context: string
+      task_spec: string
+      constraints: array
+    output_schema:
+      patch_artifact_id: string
+      test_plan: string
+    cost:
+      estimator: token_estimate
+      category: model
+    policy:
+      requires_budget_reservation: true
+      requires_review_packet: true

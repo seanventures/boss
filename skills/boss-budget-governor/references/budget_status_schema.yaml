@@ -1,0 +1,13 @@
+kind: APISchema
+name: BudgetStatus
+fields:
+  scope_type: string
+  scope_id: string
+  daily_cap_usd_micros: integer
+  actual_spend_usd_micros: integer
+  reserved_spend_usd_micros: integer
+  available_usd_micros: integer
+  budget_state: { enum: [green, yellow, orange, red] }
+  burn_rate_usd_micros_per_min: integer
+  forecast_eod_usd_micros: integer
+  top_cost_drivers: array

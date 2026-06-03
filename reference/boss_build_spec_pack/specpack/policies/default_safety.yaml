@@ -1,0 +1,35 @@
+kind: Policy
+id: default_safety
+version: 0.1.0
+scope:
+  type: org
+rules:
+  external_effects:
+    require_receipt: true
+    require_dedupe_key: true
+  spend:
+    require_budget_reservation: true
+  worker_jobs:
+    require_lease: true
+    require_heartbeat: true
+    max_attempts_default: 3
+  comms:
+    use_outbox_only: true
+    no_silent_drops: true
+    quiet_hours_enabled: false
+  approvals:
+    risk_tier_requirements:
+      "0": { approvals: [] }
+      "1": { approvals: [] }
+      "2": { approvals: [ceo] }
+      "3": { approvals: [ceo, cao] }
+  self_improvement:
+    apply_directly: false
+    require_pr: true
+    require_tests: true
+    require_rollback_plan: true
+  v0_mock_mode:
+    slack_real_send_allowed: false
+    github_real_merge_allowed: false
+    infra_real_provision_allowed: false
+    model_real_spend_allowed: false

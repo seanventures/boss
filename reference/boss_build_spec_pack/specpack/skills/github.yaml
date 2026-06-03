@@ -1,0 +1,40 @@
+skills:
+  - id: github.create_pr_mock
+    kind: software_factory
+    risk_tier: 1
+    mock_mode: true
+    description: Create a mock PR artifact and receipt for v0 testing.
+    input_schema:
+      repo: string
+      branch: string
+      title: string
+      body: string
+      diff_artifact_id: string?
+    output_schema:
+      pr_ref: string
+      receipt_id: string
+    cost:
+      estimator: zero
+      category: tool
+    policy:
+      requires_receipt: true
+      dedupe_key_template: "github.create_pr:{repo}:{branch}:{title}"
+  - id: github.create_pr_real
+    kind: software_factory
+    risk_tier: 2
+    mock_mode: false
+    description: Create a real GitHub PR. Not allowed in v0 without explicit approval and integration setup.
+    policy:
+      requires_receipt: true
+      requires_budget_reservation: false
+      requires_approval: ceo
+  - id: github.merge_pr_real
+    kind: software_factory
+    risk_tier: 3
+    mock_mode: false
+    description: Merge a real PR. Disabled in v0.
+    policy:
+      requires_receipt: true
+      requires_approval: [ceo, cto]
+      requires_green_ci: true
+      requires_review_packet: true

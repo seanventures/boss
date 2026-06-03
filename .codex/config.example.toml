@@ -1,0 +1,17 @@
+# Example Codex config for BOSS. Copy to .codex/config.toml and adjust.
+# Keep permissions tight until the repo is trusted and tests exist.
+
+# model = "gpt-5.2-codex"
+# reasoning_effort = "high"
+
+[sandbox]
+# Start constrained. Loosen only after the first scaffold exists.
+mode = "workspace-write"
+network_access = false
+
+[approval]
+# Ask before commands that install packages, access network, alter git state, or run destructive operations.
+mode = "on-request"
+
+[project]
+project_doc_max_bytes = 32768

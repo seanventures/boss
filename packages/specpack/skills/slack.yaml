@@ -1,0 +1,29 @@
+skills:
+  - id: slack.post_real_guarded
+    kind: comms
+    risk_tier: 2
+    mock_mode: false
+    description: Queue a real Slack outbox message and receipt after explicit approval.
+    input_schema:
+      channel: string
+      text: string
+      thread_ts: string?
+    output_schema:
+      provider_ref: string
+      receipt_id: string
+    cost:
+      estimator: fixed
+      category: comms
+    policy:
+      use_outbox_only: true
+      requires_receipt: true
+      requires_approval: ceo
+  - id: slack.post_real
+    kind: comms
+    risk_tier: 2
+    mock_mode: false
+    description: Send a real Slack message through the outbox worker when the integration is enabled.
+    policy:
+      use_outbox_only: true
+      requires_receipt: true
+      rate_limit_per_channel_per_hour: 10
