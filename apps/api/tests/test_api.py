@@ -3,6 +3,8 @@ from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import text
 
+from apps.api.app import main as api_main
+
 
 def test_health_returns_service_status(client):
     response = client.get("/health")
@@ -787,6 +789,80 @@ def test_approving_pr_review_decision_creates_merge_gate_block_artifact(client, 
     assert "decision.follow_on_blocked" in event_types
 
 
+def test_approving_pr_review_decision_queues_merge_job_when_policy_enabled(client, engine):
+    previous = api_main.decisions.settings.enable_sandbox_merge
+    api_main.decisions.settings.enable_sandbox_merge = True
+    try:
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO decisions (
+                        id, project_id, task_id, question, recommendation, options, risk_tier,
+                        cost_summary, default_action, status
+                    )
+                    VALUES (
+                        'dec_review_pr_merge', 'boss-dogfood', NULL, 'Review and approve sandbox PR: Merge',
+                        CAST(:recommendation AS JSONB), '[]'::jsonb, 2, '{}'::jsonb, 'hold', 'pending'
+                    )
+                    """
+                ),
+                {
+                    "recommendation": json.dumps(
+                        {
+                            "action": "review_pull_request",
+                            "pull_request_url": "https://github.com/seanheiney/boss-sandbox/pull/42",
+                            "branch_name": "boss/demo-pr",
+                            "title": "Merge",
+                        }
+                    )
+                },
+            )
+
+        approve = client.post(
+            "/v1/decisions/dec_review_pr_merge/approve",
+            json={"actor": "ceo", "note": "Queue the merge."},
+        )
+        assert approve.status_code == 200
+        assert approve.json()["status"] == "approved"
+
+        with engine.begin() as connection:
+            merge_jobs = connection.execute(
+                text(
+                    """
+                    SELECT kind, status, payload
+                    FROM jobs
+                    WHERE project_id = 'boss-dogfood' AND kind = 'github.pull_request.merge'
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                    """
+                )
+            ).mappings().all()
+            merge_gates = connection.execute(
+                text(
+                    """
+                    SELECT COUNT(*) FROM artifacts
+                    WHERE project_id = 'boss-dogfood' AND artifact_type = 'merge_gate'
+                    """
+                )
+            ).scalar_one()
+
+        assert len(merge_jobs) == 1
+        merge_payload = merge_jobs[0]["payload"]
+        assert merge_jobs[0]["status"] == "queued"
+        assert merge_payload["decision_id"] == "dec_review_pr_merge"
+        assert merge_payload["pull_request_number"] == 42
+        assert merge_payload["pull_request_url"].endswith("/pull/42")
+        assert merge_gates == 0
+
+        events = client.get("/v1/events", params={"project_id": "boss-dogfood"})
+        assert events.status_code == 200
+        event_types = [item["event_type"] for item in events.json()["items"]]
+        assert "decision.follow_on_job_queued" in event_types
+    finally:
+        api_main.decisions.settings.enable_sandbox_merge = previous
+
+
 def test_spend_gated_job_without_reservation_is_not_leased(client, engine):
     created = client.post(
         "/v1/jobs",
@@ -940,3 +1016,63 @@ def test_queue_pr_proposal_job_is_leasable_and_completion_passes_through(client)
     assert payload["receipt_id"] == "rcpt_pr"
     assert payload["decision_id"] == "dec_pr"
     assert payload["pull_request_url"].endswith("/pull/1")
+
+
+def test_queue_merge_job_is_leasable_and_completion_passes_through(client):
+    queued = client.post(
+        "/v1/software-factory/merges/queue",
+        json={
+            "project_id": "boss-dogfood",
+            "decision_id": "dec_merge",
+            "dedupe_key": "queued-pr-merge",
+            "pull_request_number": 42,
+            "pull_request_url": "https://github.com/seanheiney/boss-sandbox/pull/42",
+            "title": "Merge Demo",
+            "branch_name": "boss/demo-pr",
+        },
+    )
+    assert queued.status_code == 201
+    job_id = queued.json()["id"]
+
+    fetched = client.get(f"/v1/jobs/{job_id}")
+    assert fetched.status_code == 200
+    assert fetched.json()["kind"] == "github.pull_request.merge"
+
+    poll = client.post(
+        "/v1/worker/poll",
+        json={
+            "worker_id": "worker-merge",
+            "capabilities": ["github.pull_request.merge"],
+            "lease_ttl_seconds": 60,
+        },
+    )
+    assert poll.status_code == 200
+    leased = poll.json()
+    assert leased["status"] == "leased"
+    assert leased["job"]["id"] == job_id
+
+    complete = client.post(
+        "/v1/worker/complete",
+        json={
+            "worker_id": "worker-merge",
+            "job_id": job_id,
+            "lease_token": leased["job"]["lease_token"],
+            "result": {
+                "status": "created",
+                "artifact_id": "art_merge",
+                "receipt_id": "rcpt_merge",
+                "decision_id": "dec_merge",
+                "pull_request_url": "https://github.com/seanheiney/boss-sandbox/pull/42",
+                "branch_name": "boss/demo-pr",
+                "merged_sha": "abc123",
+            },
+        },
+    )
+    assert complete.status_code == 200
+    payload = complete.json()
+    assert payload["status"] == "succeeded"
+    assert payload["artifact_id"] == "art_merge"
+    assert payload["receipt_id"] == "rcpt_merge"
+    assert payload["decision_id"] == "dec_merge"
+    assert payload["pull_request_url"].endswith("/pull/42")
+    assert payload["merged_sha"] == "abc123"

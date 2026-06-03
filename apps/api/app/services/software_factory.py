@@ -183,6 +183,60 @@ class SoftwareFactoryService:
             "output_text": output_text,
         }
 
+    def _mark_merge_completed(
+        self,
+        connection: Connection,
+        project_id: str,
+        task_id: Optional[str],
+        decision_id: str,
+        actor: str,
+    ) -> None:
+        updated = connection.execute(
+            text(
+                """
+                UPDATE decisions
+                SET status = 'executed',
+                    updated_at = now()
+                WHERE id = :decision_id AND status = 'approved'
+                """
+            ),
+            {"decision_id": decision_id},
+        )
+        if updated.rowcount == 1:
+            emit_event(
+                connection,
+                project_id,
+                "decision.executed",
+                actor,
+                "decision",
+                decision_id,
+                {},
+            )
+
+        if not task_id:
+            return
+        task_updated = connection.execute(
+            text(
+                """
+                UPDATE tasks
+                SET status = 'completed',
+                    updated_at = now()
+                WHERE id = :task_id AND status <> 'completed'
+                """
+            ),
+            {"task_id": task_id},
+        )
+        if task_updated.rowcount == 1:
+            emit_event(
+                connection,
+                project_id,
+                "task.completed",
+                actor,
+                "task",
+                task_id,
+                {"decision_id": decision_id},
+            )
+
     def propose_pull_request(
         self,
         connection: Connection,
@@ -241,6 +295,7 @@ class SoftwareFactoryService:
                 "receipt_id": pr_receipt["id"],
                 "decision_id": result.get("decision_id"),
                 "pull_request_url": result.get("pull_request_url"),
+                "pull_request_number": result.get("pull_request_number"),
                 "branch_name": result.get("branch_name"),
             }
 
@@ -454,6 +509,7 @@ class SoftwareFactoryService:
             "test_report_artifact_id": test_report_artifact_id,
             "decision_id": decision_id,
             "pull_request_url": pr.url,
+            "pull_request_number": pr.number,
             "branch_name": branch_name,
         }
         self.receipts.mark_succeeded(connection, pr_receipt["id"], pr.url, result)
@@ -482,5 +538,155 @@ class SoftwareFactoryService:
             "receipt_id": pr_receipt["id"],
             "decision_id": decision_id,
             "pull_request_url": pr.url,
+            "pull_request_number": pr.number,
             "branch_name": branch_name,
+        }
+
+    def merge_pull_request(
+        self,
+        connection: Connection,
+        project_id: str,
+        task_id: Optional[str],
+        decision_id: str,
+        dedupe_key: str,
+        pull_request_number: int,
+        pull_request_url: str,
+        title: str,
+        branch_name: Optional[str],
+    ) -> dict:
+        scope = self._scope(connection, project_id)
+        merge_receipt, created = self.receipts.create_or_reuse(
+            connection,
+            scope["org_id"],
+            scope["workspace_id"],
+            project_id,
+            dedupe_key,
+            "github.pull_request.merge",
+            {
+                "repository": self.github.repository_full_name,
+                "pull_request_number": pull_request_number,
+            },
+            {
+                "decision_id": decision_id,
+                "title": title,
+                "pull_request_url": pull_request_url,
+                "branch_name": branch_name,
+            },
+        )
+        if not created and merge_receipt["status"] == "succeeded":
+            self._mark_merge_completed(
+                connection,
+                project_id,
+                task_id,
+                decision_id,
+                "release_manager",
+            )
+            result = merge_receipt["result"] or {}
+            return {
+                "status": "reused",
+                "artifact_id": result.get("artifact_id"),
+                "receipt_id": merge_receipt["id"],
+                "decision_id": decision_id,
+                "pull_request_url": pull_request_url,
+                "branch_name": branch_name,
+                "merged_sha": result.get("merged_sha"),
+            }
+
+        try:
+            merge = self.github.merge_pull_request(pull_request_number, title)
+        except IntegrationConfigurationError as error:
+            self.receipts.mark_failed(
+                connection, merge_receipt["id"], {"message": str(error)}
+            )
+            decision_id_block = create_blocking_decision(
+                connection,
+                project_id,
+                task_id,
+                "GitHub integration is not configured",
+                {"action": "provide_github_token"},
+                {},
+                "missing_github_credentials",
+            )
+            return {
+                "status": "blocked",
+                "decision_id": decision_id_block,
+                "message": str(error),
+            }
+        except Exception as error:
+            self.receipts.mark_failed(
+                connection, merge_receipt["id"], {"message": str(error)}
+            )
+            emit_event(
+                connection,
+                project_id,
+                "software_factory.pull_request_merge_failed",
+                "release_manager",
+                "receipt",
+                merge_receipt["id"],
+                {"message": str(error), "pull_request_url": pull_request_url},
+            )
+            return {
+                "status": "failed",
+                "receipt_id": merge_receipt["id"],
+                "message": str(error),
+            }
+
+        artifact_id = create_artifact(
+            connection,
+            self.settings,
+            project_id,
+            task_id,
+            "merge_result",
+            f"Merge result for {title}",
+            {
+                "decision_id": decision_id,
+                "pull_request_number": pull_request_number,
+                "pull_request_url": pull_request_url,
+                "branch_name": branch_name,
+                "merged_sha": merge.sha,
+                "merged": merge.merged,
+                "message": merge.message,
+                "merge_method": self.settings.sandbox_merge_method,
+            },
+        )
+        result = {
+            "artifact_id": artifact_id,
+            "merged_sha": merge.sha,
+            "pull_request_url": pull_request_url,
+            "branch_name": branch_name,
+        }
+        self.receipts.mark_succeeded(
+            connection,
+            merge_receipt["id"],
+            pull_request_url,
+            result,
+        )
+        self._mark_merge_completed(
+            connection,
+            project_id,
+            task_id,
+            decision_id,
+            "release_manager",
+        )
+        emit_event(
+            connection,
+            project_id,
+            "software_factory.pull_request_merged",
+            "release_manager",
+            "artifact",
+            artifact_id,
+            {
+                "receipt_id": merge_receipt["id"],
+                "pull_request_url": pull_request_url,
+                "merged_sha": merge.sha,
+            },
+        )
+        return {
+            "status": "created",
+            "artifact_id": artifact_id,
+            "receipt_id": merge_receipt["id"],
+            "decision_id": decision_id,
+            "pull_request_url": pull_request_url,
+            "branch_name": branch_name,
+            "merged_sha": merge.sha,
         }

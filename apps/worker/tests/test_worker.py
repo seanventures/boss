@@ -67,6 +67,18 @@ class FakeControlPlaneClient:
             "branch_name": payload["branch_name"],
         }
 
+    def merge_pull_request(self, payload):
+        self.calls.append(("merge_pull_request", payload))
+        return {
+            "status": "created",
+            "artifact_id": "art_merge",
+            "receipt_id": "rcpt_merge",
+            "decision_id": payload["decision_id"],
+            "pull_request_url": payload["pull_request_url"],
+            "branch_name": payload.get("branch_name"),
+            "merged_sha": "abc123",
+        }
+
 
 def test_worker_starts_and_exits_cleanly():
     result = subprocess.run(
@@ -218,5 +230,42 @@ def test_run_worker_cycle_executes_queued_pr_proposal_job():
         "poll",
         "heartbeat",
         "create_pull_request_proposal",
+        "complete",
+    ]
+
+
+def test_run_worker_cycle_executes_queued_pr_merge_job():
+    leased_job = LeasedJob(
+        id="job_merge",
+        project_id="boss-dogfood",
+        task_id="tsk_test",
+        kind="github.pull_request.merge",
+        payload={
+            "decision_id": "dec_merge",
+            "dedupe_key": "merge-test",
+            "pull_request_number": 42,
+            "pull_request_url": "https://github.com/seanheiney/boss-sandbox/pull/42",
+            "title": "Merge Demo",
+            "branch_name": "boss/demo-pr",
+        },
+        attempt=1,
+        max_attempts=3,
+        lease_token="lease_token",
+        lease_expires_at="future",
+    )
+    client = FakeControlPlaneClient(leased_job)
+    settings = SimpleNamespace(
+        worker_id="worker-test",
+        lease_ttl_seconds=60,
+        poll_interval_seconds=1,
+    )
+
+    ran_job = run_worker_cycle(client, settings)
+
+    assert ran_job is True
+    assert [call[0] for call in client.calls] == [
+        "poll",
+        "heartbeat",
+        "merge_pull_request",
         "complete",
     ]

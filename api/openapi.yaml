@@ -325,6 +325,27 @@ paths:
                       content: { type: string }
       responses:
         '200': { description: Sandbox PR created, reused, or blocked }
+  /v1/software-factory/merges:
+    post:
+      summary: Merge a sandbox pull request behind a receipt-backed control-plane gate
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                [project_id, decision_id, dedupe_key, pull_request_number, pull_request_url, title]
+              properties:
+                project_id: { type: string }
+                decision_id: { type: string }
+                dedupe_key: { type: string }
+                pull_request_number: { type: integer }
+                pull_request_url: { type: string }
+                title: { type: string }
+                branch_name: { type: string }
+      responses:
+        '200': { description: Sandbox PR merged, reused, blocked, or failed }
   /v1/software-factory/proposals/queue:
     post:
       summary: Queue a real sandbox PR proposal for leased worker execution
@@ -356,6 +377,30 @@ paths:
                       content: { type: string }
       responses:
         '201': { description: Proposal job queued }
+  /v1/software-factory/merges/queue:
+    post:
+      summary: Queue a sandbox PR merge for leased worker execution
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                [project_id, decision_id, dedupe_key, pull_request_number, pull_request_url, title]
+              properties:
+                project_id: { type: string }
+                task_id: { type: string }
+                decision_id: { type: string }
+                dedupe_key: { type: string }
+                pull_request_number: { type: integer }
+                pull_request_url: { type: string }
+                title: { type: string }
+                branch_name: { type: string }
+                priority: { type: integer, default: 30 }
+                max_attempts: { type: integer, default: 3 }
+      responses:
+        '201': { description: Merge job queued }
   /v1/receipts/{dedupe_key}:
     get:
       summary: Get receipt by dedupe key

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Any, Optional
 
 from sqlalchemy import text
@@ -176,7 +177,12 @@ class DecisionService:
         if action == "review_plan_draft":
             self._queue_pr_proposal_from_plan(connection, row, actor, recommendation)
         elif action == "review_pull_request":
-            self._create_merge_gate_block(connection, row, actor, recommendation)
+            if self.settings.enable_sandbox_merge:
+                self._queue_merge_job_from_review(
+                    connection, row, actor, recommendation
+                )
+            else:
+                self._create_merge_gate_block(connection, row, actor, recommendation)
 
     def _queue_pr_proposal_from_plan(
         self,
@@ -279,6 +285,64 @@ class DecisionService:
                 "decision_id": row["id"],
                 "reservation_id": reservation["reservation_id"],
                 "kind": "software_factory.propose_pr",
+            },
+        )
+
+    def _queue_merge_job_from_review(
+        self,
+        connection: Connection,
+        row: dict[str, Any],
+        actor: str,
+        recommendation: dict[str, Any],
+    ) -> None:
+        pull_request_number = self._pull_request_number(recommendation)
+        pull_request_url = recommendation.get("pull_request_url")
+        if not pull_request_number or not isinstance(pull_request_url, str):
+            emit_event(
+                connection,
+                row["project_id"],
+                "decision.follow_on_skipped",
+                actor,
+                "decision",
+                row["id"],
+                {"reason": "missing_pull_request_metadata"},
+            )
+            return
+
+        title = recommendation.get("title")
+        if not isinstance(title, str) or not title.strip():
+            title = row["question"]
+        branch_name = recommendation.get("branch_name")
+        if branch_name is not None and not isinstance(branch_name, str):
+            branch_name = None
+
+        job = self.jobs.create_job(
+            connection,
+            project_id=row["project_id"],
+            task_id=row["task_id"],
+            kind="github.pull_request.merge",
+            priority=20,
+            payload={
+                "project_id": row["project_id"],
+                "decision_id": row["id"],
+                "dedupe_key": f"approved-pr-merge-{row['id']}",
+                "pull_request_number": pull_request_number,
+                "pull_request_url": pull_request_url,
+                "title": title,
+                "branch_name": branch_name,
+            },
+        )
+        emit_event(
+            connection,
+            row["project_id"],
+            "decision.follow_on_job_queued",
+            actor,
+            "job",
+            job["id"],
+            {
+                "decision_id": row["id"],
+                "kind": "github.pull_request.merge",
+                "pull_request_url": pull_request_url,
             },
         )
 
@@ -400,3 +464,15 @@ class DecisionService:
         for item in plan_content.get("done_when", []):
             lines.append(f"- {item}")
         return "\n".join(lines) + "\n"
+
+    def _pull_request_number(self, recommendation: dict[str, Any]) -> Optional[int]:
+        direct = recommendation.get("pull_request_number")
+        if isinstance(direct, int) and direct > 0:
+            return direct
+        url = recommendation.get("pull_request_url")
+        if not isinstance(url, str):
+            return None
+        match = re.search(r"/pull/(\d+)$", url)
+        if not match:
+            return None
+        return int(match.group(1))

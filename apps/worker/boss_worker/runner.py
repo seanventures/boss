@@ -16,6 +16,7 @@ def capabilities() -> list[str]:
         "plan.generate",
         "openai.plan",
         "software_factory.propose_pr",
+        "github.pull_request.merge",
     ]
 
 
@@ -81,6 +82,21 @@ def execute_job(job: LeasedJob, client: ControlPlaneClient) -> dict[str, Any]:
             raise RuntimeError(
                 result.get("message") or "Software-factory proposal job failed."
             )
+        return result
+    if job.kind == "github.pull_request.merge":
+        result = client.merge_pull_request(
+            {
+                "project_id": job.project_id,
+                "decision_id": job.payload["decision_id"],
+                "dedupe_key": job.payload["dedupe_key"],
+                "pull_request_number": job.payload["pull_request_number"],
+                "pull_request_url": job.payload["pull_request_url"],
+                "title": job.payload["title"],
+                "branch_name": job.payload.get("branch_name"),
+            }
+        )
+        if result.get("status") == "failed":
+            raise RuntimeError(result.get("message") or "Pull-request merge failed.")
         return result
     raise ValueError(f"Unsupported job kind: {job.kind}")
 

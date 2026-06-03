@@ -45,6 +45,12 @@ class Settings(BaseSettings):
     software_factory_pr_budget_usd_micros: int = Field(
         default=500_000, alias="BOSS_SOFTWARE_FACTORY_PR_BUDGET_USD_MICROS"
     )
+    enable_sandbox_merge: bool = Field(
+        default=False, alias="BOSS_ENABLE_SANDBOX_MERGE"
+    )
+    sandbox_merge_method: str = Field(
+        default="squash", alias="BOSS_SANDBOX_MERGE_METHOD"
+    )
 
     @property
     def repo_root(self) -> Path:

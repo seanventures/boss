@@ -148,7 +148,35 @@ class PullRequestProposalResponse(BaseModel):
     receipt_id: Optional[str] = None
     decision_id: Optional[str] = None
     pull_request_url: Optional[str] = None
+    pull_request_number: Optional[int] = None
     branch_name: Optional[str] = None
+    message: Optional[str] = None
+
+
+class PullRequestMergeRequest(BaseModel):
+    project_id: str
+    decision_id: str
+    dedupe_key: str
+    pull_request_number: int = Field(gt=0)
+    pull_request_url: str
+    title: str
+    branch_name: Optional[str] = None
+
+
+class PullRequestMergeJobRequest(PullRequestMergeRequest):
+    task_id: Optional[str] = None
+    priority: int = Field(default=30, ge=0)
+    max_attempts: int = Field(default=3, ge=1, le=20)
+
+
+class PullRequestMergeResponse(BaseModel):
+    status: str
+    artifact_id: Optional[str] = None
+    receipt_id: Optional[str] = None
+    decision_id: Optional[str] = None
+    pull_request_url: Optional[str] = None
+    branch_name: Optional[str] = None
+    merged_sha: Optional[str] = None
     message: Optional[str] = None
 
 
@@ -239,6 +267,7 @@ class WorkerCompleteResponse(BaseModel):
     decision_id: Optional[str] = None
     receipt_id: Optional[str] = None
     pull_request_url: Optional[str] = None
+    merged_sha: Optional[str] = None
     branch_name: Optional[str] = None
 
 

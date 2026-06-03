@@ -136,6 +136,7 @@ export type WorkerCompleteResponse = {
   decision_id?: string;
   receipt_id?: string;
   pull_request_url?: string;
+  merged_sha?: string;
   branch_name?: string;
 };
 
@@ -295,7 +296,35 @@ export type PullRequestProposalResponse = {
   receipt_id?: string;
   decision_id?: string;
   pull_request_url?: string;
+  pull_request_number?: number;
   branch_name?: string;
+  message?: string;
+};
+
+export type PullRequestMergeRequest = {
+  project_id: string;
+  decision_id: string;
+  dedupe_key: string;
+  pull_request_number: number;
+  pull_request_url: string;
+  title: string;
+  branch_name?: string;
+};
+
+export type PullRequestMergeJobRequest = PullRequestMergeRequest & {
+  task_id?: string;
+  priority?: number;
+  max_attempts?: number;
+};
+
+export type PullRequestMergeResponse = {
+  status: string;
+  artifact_id?: string;
+  receipt_id?: string;
+  decision_id?: string;
+  pull_request_url?: string;
+  branch_name?: string;
+  merged_sha?: string;
   message?: string;
 };
 
@@ -505,8 +534,22 @@ export function createBossApiClient(config: BossApiClientConfig) {
         },
       );
     },
+    mergePullRequest(payload: PullRequestMergeRequest) {
+      return request<PullRequestMergeResponse>(
+        "POST",
+        "/v1/software-factory/merges",
+        {
+          body: payload,
+        },
+      );
+    },
     queuePullRequestProposalJob(payload: PullRequestProposalJobRequest) {
       return request<JobSummary>("POST", "/v1/software-factory/proposals/queue", {
+        body: payload,
+      });
+    },
+    queuePullRequestMergeJob(payload: PullRequestMergeJobRequest) {
+      return request<JobSummary>("POST", "/v1/software-factory/merges/queue", {
         body: payload,
       });
     },

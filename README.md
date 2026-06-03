@@ -65,6 +65,7 @@ If a required credential is missing, the API must fail closed and create visible
 - `make smoke`: run a local schema/bootstrap smoke check
 - `make real-smoke-plan`: run a real reservation -> OpenAI plan flow against local Postgres
 - `make real-smoke-pr`: run a real reservation -> queued PR job -> leased worker -> sandbox PR proposal flow
+- `make real-smoke-merge`: run the full sandbox PR proposal flow and, when merge policy is enabled, approve and execute the merge job
 - `make worker-drain-once`: poll the control plane once and execute at most one leased job
 
 ## Current control-plane endpoints
@@ -89,7 +90,9 @@ If a required credential is missing, the API must fail closed and create visible
 - `GET /v1/events`
 - `POST /v1/openai/plans`
 - `POST /v1/software-factory/proposals`
+- `POST /v1/software-factory/merges`
 - `POST /v1/software-factory/proposals/queue`
+- `POST /v1/software-factory/merges/queue`
 - `GET /v1/receipts/{dedupe_key}`
 
 ## Budget-governor behavior
@@ -99,7 +102,7 @@ If a required credential is missing, the API must fail closed and create visible
 - Spend-gated jobs without an active reservation are not leased; they create a visible decision and are cancelled explicitly rather than running silently.
 - Real sandbox PR proposals can now be queued as leased jobs so GitHub/OpenAI execution runs through `reservation -> job -> lease -> receipt -> artifact -> decision`.
 - Approving a plan-review decision now auto-reserves the configured sandbox proposal budget and queues the next `software_factory.propose_pr` job instead of stopping at decision state only.
-- Approving the final sandbox PR review decision now creates a receipt-linked merge gate artifact and a visible blocked event, making the manual-merge boundary explicit instead of leaving approval as a terminal dead end.
+- Approving the final sandbox PR review decision creates a receipt-linked merge gate by default, and can queue a real `github.pull_request.merge` job only when `BOSS_ENABLE_SANDBOX_MERGE=true`.
 
 ## GitHub bootstrap
 

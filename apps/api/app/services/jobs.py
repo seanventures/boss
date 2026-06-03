@@ -494,6 +494,16 @@ class JobLeaseService:
                 "branch_name": result.get("branch_name"),
             }
 
+        if job_row["kind"] == "github.pull_request.merge":
+            return {
+                "artifact_id": result.get("artifact_id"),
+                "decision_id": result.get("decision_id"),
+                "receipt_id": result.get("receipt_id"),
+                "pull_request_url": result.get("pull_request_url"),
+                "branch_name": result.get("branch_name"),
+                "merged_sha": result.get("merged_sha"),
+            }
+
         if job_row["kind"] not in {"plan.command", "plan.generate"}:
             return {}
 

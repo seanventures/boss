@@ -99,6 +99,11 @@ class ControlPlaneClient:
         response.raise_for_status()
         return response.json()
 
+    def merge_pull_request(self, payload: dict[str, Any]) -> dict[str, Any]:
+        response = self._client.post("/v1/software-factory/merges", json=payload)
+        response.raise_for_status()
+        return response.json()
+
     def fail(
         self,
         worker_id: str,

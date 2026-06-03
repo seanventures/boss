@@ -27,6 +27,9 @@ from .schemas import (
     LeasedJob,
     OpenAIPlanRequest,
     OpenAIPlanResponse,
+    PullRequestMergeJobRequest,
+    PullRequestMergeRequest,
+    PullRequestMergeResponse,
     PullRequestProposalJobRequest,
     PullRequestProposalRequest,
     PullRequestProposalResponse,
@@ -553,6 +556,23 @@ def create_pull_request_proposal(
         return PullRequestProposalResponse(**result)
 
 
+@app.post("/v1/software-factory/merges", response_model=PullRequestMergeResponse)
+def merge_pull_request(payload: PullRequestMergeRequest) -> PullRequestMergeResponse:
+    with begin(engine) as connection:
+        result = software_factory.merge_pull_request(
+            connection,
+            payload.project_id,
+            None,
+            payload.decision_id,
+            payload.dedupe_key,
+            payload.pull_request_number,
+            payload.pull_request_url,
+            payload.title,
+            payload.branch_name,
+        )
+        return PullRequestMergeResponse(**result)
+
+
 @app.post("/v1/software-factory/proposals/queue", response_model=JobSummary, status_code=201)
 def queue_pull_request_proposal(
     payload: PullRequestProposalJobRequest,
@@ -572,6 +592,31 @@ def queue_pull_request_proposal(
                 "summary": payload.summary,
                 "files": [file.model_dump() for file in payload.files],
                 "requires_reservation": True,
+            },
+            priority=payload.priority,
+            max_attempts=payload.max_attempts,
+        )
+        return JobSummary(**result)
+
+
+@app.post("/v1/software-factory/merges/queue", response_model=JobSummary, status_code=201)
+def queue_pull_request_merge(
+    payload: PullRequestMergeJobRequest,
+) -> JobSummary:
+    with begin(engine) as connection:
+        result = jobs.create_job(
+            connection,
+            project_id=payload.project_id,
+            task_id=payload.task_id,
+            kind="github.pull_request.merge",
+            payload={
+                "project_id": payload.project_id,
+                "decision_id": payload.decision_id,
+                "dedupe_key": payload.dedupe_key,
+                "pull_request_number": payload.pull_request_number,
+                "pull_request_url": payload.pull_request_url,
+                "title": payload.title,
+                "branch_name": payload.branch_name,
             },
             priority=payload.priority,
             max_attempts=payload.max_attempts,

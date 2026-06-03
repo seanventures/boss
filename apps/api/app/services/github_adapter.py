@@ -19,6 +19,13 @@ class PullRequestResult:
     number: int
 
 
+@dataclass
+class PullRequestMergeResult:
+    sha: str
+    merged: bool
+    message: str
+
+
 class GitHubAdapter:
     def __init__(self, settings: Settings):
         self.settings = settings
@@ -118,3 +125,20 @@ class GitHubAdapter:
             },
         )
         return PullRequestResult(url=response["html_url"], number=response["number"])
+
+    def merge_pull_request(
+        self, pull_request_number: int, commit_title: str
+    ) -> PullRequestMergeResult:
+        response = self._request(
+            "PUT",
+            f"/repos/{self.repository_full_name}/pulls/{pull_request_number}/merge",
+            {
+                "commit_title": commit_title,
+                "merge_method": self.settings.sandbox_merge_method,
+            },
+        )
+        return PullRequestMergeResult(
+            sha=response["sha"],
+            merged=bool(response["merged"]),
+            message=response["message"],
+        )

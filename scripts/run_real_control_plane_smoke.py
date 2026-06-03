@@ -60,7 +60,13 @@ def drain_worker_once(client: TestClient) -> dict | None:
         "/v1/worker/poll",
         json={
             "worker_id": "smoke-worker",
-            "capabilities": ["plan.command", "plan.generate", "openai.plan", "software_factory.propose_pr"],
+            "capabilities": [
+                "plan.command",
+                "plan.generate",
+                "openai.plan",
+                "software_factory.propose_pr",
+                "github.pull_request.merge",
+            ],
             "lease_ttl_seconds": 60,
         },
     )
@@ -103,6 +109,19 @@ def drain_worker_once(client: TestClient) -> dict | None:
                 "branch_name": job["payload"]["branch_name"],
                 "summary": job["payload"]["summary"],
                 "files": job["payload"]["files"],
+            },
+        )
+    elif job["kind"] == "github.pull_request.merge":
+        result = client.post(
+            "/v1/software-factory/merges",
+            json={
+                "project_id": job["project_id"],
+                "decision_id": job["payload"]["decision_id"],
+                "dedupe_key": job["payload"]["dedupe_key"],
+                "pull_request_number": job["payload"]["pull_request_number"],
+                "pull_request_url": job["payload"]["pull_request_url"],
+                "title": job["payload"]["title"],
+                "branch_name": job["payload"].get("branch_name"),
             },
         )
     else:
@@ -162,6 +181,11 @@ def main() -> None:
         type=int,
         default=500_000,
         help="Budget reservation amount for the sandbox PR proposal.",
+    )
+    parser.add_argument(
+        "--with-merge",
+        action="store_true",
+        help="Approve the PR review decision and execute the merge job if merge policy is enabled.",
     )
     args = parser.parse_args()
 
@@ -246,6 +270,26 @@ def main() -> None:
         completion_payload = drain_worker_once(client)
         print("Worker completion:")
         print(json.dumps(completion_payload, indent=2))
+
+        if not args.with_merge:
+            return
+        if not settings.enable_sandbox_merge:
+            raise SystemExit(
+                "BOSS_ENABLE_SANDBOX_MERGE is false. Enable it before running --with-merge."
+            )
+        decision_id = completion_payload.get("decision_id") if completion_payload else None
+        if not decision_id:
+            raise SystemExit("No PR review decision_id was returned from the proposal run.")
+        approve = client.post(
+            f"/v1/decisions/{decision_id}/approve",
+            json={"actor": "ceo", "note": "Approve sandbox merge for smoke validation."},
+        )
+        approve.raise_for_status()
+        print("Approved PR review decision:")
+        print(json.dumps(approve.json(), indent=2))
+        merge_completion = drain_worker_once(client)
+        print("Merge worker completion:")
+        print(json.dumps(merge_completion, indent=2))
 
 
 if __name__ == "__main__":
