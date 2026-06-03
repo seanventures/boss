@@ -10,6 +10,7 @@ rules:
     openclaw_not_foundation: true
   provider_actions:
     require_changeset_for_write: true
+    require_budget_reservation_for_write: true
     require_resource_receipt: true
     require_dedupe_key: true
     require_policy_check: true

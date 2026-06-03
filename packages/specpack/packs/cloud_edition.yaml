@@ -1,0 +1,28 @@
+id: cloud_edition
+version: 2.0.0
+description: Managed BOSS Cloud edition capability pack with Account Connect and managed infrastructure.
+edition: cloud
+hosted_account_connect_required: true
+includes:
+  - account_connect
+  - hosted_auth
+  - hosted_control_plane
+  - managed_postgres_object_store_queues
+  - managed_backups
+  - managed_secrets_vault
+  - managed_connector_gateway
+  - managed_model_gateway
+  - hosted_budget_cost_dashboard
+  - managed_workers
+  - hosted_providerops
+  - automatic_updates
+requires:
+  - community_edition
+  - commercial_packaging_policy
+installs:
+  roles: [providerops_manager, finops_sentinel, deployment_manager, secrets_steward, model_spend_analyst]
+  workflows: [providerops_readonly_sync, model_entitlement_routing, open_core_cloud_upgrade]
+  policies: [commercial_packaging_policy, resource_plane_policy, model_entitlement_policy]
+  skills: [providerops, model_providers, deployment]
+status: planned
+

@@ -1,0 +1,67 @@
+kind: BossSpecPack
+id: boss-product-specpack-v2
+name: BOSS Product SpecPack v2.0
+version: 2.0.0
+source_prd: docs/product/PRD-v2.0.md
+source_technical_spec: docs/product/TECHNICAL_SPEC-v2.0.md
+source_roadmap: docs/product/ROADMAP-v2.0.md
+positioning:
+  product_thesis: BOSS is not an AI assistant. BOSS is an operating system for accountable autonomous work.
+  architecture:
+    openclaw_foundation: false
+    resource_plane_core: true
+    provider_adapters_are_plugins: true
+    account_connect_required_for_cloud: true
+    account_connect_required_for_community: false
+critical_invariants:
+  - canonical_truth_is_durable_state_not_chat
+  - no_external_effect_without_receipt
+  - no_spendy_action_without_budget_reservation
+  - no_provider_write_without_changeset
+  - no_provider_write_without_budget_reservation
+  - no_provider_action_without_resource_receipt
+  - no_silent_drops
+  - budget_governor_wins_over_autoscaler
+  - agents_never_receive_raw_provider_secrets
+  - optimize_across_authorized_capacity_do_not_bypass_limits
+objects:
+  core:
+    - rolespec
+    - packspec
+    - task
+    - decision
+    - meeting
+    - receipt
+  resource_plane:
+    - provider_account
+    - provider_adapter
+    - external_resource
+    - changeset
+    - resource_receipt
+    - deployment_target
+    - billing_account
+    - cost_event
+    - commitment
+  model_capacity:
+    - entitlement_pool
+    - model_route_decision
+    - capacity_receipt
+  commercial:
+    - edition
+    - license_entitlement
+    - account_connect_org
+    - enterprise_cluster
+policies:
+  - default_safety
+  - resource_plane_policy
+  - budget_governor_policy
+  - model_entitlement_policy
+  - commercial_packaging_policy
+  - enterprise_governance_policy
+packs:
+  - core_v2
+  - community_edition
+  - cloud_edition
+  - enterprise_edition
+  - providerops_pack
+  - software_factory_pack

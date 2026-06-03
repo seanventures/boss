@@ -154,6 +154,11 @@ CREATE TABLE IF NOT EXISTS entitlement_sources (
   task_strengths JSONB NOT NULL DEFAULT '[]'::jsonb,
   risk_tier_max INTEGER NOT NULL DEFAULT 1,
   status TEXT NOT NULL DEFAULT 'declared',
+  auth_method TEXT NOT NULL DEFAULT 'api_key',
+  connection_status TEXT NOT NULL DEFAULT 'not_connected',
+  connection_ref TEXT,
+  oauth_scopes JSONB NOT NULL DEFAULT '[]'::jsonb,
+  connection_metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
   policy_notes JSONB NOT NULL DEFAULT '[]'::jsonb,
   observed_capacity JSONB NOT NULL DEFAULT '{}'::jsonb,
   runtime_supported BOOLEAN NOT NULL DEFAULT false,
@@ -161,6 +166,32 @@ CREATE TABLE IF NOT EXISTS entitlement_sources (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE(project_id, source_id)
 );
+ALTER TABLE entitlement_sources ADD COLUMN IF NOT EXISTS auth_method TEXT NOT NULL DEFAULT 'api_key';
+ALTER TABLE entitlement_sources ADD COLUMN IF NOT EXISTS connection_status TEXT NOT NULL DEFAULT 'not_connected';
+ALTER TABLE entitlement_sources ADD COLUMN IF NOT EXISTS connection_ref TEXT;
+ALTER TABLE entitlement_sources ADD COLUMN IF NOT EXISTS oauth_scopes JSONB NOT NULL DEFAULT '[]'::jsonb;
+ALTER TABLE entitlement_sources ADD COLUMN IF NOT EXISTS connection_metadata JSONB NOT NULL DEFAULT '{}'::jsonb;
+
+CREATE TABLE IF NOT EXISTS capacity_receipts (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  entitlement_pool_id TEXT NOT NULL,
+  source_id TEXT NOT NULL,
+  provider TEXT NOT NULL,
+  capacity_kind TEXT NOT NULL,
+  model_route_decision_id TEXT,
+  provider_ref TEXT,
+  usage_units JSONB NOT NULL DEFAULT '{}'::jsonb,
+  capacity_state_after TEXT NOT NULL DEFAULT 'unknown',
+  dedupe_key TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'recorded',
+  observed_capacity JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_by TEXT NOT NULL DEFAULT 'system',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(project_id, entitlement_pool_id, dedupe_key)
+);
+CREATE INDEX IF NOT EXISTS idx_capacity_receipts_project_created
+  ON capacity_receipts(project_id, created_at DESC);
 
 CREATE TABLE IF NOT EXISTS routing_logs (
   id TEXT PRIMARY KEY,

@@ -2,7 +2,7 @@
 
 Last updated: June 3, 2026
 
-These stories are derived from `docs/product/PRD-v1.1.md`, `docs/product/TECHNICAL_SPEC-v1.1.md`, `reference/boss_build_spec_pack/docs/CODEX_RUNBOOK.md`, `packages/specpack/workflows/ceo_command_to_pr.yaml`, `packages/specpack/workflows/providerops_readonly_sync.yaml`, `packages/specpack/workflows/changeset_apply_with_receipts.yaml`, `packages/specpack/workflows/deployment_run.yaml`, `packages/specpack/policies/default_safety.yaml`, and `packages/specpack/policies/resource_plane_policy.yaml`.
+These stories are derived from `docs/product/PRD-v2.0.md`, `docs/product/TECHNICAL_SPEC-v2.0.md`, `reference/boss_build_spec_pack/docs/CODEX_RUNBOOK.md`, `packages/specpack/workflows/ceo_command_to_pr.yaml`, `packages/specpack/workflows/providerops_readonly_sync.yaml`, `packages/specpack/workflows/changeset_apply_with_receipts.yaml`, `packages/specpack/workflows/deployment_run.yaml`, `packages/specpack/workflows/model_entitlement_routing.yaml`, `packages/specpack/policies/default_safety.yaml`, `packages/specpack/policies/resource_plane_policy.yaml`, `packages/specpack/policies/budget_governor_policy.yaml`, and `packages/specpack/policies/model_entitlement_policy.yaml`.
 
 ## Founder / CEO
 
@@ -311,7 +311,44 @@ Acceptance criteria:
 
 - Given a source disallowed for a workload class, when routing is previewed, then BOSS denies that source and logs the reason.
 - Given a source missing credentials, when routing is evaluated for runtime work, then BOSS fails closed.
+- Given a public subscription source uses OpenAI Codex, Claude Code, or Grok Build, when no official OAuth/CLI session is connected, then BOSS denies routing and records the connection reason.
+- Given an entitled operator records a verified official session reference, when the source is connected through the API, then BOSS stores only the connection reference, scopes, non-secret metadata, observed capacity, and `entitlement.source_connected` event.
+- Given a connected official session reference is revoked, when the source is disconnected through the API, then BOSS marks credentials absent, resets capacity to unknown, emits `entitlement.source_disconnected`, and subsequent routes fail closed.
+- Given an official OAuth/CLI session is connected for a subscription source, when owner-sandbox work is routed, then BOSS may select it and records the auth method and connection reference in the routing decision.
+- Given a source is exhausted, rate-limited, blocked, disabled, suspended, unavailable, or has zero remaining counters, when routing is evaluated, then BOSS rejects it with a capacity-specific reason and reset/observation metadata where available.
 - Given a personal subscription source and multi-tenant workload, when routing is attempted, then BOSS denies it unless provider policy explicitly allows it.
+
+### Story ADM-005: Audit Entitlement Pools and Capacity Receipts
+
+As an agent platform admin, I want model adapters, entitlement pools, capacity probes, and route decisions exposed through stable APIs, so that UI surfaces and customers can inspect AI capacity without relying on stitched-together logs.
+
+Acceptance criteria:
+
+- Given the model provider registry is loaded, when model adapters are listed, then BOSS returns each official API, official CLI, official coding agent, and approved local model adapter with auth method, workload rules, runtime status, and provider-policy notes.
+- Given a project has entitlement sources, when entitlement pools are listed, then BOSS returns normalized pool records with capacity state, routing modes, allowed workload classes, and budget-policy reference.
+- Given an entitled actor records observed pool capacity, when a capacity probe is submitted, then BOSS updates the pool capacity, writes a `CapacityReceipt`, emits `capacity.receipt_recorded`, and stores no raw provider secret.
+- Given the same capacity probe `dedupe_key` is submitted again, when BOSS processes the request, then it returns the prior `CapacityReceipt`, does not create a second receipt, and does not overwrite capacity state.
+- Given route simulation is requested, when the Model Entitlement Broker evaluates sources, then BOSS writes and returns a canonical `ModelRouteDecision` with selected pool, rejected-source reasons, capacity snapshot, budget state, and policy result.
+
+### Story ADM-003: Run Community Without Hosted Auth
+
+As a self-hosted Community operator, I want BOSS to run with local auth and no BOSS Account Connect dependency, so that I can trust and evaluate the open-core product independently.
+
+Acceptance criteria:
+
+- Given a Community install, when no Account Connect org is linked, then local auth, local runner, core objects, Decision Inbox, basic Budget Governor, and basic Model Entitlement Broker still work.
+- Given a Community install, when Cloud-only capabilities are requested, then BOSS explains the missing entitlement without breaking local operation.
+- Given Community packaging is documented, when licensing language is shown, then restricted or commercial modules are not described as open source without legal review.
+
+### Story ADM-004: Use Account Connect for Cloud Identity
+
+As a Cloud customer admin, I want BOSS Account Connect to manage login, org identity, billing, license entitlements, team invites, and marketplace identity, so that managed Cloud operation is centralized and auditable.
+
+Acceptance criteria:
+
+- Given BOSS Cloud is enabled, when an org is created, then Account Connect owns cloud identity and license entitlement state.
+- Given a Cloud user installs a marketplace pack, when the install starts, then publisher identity and entitlement checks are resolved through Account Connect.
+- Given Enterprise is detached, when Account Connect is unavailable, then private license and identity flows remain explicitly supported.
 
 ### Story ADM-002: Control Project Actors
 

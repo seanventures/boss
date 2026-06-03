@@ -37,7 +37,35 @@ fields:
     type: integer
   - name: status
     type: enum
-    values: [active, blocked, exhausted, disabled]
+    values: [declared, active, missing_credentials, blocked, exhausted, disabled]
+  - name: auth_method
+    type: enum
+    values: [api_key, official_cli_oauth, official_device_oauth, official_browser_oauth, local_host]
+  - name: connection_status
+    type: enum
+    values: [not_connected, connected, expired, revoked, unsupported]
+  - name: connection_ref
+    type: string
+  - name: oauth_scopes
+    type: array
+  - name: connection_metadata
+    type: object
+  - name: observed_capacity
+    type: object
+    description: Non-secret observed capacity, quota, rate-limit, reset, and connection state for routing.
+    properties:
+      capacity_state:
+        type: enum
+        values: [available, degraded, exhausted, rate_limited, blocked, disabled, suspended, unavailable, unknown]
+      remaining_units:
+        type: number
+      remaining_requests:
+        type: number
+      remaining_tokens:
+        type: number
+      reset_at:
+        type: string
+      observed_at:
+        type: string
   - name: policy_notes
     type: array
-

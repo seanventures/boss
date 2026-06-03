@@ -1694,8 +1694,18 @@ def test_skill_registry_and_seeded_entitlement_sources_are_visible(client):
     payload = sources.json()
     openai_api = next(item for item in payload["items"] if item["source_id"] == "openai_api")
     assert openai_api["provider"] == "openai"
+    assert openai_api["auth_method"] == "api_key"
     assert openai_api["runtime_supported"] is True
     assert openai_api["effective_status"] in {"active", "missing_credentials"}
+    openai_codex = next(
+        item for item in payload["items"] if item["source_id"] == "openai_codex_chatgpt"
+    )
+    assert openai_codex["auth_method"] == "official_cli_oauth"
+    assert openai_codex["connection_ref"] == "BOSS_OPENAI_CODEX_OAUTH_SESSION_REF"
+    assert openai_codex["multi_tenant_allowed"] is False
+    xai_grok = next(item for item in payload["items"] if item["source_id"] == "xai_grok_build")
+    assert xai_grok["auth_method"] == "official_device_oauth"
+    assert xai_grok["connection_metadata"]["login_command"] == "grok login --device-auth"
 
 
 def test_skill_spec_validator_rejects_mock_or_incomplete_specs():
@@ -4689,7 +4699,12 @@ def test_router_preview_denies_multi_tenant_cli_source(client, engine):
             "task_strengths": ["planning", "coding"],
             "risk_tier_max": 1,
             "status": "active",
-            "observed_capacity": {"credential_present": True},
+            "auth_method": "official_cli_oauth",
+            "connection_status": "connected",
+            "observed_capacity": {
+                "credential_present": True,
+                "official_oauth_connected": True,
+            },
             "runtime_supported": True,
             "actor": "ceo",
         },
@@ -4716,6 +4731,570 @@ def test_router_preview_denies_multi_tenant_cli_source(client, engine):
         item["reason"] in {"provider_policy_disallows_workload", "multi_tenant_not_allowed"}
         for item in payload["rejected_sources"]
     )
+
+
+def test_router_preview_requires_official_oauth_for_subscription_sources(client, engine):
+    with engine.begin() as connection:
+        connection.execute(text("DELETE FROM events WHERE project_id = 'boss-oauth-router'"))
+        connection.execute(
+            text("DELETE FROM routing_logs WHERE project_id = 'boss-oauth-router'")
+        )
+        connection.execute(
+            text(
+                "DELETE FROM entitlement_sources WHERE project_id = 'boss-oauth-router'"
+            )
+        )
+        connection.execute(text("DELETE FROM projects WHERE id = 'boss-oauth-router'"))
+        connection.execute(
+            text(
+                """
+                INSERT INTO projects (id, workspace_id, name, slug)
+                VALUES ('boss-oauth-router', 'ws_boss', 'BOSS OAuth Router', 'boss-oauth-router')
+                """
+            )
+        )
+        api_main.members.seed_default_members(connection, "boss-oauth-router", "test")
+
+    disconnected = client.post(
+        "/v1/entitlements/sources",
+        json={
+            "project_id": "boss-oauth-router",
+            "provider": "openai",
+            "source_id": "openai_codex_chatgpt",
+            "source_kind": "official_cli",
+            "entitlement_kind": "subscription",
+            "owner_type": "workspace_operator",
+            "owner_id": "founder",
+            "workload_classes_allowed": ["owner_sandbox"],
+            "multi_tenant_allowed": False,
+            "supported_models": ["codex"],
+            "task_strengths": ["planning", "coding"],
+            "risk_tier_max": 1,
+            "status": "active",
+            "auth_method": "api_key",
+            "connection_status": "connected",
+            "observed_capacity": {"credential_present": True},
+            "runtime_supported": True,
+            "actor": "ceo",
+        },
+    )
+    assert disconnected.status_code == 201
+
+    denied = client.post(
+        "/v1/router/preview",
+        json={
+            "project_id": "boss-oauth-router",
+            "skill_id": "model.generate_text",
+            "task_kind": "planning",
+            "workload_class": "owner_sandbox",
+            "risk_tier": 1,
+            "preferred_capabilities": ["planning"],
+            "actor": "ceo",
+        },
+    )
+    assert denied.status_code == 200
+    denied_payload = denied.json()
+    assert denied_payload["source_id"] is None
+    assert any(
+        item["source_id"] == "openai_codex_chatgpt"
+        and item["reason"] == "official_oauth_connection_required"
+        for item in denied_payload["rejected_sources"]
+    )
+
+    connected = client.post(
+        "/v1/entitlements/sources",
+        json={
+            "project_id": "boss-oauth-router",
+            "provider": "openai",
+            "source_id": "openai_codex_chatgpt",
+            "source_kind": "official_cli",
+            "entitlement_kind": "subscription",
+            "owner_type": "workspace_operator",
+            "owner_id": "founder",
+            "workload_classes_allowed": ["owner_sandbox"],
+            "multi_tenant_allowed": False,
+            "supported_models": ["codex"],
+            "task_strengths": ["planning", "coding"],
+            "risk_tier_max": 1,
+            "status": "active",
+            "auth_method": "official_cli_oauth",
+            "connection_status": "connected",
+            "connection_ref": "local:codex-login",
+            "oauth_scopes": ["codex.local"],
+            "observed_capacity": {
+                "credential_present": True,
+                "official_oauth_connected": True,
+            },
+            "runtime_supported": True,
+            "actor": "ceo",
+        },
+    )
+    assert connected.status_code == 201
+
+    selected = client.post(
+        "/v1/router/preview",
+        json={
+            "project_id": "boss-oauth-router",
+            "skill_id": "model.generate_text",
+            "task_kind": "planning",
+            "workload_class": "owner_sandbox",
+            "risk_tier": 1,
+            "preferred_capabilities": ["planning"],
+            "actor": "ceo",
+        },
+    )
+    assert selected.status_code == 200
+    selected_payload = selected.json()
+    assert selected_payload["source_id"] == "openai_codex_chatgpt"
+    assert selected_payload["decision"]["auth_method"] == "official_cli_oauth"
+    assert selected_payload["decision"]["connection_ref"] == "local:codex-login"
+
+
+def test_entitlement_source_connect_disconnect_lifecycle_routes_fail_closed(client, engine):
+    project_id = "boss-entitlement-connect"
+    with engine.begin() as connection:
+        connection.execute(text(f"DELETE FROM events WHERE project_id = '{project_id}'"))
+        connection.execute(text(f"DELETE FROM routing_logs WHERE project_id = '{project_id}'"))
+        connection.execute(
+            text(f"DELETE FROM entitlement_sources WHERE project_id = '{project_id}'")
+        )
+        connection.execute(text(f"DELETE FROM projects WHERE id = '{project_id}'"))
+        connection.execute(
+            text(
+                f"""
+                INSERT INTO projects (id, workspace_id, name, slug)
+                VALUES ('{project_id}', 'ws_boss', 'Entitlement Connect', '{project_id}')
+                """
+            )
+        )
+        api_main.members.seed_default_members(connection, project_id, "test")
+        api_main.entitlements.seed_default_sources(connection, project_id, "test")
+
+    connected = client.post(
+        "/v1/entitlements/sources/openai_codex_chatgpt/connect",
+        json={
+            "project_id": project_id,
+            "connection_ref": "secretref://local/codex-session",
+            "auth_method": "official_cli_oauth",
+            "oauth_scopes": ["codex.local"],
+            "connection_metadata": {"login_command": "codex login"},
+            "observed_capacity": {
+                "capacity_state": "available",
+                "remaining_units": 10,
+                "observed_at": datetime.now(timezone.utc).isoformat(),
+            },
+            "actor": "ceo",
+        },
+    )
+    assert connected.status_code == 200
+    connected_payload = connected.json()
+    assert connected_payload["effective_status"] == "active"
+    assert connected_payload["connection_status"] == "connected"
+    assert connected_payload["observed_capacity"]["official_oauth_connected"] is True
+
+    selected = client.post(
+        "/v1/router/preview",
+        json={
+            "project_id": project_id,
+            "skill_id": "model.generate_text",
+            "task_kind": "planning",
+            "workload_class": "owner_sandbox",
+            "risk_tier": 1,
+            "preferred_capabilities": ["planning"],
+            "actor": "ceo",
+        },
+    )
+    assert selected.status_code == 200
+    assert selected.json()["source_id"] == "openai_codex_chatgpt"
+
+    disconnected = client.post(
+        "/v1/entitlements/sources/openai_codex_chatgpt/disconnect",
+        json={
+            "project_id": project_id,
+            "reason": "operator_revoked_local_session",
+            "actor": "ceo",
+        },
+    )
+    assert disconnected.status_code == 200
+    assert disconnected.json()["connection_status"] == "revoked"
+
+    denied = client.post(
+        "/v1/router/preview",
+        json={
+            "project_id": project_id,
+            "skill_id": "model.generate_text",
+            "task_kind": "planning",
+            "workload_class": "owner_sandbox",
+            "risk_tier": 1,
+            "preferred_capabilities": ["planning"],
+            "actor": "ceo",
+        },
+    )
+    assert denied.status_code == 200
+    denied_payload = denied.json()
+    assert denied_payload["source_id"] is None
+    assert any(
+        item["source_id"] == "openai_codex_chatgpt"
+        and item["reason"] == "missing_oauth_connection"
+        and item["connection_status"] == "revoked"
+        for item in denied_payload["rejected_sources"]
+    )
+
+    events = client.get("/v1/events", params={"project_id": project_id, "limit": 10})
+    assert events.status_code == 200
+    event_kinds = {item["event_type"] for item in events.json()["items"]}
+    assert "entitlement.source_connected" in event_kinds
+    assert "entitlement.source_disconnected" in event_kinds
+
+
+def test_entitlement_source_connect_rejects_non_oauth_subscription_method(client, engine):
+    project_id = "boss-entitlement-connect-invalid"
+    with engine.begin() as connection:
+        connection.execute(text(f"DELETE FROM entitlement_sources WHERE project_id = '{project_id}'"))
+        connection.execute(text(f"DELETE FROM projects WHERE id = '{project_id}'"))
+        connection.execute(
+            text(
+                f"""
+                INSERT INTO projects (id, workspace_id, name, slug)
+                VALUES ('{project_id}', 'ws_boss', 'Entitlement Connect Invalid', '{project_id}')
+                """
+            )
+        )
+        api_main.members.seed_default_members(connection, project_id, "test")
+        api_main.entitlements.seed_default_sources(connection, project_id, "test")
+
+    response = client.post(
+        "/v1/entitlements/sources/openai_codex_chatgpt/connect",
+        json={
+            "project_id": project_id,
+            "connection_ref": "secretref://local/codex-session",
+            "auth_method": "api_key",
+            "actor": "ceo",
+        },
+    )
+    assert response.status_code == 422
+    assert "official OAuth" in response.json()["detail"]
+
+
+def test_router_preview_rejects_exhausted_subscription_capacity(client, engine):
+    project_id = "boss-entitlement-capacity"
+    with engine.begin() as connection:
+        connection.execute(text(f"DELETE FROM events WHERE project_id = '{project_id}'"))
+        connection.execute(text(f"DELETE FROM routing_logs WHERE project_id = '{project_id}'"))
+        connection.execute(
+            text(f"DELETE FROM entitlement_sources WHERE project_id = '{project_id}'")
+        )
+        connection.execute(text(f"DELETE FROM projects WHERE id = '{project_id}'"))
+        connection.execute(
+            text(
+                f"""
+                INSERT INTO projects (id, workspace_id, name, slug)
+                VALUES ('{project_id}', 'ws_boss', 'Entitlement Capacity', '{project_id}')
+                """
+            )
+        )
+        api_main.members.seed_default_members(connection, project_id, "test")
+        api_main.entitlements.seed_default_sources(connection, project_id, "test")
+
+    connected = client.post(
+        "/v1/entitlements/sources/openai_codex_chatgpt/connect",
+        json={
+            "project_id": project_id,
+            "connection_ref": "secretref://local/codex-session",
+            "auth_method": "official_cli_oauth",
+            "observed_capacity": {
+                "capacity_state": "exhausted",
+                "remaining_units": 0,
+                "reset_at": "2026-06-03T18:00:00Z",
+            },
+            "actor": "ceo",
+        },
+    )
+    assert connected.status_code == 200
+
+    preview = client.post(
+        "/v1/router/preview",
+        json={
+            "project_id": project_id,
+            "skill_id": "model.generate_text",
+            "task_kind": "planning",
+            "workload_class": "owner_sandbox",
+            "risk_tier": 1,
+            "preferred_capabilities": ["planning"],
+            "actor": "ceo",
+        },
+    )
+    assert preview.status_code == 200
+    payload = preview.json()
+    assert payload["source_id"] is None
+    assert any(
+        item["source_id"] == "openai_codex_chatgpt"
+        and item["reason"] == "capacity_exhausted"
+        and item["capacity_state"] == "exhausted"
+        and item["capacity_reset_at"] == "2026-06-03T18:00:00Z"
+        for item in payload["rejected_sources"]
+    )
+    assert payload["decision"]["rejected_source_count"] >= 1
+
+
+def test_router_preview_keeps_grok_oauth_subscription_out_of_multi_tenant(client, engine):
+    with engine.begin() as connection:
+        connection.execute(text("DELETE FROM events WHERE project_id = 'boss-grok-router'"))
+        connection.execute(
+            text("DELETE FROM routing_logs WHERE project_id = 'boss-grok-router'")
+        )
+        connection.execute(
+            text("DELETE FROM entitlement_sources WHERE project_id = 'boss-grok-router'")
+        )
+        connection.execute(text("DELETE FROM projects WHERE id = 'boss-grok-router'"))
+        connection.execute(
+            text(
+                """
+                INSERT INTO projects (id, workspace_id, name, slug)
+                VALUES ('boss-grok-router', 'ws_boss', 'BOSS Grok Router', 'boss-grok-router')
+                """
+            )
+        )
+        api_main.members.seed_default_members(connection, "boss-grok-router", "test")
+
+    source = client.post(
+        "/v1/entitlements/sources",
+        json={
+            "project_id": "boss-grok-router",
+            "provider": "xai",
+            "source_id": "xai_grok_build",
+            "source_kind": "official_cli",
+            "entitlement_kind": "subscription",
+            "owner_type": "workspace_operator",
+            "owner_id": "founder",
+            "workload_classes_allowed": [
+                "owner_sandbox",
+                "single_tenant_customer",
+                "multi_tenant_customer",
+            ],
+            "multi_tenant_allowed": False,
+            "supported_models": ["grok-code-fast"],
+            "task_strengths": ["coding"],
+            "risk_tier_max": 1,
+            "status": "active",
+            "auth_method": "official_device_oauth",
+            "connection_status": "connected",
+            "connection_ref": "local:grok-device-login",
+            "oauth_scopes": ["grok_build.local"],
+            "observed_capacity": {
+                "credential_present": True,
+                "official_oauth_connected": True,
+            },
+            "runtime_supported": True,
+            "actor": "ceo",
+        },
+    )
+    assert source.status_code == 201
+
+    preview = client.post(
+        "/v1/router/preview",
+        json={
+            "project_id": "boss-grok-router",
+            "skill_id": "model.generate_text",
+            "task_kind": "coding",
+            "workload_class": "multi_tenant_customer",
+            "risk_tier": 1,
+            "preferred_capabilities": ["coding"],
+            "actor": "ceo",
+        },
+    )
+    assert preview.status_code == 200
+    payload = preview.json()
+    assert payload["source_id"] is None
+    assert any(
+        item["source_id"] == "xai_grok_build"
+        and item["reason"] in {"provider_policy_disallows_workload", "multi_tenant_not_allowed"}
+        for item in payload["rejected_sources"]
+    )
+
+
+def test_model_adapter_and_entitlement_pool_v2_surfaces_are_visible(client, engine):
+    project_id = "boss-model-pools-v2"
+    with engine.begin() as connection:
+        connection.execute(text(f"DELETE FROM capacity_receipts WHERE project_id = '{project_id}'"))
+        connection.execute(text(f"DELETE FROM events WHERE project_id = '{project_id}'"))
+        connection.execute(text(f"DELETE FROM routing_logs WHERE project_id = '{project_id}'"))
+        connection.execute(text(f"DELETE FROM entitlement_sources WHERE project_id = '{project_id}'"))
+        connection.execute(text(f"DELETE FROM projects WHERE id = '{project_id}'"))
+        connection.execute(
+            text(
+                f"""
+                INSERT INTO projects (id, workspace_id, name, slug)
+                VALUES ('{project_id}', 'ws_boss', 'Model Pools V2', '{project_id}')
+                """
+            )
+        )
+        api_main.members.seed_default_members(connection, project_id, "test")
+        api_main.entitlements.seed_default_sources(connection, project_id, "test")
+
+    adapters = client.get("/v1/model-adapters")
+    assert adapters.status_code == 200
+    adapter_items = adapters.json()["items"]
+    assert any(
+        item["source_id"] == "openai_codex_chatgpt"
+        and item["official_connection_required"] is True
+        and item["multi_tenant_allowed"] is False
+        for item in adapter_items
+    )
+    assert any(
+        item["source_id"] == "xai_grok_build"
+        and item["auth_method"] == "official_device_oauth"
+        for item in adapter_items
+    )
+
+    pools = client.get("/v1/entitlement-pools", params={"project_id": project_id})
+    assert pools.status_code == 200
+    pool_items = pools.json()["items"]
+    codex_pool = next(
+        item for item in pool_items if item["source_id"] == "openai_codex_chatgpt"
+    )
+    assert codex_pool["id"] == f"pool_{project_id}_openai_codex_chatgpt"
+    assert codex_pool["access_class"] == "official_cli"
+    assert codex_pool["capacity_state"] == "unknown"
+    assert codex_pool["budget_policy_ref"] == f"budget_policy:{project_id}"
+
+
+def test_entitlement_pool_probe_writes_capacity_receipt_idempotently(client, engine):
+    project_id = "boss-capacity-probe-v2"
+    pool_id = f"pool_{project_id}_openai_codex_chatgpt"
+    with engine.begin() as connection:
+        connection.execute(text(f"DELETE FROM capacity_receipts WHERE project_id = '{project_id}'"))
+        connection.execute(text(f"DELETE FROM events WHERE project_id = '{project_id}'"))
+        connection.execute(text(f"DELETE FROM routing_logs WHERE project_id = '{project_id}'"))
+        connection.execute(text(f"DELETE FROM entitlement_sources WHERE project_id = '{project_id}'"))
+        connection.execute(text(f"DELETE FROM projects WHERE id = '{project_id}'"))
+        connection.execute(
+            text(
+                f"""
+                INSERT INTO projects (id, workspace_id, name, slug)
+                VALUES ('{project_id}', 'ws_boss', 'Capacity Probe V2', '{project_id}')
+                """
+            )
+        )
+        api_main.members.seed_default_members(connection, project_id, "test")
+        api_main.entitlements.seed_default_sources(connection, project_id, "test")
+
+    first = client.post(
+        f"/v1/entitlement-pools/{pool_id}/probe",
+        json={
+            "project_id": project_id,
+            "observed_capacity": {
+                "capacity_state": "rate_limited",
+                "remaining_units": 0,
+                "reset_at": "2026-06-03T18:00:00Z",
+                "observed_at": "2026-06-03T17:00:00Z",
+            },
+            "usage_units": {"requests": 1},
+            "provider_ref": "local-codex-session",
+            "dedupe_key": "capacity-probe-once",
+            "actor": "ceo",
+        },
+    )
+    assert first.status_code == 200
+    first_payload = first.json()
+    assert first_payload["duplicate"] is False
+    assert first_payload["pool"]["capacity_state"] == "rate_limited"
+    assert first_payload["receipt"]["entitlement_pool_id"] == pool_id
+    assert first_payload["receipt"]["capacity_kind"] == "subscription_cli"
+    assert first_payload["receipt"]["dedupe_key"] == "capacity-probe-once"
+
+    duplicate = client.post(
+        f"/v1/entitlement-pools/{pool_id}/probe",
+        json={
+            "project_id": project_id,
+            "observed_capacity": {
+                "capacity_state": "available",
+                "remaining_units": 100,
+            },
+            "dedupe_key": "capacity-probe-once",
+            "actor": "ceo",
+        },
+    )
+    assert duplicate.status_code == 200
+    duplicate_payload = duplicate.json()
+    assert duplicate_payload["duplicate"] is True
+    assert duplicate_payload["receipt"]["id"] == first_payload["receipt"]["id"]
+    assert duplicate_payload["pool"]["capacity_state"] == "rate_limited"
+
+    with engine.begin() as connection:
+        count = connection.execute(
+            text(
+                """
+                SELECT count(*) FROM capacity_receipts
+                WHERE project_id = :project_id
+                  AND entitlement_pool_id = :pool_id
+                  AND dedupe_key = 'capacity-probe-once'
+                """
+            ),
+            {"project_id": project_id, "pool_id": pool_id},
+        ).scalar_one()
+    assert count == 1
+
+    events = client.get("/v1/events", params={"project_id": project_id, "limit": 10})
+    assert events.status_code == 200
+    assert any(
+        item["event_type"] == "capacity.receipt_recorded"
+        for item in events.json()["items"]
+    )
+
+
+def test_model_route_decision_simulate_and_list_v2_surface(client, engine):
+    project_id = "boss-route-decisions-v2"
+    previous = api_main.entitlements.settings.openai_api_key
+    api_main.entitlements.settings.openai_api_key = "test-openai-key"
+    try:
+        with engine.begin() as connection:
+            connection.execute(text(f"DELETE FROM capacity_receipts WHERE project_id = '{project_id}'"))
+            connection.execute(text(f"DELETE FROM events WHERE project_id = '{project_id}'"))
+            connection.execute(text(f"DELETE FROM routing_logs WHERE project_id = '{project_id}'"))
+            connection.execute(text(f"DELETE FROM entitlement_sources WHERE project_id = '{project_id}'"))
+            connection.execute(text(f"DELETE FROM projects WHERE id = '{project_id}'"))
+            connection.execute(
+                text(
+                    f"""
+                    INSERT INTO projects (id, workspace_id, name, slug)
+                    VALUES ('{project_id}', 'ws_boss', 'Route Decisions V2', '{project_id}')
+                    """
+                )
+            )
+            api_main.members.seed_default_members(connection, project_id, "test")
+            api_main.entitlements.seed_default_sources(connection, project_id, "test")
+
+        simulated = client.post(
+            "/v1/model-route-decisions/simulate",
+            json={
+                "project_id": project_id,
+                "skill_id": "model.generate_text",
+                "task_kind": "planning",
+                "workload_class": "owner_sandbox",
+                "risk_tier": 1,
+                "data_boundary": "internal",
+                "preferred_capabilities": ["planning", "summarization"],
+                "actor": "ceo",
+            },
+        )
+    finally:
+        api_main.entitlements.settings.openai_api_key = previous
+
+    assert simulated.status_code == 200
+    decision = simulated.json()["decision"]
+    assert decision["selected_source_id"] == "openai_api"
+    assert decision["selected_entitlement_pool_id"] == f"pool_{project_id}_openai_api"
+    assert decision["selected_provider"] == "openai"
+    assert decision["policy_result"]["allowed"] is True
+    assert decision["data_boundary"] == "internal"
+
+    listed = client.get(
+        "/v1/model-route-decisions",
+        params={"project_id": project_id, "limit": 5},
+    )
+    assert listed.status_code == 200
+    assert any(item["id"] == decision["id"] for item in listed.json()["items"])
 
 
 def test_command_proposal_creates_task_job_artifact_and_task_lookup(client, engine):

@@ -1,0 +1,31 @@
+kind: WorkflowSpec
+id: model_entitlement_routing
+version: 0.1.0
+description: Route AI work across authorized local, subscription, API, and gateway capacity without bypassing provider limits.
+phases:
+  - id: collect_task_context
+    actor: model_entitlement_broker
+    outputs: [Task, SkillSpec]
+  - id: inspect_entitlement_pools
+    actor: model_entitlement_broker
+    outputs: [EntitlementPool, ModelProviderHealth]
+  - id: apply_policy
+    actor: policy_engine
+    outputs: [PolicyEvaluation]
+  - id: reserve_api_budget_if_needed
+    actor: budget_governor
+    outputs: [BudgetReservation]
+    optional: true
+  - id: select_route
+    actor: model_entitlement_broker
+    outputs: [ModelRouteDecision]
+  - id: record_capacity_or_cost
+    actor: model_entitlement_broker
+    outputs: [CapacityReceipt, CostReceipt]
+rules:
+  optimize_across_authorized_capacity_do_not_bypass_limits: true
+  paid_api_fallback_requires_budget_reservation: true
+  personal_subscription_not_for_multi_tenant: true
+  no_consumer_ui_scraping: true
+  rejected_sources_must_be_recorded: true
+

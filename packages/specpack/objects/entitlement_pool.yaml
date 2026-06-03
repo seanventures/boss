@@ -1,0 +1,36 @@
+kind: ObjectSpec
+id: EntitlementPool
+version: 0.1.0
+description: Governed AI capacity pool used by the Model Entitlement Broker.
+fields:
+  - name: id
+    type: string
+  - name: provider
+    type: enum
+    values: [openai, anthropic, google_ai, xai, cursor, local, openrouter, bedrock, vertex, azure_openai]
+  - name: access_class
+    type: enum
+    values: [local_model, official_cli, official_api, enterprise_model_gateway, managed_cloud_model_gateway]
+  - name: owner_type
+    type: enum
+    values: [user, org, workspace, project, enterprise_cluster]
+  - name: owner_id
+    type: string
+  - name: allowed_workload_classes
+    type: array
+  - name: routing_modes
+    type: array
+  - name: capacity_state
+    type: enum
+    values: [available, degraded, exhausted, rate_limited, blocked, unavailable, unknown]
+  - name: cooldown_until
+    type: datetime
+  - name: multi_tenant_allowed
+    type: boolean
+  - name: budget_policy_ref
+    type: string
+rules:
+  no_rate_limit_bypass: true
+  no_credential_sharing: true
+  no_personal_subscription_for_multi_tenant_workloads: true
+

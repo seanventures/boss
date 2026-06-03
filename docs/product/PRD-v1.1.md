@@ -173,8 +173,12 @@ OpenClaw is not the recommended foundation, durable brain, required runtime, or 
 
 - Treat OpenAI, Claude, Gemini, Cursor, Grok, and approved local models as entitlement pools, not unlimited compute.
 - Support official CLI, official coding agent, official API, and approved local model sources.
+- Support official OAuth, device OAuth, and CLI-authenticated public subscription connections where providers expose them, including Codex/ChatGPT, Claude Code Pro/Max, and Grok Build; BOSS stores only connection references, not raw OAuth tokens.
+- Expose API-driven connect/disconnect lifecycle for model entitlement sources, recording only SecretRefs or local official-session references plus non-secret metadata, scopes, capacity state, and audit events.
 - Route tasks based on task fit, observed capacity, provider rules, cost, quality, risk, and budget state.
-- Fail closed when a source is out of capacity, disallowed, missing credentials, blocked by data boundary, or blocked by provider terms.
+- Fail closed when a source is out of capacity, rate-limited, blocked, disallowed, missing credentials, blocked by data boundary, or blocked by provider terms.
+- Routing logs must include selected-source auth/connection/capacity context and rejected-source reasons with enough detail for operators to fix configuration or wait for capacity reset.
+- Public subscription sources remain owner-scoped or single-tenant only unless provider rules explicitly permit multi-tenant backend use.
 - Model-provider costs and rate limits are resource-plane concerns when they affect provider accounts, cost ledgers, commitments, or quota health.
 
 ## Elastic Resource Plane / ProviderOps

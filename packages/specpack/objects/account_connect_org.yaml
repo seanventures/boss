@@ -1,0 +1,27 @@
+kind: ObjectSpec
+id: AccountConnectOrg
+version: 0.1.0
+description: Hosted BOSS Account Connect organization identity for Cloud and attached Enterprise.
+fields:
+  - name: id
+    type: string
+  - name: hosted_org_id
+    type: string
+  - name: local_org_id
+    type: string
+  - name: connection_mode
+    type: enum
+    values: [cloud_required, attached, detached, disabled]
+  - name: marketplace_identity
+    type: object
+  - name: billing_portal_ref
+    type: string
+  - name: connector_authorization_refs
+    type: array
+  - name: optional_telemetry_enabled
+    type: boolean
+rules:
+  community_may_disable: true
+  cloud_requires_account_connect: true
+  enterprise_can_run_detached: true
+

@@ -11,6 +11,8 @@ export type RoutingLogFeedItem = {
   selectedSourceId?: string;
   selectedModelId?: string;
   denialReason?: string;
+  selectedSource?: Record<string, unknown>;
+  rejectedSources: Array<Record<string, unknown>>;
   createdAt: string;
 };
 
@@ -31,6 +33,11 @@ function mapLog(payload: RoutingLogItem): RoutingLogFeedItem {
     selectedSourceId: payload.selected_source_id,
     selectedModelId: payload.selected_model_id,
     denialReason: payload.denial_reason,
+    selectedSource:
+      payload.decision && typeof payload.decision.selected_source === "object"
+        ? (payload.decision.selected_source as Record<string, unknown>)
+        : undefined,
+    rejectedSources: payload.rejected_sources,
     createdAt: payload.created_at,
   };
 }

@@ -109,6 +109,263 @@ describe("createBossApiClient", () => {
     expect(calls[1].init?.method).toBe("POST");
   });
 
+  it("carries entitlement OAuth connection metadata through the API contract", async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const entitlementSource = {
+      id: "src_boss_openai_codex_chatgpt",
+      project_id: "boss-dogfood",
+      provider: "openai",
+      source_id: "openai_codex_chatgpt",
+      source_kind: "official_cli",
+      entitlement_kind: "subscription",
+      owner_type: "workspace_operator",
+      owner_id: "founder",
+      workload_classes_allowed: ["owner_sandbox"],
+      multi_tenant_allowed: false,
+      credential_ref: "BOSS_OPENAI_CODEX_OAUTH_SESSION_REF",
+      cost_mode: "subscription",
+      limit_shape: {},
+      supported_models: ["codex"],
+      task_strengths: ["coding"],
+      risk_tier_max: 1,
+      status: "active",
+      effective_status: "active",
+      auth_method: "official_cli_oauth",
+      connection_status: "connected",
+      connection_ref: "local:codex-login",
+      oauth_scopes: ["codex.local"],
+      connection_metadata: { login_command: "codex login" },
+      policy_notes: ["Do not use as shared backend infrastructure."],
+      observed_capacity: {
+        credential_present: true,
+        official_oauth_connected: true,
+      },
+      runtime_supported: true,
+      created_at: "2026-06-03T00:00:00Z",
+      updated_at: "2026-06-03T00:00:00Z",
+    };
+    const disconnectedSource = {
+      ...entitlementSource,
+      connection_status: "revoked",
+      effective_status: "missing_oauth_connection",
+      observed_capacity: {
+        credential_present: false,
+        official_oauth_connected: false,
+        capacity_state: "unknown",
+      },
+    };
+    const responses = [
+      { status: 200, body: { project_id: "boss-dogfood", items: [entitlementSource] } },
+      { status: 201, body: entitlementSource },
+      { status: 200, body: entitlementSource },
+      { status: 200, body: disconnectedSource },
+    ];
+    const fetchImpl = async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({ url: String(input), init });
+      const response = responses.shift();
+      return new Response(JSON.stringify(response?.body ?? {}), {
+        status: response?.status ?? 500,
+        headers: { "Content-Type": "application/json" },
+      });
+    };
+    const client = createBossApiClient({
+      baseUrl: "http://127.0.0.1:8000",
+      fetchImpl,
+    });
+
+    const listed = await client.listEntitlementSources("boss-dogfood");
+    const upserted = await client.upsertEntitlementSource({
+      project_id: "boss-dogfood",
+      provider: "openai",
+      source_id: "openai_codex_chatgpt",
+      source_kind: "official_cli",
+      entitlement_kind: "subscription",
+      owner_type: "workspace_operator",
+      owner_id: "founder",
+      auth_method: "official_cli_oauth",
+      connection_status: "connected",
+      connection_ref: "local:codex-login",
+      oauth_scopes: ["codex.local"],
+      connection_metadata: { login_command: "codex login" },
+      actor: "ceo",
+    });
+    const connected = await client.connectEntitlementSource("openai_codex_chatgpt", {
+      project_id: "boss-dogfood",
+      connection_ref: "local:codex-login",
+      auth_method: "official_cli_oauth",
+      oauth_scopes: ["codex.local"],
+      connection_metadata: { login_command: "codex login" },
+      observed_capacity: { capacity_state: "available", remaining_units: 10 },
+      actor: "ceo",
+    });
+    const disconnected = await client.disconnectEntitlementSource(
+      "openai_codex_chatgpt",
+      {
+        project_id: "boss-dogfood",
+        reason: "operator_revoked_session",
+        actor: "ceo",
+      },
+    );
+
+    expect(listed.items[0].auth_method).toBe("official_cli_oauth");
+    expect(listed.items[0].connection_status).toBe("connected");
+    expect(upserted.connection_ref).toBe("local:codex-login");
+    expect(connected.observed_capacity.official_oauth_connected).toBe(true);
+    expect(disconnected.connection_status).toBe("revoked");
+    expect(calls[0].url).toContain("/v1/entitlements/sources");
+    expect(calls[1].init?.method).toBe("POST");
+    expect(calls[2].url).toContain(
+      "/v1/entitlements/sources/openai_codex_chatgpt/connect",
+    );
+    expect(calls[3].url).toContain(
+      "/v1/entitlements/sources/openai_codex_chatgpt/disconnect",
+    );
+  });
+
+  it("uses the v2 Model Entitlement Broker API contract", async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const adapter = {
+      id: "adapter_openai_api",
+      provider: "openai",
+      source_id: "openai_api",
+      source_kind: "official_api",
+      access_class: "official_api",
+      entitlement_kind: "usage_based_api",
+      auth_method: "api_key",
+      connection_ref: "OPENAI_API_KEY",
+      supported_models: ["gpt-5.2-codex"],
+      task_strengths: ["planning"],
+      allowed_workload_classes: ["owner_sandbox", "multi_tenant_customer"],
+      multi_tenant_allowed: true,
+      runtime_supported: true,
+      credential_present: true,
+      official_connection_required: false,
+      policy_notes: ["API usage requires billing."],
+    };
+    const pool = {
+      id: "pool_boss-dogfood_openai_api",
+      project_id: "boss-dogfood",
+      provider: "openai",
+      source_id: "openai_api",
+      source_kind: "official_api",
+      access_class: "official_api",
+      auth_method: "api_key",
+      connection_status: "connected",
+      effective_status: "active",
+      owner_type: "project",
+      owner_id: "boss-dogfood",
+      allowed_workload_classes: ["owner_sandbox"],
+      routing_modes: ["budget_safe"],
+      capacity_state: "available",
+      multi_tenant_allowed: true,
+      budget_policy_ref: "budget_policy:boss-dogfood",
+      runtime_supported: true,
+      supported_models: ["gpt-5.2-codex"],
+      task_strengths: ["planning"],
+      risk_tier_max: 3,
+      observed_capacity: { capacity_state: "available" },
+      policy_notes: [],
+      updated_at: "2026-06-03T00:00:00Z",
+    };
+    const receipt = {
+      id: "caprec_1",
+      project_id: "boss-dogfood",
+      entitlement_pool_id: pool.id,
+      source_id: "openai_api",
+      provider: "openai",
+      capacity_kind: "official_api",
+      usage_units: { requests: 1 },
+      capacity_state_after: "available",
+      dedupe_key: "probe-1",
+      status: "recorded",
+      observed_capacity: { capacity_state: "available" },
+      created_by: "ceo",
+      created_at: "2026-06-03T00:00:00Z",
+    };
+    const decision = {
+      id: "route_1",
+      project_id: "boss-dogfood",
+      skill_id: "model.generate_text",
+      task_kind: "planning",
+      workload_class: "owner_sandbox",
+      risk_tier: 1,
+      selected_entitlement_pool_id: pool.id,
+      selected_source_id: "openai_api",
+      selected_provider: "openai",
+      selected_model_id: "openai:gpt-5.2-codex",
+      routing_mode: "budget_safe",
+      rejected_sources: [],
+      budget_state: "green",
+      data_boundary: "internal",
+      capacity_snapshot: { source_id: "openai_api" },
+      policy_result: { allowed: true },
+      created_at: "2026-06-03T00:00:00Z",
+    };
+    const responses = [
+      { status: 200, body: { items: [adapter] } },
+      { status: 200, body: { project_id: "boss-dogfood", items: [pool] } },
+      {
+        status: 200,
+        body: {
+          project_id: "boss-dogfood",
+          pool,
+          receipt,
+          duplicate: false,
+        },
+      },
+      { status: 200, body: { project_id: "boss-dogfood", decision } },
+      { status: 200, body: { project_id: "boss-dogfood", items: [decision] } },
+    ];
+    const fetchImpl = async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({ url: String(input), init });
+      const response = responses.shift();
+      return new Response(JSON.stringify(response?.body ?? {}), {
+        status: response?.status ?? 500,
+        headers: { "Content-Type": "application/json" },
+      });
+    };
+    const client = createBossApiClient({
+      baseUrl: "http://127.0.0.1:8000",
+      fetchImpl,
+    });
+
+    const adapters = await client.listModelAdapters();
+    const pools = await client.listEntitlementPools("boss-dogfood");
+    const probe = await client.probeEntitlementPool(pool.id, {
+      project_id: "boss-dogfood",
+      observed_capacity: { capacity_state: "available" },
+      usage_units: { requests: 1 },
+      dedupe_key: "probe-1",
+      actor: "ceo",
+    });
+    const simulated = await client.simulateModelRouteDecision({
+      project_id: "boss-dogfood",
+      skill_id: "model.generate_text",
+      task_kind: "planning",
+      workload_class: "owner_sandbox",
+      actor: "ceo",
+    });
+    const listed = await client.listModelRouteDecisions("boss-dogfood", 5);
+
+    expect(adapters.items[0].source_id).toBe("openai_api");
+    expect(pools.items[0].id).toBe(pool.id);
+    expect(probe.receipt.dedupe_key).toBe("probe-1");
+    expect(simulated.decision.selected_entitlement_pool_id).toBe(pool.id);
+    expect(listed.items[0].id).toBe("route_1");
+    expect(calls[0].url).toBe("http://127.0.0.1:8000/v1/model-adapters");
+    expect(calls[1].url).toContain("/v1/entitlement-pools?project_id=boss-dogfood");
+    expect(calls[2].url).toContain(
+      "/v1/entitlement-pools/pool_boss-dogfood_openai_api/probe",
+    );
+    expect(calls[2].init?.method).toBe("POST");
+    expect(calls[3].url).toBe(
+      "http://127.0.0.1:8000/v1/model-route-decisions/simulate",
+    );
+    expect(calls[4].url).toContain(
+      "/v1/model-route-decisions?project_id=boss-dogfood&limit=5",
+    );
+  });
+
   it("creates compliance evidence bundles through the API contract", async () => {
     const calls: Array<{ url: string; init?: RequestInit }> = [];
     const fetchImpl = async (input: RequestInfo | URL, init?: RequestInit) => {

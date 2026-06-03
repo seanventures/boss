@@ -95,6 +95,24 @@ class Settings(BaseSettings):
         alias="BOSS_OIDC_SUBJECT_PRINCIPALS",
     )
     openai_model: str = Field(default="gpt-5.2-codex", alias="BOSS_OPENAI_MODEL")
+    openai_codex_oauth_enabled: bool = Field(
+        default=False, alias="BOSS_OPENAI_CODEX_OAUTH_ENABLED"
+    )
+    openai_codex_oauth_session_ref: Optional[str] = Field(
+        default=None, alias="BOSS_OPENAI_CODEX_OAUTH_SESSION_REF"
+    )
+    anthropic_claude_oauth_enabled: bool = Field(
+        default=False, alias="BOSS_ANTHROPIC_CLAUDE_OAUTH_ENABLED"
+    )
+    anthropic_claude_oauth_session_ref: Optional[str] = Field(
+        default=None, alias="BOSS_ANTHROPIC_CLAUDE_OAUTH_SESSION_REF"
+    )
+    xai_grok_oauth_enabled: bool = Field(
+        default=False, alias="BOSS_XAI_GROK_OAUTH_ENABLED"
+    )
+    xai_grok_oauth_session_ref: Optional[str] = Field(
+        default=None, alias="BOSS_XAI_GROK_OAUTH_SESSION_REF"
+    )
     github_token: Optional[str] = Field(
         default=None, validation_alias=AliasChoices("BOSS_GITHUB_TOKEN", "GITHUB_TOKEN")
     )

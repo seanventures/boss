@@ -1,0 +1,30 @@
+kind: Policy
+id: enterprise_governance_policy
+version: 0.1.0
+scope:
+  type: enterprise
+rules:
+  identity:
+    sso_oidc: true
+    saml: true
+    scim: true
+    rbac: true
+    abac: true
+  audit:
+    exports_required: true
+    retention_policy_required: true
+    compliance_evidence_workflows: true
+  infrastructure:
+    private_workers: true
+    private_model_gateway: true
+    data_residency: true
+    private_networking_later: true
+    air_gapped_later: true
+  support:
+    support_sla: true
+    lts_builds: true
+  account_connect:
+    attached_mode_supported: true
+    detached_mode_supported: true
+  secrets:
+    agents_receive_raw_provider_secrets: false

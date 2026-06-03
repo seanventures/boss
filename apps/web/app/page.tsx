@@ -1,6 +1,7 @@
 import {
   applyChangeSetAction,
   approveChangeSetAction,
+  connectEntitlementSourceAction,
   createChangeSetAction,
   createDeploymentTargetAction,
   createProviderAccountAction,
@@ -15,6 +16,7 @@ import {
   refreshHealthSnapshotAction,
   recordSelfImprovementCanaryAction,
   recordSelfImprovementRolloutAction,
+  disconnectEntitlementSourceAction,
   revokeBreakGlassGrantAction,
   resolveDecisionAction,
   rollbackSelfImprovementProposalAction,
@@ -131,8 +133,16 @@ function entitlementBadge(
     effectiveStatus: string;
     runtimeSupported: boolean;
     credentialPresent: boolean;
+    capacityState?: string;
   },
 ): string {
+  if (
+    source.capacityState === "exhausted" ||
+    source.capacityState === "rate_limited" ||
+    source.capacityState === "blocked"
+  ) {
+    return titleCaseToken(source.capacityState);
+  }
   if (source.effectiveStatus === "active") {
     return "active";
   }
@@ -150,10 +160,27 @@ function entitlementDetail(
     runtimeSupported: boolean;
     credentialPresent: boolean;
     credentialRef?: string;
+    authMethod?: string;
+    connectionStatus?: string;
+    connectionRef?: string;
+    capacityState?: string;
+    capacityResetAt?: string;
   },
 ): string {
+  const authMethod = titleCaseToken(source.authMethod ?? "unknown");
+  const capacity = `Capacity ${titleCaseToken(source.capacityState ?? "unknown")}${
+    source.capacityResetAt ? ` until ${formatDateTime(source.capacityResetAt)}` : ""
+  }`;
+  if (source.authMethod?.includes("oauth")) {
+    if (source.connectionStatus === "connected" && source.credentialPresent) {
+      return `${authMethod} connected through ${
+        source.connectionRef ?? source.credentialRef ?? "official session"
+      }. ${capacity}.`;
+    }
+    return `${authMethod} is available, but no active official session is connected. ${capacity}.`;
+  }
   if (source.runtimeSupported && source.credentialPresent) {
-    return "Adapter support is enabled and credentials are present.";
+    return `Adapter support is enabled and ${authMethod} credentials are present. ${capacity}.`;
   }
   if (source.runtimeSupported && !source.credentialPresent) {
     return source.credentialRef
@@ -161,6 +188,19 @@ function entitlementDetail(
       : "Adapter support is enabled, but credentials are missing.";
   }
   return "This source is currently registry inventory only and cannot execute work.";
+}
+
+function routingRejectionSummary(rejectedSources: Array<Record<string, unknown>>): string {
+  const summary = rejectedSources
+    .slice(0, 3)
+    .map((source) => {
+      const sourceId = typeof source.source_id === "string" ? source.source_id : "source";
+      const reason = typeof source.reason === "string" ? source.reason : "rejected";
+      const capacityState =
+        typeof source.capacity_state === "string" ? ` / ${source.capacity_state}` : "";
+      return `${sourceId}: ${reason}${capacityState}`;
+    });
+  return summary.length > 0 ? summary.join("; ") : "No rejected-source details recorded.";
 }
 
 function decisionStatusDetail(decision: DecisionFeedItem): string {
@@ -2999,11 +3039,101 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                           {source.effectiveStatus}
                         </p>
                         <p className="detail">
+                          Auth {titleCaseToken(source.authMethod)} / connection{" "}
+                          {source.connectionStatus}
+                          {source.oauthScopes.length > 0
+                            ? ` / scopes ${source.oauthScopes.join(", ")}`
+                            : ""}
+                        </p>
+                        <p className="detail">
+                          Capacity {titleCaseToken(source.capacityState)}
+                          {source.capacityResetAt
+                            ? ` / resets ${formatDateTime(source.capacityResetAt)}`
+                            : ""}
+                          {source.observedAt
+                            ? ` / observed ${formatDateTime(source.observedAt)}`
+                            : ""}
+                        </p>
+                        <p className="detail">
                           {source.supportedModels.length > 0
                             ? source.supportedModels.join(", ")
                             : "No runtime-backed models"}
                         </p>
                         <p className="detail">{entitlementDetail(source)}</p>
+                        {source.authMethod.includes("oauth") ? (
+                          source.connectionStatus === "connected" ? (
+                            <form
+                              action={disconnectEntitlementSourceAction}
+                              className="composer compact"
+                            >
+                              <input
+                                type="hidden"
+                                name="project_id"
+                                value={activeProjectId}
+                              />
+                              <input type="hidden" name="actor" value={activeActorId} />
+                              <input
+                                type="hidden"
+                                name="source_id"
+                                value={source.sourceId}
+                              />
+                              <input
+                                type="hidden"
+                                name="reason"
+                                value="Operator disconnected official session reference from ProviderOps."
+                              />
+                              <button className="button secondary" type="submit">
+                                Disconnect session
+                              </button>
+                            </form>
+                          ) : (
+                            <form
+                              action={connectEntitlementSourceAction}
+                              className="composer compact"
+                            >
+                              <input
+                                type="hidden"
+                                name="project_id"
+                                value={activeProjectId}
+                              />
+                              <input type="hidden" name="actor" value={activeActorId} />
+                              <input
+                                type="hidden"
+                                name="source_id"
+                                value={source.sourceId}
+                              />
+                              <input
+                                type="hidden"
+                                name="auth_method"
+                                value={source.authMethod}
+                              />
+                              <input
+                                className="input"
+                                name="connection_ref"
+                                aria-label="Official session connection reference"
+                                placeholder="SecretRef or local session ref"
+                                required
+                              />
+                              <textarea
+                                className="input"
+                                name="oauth_scopes"
+                                aria-label="OAuth scopes"
+                                defaultValue={source.oauthScopes.join("\n")}
+                                placeholder="One OAuth scope per line"
+                              />
+                              <textarea
+                                className="input"
+                                name="observed_capacity_json"
+                                aria-label="Observed capacity JSON"
+                                defaultValue={`{"capacity_state":"available"}`}
+                                placeholder="Observed capacity JSON"
+                              />
+                              <button className="button secondary" type="submit">
+                                Connect official session
+                              </button>
+                            </form>
+                          )
+                        ) : null}
                       </div>
                       <span
                         className={`pill${
@@ -3040,6 +3170,19 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                         <p className="detail">
                           {route.workloadClass} / {route.dataBoundary} /{" "}
                           {formatDateTime(route.createdAt)}
+                        </p>
+                        <p className="detail">
+                          {route.selectedSource
+                            ? `Auth ${
+                                typeof route.selectedSource.auth_method === "string"
+                                  ? titleCaseToken(route.selectedSource.auth_method)
+                                  : "Unknown"
+                              } / capacity ${
+                                typeof route.selectedSource.capacity_state === "string"
+                                  ? titleCaseToken(route.selectedSource.capacity_state)
+                                  : "Unknown"
+                              }`
+                            : routingRejectionSummary(route.rejectedSources)}
                         </p>
                       </div>
                       <code className="mono">{route.id}</code>

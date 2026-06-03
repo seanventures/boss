@@ -1,0 +1,37 @@
+kind: ObjectSpec
+id: ModelRouteDecision
+version: 0.1.0
+description: Auditable routing decision for model, CLI, local, or gateway capacity.
+fields:
+  - name: id
+    type: string
+  - name: project_id
+    type: string
+  - name: task_id
+    type: string
+  - name: skill_id
+    type: string
+  - name: selected_entitlement_pool_id
+    type: string
+  - name: selected_model_id
+    type: string
+  - name: routing_mode
+    type: enum
+    values: [subscription_first, quality_first, budget_safe, parallel_sprint, local_first, enterprise_policy]
+  - name: rejected_sources
+    type: array
+  - name: budget_state
+    type: string
+  - name: data_boundary
+    type: string
+  - name: capacity_snapshot
+    type: object
+  - name: policy_result
+    type: object
+  - name: created_at
+    type: datetime
+rules:
+  record_every_selection: true
+  include_rejected_source_reasons: true
+  include_capacity_snapshot: true
+

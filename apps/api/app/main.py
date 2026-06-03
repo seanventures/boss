@@ -77,6 +77,8 @@ from .schemas import (
     DeadletterListResponse,
     DriftReportListResponse,
     DriftReportSummary,
+    EntitlementSourceConnectRequest,
+    EntitlementSourceDisconnectRequest,
     EntitlementSourceListResponse,
     EntitlementSourceSummary,
     EntitlementSourceUpsertRequest,
@@ -136,6 +138,17 @@ from .schemas import (
     PolicyRecordCreateRequest,
     PolicyRecordListResponse,
     PolicyRecordSummary,
+    CapacityReceiptSummary,
+    EntitlementPoolListResponse,
+    EntitlementPoolProbeRequest,
+    EntitlementPoolProbeResponse,
+    EntitlementPoolSummary,
+    ModelAdapterListResponse,
+    ModelAdapterSummary,
+    ModelRouteDecisionListResponse,
+    ModelRouteDecisionSimulateRequest,
+    ModelRouteDecisionSimulateResponse,
+    ModelRouteDecisionSummary,
     ProviderAccountCreateRequest,
     ProviderAccountListResponse,
     ProviderAccountSummary,
@@ -223,7 +236,13 @@ from .services.decisions import (
     DecisionService,
     InvalidDecisionTransitionError,
 )
-from .services.entitlements import EntitlementBrokerService, SkillNotFoundError
+from .services.entitlements import (
+    EntitlementBrokerService,
+    EntitlementPoolNotFoundError,
+    EntitlementSourceNotFoundError,
+    InvalidEntitlementConnectionError,
+    SkillNotFoundError,
+)
 from .services.health import HealthSnapshotService
 from .services.infrastructure import (
     InfraResourceNotFoundError,
@@ -1110,12 +1129,29 @@ def entitlement_source_summary_from_service(
         risk_tier_max=payload["risk_tier_max"],
         status=payload["status"],
         effective_status=payload["effective_status"],
+        auth_method=payload.get("auth_method", "api_key"),
+        connection_status=payload.get("connection_status", "not_connected"),
+        connection_ref=payload.get("connection_ref"),
+        oauth_scopes=payload.get("oauth_scopes") or [],
+        connection_metadata=payload.get("connection_metadata") or {},
         policy_notes=payload.get("policy_notes") or [],
         observed_capacity=payload.get("observed_capacity") or {},
         runtime_supported=bool(payload["runtime_supported"]),
         created_at=payload["created_at"],
         updated_at=payload["updated_at"],
     )
+
+
+def model_adapter_summary_from_service(payload) -> ModelAdapterSummary:
+    return ModelAdapterSummary(**payload)
+
+
+def entitlement_pool_summary_from_service(payload) -> EntitlementPoolSummary:
+    return EntitlementPoolSummary(**payload)
+
+
+def capacity_receipt_summary_from_service(payload) -> CapacityReceiptSummary:
+    return CapacityReceiptSummary(**payload)
 
 
 def routing_log_item_from_service(payload) -> RoutingLogItem:
@@ -1138,6 +1174,10 @@ def routing_log_item_from_service(payload) -> RoutingLogItem:
         if hasattr(payload["created_at"], "isoformat")
         else payload["created_at"],
     )
+
+
+def model_route_decision_summary_from_service(payload) -> ModelRouteDecisionSummary:
+    return ModelRouteDecisionSummary(**payload)
 
 
 @app.get("/health", response_model=HealthResponse)
@@ -2236,6 +2276,116 @@ def list_skills() -> SkillListResponse:
     )
 
 
+@app.get("/v1/model-adapters", response_model=ModelAdapterListResponse)
+def list_model_adapters() -> ModelAdapterListResponse:
+    return ModelAdapterListResponse(
+        items=[
+            model_adapter_summary_from_service(adapter)
+            for adapter in entitlements.list_model_adapters()
+        ]
+    )
+
+
+@app.get("/v1/entitlement-pools", response_model=EntitlementPoolListResponse)
+def list_entitlement_pools(project_id: str) -> EntitlementPoolListResponse:
+    with begin(engine) as connection:
+        items = entitlements.list_entitlement_pools(connection, project_id)
+        return EntitlementPoolListResponse(
+            project_id=project_id,
+            items=[entitlement_pool_summary_from_service(item) for item in items],
+        )
+
+
+@app.post(
+    "/v1/entitlement-pools/{pool_id}/probe",
+    response_model=EntitlementPoolProbeResponse,
+)
+def probe_entitlement_pool(
+    pool_id: str,
+    payload: EntitlementPoolProbeRequest,
+) -> EntitlementPoolProbeResponse:
+    with begin(engine) as connection:
+        try:
+            require_project_actor(
+                connection,
+                payload.project_id,
+                payload.actor,
+                "entitlement_manage",
+            )
+            result = entitlements.record_capacity_probe(
+                connection,
+                payload.project_id,
+                pool_id,
+                actor=payload.actor,
+                observed_capacity=payload.observed_capacity,
+                usage_units=payload.usage_units,
+                provider_ref=payload.provider_ref,
+                model_route_decision_id=payload.model_route_decision_id,
+                dedupe_key=payload.dedupe_key,
+                status=payload.status,
+            )
+        except EntitlementPoolNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        return EntitlementPoolProbeResponse(
+            project_id=payload.project_id,
+            pool=entitlement_pool_summary_from_service(result["pool"]),
+            receipt=capacity_receipt_summary_from_service(result["receipt"]),
+            duplicate=bool(result["duplicate"]),
+        )
+
+
+@app.get(
+    "/v1/model-route-decisions",
+    response_model=ModelRouteDecisionListResponse,
+)
+def list_model_route_decisions(
+    project_id: str, limit: int = 25
+) -> ModelRouteDecisionListResponse:
+    if limit < 1 or limit > 200:
+        raise HTTPException(status_code=400, detail="limit must be between 1 and 200.")
+    with begin(engine) as connection:
+        items = entitlements.list_model_route_decisions(connection, project_id, limit)
+        return ModelRouteDecisionListResponse(
+            project_id=project_id,
+            items=[model_route_decision_summary_from_service(item) for item in items],
+        )
+
+
+@app.post(
+    "/v1/model-route-decisions/simulate",
+    response_model=ModelRouteDecisionSimulateResponse,
+)
+def simulate_model_route_decision(
+    payload: ModelRouteDecisionSimulateRequest,
+) -> ModelRouteDecisionSimulateResponse:
+    with begin(engine) as connection:
+        try:
+            require_project_actor(
+                connection,
+                payload.project_id,
+                payload.actor,
+                "entitlement_manage",
+            )
+            decision = entitlements.simulate_model_route_decision(
+                connection,
+                payload.project_id,
+                skill_id=payload.skill_id,
+                task_kind=payload.task_kind,
+                workload_class=payload.workload_class,
+                risk_tier=payload.risk_tier,
+                data_boundary=payload.data_boundary,
+                preferred_capabilities=payload.preferred_capabilities,
+                budget_state=payload.budget_state,
+                actor=payload.actor,
+            )
+        except SkillNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        return ModelRouteDecisionSimulateResponse(
+            project_id=payload.project_id,
+            decision=model_route_decision_summary_from_service(decision),
+        )
+
+
 @app.get("/v1/entitlements/sources", response_model=EntitlementSourceListResponse)
 def list_entitlement_sources(project_id: str) -> EntitlementSourceListResponse:
     with begin(engine) as connection:
@@ -2266,6 +2416,68 @@ def upsert_entitlement_source(
             payload.model_dump(exclude={"actor"}),
             actor=payload.actor,
         )
+        return entitlement_source_summary_from_service(item)
+
+
+@app.post(
+    "/v1/entitlements/sources/{source_id}/connect",
+    response_model=EntitlementSourceSummary,
+)
+def connect_entitlement_source(
+    source_id: str,
+    payload: EntitlementSourceConnectRequest,
+) -> EntitlementSourceSummary:
+    with begin(engine) as connection:
+        try:
+            require_project_actor(
+                connection,
+                payload.project_id,
+                payload.actor,
+                "entitlement_manage",
+            )
+            item = entitlements.connect_source(
+                connection,
+                payload.project_id,
+                source_id,
+                actor=payload.actor,
+                connection_ref=payload.connection_ref,
+                auth_method=payload.auth_method,
+                oauth_scopes=payload.oauth_scopes,
+                connection_metadata=payload.connection_metadata,
+                observed_capacity=payload.observed_capacity,
+            )
+        except EntitlementSourceNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except InvalidEntitlementConnectionError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        return entitlement_source_summary_from_service(item)
+
+
+@app.post(
+    "/v1/entitlements/sources/{source_id}/disconnect",
+    response_model=EntitlementSourceSummary,
+)
+def disconnect_entitlement_source(
+    source_id: str,
+    payload: EntitlementSourceDisconnectRequest,
+) -> EntitlementSourceSummary:
+    with begin(engine) as connection:
+        try:
+            require_project_actor(
+                connection,
+                payload.project_id,
+                payload.actor,
+                "entitlement_manage",
+            )
+            item = entitlements.disconnect_source(
+                connection,
+                payload.project_id,
+                source_id,
+                actor=payload.actor,
+                reason=payload.reason,
+            )
+        except EntitlementSourceNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
         return entitlement_source_summary_from_service(item)
 
 

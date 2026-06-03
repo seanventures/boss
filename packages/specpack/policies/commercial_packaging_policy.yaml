@@ -1,0 +1,44 @@
+kind: Policy
+id: commercial_packaging_policy
+version: 0.1.0
+scope:
+  type: product
+rules:
+  product_model: open_core_managed_cloud_enterprise
+  legal_review_required_before_license_selection: true
+  community:
+    must_be_useful: true
+    hosted_account_connect_required: false
+    candidate_license: AGPLv3
+    included_capabilities:
+      - local_auth
+      - local_control_plane
+      - local_runner
+      - basic_mission_control
+      - basic_budget_governor
+      - basic_model_entitlement_broker
+      - basic_providerops_readonly
+      - role_skill_pack_formats
+  cloud:
+    requires_account_connect: true
+    monetizes:
+      - hosted_control_plane
+      - managed_workers
+      - managed_connector_gateway
+      - managed_model_gateway
+      - hosted_providerops
+      - cloud_billing
+  enterprise:
+    monetizes:
+      - sso_scim_saml
+      - rbac_abac
+      - audit_exports
+      - clustering
+      - ha
+      - private_workers
+      - private_model_gateway
+      - enterprise_providerops
+      - support_sla
+  language:
+    do_not_call_restricted_source_available_code_open_source: true
+

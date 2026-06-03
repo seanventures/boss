@@ -9,8 +9,16 @@ export type EntitlementSourceFeedItem = {
   sourceKind: string;
   status: string;
   effectiveStatus: string;
+  authMethod: string;
+  connectionStatus: string;
+  connectionRef?: string;
+  oauthScopes: string[];
+  connectionMetadata: Record<string, unknown>;
   runtimeSupported: boolean;
   credentialPresent: boolean;
+  capacityState: string;
+  capacityResetAt?: string;
+  observedAt?: string;
   credentialRef?: string;
   supportedModels: string[];
 };
@@ -30,8 +38,29 @@ function mapSource(payload: EntitlementSourceSummary): EntitlementSourceFeedItem
     sourceKind: payload.source_kind,
     status: payload.status,
     effectiveStatus: payload.effective_status,
+    authMethod: payload.auth_method,
+    connectionStatus: payload.connection_status,
+    connectionRef: payload.connection_ref,
+    oauthScopes: payload.oauth_scopes,
+    connectionMetadata: payload.connection_metadata,
     runtimeSupported: payload.runtime_supported,
     credentialPresent: Boolean(payload.observed_capacity?.credential_present),
+    capacityState:
+      typeof payload.observed_capacity?.capacity_state === "string"
+        ? payload.observed_capacity.capacity_state
+        : "unknown",
+    capacityResetAt:
+      typeof payload.observed_capacity?.reset_at === "string"
+        ? payload.observed_capacity.reset_at
+        : typeof payload.observed_capacity?.rate_limit_reset_at === "string"
+          ? payload.observed_capacity.rate_limit_reset_at
+          : undefined,
+    observedAt:
+      typeof payload.observed_capacity?.observed_at === "string"
+        ? payload.observed_capacity.observed_at
+        : typeof payload.observed_capacity?.last_checked_at === "string"
+          ? payload.observed_capacity.last_checked_at
+          : undefined,
     credentialRef: payload.credential_ref,
     supportedModels: payload.supported_models,
   };

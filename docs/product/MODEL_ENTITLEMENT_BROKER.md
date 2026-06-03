@@ -8,7 +8,7 @@ The Model Entitlement Broker is the control-plane service that decides which AI 
 
 BOSS must treat model access as governed capacity, not as an undifferentiated pool of "AI compute".
 
-In PRD v1.1, model-provider accounts, usage/cost sync, quota health, and API key ownership also participate in ProviderOps. The Model Entitlement Broker chooses eligible AI capacity; the Resource Plane Kernel tracks provider accounts, cost events, health, commitments, and receipts for provider-side actions.
+In PRD v2.0, model-provider accounts, usage/cost sync, quota health, and API key ownership also participate in ProviderOps. The Model Entitlement Broker chooses eligible AI capacity; the Resource Plane Kernel tracks provider accounts, cost events, health, commitments, and receipts for provider-side actions.
 
 ## Supported source kinds
 
@@ -16,6 +16,56 @@ In PRD v1.1, model-provider accounts, usage/cost sync, quota health, and API key
 - `official_coding_agent`
 - `official_api`
 - `approved_local_model`
+
+## Supported connection methods
+
+- `api_key`: official provider API keys for usage-billed production paths.
+- `official_cli_oauth`: a local official CLI session connected by the entitled user.
+- `official_device_oauth`: a local or headless device-code session exposed by an official provider CLI.
+- `official_browser_oauth`: a browser-based official provider login flow.
+- `local_host`: approved local model capacity owned by an explicit runner host.
+
+Subscription-backed public model sources must have a connected official OAuth/CLI session before routing. BOSS stores only a `connection_ref` or `SecretRef`, not raw OAuth tokens.
+
+## Connection lifecycle
+
+BOSS does not perform stealth login flows or collect raw provider OAuth tokens. A connection is recorded only after an entitled operator has completed the provider's official login flow through an official CLI, coding agent, device flow, browser OAuth flow, API key, or approved local runner.
+
+Connection operations:
+
+- `connect`: records the source's `connection_ref`, connection method, non-secret metadata, scopes, and observed capacity; emits `entitlement.source_connected`.
+- `disconnect`: revokes the local connection reference, marks credentials absent, resets capacity to `unknown`, and emits `entitlement.source_disconnected`.
+- invalid subscription connections using non-OAuth methods are rejected before route eligibility.
+
+Supported `connection_status` values are `not_connected`, `connected`, `expired`, `revoked`, and `unsupported`.
+
+## Runtime API surfaces
+
+The v2 broker API is API-first and UI-agnostic:
+
+- `GET /v1/model-adapters`: lists adapter definitions from the provider registry, including access class, auth method, supported models, workload rules, runtime support, and policy notes.
+- `GET /v1/entitlement-pools`: lists normalized project-scoped entitlement pools derived from configured sources.
+- `POST /v1/entitlement-pools/{id}/probe`: records operator/provider-observed capacity and writes a durable `CapacityReceipt`; repeated calls with the same `dedupe_key` return the prior receipt and do not mutate capacity again.
+- `POST /v1/model-route-decisions/simulate`: evaluates routing through the same fail-closed policy path as runtime selection and persists a canonical `ModelRouteDecision`.
+- `GET /v1/model-route-decisions`: lists recent canonical route decisions with selected pool, rejected-source reasons, capacity snapshot, budget state, and policy result.
+
+Capacity probes do not scrape providers or consumer interfaces. They only record authorized capacity observations supplied through BOSS control-plane APIs or future approved provider adapters.
+
+## Capacity states
+
+Observed capacity is policy input, not a best-effort hint. Supported `capacity_state` values are:
+
+- `available`
+- `degraded`
+- `exhausted`
+- `rate_limited`
+- `blocked`
+- `disabled`
+- `suspended`
+- `unavailable`
+- `unknown`
+
+`exhausted`, `rate_limited`, `blocked`, `disabled`, `suspended`, and `unavailable` sources fail closed during route selection. Numeric counters such as `remaining_units`, `remaining_requests`, or `remaining_tokens` at zero also fail closed. Reset and observation timestamps should be exposed as `reset_at`, `rate_limit_reset_at`, `observed_at`, or `last_checked_at`.
 
 ## Routing rule
 
@@ -57,7 +107,7 @@ Optimize across limits. Do not bypass limits.
   - `official_cli`
   - `official_api`
 - Preferred use:
-  - Codex/ChatGPT entitlement for founder or sandbox workflows
+  - Codex/ChatGPT entitlement for founder or sandbox workflows after official Codex login
   - OpenAI API for durable production or multi-tenant execution
 - Hard notes:
   - Codex usage limits depend on plan and count toward agentic usage
@@ -70,7 +120,7 @@ Optimize across limits. Do not bypass limits.
   - `official_cli`
   - `official_api`
 - Preferred use:
-  - Claude Code entitlement for founder or sandbox workflows
+  - Claude Code entitlement for founder or sandbox workflows after official Claude login
   - Anthropic API for dedicated production paths if enabled later
 - Hard notes:
   - Claude and Claude Code usage share the same plan limits
@@ -104,13 +154,16 @@ Optimize across limits. Do not bypass limits.
 ### xAI
 
 - Allowed source kinds:
+  - `official_cli`
   - `official_api`
 - Preferred use:
-  - API-backed execution only
+  - Grok Build OAuth/OIDC CLI sessions for owner or single-tenant coding workflows
+  - API-backed execution for production or multi-tenant workloads
 - Hard notes:
+  - Grok Build documents browser OIDC and device-code authentication
   - xAI documents per-model RPM and TPM limits for API usage
-  - consumer services may be rate-limited at xAI's discretion
-  - safest initial route is the official API, not consumer surfaces
+  - Grok/X consumer subscription benefits are separate from xAI API billing
+  - consumer web/app surfaces remain out of bounds for BOSS automation
 
 ### Local models
 
@@ -134,6 +187,11 @@ Optimize across limits. Do not bypass limits.
 - `workload_classes_allowed`
 - `multi_tenant_allowed`
 - `credential_ref`
+- `auth_method`
+- `connection_status`
+- `connection_ref`
+- `oauth_scopes`
+- `connection_metadata`
 - `cost_mode`
 - `limit_shape`
 - `supported_models`
@@ -150,6 +208,8 @@ Optimize across limits. Do not bypass limits.
 - reservation requirement
 - provider-rule compliance result
 - fallback order
+- selected source auth method, connection reference, and capacity state
+- rejected source provider, source kind, auth method, connection state, capacity state, reset timestamp, and rejection reason
 
 ## Official references
 

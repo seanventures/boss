@@ -1,0 +1,29 @@
+kind: ObjectSpec
+id: CapacityReceipt
+version: 0.1.0
+description: Evidence record for subscription, CLI, local, or gateway capacity consumption.
+fields:
+  - name: id
+    type: string
+  - name: model_route_decision_id
+    type: string
+  - name: entitlement_pool_id
+    type: string
+  - name: capacity_kind
+    type: enum
+    values: [subscription_cli, official_api, local_model, enterprise_gateway, managed_gateway]
+  - name: provider_ref
+    type: string
+  - name: usage_units
+    type: object
+  - name: capacity_state_after
+    type: string
+  - name: dedupe_key
+    type: string
+  - name: status
+    type: enum
+    values: [recorded, reconciled, failed, deadlettered]
+constraints:
+  unique:
+    - [entitlement_pool_id, dedupe_key]
+

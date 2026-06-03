@@ -8,6 +8,7 @@ This release ships the Elastic Resource Plane / ProviderOps module as core BOSS 
 
 ### Added
 
+- Added BOSS PRD v2.0 - Ultimate Product Spec. Added open-core commercial strategy, Community/Cloud/Enterprise editions, BOSS Account Connect, Elastic Resource Plane / ProviderOps, ProviderOps roles, ChangeSets, resource receipts, billing/cost ledger, Resource Janitor, drift detection, Budget-aware Autoscaler, Model Entitlement Broker refinements, clustering/HA enterprise strategy, marketplace/pack ecosystem, and clarified OpenClaw is not the strategic foundation.
 - Added Elastic Resource Plane / ProviderOps as a core BOSS module; added provider/resource inventory, billing ledger, ChangeSets, resource receipts, deployment registry, drift detection, Resource Janitor, ProviderOps roles, budget-aware provider actuation, and clarified OpenClaw is not the BOSS foundation.
 - Added the first ProviderOps runtime slice with Resource Plane tables, provider-account APIs, official read-only adapter tests/syncs, ChangeSet approval/apply gates, ResourceReceipts, provider health, drift/reconciliation feeds, deployment targets, API-client support, and fail-closed credential/provider-write behavior.
 - Added the ProviderOps executive-console dashboard for provider registration/testing, inventory sync, Resource Explorer, ChangeSet Review, Deployment Registry, provider health, drift, costs, reconciliation, and ResourceReceipt visibility.
@@ -28,6 +29,8 @@ This release ships the Elastic Resource Plane / ProviderOps module as core BOSS 
 - Added standards-based OIDC bearer JWT transport authentication with JWKS signature verification, issuer/audience checks, project-member principal resolution, API-session visibility, and fail-closed missing-provider-config handling.
 - Added delegated org-wide RBAC with `org_members`, API-driven org-member management, same-org project authorization fallback, and tests proving org delegates can act across projects without per-project duplication.
 - Added console Org Delegation management, org-delegate actor selection, auth-session method/OIDC visibility, and break-glass support for same-org delegated member targets.
+- Added official OAuth/CLI session connection metadata for OpenAI Codex, Anthropic Claude Code, and xAI Grok Build subscription entitlements, with broker enforcement that rejects unconnected subscriptions and keeps public subscriptions out of multi-tenant routing.
+- Added Model Entitlement Broker connect/disconnect APIs and console controls for official OAuth/session references, capacity-state fail-closed routing, and structured route explanations with auth, connection, capacity, reset, and rejection metadata.
 - Added spendy ProviderOps ChangeSet-to-CostEvent recording so successful provider actuation writes receipt-linked observed cost events with explicit confidence labels before provider billing reconciliation.
 - Added ProviderOps CostAnomalies and read-only provider kill switches when observed provider spend crosses the budget freeze threshold, with decision cards and dashboard visibility.
 

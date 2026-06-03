@@ -1,0 +1,38 @@
+skills:
+  - id: providerops.sync.readonly
+    kind: providerops
+    risk_tier: 1
+    mock_mode: false
+    description: Run read-only provider inventory, health, billing, and reconciliation sync.
+    data_boundary: confidential
+    input_schema: { provider_account_id: string }
+    output_schema: { resource_ids: array, cost_event_ids: array, provider_health_id: string, reconciliation_run_id: string }
+    cost: { estimator: provider_readonly, category: providerops }
+    retry: { max_attempts: 2, backoff: exponential }
+    permissions: { allowed_callers: [resource_plane_kernel, providerops_manager], required_permissions: [provider_read] }
+    policy: { read_only: true, raw_secrets_forbidden: true }
+  - id: providerops.drift.report
+    kind: providerops
+    risk_tier: 1
+    mock_mode: false
+    description: Compare provider inventory with BOSS desired state and produce DriftReports.
+    data_boundary: confidential
+    input_schema: { project_id: string, provider_account_id: "string?" }
+    output_schema: { drift_report_ids: array }
+    cost: { estimator: fixed, category: providerops }
+    retry: { max_attempts: 1, backoff: none }
+    permissions: { allowed_callers: [resource_plane_kernel, providerops_manager, infra_steward], required_permissions: [resource_read] }
+    policy: { never_auto_delete_production_resources: true }
+  - id: providerops.janitor.propose
+    kind: providerops
+    risk_tier: 2
+    mock_mode: false
+    description: Propose cleanup ChangeSets for orphaned, stale, untagged, or expired resources.
+    data_boundary: confidential
+    input_schema: { project_id: string, ttl_policy: object }
+    output_schema: { artifact_id: string, changeset_ids: array, estimated_savings_usd_micros: integer }
+    cost: { estimator: fixed, category: providerops }
+    retry: { max_attempts: 1, backoff: none }
+    permissions: { allowed_callers: [resource_janitor], required_permissions: [resource_read, changeset_create] }
+    policy: { destructive_cleanup_requires_approval: true, production_cleanup_hold: true }
+

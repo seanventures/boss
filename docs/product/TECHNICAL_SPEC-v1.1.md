@@ -14,6 +14,8 @@ Core planes:
 - Communications Plane: outbox/inbox, ACK, throttling, retries, deadletters, and communication receipts.
 - Elastic Resource Plane / ProviderOps: provider accounts, adapters, inventory, billing, deployments, ChangeSets, resource receipts, reconciliation, drift, provider health, janitor, and autoscaling policy.
 - Model Entitlement Broker / AI Capacity Router: AI capacity inventory, provider rules, rate limits, cost posture, routing logs, and fail-closed source selection.
+- Entitlement connections: API-key, official CLI OAuth, official device OAuth, official browser OAuth, and approved local-host connection metadata. Subscription sources must expose a connected official session reference before routing, and BOSS records only `connection_ref`/`SecretRef` metadata, not raw provider tokens.
+- Entitlement capacity: observed source capacity is enforced before routing. `exhausted`, `rate_limited`, `blocked`, `disabled`, `suspended`, `unavailable`, and zero remaining counters are hard denials.
 
 OpenClaw is not a BOSS foundation or durable runtime. Older references to OpenClaw should be treated only as optional/legacy adapter inspiration. BOSS owns the durable kernel, policy, state, budgets, receipts, and observability.
 
@@ -207,6 +209,12 @@ These endpoints are implemented runtime surfaces and should remain aligned with 
 - `GET /v1/providers`
 - `POST /v1/providers`
 - `POST /v1/providers/{id}/test`
+- `GET /v1/entitlements/sources`
+- `POST /v1/entitlements/sources`
+- `POST /v1/entitlements/sources/{source_id}/connect`
+- `POST /v1/entitlements/sources/{source_id}/disconnect`
+- `POST /v1/router/preview`
+- `GET /v1/router/logs`
 - `GET /v1/resources`
 - `POST /v1/resources/sync`
 - `GET /v1/costs`

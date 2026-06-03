@@ -1,0 +1,34 @@
+id: enterprise_edition
+version: 2.0.0
+description: Enterprise Cloud and Enterprise Self-Hosted capability pack for governance, clustering, private workers, and support.
+edition: enterprise
+hosted_account_connect_required: optional
+includes:
+  - sso_oidc_saml
+  - scim
+  - rbac_abac
+  - audit_exports
+  - policy_packs
+  - private_workspaces
+  - dedicated_workers
+  - data_residency
+  - private_networking_later
+  - enterprise_budget_controls
+  - legal_compliance_workflows
+  - custom_adapters
+  - custom_model_routing_policies
+  - premium_support_sla
+  - ha_deployment
+  - clustering
+  - kubernetes_support
+  - air_gapped_later
+requires:
+  - community_edition
+  - enterprise_governance_policy
+installs:
+  roles: [secrets_steward, infra_steward, deployment_manager, model_spend_analyst]
+  workflows: [budget_governed_scale_plan, model_entitlement_routing, open_core_cloud_upgrade]
+  policies: [enterprise_governance_policy, resource_plane_policy, budget_governor_policy]
+  skills: [providerops, deployment, model_providers]
+status: planned
+

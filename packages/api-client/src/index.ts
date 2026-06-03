@@ -1500,6 +1500,29 @@ export type SkillListResponse = {
   items: SkillSummary[];
 };
 
+export type ModelAdapterSummary = {
+  id: string;
+  provider: string;
+  source_id: string;
+  source_kind: string;
+  access_class: string;
+  entitlement_kind: string;
+  auth_method: string;
+  connection_ref?: string;
+  supported_models: string[];
+  task_strengths: string[];
+  allowed_workload_classes: string[];
+  multi_tenant_allowed: boolean;
+  runtime_supported: boolean;
+  credential_present: boolean;
+  official_connection_required: boolean;
+  policy_notes: string[];
+};
+
+export type ModelAdapterListResponse = {
+  items: ModelAdapterSummary[];
+};
+
 export type EntitlementSourceSummary = {
   id: string;
   project_id: string;
@@ -1519,6 +1542,11 @@ export type EntitlementSourceSummary = {
   risk_tier_max: number;
   status: string;
   effective_status: string;
+  auth_method: string;
+  connection_status: string;
+  connection_ref?: string;
+  oauth_scopes: string[];
+  connection_metadata: Record<string, unknown>;
   policy_notes: string[];
   observed_capacity: Record<string, unknown>;
   runtime_supported: boolean;
@@ -1548,10 +1576,99 @@ export type EntitlementSourceUpsertRequest = {
   task_strengths?: string[];
   risk_tier_max?: number;
   status?: string;
+  auth_method?: string;
+  connection_status?: string;
+  connection_ref?: string;
+  oauth_scopes?: string[];
+  connection_metadata?: Record<string, unknown>;
   policy_notes?: string[];
   observed_capacity?: Record<string, unknown>;
   runtime_supported?: boolean;
   actor?: string;
+};
+
+export type EntitlementSourceConnectRequest = {
+  project_id: string;
+  connection_ref: string;
+  auth_method?: string;
+  oauth_scopes?: string[];
+  connection_metadata?: Record<string, unknown>;
+  observed_capacity?: Record<string, unknown>;
+  actor?: string;
+};
+
+export type EntitlementSourceDisconnectRequest = {
+  project_id: string;
+  reason?: string;
+  actor?: string;
+};
+
+export type EntitlementPoolSummary = {
+  id: string;
+  project_id: string;
+  provider: string;
+  source_id: string;
+  source_kind: string;
+  access_class: string;
+  auth_method: string;
+  connection_status: string;
+  effective_status: string;
+  owner_type: string;
+  owner_id: string;
+  allowed_workload_classes: string[];
+  routing_modes: string[];
+  capacity_state: string;
+  cooldown_until?: string;
+  multi_tenant_allowed: boolean;
+  budget_policy_ref: string;
+  runtime_supported: boolean;
+  supported_models: string[];
+  task_strengths: string[];
+  risk_tier_max: number;
+  observed_capacity: Record<string, unknown>;
+  policy_notes: string[];
+  updated_at?: string;
+};
+
+export type EntitlementPoolListResponse = {
+  project_id: string;
+  items: EntitlementPoolSummary[];
+};
+
+export type CapacityReceiptSummary = {
+  id: string;
+  project_id: string;
+  entitlement_pool_id: string;
+  source_id: string;
+  provider: string;
+  capacity_kind: string;
+  model_route_decision_id?: string;
+  provider_ref?: string;
+  usage_units: Record<string, unknown>;
+  capacity_state_after: string;
+  dedupe_key: string;
+  status: string;
+  observed_capacity: Record<string, unknown>;
+  created_by: string;
+  created_at: string;
+};
+
+export type EntitlementPoolProbeRequest = {
+  project_id: string;
+  observed_capacity: Record<string, unknown>;
+  usage_units?: Record<string, unknown>;
+  provider_ref?: string;
+  model_route_decision_id?: string;
+  dedupe_key?: string;
+  status?: string;
+  actor?: string;
+};
+
+export type EntitlementPoolProbeResponse = {
+  project_id: string;
+  pool: EntitlementPoolSummary;
+  receipt: CapacityReceiptSummary;
+  duplicate: boolean;
 };
 
 export type RoutingPreviewRequest = {
@@ -1603,6 +1720,39 @@ export type RoutingLogItem = {
 export type RoutingLogListResponse = {
   project_id: string;
   items: RoutingLogItem[];
+};
+
+export type ModelRouteDecisionSummary = {
+  id: string;
+  project_id: string;
+  task_id?: string;
+  skill_id?: string;
+  task_kind: string;
+  workload_class: string;
+  risk_tier: number;
+  selected_entitlement_pool_id?: string;
+  selected_source_id?: string;
+  selected_provider?: string;
+  selected_model_id?: string;
+  routing_mode: string;
+  rejected_sources: Array<Record<string, unknown>>;
+  budget_state: string;
+  data_boundary: DataBoundary;
+  capacity_snapshot: Record<string, unknown>;
+  policy_result: Record<string, unknown>;
+  created_at: string;
+};
+
+export type ModelRouteDecisionListResponse = {
+  project_id: string;
+  items: ModelRouteDecisionSummary[];
+};
+
+export type ModelRouteDecisionSimulateRequest = RoutingPreviewRequest;
+
+export type ModelRouteDecisionSimulateResponse = {
+  project_id: string;
+  decision: ModelRouteDecisionSummary;
 };
 
 export type ProviderAccountSummary = {
@@ -2552,6 +2702,44 @@ export function createBossApiClient(config: BossApiClientConfig) {
     listSkills() {
       return request<SkillListResponse>("GET", "/v1/skills");
     },
+    listModelAdapters() {
+      return request<ModelAdapterListResponse>("GET", "/v1/model-adapters");
+    },
+    listEntitlementPools(projectId: string) {
+      return request<EntitlementPoolListResponse>("GET", "/v1/entitlement-pools", {
+        query: { project_id: projectId },
+      });
+    },
+    probeEntitlementPool(
+      poolId: string,
+      payload: EntitlementPoolProbeRequest,
+    ) {
+      return request<EntitlementPoolProbeResponse>(
+        "POST",
+        `/v1/entitlement-pools/${encodeURIComponent(poolId)}/probe`,
+        {
+          body: payload,
+        },
+      );
+    },
+    listModelRouteDecisions(projectId: string, limit = 25) {
+      return request<ModelRouteDecisionListResponse>(
+        "GET",
+        "/v1/model-route-decisions",
+        {
+          query: { project_id: projectId, limit },
+        },
+      );
+    },
+    simulateModelRouteDecision(payload: ModelRouteDecisionSimulateRequest) {
+      return request<ModelRouteDecisionSimulateResponse>(
+        "POST",
+        "/v1/model-route-decisions/simulate",
+        {
+          body: payload,
+        },
+      );
+    },
     listEntitlementSources(projectId: string) {
       return request<EntitlementSourceListResponse>(
         "GET",
@@ -2565,6 +2753,30 @@ export function createBossApiClient(config: BossApiClientConfig) {
       return request<EntitlementSourceSummary>("POST", "/v1/entitlements/sources", {
         body: payload,
       });
+    },
+    connectEntitlementSource(
+      sourceId: string,
+      payload: EntitlementSourceConnectRequest,
+    ) {
+      return request<EntitlementSourceSummary>(
+        "POST",
+        `/v1/entitlements/sources/${encodeURIComponent(sourceId)}/connect`,
+        {
+          body: payload,
+        },
+      );
+    },
+    disconnectEntitlementSource(
+      sourceId: string,
+      payload: EntitlementSourceDisconnectRequest,
+    ) {
+      return request<EntitlementSourceSummary>(
+        "POST",
+        `/v1/entitlements/sources/${encodeURIComponent(sourceId)}/disconnect`,
+        {
+          body: payload,
+        },
+      );
     },
     previewRoute(payload: RoutingPreviewRequest) {
       return request<RoutingPreviewResponse>("POST", "/v1/router/preview", {

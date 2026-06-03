@@ -67,6 +67,25 @@ function parseOptionalJsonObject(
   return parsed as Record<string, unknown>;
 }
 
+function parseOptionalJsonObjectField(
+  value: FormDataEntryValue | null,
+  fieldName: string,
+): Record<string, unknown> {
+  if (typeof value !== "string" || !value.trim()) {
+    return {};
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    throw new Error(`${fieldName} must be valid JSON`);
+  }
+  if (!parsed || Array.isArray(parsed) || typeof parsed !== "object") {
+    throw new Error(`${fieldName} must be a JSON object`);
+  }
+  return parsed as Record<string, unknown>;
+}
+
 function parseOptionalJsonArray(
   value: FormDataEntryValue | null,
   fieldName: string,
@@ -265,6 +284,50 @@ export async function installAgentModuleAction(formData: FormData): Promise<void
   await client.installAgentModule({
     project_id: getProjectId(formData),
     module_id: moduleId,
+    actor: getActor(formData),
+  });
+  revalidatePath("/");
+}
+
+export async function connectEntitlementSourceAction(
+  formData: FormData,
+): Promise<void> {
+  const sourceId = formData.get("source_id");
+  const connectionRef = formData.get("connection_ref");
+  if (typeof sourceId !== "string" || !sourceId.trim()) {
+    throw new Error("source_id is required");
+  }
+  if (typeof connectionRef !== "string" || !connectionRef.trim()) {
+    throw new Error("connection_ref is required");
+  }
+  await client.connectEntitlementSource(sourceId.trim(), {
+    project_id: getProjectId(formData),
+    connection_ref: connectionRef.trim(),
+    auth_method: getOptionalString(formData, "auth_method"),
+    oauth_scopes: parseLines(formData.get("oauth_scopes")),
+    connection_metadata: parseOptionalJsonObjectField(
+      formData.get("connection_metadata_json"),
+      "connection_metadata_json",
+    ),
+    observed_capacity: parseOptionalJsonObjectField(
+      formData.get("observed_capacity_json"),
+      "observed_capacity_json",
+    ),
+    actor: getActor(formData),
+  });
+  revalidatePath("/");
+}
+
+export async function disconnectEntitlementSourceAction(
+  formData: FormData,
+): Promise<void> {
+  const sourceId = formData.get("source_id");
+  if (typeof sourceId !== "string" || !sourceId.trim()) {
+    throw new Error("source_id is required");
+  }
+  await client.disconnectEntitlementSource(sourceId.trim(), {
+    project_id: getProjectId(formData),
+    reason: getOptionalString(formData, "reason") ?? "Disconnected from UI.",
     actor: getActor(formData),
   });
   revalidatePath("/");

@@ -880,6 +880,104 @@ paths:
                         permissions: { type: object }
                         data_boundary: { type: string }
                         policy: { type: object }
+  /v1/model-adapters:
+    get:
+      summary: List registered model adapter definitions from the Model Entitlement Broker
+      responses:
+        '200':
+          description: Model adapter inventory with source kind, auth method, workload rules, and runtime status
+  /v1/entitlement-pools:
+    get:
+      summary: List governed AI entitlement pools for a project
+      parameters:
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Entitlement pools normalized from configured sources with capacity and policy state
+  /v1/entitlement-pools/{id}/probe:
+    post:
+      summary: Record observed capacity for an entitlement pool with a durable CapacityReceipt
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id, observed_capacity]
+              properties:
+                project_id: { type: string }
+                observed_capacity:
+                  type: object
+                  description: Operator/provider observed capacity such as capacity_state, remaining_units, reset_at, observed_at. This is not a direct provider scrape.
+                usage_units:
+                  type: object
+                  description: Optional observed units consumed during the probe window.
+                provider_ref:
+                  type: string
+                  description: Non-secret provider or local runner reference.
+                model_route_decision_id:
+                  type: string
+                dedupe_key:
+                  type: string
+                  description: Idempotency key; repeated probes with the same key return the existing CapacityReceipt.
+                status:
+                  type: string
+                  default: recorded
+                  enum: [recorded, reconciled, failed, deadlettered]
+                actor: { type: string, default: system }
+      responses:
+        '200': { description: CapacityReceipt, updated entitlement pool, and duplicate flag }
+        '404': { description: Entitlement pool not found }
+  /v1/model-route-decisions:
+    get:
+      summary: List canonical ModelRouteDecision records for a project
+      parameters:
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, default: 25 }
+      responses:
+        '200': { description: ModelRouteDecision list derived from persisted routing logs }
+  /v1/model-route-decisions/simulate:
+    post:
+      summary: Simulate model routing through the entitlement broker and persist a ModelRouteDecision
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id, skill_id, task_kind, workload_class]
+              properties:
+                project_id: { type: string }
+                skill_id: { type: string }
+                task_kind: { type: string }
+                workload_class: { type: string }
+                risk_tier: { type: integer, default: 1 }
+                data_boundary:
+                  type: string
+                  default: internal
+                  enum: [public, internal, confidential, restricted, local-only]
+                preferred_capabilities:
+                  type: array
+                  items: { type: string }
+                budget_state: { type: string }
+                actor: { type: string, default: system }
+      responses:
+        '200': { description: Persisted ModelRouteDecision with selected pool, policy result, and rejected source reasons }
+        '404': { description: Skill not found }
   /v1/entitlements/sources:
     get:
       summary: List configured entitlement sources for a project
@@ -899,8 +997,113 @@ paths:
             schema:
               type: object
               required: [project_id, provider, source_id, source_kind, entitlement_kind, owner_type, owner_id]
+              properties:
+                project_id: { type: string }
+                provider: { type: string }
+                source_id: { type: string }
+                source_kind:
+                  type: string
+                  enum: [official_cli, official_coding_agent, official_api, approved_local_model]
+                entitlement_kind:
+                  type: string
+                  enum: [subscription, usage_based_api, licensed_seat, local_capacity]
+                owner_type: { type: string }
+                owner_id: { type: string }
+                workload_classes_allowed:
+                  type: array
+                  items: { type: string }
+                multi_tenant_allowed: { type: boolean, default: false }
+                credential_ref: { type: string }
+                cost_mode: { type: string }
+                limit_shape: { type: object }
+                supported_models:
+                  type: array
+                  items: { type: string }
+                task_strengths:
+                  type: array
+                  items: { type: string }
+                risk_tier_max: { type: integer, default: 1 }
+                status: { type: string, default: declared }
+                auth_method:
+                  type: string
+                  default: api_key
+                  enum: [api_key, official_cli_oauth, official_device_oauth, official_browser_oauth, local_host]
+                connection_status:
+                  type: string
+                  default: not_connected
+                  enum: [not_connected, connected, expired, revoked, unsupported]
+                connection_ref: { type: string }
+                oauth_scopes:
+                  type: array
+                  items: { type: string }
+                connection_metadata: { type: object }
+                policy_notes:
+                  type: array
+                  items: { type: string }
+                observed_capacity: { type: object }
+                runtime_supported: { type: boolean, default: false }
+                actor: { type: string, default: system }
       responses:
-        '201': { description: Entitlement source upserted }
+        '201': { description: Entitlement source upserted with auth method and connection state }
+  /v1/entitlements/sources/{source_id}/connect:
+    post:
+      summary: Record a verified official OAuth/session connection for an entitlement source
+      parameters:
+        - name: source_id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id, connection_ref]
+              properties:
+                project_id: { type: string }
+                connection_ref:
+                  type: string
+                  description: SecretRef or local official-session reference; never a raw OAuth token.
+                auth_method:
+                  type: string
+                  enum: [api_key, official_cli_oauth, official_device_oauth, official_browser_oauth, local_host]
+                oauth_scopes:
+                  type: array
+                  items: { type: string }
+                connection_metadata:
+                  type: object
+                  description: Non-secret metadata such as official login command or local runner id.
+                observed_capacity:
+                  type: object
+                  description: Operator/provider observed capacity such as capacity_state, remaining_units, reset_at, observed_at.
+                actor: { type: string, default: system }
+      responses:
+        '200': { description: Entitlement source connected and event recorded }
+        '404': { description: Entitlement source not found }
+        '422': { description: Subscription source requires an official OAuth connection method }
+  /v1/entitlements/sources/{source_id}/disconnect:
+    post:
+      summary: Revoke the local official-session reference for an entitlement source
+      parameters:
+        - name: source_id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id]
+              properties:
+                project_id: { type: string }
+                reason: { type: string }
+                actor: { type: string, default: system }
+      responses:
+        '200': { description: Entitlement source disconnected and event recorded }
+        '404': { description: Entitlement source not found }
   /v1/router/preview:
     post:
       summary: Preview entitlement-based model routing and persist a routing log
@@ -927,7 +1130,8 @@ paths:
                 budget_state: { type: string }
                 actor: { type: string, default: system }
       responses:
-        '200': { description: Routing decision with persisted data_boundary policy result }
+        '200':
+          description: Routing decision with persisted data-boundary, auth, connection, and capacity policy result
         '404': { description: Skill not found }
   /v1/router/logs:
     get:

@@ -1,0 +1,26 @@
+kind: ObjectSpec
+id: EnterpriseCluster
+version: 0.1.0
+description: Enterprise deployment, clustering, HA, and private worker boundary.
+fields:
+  - name: id
+    type: string
+  - name: org_id
+    type: string
+  - name: deployment_mode
+    type: enum
+    values: [enterprise_cloud, self_hosted, private_cloud, air_gapped]
+  - name: account_connect_mode
+    type: enum
+    values: [attached, detached]
+  - name: worker_pool_strategy
+    type: string
+  - name: ha_profile
+    type: string
+  - name: data_residency
+    type: string
+  - name: support_tier
+    type: string
+rules:
+  private_workers_preserve_secret_boundaries: true
+  budget_governor_still_applies: true

@@ -8,12 +8,14 @@ Build BOSS, the Business Operating System Sentinel: a financially controlled aut
 
 Before architecture or feature work, read:
 
-1. `docs/product/PRD-v1.1.md`
-2. `docs/product/TECHNICAL_SPEC-v1.1.md`
-3. `reference/boss_build_spec_pack/docs/CODEX_RUNBOOK.md`
-4. `packages/specpack/workflows/ceo_command_to_pr.yaml`
-5. `packages/specpack/policies/default_safety.yaml`
-6. `packages/specpack/policies/resource_plane_policy.yaml`
+1. `docs/product/PRD-v2.0.md`
+2. `docs/product/TECHNICAL_SPEC-v2.0.md`
+3. `docs/product/PRD-v1.1.md`
+4. `docs/product/TECHNICAL_SPEC-v1.1.md`
+5. `reference/boss_build_spec_pack/docs/CODEX_RUNBOOK.md`
+6. `packages/specpack/workflows/ceo_command_to_pr.yaml`
+7. `packages/specpack/policies/default_safety.yaml`
+8. `packages/specpack/policies/resource_plane_policy.yaml`
 
 ## Build order
 

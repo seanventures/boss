@@ -1,0 +1,13 @@
+id: providerops_pack
+version: 2.0.0
+description: ProviderOps pack for resource inventory, ChangeSets, receipts, billing ledger, drift, health, and janitor workflows.
+requires:
+  - resource_plane_policy
+  - budget_governor_policy
+installs:
+  roles: [providerops_manager, finops_sentinel, infra_steward, deployment_manager, resource_janitor, secrets_steward]
+  workflows: [providerops_readonly_sync, changeset_apply_with_receipts, deployment_run, budget_governed_scale_plan]
+  policies: [resource_plane_policy, budget_governor_policy]
+  skills: [providerops, cloudflare, digitalocean, supabase, deployment, model_providers]
+status: planned
+

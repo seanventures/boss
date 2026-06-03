@@ -1695,6 +1695,29 @@ class SkillListResponse(BaseModel):
     items: list[SkillSummary]
 
 
+class ModelAdapterSummary(BaseModel):
+    id: str
+    provider: str
+    source_id: str
+    source_kind: str
+    access_class: str
+    entitlement_kind: str
+    auth_method: str
+    connection_ref: Optional[str] = None
+    supported_models: list[str]
+    task_strengths: list[str]
+    allowed_workload_classes: list[str]
+    multi_tenant_allowed: bool
+    runtime_supported: bool
+    credential_present: bool
+    official_connection_required: bool
+    policy_notes: list[str]
+
+
+class ModelAdapterListResponse(BaseModel):
+    items: list[ModelAdapterSummary]
+
+
 class EntitlementSourceSummary(BaseModel):
     id: str
     project_id: str
@@ -1714,6 +1737,11 @@ class EntitlementSourceSummary(BaseModel):
     risk_tier_max: int
     status: str
     effective_status: str
+    auth_method: str = "api_key"
+    connection_status: str = "not_connected"
+    connection_ref: Optional[str] = None
+    oauth_scopes: list[str] = Field(default_factory=list)
+    connection_metadata: dict[str, Any] = Field(default_factory=dict)
     policy_notes: list[str]
     observed_capacity: dict[str, Any]
     runtime_supported: bool
@@ -1743,10 +1771,99 @@ class EntitlementSourceUpsertRequest(BaseModel):
     task_strengths: list[str] = Field(default_factory=list)
     risk_tier_max: int = 1
     status: str = "declared"
+    auth_method: str = "api_key"
+    connection_status: str = "not_connected"
+    connection_ref: Optional[str] = None
+    oauth_scopes: list[str] = Field(default_factory=list)
+    connection_metadata: dict[str, Any] = Field(default_factory=dict)
     policy_notes: list[str] = Field(default_factory=list)
     observed_capacity: dict[str, Any] = Field(default_factory=dict)
     runtime_supported: bool = False
     actor: str = "system"
+
+
+class EntitlementSourceConnectRequest(BaseModel):
+    project_id: str
+    connection_ref: str
+    auth_method: Optional[str] = None
+    oauth_scopes: list[str] = Field(default_factory=list)
+    connection_metadata: dict[str, Any] = Field(default_factory=dict)
+    observed_capacity: dict[str, Any] = Field(default_factory=dict)
+    actor: str = "system"
+
+
+class EntitlementSourceDisconnectRequest(BaseModel):
+    project_id: str
+    reason: Optional[str] = None
+    actor: str = "system"
+
+
+class EntitlementPoolSummary(BaseModel):
+    id: str
+    project_id: str
+    provider: str
+    source_id: str
+    source_kind: str
+    access_class: str
+    auth_method: str
+    connection_status: str
+    effective_status: str
+    owner_type: str
+    owner_id: str
+    allowed_workload_classes: list[str]
+    routing_modes: list[str]
+    capacity_state: str
+    cooldown_until: Optional[str] = None
+    multi_tenant_allowed: bool
+    budget_policy_ref: str
+    runtime_supported: bool
+    supported_models: list[str]
+    task_strengths: list[str]
+    risk_tier_max: int
+    observed_capacity: dict[str, Any]
+    policy_notes: list[str]
+    updated_at: Optional[str] = None
+
+
+class EntitlementPoolListResponse(BaseModel):
+    project_id: str
+    items: list[EntitlementPoolSummary]
+
+
+class CapacityReceiptSummary(BaseModel):
+    id: str
+    project_id: str
+    entitlement_pool_id: str
+    source_id: str
+    provider: str
+    capacity_kind: str
+    model_route_decision_id: Optional[str] = None
+    provider_ref: Optional[str] = None
+    usage_units: dict[str, Any]
+    capacity_state_after: str
+    dedupe_key: str
+    status: str
+    observed_capacity: dict[str, Any]
+    created_by: str
+    created_at: str
+
+
+class EntitlementPoolProbeRequest(BaseModel):
+    project_id: str
+    observed_capacity: dict[str, Any]
+    usage_units: dict[str, Any] = Field(default_factory=dict)
+    provider_ref: Optional[str] = None
+    model_route_decision_id: Optional[str] = None
+    dedupe_key: Optional[str] = None
+    status: str = "recorded"
+    actor: str = "system"
+
+
+class EntitlementPoolProbeResponse(BaseModel):
+    project_id: str
+    pool: EntitlementPoolSummary
+    receipt: CapacityReceiptSummary
+    duplicate: bool
 
 
 class RoutingPreviewRequest(BaseModel):
@@ -1798,6 +1915,41 @@ class RoutingLogItem(BaseModel):
 class RoutingLogListResponse(BaseModel):
     project_id: str
     items: list[RoutingLogItem]
+
+
+class ModelRouteDecisionSummary(BaseModel):
+    id: str
+    project_id: str
+    task_id: Optional[str] = None
+    skill_id: Optional[str] = None
+    task_kind: str
+    workload_class: str
+    risk_tier: int
+    selected_entitlement_pool_id: Optional[str] = None
+    selected_source_id: Optional[str] = None
+    selected_provider: Optional[str] = None
+    selected_model_id: Optional[str] = None
+    routing_mode: str
+    rejected_sources: list[dict[str, Any]]
+    budget_state: str
+    data_boundary: DataBoundary = "internal"
+    capacity_snapshot: dict[str, Any]
+    policy_result: dict[str, Any]
+    created_at: str
+
+
+class ModelRouteDecisionListResponse(BaseModel):
+    project_id: str
+    items: list[ModelRouteDecisionSummary]
+
+
+class ModelRouteDecisionSimulateRequest(RoutingPreviewRequest):
+    pass
+
+
+class ModelRouteDecisionSimulateResponse(BaseModel):
+    project_id: str
+    decision: ModelRouteDecisionSummary
 
 
 class ProviderAccountSummary(BaseModel):

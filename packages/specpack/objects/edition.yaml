@@ -1,0 +1,24 @@
+kind: ObjectSpec
+id: Edition
+version: 0.1.0
+description: Product packaging definition for Community, Cloud, and Enterprise editions.
+fields:
+  - name: id
+    type: enum
+    values: [community, cloud, enterprise_cloud, enterprise_self_hosted]
+  - name: display_name
+    type: string
+  - name: license_candidate
+    type: string
+  - name: hosted_account_connect_required
+    type: boolean
+  - name: included_capabilities
+    type: array
+  - name: commercial_capabilities
+    type: array
+  - name: legal_review_required
+    type: boolean
+rules:
+  community_must_work_without_account_connect: true
+  do_not_label_restricted_source_available_as_open_source: true
+

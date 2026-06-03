@@ -1,0 +1,27 @@
+kind: WorkflowSpec
+id: open_core_cloud_upgrade
+version: 0.1.0
+description: Upgrade from Community to Cloud or Enterprise without making hosted auth mandatory for Community.
+phases:
+  - id: inspect_local_install
+    actor: metatron
+    outputs: [Edition]
+  - id: explain_capability_gap
+    actor: account_connect
+    outputs: [LicenseEntitlement]
+  - id: link_account_connect
+    actor: account_connect
+    outputs: [AccountConnectOrg]
+    optional: true
+  - id: install_commercial_capability
+    actor: pack_registry
+    outputs: [PackInstall]
+    optional: true
+  - id: verify_local_fallback
+    actor: qa_manager
+    outputs: [Artifact]
+rules:
+  community_must_work_without_account_connect: true
+  cloud_requires_account_connect: true
+  enterprise_can_run_attached_or_detached: true
+  legal_review_required_for_license_language: true

@@ -1,0 +1,29 @@
+kind: ObjectSpec
+id: LicenseEntitlement
+version: 0.1.0
+description: Capability entitlement for Cloud, Enterprise, marketplace, or self-hosted license state.
+fields:
+  - name: id
+    type: string
+  - name: edition_id
+    type: string
+  - name: account_connect_org_id
+    type: string
+  - name: scope_type
+    type: enum
+    values: [org, workspace, project, enterprise_cluster]
+  - name: scope_id
+    type: string
+  - name: capabilities
+    type: array
+  - name: seats
+    type: integer
+  - name: status
+    type: enum
+    values: [active, trial, expired, suspended, detached]
+  - name: expires_at
+    type: datetime
+rules:
+  capability_checks_are_server_side: true
+  community_baseline_not_dependent_on_hosted_license: true
+

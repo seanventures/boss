@@ -47,7 +47,8 @@ This document summarizes the currently implemented BOSS runtime surfaces in this
   - role and pack discovery/install
   - RoleSpec scope checks with drift events, trust changes, and automatic autonomy downgrade
   - agent-module catalog and install flow
-  - entitlement source and routing-log visibility
+  - entitlement source and routing-log visibility, including API-key and official OAuth/CLI session connection lifecycle, capacity-state visibility, and structured route rejection explanations for OpenAI Codex, Anthropic Claude Code, and xAI Grok Build subscription sources
+  - Model Entitlement Broker v2 APIs for model adapter inventory, entitlement pool inventory, idempotent capacity probes with durable `CapacityReceipt` rows, and canonical `ModelRouteDecision` simulate/list surfaces
   - ProviderOps provider accounts, connection tests, resource inventory sync, read-only DigitalOcean/OpenAI/Anthropic billing sync, cost ledger reads, duplicate-safe BillingAccount/CostEvent records, spendy ChangeSet-to-CostEvent recording, cost anomalies with read-only provider kill switches, ChangeSet planning/approval/apply attempts, real Cloudflare DNS record upsert actuation, real Cloudflare Worker deployment actuation, real Git-connected Cloudflare Pages deployment actuation, real DigitalOcean droplet create/destroy actuation, real DigitalOcean App Platform deployment actuation, real Supabase project create/pause actuation, real Supabase migration apply actuation, ResourceReceipts, deployment targets, provider health, drift reports, and reconciliation-run visibility
   - DeploymentRun planning with release-packet artifacts, provider deployment ChangeSet linkage, BudgetReservation enforcement for spendy deploys, real Cloudflare Worker, Cloudflare Pages, DigitalOcean App Platform, and Supabase migration execution, real health-check execution, rollback artifacts, and health-failure decisions
   - Resource Janitor report generation and approval-required cleanup ChangeSet proposals for orphaned/expired non-production resources
@@ -101,7 +102,7 @@ This document summarizes the currently implemented BOSS runtime surfaces in this
   - packaged agent-module catalog, install flow, and role lineage
   - deterministic RoleSpec validation for pack roles and module-provided roles
   - deterministic SkillSpec validation for typed IO, cost, retry, permissions, data boundary, policy, and real-only mode
-  - model entitlement broker with routing logs
+  - model entitlement broker with routing logs, official subscription connection checks, connect/disconnect APIs, capacity-state fail-closed denials, multi-tenant denials for personal/public subscription sources, capacity receipt dedupe, and ModelRouteDecision API surfaces
   - data-boundary-aware routing that blocks restricted/local-only work from unapproved external model sources and records the boundary in routing decisions
   - data-boundary-aware GitHub effect gates that block restricted/local-only PR, merge, and deployment effects before receipts or external calls are opened
   - data-boundary-aware comms records and Slack/email delivery gates that block restricted/local-only messages before receipts or external calls are opened
@@ -130,6 +131,7 @@ This document summarizes the currently implemented BOSS runtime surfaces in this
   - self-improvement canary, rollout, and rollback submission with required evidence payloads
   - API-driven agent marketplace visibility and module installation
   - entitlement readiness labels that distinguish active, credential-gated, adapter-ready, and registry-only sources
+  - entitlement auth, connection-state, and capacity-state labels for API keys, official CLI OAuth, device OAuth, and local-host sources, with console actions for official session connect/disconnect
   - ProviderOps dashboard for provider-account registration/testing, inventory sync, Resource Explorer, Resource Janitor cleanup proposals, ChangeSet Review, Deployment Registry, provider health, drift, cost, reconciliation, and ResourceReceipt visibility
   - ProviderOps dashboard controls for worker-pool registration and Budget-Aware Autoscaler review, with ScalePlan history and ChangeSet/decision references
   - Deployment Registry controls for planning DeploymentRuns and running deployment health checks with release, health, rollback, ChangeSet, and decision references
@@ -235,8 +237,8 @@ The latest passing local state at the time of this update was:
 
 ## Where to look next
 
-- Product intent: [PRD-v1.1.md](/Volumes/DataSSD1/test/boss/docs/product/PRD-v1.1.md)
-- Technical spec: [TECHNICAL_SPEC-v1.1.md](/Volumes/DataSSD1/test/boss/docs/product/TECHNICAL_SPEC-v1.1.md)
+- Product intent: [PRD-v2.0.md](/Volumes/DataSSD1/test/boss/docs/product/PRD-v2.0.md)
+- Technical spec: [TECHNICAL_SPEC-v2.0.md](/Volumes/DataSSD1/test/boss/docs/product/TECHNICAL_SPEC-v2.0.md)
 - Active contract: [api/openapi.yaml](/Volumes/DataSSD1/test/boss/api/openapi.yaml)
 - Runtime overview: [README.md](/Volumes/DataSSD1/test/boss/README.md)
 - Entitlement policy: [MODEL_ENTITLEMENT_BROKER.md](/Volumes/DataSSD1/test/boss/docs/product/MODEL_ENTITLEMENT_BROKER.md)

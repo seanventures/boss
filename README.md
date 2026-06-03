@@ -33,8 +33,9 @@ If a required credential is missing, the API must fail closed and create visible
 ## Repo layout
 
 - `AGENTS.md`: active repository rules
-- `docs/product/PRD-v1.1.md`: governing product intent
-- `docs/product/TECHNICAL_SPEC-v1.1.md`: active technical architecture companion
+- `docs/product/PRD-v2.0.md`: governing product intent
+- `docs/product/TECHNICAL_SPEC-v2.0.md`: active technical architecture companion
+- `docs/product/ROADMAP-v2.0.md`: product maturity roadmap
 - `docs/product/IMPLEMENTATION_STATUS.md`: shipped runtime status and current constraints
 - `CHANGELOG.md`: release notes
 - `api/openapi.yaml`: active API contract
@@ -273,6 +274,7 @@ For delegated org-wide RBAC, `POST /v1/org-members` creates an org-level member 
 
 - BOSS treats AI capacity as governed entitlement sources, not generic free compute.
 - The runtime inventory now distinguishes `official_cli`, `official_coding_agent`, `official_api`, and `approved_local_model` sources.
+- Public subscription sources for Codex, Claude Code, and Grok Build are modeled as official OAuth/CLI session entitlements with `auth_method`, `connection_status`, `connection_ref`, OAuth scopes, and provider-rule notes. They can be used only for owner or single-tenant work when an official session is connected; API-key sources remain the production and multi-tenant path.
 - Router previews and brokered model calls write durable routing logs with selected source, selected model, denial reasons, and rejected alternatives.
 - Routing decisions now include `data_boundary`; restricted and local-only work is denied for unapproved external sources, while approved local model capacity can handle local-only work when configured.
 - OpenAI planning and review-packet generation now pass through the broker before execution.

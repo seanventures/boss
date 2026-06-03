@@ -21,7 +21,29 @@ class EntitlementSourceNotFoundError(Exception):
     pass
 
 
+class EntitlementPoolNotFoundError(Exception):
+    pass
+
+
+class InvalidEntitlementConnectionError(Exception):
+    pass
+
+
 class EntitlementBrokerService:
+    OFFICIAL_OAUTH_METHODS = {
+        "official_cli_oauth",
+        "official_device_oauth",
+        "official_browser_oauth",
+    }
+    CAPACITY_DENIAL_STATES = {
+        "blocked",
+        "disabled",
+        "exhausted",
+        "rate_limited",
+        "suspended",
+        "unavailable",
+    }
+
     def __init__(self, settings: Settings):
         self.settings = settings
         self.budget = BudgetGovernor(settings)
@@ -143,14 +165,38 @@ class EntitlementBrokerService:
         raise SkillNotFoundError(f"Skill '{skill_id}' not found")
 
     def _runtime_flags(self, source_id: str) -> tuple[bool, bool]:
+        if source_id == "openai_codex_chatgpt":
+            return (
+                bool(self.settings.openai_codex_oauth_enabled),
+                bool(
+                    self.settings.openai_codex_oauth_enabled
+                    and self.settings.openai_codex_oauth_session_ref
+                ),
+            )
         if source_id == "openai_api":
             return True, bool(self.settings.openai_api_key)
+        if source_id == "anthropic_claude_code":
+            return (
+                bool(self.settings.anthropic_claude_oauth_enabled),
+                bool(
+                    self.settings.anthropic_claude_oauth_enabled
+                    and self.settings.anthropic_claude_oauth_session_ref
+                ),
+            )
         if source_id == "anthropic_api":
             return False, bool(self.settings.anthropic_api_key)
         if source_id == "google_api":
             return False, bool(self.settings.google_api_key)
         if source_id == "xai_api":
             return False, bool(self.settings.xai_api_key)
+        if source_id == "xai_grok_build":
+            return (
+                bool(self.settings.xai_grok_oauth_enabled),
+                bool(
+                    self.settings.xai_grok_oauth_enabled
+                    and self.settings.xai_grok_oauth_session_ref
+                ),
+            )
         if source_id == "cursor_cli":
             return False, bool(self.settings.cursor_cli_enabled)
         if source_id == "approved_local_model_host":
@@ -161,19 +207,103 @@ class EntitlementBrokerService:
         return False, False
 
     def _credential_ref(self, source_id: str) -> Optional[str]:
+        if source_id == "openai_codex_chatgpt":
+            return "BOSS_OPENAI_CODEX_OAUTH_SESSION_REF"
         if source_id == "openai_api":
             return "OPENAI_API_KEY"
+        if source_id == "anthropic_claude_code":
+            return "BOSS_ANTHROPIC_CLAUDE_OAUTH_SESSION_REF"
         if source_id == "anthropic_api":
             return "ANTHROPIC_API_KEY"
         if source_id == "google_api":
             return "GOOGLE_API_KEY"
         if source_id == "xai_api":
             return "XAI_API_KEY"
+        if source_id == "xai_grok_build":
+            return "BOSS_XAI_GROK_OAUTH_SESSION_REF"
         if source_id == "cursor_cli":
             return "BOSS_CURSOR_CLI_ENABLED"
         if source_id == "approved_local_model_host":
             return "BOSS_LOCAL_MODEL_ID"
         return None
+
+    def _requires_official_oauth(self, source: dict[str, Any]) -> bool:
+        return (
+            source.get("entitlement_kind") == "subscription"
+            and source.get("source_kind") in {"official_cli", "official_coding_agent"}
+        )
+
+    def _effective_connection_status(self, source: dict[str, Any]) -> str:
+        observed_capacity = source.get("observed_capacity") or {}
+        if bool(observed_capacity.get("official_oauth_connected")):
+            return "connected"
+        _, credential_present = self._runtime_context(source)
+        if self._requires_official_oauth(source) and credential_present:
+            return "connected"
+        return str(source.get("connection_status") or "not_connected")
+
+    def _connection_policy_denial(self, source: dict[str, Any]) -> Optional[str]:
+        if not self._requires_official_oauth(source):
+            return None
+        if source.get("auth_method") not in self.OFFICIAL_OAUTH_METHODS:
+            return "official_oauth_connection_required"
+        if self._effective_connection_status(source) != "connected":
+            return "official_oauth_connection_not_connected"
+        return None
+
+    def _capacity_policy_denial(self, source: dict[str, Any]) -> Optional[str]:
+        observed_capacity = source.get("observed_capacity") or {}
+        capacity_state = str(observed_capacity.get("capacity_state") or "").strip()
+        if capacity_state in self.CAPACITY_DENIAL_STATES:
+            if capacity_state == "rate_limited":
+                return "capacity_rate_limited"
+            if capacity_state == "blocked":
+                return "capacity_blocked"
+            return "capacity_exhausted"
+        if bool(observed_capacity.get("subscription_limit_reached")) or bool(
+            observed_capacity.get("usage_cap_reached")
+        ):
+            return "capacity_exhausted"
+        if bool(observed_capacity.get("provider_rate_limited")) or bool(
+            observed_capacity.get("rate_limited")
+        ):
+            return "capacity_rate_limited"
+        for key in ("remaining_units", "remaining_requests", "remaining_tokens"):
+            value = observed_capacity.get(key)
+            if isinstance(value, (int, float)) and value <= 0:
+                return "capacity_exhausted"
+        return None
+
+    def _route_context_for_source(self, source: dict[str, Any]) -> dict[str, Any]:
+        observed_capacity = source.get("observed_capacity") or {}
+        return {
+            "source_id": source["source_id"],
+            "provider": source.get("provider"),
+            "source_kind": source.get("source_kind"),
+            "auth_method": source.get("auth_method"),
+            "connection_status": self._effective_connection_status(source),
+            "connection_ref": source.get("connection_ref"),
+            "capacity_state": observed_capacity.get("capacity_state", "unknown"),
+            "capacity_reset_at": observed_capacity.get("reset_at")
+            or observed_capacity.get("rate_limit_reset_at"),
+            "observed_at": observed_capacity.get("observed_at")
+            or observed_capacity.get("last_checked_at"),
+        }
+
+    def _reject_source(
+        self,
+        rejected_sources: list[dict[str, Any]],
+        source: dict[str, Any],
+        reason: str,
+        **extra: Any,
+    ) -> None:
+        rejected_sources.append(
+            {
+                **self._route_context_for_source(source),
+                "reason": reason,
+                **extra,
+            }
+        )
 
     def _effective_status(self, row: dict[str, Any]) -> str:
         stored_status = row.get("status") or "declared"
@@ -181,8 +311,13 @@ class EntitlementBrokerService:
         if stored_status in {"inactive", "disabled"}:
             return stored_status
         if runtime_supported and credential_present:
+            connection_denial = self._connection_policy_denial(row)
+            if connection_denial:
+                return connection_denial
             return "active"
         if runtime_supported and not credential_present:
+            if self._requires_official_oauth(row):
+                return "missing_oauth_connection"
             return "missing_credentials"
         if stored_status == "active" and not runtime_supported:
             return "runtime_unavailable"
@@ -202,6 +337,114 @@ class EntitlementBrokerService:
             computed_credential_present
         )
         return runtime_supported, credential_present
+
+    def _access_class_for_source_kind(self, source_kind: str) -> str:
+        if source_kind == "approved_local_model":
+            return "local_model"
+        if source_kind == "official_api":
+            return "official_api"
+        if source_kind in {"official_cli", "official_coding_agent"}:
+            return "official_cli"
+        return source_kind
+
+    def _capacity_kind_for_source(self, source: dict[str, Any]) -> str:
+        source_kind = source.get("source_kind")
+        entitlement_kind = source.get("entitlement_kind")
+        if source_kind == "approved_local_model":
+            return "local_model"
+        if source_kind == "official_api":
+            return "official_api"
+        if entitlement_kind in {"subscription", "licensed_seat"}:
+            return "subscription_cli"
+        return "official_api"
+
+    def _routing_modes_for_source(self, source: dict[str, Any]) -> list[str]:
+        source_kind = source.get("source_kind")
+        if source_kind == "approved_local_model":
+            return ["local_first", "budget_safe"]
+        if source_kind == "official_api":
+            return ["budget_safe", "quality_first"]
+        if source_kind in {"official_cli", "official_coding_agent"}:
+            return ["subscription_first", "owner_sandbox"]
+        return ["budget_safe"]
+
+    def _pool_id(self, project_id: str, source_id: str) -> str:
+        return f"pool_{project_id}_{source_id}"
+
+    def _entitlement_pool_from_source(self, source: dict[str, Any]) -> dict[str, Any]:
+        observed_capacity = source.get("observed_capacity") or {}
+        capacity_state = str(observed_capacity.get("capacity_state") or "unknown")
+        return {
+            "id": self._pool_id(source["project_id"], source["source_id"]),
+            "project_id": source["project_id"],
+            "provider": source["provider"],
+            "source_id": source["source_id"],
+            "source_kind": source["source_kind"],
+            "access_class": self._access_class_for_source_kind(source["source_kind"]),
+            "auth_method": source.get("auth_method", "api_key"),
+            "connection_status": source.get("connection_status", "not_connected"),
+            "effective_status": source.get("effective_status", source.get("status", "declared")),
+            "owner_type": source["owner_type"],
+            "owner_id": source["owner_id"],
+            "allowed_workload_classes": source.get("workload_classes_allowed") or [],
+            "routing_modes": self._routing_modes_for_source(source),
+            "capacity_state": capacity_state,
+            "cooldown_until": observed_capacity.get("cooldown_until")
+            or observed_capacity.get("reset_at")
+            or observed_capacity.get("rate_limit_reset_at"),
+            "multi_tenant_allowed": bool(source.get("multi_tenant_allowed", False)),
+            "budget_policy_ref": f"budget_policy:{source['project_id']}",
+            "runtime_supported": bool(source.get("runtime_supported", False)),
+            "supported_models": source.get("supported_models") or [],
+            "task_strengths": source.get("task_strengths") or [],
+            "risk_tier_max": int(source.get("risk_tier_max", 0)),
+            "observed_capacity": observed_capacity,
+            "policy_notes": source.get("policy_notes") or [],
+            "updated_at": source.get("updated_at"),
+        }
+
+    def _route_decision_from_log(self, log: dict[str, Any]) -> dict[str, Any]:
+        decision = log.get("decision") or {}
+        selected_source_id = log.get("selected_source_id")
+        return {
+            "id": log["id"],
+            "project_id": log["project_id"],
+            "task_id": decision.get("task_id"),
+            "skill_id": log.get("skill_id"),
+            "task_kind": log["task_kind"],
+            "workload_class": log["workload_class"],
+            "risk_tier": log["risk_tier"],
+            "selected_entitlement_pool_id": self._pool_id(
+                log["project_id"], selected_source_id
+            )
+            if selected_source_id
+            else None,
+            "selected_source_id": selected_source_id,
+            "selected_provider": log.get("selected_provider"),
+            "selected_model_id": log.get("selected_model_id"),
+            "routing_mode": decision.get("routing_mode", "budget_safe"),
+            "rejected_sources": log.get("rejected_sources") or [],
+            "budget_state": log["budget_state"],
+            "data_boundary": log.get("data_boundary", "internal"),
+            "capacity_snapshot": decision.get("selected_source")
+            or {"eligible_sources": decision.get("eligible_sources") or []},
+            "policy_result": {
+                "allowed": log.get("denial_reason") is None,
+                "denial_reason": log.get("denial_reason"),
+                "provider_rule_compliance": bool(
+                    decision.get("provider_rule_compliance", False)
+                ),
+                "reservation_required": bool(
+                    decision.get("reservation_required", False)
+                ),
+            },
+            "created_at": log["created_at"],
+        }
+
+    def _capacity_receipt_from_row(self, row: dict[str, Any]) -> dict[str, Any]:
+        payload = dict(row)
+        payload["created_at"] = payload["created_at"].isoformat()
+        return payload
 
     def seed_default_sources(
         self, connection: Connection, project_id: str, actor: str = "bootstrap"
@@ -232,6 +475,17 @@ class EntitlementBrokerService:
                         source_defaults.get("multi_tenant_allowed", False)
                     ),
                     "credential_ref": self._credential_ref(source_id),
+                    "auth_method": source_defaults.get("auth_method", "api_key"),
+                    "connection_status": "connected"
+                    if credential_present
+                    else source_defaults.get("connection_status", "not_connected"),
+                    "connection_ref": source_defaults.get(
+                        "connection_ref", self._credential_ref(source_id)
+                    ),
+                    "oauth_scopes": source_defaults.get("oauth_scopes", []),
+                    "connection_metadata": source_defaults.get(
+                        "connection_metadata", {}
+                    ),
                     "cost_mode": source_defaults.get("entitlement_kind", "usage_based_api"),
                     "limit_shape": {},
                     "supported_models": source_defaults.get("supported_models", []),
@@ -245,6 +499,10 @@ class EntitlementBrokerService:
                     "observed_capacity": {
                         "credential_present": credential_present,
                         "runtime_supported": runtime_supported,
+                        "official_oauth_connected": bool(
+                            self._requires_official_oauth(source_defaults)
+                            and credential_present
+                        ),
                     },
                 },
                 actor=actor,
@@ -259,7 +517,9 @@ class EntitlementBrokerService:
                        owner_type, owner_id, workload_classes_allowed, multi_tenant_allowed,
                        credential_ref, cost_mode, limit_shape, supported_models,
                        task_strengths, risk_tier_max, status, policy_notes,
-                       observed_capacity, runtime_supported, created_at, updated_at
+                       auth_method, connection_status, connection_ref, oauth_scopes,
+                       connection_metadata, observed_capacity, runtime_supported,
+                       created_at, updated_at
                 FROM entitlement_sources
                 WHERE project_id = :project_id
                 ORDER BY provider ASC, source_id ASC
@@ -271,17 +531,223 @@ class EntitlementBrokerService:
         for row in rows:
             payload = dict(row)
             payload["effective_status"] = self._effective_status(payload)
+            payload["connection_status"] = self._effective_connection_status(payload)
             runtime_supported, credential_present = self._runtime_context(payload)
             payload["runtime_supported"] = runtime_supported
             payload["observed_capacity"] = {
                 **(payload.get("observed_capacity") or {}),
                 "credential_present": credential_present,
                 "runtime_supported": runtime_supported,
+                "capacity_state": (
+                    (payload.get("observed_capacity") or {}).get("capacity_state")
+                    or ("available" if credential_present else "unknown")
+                ),
+                "official_oauth_connected": bool(
+                    self._requires_official_oauth(payload)
+                    and self._effective_connection_status(payload) == "connected"
+                ),
             }
             payload["created_at"] = payload["created_at"].isoformat()
             payload["updated_at"] = payload["updated_at"].isoformat()
             items.append(payload)
         return items
+
+    def list_model_adapters(self) -> list[dict[str, Any]]:
+        adapters: list[dict[str, Any]] = []
+        for provider in self._provider_registry().get("providers", []):
+            provider_id = provider.get("id")
+            if not isinstance(provider_id, str):
+                continue
+            for source in provider.get("source_records", []):
+                source_id = source.get("source_id")
+                if not isinstance(source_id, str):
+                    continue
+                runtime_supported, credential_present = self._runtime_flags(source_id)
+                source_kind = str(source.get("source_kind", "official_api"))
+                adapters.append(
+                    {
+                        "id": f"adapter_{source_id}",
+                        "provider": provider_id,
+                        "source_id": source_id,
+                        "source_kind": source_kind,
+                        "access_class": self._access_class_for_source_kind(source_kind),
+                        "entitlement_kind": source.get(
+                            "entitlement_kind", "usage_based_api"
+                        ),
+                        "auth_method": source.get("auth_method", "api_key"),
+                        "connection_ref": source.get(
+                            "connection_ref", self._credential_ref(source_id)
+                        ),
+                        "supported_models": source.get("supported_models", []) or [],
+                        "task_strengths": source.get("task_strengths", []) or [],
+                        "allowed_workload_classes": source.get(
+                            "workload_classes_allowed", []
+                        )
+                        or [],
+                        "multi_tenant_allowed": bool(
+                            source.get("multi_tenant_allowed", False)
+                        ),
+                        "runtime_supported": runtime_supported,
+                        "credential_present": credential_present,
+                        "official_connection_required": bool(
+                            self._requires_official_oauth(source)
+                        ),
+                        "policy_notes": source.get("policy_notes", []) or [],
+                    }
+                )
+        return sorted(adapters, key=lambda item: (item["provider"], item["source_id"]))
+
+    def list_entitlement_pools(
+        self, connection: Connection, project_id: str
+    ) -> list[dict[str, Any]]:
+        return [
+            self._entitlement_pool_from_source(source)
+            for source in self.list_sources(connection, project_id)
+        ]
+
+    def get_entitlement_pool(
+        self, connection: Connection, project_id: str, pool_id: str
+    ) -> dict[str, Any]:
+        for pool in self.list_entitlement_pools(connection, project_id):
+            if pool["id"] == pool_id or pool["source_id"] == pool_id:
+                return pool
+        raise EntitlementPoolNotFoundError(
+            f"Entitlement pool '{pool_id}' not found for project '{project_id}'."
+        )
+
+    def record_capacity_probe(
+        self,
+        connection: Connection,
+        project_id: str,
+        pool_id: str,
+        *,
+        actor: str,
+        observed_capacity: dict[str, Any],
+        usage_units: Optional[dict[str, Any]] = None,
+        provider_ref: Optional[str] = None,
+        model_route_decision_id: Optional[str] = None,
+        dedupe_key: Optional[str] = None,
+        status: str = "recorded",
+    ) -> dict[str, Any]:
+        pool = self.get_entitlement_pool(connection, project_id, pool_id)
+        resolved_dedupe_key = dedupe_key or (
+            f"{pool['id']}:{provider_ref or 'manual'}:"
+            f"{observed_capacity.get('observed_at') or observed_capacity.get('capacity_state') or 'probe'}"
+        )
+        existing = connection.execute(
+            text(
+                """
+                SELECT id, project_id, entitlement_pool_id, source_id, provider,
+                       capacity_kind, model_route_decision_id, provider_ref,
+                       usage_units, capacity_state_after, dedupe_key, status,
+                       observed_capacity, created_by, created_at
+                FROM capacity_receipts
+                WHERE project_id = :project_id
+                  AND entitlement_pool_id = :entitlement_pool_id
+                  AND dedupe_key = :dedupe_key
+                """
+            ),
+            {
+                "project_id": project_id,
+                "entitlement_pool_id": pool["id"],
+                "dedupe_key": resolved_dedupe_key,
+            },
+        ).mappings().first()
+        if existing:
+            return {
+                "receipt": self._capacity_receipt_from_row(dict(existing)),
+                "pool": self.get_entitlement_pool(connection, project_id, pool["id"]),
+                "duplicate": True,
+            }
+
+        source = self.get_source(connection, project_id, pool["source_id"])
+        merged_capacity = {
+            **(source.get("observed_capacity") or {}),
+            **observed_capacity,
+        }
+        capacity_state_after = str(
+            merged_capacity.get("capacity_state")
+            or observed_capacity.get("capacity_state")
+            or "unknown"
+        )
+        merged_capacity["capacity_state"] = capacity_state_after
+        updated_source = self.upsert_source(
+            connection,
+            {
+                **source,
+                "observed_capacity": merged_capacity,
+            },
+            actor=actor,
+            emit_events=False,
+        )
+        receipt_id = make_id("caprec")
+        connection.execute(
+            text(
+                """
+                INSERT INTO capacity_receipts (
+                    id, project_id, entitlement_pool_id, source_id, provider,
+                    capacity_kind, model_route_decision_id, provider_ref,
+                    usage_units, capacity_state_after, dedupe_key, status,
+                    observed_capacity, created_by
+                )
+                VALUES (
+                    :id, :project_id, :entitlement_pool_id, :source_id, :provider,
+                    :capacity_kind, :model_route_decision_id, :provider_ref,
+                    CAST(:usage_units AS JSONB), :capacity_state_after, :dedupe_key,
+                    :status, CAST(:observed_capacity AS JSONB), :created_by
+                )
+                """
+            ),
+            {
+                "id": receipt_id,
+                "project_id": project_id,
+                "entitlement_pool_id": pool["id"],
+                "source_id": pool["source_id"],
+                "provider": pool["provider"],
+                "capacity_kind": self._capacity_kind_for_source(source),
+                "model_route_decision_id": model_route_decision_id,
+                "provider_ref": provider_ref,
+                "usage_units": json.dumps(usage_units or {}),
+                "capacity_state_after": capacity_state_after,
+                "dedupe_key": resolved_dedupe_key,
+                "status": status,
+                "observed_capacity": json.dumps(observed_capacity),
+                "created_by": actor,
+            },
+        )
+        emit_event(
+            connection,
+            project_id,
+            "capacity.receipt_recorded",
+            actor,
+            "capacity_receipt",
+            receipt_id,
+            {
+                "entitlement_pool_id": pool["id"],
+                "source_id": pool["source_id"],
+                "provider": pool["provider"],
+                "capacity_state_after": capacity_state_after,
+                "dedupe_key": resolved_dedupe_key,
+            },
+        )
+        receipt_row = connection.execute(
+            text(
+                """
+                SELECT id, project_id, entitlement_pool_id, source_id, provider,
+                       capacity_kind, model_route_decision_id, provider_ref,
+                       usage_units, capacity_state_after, dedupe_key, status,
+                       observed_capacity, created_by, created_at
+                FROM capacity_receipts
+                WHERE id = :id
+                """
+            ),
+            {"id": receipt_id},
+        ).mappings().one()
+        return {
+            "receipt": self._capacity_receipt_from_row(dict(receipt_row)),
+            "pool": self._entitlement_pool_from_source(updated_source),
+            "duplicate": False,
+        }
 
     def upsert_source(
         self,
@@ -304,6 +770,10 @@ class EntitlementBrokerService:
             computed_credential_present
         )
         source_pk = f"src_{record['project_id']}_{record['source_id']}"
+        auth_method = record.get("auth_method", "api_key")
+        connection_status = record.get("connection_status")
+        if not connection_status:
+            connection_status = "connected" if credential_present else "not_connected"
         connection.execute(
             text(
                 """
@@ -311,7 +781,9 @@ class EntitlementBrokerService:
                     id, project_id, provider, source_id, source_kind, entitlement_kind,
                     owner_type, owner_id, workload_classes_allowed, multi_tenant_allowed,
                     credential_ref, cost_mode, limit_shape, supported_models, task_strengths,
-                    risk_tier_max, status, policy_notes, observed_capacity, runtime_supported
+                    risk_tier_max, status, auth_method, connection_status, connection_ref,
+                    oauth_scopes, connection_metadata, policy_notes, observed_capacity,
+                    runtime_supported
                 )
                 VALUES (
                     :id, :project_id, :provider, :source_id, :source_kind, :entitlement_kind,
@@ -319,6 +791,8 @@ class EntitlementBrokerService:
                     :multi_tenant_allowed, :credential_ref, :cost_mode,
                     CAST(:limit_shape AS JSONB), CAST(:supported_models AS JSONB),
                     CAST(:task_strengths AS JSONB), :risk_tier_max, :status,
+                    :auth_method, :connection_status, :connection_ref,
+                    CAST(:oauth_scopes AS JSONB), CAST(:connection_metadata AS JSONB),
                     CAST(:policy_notes AS JSONB), CAST(:observed_capacity AS JSONB),
                     :runtime_supported
                 )
@@ -337,6 +811,11 @@ class EntitlementBrokerService:
                     task_strengths = EXCLUDED.task_strengths,
                     risk_tier_max = EXCLUDED.risk_tier_max,
                     status = EXCLUDED.status,
+                    auth_method = EXCLUDED.auth_method,
+                    connection_status = EXCLUDED.connection_status,
+                    connection_ref = EXCLUDED.connection_ref,
+                    oauth_scopes = EXCLUDED.oauth_scopes,
+                    connection_metadata = EXCLUDED.connection_metadata,
                     policy_notes = EXCLUDED.policy_notes,
                     observed_capacity = EXCLUDED.observed_capacity,
                     runtime_supported = EXCLUDED.runtime_supported,
@@ -365,12 +844,27 @@ class EntitlementBrokerService:
                 "task_strengths": json.dumps(record.get("task_strengths", [])),
                 "risk_tier_max": int(record.get("risk_tier_max", 1)),
                 "status": record.get("status", "declared"),
+                "auth_method": auth_method,
+                "connection_status": connection_status,
+                "connection_ref": record.get(
+                    "connection_ref", record.get("credential_ref")
+                ),
+                "oauth_scopes": json.dumps(record.get("oauth_scopes", [])),
+                "connection_metadata": json.dumps(
+                    record.get("connection_metadata", {})
+                ),
                 "policy_notes": json.dumps(record.get("policy_notes", [])),
                 "observed_capacity": json.dumps(
                     {
                         **observed_capacity,
                         "credential_present": credential_present,
                         "runtime_supported": runtime_supported,
+                        "official_oauth_connected": bool(
+                            self._requires_official_oauth(record)
+                            and credential_present
+                            and auth_method in self.OFFICIAL_OAUTH_METHODS
+                            and connection_status == "connected"
+                        ),
                     }
                 ),
                 "runtime_supported": runtime_supported,
@@ -385,13 +879,137 @@ class EntitlementBrokerService:
                 "entitlement_source",
                 source_pk,
                 {"source_id": record["source_id"], "provider": record["provider"]},
-            )
+        )
         source = next(
             item
             for item in self.list_sources(connection, record["project_id"])
             if item["source_id"] == record["source_id"]
         )
         return source
+
+    def get_source(
+        self, connection: Connection, project_id: str, source_id: str
+    ) -> dict[str, Any]:
+        for source in self.list_sources(connection, project_id):
+            if source["source_id"] == source_id:
+                return source
+        raise EntitlementSourceNotFoundError(
+            f"Entitlement source '{source_id}' not found for project '{project_id}'."
+        )
+
+    def connect_source(
+        self,
+        connection: Connection,
+        project_id: str,
+        source_id: str,
+        *,
+        actor: str,
+        connection_ref: str,
+        auth_method: Optional[str] = None,
+        oauth_scopes: Optional[list[str]] = None,
+        connection_metadata: Optional[dict[str, Any]] = None,
+        observed_capacity: Optional[dict[str, Any]] = None,
+    ) -> dict[str, Any]:
+        if not connection_ref.strip():
+            raise InvalidEntitlementConnectionError(
+                "connection_ref is required and must point to a SecretRef or local official session reference."
+            )
+        source = self.get_source(connection, project_id, source_id)
+        resolved_auth_method = auth_method or source.get("auth_method", "api_key")
+        if self._requires_official_oauth(source) and (
+            resolved_auth_method not in self.OFFICIAL_OAUTH_METHODS
+        ):
+            raise InvalidEntitlementConnectionError(
+                "Subscription-backed public model sources must use an official OAuth connection method."
+            )
+        merged_capacity = {
+            **(source.get("observed_capacity") or {}),
+            **(observed_capacity or {}),
+            "credential_present": True,
+            "runtime_supported": True,
+            "official_oauth_connected": bool(self._requires_official_oauth(source)),
+        }
+        merged_capacity.setdefault("capacity_state", "available")
+        connected = self.upsert_source(
+            connection,
+            {
+                **source,
+                "auth_method": resolved_auth_method,
+                "connection_status": "connected",
+                "connection_ref": connection_ref,
+                "oauth_scopes": oauth_scopes
+                if oauth_scopes is not None
+                else source.get("oauth_scopes", []),
+                "connection_metadata": {
+                    **(source.get("connection_metadata") or {}),
+                    **(connection_metadata or {}),
+                    "connection_recorded_by": actor,
+                },
+                "observed_capacity": merged_capacity,
+                "runtime_supported": True,
+                "status": "active",
+            },
+            actor=actor,
+            emit_events=False,
+        )
+        emit_event(
+            connection,
+            project_id,
+            "entitlement.source_connected",
+            actor,
+            "entitlement_source",
+            connected["id"],
+            {
+                "source_id": source_id,
+                "provider": connected["provider"],
+                "auth_method": connected["auth_method"],
+                "connection_status": connected["connection_status"],
+                "capacity_state": connected["observed_capacity"].get("capacity_state"),
+            },
+        )
+        return connected
+
+    def disconnect_source(
+        self,
+        connection: Connection,
+        project_id: str,
+        source_id: str,
+        *,
+        actor: str,
+        reason: Optional[str] = None,
+    ) -> dict[str, Any]:
+        source = self.get_source(connection, project_id, source_id)
+        observed_capacity = {
+            **(source.get("observed_capacity") or {}),
+            "credential_present": False,
+            "official_oauth_connected": False,
+            "capacity_state": "unknown",
+        }
+        disconnected = self.upsert_source(
+            connection,
+            {
+                **source,
+                "connection_status": "revoked",
+                "observed_capacity": observed_capacity,
+                "status": "missing_credentials",
+            },
+            actor=actor,
+            emit_events=False,
+        )
+        emit_event(
+            connection,
+            project_id,
+            "entitlement.source_disconnected",
+            actor,
+            "entitlement_source",
+            disconnected["id"],
+            {
+                "source_id": source_id,
+                "provider": disconnected["provider"],
+                "reason": reason or "operator_disconnected",
+            },
+        )
+        return disconnected
 
     def _allowed_tiers_for_budget_state(self, budget_state: str) -> list[str]:
         registry = self._provider_registry()
@@ -488,6 +1106,69 @@ class EntitlementBrokerService:
             for row in rows
         ]
 
+    def get_routing_log(
+        self, connection: Connection, project_id: str, route_decision_log_id: str
+    ) -> dict[str, Any]:
+        row = connection.execute(
+            text(
+                """
+                SELECT id, project_id, skill_id, task_kind, workload_class, risk_tier,
+                       data_boundary, budget_state, selected_source_id, selected_provider,
+                       selected_model_id, denial_reason, rejected_sources, decision,
+                       created_at
+                FROM routing_logs
+                WHERE project_id = :project_id AND id = :id
+                """
+            ),
+            {"project_id": project_id, "id": route_decision_log_id},
+        ).mappings().first()
+        if row is None:
+            raise SkillNotFoundError(
+                f"Route decision '{route_decision_log_id}' not found for project '{project_id}'."
+            )
+        payload = dict(row)
+        payload["created_at"] = row["created_at"].isoformat()
+        return payload
+
+    def list_model_route_decisions(
+        self, connection: Connection, project_id: str, limit: int = 25
+    ) -> list[dict[str, Any]]:
+        return [
+            self._route_decision_from_log(log)
+            for log in self.list_routing_logs(connection, project_id, limit)
+        ]
+
+    def simulate_model_route_decision(
+        self,
+        connection: Connection,
+        project_id: str,
+        *,
+        skill_id: str,
+        task_kind: str,
+        workload_class: str,
+        risk_tier: int,
+        preferred_capabilities: Optional[list[str]] = None,
+        budget_state: Optional[str] = None,
+        data_boundary: str = "internal",
+        actor: str = "system",
+    ) -> dict[str, Any]:
+        route = self.preview_route(
+            connection,
+            project_id,
+            skill_id=skill_id,
+            task_kind=task_kind,
+            workload_class=workload_class,
+            risk_tier=risk_tier,
+            preferred_capabilities=preferred_capabilities,
+            budget_state=budget_state,
+            data_boundary=data_boundary,
+            actor=actor,
+        )
+        log = self.get_routing_log(
+            connection, project_id, route["route_decision_log_id"]
+        )
+        return self._route_decision_from_log(log)
+
     def preview_route(
         self,
         connection: Connection,
@@ -521,45 +1202,26 @@ class EntitlementBrokerService:
         for source in self.list_sources(connection, project_id):
             effective_status = source["effective_status"]
             if effective_status != "active":
-                rejected_sources.append(
-                    {
-                        "source_id": source["source_id"],
-                        "reason": effective_status,
-                    }
-                )
+                self._reject_source(rejected_sources, source, effective_status)
                 continue
             if not source["runtime_supported"]:
-                rejected_sources.append(
-                    {
-                        "source_id": source["source_id"],
-                        "reason": "runtime_unavailable",
-                    }
-                )
+                self._reject_source(rejected_sources, source, "runtime_unavailable")
                 continue
             if workload_class not in (source.get("workload_classes_allowed") or []):
-                rejected_sources.append(
-                    {
-                        "source_id": source["source_id"],
-                        "reason": "workload_class_not_allowed",
-                    }
+                self._reject_source(
+                    rejected_sources, source, "workload_class_not_allowed"
                 )
                 continue
             if workload_class == "multi_tenant_customer" and not source.get(
                 "multi_tenant_allowed", False
             ):
-                rejected_sources.append(
-                    {
-                        "source_id": source["source_id"],
-                        "reason": "multi_tenant_not_allowed",
-                    }
+                self._reject_source(
+                    rejected_sources, source, "multi_tenant_not_allowed"
                 )
                 continue
             if risk_tier > int(source.get("risk_tier_max", 0)):
-                rejected_sources.append(
-                    {
-                        "source_id": source["source_id"],
-                        "reason": "risk_tier_exceeds_source_limit",
-                    }
+                self._reject_source(
+                    rejected_sources, source, "risk_tier_exceeds_source_limit"
                 )
                 continue
             if any(
@@ -567,20 +1229,24 @@ class EntitlementBrokerService:
                 and combo.get("workload_class") == workload_class
                 for combo in disallowed_combinations
             ):
-                rejected_sources.append(
-                    {
-                        "source_id": source["source_id"],
-                        "reason": "provider_policy_disallows_workload",
-                    }
+                self._reject_source(
+                    rejected_sources, source, "provider_policy_disallows_workload"
                 )
                 continue
+            connection_denial = self._connection_policy_denial(source)
+            if connection_denial:
+                self._reject_source(rejected_sources, source, connection_denial)
+                continue
+            capacity_denial = self._capacity_policy_denial(source)
+            if capacity_denial:
+                self._reject_source(rejected_sources, source, capacity_denial)
+                continue
             if boundary not in self._allowed_data_boundaries_for_source(source):
-                rejected_sources.append(
-                    {
-                        "source_id": source["source_id"],
-                        "reason": "data_boundary_not_allowed",
-                        "data_boundary": boundary,
-                    }
+                self._reject_source(
+                    rejected_sources,
+                    source,
+                    "data_boundary_not_allowed",
+                    data_boundary=boundary,
                 )
                 continue
 
@@ -590,11 +1256,8 @@ class EntitlementBrokerService:
                 allowed_tiers,
             )
             if allowed_tiers and not model_candidates and source["source_kind"] == "official_api":
-                rejected_sources.append(
-                    {
-                        "source_id": source["source_id"],
-                        "reason": "no_budget_eligible_model_tier",
-                    }
+                self._reject_source(
+                    rejected_sources, source, "no_budget_eligible_model_tier"
                 )
                 continue
             selected_model = self._pick_model(
@@ -642,6 +1305,19 @@ class EntitlementBrokerService:
             "preferred_capabilities": preferred_capabilities,
             "fallback_order": [item[1]["source_id"] for item in candidates[1:4]],
             "provider_rule_compliance": selected_source is not None,
+            "connection_ref": selected_source.get("connection_ref")
+            if selected_source
+            else None,
+            "auth_method": selected_source.get("auth_method")
+            if selected_source
+            else None,
+            "selected_source": self._route_context_for_source(selected_source)
+            if selected_source
+            else None,
+            "eligible_sources": [
+                self._route_context_for_source(item[1]) for item in candidates[:5]
+            ],
+            "rejected_source_count": len(rejected_sources),
         }
         log_id = make_id("route")
         connection.execute(
