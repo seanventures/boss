@@ -2,6 +2,7 @@ from sqlalchemy import text
 
 from .config import get_settings
 from .db import ensure_schema, get_engine
+from .services.entitlements import EntitlementBrokerService
 from .services.specpack import SpecPackService
 
 
@@ -9,6 +10,7 @@ def seed() -> None:
     settings = get_settings()
     settings.artifact_root.mkdir(parents=True, exist_ok=True)
     engine = get_engine(settings)
+    entitlements = EntitlementBrokerService(settings)
     specpack = SpecPackService(settings)
     ensure_schema(engine, settings)
 
@@ -73,6 +75,11 @@ def seed() -> None:
             connection,
             settings.default_project_id,
             settings.core_pack_id,
+            "bootstrap",
+        )
+        entitlements.seed_default_sources(
+            connection,
+            settings.default_project_id,
             "bootstrap",
         )
 

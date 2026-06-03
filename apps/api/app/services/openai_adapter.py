@@ -13,14 +13,17 @@ class OpenAIAdapter:
         self.settings = settings
 
     def create_text_response(
-        self, prompt: str, system_prompt: Optional[str] = None
+        self,
+        prompt: str,
+        system_prompt: Optional[str] = None,
+        model: Optional[str] = None,
     ) -> Tuple[str, str]:
         if not self.settings.openai_api_key:
             raise IntegrationConfigurationError("OPENAI_API_KEY is not configured.")
 
         client = OpenAI(api_key=self.settings.openai_api_key)
         response = client.responses.create(
-            model=self.settings.openai_model,
+            model=model or self.settings.openai_model,
             instructions=system_prompt,
             input=prompt,
         )

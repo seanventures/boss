@@ -162,6 +162,59 @@ paths:
         '201': { description: Pack installed }
         '404': { description: Pack not found }
         '422': { description: Invalid pack or role spec }
+  /v1/skills:
+    get:
+      summary: List registered control-plane skills from specpack
+      responses:
+        '200': { description: Skill list }
+  /v1/entitlements/sources:
+    get:
+      summary: List configured entitlement sources for a project
+      parameters:
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Entitlement source list }
+    post:
+      summary: Register or update an entitlement source
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id, provider, source_id, source_kind, entitlement_kind, owner_type, owner_id]
+      responses:
+        '201': { description: Entitlement source upserted }
+  /v1/router/preview:
+    post:
+      summary: Preview entitlement-based model routing and persist a routing log
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id, skill_id, task_kind, workload_class]
+      responses:
+        '200': { description: Routing decision }
+        '404': { description: Skill not found }
+  /v1/router/logs:
+    get:
+      summary: List recent routing logs for a project
+      parameters:
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, default: 25 }
+      responses:
+        '200': { description: Routing log list }
   /v1/decisions/inbox:
     get:
       summary: List decisions for inbox with pending items first

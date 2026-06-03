@@ -2,9 +2,12 @@ import { installPackAction, resolveDecisionAction, submitCommandAction } from ".
 import { fetchArtifactFeed } from "../lib/artifacts";
 import { fetchDeadletterFeed } from "../lib/deadletters";
 import { fetchDecisionFeed, type DecisionFeedItem } from "../lib/decisions";
+import { fetchEntitlementFeed } from "../lib/entitlements";
 import { fetchActivityFeed } from "../lib/events";
 import { fetchPackFeed } from "../lib/packs";
 import { fetchRoleFeed } from "../lib/roles";
+import { fetchRoutingLogFeed } from "../lib/routing";
+import { fetchSkillFeed } from "../lib/skills";
 import { fetchStatus } from "../lib/status";
 import { fetchTaskFeed } from "../lib/tasks";
 
@@ -76,7 +79,19 @@ function decisionStatusDetail(decision: DecisionFeedItem): string {
 }
 
 export default async function HomePage() {
-  const [status, decisions, tasks, artifacts, events, deadletters, packs, roles] =
+  const [
+    status,
+    decisions,
+    tasks,
+    artifacts,
+    events,
+    deadletters,
+    packs,
+    roles,
+    entitlements,
+    routingLogs,
+    skills,
+  ] =
     await Promise.all([
       fetchStatus(),
       fetchDecisionFeed(),
@@ -86,6 +101,9 @@ export default async function HomePage() {
       fetchDeadletterFeed(),
       fetchPackFeed(),
       fetchRoleFeed(),
+      fetchEntitlementFeed(),
+      fetchRoutingLogFeed(),
+      fetchSkillFeed(),
     ]);
 
   const deadletterCount = deadletters.items.length;
@@ -301,6 +319,108 @@ export default async function HomePage() {
                         </p>
                       </div>
                       <code className="mono">{role.id}</code>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </article>
+          </div>
+        </section>
+
+        <section className="panel-stack">
+          <div className="section-head">
+            <div>
+              <span className="eyebrow">AI Capacity</span>
+              <h2>Entitlements, routing, and skill registry.</h2>
+            </div>
+            <p className="status-meta">
+              BOSS routes only across official or approved sources and logs every broker choice.
+            </p>
+          </div>
+
+          <div className="stack-grid">
+            <article className="stack-card">
+              <h3>Entitlement sources</h3>
+              {!entitlements.apiReachable ? (
+                <p className="detail">
+                  {entitlements.blockedReason ?? "Entitlement API is unavailable."}
+                </p>
+              ) : entitlements.items.length === 0 ? (
+                <p className="detail">No entitlement sources are registered.</p>
+              ) : (
+                <div className="feed-list">
+                  {entitlements.items.map((source) => (
+                    <div className="feed-row" key={source.id}>
+                      <div>
+                        <h4>{source.sourceId}</h4>
+                        <p className="detail">
+                          {source.provider} / {titleCaseToken(source.sourceKind)} /{" "}
+                          {source.effectiveStatus}
+                        </p>
+                        <p className="detail">
+                          {source.supportedModels.length > 0
+                            ? source.supportedModels.join(", ")
+                            : "No runtime-backed models"}
+                        </p>
+                      </div>
+                      <span className={`pill${source.runtimeSupported ? "" : " warn"}`}>
+                        {source.runtimeSupported ? "runtime ready" : "registry only"}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </article>
+
+            <article className="stack-card">
+              <h3>Routing logs</h3>
+              {!routingLogs.apiReachable ? (
+                <p className="detail">
+                  {routingLogs.blockedReason ?? "Routing log API is unavailable."}
+                </p>
+              ) : routingLogs.items.length === 0 ? (
+                <p className="detail">No routing decisions have been logged yet.</p>
+              ) : (
+                <div className="feed-list">
+                  {routingLogs.items.map((route) => (
+                    <div className="feed-row" key={route.id}>
+                      <div>
+                        <h4>{route.skillId ?? route.taskKind}</h4>
+                        <p className="detail">
+                          {route.selectedSourceId
+                            ? `${route.selectedSourceId} -> ${route.selectedModelId ?? "no model id"}`
+                            : `Denied: ${route.denialReason ?? "unknown"}`}
+                        </p>
+                        <p className="detail">
+                          {route.workloadClass} / {formatDateTime(route.createdAt)}
+                        </p>
+                      </div>
+                      <code className="mono">{route.id}</code>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </article>
+
+            <article className="stack-card">
+              <h3>Broker skills</h3>
+              {!skills.apiReachable ? (
+                <p className="detail">
+                  {skills.blockedReason ?? "Skill API is unavailable."}
+                </p>
+              ) : skills.items.length === 0 ? (
+                <p className="detail">No broker or model skills are registered.</p>
+              ) : (
+                <div className="feed-list">
+                  {skills.items.slice(0, 6).map((skill) => (
+                    <div className="feed-row" key={skill.id}>
+                      <div>
+                        <h4>{skill.id}</h4>
+                        <p className="detail">
+                          {titleCaseToken(skill.kind)} / risk {skill.riskTier}
+                        </p>
+                      </div>
+                      <span className="pill">{titleCaseToken(skill.kind)}</span>
                     </div>
                   ))}
                 </div>

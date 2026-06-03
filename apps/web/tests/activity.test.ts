@@ -3,8 +3,11 @@ import { describe, expect, it } from "vitest";
 import { emptyArtifactFeed } from "../lib/artifacts";
 import { emptyActivityFeed } from "../lib/events";
 import { emptyDeadletterFeed } from "../lib/deadletters";
+import { emptyEntitlementFeed } from "../lib/entitlements";
 import { emptyPackFeed } from "../lib/packs";
 import { emptyRoleFeed } from "../lib/roles";
+import { emptyRoutingLogFeed } from "../lib/routing";
+import { emptySkillFeed } from "../lib/skills";
 
 describe("empty API feeds", () => {
   it("returns an unavailable artifact feed", () => {
@@ -45,5 +48,29 @@ describe("empty API feeds", () => {
     expect(feed.apiReachable).toBe(false);
     expect(feed.items).toEqual([]);
     expect(feed.blockedReason).toBe("role api down");
+  });
+
+  it("returns an unavailable entitlement feed", () => {
+    const feed = emptyEntitlementFeed("entitlement api down");
+
+    expect(feed.apiReachable).toBe(false);
+    expect(feed.items).toEqual([]);
+    expect(feed.blockedReason).toBe("entitlement api down");
+  });
+
+  it("returns an unavailable routing log feed", () => {
+    const feed = emptyRoutingLogFeed("routing api down");
+
+    expect(feed.apiReachable).toBe(false);
+    expect(feed.items).toEqual([]);
+    expect(feed.blockedReason).toBe("routing api down");
+  });
+
+  it("returns an unavailable skill feed", () => {
+    const feed = emptySkillFeed("skill api down");
+
+    expect(feed.apiReachable).toBe(false);
+    expect(feed.items).toEqual([]);
+    expect(feed.blockedReason).toBe("skill api down");
   });
 });

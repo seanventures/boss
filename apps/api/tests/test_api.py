@@ -112,6 +112,123 @@ def test_pack_install_is_idempotent_for_new_project(client, engine):
     assert pack.json()["installed"] is True
 
 
+def test_skill_registry_and_seeded_entitlement_sources_are_visible(client):
+    skills = client.get("/v1/skills")
+    assert skills.status_code == 200
+    skill_ids = [item["id"] for item in skills.json()["items"]]
+    assert "model.route_via_entitlement_broker" in skill_ids
+    assert "model.generate_text" in skill_ids
+
+    sources = client.get(
+        "/v1/entitlements/sources",
+        params={"project_id": "boss-dogfood"},
+    )
+    assert sources.status_code == 200
+    payload = sources.json()
+    openai_api = next(item for item in payload["items"] if item["source_id"] == "openai_api")
+    assert openai_api["provider"] == "openai"
+    assert openai_api["runtime_supported"] is True
+    assert openai_api["effective_status"] in {"active", "missing_credentials"}
+
+
+def test_router_preview_selects_openai_api_and_writes_log(client):
+    previous = api_main.software_factory.settings.openai_api_key
+    api_main.software_factory.settings.openai_api_key = "test-openai-key"
+    try:
+        preview = client.post(
+            "/v1/router/preview",
+            json={
+                "project_id": "boss-dogfood",
+                "skill_id": "model.generate_text",
+                "task_kind": "planning",
+                "workload_class": "owner_sandbox",
+                "risk_tier": 1,
+                "preferred_capabilities": ["planning", "summarization"],
+                "actor": "ceo",
+            },
+        )
+    finally:
+        api_main.software_factory.settings.openai_api_key = previous
+
+    assert preview.status_code == 200
+    payload = preview.json()
+    assert payload["source_id"] == "openai_api"
+    assert payload["provider"] == "openai"
+    assert payload["model_id"].startswith("openai:")
+    assert payload["denial_reason"] is None
+
+    logs = client.get("/v1/router/logs", params={"project_id": "boss-dogfood"})
+    assert logs.status_code == 200
+    log_ids = [item["id"] for item in logs.json()["items"]]
+    assert payload["route_decision_log_id"] in log_ids
+
+
+def test_router_preview_denies_multi_tenant_cli_source(client, engine):
+    with engine.begin() as connection:
+        connection.execute(text("DELETE FROM events WHERE project_id = 'boss-router'"))
+        connection.execute(text("DELETE FROM routing_logs WHERE project_id = 'boss-router'"))
+        connection.execute(
+            text("DELETE FROM entitlement_sources WHERE project_id = 'boss-router'")
+        )
+        connection.execute(text("DELETE FROM projects WHERE id = 'boss-router'"))
+        connection.execute(
+            text(
+                """
+                INSERT INTO projects (id, workspace_id, name, slug)
+                VALUES ('boss-router', 'ws_boss', 'BOSS Router', 'boss-router')
+                """
+            )
+        )
+
+    source = client.post(
+        "/v1/entitlements/sources",
+        json={
+            "project_id": "boss-router",
+            "provider": "openai",
+            "source_id": "owner_cli_test",
+            "source_kind": "official_cli",
+            "entitlement_kind": "subscription",
+            "owner_type": "workspace_operator",
+            "owner_id": "founder",
+            "workload_classes_allowed": [
+                "owner_sandbox",
+                "single_tenant_customer",
+                "multi_tenant_customer",
+            ],
+            "multi_tenant_allowed": False,
+            "supported_models": ["gpt-5.2-codex"],
+            "task_strengths": ["planning", "coding"],
+            "risk_tier_max": 1,
+            "status": "active",
+            "observed_capacity": {"credential_present": True},
+            "runtime_supported": True,
+            "actor": "ceo",
+        },
+    )
+    assert source.status_code == 201
+
+    preview = client.post(
+        "/v1/router/preview",
+        json={
+            "project_id": "boss-router",
+            "skill_id": "model.generate_text",
+            "task_kind": "planning",
+            "workload_class": "multi_tenant_customer",
+            "risk_tier": 1,
+            "preferred_capabilities": ["planning"],
+            "actor": "ceo",
+        },
+    )
+    assert preview.status_code == 200
+    payload = preview.json()
+    assert payload["source_id"] is None
+    assert payload["denial_reason"] == "no_eligible_source"
+    assert any(
+        item["reason"] in {"provider_policy_disallows_workload", "multi_tenant_not_allowed"}
+        for item in payload["rejected_sources"]
+    )
+
+
 def test_command_proposal_creates_task_job_artifact_and_task_lookup(client, engine):
     response = client.post(
         "/v1/commands/propose",
@@ -1429,10 +1546,15 @@ def test_pr_proposal_blocks_without_github_credentials_and_releases_reservation(
     monkeypatch.setattr(
         api_main.software_factory.openai,
         "create_text_response",
-        lambda prompt, system_prompt=None: ("resp_review_packet", "Review packet"),
+        lambda prompt, system_prompt=None, model=None: (
+            "resp_review_packet",
+            "Review packet",
+        ),
     )
     previous = api_main.software_factory.settings.github_token
+    previous_openai = api_main.software_factory.settings.openai_api_key
     api_main.software_factory.settings.github_token = None
+    api_main.software_factory.settings.openai_api_key = "test-openai-key"
     try:
         response = client.post(
             "/v1/software-factory/proposals",
@@ -1448,6 +1570,7 @@ def test_pr_proposal_blocks_without_github_credentials_and_releases_reservation(
         )
     finally:
         api_main.software_factory.settings.github_token = previous
+        api_main.software_factory.settings.openai_api_key = previous_openai
 
     assert response.status_code == 200
     payload = response.json()
@@ -1595,11 +1718,13 @@ def test_command_to_merge_flow_completes_task_when_merge_policy_enabled(
     client, engine, monkeypatch
 ):
     previous = api_main.decisions.settings.enable_sandbox_merge
+    previous_openai = api_main.software_factory.settings.openai_api_key
     api_main.decisions.settings.enable_sandbox_merge = True
+    api_main.software_factory.settings.openai_api_key = "test-openai-key"
     monkeypatch.setattr(
         api_main.software_factory.openai,
         "create_text_response",
-        lambda prompt, system_prompt=None: (
+        lambda prompt, system_prompt=None, model=None: (
             "resp_review_packet",
             "## Implementation summary\n- Review packet generated for test coverage.",
         ),
@@ -1854,3 +1979,4 @@ def test_command_to_merge_flow_completes_task_when_merge_policy_enabled(
         assert "task.completed" in event_types
     finally:
         api_main.decisions.settings.enable_sandbox_merge = previous
+        api_main.software_factory.settings.openai_api_key = previous_openai

@@ -455,3 +455,119 @@ class PackInstallRequest(BaseModel):
     project_id: str
     pack_id: str
     actor: str = "system"
+
+
+class SkillSummary(BaseModel):
+    id: str
+    kind: str
+    risk_tier: int
+    description: str
+    mock_mode: bool
+    cost: dict[str, Any]
+    policy: dict[str, Any]
+
+
+class SkillListResponse(BaseModel):
+    items: list[SkillSummary]
+
+
+class EntitlementSourceSummary(BaseModel):
+    id: str
+    project_id: str
+    provider: str
+    source_id: str
+    source_kind: str
+    entitlement_kind: str
+    owner_type: str
+    owner_id: str
+    workload_classes_allowed: list[str]
+    multi_tenant_allowed: bool
+    credential_ref: Optional[str] = None
+    cost_mode: str
+    limit_shape: dict[str, Any]
+    supported_models: list[str]
+    task_strengths: list[str]
+    risk_tier_max: int
+    status: str
+    effective_status: str
+    policy_notes: list[str]
+    observed_capacity: dict[str, Any]
+    runtime_supported: bool
+    created_at: str
+    updated_at: str
+
+
+class EntitlementSourceListResponse(BaseModel):
+    project_id: str
+    items: list[EntitlementSourceSummary]
+
+
+class EntitlementSourceUpsertRequest(BaseModel):
+    project_id: str
+    provider: str
+    source_id: str
+    source_kind: str
+    entitlement_kind: str
+    owner_type: str
+    owner_id: str
+    workload_classes_allowed: list[str] = Field(default_factory=list)
+    multi_tenant_allowed: bool = False
+    credential_ref: Optional[str] = None
+    cost_mode: str = "usage_based_api"
+    limit_shape: dict[str, Any] = Field(default_factory=dict)
+    supported_models: list[str] = Field(default_factory=list)
+    task_strengths: list[str] = Field(default_factory=list)
+    risk_tier_max: int = 1
+    status: str = "declared"
+    policy_notes: list[str] = Field(default_factory=list)
+    observed_capacity: dict[str, Any] = Field(default_factory=dict)
+    runtime_supported: bool = False
+    actor: str = "system"
+
+
+class RoutingPreviewRequest(BaseModel):
+    project_id: str
+    skill_id: str
+    task_kind: str
+    workload_class: str
+    risk_tier: int = Field(default=1, ge=0, le=3)
+    preferred_capabilities: list[str] = Field(default_factory=list)
+    budget_state: Optional[str] = None
+    actor: str = "system"
+
+
+class RoutingPreviewResponse(BaseModel):
+    route_decision_log_id: str
+    skill_id: str
+    task_kind: str
+    workload_class: str
+    risk_tier: int
+    budget_state: str
+    source_id: Optional[str] = None
+    provider: Optional[str] = None
+    model_id: Optional[str] = None
+    denial_reason: Optional[str] = None
+    rejected_sources: list[dict[str, Any]]
+    decision: dict[str, Any]
+
+
+class RoutingLogItem(BaseModel):
+    id: str
+    project_id: str
+    skill_id: Optional[str] = None
+    task_kind: str
+    workload_class: str
+    risk_tier: int
+    budget_state: str
+    selected_source_id: Optional[str] = None
+    selected_provider: Optional[str] = None
+    selected_model_id: Optional[str] = None
+    denial_reason: Optional[str] = None
+    rejected_sources: list[dict[str, Any]]
+    decision: dict[str, Any]
+    created_at: str
+
+
+class RoutingLogListResponse(BaseModel):
+    project_id: str
+    items: list[RoutingLogItem]

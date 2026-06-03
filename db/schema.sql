@@ -48,6 +48,49 @@ CREATE TABLE IF NOT EXISTS pack_installs (
   UNIQUE(project_id, pack_id)
 );
 
+CREATE TABLE IF NOT EXISTS entitlement_sources (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id),
+  provider TEXT NOT NULL,
+  source_id TEXT NOT NULL,
+  source_kind TEXT NOT NULL,
+  entitlement_kind TEXT NOT NULL,
+  owner_type TEXT NOT NULL,
+  owner_id TEXT NOT NULL,
+  workload_classes_allowed JSONB NOT NULL DEFAULT '[]'::jsonb,
+  multi_tenant_allowed BOOLEAN NOT NULL DEFAULT false,
+  credential_ref TEXT,
+  cost_mode TEXT NOT NULL DEFAULT 'usage_based_api',
+  limit_shape JSONB NOT NULL DEFAULT '{}'::jsonb,
+  supported_models JSONB NOT NULL DEFAULT '[]'::jsonb,
+  task_strengths JSONB NOT NULL DEFAULT '[]'::jsonb,
+  risk_tier_max INTEGER NOT NULL DEFAULT 1,
+  status TEXT NOT NULL DEFAULT 'declared',
+  policy_notes JSONB NOT NULL DEFAULT '[]'::jsonb,
+  observed_capacity JSONB NOT NULL DEFAULT '{}'::jsonb,
+  runtime_supported BOOLEAN NOT NULL DEFAULT false,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(project_id, source_id)
+);
+
+CREATE TABLE IF NOT EXISTS routing_logs (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id),
+  skill_id TEXT,
+  task_kind TEXT NOT NULL,
+  workload_class TEXT NOT NULL,
+  risk_tier INTEGER NOT NULL,
+  budget_state TEXT NOT NULL,
+  selected_source_id TEXT,
+  selected_provider TEXT,
+  selected_model_id TEXT,
+  denial_reason TEXT,
+  rejected_sources JSONB NOT NULL DEFAULT '[]'::jsonb,
+  decision JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 CREATE TABLE IF NOT EXISTS tasks (
   id TEXT PRIMARY KEY,
   project_id TEXT NOT NULL REFERENCES projects(id),

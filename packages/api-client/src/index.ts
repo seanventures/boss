@@ -413,6 +413,122 @@ export type PackInstallRequest = {
   actor?: string;
 };
 
+export type SkillSummary = {
+  id: string;
+  kind: string;
+  risk_tier: number;
+  description: string;
+  mock_mode: boolean;
+  cost: Record<string, unknown>;
+  policy: Record<string, unknown>;
+};
+
+export type SkillListResponse = {
+  items: SkillSummary[];
+};
+
+export type EntitlementSourceSummary = {
+  id: string;
+  project_id: string;
+  provider: string;
+  source_id: string;
+  source_kind: string;
+  entitlement_kind: string;
+  owner_type: string;
+  owner_id: string;
+  workload_classes_allowed: string[];
+  multi_tenant_allowed: boolean;
+  credential_ref?: string;
+  cost_mode: string;
+  limit_shape: Record<string, unknown>;
+  supported_models: string[];
+  task_strengths: string[];
+  risk_tier_max: number;
+  status: string;
+  effective_status: string;
+  policy_notes: string[];
+  observed_capacity: Record<string, unknown>;
+  runtime_supported: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
+export type EntitlementSourceListResponse = {
+  project_id: string;
+  items: EntitlementSourceSummary[];
+};
+
+export type EntitlementSourceUpsertRequest = {
+  project_id: string;
+  provider: string;
+  source_id: string;
+  source_kind: string;
+  entitlement_kind: string;
+  owner_type: string;
+  owner_id: string;
+  workload_classes_allowed?: string[];
+  multi_tenant_allowed?: boolean;
+  credential_ref?: string;
+  cost_mode?: string;
+  limit_shape?: Record<string, unknown>;
+  supported_models?: string[];
+  task_strengths?: string[];
+  risk_tier_max?: number;
+  status?: string;
+  policy_notes?: string[];
+  observed_capacity?: Record<string, unknown>;
+  runtime_supported?: boolean;
+  actor?: string;
+};
+
+export type RoutingPreviewRequest = {
+  project_id: string;
+  skill_id: string;
+  task_kind: string;
+  workload_class: string;
+  risk_tier?: number;
+  preferred_capabilities?: string[];
+  budget_state?: string;
+  actor?: string;
+};
+
+export type RoutingPreviewResponse = {
+  route_decision_log_id: string;
+  skill_id: string;
+  task_kind: string;
+  workload_class: string;
+  risk_tier: number;
+  budget_state: string;
+  source_id?: string;
+  provider?: string;
+  model_id?: string;
+  denial_reason?: string;
+  rejected_sources: Array<Record<string, unknown>>;
+  decision: Record<string, unknown>;
+};
+
+export type RoutingLogItem = {
+  id: string;
+  project_id: string;
+  skill_id?: string;
+  task_kind: string;
+  workload_class: string;
+  risk_tier: number;
+  budget_state: string;
+  selected_source_id?: string;
+  selected_provider?: string;
+  selected_model_id?: string;
+  denial_reason?: string;
+  rejected_sources: Array<Record<string, unknown>>;
+  decision: Record<string, unknown>;
+  created_at: string;
+};
+
+export type RoutingLogListResponse = {
+  project_id: string;
+  items: RoutingLogItem[];
+};
+
 export type DeadletterItem = {
   id: string;
   project_id?: string;
@@ -595,6 +711,33 @@ export function createBossApiClient(config: BossApiClientConfig) {
     installPack(payload: PackInstallRequest) {
       return request<PackDetail>("POST", "/v1/packs/install", {
         body: payload,
+      });
+    },
+    listSkills() {
+      return request<SkillListResponse>("GET", "/v1/skills");
+    },
+    listEntitlementSources(projectId: string) {
+      return request<EntitlementSourceListResponse>(
+        "GET",
+        "/v1/entitlements/sources",
+        {
+          query: { project_id: projectId },
+        },
+      );
+    },
+    upsertEntitlementSource(payload: EntitlementSourceUpsertRequest) {
+      return request<EntitlementSourceSummary>("POST", "/v1/entitlements/sources", {
+        body: payload,
+      });
+    },
+    previewRoute(payload: RoutingPreviewRequest) {
+      return request<RoutingPreviewResponse>("POST", "/v1/router/preview", {
+        body: payload,
+      });
+    },
+    listRoutingLogs(projectId: string, limit = 25) {
+      return request<RoutingLogListResponse>("GET", "/v1/router/logs", {
+        query: { project_id: projectId, limit },
       });
     },
     pollWorker(payload: WorkerPollRequest) {

@@ -29,7 +29,7 @@ skills:
     kind: software_factory
     risk_tier: 2
     mock_mode: false
-    description: Later integration: run OpenHands-style coding worker in a sandbox to create PRs.
+    description: "Later integration: run OpenHands-style coding worker in a sandbox to create PRs."
     input_schema:
       repo_url: string
       issue_or_spec: string

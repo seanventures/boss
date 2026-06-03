@@ -10,6 +10,7 @@ from ..config import Settings
 from ..schemas import FileChange
 from .budget import BudgetGovernor
 from .core import create_artifact, create_blocking_decision, emit_event
+from .entitlements import EntitlementBrokerService
 from .github_adapter import GitHubAdapter, IntegrationConfigurationError
 from .openai_adapter import OpenAIAdapter
 from .receipts import ReceiptService
@@ -22,6 +23,7 @@ class SoftwareFactoryService:
         self.receipts = ReceiptService()
         self.github = GitHubAdapter(settings)
         self.openai = OpenAIAdapter(settings)
+        self.entitlements = EntitlementBrokerService(settings)
 
     def _scope(self, connection: Connection, project_id: str) -> dict:
         row = connection.execute(
@@ -39,6 +41,70 @@ class SoftwareFactoryService:
         if not row:
             raise ValueError(f"Unknown project_id: {project_id}")
         return dict(row)
+
+    def _route_model_execution(
+        self,
+        connection: Connection,
+        project_id: str,
+        *,
+        task_id: Optional[str],
+        task_kind: str,
+        preferred_capabilities: list[str],
+    ) -> dict:
+        route = self.entitlements.preview_route(
+            connection,
+            project_id,
+            skill_id="model.generate_text",
+            task_kind=task_kind,
+            workload_class="owner_sandbox",
+            risk_tier=1,
+            preferred_capabilities=preferred_capabilities,
+            actor="coding_worker",
+        )
+        if route.get("source_id"):
+            return route
+
+        rejected = route.get("rejected_sources") or []
+        missing_openai = any(
+            item.get("source_id") == "openai_api"
+            and item.get("reason") == "missing_credentials"
+            for item in rejected
+        )
+        if missing_openai:
+            decision_id = create_blocking_decision(
+                connection,
+                project_id,
+                task_id,
+                "OpenAI integration is not configured",
+                {"action": "provide_openai_api_key"},
+                {"routing_log_id": route["route_decision_log_id"]},
+                "missing_openai_credentials",
+            )
+            return {
+                "blocked": {
+                    "status": "blocked",
+                    "decision_id": decision_id,
+                    "message": "OPENAI_API_KEY is not configured.",
+                }
+            }
+
+        decision_id = create_blocking_decision(
+            connection,
+            project_id,
+            task_id,
+            "No eligible model entitlement source is available",
+            {"action": "review_entitlement_sources"},
+            {"routing_log_id": route["route_decision_log_id"]},
+            "no_eligible_model_source",
+        )
+        return {
+            "blocked": {
+                "status": "blocked",
+                "decision_id": decision_id,
+                "message": route.get("denial_reason")
+                or "No eligible model entitlement source was available.",
+            }
+        }
 
     def create_plan_artifact(
         self,
@@ -64,6 +130,22 @@ class SoftwareFactoryService:
             )
             return {"status": "blocked", "decision_id": decision_id}
 
+        route = self._route_model_execution(
+            connection,
+            project_id,
+            task_id=None,
+            task_kind="planning",
+            preferred_capabilities=["planning", "summarization"],
+        )
+        if route.get("blocked"):
+            self.budget.release(
+                connection,
+                project_id,
+                reservation_id,
+                "Released reservation because no eligible model entitlement source was available.",
+            )
+            return route["blocked"]
+
         scope = self._scope(connection, project_id)
         receipt, created = self.receipts.create_or_reuse(
             connection,
@@ -72,7 +154,11 @@ class SoftwareFactoryService:
             project_id,
             dedupe_key,
             "openai.responses.create",
-            {"model": self.settings.openai_model},
+            {
+                "model": route["model_id"],
+                "source_id": route["source_id"],
+                "routing_log_id": route["route_decision_log_id"],
+            },
             {"prompt": prompt, "system_prompt": system_prompt},
         )
         if not created and receipt["status"] == "succeeded":
@@ -91,7 +177,7 @@ class SoftwareFactoryService:
 
         try:
             provider_ref, output_text = self.openai.create_text_response(
-                prompt, system_prompt
+                prompt, system_prompt, route["model_id"]
             )
         except IntegrationConfigurationError as error:
             self.receipts.mark_failed(
@@ -163,7 +249,7 @@ class SoftwareFactoryService:
             reservation_id,
             receipt["id"],
             "model",
-            self.settings.openai_model,
+            route["model_id"],
             int(reservation["amount_usd_micros"]),
             None,
         )
@@ -174,7 +260,12 @@ class SoftwareFactoryService:
             "coding_worker",
             "artifact",
             artifact_id,
-            {"receipt_id": receipt["id"]},
+            {
+                "receipt_id": receipt["id"],
+                "routing_log_id": route["route_decision_log_id"],
+                "source_id": route["source_id"],
+                "model_id": route["model_id"],
+            },
         )
         return {
             "status": "created",
@@ -266,6 +357,22 @@ class SoftwareFactoryService:
             )
             return {"status": "blocked", "decision_id": decision_id}
 
+        route = self._route_model_execution(
+            connection,
+            project_id,
+            task_id=task_id,
+            task_kind="review",
+            preferred_capabilities=["review", "coding", "summarization"],
+        )
+        if route.get("blocked"):
+            self.budget.release(
+                connection,
+                project_id,
+                reservation_id,
+                "Released reservation because no eligible model entitlement source was available.",
+            )
+            return route["blocked"]
+
         scope = self._scope(connection, project_id)
         pr_receipt, created = self.receipts.create_or_reuse(
             connection,
@@ -315,6 +422,7 @@ class SoftwareFactoryService:
                     "tests added or still needed, risk hotspots, rollback plan, confidence, "
                     "and recommendation."
                 ),
+                route["model_id"],
             )
         except IntegrationConfigurationError as error:
             self.receipts.mark_failed(
@@ -486,6 +594,7 @@ class SoftwareFactoryService:
                 "recommendation": "Review the draft PR and merge manually after approval.",
                 "github_commits": commit_shas,
                 "openai_response_id": review_provider_ref,
+                "routing_log_id": route["route_decision_log_id"],
             },
         )
         decision_id = create_blocking_decision(
@@ -533,7 +642,13 @@ class SoftwareFactoryService:
             "coding_worker",
             "decision",
             decision_id,
-            {"receipt_id": pr_receipt["id"], "pull_request_url": pr.url},
+            {
+                "receipt_id": pr_receipt["id"],
+                "pull_request_url": pr.url,
+                "routing_log_id": route["route_decision_log_id"],
+                "source_id": route["source_id"],
+                "model_id": route["model_id"],
+            },
         )
         return {
             "status": "created",

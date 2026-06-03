@@ -24,6 +24,9 @@ from .schemas import (
     DecisionInboxResponse,
     DeadletterItem,
     DeadletterListResponse,
+    EntitlementSourceListResponse,
+    EntitlementSourceSummary,
+    EntitlementSourceUpsertRequest,
     EventFeedResponse,
     EventItem,
     HealthResponse,
@@ -46,6 +49,12 @@ from .schemas import (
     RoleDetail,
     RoleListResponse,
     RoleSummary,
+    RoutingLogItem,
+    RoutingLogListResponse,
+    RoutingPreviewRequest,
+    RoutingPreviewResponse,
+    SkillListResponse,
+    SkillSummary,
     StatusResponse,
     TaskCreateRequest,
     TaskListResponse,
@@ -65,6 +74,7 @@ from .services.decisions import (
     DecisionService,
     InvalidDecisionTransitionError,
 )
+from .services.entitlements import EntitlementBrokerService, SkillNotFoundError
 from .services.intake import CommandIntakeService
 from .services.jobs import JobLeaseService, LeaseNotFoundError
 from .services.receipts import ReceiptService
@@ -80,6 +90,7 @@ receipts = ReceiptService()
 software_factory = SoftwareFactoryService(settings)
 decisions = DecisionService(settings)
 specpack = SpecPackService(settings)
+entitlements = EntitlementBrokerService(settings)
 
 
 @asynccontextmanager
@@ -241,6 +252,67 @@ def pack_detail_from_service(payload) -> PackDetail:
         role_count=payload.get("role_count"),
         role_results=payload.get("role_results") or [],
         install_status=payload.get("install_status"),
+    )
+
+
+def skill_summary_from_service(payload) -> SkillSummary:
+    return SkillSummary(
+        id=payload["id"],
+        kind=payload["kind"],
+        risk_tier=payload["risk_tier"],
+        description=payload["description"],
+        mock_mode=payload["mock_mode"],
+        cost=payload.get("cost") or {},
+        policy=payload.get("policy") or {},
+    )
+
+
+def entitlement_source_summary_from_service(
+    payload,
+) -> EntitlementSourceSummary:
+    return EntitlementSourceSummary(
+        id=payload["id"],
+        project_id=payload["project_id"],
+        provider=payload["provider"],
+        source_id=payload["source_id"],
+        source_kind=payload["source_kind"],
+        entitlement_kind=payload["entitlement_kind"],
+        owner_type=payload["owner_type"],
+        owner_id=payload["owner_id"],
+        workload_classes_allowed=payload.get("workload_classes_allowed") or [],
+        multi_tenant_allowed=bool(payload["multi_tenant_allowed"]),
+        credential_ref=payload.get("credential_ref"),
+        cost_mode=payload["cost_mode"],
+        limit_shape=payload.get("limit_shape") or {},
+        supported_models=payload.get("supported_models") or [],
+        task_strengths=payload.get("task_strengths") or [],
+        risk_tier_max=payload["risk_tier_max"],
+        status=payload["status"],
+        effective_status=payload["effective_status"],
+        policy_notes=payload.get("policy_notes") or [],
+        observed_capacity=payload.get("observed_capacity") or {},
+        runtime_supported=bool(payload["runtime_supported"]),
+        created_at=payload["created_at"],
+        updated_at=payload["updated_at"],
+    )
+
+
+def routing_log_item_from_service(payload) -> RoutingLogItem:
+    return RoutingLogItem(
+        id=payload["id"],
+        project_id=payload["project_id"],
+        skill_id=payload.get("skill_id"),
+        task_kind=payload["task_kind"],
+        workload_class=payload["workload_class"],
+        risk_tier=payload["risk_tier"],
+        budget_state=payload["budget_state"],
+        selected_source_id=payload.get("selected_source_id"),
+        selected_provider=payload.get("selected_provider"),
+        selected_model_id=payload.get("selected_model_id"),
+        denial_reason=payload.get("denial_reason"),
+        rejected_sources=payload.get("rejected_sources") or [],
+        decision=payload.get("decision") or {},
+        created_at=payload["created_at"],
     )
 
 
@@ -514,6 +586,72 @@ def install_pack(payload: PackInstallRequest) -> PackDetail:
         except (RoleNotFoundError, ValueError) as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
         return pack_detail_from_service(result)
+
+
+@app.get("/v1/skills", response_model=SkillListResponse)
+def list_skills() -> SkillListResponse:
+    return SkillListResponse(
+        items=[skill_summary_from_service(skill) for skill in entitlements.list_skills()]
+    )
+
+
+@app.get("/v1/entitlements/sources", response_model=EntitlementSourceListResponse)
+def list_entitlement_sources(project_id: str) -> EntitlementSourceListResponse:
+    with begin(engine) as connection:
+        items = entitlements.list_sources(connection, project_id)
+        return EntitlementSourceListResponse(
+            project_id=project_id,
+            items=[entitlement_source_summary_from_service(item) for item in items],
+        )
+
+
+@app.post(
+    "/v1/entitlements/sources",
+    response_model=EntitlementSourceSummary,
+    status_code=201,
+)
+def upsert_entitlement_source(
+    payload: EntitlementSourceUpsertRequest,
+) -> EntitlementSourceSummary:
+    with begin(engine) as connection:
+        item = entitlements.upsert_source(
+            connection,
+            payload.model_dump(exclude={"actor"}),
+            actor=payload.actor,
+        )
+        return entitlement_source_summary_from_service(item)
+
+
+@app.post("/v1/router/preview", response_model=RoutingPreviewResponse)
+def preview_route(payload: RoutingPreviewRequest) -> RoutingPreviewResponse:
+    with begin(engine) as connection:
+        try:
+            route = entitlements.preview_route(
+                connection,
+                payload.project_id,
+                skill_id=payload.skill_id,
+                task_kind=payload.task_kind,
+                workload_class=payload.workload_class,
+                risk_tier=payload.risk_tier,
+                preferred_capabilities=payload.preferred_capabilities,
+                budget_state=payload.budget_state,
+                actor=payload.actor,
+            )
+        except SkillNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        return RoutingPreviewResponse(**route)
+
+
+@app.get("/v1/router/logs", response_model=RoutingLogListResponse)
+def list_routing_logs(project_id: str, limit: int = 25) -> RoutingLogListResponse:
+    if limit < 1 or limit > 200:
+        raise HTTPException(status_code=400, detail="limit must be between 1 and 200.")
+    with begin(engine) as connection:
+        items = entitlements.list_routing_logs(connection, project_id, limit)
+        return RoutingLogListResponse(
+            project_id=project_id,
+            items=[routing_log_item_from_service(item) for item in items],
+        )
 
 
 @app.post("/v1/jobs", response_model=JobSummary, status_code=201)

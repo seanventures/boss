@@ -76,6 +76,8 @@ The executive console now supports API-driven CEO command intake plus live visib
 
 The dogfood seed now installs the spec-backed `core_v1` company pack into `boss-dogfood`, which provisions the default operating roles from `packages/specpack/roles`.
 
+The dogfood seed also registers the initial entitlement-source inventory from `packages/specpack/models/providers.yaml`, and brokered OpenAI planning/review calls now write routing logs before execution.
+
 ## Current control-plane endpoints
 
 - `GET /health`
@@ -92,6 +94,11 @@ The dogfood seed now installs the spec-backed `core_v1` company pack into `boss-
 - `GET /v1/packs`
 - `GET /v1/packs/{pack_id}`
 - `POST /v1/packs/install`
+- `GET /v1/skills`
+- `GET /v1/entitlements/sources`
+- `POST /v1/entitlements/sources`
+- `POST /v1/router/preview`
+- `GET /v1/router/logs`
 - `POST /v1/jobs`
 - `POST /v1/worker/poll`
 - `POST /v1/worker/heartbeat`
@@ -119,6 +126,14 @@ The dogfood seed now installs the spec-backed `core_v1` company pack into `boss-
 - Real sandbox PR proposals can now be queued as leased jobs so GitHub/OpenAI execution runs through `reservation -> job -> lease -> receipt -> artifact -> decision`.
 - Approving a plan-review decision now auto-reserves the configured sandbox proposal budget and queues the next `software_factory.propose_pr` job instead of stopping at decision state only.
 - Approving the final sandbox PR review decision creates a receipt-linked merge gate by default, and can queue a real `github.pull_request.merge` job only when `BOSS_ENABLE_SANDBOX_MERGE=true`.
+
+## Model entitlement broker
+
+- BOSS treats AI capacity as governed entitlement sources, not generic free compute.
+- The runtime inventory now distinguishes `official_cli`, `official_coding_agent`, `official_api`, and `approved_local_model` sources.
+- Router previews and brokered model calls write durable routing logs with selected source, selected model, denial reasons, and rejected alternatives.
+- OpenAI planning and review-packet generation now pass through the broker before execution.
+- The broker fails closed when no eligible runtime-backed source is available or when provider-policy constraints disallow the workload.
 
 ## GitHub bootstrap
 

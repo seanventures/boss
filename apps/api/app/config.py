@@ -13,6 +13,11 @@ class Settings(BaseSettings):
 
     database_url: str = "postgresql+psycopg://boss:boss@localhost:5432/boss"
     openai_api_key: Optional[str] = Field(default=None, alias="OPENAI_API_KEY")
+    anthropic_api_key: Optional[str] = Field(
+        default=None, alias="ANTHROPIC_API_KEY"
+    )
+    google_api_key: Optional[str] = Field(default=None, alias="GOOGLE_API_KEY")
+    xai_api_key: Optional[str] = Field(default=None, alias="XAI_API_KEY")
     openai_model: str = Field(default="gpt-5.2-codex", alias="BOSS_OPENAI_MODEL")
     github_token: Optional[str] = Field(
         default=None, validation_alias=AliasChoices("BOSS_GITHUB_TOKEN", "GITHUB_TOKEN")
@@ -34,6 +39,11 @@ class Settings(BaseSettings):
     )
     artifact_dir: Path = Field(default=Path("artifacts"), alias="BOSS_ARTIFACTS_DIR")
     core_pack_id: str = Field(default="core_v1", alias="BOSS_CORE_PACK_ID")
+    cursor_cli_enabled: bool = Field(default=False, alias="BOSS_CURSOR_CLI_ENABLED")
+    local_model_enabled: bool = Field(default=False, alias="BOSS_LOCAL_MODEL_ENABLED")
+    local_model_id: Optional[str] = Field(
+        default=None, alias="BOSS_LOCAL_MODEL_ID"
+    )
     daily_cap_usd_micros: int = Field(
         default=10_000_000, alias="BOSS_DAILY_CAP_USD_MICROS"
     )
