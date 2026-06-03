@@ -33,6 +33,15 @@ CREATE TABLE IF NOT EXISTS roles (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE(project_id, role_key)
 );
+ALTER TABLE roles ADD COLUMN IF NOT EXISTS trust_score INTEGER NOT NULL DEFAULT 50;
+ALTER TABLE roles ADD COLUMN IF NOT EXISTS successful_runs INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE roles ADD COLUMN IF NOT EXISTS policy_violation_count INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE roles ADD COLUMN IF NOT EXISTS duplicate_effect_attempt_count INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE roles ADD COLUMN IF NOT EXISTS hidden_failure_count INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE roles ADD COLUMN IF NOT EXISTS low_quality_output_count INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE roles ADD COLUMN IF NOT EXISTS scope_violation_count INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE roles ADD COLUMN IF NOT EXISTS last_reviewed_at TIMESTAMPTZ;
+ALTER TABLE roles ADD COLUMN IF NOT EXISTS last_violation_at TIMESTAMPTZ;
 
 CREATE TABLE IF NOT EXISTS pack_installs (
   id TEXT PRIMARY KEY,
@@ -157,6 +166,51 @@ ALTER TABLE decisions ADD COLUMN IF NOT EXISTS executed_by TEXT;
 ALTER TABLE decisions ADD COLUMN IF NOT EXISTS executed_at TIMESTAMPTZ;
 ALTER TABLE decisions ADD COLUMN IF NOT EXISTS resolution_note TEXT;
 ALTER TABLE decisions ADD COLUMN IF NOT EXISTS external_ref TEXT;
+
+CREATE TABLE IF NOT EXISTS autonomy_changes (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id),
+  role_id TEXT NOT NULL REFERENCES roles(id),
+  role_key TEXT NOT NULL,
+  decision_id TEXT REFERENCES decisions(id),
+  change_type TEXT NOT NULL,
+  trigger TEXT NOT NULL,
+  from_level INTEGER NOT NULL,
+  to_level INTEGER NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending_decision',
+  reason TEXT NOT NULL,
+  evidence_refs JSONB NOT NULL DEFAULT '[]'::jsonb,
+  metrics JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_by TEXT NOT NULL,
+  approved_by TEXT,
+  approved_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_autonomy_changes_project_role
+  ON autonomy_changes(project_id, role_key, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS role_reviews (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id),
+  role_id TEXT NOT NULL REFERENCES roles(id),
+  role_key TEXT NOT NULL,
+  summary TEXT NOT NULL,
+  metrics JSONB NOT NULL DEFAULT '{}'::jsonb,
+  evidence_refs JSONB NOT NULL DEFAULT '[]'::jsonb,
+  trust_score_before INTEGER NOT NULL,
+  trust_delta INTEGER NOT NULL,
+  trust_score_after INTEGER NOT NULL,
+  autonomy_level_before INTEGER NOT NULL,
+  autonomy_level_after INTEGER NOT NULL,
+  governance_outcome TEXT NOT NULL,
+  autonomy_change_id TEXT REFERENCES autonomy_changes(id),
+  artifact_id TEXT REFERENCES artifacts(id),
+  created_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_role_reviews_project_role
+  ON role_reviews(project_id, role_key, created_at DESC);
 
 CREATE TABLE IF NOT EXISTS self_improvement_proposals (
   id TEXT PRIMARY KEY,

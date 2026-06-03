@@ -134,7 +134,11 @@ class SpecPackService:
         rows = connection.execute(
             text(
                 """
-                SELECT id, role_key, display_name, autonomy_level, spec, created_at
+                SELECT id, role_key, display_name, autonomy_level, spec, created_at,
+                       trust_score, successful_runs, policy_violation_count,
+                       duplicate_effect_attempt_count, hidden_failure_count,
+                       low_quality_output_count, scope_violation_count,
+                       last_reviewed_at, last_violation_at
                 FROM roles
                 WHERE project_id = :project_id
                 ORDER BY role_key
@@ -150,6 +154,27 @@ class SpecPackService:
                 "display_name": row["display_name"],
                 "autonomy_level": row["autonomy_level"],
                 "spec": row["spec"] or {},
+                "trust_score": int(row.get("trust_score") or 50),
+                "successful_runs": int(row.get("successful_runs") or 0),
+                "policy_violation_count": int(row.get("policy_violation_count") or 0),
+                "duplicate_effect_attempt_count": int(
+                    row.get("duplicate_effect_attempt_count") or 0
+                ),
+                "hidden_failure_count": int(row.get("hidden_failure_count") or 0),
+                "low_quality_output_count": int(
+                    row.get("low_quality_output_count") or 0
+                ),
+                "scope_violation_count": int(row.get("scope_violation_count") or 0),
+                "last_reviewed_at": (
+                    row["last_reviewed_at"].isoformat()
+                    if row.get("last_reviewed_at")
+                    else None
+                ),
+                "last_violation_at": (
+                    row["last_violation_at"].isoformat()
+                    if row.get("last_violation_at")
+                    else None
+                ),
                 "created_at": row["created_at"].isoformat(),
             }
             for row in rows
@@ -161,7 +186,11 @@ class SpecPackService:
         row = connection.execute(
             text(
                 """
-                SELECT id, role_key, display_name, autonomy_level, spec, created_at
+                SELECT id, role_key, display_name, autonomy_level, spec, created_at,
+                       trust_score, successful_runs, policy_violation_count,
+                       duplicate_effect_attempt_count, hidden_failure_count,
+                       low_quality_output_count, scope_violation_count,
+                       last_reviewed_at, last_violation_at
                 FROM roles
                 WHERE project_id = :project_id AND role_key = :role_key
                 """
@@ -177,6 +206,27 @@ class SpecPackService:
             "display_name": row["display_name"],
             "autonomy_level": row["autonomy_level"],
             "spec": row["spec"] or {},
+            "trust_score": int(row.get("trust_score") or 50),
+            "successful_runs": int(row.get("successful_runs") or 0),
+            "policy_violation_count": int(row.get("policy_violation_count") or 0),
+            "duplicate_effect_attempt_count": int(
+                row.get("duplicate_effect_attempt_count") or 0
+            ),
+            "hidden_failure_count": int(row.get("hidden_failure_count") or 0),
+            "low_quality_output_count": int(
+                row.get("low_quality_output_count") or 0
+            ),
+            "scope_violation_count": int(row.get("scope_violation_count") or 0),
+            "last_reviewed_at": (
+                row["last_reviewed_at"].isoformat()
+                if row.get("last_reviewed_at")
+                else None
+            ),
+            "last_violation_at": (
+                row["last_violation_at"].isoformat()
+                if row.get("last_violation_at")
+                else None
+            ),
             "created_at": row["created_at"].isoformat(),
         }
 

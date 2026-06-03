@@ -68,6 +68,8 @@ from .schemas import (
     ReceiptResponse,
     ReplayBundleRequest,
     ReplayBundleResponse,
+    RoleGovernanceDetail,
+    RoleReviewRequest,
     RoleDetail,
     RoleListResponse,
     RoleSummary,
@@ -118,6 +120,7 @@ from .services.intake import CommandIntakeService
 from .services.jobs import JobLeaseService, LeaseNotFoundError
 from .services.metatron import MetatronScopeNotFoundError, MetatronService
 from .services.receipts import ReceiptService
+from .services.role_governance import RoleGovernanceService
 from .services.self_improvement import (
     InvalidSelfImprovementTransitionError,
     SelfImprovementProposalNotFoundError,
@@ -141,6 +144,7 @@ comms = CommsService(settings)
 self_improvement = SelfImprovementService(settings)
 health_snapshots = HealthSnapshotService(settings)
 metatron = MetatronService(settings)
+role_governance = RoleGovernanceService(settings)
 
 
 @asynccontextmanager
@@ -401,6 +405,17 @@ def role_summary_from_service(payload) -> RoleSummary:
         role_key=payload["role_key"],
         display_name=payload["display_name"],
         autonomy_level=payload["autonomy_level"],
+        trust_score=payload.get("trust_score", 50),
+        successful_runs=payload.get("successful_runs", 0),
+        policy_violation_count=payload.get("policy_violation_count", 0),
+        duplicate_effect_attempt_count=payload.get(
+            "duplicate_effect_attempt_count", 0
+        ),
+        hidden_failure_count=payload.get("hidden_failure_count", 0),
+        low_quality_output_count=payload.get("low_quality_output_count", 0),
+        scope_violation_count=payload.get("scope_violation_count", 0),
+        last_reviewed_at=payload.get("last_reviewed_at"),
+        last_violation_at=payload.get("last_violation_at"),
         created_at=payload["created_at"],
     )
 
@@ -412,8 +427,30 @@ def role_detail_from_service(payload) -> RoleDetail:
         role_key=payload["role_key"],
         display_name=payload["display_name"],
         autonomy_level=payload["autonomy_level"],
+        trust_score=payload.get("trust_score", 50),
+        successful_runs=payload.get("successful_runs", 0),
+        policy_violation_count=payload.get("policy_violation_count", 0),
+        duplicate_effect_attempt_count=payload.get(
+            "duplicate_effect_attempt_count", 0
+        ),
+        hidden_failure_count=payload.get("hidden_failure_count", 0),
+        low_quality_output_count=payload.get("low_quality_output_count", 0),
+        scope_violation_count=payload.get("scope_violation_count", 0),
+        last_reviewed_at=payload.get("last_reviewed_at"),
+        last_violation_at=payload.get("last_violation_at"),
         created_at=payload["created_at"],
         spec=payload["spec"] or {},
+    )
+
+
+def role_governance_detail_from_service(payload) -> RoleGovernanceDetail:
+    return RoleGovernanceDetail(
+        project_id=payload["project_id"],
+        role=role_detail_from_service(payload["role"]),
+        policy=payload.get("policy") or {},
+        pending_autonomy_change=payload.get("pending_autonomy_change"),
+        recent_reviews=payload.get("recent_reviews") or [],
+        recent_autonomy_changes=payload.get("recent_autonomy_changes") or [],
     )
 
 
@@ -737,21 +774,24 @@ def create_self_improvement_proposal(
     payload: SelfImprovementProposalCreateRequest,
 ) -> SelfImprovementProposalDetail:
     with begin(engine) as connection:
-        row = self_improvement.create_proposal(
-            connection,
-            project_id=payload.project_id,
-            title=payload.title,
-            summary=payload.summary,
-            change_ref=payload.change_ref,
-            diff_summary=payload.diff_summary,
-            expected_impact=payload.expected_impact,
-            test_plan=payload.test_plan,
-            canary_scope=payload.canary_scope,
-            rollback_plan=payload.rollback_plan,
-            success_metrics=payload.success_metrics,
-            actor=payload.actor,
-            risk_tier=payload.risk_tier,
-        )
+        try:
+            row = self_improvement.create_proposal(
+                connection,
+                project_id=payload.project_id,
+                title=payload.title,
+                summary=payload.summary,
+                change_ref=payload.change_ref,
+                diff_summary=payload.diff_summary,
+                expected_impact=payload.expected_impact,
+                test_plan=payload.test_plan,
+                canary_scope=payload.canary_scope,
+                rollback_plan=payload.rollback_plan,
+                success_metrics=payload.success_metrics,
+                actor=payload.actor,
+                risk_tier=payload.risk_tier,
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
         return self_improvement_detail_from_row(row)
 
 
@@ -790,8 +830,10 @@ def record_self_improvement_canary(
             )
         except SelfImprovementProposalNotFoundError as error:
             raise HTTPException(status_code=404, detail=str(error)) from error
-        except (InvalidSelfImprovementTransitionError, ValueError) as error:
+        except InvalidSelfImprovementTransitionError as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
         return self_improvement_detail_from_row(row)
 
 
@@ -817,6 +859,8 @@ def record_self_improvement_rollout(
             raise HTTPException(status_code=404, detail=str(error)) from error
         except InvalidSelfImprovementTransitionError as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
         return self_improvement_detail_from_row(row)
 
 
@@ -842,6 +886,8 @@ def rollback_self_improvement_proposal(
             raise HTTPException(status_code=404, detail=str(error)) from error
         except InvalidSelfImprovementTransitionError as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
         return self_improvement_detail_from_row(row)
 
 
@@ -936,6 +982,42 @@ def get_role(role_key: str, project_id: str) -> RoleDetail:
         except RoleNotFoundError as error:
             raise HTTPException(status_code=404, detail=str(error)) from error
         return role_detail_from_service(role)
+
+
+@app.get("/v1/roles/{role_key}/governance", response_model=RoleGovernanceDetail)
+def get_role_governance(role_key: str, project_id: str) -> RoleGovernanceDetail:
+    with begin(engine) as connection:
+        try:
+            detail = role_governance.get_governance(connection, project_id, role_key)
+        except RoleNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        return role_governance_detail_from_service(detail)
+
+
+@app.post(
+    "/v1/roles/{role_key}/reviews",
+    response_model=RoleGovernanceDetail,
+    status_code=201,
+)
+def record_role_review(
+    role_key: str, request: RoleReviewRequest
+) -> RoleGovernanceDetail:
+    with begin(engine) as connection:
+        try:
+            detail = role_governance.record_review(
+                connection,
+                project_id=request.project_id,
+                role_key=role_key,
+                actor=request.actor,
+                summary=request.summary,
+                metrics=request.metrics,
+                evidence_refs=request.evidence_refs,
+            )
+        except RoleNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        return role_governance_detail_from_service(detail)
 
 
 @app.get("/v1/packs", response_model=PackListResponse)

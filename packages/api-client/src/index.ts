@@ -714,6 +714,15 @@ export type RoleSummary = {
   role_key: string;
   display_name: string;
   autonomy_level: number;
+  trust_score: number;
+  successful_runs: number;
+  policy_violation_count: number;
+  duplicate_effect_attempt_count: number;
+  hidden_failure_count: number;
+  low_quality_output_count: number;
+  scope_violation_count: number;
+  last_reviewed_at?: string;
+  last_violation_at?: string;
   created_at: string;
 };
 
@@ -724,6 +733,60 @@ export type RoleDetail = RoleSummary & {
 export type RoleListResponse = {
   project_id: string;
   items: RoleSummary[];
+};
+
+export type RoleReviewRequest = {
+  project_id: string;
+  actor?: string;
+  summary: string;
+  metrics: Record<string, unknown>;
+  evidence_refs: string[];
+};
+
+export type RoleReviewSummary = {
+  id: string;
+  role_key: string;
+  summary: string;
+  metrics: Record<string, unknown>;
+  evidence_refs: string[];
+  trust_score_before: number;
+  trust_delta: number;
+  trust_score_after: number;
+  autonomy_level_before: number;
+  autonomy_level_after: number;
+  governance_outcome: string;
+  autonomy_change_id?: string;
+  artifact_id?: string;
+  created_by: string;
+  created_at: string;
+};
+
+export type AutonomyChangeSummary = {
+  id: string;
+  role_key: string;
+  decision_id?: string;
+  change_type: string;
+  trigger: string;
+  from_level: number;
+  to_level: number;
+  status: string;
+  reason: string;
+  evidence_refs: string[];
+  metrics: Record<string, unknown>;
+  created_by: string;
+  approved_by?: string;
+  approved_at?: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type RoleGovernanceDetail = {
+  project_id: string;
+  role: RoleDetail;
+  policy: Record<string, unknown>;
+  pending_autonomy_change?: AutonomyChangeSummary;
+  recent_reviews: RoleReviewSummary[];
+  recent_autonomy_changes: AutonomyChangeSummary[];
 };
 
 export type PackSummary = {
@@ -1103,6 +1166,22 @@ export function createBossApiClient(config: BossApiClientConfig) {
       return request<RoleDetail>("GET", `/v1/roles/${encodeURIComponent(roleKey)}`, {
         query: { project_id: projectId },
       });
+    },
+    getRoleGovernance(projectId: string, roleKey: string) {
+      return request<RoleGovernanceDetail>(
+        "GET",
+        `/v1/roles/${encodeURIComponent(roleKey)}/governance`,
+        {
+          query: { project_id: projectId },
+        },
+      );
+    },
+    recordRoleReview(roleKey: string, payload: RoleReviewRequest) {
+      return request<RoleGovernanceDetail>(
+        "POST",
+        `/v1/roles/${encodeURIComponent(roleKey)}/reviews`,
+        { body: payload },
+      );
     },
     listPacks(projectId: string) {
       return request<PackListResponse>("GET", "/v1/packs", {

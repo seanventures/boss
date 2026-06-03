@@ -107,6 +107,8 @@ The dogfood seed also registers the initial entitlement-source inventory from `p
 - `GET /v1/artifacts/{artifact_id}`
 - `GET /v1/roles`
 - `GET /v1/roles/{role_key}`
+- `GET /v1/roles/{role_key}/governance`
+- `POST /v1/roles/{role_key}/reviews`
 - `GET /v1/packs`
 - `GET /v1/packs/{pack_id}`
 - `POST /v1/packs/install`
@@ -185,6 +187,7 @@ The dogfood seed also registers the initial entitlement-source inventory from `p
 
 - BOSS now tracks self-improvement through a durable `self_improvement_proposals` workflow instead of burying product changes in ad hoc notes or chat.
 - Creating a proposal requires a change reference, diff summary, test plan, canary scope, rollback plan, and success metrics. The control plane turns that into a task, proposal artifact, and canary approval decision.
+- The self-improvement API now fails closed if proposal, canary, rollout, or rollback requests omit required change-control evidence such as non-empty test plans, canary scope, rollback steps, metrics, or evidence references.
 - Decision outcomes are now connected to proposal state. Approval advances the proposal, revision requests reopen it explicitly, and rejection leaves a visible rejected state instead of silent drift.
 - Successful canaries automatically create the next rollout approval decision. Rollout and rollback are both recorded as first-class artifacts so BOSS can prove how it changed itself.
 
@@ -193,6 +196,13 @@ The dogfood seed also registers the initial entitlement-source inventory from `p
 - BOSS now has a canonical `health_snapshots` object that captures queue state, workload state, incident state, budget state, and derived top risks for a project.
 - `GET /v1/status` now returns live top risks plus latest snapshot metadata, while `POST /v1/health-snapshots/refresh` persists a durable snapshot for audit and operator review.
 - Snapshot risk derivation currently covers deadletters, blocked or deadlettered outbox messages, budget pressure, high-risk pending decisions, retryable jobs, and missing provider credentials.
+
+## Role governance
+
+- Installed roles now carry runtime governance state instead of only static pack metadata: trust score, successful-run count, violation counters, and last review or violation timestamps.
+- `POST /v1/roles/{role_key}/reviews` records a durable governance review with evidence refs and metrics, updates the role trust score, and emits audit events for trust changes and detected drift.
+- Review metrics can now trigger automatic autonomy downgrades for violation conditions, or create explicit autonomy-upgrade decisions when a role meets the autonomy ladder policy.
+- Approved autonomy decisions now update the live role record through the control plane instead of leaving autonomy changes as spec-only intent.
 
 ## GitHub bootstrap
 

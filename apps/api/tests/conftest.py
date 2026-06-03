@@ -8,6 +8,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from apps.api.app.bootstrap import seed
 from apps.api.app.config import get_settings
 from apps.api.app.main import app
+from apps.api.app.services.specpack import SpecPackService
 
 
 @pytest.fixture(scope="session")
@@ -34,6 +35,8 @@ def seeded_database(engine):
 
 @pytest.fixture(autouse=True)
 def clean_tables(engine):
+    settings = get_settings()
+    specpack = SpecPackService(settings)
     with engine.begin() as connection:
         connection.execute(text("DELETE FROM cost_receipts"))
         connection.execute(text("DELETE FROM budget_reservations"))
@@ -41,6 +44,8 @@ def clean_tables(engine):
         connection.execute(text("DELETE FROM inbox_messages"))
         connection.execute(text("DELETE FROM outbox_messages"))
         connection.execute(text("DELETE FROM self_improvement_proposals"))
+        connection.execute(text("DELETE FROM role_reviews"))
+        connection.execute(text("DELETE FROM autonomy_changes"))
         connection.execute(text("DELETE FROM receipts"))
         connection.execute(text("DELETE FROM deadletters"))
         connection.execute(text("DELETE FROM routing_logs"))
@@ -48,6 +53,30 @@ def clean_tables(engine):
         connection.execute(text("DELETE FROM decisions"))
         connection.execute(text("DELETE FROM jobs"))
         connection.execute(text("DELETE FROM tasks"))
+        specpack.install_pack(
+            connection,
+            settings.default_project_id,
+            settings.core_pack_id,
+            "test-reset",
+        )
+        connection.execute(
+            text(
+                """
+                UPDATE roles
+                SET trust_score = 50,
+                    successful_runs = 0,
+                    policy_violation_count = 0,
+                    duplicate_effect_attempt_count = 0,
+                    hidden_failure_count = 0,
+                    low_quality_output_count = 0,
+                    scope_violation_count = 0,
+                    last_reviewed_at = NULL,
+                    last_violation_at = NULL
+                WHERE project_id = :project_id
+                """
+            ),
+            {"project_id": settings.default_project_id},
+        )
         connection.execute(text("DELETE FROM events"))
     yield
 

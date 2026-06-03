@@ -140,7 +140,7 @@ paths:
             schema:
               type: object
               required:
-                [project_id, title, summary, change_ref, diff_summary]
+                [project_id, title, summary, change_ref, diff_summary, expected_impact, test_plan, canary_scope, rollback_plan, success_metrics]
               properties:
                 project_id: { type: string }
                 title: { type: string }
@@ -166,6 +166,7 @@ paths:
                 risk_tier: { type: integer, default: 2 }
       responses:
         '201': { description: Self-improvement proposal created }
+        '422': { description: Missing required change-control evidence }
   /v1/self-improvement/proposals/{proposal_id}:
     get:
       summary: Get self-improvement proposal detail
@@ -186,7 +187,7 @@ paths:
           application/json:
             schema:
               type: object
-              required: [outcome, summary]
+              required: [outcome, summary, metrics, evidence_refs]
               properties:
                 actor: { type: string, default: release_manager }
                 outcome: { type: string }
@@ -199,6 +200,7 @@ paths:
         '200': { description: Canary result recorded }
         '404': { description: Proposal not found }
         '409': { description: Invalid proposal state }
+        '422': { description: Missing required canary evidence }
   /v1/self-improvement/proposals/{proposal_id}/rollout:
     post:
       summary: Record rollout of an approved self-improvement change
@@ -208,7 +210,7 @@ paths:
           application/json:
             schema:
               type: object
-              required: [summary]
+              required: [summary, metrics, evidence_refs]
               properties:
                 actor: { type: string, default: release_manager }
                 summary: { type: string }
@@ -221,6 +223,7 @@ paths:
         '200': { description: Rollout recorded }
         '404': { description: Proposal not found }
         '409': { description: Invalid proposal state }
+        '422': { description: Missing required rollout evidence }
   /v1/self-improvement/proposals/{proposal_id}/rollback:
     post:
       summary: Record rollback of a self-improvement rollout
@@ -230,7 +233,7 @@ paths:
           application/json:
             schema:
               type: object
-              required: [reason]
+              required: [reason, metrics, evidence_refs]
               properties:
                 actor: { type: string, default: release_manager }
                 reason: { type: string }
@@ -243,6 +246,7 @@ paths:
         '200': { description: Rollback recorded }
         '404': { description: Proposal not found }
         '409': { description: Invalid proposal state }
+        '422': { description: Missing required rollback evidence }
   /v1/artifacts:
     get:
       summary: List artifacts
@@ -293,6 +297,50 @@ paths:
       responses:
         '200': { description: Role detail }
         '404': { description: Role not found }
+  /v1/roles/{role_key}/governance:
+    get:
+      summary: Get governance state for an installed role
+      parameters:
+        - name: role_key
+          in: path
+          required: true
+          schema: { type: string }
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Role governance detail }
+        '404': { description: Role not found }
+  /v1/roles/{role_key}/reviews:
+    post:
+      summary: Record a governance review for an installed role
+      parameters:
+        - name: role_key
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id, summary, metrics, evidence_refs]
+              properties:
+                project_id: { type: string }
+                actor: { type: string, default: vp_agents }
+                summary: { type: string }
+                metrics:
+                  type: object
+                  additionalProperties: true
+                evidence_refs:
+                  type: array
+                  items: { type: string }
+      responses:
+        '201': { description: Role governance detail after the review }
+        '404': { description: Role not found }
+        '422': { description: Review payload is invalid }
   /v1/packs:
     get:
       summary: List available packs with install status for a project

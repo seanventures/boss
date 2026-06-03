@@ -940,8 +940,21 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                       <div>
                         <h4>{role.displayName}</h4>
                         <p className="detail">
-                          {titleCaseToken(role.roleKey)} / autonomy {role.autonomyLevel}
+                          {titleCaseToken(role.roleKey)} / autonomy {role.autonomyLevel} / trust{" "}
+                          {role.trustScore}
                         </p>
+                        <p className="detail">
+                          {role.successfulRuns} successful runs / {role.policyViolationCount} policy
+                          {" "}violations / {role.scopeViolationCount} scope violations
+                        </p>
+                        {role.lastReviewedAt ? (
+                          <p className="detail">
+                            Last reviewed {formatDateTime(role.lastReviewedAt)}
+                            {role.lastViolationAt
+                              ? ` / last violation ${formatDateTime(role.lastViolationAt)}`
+                              : ""}
+                          </p>
+                        ) : null}
                       </div>
                       <code className="mono">{role.id}</code>
                     </div>

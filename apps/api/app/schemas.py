@@ -2,7 +2,29 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
+
+
+def _require_text(value: str, field_name: str) -> str:
+    cleaned = value.strip()
+    if not cleaned:
+        raise ValueError(f"{field_name} must not be blank.")
+    return cleaned
+
+
+def _require_non_empty_string_list(values: list[str], field_name: str) -> list[str]:
+    cleaned = [item.strip() for item in values if isinstance(item, str) and item.strip()]
+    if not cleaned:
+        raise ValueError(f"{field_name} must contain at least one non-empty item.")
+    return cleaned
+
+
+def _require_non_empty_mapping(
+    values: dict[str, Any], field_name: str
+) -> dict[str, Any]:
+    if not values:
+        raise ValueError(f"{field_name} must contain at least one entry.")
+    return values
 
 
 class HealthResponse(BaseModel):
@@ -439,6 +461,28 @@ class SelfImprovementProposalCreateRequest(BaseModel):
     actor: str = "vp_agents"
     risk_tier: int = Field(default=2, ge=1, le=3)
 
+    @model_validator(mode="after")
+    def validate_change_control_evidence(self) -> "SelfImprovementProposalCreateRequest":
+        self.title = _require_text(self.title, "title")
+        self.summary = _require_text(self.summary, "summary")
+        self.change_ref = _require_text(self.change_ref, "change_ref")
+        self.diff_summary = _require_text(self.diff_summary, "diff_summary")
+        self.expected_impact = _require_non_empty_string_list(
+            self.expected_impact, "expected_impact"
+        )
+        self.test_plan = _require_non_empty_string_list(self.test_plan, "test_plan")
+        self.canary_scope = _require_non_empty_string_list(
+            self.canary_scope, "canary_scope"
+        )
+        self.rollback_plan = _require_non_empty_string_list(
+            self.rollback_plan, "rollback_plan"
+        )
+        self.success_metrics = _require_non_empty_string_list(
+            self.success_metrics, "success_metrics"
+        )
+        self.actor = _require_text(self.actor, "actor")
+        return self
+
 
 class SelfImprovementProposalSummary(BaseModel):
     id: str
@@ -482,6 +526,17 @@ class SelfImprovementCanaryRequest(BaseModel):
     metrics: dict[str, Any] = Field(default_factory=dict)
     evidence_refs: list[str] = Field(default_factory=list)
 
+    @model_validator(mode="after")
+    def validate_canary_evidence(self) -> "SelfImprovementCanaryRequest":
+        self.actor = _require_text(self.actor, "actor")
+        self.outcome = _require_text(self.outcome, "outcome")
+        self.summary = _require_text(self.summary, "summary")
+        self.metrics = _require_non_empty_mapping(self.metrics, "metrics")
+        self.evidence_refs = _require_non_empty_string_list(
+            self.evidence_refs, "evidence_refs"
+        )
+        return self
+
 
 class SelfImprovementRolloutRequest(BaseModel):
     actor: str = "release_manager"
@@ -490,6 +545,18 @@ class SelfImprovementRolloutRequest(BaseModel):
     metrics: dict[str, Any] = Field(default_factory=dict)
     evidence_refs: list[str] = Field(default_factory=list)
 
+    @model_validator(mode="after")
+    def validate_rollout_evidence(self) -> "SelfImprovementRolloutRequest":
+        self.actor = _require_text(self.actor, "actor")
+        self.summary = _require_text(self.summary, "summary")
+        if self.external_ref is not None:
+            self.external_ref = _require_text(self.external_ref, "external_ref")
+        self.metrics = _require_non_empty_mapping(self.metrics, "metrics")
+        self.evidence_refs = _require_non_empty_string_list(
+            self.evidence_refs, "evidence_refs"
+        )
+        return self
+
 
 class SelfImprovementRollbackRequest(BaseModel):
     actor: str = "release_manager"
@@ -497,6 +564,18 @@ class SelfImprovementRollbackRequest(BaseModel):
     external_ref: Optional[str] = None
     metrics: dict[str, Any] = Field(default_factory=dict)
     evidence_refs: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_rollback_evidence(self) -> "SelfImprovementRollbackRequest":
+        self.actor = _require_text(self.actor, "actor")
+        self.reason = _require_text(self.reason, "reason")
+        if self.external_ref is not None:
+            self.external_ref = _require_text(self.external_ref, "external_ref")
+        self.metrics = _require_non_empty_mapping(self.metrics, "metrics")
+        self.evidence_refs = _require_non_empty_string_list(
+            self.evidence_refs, "evidence_refs"
+        )
+        return self
 
 
 class DecisionCard(BaseModel):
@@ -750,6 +829,15 @@ class RoleSummary(BaseModel):
     role_key: str
     display_name: str
     autonomy_level: int
+    trust_score: int
+    successful_runs: int = 0
+    policy_violation_count: int = 0
+    duplicate_effect_attempt_count: int = 0
+    hidden_failure_count: int = 0
+    low_quality_output_count: int = 0
+    scope_violation_count: int = 0
+    last_reviewed_at: Optional[str] = None
+    last_violation_at: Optional[str] = None
     created_at: str
 
 
@@ -760,6 +848,70 @@ class RoleDetail(RoleSummary):
 class RoleListResponse(BaseModel):
     project_id: str
     items: list[RoleSummary]
+
+
+class RoleReviewRequest(BaseModel):
+    project_id: str
+    actor: str = "vp_agents"
+    summary: str
+    metrics: dict[str, Any]
+    evidence_refs: list[str]
+
+    @model_validator(mode="after")
+    def validate_fields(self) -> "RoleReviewRequest":
+        self.actor = _require_text(self.actor, "actor")
+        self.summary = _require_text(self.summary, "summary")
+        self.metrics = _require_non_empty_mapping(self.metrics, "metrics")
+        self.evidence_refs = _require_non_empty_string_list(
+            self.evidence_refs, "evidence_refs"
+        )
+        return self
+
+
+class RoleReviewSummary(BaseModel):
+    id: str
+    role_key: str
+    summary: str
+    metrics: dict[str, Any] = Field(default_factory=dict)
+    evidence_refs: list[str] = Field(default_factory=list)
+    trust_score_before: int
+    trust_delta: int
+    trust_score_after: int
+    autonomy_level_before: int
+    autonomy_level_after: int
+    governance_outcome: str
+    autonomy_change_id: Optional[str] = None
+    artifact_id: Optional[str] = None
+    created_by: str
+    created_at: str
+
+
+class AutonomyChangeSummary(BaseModel):
+    id: str
+    role_key: str
+    decision_id: Optional[str] = None
+    change_type: str
+    trigger: str
+    from_level: int
+    to_level: int
+    status: str
+    reason: str
+    evidence_refs: list[str] = Field(default_factory=list)
+    metrics: dict[str, Any] = Field(default_factory=dict)
+    created_by: str
+    approved_by: Optional[str] = None
+    approved_at: Optional[str] = None
+    created_at: str
+    updated_at: str
+
+
+class RoleGovernanceDetail(BaseModel):
+    project_id: str
+    role: RoleDetail
+    policy: dict[str, Any] = Field(default_factory=dict)
+    pending_autonomy_change: Optional[AutonomyChangeSummary] = None
+    recent_reviews: list[RoleReviewSummary] = Field(default_factory=list)
+    recent_autonomy_changes: list[AutonomyChangeSummary] = Field(default_factory=list)
 
 
 class PackSummary(BaseModel):

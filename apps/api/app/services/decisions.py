@@ -10,6 +10,7 @@ from ..config import Settings
 from .budget import BudgetGovernor
 from .core import create_artifact, emit_event, now_utc
 from .jobs import JobLeaseService
+from .role_governance import RoleGovernanceService
 from .self_improvement import SelfImprovementService
 
 
@@ -27,6 +28,7 @@ class DecisionService:
         self.budget = BudgetGovernor(settings)
         self.jobs = JobLeaseService(settings)
         self.self_improvement = SelfImprovementService(settings)
+        self.role_governance = RoleGovernanceService(settings)
 
     def expire_overdue(
         self, connection: Connection, project_id: Optional[str] = None
@@ -426,6 +428,10 @@ class DecisionService:
             self.self_improvement.apply_decision_outcome(
                 connection, row, "approve", actor, row.get("resolution_note")
             )
+        elif action == "role.autonomy_change":
+            self.role_governance.apply_decision_outcome(
+                connection, row, "approve", actor, row.get("resolution_note")
+            )
 
     def _handle_non_approved_follow_on(
         self,
@@ -443,6 +449,10 @@ class DecisionService:
             "self_improvement.rollout",
         }:
             self.self_improvement.apply_decision_outcome(
+                connection, row, action, actor, note
+            )
+        elif recommendation_action == "role.autonomy_change":
+            self.role_governance.apply_decision_outcome(
                 connection, row, action, actor, note
             )
 

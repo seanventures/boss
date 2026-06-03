@@ -7,6 +7,13 @@ export type RoleFeedItem = {
   roleKey: string;
   displayName: string;
   autonomyLevel: number;
+  trustScore: number;
+  successfulRuns: number;
+  policyViolationCount: number;
+  duplicateEffectAttemptCount: number;
+  scopeViolationCount: number;
+  lastReviewedAt?: string;
+  lastViolationAt?: string;
   createdAt: string;
 };
 
@@ -23,6 +30,13 @@ function mapRole(payload: RoleSummary): RoleFeedItem {
     roleKey: payload.role_key,
     displayName: payload.display_name,
     autonomyLevel: payload.autonomy_level,
+    trustScore: payload.trust_score,
+    successfulRuns: payload.successful_runs,
+    policyViolationCount: payload.policy_violation_count,
+    duplicateEffectAttemptCount: payload.duplicate_effect_attempt_count,
+    scopeViolationCount: payload.scope_violation_count,
+    lastReviewedAt: payload.last_reviewed_at,
+    lastViolationAt: payload.last_violation_at,
     createdAt: payload.created_at,
   };
 }

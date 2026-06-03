@@ -87,6 +87,24 @@ class SelfImprovementService:
         actor: str,
         risk_tier: int,
     ) -> dict[str, Any]:
+        title = self._require_text(title, "title")
+        summary = self._require_text(summary, "summary")
+        change_ref = self._require_text(change_ref, "change_ref")
+        diff_summary = self._require_text(diff_summary, "diff_summary")
+        actor = self._require_text(actor, "actor")
+        expected_impact = self._require_non_empty_string_list(
+            expected_impact, "expected_impact"
+        )
+        test_plan = self._require_non_empty_string_list(test_plan, "test_plan")
+        canary_scope = self._require_non_empty_string_list(
+            canary_scope, "canary_scope"
+        )
+        rollback_plan = self._require_non_empty_string_list(
+            rollback_plan, "rollback_plan"
+        )
+        success_metrics = self._require_non_empty_string_list(
+            success_metrics, "success_metrics"
+        )
         proposal_id = make_id("imp")
         task = self.intake.create_task(
             connection,
@@ -308,6 +326,12 @@ class SelfImprovementService:
     ) -> dict[str, Any]:
         if outcome not in {"succeeded", "failed"}:
             raise ValueError("outcome must be 'succeeded' or 'failed'")
+        actor = self._require_text(actor, "actor")
+        summary = self._require_text(summary, "summary")
+        metrics = self._require_non_empty_mapping(metrics, "metrics")
+        evidence_refs = self._require_non_empty_string_list(
+            evidence_refs, "evidence_refs"
+        )
         proposal = self.get_proposal(connection, proposal_id, for_update=True)
         if proposal["status"] != "canary_approved":
             raise InvalidSelfImprovementTransitionError(
@@ -404,6 +428,14 @@ class SelfImprovementService:
             raise InvalidSelfImprovementTransitionError(
                 f"Proposal is {proposal['status']} and cannot be rolled out."
             )
+        actor = self._require_text(actor, "actor")
+        summary = self._require_text(summary, "summary")
+        if external_ref is not None:
+            external_ref = self._require_text(external_ref, "external_ref")
+        metrics = self._require_non_empty_mapping(metrics, "metrics")
+        evidence_refs = self._require_non_empty_string_list(
+            evidence_refs, "evidence_refs"
+        )
 
         timestamp = now_utc()
         artifact_id = create_artifact(
@@ -488,6 +520,14 @@ class SelfImprovementService:
             raise InvalidSelfImprovementTransitionError(
                 f"Proposal is {proposal['status']} and cannot be rolled back."
             )
+        actor = self._require_text(actor, "actor")
+        reason = self._require_text(reason, "reason")
+        if external_ref is not None:
+            external_ref = self._require_text(external_ref, "external_ref")
+        metrics = self._require_non_empty_mapping(metrics, "metrics")
+        evidence_refs = self._require_non_empty_string_list(
+            evidence_refs, "evidence_refs"
+        )
 
         timestamp = now_utc()
         artifact_id = create_artifact(
@@ -555,6 +595,27 @@ class SelfImprovementService:
             {"proposal_id": proposal_id, "phase": "rollback"},
         )
         return self.get_proposal(connection, proposal_id)
+
+    def _require_text(self, value: str, field_name: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError(f"{field_name} must not be blank.")
+        return cleaned
+
+    def _require_non_empty_string_list(
+        self, values: list[str], field_name: str
+    ) -> list[str]:
+        cleaned = [item.strip() for item in values if isinstance(item, str) and item.strip()]
+        if not cleaned:
+            raise ValueError(f"{field_name} must contain at least one non-empty item.")
+        return cleaned
+
+    def _require_non_empty_mapping(
+        self, values: dict[str, Any], field_name: str
+    ) -> dict[str, Any]:
+        if not values:
+            raise ValueError(f"{field_name} must contain at least one entry.")
+        return values
 
     def _create_decision(
         self,

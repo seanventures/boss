@@ -206,8 +206,121 @@ def test_role_detail_returns_loaded_spec(client):
     assert payload["role_key"] == "metatron"
     assert payload["display_name"] == "Metatron"
     assert payload["autonomy_level"] == 1
+    assert payload["trust_score"] == 50
     assert payload["spec"]["mission"].startswith("Omnipresent CEO interface")
     assert "WhatChangedDigest" in payload["spec"]["output_contracts"]
+
+
+def test_role_review_creates_upgrade_recommendation_when_role_is_eligible(client):
+    response = client.post(
+        "/v1/roles/metatron/reviews",
+        json={
+            "project_id": "boss-dogfood",
+            "actor": "vp_agents",
+            "summary": "Metatron completed enough clean runs to qualify for the next autonomy tier.",
+            "metrics": {
+                "successful_runs": 30,
+                "policy_violations": 0,
+                "duplicate_effect_attempts": 0,
+                "hidden_failures": 0,
+                "low_quality_outputs": 0,
+                "scope_violations": 0,
+                "rollback_rate": 0.0,
+            },
+            "evidence_refs": ["artifact:metatron-eval-001"],
+        },
+    )
+
+    assert response.status_code == 201
+    payload = response.json()
+    assert payload["role"]["role_key"] == "metatron"
+    assert payload["role"]["trust_score"] > 50
+    assert payload["pending_autonomy_change"] is not None
+    assert payload["pending_autonomy_change"]["change_type"] == "upgrade"
+    assert payload["pending_autonomy_change"]["from_level"] == 1
+    assert payload["pending_autonomy_change"]["to_level"] == 2
+    assert payload["pending_autonomy_change"]["decision_id"]
+    assert payload["recent_reviews"][0]["governance_outcome"] == "upgrade_recommended"
+
+
+def test_role_review_with_violation_auto_downgrades_and_records_drift(client):
+    response = client.post(
+        "/v1/roles/cto/reviews",
+        json={
+            "project_id": "boss-dogfood",
+            "actor": "vp_agents",
+            "summary": "CTO drifted outside its charter and triggered a policy violation.",
+            "metrics": {
+                "successful_runs": 2,
+                "policy_violations": 1,
+                "duplicate_effect_attempts": 0,
+                "hidden_failures": 0,
+                "low_quality_outputs": 0,
+                "scope_violations": 1,
+                "rollback_rate": 0.0,
+            },
+            "evidence_refs": ["event:policy-violation-001"],
+        },
+    )
+
+    assert response.status_code == 201
+    payload = response.json()
+    assert payload["role"]["role_key"] == "cto"
+    assert payload["role"]["autonomy_level"] == 0
+    assert payload["role"]["policy_violation_count"] == 1
+    assert payload["role"]["scope_violation_count"] == 1
+    assert payload["pending_autonomy_change"] is None
+    assert payload["recent_reviews"][0]["governance_outcome"] == "auto_downgraded"
+    assert payload["recent_autonomy_changes"][0]["status"] == "applied"
+    assert payload["recent_autonomy_changes"][0]["change_type"] == "downgrade"
+
+    events = client.get("/v1/events", params={"project_id": "boss-dogfood"})
+    assert events.status_code == 200
+    event_types = [item["event_type"] for item in events.json()["items"]]
+    assert "role.drift_detected" in event_types
+
+
+def test_approved_role_autonomy_change_updates_role_level(client):
+    review = client.post(
+        "/v1/roles/metatron/reviews",
+        json={
+            "project_id": "boss-dogfood",
+            "actor": "vp_agents",
+            "summary": "Metatron met the next autonomy threshold.",
+            "metrics": {
+                "successful_runs": 30,
+                "policy_violations": 0,
+                "duplicate_effect_attempts": 0,
+                "hidden_failures": 0,
+                "low_quality_outputs": 0,
+                "scope_violations": 0,
+                "rollback_rate": 0.0,
+            },
+            "evidence_refs": ["artifact:metatron-eval-approve"],
+        },
+    )
+    assert review.status_code == 201
+    decision_id = review.json()["pending_autonomy_change"]["decision_id"]
+
+    approved = client.post(
+        f"/v1/decisions/{decision_id}/approve",
+        json={"actor": "ceo", "note": "Upgrade approved."},
+    )
+    assert approved.status_code == 200
+
+    role = client.get("/v1/roles/metatron", params={"project_id": "boss-dogfood"})
+    assert role.status_code == 200
+    assert role.json()["autonomy_level"] == 2
+
+    governance = client.get(
+        "/v1/roles/metatron/governance",
+        params={"project_id": "boss-dogfood"},
+    )
+    assert governance.status_code == 200
+    payload = governance.json()
+    assert payload["pending_autonomy_change"] is None
+    assert payload["recent_autonomy_changes"][0]["status"] == "applied"
+    assert payload["recent_autonomy_changes"][0]["to_level"] == 2
 
 
 def test_pack_install_is_idempotent_for_new_project(client, engine):
@@ -1190,6 +1303,167 @@ def test_self_improvement_proposal_runs_through_canary_rollout_and_rollback(
     assert "self_improvement_canary_report" in artifact_types
     assert "self_improvement_rollout_record" in artifact_types
     assert "self_improvement_rollback_record" in artifact_types
+
+
+def test_self_improvement_proposal_requires_non_empty_change_control_evidence(client):
+    response = client.post(
+        "/v1/self-improvement/proposals",
+        json={
+            "project_id": "boss-dogfood",
+            "title": "   ",
+            "summary": "Harden proposal input validation.",
+            "change_ref": "https://github.com/seanheiney/boss/pull/99",
+            "diff_summary": "Require explicit test, canary, rollback, and metric evidence.",
+            "expected_impact": [],
+            "test_plan": [" "],
+            "canary_scope": [],
+            "rollback_plan": [],
+            "success_metrics": [],
+        },
+    )
+
+    assert response.status_code == 422
+    payload = response.json()
+    assert "must" in json.dumps(payload)
+    assert any(
+        term in json.dumps(payload)
+        for term in [
+            "title must not be blank",
+            "expected_impact must contain at least one non-empty item",
+            "test_plan must contain at least one non-empty item",
+            "canary_scope must contain at least one non-empty item",
+            "rollback_plan must contain at least one non-empty item",
+            "success_metrics must contain at least one non-empty item",
+        ]
+    )
+
+
+def test_self_improvement_canary_requires_metrics_and_evidence(client):
+    created = client.post(
+        "/v1/self-improvement/proposals",
+        json={
+            "project_id": "boss-dogfood",
+            "title": "Tighten decision inbox defaults",
+            "summary": "Improve default-action handling and observability for expired decisions.",
+            "change_ref": "https://github.com/seanheiney/boss/pull/142",
+            "diff_summary": "Adjust decision expiry handling and add stronger audit markers.",
+            "expected_impact": ["Lower decision latency"],
+            "test_plan": ["Add API transition tests"],
+            "canary_scope": ["dogfood workspace only"],
+            "rollback_plan": ["Revert PR"],
+            "success_metrics": ["No expired high-risk decision executes"],
+        },
+    )
+    assert created.status_code == 201
+    proposal_id = created.json()["id"]
+    decision_id = created.json()["current_decision_id"]
+
+    approve_canary = client.post(
+        f"/v1/decisions/{decision_id}/approve",
+        json={"actor": "ceo", "note": "Run the dogfood canary."},
+    )
+    assert approve_canary.status_code == 200
+
+    canary = client.post(
+        f"/v1/self-improvement/proposals/{proposal_id}/canary",
+        json={
+            "actor": "release_manager",
+            "outcome": "succeeded",
+            "summary": "Canary looked healthy.",
+            "metrics": {},
+            "evidence_refs": [],
+        },
+    )
+    assert canary.status_code == 422
+    assert "metrics" in json.dumps(canary.json())
+    assert "evidence_refs" in json.dumps(canary.json())
+
+
+def test_self_improvement_rollout_and_rollback_require_metrics_and_evidence(client):
+    created = client.post(
+        "/v1/self-improvement/proposals",
+        json={
+            "project_id": "boss-dogfood",
+            "title": "Refine budget governor events",
+            "summary": "Improve budget denial event detail and audit clarity.",
+            "change_ref": "https://github.com/seanheiney/boss/pull/177",
+            "diff_summary": "Expand denial event payloads and review packet notes.",
+            "expected_impact": ["Better operator clarity"],
+            "test_plan": ["Decision API coverage"],
+            "canary_scope": ["dogfood only"],
+            "rollback_plan": ["Revert PR"],
+            "success_metrics": ["Clearer denial event feed"],
+        },
+    )
+    assert created.status_code == 201
+    proposal_id = created.json()["id"]
+    canary_decision_id = created.json()["current_decision_id"]
+
+    assert (
+        client.post(
+            f"/v1/decisions/{canary_decision_id}/approve",
+            json={"actor": "ceo", "note": "Approve canary."},
+        ).status_code
+        == 200
+    )
+    successful_canary = client.post(
+        f"/v1/self-improvement/proposals/{proposal_id}/canary",
+        json={
+            "actor": "release_manager",
+            "outcome": "succeeded",
+            "summary": "Canary stayed within expected bounds.",
+            "metrics": {"decision_latency_delta_pct": -4},
+            "evidence_refs": ["evt_canary_budget_1"],
+        },
+    )
+    assert successful_canary.status_code == 200
+    rollout_decision_id = successful_canary.json()["current_decision_id"]
+
+    assert (
+        client.post(
+            f"/v1/decisions/{rollout_decision_id}/approve",
+            json={"actor": "ceo", "note": "Approve rollout."},
+        ).status_code
+        == 200
+    )
+
+    rollout = client.post(
+        f"/v1/self-improvement/proposals/{proposal_id}/rollout",
+        json={
+            "actor": "release_manager",
+            "summary": "Rolled out broadly.",
+            "metrics": {},
+            "evidence_refs": [],
+        },
+    )
+    assert rollout.status_code == 422
+    assert "metrics" in json.dumps(rollout.json())
+    assert "evidence_refs" in json.dumps(rollout.json())
+
+    valid_rollout = client.post(
+        f"/v1/self-improvement/proposals/{proposal_id}/rollout",
+        json={
+            "actor": "release_manager",
+            "summary": "Rolled out broadly.",
+            "external_ref": "deploy://dogfood/2026-06-02/self-improvement-177",
+            "metrics": {"deadletter_rate": 0},
+            "evidence_refs": ["art_rollout_budget_1"],
+        },
+    )
+    assert valid_rollout.status_code == 200
+
+    rollback = client.post(
+        f"/v1/self-improvement/proposals/{proposal_id}/rollback",
+        json={
+            "actor": "release_manager",
+            "reason": "Rollback after operator review.",
+            "metrics": {},
+            "evidence_refs": [],
+        },
+    )
+    assert rollback.status_code == 422
+    assert "metrics" in json.dumps(rollback.json())
+    assert "evidence_refs" in json.dumps(rollback.json())
 
 
 def test_self_improvement_revision_request_updates_proposal_status(client):

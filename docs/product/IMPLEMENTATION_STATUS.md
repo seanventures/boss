@@ -56,7 +56,9 @@ This document summarizes the currently implemented BOSS runtime surfaces in this
 - Governance surfaces:
   - Core Pack install for dogfood
   - model entitlement broker with routing logs
+  - runtime role governance with trust scoring, review artifacts, and autonomy-change records
   - self-improvement proposal, canary, rollout, and rollback records
+  - fail-closed self-improvement evidence gates for tests, canary scope, rollback steps, metrics, and evidence refs
   - audit export and replay-bundle artifact generation
 
 ## Current end-to-end founder flow
@@ -93,7 +95,6 @@ The current founder-dogfood control loop is:
 - Identity, membership, and RBAC are not yet implemented. Approval actor names are still caller-supplied.
 - The software factory captures real GitHub validation evidence, but it does not yet execute arbitrary sandbox test commands itself.
 - Deployment currently records real GitHub deployment state, but it is not yet a full health-verified staged rollout system.
-- Trust scoring, role drift enforcement, and autonomy ladder upgrades/downgrades are not yet runtime-enforced.
 - Enterprise controls such as SSO, break-glass flows, and multi-user admin governance are not complete.
 
 ## Local verification baseline
@@ -106,7 +107,7 @@ The current local release-grade baseline for this repo is:
 
 The latest passing local state at the time of this update was:
 
-- `71` tests passed
+- `77` tests passed
 - smoke passed
 - OpenAPI parsed successfully
 
