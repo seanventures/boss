@@ -53,7 +53,22 @@ a {
 
 .hero {
   padding: 32px;
+}
+
+.hero-grid {
   display: grid;
+  gap: 24px;
+  grid-template-columns: minmax(0, 1.35fr) minmax(320px, 0.95fr);
+}
+
+.hero-copy {
+  display: grid;
+  gap: 12px;
+}
+
+.hero-pills {
+  display: flex;
+  flex-wrap: wrap;
   gap: 12px;
 }
 
@@ -119,6 +134,53 @@ a {
   gap: 20px;
 }
 
+.stack-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 20px;
+}
+
+.stack-card {
+  backdrop-filter: blur(18px);
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+  border-radius: 24px;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.22);
+  padding: 24px;
+  display: grid;
+  gap: 16px;
+}
+
+.stack-card h3,
+.stack-card h4 {
+  margin: 0;
+}
+
+.feed-list {
+  display: grid;
+  gap: 14px;
+}
+
+.feed-row {
+  display: flex;
+  gap: 16px;
+  align-items: start;
+  justify-content: space-between;
+  padding-top: 14px;
+  border-top: 1px solid rgba(162, 199, 255, 0.14);
+}
+
+.feed-row:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.mono {
+  font-family: "SFMono-Regular", "Menlo", "Monaco", monospace;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
 .decision-card {
   padding: 24px;
   display: grid;
@@ -169,6 +231,67 @@ a {
 .decision-actions {
   display: flex;
   gap: 12px;
+}
+
+.composer {
+  display: grid;
+  gap: 16px;
+  padding: 24px;
+  border-radius: 22px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(162, 199, 255, 0.14);
+}
+
+.composer h2 {
+  margin: 6px 0 0;
+  font-size: 1.3rem;
+}
+
+.field {
+  display: grid;
+  gap: 8px;
+}
+
+.field span {
+  font-size: 0.78rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.textarea,
+.input {
+  width: 100%;
+  appearance: none;
+  border-radius: 16px;
+  border: 1px solid rgba(162, 199, 255, 0.18);
+  background: rgba(4, 10, 18, 0.7);
+  color: var(--text);
+  font: inherit;
+  padding: 14px 16px;
+}
+
+.textarea {
+  resize: vertical;
+  min-height: 140px;
+}
+
+.textarea::placeholder,
+.input::placeholder {
+  color: rgba(137, 161, 188, 0.7);
+}
+
+.textarea:disabled,
+.input:disabled,
+.button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.input-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
 }
 
 .button {
@@ -223,13 +346,19 @@ a {
 
   .hero,
   .grid article,
-  .decision-card {
+  .decision-card,
+  .stack-card {
     border-radius: 18px;
+  }
+
+  .hero-grid {
+    grid-template-columns: 1fr;
   }
 
   .section-head,
   .decision-head,
-  .decision-footer {
+  .decision-footer,
+  .feed-row {
     grid-template-columns: 1fr;
     display: grid;
   }
@@ -240,5 +369,9 @@ a {
 
   .decision-actions {
     flex-wrap: wrap;
+  }
+
+  .hero-pills {
+    gap: 8px;
   }
 }

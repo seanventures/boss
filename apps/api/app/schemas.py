@@ -356,3 +356,39 @@ class EventItem(BaseModel):
 class EventFeedResponse(BaseModel):
     project_id: str
     items: list[EventItem]
+
+
+class ArtifactSummary(BaseModel):
+    id: str
+    project_id: str
+    task_id: Optional[str] = None
+    artifact_type: str
+    title: str
+    uri: Optional[str] = None
+    content_hash: Optional[str] = None
+    created_by_job_id: Optional[str] = None
+    created_at: str
+
+
+class ArtifactDetail(ArtifactSummary):
+    content: dict[str, Any] = Field(default_factory=dict)
+
+
+class ArtifactListResponse(BaseModel):
+    project_id: str
+    items: list[ArtifactSummary]
+
+
+class DeadletterItem(BaseModel):
+    id: str
+    project_id: Optional[str] = None
+    source_kind: str
+    source_id: str
+    reason: str
+    payload: dict[str, Any] = Field(default_factory=dict)
+    created_at: str
+
+
+class DeadletterListResponse(BaseModel):
+    project_id: str
+    items: list[DeadletterItem]

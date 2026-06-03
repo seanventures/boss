@@ -7,6 +7,9 @@ from .bootstrap import seed
 from .config import get_settings
 from .db import begin, database_is_reachable, get_engine
 from .schemas import (
+    ArtifactDetail,
+    ArtifactListResponse,
+    ArtifactSummary,
     BudgetQuoteRequest,
     BudgetQuoteResponse,
     BudgetReleaseRequest,
@@ -19,6 +22,8 @@ from .schemas import (
     DecisionActionRequest,
     DecisionCard,
     DecisionInboxResponse,
+    DeadletterItem,
+    DeadletterListResponse,
     EventFeedResponse,
     EventItem,
     HealthResponse,
@@ -122,6 +127,47 @@ def decision_card_from_row(row) -> DecisionCard:
         approved_at=row["approved_at"].isoformat() if row["approved_at"] else None,
         created_at=row["created_at"].isoformat(),
         updated_at=row["updated_at"].isoformat(),
+    )
+
+
+def artifact_summary_from_row(row) -> ArtifactSummary:
+    return ArtifactSummary(
+        id=row["id"],
+        project_id=row["project_id"],
+        task_id=row["task_id"],
+        artifact_type=row["artifact_type"],
+        title=row["title"],
+        uri=row["uri"],
+        content_hash=row["content_hash"],
+        created_by_job_id=row["created_by_job_id"],
+        created_at=row["created_at"].isoformat(),
+    )
+
+
+def artifact_detail_from_row(row) -> ArtifactDetail:
+    return ArtifactDetail(
+        id=row["id"],
+        project_id=row["project_id"],
+        task_id=row["task_id"],
+        artifact_type=row["artifact_type"],
+        title=row["title"],
+        uri=row["uri"],
+        content_hash=row["content_hash"],
+        created_by_job_id=row["created_by_job_id"],
+        created_at=row["created_at"].isoformat(),
+        content=row["content"] or {},
+    )
+
+
+def deadletter_item_from_row(row) -> DeadletterItem:
+    return DeadletterItem(
+        id=row["id"],
+        project_id=row["project_id"],
+        source_kind=row["source_kind"],
+        source_id=row["source_id"],
+        reason=row["reason"],
+        payload=row["payload"] or {},
+        created_at=row["created_at"].isoformat(),
     )
 
 
@@ -294,6 +340,50 @@ def get_task(task_id: str) -> TaskSummary:
         if not row:
             raise HTTPException(status_code=404, detail="Task not found")
         return task_summary_from_row(row)
+
+
+@app.get("/v1/artifacts", response_model=ArtifactListResponse)
+def list_artifacts(project_id: str, limit: int = 25) -> ArtifactListResponse:
+    if limit < 1 or limit > 200:
+        raise HTTPException(status_code=400, detail="limit must be between 1 and 200.")
+
+    with begin(engine) as connection:
+        rows = connection.execute(
+            text(
+                """
+                SELECT id, project_id, task_id, artifact_type, title, uri, content_hash,
+                       created_by_job_id, created_at
+                FROM artifacts
+                WHERE project_id = :project_id
+                ORDER BY created_at DESC
+                LIMIT :limit
+                """
+            ),
+            {"project_id": project_id, "limit": limit},
+        ).mappings().all()
+        return ArtifactListResponse(
+            project_id=project_id,
+            items=[artifact_summary_from_row(row) for row in rows],
+        )
+
+
+@app.get("/v1/artifacts/{artifact_id}", response_model=ArtifactDetail)
+def get_artifact(artifact_id: str) -> ArtifactDetail:
+    with begin(engine) as connection:
+        row = connection.execute(
+            text(
+                """
+                SELECT id, project_id, task_id, artifact_type, title, uri, content,
+                       content_hash, created_by_job_id, created_at
+                FROM artifacts
+                WHERE id = :artifact_id
+                """
+            ),
+            {"artifact_id": artifact_id},
+        ).mappings().first()
+        if not row:
+            raise HTTPException(status_code=404, detail="Artifact not found")
+        return artifact_detail_from_row(row)
 
 
 @app.post("/v1/jobs", response_model=JobSummary, status_code=201)
@@ -658,6 +748,30 @@ def event_feed(project_id: str, limit: int = 50) -> EventFeedResponse:
             for row in rows
         ]
         return EventFeedResponse(project_id=project_id, items=items)
+
+
+@app.get("/v1/deadletters", response_model=DeadletterListResponse)
+def list_deadletters(project_id: str, limit: int = 50) -> DeadletterListResponse:
+    if limit < 1 or limit > 200:
+        raise HTTPException(status_code=400, detail="limit must be between 1 and 200.")
+
+    with begin(engine) as connection:
+        rows = connection.execute(
+            text(
+                """
+                SELECT id, project_id, source_kind, source_id, reason, payload, created_at
+                FROM deadletters
+                WHERE project_id = :project_id
+                ORDER BY created_at DESC
+                LIMIT :limit
+                """
+            ),
+            {"project_id": project_id, "limit": limit},
+        ).mappings().all()
+        return DeadletterListResponse(
+            project_id=project_id,
+            items=[deadletter_item_from_row(row) for row in rows],
+        )
 
 
 @app.get("/v1/receipts/{dedupe_key}", response_model=ReceiptResponse)

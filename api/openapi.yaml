@@ -69,6 +69,31 @@ paths:
           schema: { type: string }
       responses:
         '200': { description: Task }
+  /v1/artifacts:
+    get:
+      summary: List artifacts
+      parameters:
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, default: 25 }
+      responses:
+        '200': { description: Artifact list }
+  /v1/artifacts/{artifact_id}:
+    get:
+      summary: Get artifact
+      parameters:
+        - name: artifact_id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Artifact detail }
+        '404': { description: Artifact not found }
   /v1/decisions/inbox:
     get:
       summary: List decisions for inbox with pending items first
@@ -420,5 +445,23 @@ paths:
           in: query
           required: true
           schema: { type: string }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, default: 50 }
       responses:
         '200': { description: Events }
+  /v1/deadletters:
+    get:
+      summary: Deadletter feed
+      parameters:
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, default: 50 }
+      responses:
+        '200': { description: Deadletters }

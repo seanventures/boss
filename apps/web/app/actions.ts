@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { client } from "../lib/client";
+import { buildCommandRequest } from "../lib/commands";
 
 export async function resolveDecisionAction(formData: FormData): Promise<void> {
   const decisionId = formData.get("decision_id");
@@ -24,5 +25,14 @@ export async function resolveDecisionAction(formData: FormData): Promise<void> {
     await client.rejectDecision(decisionId, payload);
   }
 
+  revalidatePath("/");
+}
+
+export async function submitCommandAction(formData: FormData): Promise<void> {
+  const payload = buildCommandRequest(
+    formData.get("command"),
+    formData.get("deadline"),
+  );
+  await client.proposeCommand(payload);
   revalidatePath("/");
 }

@@ -1,6 +1,10 @@
-import { resolveDecisionAction } from "./actions";
+import { resolveDecisionAction, submitCommandAction } from "./actions";
+import { fetchArtifactFeed } from "../lib/artifacts";
+import { fetchDeadletterFeed } from "../lib/deadletters";
 import { fetchDecisionFeed, type DecisionFeedItem } from "../lib/decisions";
+import { fetchActivityFeed } from "../lib/events";
 import { fetchStatus } from "../lib/status";
+import { fetchTaskFeed } from "../lib/tasks";
 
 function formatMicros(amount: unknown): string {
   if (typeof amount !== "number") {
@@ -31,26 +35,98 @@ function formatDeadline(deadlineAt?: string): string {
   }).format(new Date(deadlineAt));
 }
 
+function formatDateTime(value?: string): string {
+  if (!value) {
+    return "Unknown time";
+  }
+  return new Intl.DateTimeFormat("en-US", {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(new Date(value));
+}
+
+function titleCaseToken(value: string): string {
+  return value.replaceAll("_", " ");
+}
+
 export default async function HomePage() {
-  const [status, decisions] = await Promise.all([
-    fetchStatus(),
-    fetchDecisionFeed(),
-  ]);
+  const [status, decisions, tasks, artifacts, events, deadletters] =
+    await Promise.all([
+      fetchStatus(),
+      fetchDecisionFeed(),
+      fetchTaskFeed(),
+      fetchArtifactFeed(),
+      fetchActivityFeed(),
+      fetchDeadletterFeed(),
+    ]);
+
+  const deadletterCount = deadletters.items.length;
+  const disableCommandEntry = !status.apiReachable || !status.databaseConnected;
 
   return (
     <main className="shell">
       <div className="frame">
         <section className="hero">
-          <span className="eyebrow">Business Operating System Sentinel</span>
-          <h1>Executive control for autonomous work.</h1>
-          <p>
-            Real GitHub and OpenAI integrations are gated behind receipts,
-            reservations, and approvals. This shell is wired to the live control
-            plane and stays visible even when integrations are blocked.
-          </p>
-          <span className={`pill${status.apiReachable ? "" : " warn"}`}>
-            {status.apiReachable ? "API reachable" : "API unavailable"}
-          </span>
+          <div className="hero-grid">
+            <div className="hero-copy">
+              <span className="eyebrow">Business Operating System Sentinel</span>
+              <h1>Executive control for autonomous work.</h1>
+              <p>
+                Real GitHub and OpenAI integrations are gated behind receipts,
+                reservations, and approvals. The console now submits CEO
+                commands directly to the live control plane and surfaces the
+                resulting tasks, artifacts, events, and deadletters.
+              </p>
+              <div className="hero-pills">
+                <span className={`pill${status.apiReachable ? "" : " warn"}`}>
+                  {status.apiReachable ? "API reachable" : "API unavailable"}
+                </span>
+                <span className={`pill${deadletterCount > 0 ? " warn" : ""}`}>
+                  {deadletterCount > 0
+                    ? `${deadletterCount} deadletter${deadletterCount === 1 ? "" : "s"}`
+                    : "No deadletters"}
+                </span>
+              </div>
+            </div>
+
+            <form action={submitCommandAction} className="composer">
+              <div>
+                <span className="eyebrow">CEO Command</span>
+                <h2>Issue a real outcome.</h2>
+              </div>
+              <label className="field">
+                <span>Outcome</span>
+                <textarea
+                  name="command"
+                  rows={5}
+                  className="textarea"
+                  placeholder="Build the next operator visibility slice and validate it through the sandbox workflow."
+                  disabled={disableCommandEntry}
+                  required
+                />
+              </label>
+              <div className="input-grid">
+                <label className="field">
+                  <span>Deadline</span>
+                  <input
+                    name="deadline"
+                    className="input"
+                    placeholder="This week"
+                    disabled={disableCommandEntry}
+                  />
+                </label>
+              </div>
+              <button className="button" disabled={disableCommandEntry} type="submit">
+                Submit command
+              </button>
+              <p className="detail">
+                {disableCommandEntry
+                  ? status.blockedReason ??
+                    "The control plane is not ready to accept commands."
+                  : "Creates a task, command brief, and queued planning job through the API."}
+              </p>
+            </form>
+          </div>
         </section>
 
         <section className="grid">
@@ -93,8 +169,7 @@ export default async function HomePage() {
             <h2>Open Tasks</h2>
             <div className="metric">{status.openTasks}</div>
             <p className="detail">
-              The first dogfood workspace is ready for command intake and
-              software-factory execution.
+              Recent task state is shown below with direct IDs from the API.
             </p>
           </article>
           <article>
@@ -107,6 +182,152 @@ export default async function HomePage() {
                 "No bootstrap blocker reported by the control plane."}
             </p>
           </article>
+          <article>
+            <h2>Artifacts</h2>
+            <div className="metric">{artifacts.items.length}</div>
+            <p className="detail">
+              Recent review packets, plans, merge results, and command briefs.
+            </p>
+          </article>
+          <article>
+            <h2>Events</h2>
+            <div className="metric">{events.items.length}</div>
+            <p className="detail">
+              What changed is derived from immutable event records.
+            </p>
+          </article>
+        </section>
+
+        <section className="panel-stack">
+          <div className="section-head">
+            <div>
+              <span className="eyebrow">Company Workspace</span>
+              <h2>Tasks and artifacts with real lineage.</h2>
+            </div>
+            <p className="status-meta">
+              The console reads canonical work objects directly from the control
+              plane API.
+            </p>
+          </div>
+
+          <div className="stack-grid">
+            <article className="stack-card">
+              <h3>Recent tasks</h3>
+              {!tasks.apiReachable ? (
+                <p className="detail">
+                  {tasks.blockedReason ?? "Task API is unavailable."}
+                </p>
+              ) : tasks.items.length === 0 ? (
+                <p className="detail">No tasks have been created yet.</p>
+              ) : (
+                <div className="feed-list">
+                  {tasks.items.map((task) => (
+                    <div className="feed-row" key={task.id}>
+                      <div>
+                        <h4>{task.title}</h4>
+                        <p className="detail">
+                          {task.status} / {task.priority} / risk {task.riskTier}
+                        </p>
+                      </div>
+                      <code className="mono">{task.id}</code>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </article>
+
+            <article className="stack-card">
+              <h3>Recent artifacts</h3>
+              {!artifacts.apiReachable ? (
+                <p className="detail">
+                  {artifacts.blockedReason ?? "Artifact API is unavailable."}
+                </p>
+              ) : artifacts.items.length === 0 ? (
+                <p className="detail">No artifacts have been created yet.</p>
+              ) : (
+                <div className="feed-list">
+                  {artifacts.items.map((artifact) => (
+                    <div className="feed-row" key={artifact.id}>
+                      <div>
+                        <h4>{artifact.title}</h4>
+                        <p className="detail">
+                          {titleCaseToken(artifact.artifactType)} /{" "}
+                          {formatDateTime(artifact.createdAt)}
+                        </p>
+                      </div>
+                      <code className="mono">{artifact.id}</code>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </article>
+          </div>
+        </section>
+
+        <section className="panel-stack">
+          <div className="section-head">
+            <div>
+              <span className="eyebrow">What Changed</span>
+              <h2>Recent events and visible failures.</h2>
+            </div>
+            <p className="status-meta">
+              No silent drops: deadletters remain visible beside the event feed.
+            </p>
+          </div>
+
+          <div className="stack-grid">
+            <article className="stack-card">
+              <h3>Recent events</h3>
+              {!events.apiReachable ? (
+                <p className="detail">
+                  {events.blockedReason ?? "Event feed is unavailable."}
+                </p>
+              ) : events.items.length === 0 ? (
+                <p className="detail">No events have been emitted yet.</p>
+              ) : (
+                <div className="feed-list">
+                  {events.items.map((event) => (
+                    <div className="feed-row" key={event.id}>
+                      <div>
+                        <h4>{titleCaseToken(event.eventType)}</h4>
+                        <p className="detail">
+                          {event.actor} / {event.entityType} / {formatDateTime(event.createdAt)}
+                        </p>
+                      </div>
+                      <code className="mono">{event.entityId}</code>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </article>
+
+            <article className="stack-card">
+              <h3>Deadletters</h3>
+              {!deadletters.apiReachable ? (
+                <p className="detail">
+                  {deadletters.blockedReason ?? "Deadletter API is unavailable."}
+                </p>
+              ) : deadletters.items.length === 0 ? (
+                <p className="detail">
+                  No failed jobs or effects are currently isolated for review.
+                </p>
+              ) : (
+                <div className="feed-list">
+                  {deadletters.items.map((deadletter) => (
+                    <div className="feed-row" key={deadletter.id}>
+                      <div>
+                        <h4>{deadletter.reason}</h4>
+                        <p className="detail">
+                          {deadletter.sourceKind} / {formatDateTime(deadletter.createdAt)}
+                        </p>
+                      </div>
+                      <code className="mono">{deadletter.sourceId}</code>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </article>
+          </div>
         </section>
 
         <section className="panel-stack">

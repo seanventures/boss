@@ -67,6 +67,35 @@ def test_command_proposal_creates_task_job_artifact_and_task_lookup(client, engi
     assert artifact_type == "command_brief"
 
 
+def test_artifact_list_and_detail_return_created_artifacts(client):
+    response = client.post(
+        "/v1/commands/propose",
+        json={
+            "project_id": "boss-dogfood",
+            "command": "Capture artifact visibility in the console.",
+            "constraints": {"deadline": "today"},
+        },
+    )
+    assert response.status_code == 201
+    artifact_id = response.json()["artifact_id"]
+
+    artifact_list = client.get(
+        "/v1/artifacts",
+        params={"project_id": "boss-dogfood", "limit": 10},
+    )
+    assert artifact_list.status_code == 200
+    payload = artifact_list.json()
+    assert payload["project_id"] == "boss-dogfood"
+    assert artifact_id in [item["id"] for item in payload["items"]]
+
+    artifact_detail = client.get(f"/v1/artifacts/{artifact_id}")
+    assert artifact_detail.status_code == 200
+    detail = artifact_detail.json()
+    assert detail["artifact_type"] == "command_brief"
+    assert detail["content"]["command"] == "Capture artifact visibility in the console."
+    assert detail["content"]["constraints"]["deadline"] == "today"
+
+
 def test_budget_denial_creates_decision(client):
     response = client.post(
         "/v1/budget/reserve",
@@ -617,6 +646,63 @@ def test_failed_job_retries_then_deadletters(client, engine):
         ).scalar_one()
     assert status == "deadlettered"
     assert deadletters == 1
+
+
+def test_deadletters_are_visible_via_api(client):
+    created = client.post(
+        "/v1/jobs",
+        json={
+            "project_id": "boss-dogfood",
+            "kind": "plan.generate",
+            "payload": {"command": "Create a draft plan."},
+            "max_attempts": 1,
+        },
+    )
+    assert created.status_code == 201
+    job_id = created.json()["id"]
+
+    leased = client.post(
+        "/v1/worker/poll",
+        json={
+            "worker_id": "worker-deadletter",
+            "capabilities": ["plan.generate"],
+            "lease_ttl_seconds": 60,
+        },
+    ).json()["job"]
+    client.post(
+        "/v1/worker/heartbeat",
+        json={
+            "worker_id": "worker-deadletter",
+            "job_id": job_id,
+            "lease_token": leased["lease_token"],
+            "lease_ttl_seconds": 60,
+        },
+    )
+    fail = client.post(
+        "/v1/worker/fail",
+        json={
+            "worker_id": "worker-deadletter",
+            "job_id": job_id,
+            "lease_token": leased["lease_token"],
+            "error": {"message": "terminal failure"},
+            "retryable": False,
+            "retry_delay_seconds": 0,
+        },
+    )
+    assert fail.status_code == 200
+    deadletter_id = fail.json()["deadletter_id"]
+
+    deadletters = client.get(
+        "/v1/deadletters",
+        params={"project_id": "boss-dogfood", "limit": 10},
+    )
+    assert deadletters.status_code == 200
+    payload = deadletters.json()
+    assert payload["project_id"] == "boss-dogfood"
+    item = next(entry for entry in payload["items"] if entry["id"] == deadletter_id)
+    assert item["source_kind"] == "job"
+    assert item["source_id"] == job_id
+    assert item["reason"] == "terminal failure"
 
 
 def test_worker_complete_creates_plan_artifact_and_decision(client):

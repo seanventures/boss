@@ -329,6 +329,42 @@ export type PullRequestMergeResponse = {
   message?: string;
 };
 
+export type ArtifactSummary = {
+  id: string;
+  project_id: string;
+  task_id?: string;
+  artifact_type: string;
+  title: string;
+  uri?: string;
+  content_hash?: string;
+  created_by_job_id?: string;
+  created_at: string;
+};
+
+export type ArtifactDetail = ArtifactSummary & {
+  content: Record<string, unknown>;
+};
+
+export type ArtifactListResponse = {
+  project_id: string;
+  items: ArtifactSummary[];
+};
+
+export type DeadletterItem = {
+  id: string;
+  project_id?: string;
+  source_kind: string;
+  source_id: string;
+  reason: string;
+  payload: Record<string, unknown>;
+  created_at: string;
+};
+
+export type DeadletterListResponse = {
+  project_id: string;
+  items: DeadletterItem[];
+};
+
 export type ReceiptResponse = {
   id: string;
   dedupe_key: string;
@@ -462,6 +498,17 @@ export function createBossApiClient(config: BossApiClientConfig) {
     getTask(taskId: string) {
       return request<TaskSummary>("GET", `/v1/tasks/${encodeURIComponent(taskId)}`);
     },
+    listArtifacts(projectId: string, limit = 25) {
+      return request<ArtifactListResponse>("GET", "/v1/artifacts", {
+        query: { project_id: projectId, limit },
+      });
+    },
+    getArtifact(artifactId: string) {
+      return request<ArtifactDetail>(
+        "GET",
+        `/v1/artifacts/${encodeURIComponent(artifactId)}`,
+      );
+    },
     pollWorker(payload: WorkerPollRequest) {
       return request<WorkerPollResponse>("POST", "/v1/worker/poll", {
         body: payload,
@@ -562,6 +609,11 @@ export function createBossApiClient(config: BossApiClientConfig) {
     },
     listEvents(projectId: string, limit = 50) {
       return request<EventFeedResponse>("GET", "/v1/events", {
+        query: { project_id: projectId, limit },
+      });
+    },
+    listDeadletters(projectId: string, limit = 50) {
+      return request<DeadletterListResponse>("GET", "/v1/deadletters", {
         query: { project_id: projectId, limit },
       });
     },

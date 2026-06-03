@@ -71,6 +71,8 @@ If a required credential is missing, the API must fail closed and create visible
 
 The database-backed commands now wait for Postgres readiness before seeding, testing, or smoke execution, which avoids race conditions during local startup.
 
+The executive console now supports API-driven CEO command intake plus live visibility into recent tasks, artifacts, events, decisions, and deadletters.
+
 ## Current control-plane endpoints
 
 - `GET /health`
@@ -80,6 +82,8 @@ The database-backed commands now wait for Postgres readiness before seeding, tes
 - `POST /v1/tasks`
 - `GET /v1/jobs/{job_id}`
 - `GET /v1/tasks/{task_id}`
+- `GET /v1/artifacts`
+- `GET /v1/artifacts/{artifact_id}`
 - `POST /v1/jobs`
 - `POST /v1/worker/poll`
 - `POST /v1/worker/heartbeat`
@@ -91,6 +95,7 @@ The database-backed commands now wait for Postgres readiness before seeding, tes
 - `POST /v1/budget/release`
 - `GET /v1/decisions/inbox`
 - `GET /v1/events`
+- `GET /v1/deadletters`
 - `POST /v1/openai/plans`
 - `POST /v1/software-factory/proposals`
 - `POST /v1/software-factory/merges`
