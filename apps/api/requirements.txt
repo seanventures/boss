@@ -2,9 +2,9 @@ fastapi==0.115.12
 httpx==0.28.1
 openai==1.93.0
 pydantic-settings==2.10.1
+PyYAML==6.0.2
 psycopg[binary]==3.2.9
 pytest==8.4.1
 ruff==0.12.0
 sqlalchemy==2.0.41
 uvicorn[standard]==0.34.3
-

@@ -2,12 +2,14 @@ from sqlalchemy import text
 
 from .config import get_settings
 from .db import ensure_schema, get_engine
+from .services.specpack import SpecPackService
 
 
 def seed() -> None:
     settings = get_settings()
     settings.artifact_root.mkdir(parents=True, exist_ok=True)
     engine = get_engine(settings)
+    specpack = SpecPackService(settings)
     ensure_schema(engine, settings)
 
     with engine.begin() as connection:
@@ -67,6 +69,12 @@ def seed() -> None:
                 "burst_cap": settings.burst_cap_usd_micros_per_min,
             },
         )
+        specpack.install_pack(
+            connection,
+            settings.default_project_id,
+            settings.core_pack_id,
+            "bootstrap",
+        )
 
 
 def main() -> None:
@@ -76,4 +84,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

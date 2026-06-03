@@ -94,6 +94,74 @@ paths:
       responses:
         '200': { description: Artifact detail }
         '404': { description: Artifact not found }
+  /v1/roles:
+    get:
+      summary: List installed roles for a project
+      parameters:
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Role list }
+  /v1/roles/{role_key}:
+    get:
+      summary: Get installed role detail
+      parameters:
+        - name: role_key
+          in: path
+          required: true
+          schema: { type: string }
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Role detail }
+        '404': { description: Role not found }
+  /v1/packs:
+    get:
+      summary: List available packs with install status for a project
+      parameters:
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Pack list }
+  /v1/packs/{pack_id}:
+    get:
+      summary: Get pack detail for a project
+      parameters:
+        - name: pack_id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Pack detail }
+        '404': { description: Pack not found }
+  /v1/packs/install:
+    post:
+      summary: Install a spec-backed company pack into a project
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id, pack_id]
+              properties:
+                project_id: { type: string }
+                pack_id: { type: string }
+                actor: { type: string, default: system }
+      responses:
+        '201': { description: Pack installed }
+        '404': { description: Pack not found }
+        '422': { description: Invalid pack or role spec }
   /v1/decisions/inbox:
     get:
       summary: List decisions for inbox with pending items first

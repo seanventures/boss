@@ -33,6 +33,7 @@ class Settings(BaseSettings):
         default="boss-dogfood", alias="BOSS_DEFAULT_PROJECT_ID"
     )
     artifact_dir: Path = Field(default=Path("artifacts"), alias="BOSS_ARTIFACTS_DIR")
+    core_pack_id: str = Field(default="core_v1", alias="BOSS_CORE_PACK_ID")
     daily_cap_usd_micros: int = Field(
         default=10_000_000, alias="BOSS_DAILY_CAP_USD_MICROS"
     )
@@ -63,6 +64,10 @@ class Settings(BaseSettings):
     @property
     def artifact_root(self) -> Path:
         return (self.repo_root / self.artifact_dir).resolve()
+
+    @property
+    def specpack_root(self) -> Path:
+        return (self.repo_root / "packages" / "specpack").resolve()
 
 
 @lru_cache(maxsize=1)

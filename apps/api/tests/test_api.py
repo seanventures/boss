@@ -25,6 +25,93 @@ def test_status_returns_seeded_project(client):
     assert payload["project_name"] == "BOSS dogfood bootstrap"
 
 
+def test_seed_installs_core_pack_and_roles(client):
+    packs = client.get("/v1/packs", params={"project_id": "boss-dogfood"})
+    assert packs.status_code == 200
+    pack_payload = packs.json()
+    core_pack = next(item for item in pack_payload["items"] if item["pack_id"] == "core_v1")
+    assert core_pack["installed"] is True
+    assert core_pack["installed_version"] == "1.0.0"
+    assert "metatron" in core_pack["roles"]
+
+    roles = client.get("/v1/roles", params={"project_id": "boss-dogfood"})
+    assert roles.status_code == 200
+    role_payload = roles.json()
+    assert len(role_payload["items"]) >= 9
+    role_keys = [item["role_key"] for item in role_payload["items"]]
+    assert "metatron" in role_keys
+    assert "cto" in role_keys
+
+
+def test_role_detail_returns_loaded_spec(client):
+    response = client.get(
+        "/v1/roles/metatron",
+        params={"project_id": "boss-dogfood"},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["role_key"] == "metatron"
+    assert payload["display_name"] == "Metatron"
+    assert payload["autonomy_level"] == 1
+    assert payload["spec"]["mission"].startswith("Omnipresent CEO interface")
+    assert "WhatChangedDigest" in payload["spec"]["output_contracts"]
+
+
+def test_pack_install_is_idempotent_for_new_project(client, engine):
+    with engine.begin() as connection:
+        connection.execute(text("DELETE FROM events WHERE project_id = 'boss-lab'"))
+        connection.execute(text("DELETE FROM roles WHERE project_id = 'boss-lab'"))
+        connection.execute(
+            text("DELETE FROM pack_installs WHERE project_id = 'boss-lab'")
+        )
+        connection.execute(text("DELETE FROM projects WHERE id = 'boss-lab'"))
+        connection.execute(
+            text(
+                """
+                INSERT INTO projects (id, workspace_id, name, slug)
+                VALUES ('boss-lab', 'ws_boss', 'BOSS Lab', 'boss-lab')
+                """
+            )
+        )
+
+    first = client.post(
+        "/v1/packs/install",
+        json={"project_id": "boss-lab", "pack_id": "core_v1", "actor": "ceo"},
+    )
+    assert first.status_code == 201
+    first_payload = first.json()
+    assert first_payload["pack_id"] == "core_v1"
+    assert first_payload["install_status"] == "installed"
+    assert first_payload["role_count"] == 9
+
+    second = client.post(
+        "/v1/packs/install",
+        json={"project_id": "boss-lab", "pack_id": "core_v1", "actor": "ceo"},
+    )
+    assert second.status_code == 201
+    second_payload = second.json()
+    assert second_payload["install_status"] == "already_installed"
+
+    roles = client.get("/v1/roles", params={"project_id": "boss-lab"})
+    assert roles.status_code == 200
+    role_keys = [item["role_key"] for item in roles.json()["items"]]
+    assert role_keys == [
+        "cao",
+        "coo",
+        "cto",
+        "metatron",
+        "pm",
+        "program_manager",
+        "qa",
+        "release_manager",
+        "vp_agents",
+    ]
+
+    pack = client.get("/v1/packs/core_v1", params={"project_id": "boss-lab"})
+    assert pack.status_code == 200
+    assert pack.json()["installed"] is True
+
+
 def test_command_proposal_creates_task_job_artifact_and_task_lookup(client, engine):
     response = client.post(
         "/v1/commands/propose",

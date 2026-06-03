@@ -1,8 +1,10 @@
-import { resolveDecisionAction, submitCommandAction } from "./actions";
+import { installPackAction, resolveDecisionAction, submitCommandAction } from "./actions";
 import { fetchArtifactFeed } from "../lib/artifacts";
 import { fetchDeadletterFeed } from "../lib/deadletters";
 import { fetchDecisionFeed, type DecisionFeedItem } from "../lib/decisions";
 import { fetchActivityFeed } from "../lib/events";
+import { fetchPackFeed } from "../lib/packs";
+import { fetchRoleFeed } from "../lib/roles";
 import { fetchStatus } from "../lib/status";
 import { fetchTaskFeed } from "../lib/tasks";
 
@@ -74,7 +76,7 @@ function decisionStatusDetail(decision: DecisionFeedItem): string {
 }
 
 export default async function HomePage() {
-  const [status, decisions, tasks, artifacts, events, deadletters] =
+  const [status, decisions, tasks, artifacts, events, deadletters, packs, roles] =
     await Promise.all([
       fetchStatus(),
       fetchDecisionFeed(),
@@ -82,10 +84,13 @@ export default async function HomePage() {
       fetchArtifactFeed(),
       fetchActivityFeed(),
       fetchDeadletterFeed(),
+      fetchPackFeed(),
+      fetchRoleFeed(),
     ]);
 
   const deadletterCount = deadletters.items.length;
   const disableCommandEntry = !status.apiReachable || !status.databaseConnected;
+  const installedCorePack = packs.items.find((pack) => pack.installed);
 
   return (
     <main className="shell">
@@ -220,6 +225,88 @@ export default async function HomePage() {
               What changed is derived from immutable event records.
             </p>
           </article>
+        </section>
+
+        <section className="panel-stack">
+          <div className="section-head">
+            <div>
+              <span className="eyebrow">Company Pack</span>
+              <h2>Installed roles and operating charter.</h2>
+            </div>
+            <p className="status-meta">
+              Company structure is now installed from spec-backed packs, not hardcoded UI assumptions.
+            </p>
+          </div>
+
+          <div className="stack-grid">
+            <article className="stack-card">
+              <h3>Installed packs</h3>
+              {!packs.apiReachable ? (
+                <p className="detail">
+                  {packs.blockedReason ?? "Pack API is unavailable."}
+                </p>
+              ) : packs.items.length === 0 ? (
+                <p className="detail">No packs are available.</p>
+              ) : (
+                <div className="feed-list">
+                  {packs.items.map((pack) => (
+                    <div className="feed-row" key={pack.packId}>
+                      <div>
+                        <h4>{pack.packId}</h4>
+                        <p className="detail">
+                          {pack.installed
+                            ? `Installed by ${pack.installedBy ?? "system"}${pack.installedAt ? ` at ${formatDateTime(pack.installedAt)}` : ""}.`
+                            : pack.description}
+                        </p>
+                        <p className="detail">
+                          v{pack.version} / {pack.roles.length} roles / {pack.status}
+                        </p>
+                      </div>
+                      {pack.installed ? (
+                        <span className="pill">installed</span>
+                      ) : (
+                        <form action={installPackAction}>
+                          <input type="hidden" name="pack_id" value={pack.packId} />
+                          <button className="button secondary" type="submit">
+                            Install
+                          </button>
+                        </form>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </article>
+
+            <article className="stack-card">
+              <h3>Installed roles</h3>
+              {!roles.apiReachable ? (
+                <p className="detail">
+                  {roles.blockedReason ?? "Role API is unavailable."}
+                </p>
+              ) : roles.items.length === 0 ? (
+                <p className="detail">
+                  {installedCorePack
+                    ? "No installed roles were returned for the active pack."
+                    : "Install a company pack to provision role specs."}
+                </p>
+              ) : (
+                <div className="feed-list">
+                  {roles.items.map((role) => (
+                    <div className="feed-row" key={role.id}>
+                      <div>
+                        <h4>{role.displayName}</h4>
+                        <p className="detail">
+                          {titleCaseToken(role.roleKey)} / autonomy {role.autonomyLevel}
+                        </p>
+                      </div>
+                      <code className="mono">{role.id}</code>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </article>
+          </div>
         </section>
 
         <section className="panel-stack">

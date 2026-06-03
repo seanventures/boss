@@ -403,3 +403,55 @@ class DeadletterItem(BaseModel):
 class DeadletterListResponse(BaseModel):
     project_id: str
     items: list[DeadletterItem]
+
+
+class RoleSummary(BaseModel):
+    id: str
+    project_id: str
+    role_key: str
+    display_name: str
+    autonomy_level: int
+    created_at: str
+
+
+class RoleDetail(RoleSummary):
+    spec: dict[str, Any]
+
+
+class RoleListResponse(BaseModel):
+    project_id: str
+    items: list[RoleSummary]
+
+
+class PackSummary(BaseModel):
+    pack_id: str
+    version: str
+    description: str
+    status: str
+    requires: list[str]
+    roles: list[str]
+    workflows: list[str]
+    policies: list[str]
+    skills: list[str]
+    installed: bool
+    installed_by: Optional[str] = None
+    installed_at: Optional[str] = None
+    updated_at: Optional[str] = None
+    installed_version: Optional[str] = None
+
+
+class PackDetail(PackSummary):
+    role_count: Optional[int] = None
+    role_results: list[dict[str, Any]] = Field(default_factory=list)
+    install_status: Optional[str] = None
+
+
+class PackListResponse(BaseModel):
+    project_id: str
+    items: list[PackSummary]
+
+
+class PackInstallRequest(BaseModel):
+    project_id: str
+    pack_id: str
+    actor: str = "system"

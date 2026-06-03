@@ -37,6 +37,7 @@ If a required credential is missing, the API must fail closed and create visible
 - `apps/worker`: Python worker shell
 - `packages/api-client`: shared TypeScript client for the control-plane API
 - `packages/specpack`: active spec objects, workflows, and policies
+- `packages/specpack/packs`: spec-backed company pack definitions installable into projects
 - `templates/boss-sandbox`: starter contents for the real sandbox target repository
 - `reference/boss_build_spec_pack`: original imported build pack
 
@@ -71,7 +72,9 @@ If a required credential is missing, the API must fail closed and create visible
 
 The database-backed commands now wait for Postgres readiness before seeding, testing, or smoke execution, which avoids race conditions during local startup.
 
-The executive console now supports API-driven CEO command intake plus live visibility into recent tasks, artifacts, events, decisions, and deadletters.
+The executive console now supports API-driven CEO command intake plus live visibility into recent tasks, artifacts, events, decisions, deadletters, installed packs, and installed roles.
+
+The dogfood seed now installs the spec-backed `core_v1` company pack into `boss-dogfood`, which provisions the default operating roles from `packages/specpack/roles`.
 
 ## Current control-plane endpoints
 
@@ -84,6 +87,11 @@ The executive console now supports API-driven CEO command intake plus live visib
 - `GET /v1/tasks/{task_id}`
 - `GET /v1/artifacts`
 - `GET /v1/artifacts/{artifact_id}`
+- `GET /v1/roles`
+- `GET /v1/roles/{role_key}`
+- `GET /v1/packs`
+- `GET /v1/packs/{pack_id}`
+- `POST /v1/packs/install`
 - `POST /v1/jobs`
 - `POST /v1/worker/poll`
 - `POST /v1/worker/heartbeat`

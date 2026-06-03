@@ -361,6 +361,58 @@ export type ArtifactListResponse = {
   items: ArtifactSummary[];
 };
 
+export type RoleSummary = {
+  id: string;
+  project_id: string;
+  role_key: string;
+  display_name: string;
+  autonomy_level: number;
+  created_at: string;
+};
+
+export type RoleDetail = RoleSummary & {
+  spec: Record<string, unknown>;
+};
+
+export type RoleListResponse = {
+  project_id: string;
+  items: RoleSummary[];
+};
+
+export type PackSummary = {
+  pack_id: string;
+  version: string;
+  description: string;
+  status: string;
+  requires: string[];
+  roles: string[];
+  workflows: string[];
+  policies: string[];
+  skills: string[];
+  installed: boolean;
+  installed_by?: string;
+  installed_at?: string;
+  updated_at?: string;
+  installed_version?: string;
+};
+
+export type PackDetail = PackSummary & {
+  role_count?: number;
+  role_results: Array<Record<string, unknown>>;
+  install_status?: string;
+};
+
+export type PackListResponse = {
+  project_id: string;
+  items: PackSummary[];
+};
+
+export type PackInstallRequest = {
+  project_id: string;
+  pack_id: string;
+  actor?: string;
+};
+
 export type DeadletterItem = {
   id: string;
   project_id?: string;
@@ -519,6 +571,31 @@ export function createBossApiClient(config: BossApiClientConfig) {
         "GET",
         `/v1/artifacts/${encodeURIComponent(artifactId)}`,
       );
+    },
+    listRoles(projectId: string) {
+      return request<RoleListResponse>("GET", "/v1/roles", {
+        query: { project_id: projectId },
+      });
+    },
+    getRole(projectId: string, roleKey: string) {
+      return request<RoleDetail>("GET", `/v1/roles/${encodeURIComponent(roleKey)}`, {
+        query: { project_id: projectId },
+      });
+    },
+    listPacks(projectId: string) {
+      return request<PackListResponse>("GET", "/v1/packs", {
+        query: { project_id: projectId },
+      });
+    },
+    getPack(projectId: string, packId: string) {
+      return request<PackDetail>("GET", `/v1/packs/${encodeURIComponent(packId)}`, {
+        query: { project_id: projectId },
+      });
+    },
+    installPack(payload: PackInstallRequest) {
+      return request<PackDetail>("POST", "/v1/packs/install", {
+        body: payload,
+      });
     },
     pollWorker(payload: WorkerPollRequest) {
       return request<WorkerPollResponse>("POST", "/v1/worker/poll", {

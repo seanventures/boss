@@ -32,6 +32,10 @@ from .schemas import (
     LeasedJob,
     OpenAIPlanRequest,
     OpenAIPlanResponse,
+    PackDetail,
+    PackInstallRequest,
+    PackListResponse,
+    PackSummary,
     PullRequestMergeJobRequest,
     PullRequestMergeRequest,
     PullRequestMergeResponse,
@@ -39,6 +43,9 @@ from .schemas import (
     PullRequestProposalRequest,
     PullRequestProposalResponse,
     ReceiptResponse,
+    RoleDetail,
+    RoleListResponse,
+    RoleSummary,
     StatusResponse,
     TaskCreateRequest,
     TaskListResponse,
@@ -62,6 +69,7 @@ from .services.intake import CommandIntakeService
 from .services.jobs import JobLeaseService, LeaseNotFoundError
 from .services.receipts import ReceiptService
 from .services.software_factory import SoftwareFactoryService
+from .services.specpack import PackNotFoundError, RoleNotFoundError, SpecPackService
 
 settings = get_settings()
 engine = get_engine(settings)
@@ -71,6 +79,7 @@ jobs = JobLeaseService(settings)
 receipts = ReceiptService()
 software_factory = SoftwareFactoryService(settings)
 decisions = DecisionService(settings)
+specpack = SpecPackService(settings)
 
 
 @asynccontextmanager
@@ -181,6 +190,57 @@ def deadletter_item_from_row(row) -> DeadletterItem:
         reason=row["reason"],
         payload=row["payload"] or {},
         created_at=row["created_at"].isoformat(),
+    )
+
+
+def role_summary_from_service(payload) -> RoleSummary:
+    return RoleSummary(
+        id=payload["id"],
+        project_id=payload["project_id"],
+        role_key=payload["role_key"],
+        display_name=payload["display_name"],
+        autonomy_level=payload["autonomy_level"],
+        created_at=payload["created_at"],
+    )
+
+
+def role_detail_from_service(payload) -> RoleDetail:
+    return RoleDetail(
+        id=payload["id"],
+        project_id=payload["project_id"],
+        role_key=payload["role_key"],
+        display_name=payload["display_name"],
+        autonomy_level=payload["autonomy_level"],
+        created_at=payload["created_at"],
+        spec=payload["spec"] or {},
+    )
+
+
+def pack_summary_from_service(payload) -> PackSummary:
+    return PackSummary(
+        pack_id=payload["pack_id"],
+        version=payload["version"],
+        description=payload["description"],
+        status=payload["status"],
+        requires=payload["requires"] or [],
+        roles=payload["roles"] or [],
+        workflows=payload["workflows"] or [],
+        policies=payload["policies"] or [],
+        skills=payload["skills"] or [],
+        installed=bool(payload["installed"]),
+        installed_by=payload.get("installed_by"),
+        installed_at=payload.get("installed_at"),
+        updated_at=payload.get("updated_at"),
+        installed_version=payload.get("installed_version"),
+    )
+
+
+def pack_detail_from_service(payload) -> PackDetail:
+    return PackDetail(
+        **pack_summary_from_service(payload).model_dump(),
+        role_count=payload.get("role_count"),
+        role_results=payload.get("role_results") or [],
+        install_status=payload.get("install_status"),
     )
 
 
@@ -397,6 +457,63 @@ def get_artifact(artifact_id: str) -> ArtifactDetail:
         if not row:
             raise HTTPException(status_code=404, detail="Artifact not found")
         return artifact_detail_from_row(row)
+
+
+@app.get("/v1/roles", response_model=RoleListResponse)
+def list_roles(project_id: str) -> RoleListResponse:
+    with begin(engine) as connection:
+        roles = specpack.list_roles_for_project(connection, project_id)
+        return RoleListResponse(
+            project_id=project_id,
+            items=[role_summary_from_service(role) for role in roles],
+        )
+
+
+@app.get("/v1/roles/{role_key}", response_model=RoleDetail)
+def get_role(role_key: str, project_id: str) -> RoleDetail:
+    with begin(engine) as connection:
+        try:
+            role = specpack.get_role_for_project(connection, project_id, role_key)
+        except RoleNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        return role_detail_from_service(role)
+
+
+@app.get("/v1/packs", response_model=PackListResponse)
+def list_packs(project_id: str) -> PackListResponse:
+    with begin(engine) as connection:
+        packs = specpack.list_packs_for_project(connection, project_id)
+        return PackListResponse(
+            project_id=project_id,
+            items=[pack_summary_from_service(pack) for pack in packs],
+        )
+
+
+@app.get("/v1/packs/{pack_id}", response_model=PackDetail)
+def get_pack(pack_id: str, project_id: str) -> PackDetail:
+    with begin(engine) as connection:
+        try:
+            pack = specpack.get_pack_for_project(connection, project_id, pack_id)
+        except PackNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        return pack_detail_from_service(pack)
+
+
+@app.post("/v1/packs/install", response_model=PackDetail, status_code=201)
+def install_pack(payload: PackInstallRequest) -> PackDetail:
+    with begin(engine) as connection:
+        try:
+            result = specpack.install_pack(
+                connection,
+                payload.project_id,
+                payload.pack_id,
+                payload.actor,
+            )
+        except PackNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except (RoleNotFoundError, ValueError) as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        return pack_detail_from_service(result)
 
 
 @app.post("/v1/jobs", response_model=JobSummary, status_code=201)

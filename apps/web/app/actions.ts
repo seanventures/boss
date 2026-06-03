@@ -62,3 +62,16 @@ export async function submitCommandAction(formData: FormData): Promise<void> {
   await client.proposeCommand(payload);
   revalidatePath("/");
 }
+
+export async function installPackAction(formData: FormData): Promise<void> {
+  const packId = formData.get("pack_id");
+  if (typeof packId !== "string" || !packId) {
+    throw new Error("pack_id is required");
+  }
+  await client.installPack({
+    project_id: process.env.NEXT_PUBLIC_BOSS_PROJECT_ID ?? "boss-dogfood",
+    pack_id: packId,
+    actor: "executive_console",
+  });
+  revalidatePath("/");
+}

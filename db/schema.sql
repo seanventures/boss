@@ -34,6 +34,20 @@ CREATE TABLE IF NOT EXISTS roles (
   UNIQUE(project_id, role_key)
 );
 
+CREATE TABLE IF NOT EXISTS pack_installs (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id),
+  pack_id TEXT NOT NULL,
+  pack_version TEXT NOT NULL,
+  description TEXT,
+  spec JSONB NOT NULL DEFAULT '{}'::jsonb,
+  installed_by TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'active',
+  installed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(project_id, pack_id)
+);
+
 CREATE TABLE IF NOT EXISTS tasks (
   id TEXT PRIMARY KEY,
   project_id TEXT NOT NULL REFERENCES projects(id),

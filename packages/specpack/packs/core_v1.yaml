@@ -1,0 +1,31 @@
+id: core_v1
+version: 1.0.0
+description: Core Pack v1 for founder-first dogfooding of BOSS.
+requires:
+  - default_safety
+  - budget_v0
+installs:
+  roles:
+    - metatron
+    - coo
+    - cao
+    - cto
+    - pm
+    - qa
+    - release_manager
+    - program_manager
+    - vp_agents
+  workflows:
+    - ceo_command_to_pr
+    - decision_inbox
+    - budget_gated_job
+  policies:
+    - default_safety
+    - budget_v0
+    - autonomy_ladder
+  skills:
+    - model_gateway
+    - github
+    - software_factory
+  canaries: []
+status: active
