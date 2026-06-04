@@ -2204,6 +2204,7 @@ export type HostedMarketplaceSyncRunSummary = {
   status: string;
   listing_count: number;
   provider_ref?: string;
+  sync_packet_artifact_id?: string;
   error?: Record<string, unknown>;
   synced_by: string;
   metadata: Record<string, unknown>;

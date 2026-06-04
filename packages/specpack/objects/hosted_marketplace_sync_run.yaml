@@ -21,6 +21,8 @@ fields:
     type: integer
   - name: provider_ref
     type: string
+  - name: sync_packet_artifact_id
+    type: string
   - name: error
     type: object
   - name: synced_by
@@ -34,4 +36,5 @@ rules:
   missing_account_connect_url_creates_blocked_run: true
   invalid_hosted_response_creates_failed_run: true
   configured_sync_uses_real_account_connect_endpoint: true
+  sync_creates_durable_packet_artifact: true
   sync_emits_event: true

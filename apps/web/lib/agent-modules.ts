@@ -71,6 +71,7 @@ export type HostedMarketplaceSyncRunFeedItem = {
   status: string;
   listingCount: number;
   providerRef?: string;
+  syncPacketArtifactId?: string;
   error?: Record<string, unknown>;
   syncedBy: string;
   metadata: Record<string, unknown>;
@@ -163,6 +164,7 @@ function mapMarketplaceSyncRun(
     status: payload.status,
     listingCount: payload.listing_count,
     providerRef: payload.provider_ref,
+    syncPacketArtifactId: payload.sync_packet_artifact_id,
     error: payload.error,
     syncedBy: payload.synced_by,
     metadata: payload.metadata,

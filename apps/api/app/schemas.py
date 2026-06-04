@@ -267,6 +267,7 @@ class HostedMarketplaceSyncRunSummary(BaseModel):
     status: str
     listing_count: int
     provider_ref: Optional[str] = None
+    sync_packet_artifact_id: Optional[str] = None
     error: Optional[dict[str, Any]] = None
     synced_by: str
     metadata: dict[str, Any]

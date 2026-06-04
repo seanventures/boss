@@ -1347,7 +1347,19 @@ def test_hosted_marketplace_sync_blocks_without_hosted_url(client):
         payload = sync.json()
         assert payload["sync_run"]["status"] == "blocked_configuration"
         assert payload["sync_run"]["error"]["reason"] == "account_connect_url_missing"
+        assert payload["sync_run"]["sync_packet_artifact_id"]
         assert payload["listing_count"] == 0
+
+        packet = client.get(
+            f"/v1/artifacts/{payload['sync_run']['sync_packet_artifact_id']}"
+        )
+        assert packet.status_code == 200
+        packet_payload = packet.json()
+        assert packet_payload["artifact_type"] == "hosted_marketplace_sync_packet"
+        assert packet_payload["content"]["status"] == "blocked_configuration"
+        assert packet_payload["content"]["listing_count"] == 0
+        assert packet_payload["content"]["error"]["reason"] == "account_connect_url_missing"
+        assert packet_payload["content"]["external_service_configured"] is False
 
         runs = client.get(
             "/v1/marketplace/sync-runs",
@@ -1355,6 +1367,10 @@ def test_hosted_marketplace_sync_blocks_without_hosted_url(client):
         )
         assert runs.status_code == 200
         assert runs.json()["items"][0]["id"] == payload["sync_run"]["id"]
+        assert (
+            runs.json()["items"][0]["sync_packet_artifact_id"]
+            == payload["sync_run"]["sync_packet_artifact_id"]
+        )
 
         listings = client.get(
             "/v1/marketplace/listings",
@@ -1436,8 +1452,23 @@ def test_hosted_marketplace_sync_uses_account_connect_adapter(client, monkeypatc
             },
         )
         assert sync.status_code == 201
-        assert sync.json()["listing_count"] == 1
-        assert sync.json()["sync_run"]["provider_ref"] == "marketplace-sync-1"
+        sync_payload = sync.json()
+        assert sync_payload["listing_count"] == 1
+        assert sync_payload["sync_run"]["provider_ref"] == "marketplace-sync-1"
+        assert sync_payload["sync_run"]["sync_packet_artifact_id"]
+
+        packet = client.get(
+            f"/v1/artifacts/{sync_payload['sync_run']['sync_packet_artifact_id']}"
+        )
+        assert packet.status_code == 200
+        packet_payload = packet.json()
+        assert packet_payload["artifact_type"] == "hosted_marketplace_sync_packet"
+        assert packet_payload["content"]["status"] == "synced"
+        assert packet_payload["content"]["listing_count"] == 1
+        assert packet_payload["content"]["provider_ref"] == "marketplace-sync-1"
+        assert packet_payload["content"]["response_metadata"]["catalog_version"] == (
+            "2026-06-04"
+        )
 
         listings = client.get(
             "/v1/marketplace/listings",

@@ -1218,6 +1218,32 @@ class CommercialService:
             **(metadata or {}),
             "hosted_metadata": response_metadata,
         }
+        sync_packet_artifact_id = create_artifact(
+            connection,
+            self.settings,
+            project_id,
+            None,
+            "hosted_marketplace_sync_packet",
+            f"Hosted marketplace sync: {active['hosted_org_id']}",
+            {
+                "object_type": "hosted_marketplace_sync_packet",
+                "sync_run_id": sync_id,
+                "project_id": project_id,
+                "account_connect_org_id": active["id"],
+                "hosted_org_id": active["hosted_org_id"],
+                "status": status,
+                "listing_count": len(listings),
+                "provider_ref": provider_ref,
+                "response_metadata": response_metadata,
+                "error": error_payload,
+                "synced_by": actor,
+                "request_metadata": metadata or {},
+                "external_service_configured": bool(self.settings.account_connect_url),
+                "data_boundary": "internal",
+            },
+            data_boundary="internal",
+        )
+        run_metadata["sync_packet_artifact_id"] = sync_packet_artifact_id
         connection.execute(
             text(
                 """
@@ -1269,6 +1295,7 @@ class CommercialService:
                 "status": status,
                 "listing_count": len(listings),
                 "provider_ref": provider_ref,
+                "sync_packet_artifact_id": sync_packet_artifact_id,
                 "error_reason": error_payload.get("reason") if error_payload else None,
             },
         )
@@ -2470,8 +2497,15 @@ class CommercialService:
         }
 
     def _marketplace_sync_run_from_row(self, row: dict[str, Any]) -> dict[str, Any]:
+        metadata = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
+        sync_packet_artifact_id = metadata.get("sync_packet_artifact_id")
         return {
             **row,
+            "sync_packet_artifact_id": (
+                sync_packet_artifact_id
+                if isinstance(sync_packet_artifact_id, str)
+                else None
+            ),
             "created_at": row["created_at"].isoformat(),
         }
 

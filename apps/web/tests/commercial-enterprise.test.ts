@@ -525,6 +525,7 @@ describe("commercial, enterprise, and marketplace feeds", async () => {
           status: "synced",
           listing_count: 1,
           provider_ref: "marketplace-sync-1",
+          sync_packet_artifact_id: "art_marketplace_sync_packet_1",
           synced_by: "ceo",
           metadata: {},
           created_at: "2026-06-04T00:00:00Z",
@@ -552,6 +553,7 @@ describe("commercial, enterprise, and marketplace feeds", async () => {
     expect(feed.marketplaceSyncRuns[0]).toMatchObject({
       status: "synced",
       providerRef: "marketplace-sync-1",
+      syncPacketArtifactId: "art_marketplace_sync_packet_1",
     });
   });
 });

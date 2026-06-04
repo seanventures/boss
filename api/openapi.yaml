@@ -1769,10 +1769,10 @@ paths:
           required: false
           schema: { type: integer, default: 50 }
       responses:
-        '200': { description: Hosted marketplace sync-run history }
+        '200': { description: Hosted marketplace sync-run history with sync_packet_artifact_id evidence links }
   /v1/marketplace/sync:
     post:
-      summary: Sync hosted marketplace catalog through the configured real Account Connect adapter
+      summary: Sync hosted marketplace catalog through the configured real Account Connect adapter and create an evidence packet artifact
       requestBody:
         required: true
         content:

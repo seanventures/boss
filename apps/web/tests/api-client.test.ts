@@ -869,6 +869,7 @@ describe("createBossApiClient", () => {
       status: "synced",
       listing_count: 1,
       provider_ref: "marketplace-sync-1",
+      sync_packet_artifact_id: "art_marketplace_sync_packet_1",
       synced_by: "ceo",
       metadata: {},
       created_at: "2026-06-04T00:00:00Z",
@@ -912,7 +913,13 @@ describe("createBossApiClient", () => {
 
     expect(listings.items[0].pack_id).toBe("private_enterprise_agent_v1");
     expect(runs.items[0].provider_ref).toBe("marketplace-sync-1");
+    expect(runs.items[0].sync_packet_artifact_id).toBe(
+      "art_marketplace_sync_packet_1",
+    );
     expect(synced.listing_count).toBe(1);
+    expect(synced.sync_run.sync_packet_artifact_id).toBe(
+      "art_marketplace_sync_packet_1",
+    );
     expect(calls[0].url).toContain("/v1/marketplace/listings?");
     expect(calls[0].url).toContain("include_inactive=true");
     expect(calls[0].url).toContain("limit=25");

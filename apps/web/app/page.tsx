@@ -4916,6 +4916,11 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                               {String(run.error.message ?? "no message")}
                             </p>
                           ) : null}
+                          {run.syncPacketArtifactId ? (
+                            <p className="detail">
+                              Sync packet artifact: {run.syncPacketArtifactId}
+                            </p>
+                          ) : null}
                         </div>
                         <span className={`pill${run.status === "synced" ? "" : " warn"}`}>
                           {titleCaseToken(run.status)}
