@@ -199,6 +199,112 @@ describe("createBossApiClient", () => {
     );
   });
 
+  it("uses Account Connect team invite and billing portal API contracts", async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const invite = {
+      id: "acctinvite_1",
+      project_id: "boss-dogfood",
+      account_connect_org_id: "acctconn_1",
+      hosted_org_id: "acct_org_123",
+      email: "ops@example.com",
+      display_name: "Ops Lead",
+      role_keys: ["operator"],
+      permissions: ["command_submit"],
+      invite_url: "https://accounts.example/invite/123",
+      hosted_invite_ref: "hosted_invite_123",
+      status: "pending_acceptance",
+      delivery_status: "sent",
+      receipt_id: "rcpt_1",
+      created_by: "ceo",
+      metadata: {},
+      created_at: "2026-06-03T00:00:00Z",
+      updated_at: "2026-06-03T00:00:00Z",
+    };
+    const billingSession = {
+      id: "acctbill_1",
+      project_id: "boss-dogfood",
+      account_connect_org_id: "acctconn_1",
+      hosted_org_id: "acct_org_123",
+      portal_url: "https://billing.example/session/123",
+      return_url: "https://boss.local/settings",
+      provider_ref: "bps_123",
+      status: "ready",
+      receipt_id: "rcpt_2",
+      created_by: "ceo",
+      expires_at: "2026-06-04T00:00:00Z",
+      metadata: {},
+      created_at: "2026-06-03T00:00:00Z",
+      updated_at: "2026-06-03T00:00:00Z",
+    };
+    const responses = [
+      { status: 200, body: { project_id: "boss-dogfood", items: [invite] } },
+      { status: 201, body: invite },
+      { status: 200, body: { ...invite, status: "revoked" } },
+      {
+        status: 200,
+        body: { project_id: "boss-dogfood", items: [billingSession] },
+      },
+      { status: 201, body: billingSession },
+    ];
+    const fetchImpl = async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({ url: String(input), init });
+      const response = responses.shift();
+      return new Response(JSON.stringify(response?.body ?? {}), {
+        status: response?.status ?? 500,
+        headers: { "Content-Type": "application/json" },
+      });
+    };
+    const client = createBossApiClient({
+      baseUrl: "http://127.0.0.1:8000",
+      fetchImpl,
+    });
+
+    const invites = await client.listAccountConnectTeamInvites("boss-dogfood");
+    const createdInvite = await client.createAccountConnectTeamInvite({
+      project_id: "boss-dogfood",
+      email: "ops@example.com",
+      actor: "ceo",
+    });
+    const revokedInvite = await client.revokeAccountConnectTeamInvite(
+      "acctinvite_1",
+      {
+        project_id: "boss-dogfood",
+        reason: "wrong recipient",
+        actor: "ceo",
+      },
+    );
+    const sessions = await client.listAccountConnectBillingPortalSessions(
+      "boss-dogfood",
+    );
+    const createdSession = await client.createAccountConnectBillingPortalSession({
+      project_id: "boss-dogfood",
+      return_url: "https://boss.local/settings",
+      actor: "ceo",
+    });
+
+    expect(invites.items[0].email).toBe("ops@example.com");
+    expect(createdInvite.hosted_invite_ref).toBe("hosted_invite_123");
+    expect(revokedInvite.status).toBe("revoked");
+    expect(sessions.items[0].provider_ref).toBe("bps_123");
+    expect(createdSession.portal_url).toBe("https://billing.example/session/123");
+    expect(calls[0].url).toBe(
+      "http://127.0.0.1:8000/v1/account-connect/team-invites?project_id=boss-dogfood&limit=50",
+    );
+    expect(calls[1].url).toBe(
+      "http://127.0.0.1:8000/v1/account-connect/team-invites",
+    );
+    expect(calls[1].init?.method).toBe("POST");
+    expect(calls[2].url).toBe(
+      "http://127.0.0.1:8000/v1/account-connect/team-invites/acctinvite_1/revoke",
+    );
+    expect(calls[3].url).toBe(
+      "http://127.0.0.1:8000/v1/account-connect/billing-portal-sessions?project_id=boss-dogfood&limit=50",
+    );
+    expect(calls[4].url).toBe(
+      "http://127.0.0.1:8000/v1/account-connect/billing-portal-sessions",
+    );
+  });
+
   it("uses enterprise cluster API contracts", async () => {
     const calls: Array<{ url: string; init?: RequestInit }> = [];
     const cluster = {

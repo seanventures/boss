@@ -611,6 +611,53 @@ CREATE INDEX IF NOT EXISTS idx_tasks_project_parent ON tasks(project_id, parent_
 ALTER TABLE jobs ADD COLUMN IF NOT EXISTS data_boundary TEXT NOT NULL DEFAULT 'internal';
 ALTER TABLE receipts ADD COLUMN IF NOT EXISTS data_boundary TEXT NOT NULL DEFAULT 'internal';
 
+CREATE TABLE IF NOT EXISTS account_connect_team_invites (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  account_connect_org_id TEXT REFERENCES account_connect_orgs(id) ON DELETE SET NULL,
+  hosted_org_id TEXT NOT NULL,
+  email TEXT NOT NULL,
+  display_name TEXT,
+  role_keys JSONB NOT NULL DEFAULT '[]'::jsonb,
+  permissions JSONB NOT NULL DEFAULT '[]'::jsonb,
+  invite_url TEXT,
+  hosted_invite_ref TEXT,
+  status TEXT NOT NULL DEFAULT 'pending_delivery',
+  delivery_status TEXT NOT NULL DEFAULT 'pending',
+  receipt_id TEXT REFERENCES receipts(id),
+  created_by TEXT NOT NULL DEFAULT 'system',
+  accepted_by TEXT,
+  accepted_at TIMESTAMPTZ,
+  revoked_by TEXT,
+  revoked_at TIMESTAMPTZ,
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_account_connect_team_invites_project
+  ON account_connect_team_invites(project_id, status, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_account_connect_team_invites_email
+  ON account_connect_team_invites(project_id, email, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS account_connect_billing_portal_sessions (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  account_connect_org_id TEXT REFERENCES account_connect_orgs(id) ON DELETE SET NULL,
+  hosted_org_id TEXT NOT NULL,
+  portal_url TEXT,
+  return_url TEXT,
+  provider_ref TEXT,
+  status TEXT NOT NULL DEFAULT 'requested',
+  receipt_id TEXT REFERENCES receipts(id),
+  created_by TEXT NOT NULL DEFAULT 'system',
+  expires_at TIMESTAMPTZ,
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_account_connect_billing_sessions_project
+  ON account_connect_billing_portal_sessions(project_id, status, created_at DESC);
+
 CREATE TABLE IF NOT EXISTS deployment_rollouts (
   id TEXT PRIMARY KEY,
   project_id TEXT NOT NULL REFERENCES projects(id),

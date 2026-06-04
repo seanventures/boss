@@ -830,6 +830,275 @@ def test_account_connect_sync_upserts_hosted_entitlements(
         api_main.commercial.settings.boss_edition = previous
 
 
+def test_account_connect_team_invite_blocks_without_hosted_url_and_records_receipt(
+    client,
+):
+    previous_edition = api_main.settings.boss_edition
+    previous_url = api_main.settings.account_connect_url
+    api_main.settings.boss_edition = "cloud"
+    api_main.commercial.settings.boss_edition = "cloud"
+    api_main.settings.account_connect_url = None
+    api_main.commercial.settings.account_connect_url = None
+    try:
+        missing_link = client.post(
+            "/v1/account-connect/team-invites",
+            json={
+                "project_id": "boss-dogfood",
+                "email": "ops@example.com",
+                "actor": "ceo",
+            },
+        )
+        assert missing_link.status_code == 404
+
+        link = client.post(
+            "/v1/account-connect/link",
+            json={
+                "project_id": "boss-dogfood",
+                "hosted_org_id": "acct_org_invites",
+                "actor": "ceo",
+            },
+        )
+        assert link.status_code == 200
+
+        created = client.post(
+            "/v1/account-connect/team-invites",
+            json={
+                "project_id": "boss-dogfood",
+                "email": "ops@example.com",
+                "display_name": "Ops Lead",
+                "role_keys": ["operator"],
+                "permissions": ["command_submit"],
+                "metadata": {"source": "test"},
+                "actor": "ceo",
+            },
+        )
+        assert created.status_code == 201
+        invite = created.json()
+        assert invite["status"] == "blocked_configuration"
+        assert invite["delivery_status"] == "blocked"
+        assert invite["receipt_id"]
+        assert invite["metadata"]["blocked_reason"] == "account_connect_url_missing"
+
+        receipts = client.get("/v1/receipts", params={"project_id": "boss-dogfood"})
+        receipt = next(
+            item for item in receipts.json()["items"] if item["id"] == invite["receipt_id"]
+        )
+        assert receipt["status"] == "failed"
+        assert receipt["effect_kind"] == "account_connect.team_invite.create"
+
+        listed = client.get(
+            "/v1/account-connect/team-invites",
+            params={"project_id": "boss-dogfood"},
+        )
+        assert listed.status_code == 200
+        assert listed.json()["items"][0]["email"] == "ops@example.com"
+
+        events = client.get("/v1/events", params={"project_id": "boss-dogfood"})
+        event_types = [item["event_type"] for item in events.json()["items"]]
+        assert "account_connect.team_invite_denied" in event_types
+        assert "account_connect.team_invite_blocked" in event_types
+    finally:
+        api_main.settings.boss_edition = previous_edition
+        api_main.commercial.settings.boss_edition = previous_edition
+        api_main.settings.account_connect_url = previous_url
+        api_main.commercial.settings.account_connect_url = previous_url
+
+
+def test_account_connect_team_invite_and_billing_portal_use_hosted_adapter(
+    client,
+    monkeypatch,
+):
+    previous = api_main.settings.boss_edition
+    api_main.settings.boss_edition = "cloud"
+    api_main.commercial.settings.boss_edition = "cloud"
+
+    class FakeAccountConnectAdapter:
+        def fetch_entitlements(self, *, hosted_org_id: str, project_id: str):
+            return []
+
+        def create_team_invite(
+            self,
+            *,
+            hosted_org_id: str,
+            project_id: str,
+            email: str,
+            display_name: Optional[str],
+            role_keys: list[str],
+            permissions: list[str],
+            metadata: dict,
+        ):
+            assert hosted_org_id == "acct_org_hosted"
+            assert project_id == "boss-dogfood"
+            assert email == "ops@example.com"
+            assert display_name == "Ops Lead"
+            assert role_keys == ["operator"]
+            assert permissions == ["command_submit"]
+            assert metadata == {"source": "test"}
+            return {
+                "id": "hosted_invite_123",
+                "status": "pending_acceptance",
+                "invite_url": "https://accounts.example/invite/123",
+            }
+
+        def revoke_team_invite(
+            self,
+            *,
+            hosted_org_id: str,
+            hosted_invite_ref: str,
+            project_id: str,
+            reason: Optional[str],
+        ):
+            assert hosted_org_id == "acct_org_hosted"
+            assert hosted_invite_ref == "hosted_invite_123"
+            assert project_id == "boss-dogfood"
+            assert reason == "wrong recipient"
+            return {"status": "revoked"}
+
+        def create_billing_portal_session(
+            self,
+            *,
+            hosted_org_id: str,
+            project_id: str,
+            return_url: Optional[str],
+            metadata: dict,
+        ):
+            assert hosted_org_id == "acct_org_hosted"
+            assert project_id == "boss-dogfood"
+            assert return_url == "https://boss.local/settings"
+            assert metadata == {"purpose": "billing_review"}
+            return {
+                "session_id": "bps_123",
+                "portal_url": "https://billing.example/session/123",
+                "expires_at": "2026-06-04T00:00:00Z",
+            }
+
+    monkeypatch.setattr(
+        api_main.commercial,
+        "account_connect_adapter",
+        FakeAccountConnectAdapter(),
+    )
+    try:
+        link = client.post(
+            "/v1/account-connect/link",
+            json={
+                "project_id": "boss-dogfood",
+                "hosted_org_id": "acct_org_hosted",
+                "actor": "ceo",
+            },
+        )
+        assert link.status_code == 200
+
+        invite_response = client.post(
+            "/v1/account-connect/team-invites",
+            json={
+                "project_id": "boss-dogfood",
+                "email": "ops@example.com",
+                "display_name": "Ops Lead",
+                "role_keys": ["operator"],
+                "permissions": ["command_submit"],
+                "metadata": {"source": "test"},
+                "actor": "ceo",
+            },
+        )
+        assert invite_response.status_code == 201
+        invite = invite_response.json()
+        assert invite["status"] == "pending_acceptance"
+        assert invite["delivery_status"] == "sent"
+        assert invite["hosted_invite_ref"] == "hosted_invite_123"
+        assert invite["invite_url"] == "https://accounts.example/invite/123"
+
+        revoke = client.post(
+            f"/v1/account-connect/team-invites/{invite['id']}/revoke",
+            json={
+                "project_id": "boss-dogfood",
+                "reason": "wrong recipient",
+                "actor": "ceo",
+            },
+        )
+        assert revoke.status_code == 200
+        assert revoke.json()["status"] == "revoked"
+
+        portal_response = client.post(
+            "/v1/account-connect/billing-portal-sessions",
+            json={
+                "project_id": "boss-dogfood",
+                "return_url": "https://boss.local/settings",
+                "metadata": {"purpose": "billing_review"},
+                "actor": "ceo",
+            },
+        )
+        assert portal_response.status_code == 201
+        portal = portal_response.json()
+        assert portal["status"] == "ready"
+        assert portal["portal_url"] == "https://billing.example/session/123"
+        assert portal["provider_ref"] == "bps_123"
+        assert portal["receipt_id"]
+
+        sessions = client.get(
+            "/v1/account-connect/billing-portal-sessions",
+            params={"project_id": "boss-dogfood"},
+        )
+        assert sessions.status_code == 200
+        assert sessions.json()["items"][0]["provider_ref"] == "bps_123"
+
+        receipts = client.get("/v1/receipts", params={"project_id": "boss-dogfood"})
+        receipt_kinds = {item["effect_kind"] for item in receipts.json()["items"]}
+        assert "account_connect.team_invite.create" in receipt_kinds
+        assert "account_connect.team_invite.revoke" in receipt_kinds
+        assert "account_connect.billing_portal_session.create" in receipt_kinds
+
+        events = client.get("/v1/events", params={"project_id": "boss-dogfood"})
+        event_types = [item["event_type"] for item in events.json()["items"]]
+        assert "account_connect.team_invite_created" in event_types
+        assert "account_connect.team_invite_revoked" in event_types
+        assert "account_connect.billing_portal_session_created" in event_types
+    finally:
+        api_main.settings.boss_edition = previous
+        api_main.commercial.settings.boss_edition = previous
+
+
+def test_account_connect_billing_portal_blocks_without_hosted_url(client):
+    previous_edition = api_main.settings.boss_edition
+    previous_url = api_main.settings.account_connect_url
+    api_main.settings.boss_edition = "cloud"
+    api_main.commercial.settings.boss_edition = "cloud"
+    api_main.settings.account_connect_url = None
+    api_main.commercial.settings.account_connect_url = None
+    try:
+        link = client.post(
+            "/v1/account-connect/link",
+            json={
+                "project_id": "boss-dogfood",
+                "hosted_org_id": "acct_org_billing_blocked",
+                "actor": "ceo",
+            },
+        )
+        assert link.status_code == 200
+
+        blocked = client.post(
+            "/v1/account-connect/billing-portal-sessions",
+            json={
+                "project_id": "boss-dogfood",
+                "return_url": "https://boss.local/settings",
+                "actor": "ceo",
+            },
+        )
+        assert blocked.status_code == 201
+        payload = blocked.json()
+        assert payload["status"] == "blocked_configuration"
+        assert payload["portal_url"] is None
+        assert payload["receipt_id"]
+
+        events = client.get("/v1/events", params={"project_id": "boss-dogfood"})
+        event_types = [item["event_type"] for item in events.json()["items"]]
+        assert "account_connect.billing_portal_blocked" in event_types
+    finally:
+        api_main.settings.boss_edition = previous_edition
+        api_main.commercial.settings.boss_edition = previous_edition
+        api_main.settings.account_connect_url = previous_url
+        api_main.commercial.settings.account_connect_url = previous_url
+
+
 def test_enterprise_cluster_records_trust_controls_and_blocking_gaps(client):
     denied = client.post(
         "/v1/enterprise/clusters",

@@ -10,6 +10,8 @@ import {
   createComplianceEvidenceBundleAction,
   createDecisionDigestAction,
   createDeploymentRunAction,
+  createAccountConnectBillingPortalSessionAction,
+  createAccountConnectTeamInviteAction,
   installAgentModuleAction,
   installPackAction,
   linkAccountConnectAction,
@@ -31,6 +33,7 @@ import {
   syncProviderResourcesAction,
   testProviderAccountAction,
   unlinkAccountConnectAction,
+  revokeAccountConnectTeamInviteAction,
   upsertEnterpriseClusterAction,
   upsertEnterpriseScimGroupAction,
   upsertEnterpriseScimUserAction,
@@ -3198,6 +3201,215 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                     </div>
                   ))}
                 </div>
+              )}
+            </article>
+
+            <article className="stack-card">
+              <h3>Team invites</h3>
+              {!commercial.apiReachable ? (
+                <p className="detail">
+                  {commercial.blockedReason ?? "Commercial API is unavailable."}
+                </p>
+              ) : (
+                <>
+                  {commercial.teamInvites.length === 0 ? (
+                    <p className="detail">
+                      No Account Connect team invites have been requested.
+                    </p>
+                  ) : (
+                    <div className="feed-list">
+                      {commercial.teamInvites.slice(0, 6).map((invite) => (
+                        <div className="feed-row" key={invite.id}>
+                          <div>
+                            <h4>{invite.displayName ?? invite.email}</h4>
+                            <p className="detail">
+                              {invite.email} / {titleCaseToken(invite.status)} / delivery{" "}
+                              {titleCaseToken(invite.deliveryStatus)}
+                            </p>
+                            <p className="detail">
+                              Roles {invite.roleKeys.join(", ") || "none"} / permissions{" "}
+                              {invite.permissions.length}
+                            </p>
+                            <p className="detail">
+                              Receipt {invite.receiptId ?? "not opened"} / hosted ref{" "}
+                              {invite.hostedInviteRef ?? "none"}
+                            </p>
+                            {invite.status !== "revoked" ? (
+                              <form
+                                action={revokeAccountConnectTeamInviteAction}
+                                className="composer compact"
+                              >
+                                <input
+                                  type="hidden"
+                                  name="project_id"
+                                  value={activeProjectId}
+                                />
+                                <input
+                                  type="hidden"
+                                  name="actor"
+                                  value={activeActorId}
+                                />
+                                <input
+                                  type="hidden"
+                                  name="invite_id"
+                                  value={invite.id}
+                                />
+                                <input
+                                  className="input"
+                                  name="reason"
+                                  aria-label="Revoke invite reason"
+                                  placeholder="Reason for revoke"
+                                />
+                                <button className="button secondary" type="submit">
+                                  Revoke invite
+                                </button>
+                              </form>
+                            ) : null}
+                          </div>
+                          <span
+                            className={`pill${
+                              invite.status === "pending_acceptance" ||
+                              invite.status === "revoked"
+                                ? ""
+                                : " warn"
+                            }`}
+                          >
+                            {titleCaseToken(invite.status)}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  <form action={createAccountConnectTeamInviteAction} className="composer">
+                    <input type="hidden" name="project_id" value={activeProjectId} />
+                    <input type="hidden" name="actor" value={activeActorId} />
+                    <label className="field">
+                      <span>Email</span>
+                      <input
+                        className="input"
+                        name="email"
+                        type="email"
+                        placeholder="operator@example.com"
+                        required
+                      />
+                    </label>
+                    <label className="field">
+                      <span>Display name</span>
+                      <input className="input" name="display_name" />
+                    </label>
+                    <label className="field">
+                      <span>Role keys</span>
+                      <textarea
+                        className="input"
+                        name="role_keys"
+                        placeholder="operator&#10;providerops_manager"
+                      />
+                    </label>
+                    <label className="field">
+                      <span>Permissions</span>
+                      <textarea
+                        className="input"
+                        name="permissions"
+                        placeholder="command_submit&#10;providerops_manage"
+                      />
+                    </label>
+                    <label className="field">
+                      <span>Metadata JSON</span>
+                      <textarea
+                        className="input"
+                        name="metadata_json"
+                        defaultValue={`{"source":"mission_control"}`}
+                      />
+                    </label>
+                    <button className="button secondary" type="submit">
+                      Create team invite
+                    </button>
+                  </form>
+                </>
+              )}
+            </article>
+
+            <article className="stack-card">
+              <h3>Billing portal sessions</h3>
+              {!commercial.apiReachable ? (
+                <p className="detail">
+                  {commercial.blockedReason ?? "Commercial API is unavailable."}
+                </p>
+              ) : (
+                <>
+                  {commercial.billingPortalSessions.length === 0 ? (
+                    <p className="detail">
+                      No billing portal sessions have been requested.
+                    </p>
+                  ) : (
+                    <div className="feed-list">
+                      {commercial.billingPortalSessions.slice(0, 6).map((session) => (
+                        <div className="feed-row" key={session.id}>
+                          <div>
+                            <h4>{session.providerRef ?? session.id}</h4>
+                            <p className="detail">
+                              {titleCaseToken(session.status)} / receipt{" "}
+                              {session.receiptId ?? "not opened"} / hosted org{" "}
+                              {session.hostedOrgId}
+                            </p>
+                            <p className="detail">
+                              Return URL {session.returnUrl ?? "not set"}
+                              {session.expiresAt
+                                ? ` / expires ${formatDateTime(session.expiresAt)}`
+                                : ""}
+                            </p>
+                            {session.portalUrl ? (
+                              <p className="detail">
+                                <a href={session.portalUrl} rel="noreferrer">
+                                  Open hosted billing portal
+                                </a>
+                              </p>
+                            ) : (
+                              <p className="detail">
+                                No portal URL was issued; check status and receipt.
+                              </p>
+                            )}
+                          </div>
+                          <span
+                            className={`pill${
+                              session.status === "ready" ? "" : " warn"
+                            }`}
+                          >
+                            {titleCaseToken(session.status)}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  <form
+                    action={createAccountConnectBillingPortalSessionAction}
+                    className="composer"
+                  >
+                    <input type="hidden" name="project_id" value={activeProjectId} />
+                    <input type="hidden" name="actor" value={activeActorId} />
+                    <label className="field">
+                      <span>Return URL</span>
+                      <input
+                        className="input"
+                        name="return_url"
+                        placeholder="https://boss.local/settings"
+                      />
+                    </label>
+                    <label className="field">
+                      <span>Metadata JSON</span>
+                      <textarea
+                        className="input"
+                        name="metadata_json"
+                        defaultValue={`{"source":"mission_control"}`}
+                      />
+                    </label>
+                    <button className="button secondary" type="submit">
+                      Create billing portal session
+                    </button>
+                  </form>
+                </>
               )}
             </article>
 

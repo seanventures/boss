@@ -40,6 +40,8 @@ def clean_tables(engine):
     members = MemberDirectoryService(settings)
     specpack = SpecPackService(settings)
     with engine.begin() as connection:
+        connection.execute(text("DELETE FROM account_connect_billing_portal_sessions"))
+        connection.execute(text("DELETE FROM account_connect_team_invites"))
         connection.execute(text("DELETE FROM license_entitlements"))
         connection.execute(text("DELETE FROM account_connect_orgs"))
         connection.execute(text("DELETE FROM enterprise_scim_users"))

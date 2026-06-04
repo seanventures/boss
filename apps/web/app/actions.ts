@@ -345,6 +345,58 @@ export async function syncAccountConnectAction(formData: FormData): Promise<void
   revalidatePath("/");
 }
 
+export async function createAccountConnectTeamInviteAction(
+  formData: FormData,
+): Promise<void> {
+  const email = formData.get("email");
+  if (typeof email !== "string" || !email.trim()) {
+    throw new Error("email is required");
+  }
+  await client.createAccountConnectTeamInvite({
+    project_id: getProjectId(formData),
+    email: email.trim(),
+    display_name: getOptionalString(formData, "display_name"),
+    role_keys: parseLines(formData.get("role_keys")),
+    permissions: parseLines(formData.get("permissions")),
+    metadata: parseOptionalJsonObjectField(
+      formData.get("metadata_json"),
+      "metadata_json",
+    ),
+    actor: getActor(formData),
+  });
+  revalidatePath("/");
+}
+
+export async function revokeAccountConnectTeamInviteAction(
+  formData: FormData,
+): Promise<void> {
+  const inviteId = formData.get("invite_id");
+  if (typeof inviteId !== "string" || !inviteId.trim()) {
+    throw new Error("invite_id is required");
+  }
+  await client.revokeAccountConnectTeamInvite(inviteId.trim(), {
+    project_id: getProjectId(formData),
+    reason: getOptionalString(formData, "reason"),
+    actor: getActor(formData),
+  });
+  revalidatePath("/");
+}
+
+export async function createAccountConnectBillingPortalSessionAction(
+  formData: FormData,
+): Promise<void> {
+  await client.createAccountConnectBillingPortalSession({
+    project_id: getProjectId(formData),
+    return_url: getOptionalString(formData, "return_url"),
+    metadata: parseOptionalJsonObjectField(
+      formData.get("metadata_json"),
+      "metadata_json",
+    ),
+    actor: getActor(formData),
+  });
+  revalidatePath("/");
+}
+
 export async function upsertEnterpriseClusterAction(
   formData: FormData,
 ): Promise<void> {

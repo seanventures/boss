@@ -22,9 +22,16 @@ from .schemas import (
     ArtifactSummary,
     AuthSessionResponse,
     AccountConnectLinkRequest,
+    AccountConnectBillingPortalSessionCreateRequest,
+    AccountConnectBillingPortalSessionListResponse,
+    AccountConnectBillingPortalSessionSummary,
     AccountConnectMutationResponse,
     AccountConnectSyncRequest,
     AccountConnectSyncResponse,
+    AccountConnectTeamInviteCreateRequest,
+    AccountConnectTeamInviteListResponse,
+    AccountConnectTeamInviteRevokeRequest,
+    AccountConnectTeamInviteSummary,
     AccountConnectUnlinkRequest,
     AuditExportCounts,
     AuditExportResponse,
@@ -646,6 +653,34 @@ def record_account_connect_sync_denial(project_id: str, actor: str, reason: str)
         return
 
 
+def record_account_connect_denial(
+    project_id: str,
+    actor: str,
+    event_type: str,
+    reason: str,
+    entity_type: str,
+) -> None:
+    try:
+        with begin(engine) as audit_connection:
+            project_exists = audit_connection.execute(
+                text("SELECT 1 FROM projects WHERE id = :project_id"),
+                {"project_id": project_id},
+            ).first()
+            if not project_exists:
+                return
+            emit_event(
+                audit_connection,
+                project_id,
+                event_type,
+                actor,
+                entity_type,
+                project_id,
+                {"reason": reason},
+            )
+    except Exception:
+        return
+
+
 def record_budget_denial_event(
     project_id: str,
     actor: str,
@@ -1218,6 +1253,18 @@ def license_entitlement_summary_from_service(payload) -> LicenseEntitlementSumma
     return LicenseEntitlementSummary(**payload)
 
 
+def account_connect_team_invite_from_service(
+    payload,
+) -> AccountConnectTeamInviteSummary:
+    return AccountConnectTeamInviteSummary(**payload)
+
+
+def account_connect_billing_session_from_service(
+    payload,
+) -> AccountConnectBillingPortalSessionSummary:
+    return AccountConnectBillingPortalSessionSummary(**payload)
+
+
 def enterprise_cluster_summary_from_service(payload) -> EnterpriseClusterSummary:
     return EnterpriseClusterSummary(**payload)
 
@@ -1426,6 +1473,156 @@ def sync_account_connect(
             edition=edition_status_from_service(result["edition"]),
             synced_entitlement_count=result["synced_entitlement_count"],
         )
+
+
+@app.get(
+    "/v1/account-connect/team-invites",
+    response_model=AccountConnectTeamInviteListResponse,
+)
+def list_account_connect_team_invites(
+    project_id: str,
+    limit: int = 50,
+) -> AccountConnectTeamInviteListResponse:
+    with begin(engine) as connection:
+        items = commercial.list_team_invites(connection, project_id, limit=limit)
+        return AccountConnectTeamInviteListResponse(
+            project_id=project_id,
+            items=[
+                account_connect_team_invite_from_service(item)
+                for item in items
+            ],
+        )
+
+
+@app.post(
+    "/v1/account-connect/team-invites",
+    response_model=AccountConnectTeamInviteSummary,
+    status_code=201,
+)
+def create_account_connect_team_invite(
+    payload: AccountConnectTeamInviteCreateRequest,
+) -> AccountConnectTeamInviteSummary:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection,
+            payload.project_id,
+            payload.actor,
+            "providerops_manage",
+        )
+        try:
+            invite = commercial.create_team_invite(
+                connection,
+                payload.project_id,
+                email=payload.email,
+                display_name=payload.display_name,
+                role_keys=payload.role_keys,
+                permissions=payload.permissions,
+                metadata=payload.metadata,
+                actor=payload.actor,
+            )
+        except AccountConnectLinkNotFoundError as error:
+            record_account_connect_denial(
+                payload.project_id,
+                payload.actor,
+                "account_connect.team_invite_denied",
+                "account_connect_not_linked",
+                "account_connect_team_invite",
+            )
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        return account_connect_team_invite_from_service(invite)
+
+
+@app.post(
+    "/v1/account-connect/team-invites/{invite_id}/revoke",
+    response_model=AccountConnectTeamInviteSummary,
+)
+def revoke_account_connect_team_invite(
+    invite_id: str,
+    payload: AccountConnectTeamInviteRevokeRequest,
+) -> AccountConnectTeamInviteSummary:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection,
+            payload.project_id,
+            payload.actor,
+            "providerops_manage",
+        )
+        try:
+            invite = commercial.revoke_team_invite(
+                connection,
+                invite_id,
+                project_id=payload.project_id,
+                actor=payload.actor,
+                reason=payload.reason,
+            )
+        except AccountConnectLinkNotFoundError as error:
+            record_account_connect_denial(
+                payload.project_id,
+                payload.actor,
+                "account_connect.team_invite_revoke_denied",
+                "account_connect_team_invite_not_found",
+                "account_connect_team_invite",
+            )
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        return account_connect_team_invite_from_service(invite)
+
+
+@app.get(
+    "/v1/account-connect/billing-portal-sessions",
+    response_model=AccountConnectBillingPortalSessionListResponse,
+)
+def list_account_connect_billing_portal_sessions(
+    project_id: str,
+    limit: int = 50,
+) -> AccountConnectBillingPortalSessionListResponse:
+    with begin(engine) as connection:
+        items = commercial.list_billing_portal_sessions(
+            connection,
+            project_id,
+            limit=limit,
+        )
+        return AccountConnectBillingPortalSessionListResponse(
+            project_id=project_id,
+            items=[
+                account_connect_billing_session_from_service(item)
+                for item in items
+            ],
+        )
+
+
+@app.post(
+    "/v1/account-connect/billing-portal-sessions",
+    response_model=AccountConnectBillingPortalSessionSummary,
+    status_code=201,
+)
+def create_account_connect_billing_portal_session(
+    payload: AccountConnectBillingPortalSessionCreateRequest,
+) -> AccountConnectBillingPortalSessionSummary:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection,
+            payload.project_id,
+            payload.actor,
+            "providerops_manage",
+        )
+        try:
+            session = commercial.create_billing_portal_session(
+                connection,
+                payload.project_id,
+                actor=payload.actor,
+                return_url=payload.return_url,
+                metadata=payload.metadata,
+            )
+        except AccountConnectLinkNotFoundError as error:
+            record_account_connect_denial(
+                payload.project_id,
+                payload.actor,
+                "account_connect.billing_portal_denied",
+                "account_connect_not_linked",
+                "account_connect_billing_portal_session",
+            )
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        return account_connect_billing_session_from_service(session)
 
 
 @app.get("/v1/enterprise/clusters", response_model=EnterpriseClusterListResponse)

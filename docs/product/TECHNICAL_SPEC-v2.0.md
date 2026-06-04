@@ -296,6 +296,12 @@ Commercial:
 - `GET /v1/entitlements`
 - `POST /v1/account-connect/link`
 - `POST /v1/account-connect/unlink`
+- `POST /v1/account-connect/sync`
+- `GET /v1/account-connect/team-invites`
+- `POST /v1/account-connect/team-invites`
+- `POST /v1/account-connect/team-invites/{id}/revoke`
+- `GET /v1/account-connect/billing-portal-sessions`
+- `POST /v1/account-connect/billing-portal-sessions`
 - `GET /v1/packs`
 - `POST /v1/packs/install`
 

@@ -6,6 +6,8 @@ vi.mock("../lib/client", () => ({
   client: {
     getEdition: vi.fn(),
     listLicenseEntitlements: vi.fn(),
+    listAccountConnectTeamInvites: vi.fn(),
+    listAccountConnectBillingPortalSessions: vi.fn(),
     listEnterpriseClusters: vi.fn(),
     listEnterpriseScimGroups: vi.fn(),
     listEnterpriseScimUsers: vi.fn(),
@@ -75,6 +77,51 @@ describe("commercial, enterprise, and marketplace feeds", async () => {
         },
       ],
     });
+    vi.mocked(client.listAccountConnectTeamInvites).mockResolvedValueOnce({
+      project_id: "boss-dogfood",
+      items: [
+        {
+          id: "acctinvite_1",
+          project_id: "boss-dogfood",
+          account_connect_org_id: "acctconn_1",
+          hosted_org_id: "hosted_org_1",
+          email: "ops@example.com",
+          display_name: "Ops Lead",
+          role_keys: ["operator"],
+          permissions: ["command_submit"],
+          invite_url: "https://accounts.example/invite/1",
+          hosted_invite_ref: "hosted_invite_1",
+          status: "pending_acceptance",
+          delivery_status: "sent",
+          receipt_id: "rcpt_invite",
+          created_by: "ceo",
+          metadata: {},
+          created_at: "2026-06-03T00:00:00Z",
+          updated_at: "2026-06-03T00:00:00Z",
+        },
+      ],
+    });
+    vi.mocked(client.listAccountConnectBillingPortalSessions).mockResolvedValueOnce({
+      project_id: "boss-dogfood",
+      items: [
+        {
+          id: "acctbill_1",
+          project_id: "boss-dogfood",
+          account_connect_org_id: "acctconn_1",
+          hosted_org_id: "hosted_org_1",
+          portal_url: "https://billing.example/session/1",
+          return_url: "https://boss.local/settings",
+          provider_ref: "bps_1",
+          status: "ready",
+          receipt_id: "rcpt_billing",
+          created_by: "ceo",
+          expires_at: "2026-06-04T00:00:00Z",
+          metadata: {},
+          created_at: "2026-06-03T00:00:00Z",
+          updated_at: "2026-06-03T00:00:00Z",
+        },
+      ],
+    });
 
     const feed = await fetchCommercialFeed("boss-dogfood");
 
@@ -84,6 +131,16 @@ describe("commercial, enterprise, and marketplace feeds", async () => {
     expect(feed.entitlements[0]).toMatchObject({
       capabilityKey: "private_agent_marketplace",
       seats: 5,
+    });
+    expect(feed.teamInvites[0]).toMatchObject({
+      email: "ops@example.com",
+      receiptId: "rcpt_invite",
+      deliveryStatus: "sent",
+    });
+    expect(feed.billingPortalSessions[0]).toMatchObject({
+      providerRef: "bps_1",
+      portalUrl: "https://billing.example/session/1",
+      status: "ready",
     });
   });
 

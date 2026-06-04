@@ -110,6 +110,100 @@ paths:
         '404': { description: No active Account Connect link matched the request }
         '502': { description: Configured Account Connect service returned an invalid or failing response }
         '503': { description: BOSS_ACCOUNT_CONNECT_URL is not configured, so sync fails closed }
+  /v1/account-connect/team-invites:
+    get:
+      summary: List Account Connect team invites and visible delivery/blocked states
+      parameters:
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, default: 50 }
+      responses:
+        '200': { description: Team invite records, including blocked hosted delivery attempts and receipt links }
+    post:
+      summary: Create a hosted Account Connect team invite through a receipt-protected adapter call
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id, email]
+              properties:
+                project_id: { type: string }
+                email: { type: string }
+                display_name: { type: string }
+                role_keys:
+                  type: array
+                  items: { type: string }
+                permissions:
+                  type: array
+                  items: { type: string }
+                metadata: { type: object }
+                actor: { type: string, default: ceo }
+      responses:
+        '201': { description: Team invite record created; hosted delivery may be sent, failed, or blocked visibly }
+        '403': { description: Actor is not allowed to manage ProviderOps or commercial connection state }
+        '404': { description: No active Account Connect link matched the request }
+  /v1/account-connect/team-invites/{invite_id}/revoke:
+    post:
+      summary: Revoke an Account Connect team invite, using a receipt-protected hosted revoke when needed
+      parameters:
+        - name: invite_id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id]
+              properties:
+                project_id: { type: string }
+                reason: { type: string }
+                actor: { type: string, default: ceo }
+      responses:
+        '200': { description: Team invite revoked locally and, when hosted invite ref exists, through the hosted adapter }
+        '403': { description: Actor is not allowed to manage ProviderOps or commercial connection state }
+        '404': { description: Invite was not found }
+  /v1/account-connect/billing-portal-sessions:
+    get:
+      summary: List Account Connect billing portal session records
+      parameters:
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, default: 50 }
+      responses:
+        '200': { description: Billing portal session records with ready, failed, or blocked status and receipt links }
+    post:
+      summary: Create a hosted billing portal session through a receipt-protected Account Connect adapter call
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id]
+              properties:
+                project_id: { type: string }
+                return_url: { type: string }
+                metadata: { type: object }
+                actor: { type: string, default: ceo }
+      responses:
+        '201': { description: Billing portal session record created; portal URL is present only when hosted adapter succeeds }
+        '403': { description: Actor is not allowed to manage ProviderOps or commercial connection state }
+        '404': { description: No active Account Connect link matched the request }
   /v1/enterprise/clusters:
     get:
       summary: List enterprise deployment, clustering, trust, support, and private-worker records

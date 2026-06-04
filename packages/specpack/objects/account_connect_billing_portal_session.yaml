@@ -1,0 +1,33 @@
+kind: ObjectSpec
+id: AccountConnectBillingPortalSession
+version: 0.1.0
+description: Receipt-linked request for a hosted billing portal session through BOSS Account Connect.
+fields:
+  - name: id
+    type: string
+  - name: project_id
+    type: string
+  - name: account_connect_org_id
+    type: string
+  - name: hosted_org_id
+    type: string
+  - name: portal_url
+    type: string
+  - name: return_url
+    type: string
+  - name: provider_ref
+    type: string
+  - name: status
+    type: enum
+    values: [ready, blocked_configuration, failed]
+  - name: receipt_id
+    type: string
+  - name: expires_at
+    type: datetime
+  - name: metadata
+    type: object
+rules:
+  hosted_session_requires_account_connect_link: true
+  hosted_session_requires_receipt: true
+  portal_url_is_present_only_after_hosted_success: true
+  missing_hosted_endpoint_creates_blocked_record: true

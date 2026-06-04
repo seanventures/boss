@@ -181,6 +181,105 @@ class AccountConnectSyncResponse(BaseModel):
     synced_entitlement_count: int
 
 
+class AccountConnectTeamInviteSummary(BaseModel):
+    id: str
+    project_id: str
+    account_connect_org_id: Optional[str] = None
+    hosted_org_id: str
+    email: str
+    display_name: Optional[str] = None
+    role_keys: list[str]
+    permissions: list[str]
+    invite_url: Optional[str] = None
+    hosted_invite_ref: Optional[str] = None
+    status: str
+    delivery_status: str
+    receipt_id: Optional[str] = None
+    created_by: str
+    accepted_by: Optional[str] = None
+    accepted_at: Optional[str] = None
+    revoked_by: Optional[str] = None
+    revoked_at: Optional[str] = None
+    metadata: dict[str, Any]
+    created_at: str
+    updated_at: str
+
+
+class AccountConnectTeamInviteListResponse(BaseModel):
+    project_id: str
+    items: list[AccountConnectTeamInviteSummary]
+
+
+class AccountConnectTeamInviteCreateRequest(BaseModel):
+    project_id: str
+    email: str
+    display_name: Optional[str] = None
+    role_keys: list[str] = Field(default_factory=list)
+    permissions: list[str] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    actor: str = "system"
+
+    @model_validator(mode="after")
+    def validate_team_invite(self) -> "AccountConnectTeamInviteCreateRequest":
+        self.project_id = _require_text(self.project_id, "project_id")
+        self.email = _require_text(self.email, "email").lower()
+        if "@" not in self.email:
+            raise ValueError("email must be a valid email-like address.")
+        self.actor = _require_text(self.actor, "actor")
+        return self
+
+
+class AccountConnectTeamInviteRevokeRequest(BaseModel):
+    project_id: str
+    reason: Optional[str] = None
+    actor: str = "system"
+
+    @model_validator(mode="after")
+    def validate_revoke(self) -> "AccountConnectTeamInviteRevokeRequest":
+        self.project_id = _require_text(self.project_id, "project_id")
+        self.actor = _require_text(self.actor, "actor")
+        return self
+
+
+class AccountConnectBillingPortalSessionSummary(BaseModel):
+    id: str
+    project_id: str
+    account_connect_org_id: Optional[str] = None
+    hosted_org_id: str
+    portal_url: Optional[str] = None
+    return_url: Optional[str] = None
+    provider_ref: Optional[str] = None
+    status: str
+    receipt_id: Optional[str] = None
+    created_by: str
+    expires_at: Optional[str] = None
+    metadata: dict[str, Any]
+    created_at: str
+    updated_at: str
+
+
+class AccountConnectBillingPortalSessionListResponse(BaseModel):
+    project_id: str
+    items: list[AccountConnectBillingPortalSessionSummary]
+
+
+class AccountConnectBillingPortalSessionCreateRequest(BaseModel):
+    project_id: str
+    return_url: Optional[str] = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    actor: str = "system"
+
+    @model_validator(mode="after")
+    def validate_billing_portal(
+        self,
+    ) -> "AccountConnectBillingPortalSessionCreateRequest":
+        self.project_id = _require_text(self.project_id, "project_id")
+        self.actor = _require_text(self.actor, "actor")
+        if self.return_url is not None:
+            self.return_url = _require_text(self.return_url, "return_url")
+        return self
+
+
 class EnterpriseClusterSummary(BaseModel):
     id: str
     org_id: str

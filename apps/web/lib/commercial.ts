@@ -1,4 +1,6 @@
 import {
+  type AccountConnectBillingPortalSessionSummary,
+  type AccountConnectTeamInviteSummary,
   BossApiError,
   type EditionStatusResponse,
   type LicenseEntitlementSummary,
@@ -55,12 +57,47 @@ export type LicenseEntitlementItem = {
   metadata: Record<string, unknown>;
 };
 
+export type AccountConnectTeamInviteItem = {
+  id: string;
+  hostedOrgId: string;
+  email: string;
+  displayName?: string;
+  roleKeys: string[];
+  permissions: string[];
+  inviteUrl?: string;
+  hostedInviteRef?: string;
+  status: string;
+  deliveryStatus: string;
+  receiptId?: string;
+  createdBy: string;
+  acceptedAt?: string;
+  revokedAt?: string;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+};
+
+export type AccountConnectBillingPortalSessionItem = {
+  id: string;
+  hostedOrgId: string;
+  portalUrl?: string;
+  returnUrl?: string;
+  providerRef?: string;
+  status: string;
+  receiptId?: string;
+  createdBy: string;
+  expiresAt?: string;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+};
+
 export type CommercialFeed = {
   projectId: string;
   apiReachable: boolean;
   blockedReason?: string;
   edition?: CommercialEditionItem;
   entitlements: LicenseEntitlementItem[];
+  teamInvites: AccountConnectTeamInviteItem[];
+  billingPortalSessions: AccountConnectBillingPortalSessionItem[];
 };
 
 function mapEdition(payload: EditionStatusResponse): CommercialEditionItem {
@@ -122,6 +159,47 @@ function mapEntitlement(
   };
 }
 
+function mapTeamInvite(
+  payload: AccountConnectTeamInviteSummary,
+): AccountConnectTeamInviteItem {
+  return {
+    id: payload.id,
+    hostedOrgId: payload.hosted_org_id,
+    email: payload.email,
+    displayName: payload.display_name,
+    roleKeys: payload.role_keys,
+    permissions: payload.permissions,
+    inviteUrl: payload.invite_url,
+    hostedInviteRef: payload.hosted_invite_ref,
+    status: payload.status,
+    deliveryStatus: payload.delivery_status,
+    receiptId: payload.receipt_id,
+    createdBy: payload.created_by,
+    acceptedAt: payload.accepted_at,
+    revokedAt: payload.revoked_at,
+    metadata: payload.metadata,
+    createdAt: payload.created_at,
+  };
+}
+
+function mapBillingPortalSession(
+  payload: AccountConnectBillingPortalSessionSummary,
+): AccountConnectBillingPortalSessionItem {
+  return {
+    id: payload.id,
+    hostedOrgId: payload.hosted_org_id,
+    portalUrl: payload.portal_url,
+    returnUrl: payload.return_url,
+    providerRef: payload.provider_ref,
+    status: payload.status,
+    receiptId: payload.receipt_id,
+    createdBy: payload.created_by,
+    expiresAt: payload.expires_at,
+    metadata: payload.metadata,
+    createdAt: payload.created_at,
+  };
+}
+
 export function emptyCommercialFeed(
   reason?: string,
   projectId = PROJECT_ID,
@@ -131,6 +209,8 @@ export function emptyCommercialFeed(
     apiReachable: false,
     blockedReason: reason,
     entitlements: [],
+    teamInvites: [],
+    billingPortalSessions: [],
   };
 }
 
@@ -139,15 +219,26 @@ export async function fetchCommercialFeed(
 ): Promise<CommercialFeed> {
   const resolvedProjectId = resolveProjectId(projectId);
   try {
-    const [edition, entitlementList] = await Promise.all([
+    const [
+      edition,
+      entitlementList,
+      teamInvites,
+      billingPortalSessions,
+    ] = await Promise.all([
       client.getEdition(resolvedProjectId),
       client.listLicenseEntitlements(resolvedProjectId, true),
+      client.listAccountConnectTeamInvites(resolvedProjectId),
+      client.listAccountConnectBillingPortalSessions(resolvedProjectId),
     ]);
     return {
       projectId: resolvedProjectId,
       apiReachable: true,
       edition: mapEdition(edition),
       entitlements: entitlementList.items.map(mapEntitlement),
+      teamInvites: teamInvites.items.map(mapTeamInvite),
+      billingPortalSessions: billingPortalSessions.items.map(
+        mapBillingPortalSession,
+      ),
     };
   } catch (error) {
     if (error instanceof BossApiError) {

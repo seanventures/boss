@@ -137,6 +137,80 @@ export type AccountConnectSyncResponse = {
   synced_entitlement_count: number;
 };
 
+export type AccountConnectTeamInviteSummary = {
+  id: string;
+  project_id: string;
+  account_connect_org_id?: string;
+  hosted_org_id: string;
+  email: string;
+  display_name?: string;
+  role_keys: string[];
+  permissions: string[];
+  invite_url?: string;
+  hosted_invite_ref?: string;
+  status: string;
+  delivery_status: string;
+  receipt_id?: string;
+  created_by: string;
+  accepted_by?: string;
+  accepted_at?: string;
+  revoked_by?: string;
+  revoked_at?: string;
+  metadata: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+};
+
+export type AccountConnectTeamInviteListResponse = {
+  project_id: string;
+  items: AccountConnectTeamInviteSummary[];
+};
+
+export type AccountConnectTeamInviteCreateRequest = {
+  project_id: string;
+  email: string;
+  display_name?: string;
+  role_keys?: string[];
+  permissions?: string[];
+  metadata?: Record<string, unknown>;
+  actor?: string;
+};
+
+export type AccountConnectTeamInviteRevokeRequest = {
+  project_id: string;
+  reason?: string;
+  actor?: string;
+};
+
+export type AccountConnectBillingPortalSessionSummary = {
+  id: string;
+  project_id: string;
+  account_connect_org_id?: string;
+  hosted_org_id: string;
+  portal_url?: string;
+  return_url?: string;
+  provider_ref?: string;
+  status: string;
+  receipt_id?: string;
+  created_by: string;
+  expires_at?: string;
+  metadata: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+};
+
+export type AccountConnectBillingPortalSessionListResponse = {
+  project_id: string;
+  items: AccountConnectBillingPortalSessionSummary[];
+};
+
+export type AccountConnectBillingPortalSessionCreateRequest = {
+  project_id: string;
+  return_url?: string;
+  metadata?: Record<string, unknown>;
+  actor?: string;
+};
+
 export type EnterpriseClusterSummary = {
   id: string;
   org_id: string;
@@ -2685,6 +2759,48 @@ export function createBossApiClient(config: BossApiClientConfig) {
       return request<AccountConnectSyncResponse>(
         "POST",
         "/v1/account-connect/sync",
+        { body: payload },
+      );
+    },
+    listAccountConnectTeamInvites(projectId: string, limit = 50) {
+      return request<AccountConnectTeamInviteListResponse>(
+        "GET",
+        "/v1/account-connect/team-invites",
+        { query: { project_id: projectId, limit: String(limit) } },
+      );
+    },
+    createAccountConnectTeamInvite(
+      payload: AccountConnectTeamInviteCreateRequest,
+    ) {
+      return request<AccountConnectTeamInviteSummary>(
+        "POST",
+        "/v1/account-connect/team-invites",
+        { body: payload },
+      );
+    },
+    revokeAccountConnectTeamInvite(
+      inviteId: string,
+      payload: AccountConnectTeamInviteRevokeRequest,
+    ) {
+      return request<AccountConnectTeamInviteSummary>(
+        "POST",
+        `/v1/account-connect/team-invites/${encodeURIComponent(inviteId)}/revoke`,
+        { body: payload },
+      );
+    },
+    listAccountConnectBillingPortalSessions(projectId: string, limit = 50) {
+      return request<AccountConnectBillingPortalSessionListResponse>(
+        "GET",
+        "/v1/account-connect/billing-portal-sessions",
+        { query: { project_id: projectId, limit: String(limit) } },
+      );
+    },
+    createAccountConnectBillingPortalSession(
+      payload: AccountConnectBillingPortalSessionCreateRequest,
+    ) {
+      return request<AccountConnectBillingPortalSessionSummary>(
+        "POST",
+        "/v1/account-connect/billing-portal-sessions",
         { body: payload },
       );
     },
