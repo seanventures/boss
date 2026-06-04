@@ -44,6 +44,7 @@ def clean_tables(engine):
     with engine.begin() as connection:
         connection.execute(text("DELETE FROM account_connect_billing_portal_sessions"))
         connection.execute(text("DELETE FROM account_connect_auth_sessions"))
+        connection.execute(text("DELETE FROM account_connect_health_checks"))
         connection.execute(text("DELETE FROM account_connect_team_invites"))
         connection.execute(text("DELETE FROM license_entitlements"))
         connection.execute(text("DELETE FROM account_connect_orgs"))

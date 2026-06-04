@@ -150,6 +150,39 @@ paths:
         '404': { description: No active Account Connect link matched the request }
         '502': { description: Configured Account Connect service returned an invalid or failing response }
         '503': { description: BOSS_ACCOUNT_CONNECT_URL is not configured, so sync fails closed }
+  /v1/account-connect/health-checks:
+    get:
+      summary: List hosted Account Connect readiness checks and blocked/failing evidence
+      parameters:
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, default: 50 }
+      responses:
+        '200': { description: Account Connect health-check records with status, latency, hosted org, response metadata, and errors }
+    post:
+      summary: Run a configured hosted Account Connect readiness check or record fail-closed configuration evidence
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id]
+              properties:
+                project_id: { type: string }
+                hosted_org_id: { type: string }
+                check_kind: { type: string, default: hosted_service }
+                metadata: { type: object }
+                actor: { type: string, default: ceo }
+      responses:
+        '201': { description: Health check recorded as healthy, degraded, unhealthy, blocked_configuration, or failed }
+        '403': { description: Actor is not allowed to manage ProviderOps or commercial connection state }
+        '409': { description: Requested hosted org conflicts with the active Account Connect link }
   /v1/account-connect/auth-sessions:
     get:
       summary: List hosted Account Connect auth sessions and visible blocked/failed states

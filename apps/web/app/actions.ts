@@ -408,6 +408,22 @@ export async function syncAccountConnectAction(formData: FormData): Promise<void
   revalidatePath("/");
 }
 
+export async function runAccountConnectHealthCheckAction(
+  formData: FormData,
+): Promise<void> {
+  await client.runAccountConnectHealthCheck({
+    project_id: getProjectId(formData),
+    hosted_org_id: getOptionalString(formData, "hosted_org_id"),
+    check_kind: getOptionalString(formData, "check_kind") ?? "hosted_service",
+    metadata: parseOptionalJsonObjectField(
+      formData.get("metadata_json"),
+      "metadata_json",
+    ),
+    actor: getActor(formData),
+  });
+  revalidatePath("/");
+}
+
 export async function createAccountConnectAuthSessionAction(
   formData: FormData,
 ): Promise<void> {

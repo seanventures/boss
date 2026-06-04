@@ -802,6 +802,24 @@ CREATE TABLE IF NOT EXISTS account_connect_billing_portal_sessions (
 CREATE INDEX IF NOT EXISTS idx_account_connect_billing_sessions_project
   ON account_connect_billing_portal_sessions(project_id, status, created_at DESC);
 
+CREATE TABLE IF NOT EXISTS account_connect_health_checks (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  account_connect_org_id TEXT REFERENCES account_connect_orgs(id) ON DELETE SET NULL,
+  hosted_org_id TEXT,
+  check_kind TEXT NOT NULL DEFAULT 'hosted_service',
+  status TEXT NOT NULL DEFAULT 'unknown',
+  latency_ms INTEGER,
+  provider_ref TEXT,
+  response_metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+  error JSONB,
+  checked_by TEXT NOT NULL DEFAULT 'system',
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_account_connect_health_checks_project
+  ON account_connect_health_checks(project_id, status, created_at DESC);
+
 CREATE TABLE IF NOT EXISTS deployment_rollouts (
   id TEXT PRIMARY KEY,
   project_id TEXT NOT NULL REFERENCES projects(id),

@@ -89,7 +89,7 @@ Model/capacity objects: `ProviderAccount`, `ProviderAdapter`, `EntitlementPool`,
 
 ProviderOps objects: `ExternalResource`, `Capability`, `DeploymentTarget`, `DeploymentEnvironmentPolicy`, `DeploymentRun`, `ChangeSet`, `ResourceReceipt`, `DriftReport`, `ProviderHealth`, `SecretRef`, `ResourcePolicy`, `ScalePlan`, `ResourceInventorySnapshot`.
 
-Commercial objects: `Edition`, `LicenseEntitlement`, `AccountConnectOrg`, `PackListing`, `PackInstall`, `MarketplacePublisher`, `EnterpriseCluster`, `EnterpriseIdentityProvider`.
+Commercial objects: `Edition`, `LicenseEntitlement`, `AccountConnectOrg`, `AccountConnectHealthCheck`, `PackListing`, `PackInstall`, `MarketplacePublisher`, `EnterpriseCluster`, `EnterpriseIdentityProvider`.
 
 ### YAML Examples
 
@@ -534,7 +534,7 @@ Paid on-prem/private cloud. Includes HA deployment, clustering, multi-node worke
 
 ### BOSS Account Connect
 
-BOSS Account Connect owns hosted login, cloud org/workspace identity, license entitlements, marketplace identity, team invites, billing portal, managed connector authorization, hosted model/provider credential management, optional telemetry/health sync, and cloud backup/sync if enabled.
+BOSS Account Connect owns hosted login, cloud org/workspace identity, license entitlements, marketplace identity, team invites, billing portal, managed connector authorization, hosted model/provider credential management, optional telemetry/health sync, hosted readiness checks, and cloud backup/sync if enabled.
 
 Rules:
 
@@ -543,6 +543,7 @@ Rules:
 - Enterprise can run attached or detached.
 - Account Connect is valuable but optional for self-host Community.
 - Hosted login must be represented in the local control plane by durable auth-session records, receipts, state validation, visible blocked/failed states, and an auditable Account Connect org link only after the hosted adapter returns a verified hosted organization.
+- Hosted readiness checks must be represented by durable `AccountConnectHealthCheck` records. Missing hosted configuration must create a blocked health-check record; BOSS must not invent a healthy state.
 
 ### Clustering and Scaling Monetization
 

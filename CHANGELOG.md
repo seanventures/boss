@@ -12,6 +12,7 @@ This release adds the commercial, Account Connect, enterprise-governance, SCIM, 
 - Added the first Enterprise Helm chart for self-hosted BOSS with configurable images, replicas, HPA/PDBs, artifact persistence, bootstrap Job, fail-closed safety defaults, and explicit operator-managed secrets.
 - Added Community, Cloud, Enterprise Cloud, and Enterprise Self-hosted edition introspection with fail-closed Cloud Account Connect requirements and local Community mode that works without hosted BOSS auth.
 - Added BOSS Account Connect link, unlink, and hosted entitlement sync APIs with visible denied events when hosted credentials or connection state are missing.
+- Added BOSS Account Connect hosted health-check APIs and Mission Control readiness history so configured hosted endpoints are checked for real and missing configuration records blocked evidence instead of fake healthy status.
 - Added BOSS Account Connect hosted-auth session APIs and Mission Control history with receipt-backed session creation/completion, callback-state validation, hosted-org linking from the adapter response, and visible blocked records when hosted configuration is missing.
 - Added license entitlement records and runtime entitlement checks that distinguish edition capabilities from active/trial hosted entitlements.
 - Added enterprise cluster inventory with trust metadata for SSO, SCIM, RBAC/ABAC, audit export, private workers, managed ProviderOps, compliance packs, support plans, SLA tier, and detached-license state.
@@ -27,6 +28,7 @@ This release adds the commercial, Account Connect, enterprise-governance, SCIM, 
 - Added per-project Enterprise identity rollout policies so OIDC/SAML/SCIM metadata does not imply live rollout; SAML ACS and SCIM provisioning fail closed until the matching policy explicitly allows authentication or provisioning.
 - Added ProviderOps deployment environment rollout policies so provider-backed staging/production DeploymentRuns and direct deployment-skill ChangeSets fail visibly until an explicit environment policy, required BudgetReservation, approval gate, health-check posture, and rollback plan are present.
 - Added OpenAPI, TypeScript API client, specpack objects, workflows, policies, user stories, and traceability coverage for the new commercial and enterprise runtime surfaces.
+- Changed web lint to generate Next route types before TypeScript checks so clean-checkout validation does not depend on a prior production build.
 
 ## v0.3.0 - 2026-06-03
 

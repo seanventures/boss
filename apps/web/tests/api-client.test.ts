@@ -395,6 +395,60 @@ describe("createBossApiClient", () => {
     );
   });
 
+  it("uses Account Connect health check API contracts", async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const healthCheck = {
+      id: "accthealth_1",
+      project_id: "boss-dogfood",
+      account_connect_org_id: "acctconn_1",
+      hosted_org_id: "acct_org_123",
+      check_kind: "hosted_service",
+      status: "healthy",
+      latency_ms: 27,
+      provider_ref: "acct-health-1",
+      response_metadata: { status: "healthy" },
+      checked_by: "ceo",
+      metadata: {},
+      created_at: "2026-06-03T00:00:00Z",
+    };
+    const responses = [
+      { status: 200, body: { project_id: "boss-dogfood", items: [healthCheck] } },
+      { status: 201, body: healthCheck },
+    ];
+    const fetchImpl = async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({ url: String(input), init });
+      const response = responses.shift();
+      return new Response(JSON.stringify(response?.body ?? {}), {
+        status: response?.status ?? 500,
+        headers: { "Content-Type": "application/json" },
+      });
+    };
+    const client = createBossApiClient({
+      baseUrl: "http://127.0.0.1:8000",
+      fetchImpl,
+    });
+
+    const listed = await client.listAccountConnectHealthChecks(
+      "boss-dogfood",
+      20,
+    );
+    const created = await client.runAccountConnectHealthCheck({
+      project_id: "boss-dogfood",
+      hosted_org_id: "acct_org_123",
+      actor: "ceo",
+    });
+
+    expect(listed.items[0].status).toBe("healthy");
+    expect(created.provider_ref).toBe("acct-health-1");
+    expect(calls[0].url).toBe(
+      "http://127.0.0.1:8000/v1/account-connect/health-checks?project_id=boss-dogfood&limit=20",
+    );
+    expect(calls[1].url).toBe(
+      "http://127.0.0.1:8000/v1/account-connect/health-checks",
+    );
+    expect(calls[1].init?.method).toBe("POST");
+  });
+
   it("uses enterprise cluster API contracts", async () => {
     const calls: Array<{ url: string; init?: RequestInit }> = [];
     const cluster = {

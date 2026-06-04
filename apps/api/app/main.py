@@ -31,6 +31,9 @@ from .schemas import (
     AccountConnectAuthSessionCreateRequest,
     AccountConnectAuthSessionListResponse,
     AccountConnectAuthSessionSummary,
+    AccountConnectHealthCheckListResponse,
+    AccountConnectHealthCheckRunRequest,
+    AccountConnectHealthCheckSummary,
     AccountConnectLinkRequest,
     AccountConnectBillingPortalSessionCreateRequest,
     AccountConnectBillingPortalSessionListResponse,
@@ -1361,6 +1364,12 @@ def account_connect_auth_session_from_service(
     return AccountConnectAuthSessionSummary(**payload)
 
 
+def account_connect_health_check_from_service(
+    payload,
+) -> AccountConnectHealthCheckSummary:
+    return AccountConnectHealthCheckSummary(**payload)
+
+
 def account_connect_team_invite_from_service(
     payload,
 ) -> AccountConnectTeamInviteSummary:
@@ -1867,6 +1876,61 @@ def sync_account_connect(
             edition=edition_status_from_service(result["edition"]),
             synced_entitlement_count=result["synced_entitlement_count"],
         )
+
+
+@app.get(
+    "/v1/account-connect/health-checks",
+    response_model=AccountConnectHealthCheckListResponse,
+)
+def list_account_connect_health_checks(
+    project_id: str,
+    limit: int = 50,
+) -> AccountConnectHealthCheckListResponse:
+    with begin(engine) as connection:
+        items = commercial.list_health_checks(connection, project_id, limit=limit)
+        return AccountConnectHealthCheckListResponse(
+            project_id=project_id,
+            items=[
+                account_connect_health_check_from_service(item)
+                for item in items
+            ],
+        )
+
+
+@app.post(
+    "/v1/account-connect/health-checks",
+    response_model=AccountConnectHealthCheckSummary,
+    status_code=201,
+)
+def run_account_connect_health_check(
+    payload: AccountConnectHealthCheckRunRequest,
+) -> AccountConnectHealthCheckSummary:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection,
+            payload.project_id,
+            payload.actor,
+            "providerops_manage",
+        )
+        try:
+            check = commercial.run_health_check(
+                connection,
+                payload.project_id,
+                actor=payload.actor,
+                hosted_org_id=payload.hosted_org_id,
+                check_kind=payload.check_kind,
+                metadata=payload.metadata,
+            )
+        except AccountConnectAuthSessionStateError as error:
+            record_account_connect_denial(
+                payload.project_id,
+                payload.actor,
+                "account_connect.health_check_denied",
+                "account_connect_hosted_org_mismatch",
+                "account_connect_health_check",
+            )
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        return account_connect_health_check_from_service(check)
 
 
 @app.get(

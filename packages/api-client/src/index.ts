@@ -147,6 +147,35 @@ export type AccountConnectSyncResponse = {
   synced_entitlement_count: number;
 };
 
+export type AccountConnectHealthCheckSummary = {
+  id: string;
+  project_id: string;
+  account_connect_org_id?: string;
+  hosted_org_id?: string;
+  check_kind: string;
+  status: string;
+  latency_ms?: number;
+  provider_ref?: string;
+  response_metadata: Record<string, unknown>;
+  error?: Record<string, unknown>;
+  checked_by: string;
+  metadata: Record<string, unknown>;
+  created_at: string;
+};
+
+export type AccountConnectHealthCheckListResponse = {
+  project_id: string;
+  items: AccountConnectHealthCheckSummary[];
+};
+
+export type AccountConnectHealthCheckRunRequest = {
+  project_id: string;
+  hosted_org_id?: string;
+  check_kind?: string;
+  metadata?: Record<string, unknown>;
+  actor?: string;
+};
+
 export type AccountConnectAuthSessionSummary = {
   id: string;
   project_id: string;
@@ -3215,6 +3244,20 @@ export function createBossApiClient(config: BossApiClientConfig) {
       return request<AccountConnectSyncResponse>(
         "POST",
         "/v1/account-connect/sync",
+        { body: payload },
+      );
+    },
+    listAccountConnectHealthChecks(projectId: string, limit = 50) {
+      return request<AccountConnectHealthCheckListResponse>(
+        "GET",
+        "/v1/account-connect/health-checks",
+        { query: { project_id: projectId, limit: String(limit) } },
+      );
+    },
+    runAccountConnectHealthCheck(payload: AccountConnectHealthCheckRunRequest) {
+      return request<AccountConnectHealthCheckSummary>(
+        "POST",
+        "/v1/account-connect/health-checks",
         { body: payload },
       );
     },

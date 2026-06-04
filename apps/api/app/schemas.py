@@ -191,6 +191,44 @@ class AccountConnectSyncResponse(BaseModel):
     synced_entitlement_count: int
 
 
+class AccountConnectHealthCheckSummary(BaseModel):
+    id: str
+    project_id: str
+    account_connect_org_id: Optional[str] = None
+    hosted_org_id: Optional[str] = None
+    check_kind: str
+    status: str
+    latency_ms: Optional[int] = None
+    provider_ref: Optional[str] = None
+    response_metadata: dict[str, Any]
+    error: Optional[dict[str, Any]] = None
+    checked_by: str
+    metadata: dict[str, Any]
+    created_at: str
+
+
+class AccountConnectHealthCheckListResponse(BaseModel):
+    project_id: str
+    items: list[AccountConnectHealthCheckSummary]
+
+
+class AccountConnectHealthCheckRunRequest(BaseModel):
+    project_id: str
+    hosted_org_id: Optional[str] = None
+    check_kind: str = "hosted_service"
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    actor: str = "system"
+
+    @model_validator(mode="after")
+    def validate_health_check(self) -> "AccountConnectHealthCheckRunRequest":
+        self.project_id = _require_text(self.project_id, "project_id")
+        self.check_kind = _require_text(self.check_kind, "check_kind")
+        self.actor = _require_text(self.actor, "actor")
+        if self.hosted_org_id is not None:
+            self.hosted_org_id = _require_text(self.hosted_org_id, "hosted_org_id")
+        return self
+
+
 class AccountConnectAuthSessionSummary(BaseModel):
     id: str
     project_id: str

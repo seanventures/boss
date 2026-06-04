@@ -1,0 +1,43 @@
+kind: ObjectSpec
+id: AccountConnectHealthCheck
+version: 0.1.0
+description: Durable read-only readiness evidence for the hosted BOSS Account Connect service.
+fields:
+  - name: id
+    type: string
+  - name: project_id
+    type: string
+  - name: account_connect_org_id
+    type: string
+  - name: hosted_org_id
+    type: string
+  - name: check_kind
+    type: string
+  - name: status
+    type: enum
+    values:
+      - healthy
+      - degraded
+      - unhealthy
+      - blocked_configuration
+      - failed
+  - name: latency_ms
+    type: integer
+  - name: provider_ref
+    type: string
+  - name: response_metadata
+    type: object
+  - name: error
+    type: object
+  - name: checked_by
+    type: string
+  - name: metadata
+    type: object
+  - name: created_at
+    type: datetime
+rules:
+  health_checks_are_read_only: true
+  missing_hosted_endpoint_creates_blocked_record: true
+  configured_checks_use_real_account_connect_endpoint: true
+  no_fake_healthy_state: true
+  health_check_emits_event: true

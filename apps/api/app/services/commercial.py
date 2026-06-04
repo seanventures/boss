@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from time import perf_counter
 from pathlib import Path
 from typing import Any, Optional
 from urllib.error import HTTPError, URLError
@@ -96,6 +97,24 @@ class AccountConnectAdapter:
                 )
             normalized.append(entitlement)
         return normalized
+
+    def check_health(
+        self,
+        *,
+        project_id: str,
+        hosted_org_id: Optional[str] = None,
+    ) -> dict[str, Any]:
+        query = urlencode({"project_id": project_id})
+        path = "/v1/health"
+        if hosted_org_id:
+            path = f"/v1/orgs/{quote(hosted_org_id, safe='')}/health"
+        payload = self._get_json(f"{path}?{query}")
+        status = payload.get("status")
+        if not isinstance(status, str) or not status.strip():
+            raise AccountConnectSyncError(
+                "Account Connect health response must include a status string."
+            )
+        return payload
 
     def create_team_invite(
         self,
@@ -269,6 +288,45 @@ class AccountConnectAdapter:
         if not isinstance(decoded, dict):
             raise AccountConnectSyncError(
                 "Account Connect write response must be a JSON object."
+            )
+        return decoded
+
+    def _get_json(self, path: str) -> dict[str, Any]:
+        if not self.settings.account_connect_url:
+            raise AccountConnectConfigurationError(
+                "BOSS_ACCOUNT_CONNECT_URL is required before hosted Account Connect checks."
+            )
+        base_url = self.settings.account_connect_url.rstrip("/")
+        headers = {
+            "Accept": "application/json",
+            "User-Agent": "boss-control-plane/0.3",
+        }
+        if self.settings.account_connect_token:
+            headers["Authorization"] = f"Bearer {self.settings.account_connect_token}"
+        request = Request(f"{base_url}{path}", headers=headers, method="GET")
+        try:
+            with urlopen(  # noqa: S310 - configured trusted Account Connect endpoint.
+                request,
+                timeout=self.settings.account_connect_timeout_seconds,
+            ) as response:
+                raw = response.read().decode("utf-8")
+        except HTTPError as error:
+            raise AccountConnectSyncError(
+                f"Account Connect check failed with HTTP {error.code}."
+            ) from error
+        except URLError as error:
+            raise AccountConnectSyncError(
+                f"Account Connect check failed: {error.reason}."
+            ) from error
+        try:
+            decoded = json.loads(raw or "{}")
+        except json.JSONDecodeError as error:
+            raise AccountConnectSyncError(
+                "Account Connect check returned invalid JSON."
+            ) from error
+        if not isinstance(decoded, dict):
+            raise AccountConnectSyncError(
+                "Account Connect check response must be a JSON object."
             )
         return decoded
 
@@ -806,6 +864,154 @@ class CommercialService:
             {"project_id": project_id, "limit": limit},
         ).mappings().all()
         return [self._auth_session_from_row(dict(row)) for row in rows]
+
+    def list_health_checks(
+        self, connection: Connection, project_id: str, limit: int = 50
+    ) -> list[dict[str, Any]]:
+        rows = connection.execute(
+            text(
+                """
+                SELECT id, project_id, account_connect_org_id, hosted_org_id,
+                       check_kind, status, latency_ms, provider_ref,
+                       response_metadata, error, checked_by, metadata, created_at
+                FROM account_connect_health_checks
+                WHERE project_id = :project_id
+                ORDER BY created_at DESC
+                LIMIT :limit
+                """
+            ),
+            {"project_id": project_id, "limit": limit},
+        ).mappings().all()
+        return [self._health_check_from_row(dict(row)) for row in rows]
+
+    def run_health_check(
+        self,
+        connection: Connection,
+        project_id: str,
+        *,
+        actor: str,
+        hosted_org_id: Optional[str] = None,
+        check_kind: str = "hosted_service",
+        metadata: Optional[dict[str, Any]] = None,
+    ) -> dict[str, Any]:
+        active = self.active_account_connect_org(connection, project_id)
+        if active and hosted_org_id and active["hosted_org_id"] != hosted_org_id:
+            emit_event(
+                connection,
+                project_id,
+                "account_connect.health_check_denied",
+                actor,
+                "account_connect_health_check",
+                project_id,
+                {
+                    "reason": "account_connect_hosted_org_mismatch",
+                    "requested_hosted_org_id": hosted_org_id,
+                    "active_hosted_org_id": active["hosted_org_id"],
+                },
+            )
+            raise AccountConnectAuthSessionStateError(
+                "Hosted org ID does not match the active Account Connect link."
+            )
+        effective_hosted_org_id = hosted_org_id or (
+            active["hosted_org_id"] if active else None
+        )
+        started = perf_counter()
+        status = "healthy"
+        provider_ref = None
+        response_metadata: dict[str, Any] = {}
+        error_payload = None
+        event_type = "account_connect.health_check_passed"
+        try:
+            response_metadata = self.account_connect_adapter.check_health(
+                project_id=project_id,
+                hosted_org_id=effective_hosted_org_id,
+            )
+            hosted_status = str(response_metadata.get("status") or "").strip().lower()
+            status = hosted_status if hosted_status in {
+                "healthy",
+                "ok",
+                "degraded",
+                "unhealthy",
+            } else "healthy"
+            if status == "ok":
+                status = "healthy"
+            provider_candidate = response_metadata.get("provider_ref") or response_metadata.get(
+                "id"
+            )
+            provider_ref = (
+                str(provider_candidate).strip()
+                if isinstance(provider_candidate, str) and provider_candidate.strip()
+                else None
+            )
+            if status in {"degraded", "unhealthy"}:
+                event_type = "account_connect.health_check_degraded"
+        except AccountConnectConfigurationError as error:
+            status = "blocked_configuration"
+            event_type = "account_connect.health_check_blocked"
+            error_payload = {
+                "reason": "account_connect_url_missing",
+                "message": str(error),
+            }
+        except AccountConnectSyncError as error:
+            status = "failed"
+            event_type = "account_connect.health_check_failed"
+            error_payload = {"reason": "account_connect_check_failed", "message": str(error)}
+
+        latency_ms = max(0, int((perf_counter() - started) * 1000))
+        check_id = make_id("accthealth")
+        connection.execute(
+            text(
+                """
+                INSERT INTO account_connect_health_checks (
+                    id, project_id, account_connect_org_id, hosted_org_id,
+                    check_kind, status, latency_ms, provider_ref,
+                    response_metadata, error, checked_by, metadata
+                )
+                VALUES (
+                    :id, :project_id, :account_connect_org_id, :hosted_org_id,
+                    :check_kind, :status, :latency_ms, :provider_ref,
+                    CAST(:response_metadata AS JSONB), CAST(:error AS JSONB),
+                    :checked_by, CAST(:metadata AS JSONB)
+                )
+                """
+            ),
+            {
+                "id": check_id,
+                "project_id": project_id,
+                "account_connect_org_id": active["id"] if active else None,
+                "hosted_org_id": effective_hosted_org_id,
+                "check_kind": check_kind.strip() or "hosted_service",
+                "status": status,
+                "latency_ms": latency_ms,
+                "provider_ref": provider_ref,
+                "response_metadata": json.dumps(response_metadata),
+                "error": json.dumps(error_payload) if error_payload else None,
+                "checked_by": actor,
+                "metadata": json.dumps(metadata or {}),
+            },
+        )
+        emit_event(
+            connection,
+            project_id,
+            event_type,
+            actor,
+            "account_connect_health_check",
+            check_id,
+            {
+                "hosted_org_id": effective_hosted_org_id,
+                "status": status,
+                "latency_ms": latency_ms,
+                "check_kind": check_kind,
+                "provider_ref": provider_ref,
+                "error_reason": error_payload.get("reason") if error_payload else None,
+            },
+        )
+        row = self._health_check_by_id(connection, check_id)
+        if not row:
+            raise AccountConnectSyncError(
+                "Account Connect health check record was not saved."
+            )
+        return row
 
     def create_auth_session(
         self,
@@ -1723,6 +1929,23 @@ class CommercialService:
         ).mappings().first()
         return self._auth_session_from_row(dict(row)) if row else None
 
+    def _health_check_by_id(
+        self, connection: Connection, check_id: str
+    ) -> Optional[dict[str, Any]]:
+        row = connection.execute(
+            text(
+                """
+                SELECT id, project_id, account_connect_org_id, hosted_org_id,
+                       check_kind, status, latency_ms, provider_ref,
+                       response_metadata, error, checked_by, metadata, created_at
+                FROM account_connect_health_checks
+                WHERE id = :id
+                """
+            ),
+            {"id": check_id},
+        ).mappings().first()
+        return self._health_check_from_row(dict(row)) if row else None
+
     def _emit_sync_denied(
         self,
         connection: Connection,
@@ -1808,4 +2031,10 @@ class CommercialService:
             else None,
             "created_at": row["created_at"].isoformat(),
             "updated_at": row["updated_at"].isoformat(),
+        }
+
+    def _health_check_from_row(self, row: dict[str, Any]) -> dict[str, Any]:
+        return {
+            **row,
+            "created_at": row["created_at"].isoformat(),
         }

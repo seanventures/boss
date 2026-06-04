@@ -6,6 +6,7 @@ vi.mock("../lib/client", () => ({
   client: {
     getEdition: vi.fn(),
     listLicenseEntitlements: vi.fn(),
+    listAccountConnectHealthChecks: vi.fn(),
     listAccountConnectAuthSessions: vi.fn(),
     listAccountConnectTeamInvites: vi.fn(),
     listAccountConnectBillingPortalSessions: vi.fn(),
@@ -79,6 +80,25 @@ describe("commercial, enterprise, and marketplace feeds", async () => {
           status: "active",
           source: "account_connect",
           metadata: {},
+        },
+      ],
+    });
+    vi.mocked(client.listAccountConnectHealthChecks).mockResolvedValueOnce({
+      project_id: "boss-dogfood",
+      items: [
+        {
+          id: "accthealth_1",
+          project_id: "boss-dogfood",
+          account_connect_org_id: "acctconn_1",
+          hosted_org_id: "hosted_org_1",
+          check_kind: "hosted_service",
+          status: "healthy",
+          latency_ms: 19,
+          provider_ref: "acct-health-1",
+          response_metadata: { status: "healthy" },
+          checked_by: "ceo",
+          metadata: {},
+          created_at: "2026-06-03T00:00:00Z",
         },
       ],
     });
@@ -158,6 +178,11 @@ describe("commercial, enterprise, and marketplace feeds", async () => {
     expect(feed.entitlements[0]).toMatchObject({
       capabilityKey: "private_agent_marketplace",
       seats: 5,
+    });
+    expect(feed.healthChecks[0]).toMatchObject({
+      status: "healthy",
+      providerRef: "acct-health-1",
+      latencyMs: 19,
     });
     expect(feed.authSessions[0]).toMatchObject({
       providerRef: "hosted_auth_1",

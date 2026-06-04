@@ -32,6 +32,7 @@ import {
   rollbackSelfImprovementProposalAction,
   requeueDeadletterJobAction,
   runAutoscalerPlanAction,
+  runAccountConnectHealthCheckAction,
   runDeploymentHealthCheckAction,
   runResourceJanitorAction,
   submitSelfImprovementProposalAction,
@@ -3479,6 +3480,95 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                     </form>
                   )}
                 </div>
+              )}
+            </article>
+
+            <article className="stack-card">
+              <h3>Account Connect health</h3>
+              {!commercial.apiReachable ? (
+                <p className="detail">
+                  {commercial.blockedReason ?? "Commercial API is unavailable."}
+                </p>
+              ) : (
+                <>
+                  {commercial.healthChecks.length === 0 ? (
+                    <p className="detail">
+                      No hosted Account Connect health checks have been recorded.
+                    </p>
+                  ) : (
+                    <div className="feed-list">
+                      {commercial.healthChecks.slice(0, 5).map((check) => (
+                        <div className="feed-row" key={check.id}>
+                          <div>
+                            <h4>{titleCaseToken(check.status)}</h4>
+                            <p className="detail">
+                              {check.checkKind} / hosted org{" "}
+                              {check.hostedOrgId ?? "not linked"} / latency{" "}
+                              {check.latencyMs ?? 0}ms
+                            </p>
+                            <p className="detail">
+                              Checked by {check.checkedBy} at{" "}
+                              {formatDateTime(check.createdAt)}
+                              {check.providerRef ? ` / ref ${check.providerRef}` : ""}
+                            </p>
+                            {check.error ? (
+                              <p className="detail">
+                                Error{" "}
+                                {String(check.error.reason ?? "unknown")}:{" "}
+                                {String(check.error.message ?? "no message")}
+                              </p>
+                            ) : null}
+                          </div>
+                          <span
+                            className={`pill${
+                              check.status === "healthy" ? "" : " warn"
+                            }`}
+                          >
+                            {titleCaseToken(check.status)}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  <form
+                    action={runAccountConnectHealthCheckAction}
+                    className="composer"
+                  >
+                    <input type="hidden" name="project_id" value={activeProjectId} />
+                    <input type="hidden" name="actor" value={activeActorId} />
+                    <label className="field">
+                      <span>Hosted org ID (optional)</span>
+                      <input
+                        className="input"
+                        name="hosted_org_id"
+                        defaultValue={
+                          commercial.edition?.accountConnectOrg?.hostedOrgId ?? ""
+                        }
+                        placeholder="acct_org_..."
+                      />
+                    </label>
+                    <label className="field">
+                      <span>Check kind</span>
+                      <input
+                        className="input"
+                        name="check_kind"
+                        defaultValue="hosted_service"
+                      />
+                    </label>
+                    <label className="field">
+                      <span>Metadata JSON</span>
+                      <textarea
+                        className="input"
+                        name="metadata_json"
+                        defaultValue={`{"source":"mission_control"}`}
+                      />
+                    </label>
+                    <button className="button secondary" type="submit">
+                      Run hosted readiness check
+                    </button>
+                  </form>
+                </>
               )}
             </article>
 

@@ -1176,6 +1176,108 @@ def test_account_connect_sync_upserts_hosted_entitlements(
         api_main.commercial.settings.boss_edition = previous
 
 
+def test_account_connect_health_check_blocks_without_hosted_url(client):
+    previous_edition = api_main.settings.boss_edition
+    previous_url = api_main.settings.account_connect_url
+    api_main.settings.boss_edition = "cloud"
+    api_main.commercial.settings.boss_edition = "cloud"
+    api_main.settings.account_connect_url = None
+    api_main.commercial.settings.account_connect_url = None
+    try:
+        check = client.post(
+            "/v1/account-connect/health-checks",
+            json={
+                "project_id": "boss-dogfood",
+                "hosted_org_id": "acct_org_missing_url",
+                "check_kind": "hosted_service",
+                "metadata": {"source": "test"},
+                "actor": "ceo",
+            },
+        )
+        assert check.status_code == 201
+        payload = check.json()
+        assert payload["status"] == "blocked_configuration"
+        assert payload["hosted_org_id"] == "acct_org_missing_url"
+        assert payload["error"]["reason"] == "account_connect_url_missing"
+        assert payload["latency_ms"] >= 0
+
+        listed = client.get(
+            "/v1/account-connect/health-checks",
+            params={"project_id": "boss-dogfood"},
+        )
+        assert listed.status_code == 200
+        assert listed.json()["items"][0]["id"] == payload["id"]
+
+        events = client.get("/v1/events", params={"project_id": "boss-dogfood"})
+        event_types = [item["event_type"] for item in events.json()["items"]]
+        assert "account_connect.health_check_blocked" in event_types
+    finally:
+        api_main.settings.boss_edition = previous_edition
+        api_main.commercial.settings.boss_edition = previous_edition
+        api_main.settings.account_connect_url = previous_url
+        api_main.commercial.settings.account_connect_url = previous_url
+
+
+def test_account_connect_health_check_uses_hosted_adapter(client, monkeypatch):
+    previous = api_main.settings.boss_edition
+    api_main.settings.boss_edition = "cloud"
+    api_main.commercial.settings.boss_edition = "cloud"
+
+    class FakeAccountConnectAdapter:
+        def check_health(
+            self,
+            *,
+            project_id: str,
+            hosted_org_id: Optional[str] = None,
+        ):
+            assert project_id == "boss-dogfood"
+            assert hosted_org_id == "acct_org_health"
+            return {
+                "status": "degraded",
+                "provider_ref": "acct-health-1",
+                "quota": {"remaining": 42},
+            }
+
+    monkeypatch.setattr(
+        api_main.commercial,
+        "account_connect_adapter",
+        FakeAccountConnectAdapter(),
+    )
+    try:
+        link = client.post(
+            "/v1/account-connect/link",
+            json={
+                "project_id": "boss-dogfood",
+                "hosted_org_id": "acct_org_health",
+                "actor": "ceo",
+            },
+        )
+        assert link.status_code == 200
+
+        check = client.post(
+            "/v1/account-connect/health-checks",
+            json={
+                "project_id": "boss-dogfood",
+                "hosted_org_id": "acct_org_health",
+                "check_kind": "hosted_service",
+                "metadata": {"source": "test"},
+                "actor": "ceo",
+            },
+        )
+        assert check.status_code == 201
+        payload = check.json()
+        assert payload["status"] == "degraded"
+        assert payload["provider_ref"] == "acct-health-1"
+        assert payload["response_metadata"]["quota"]["remaining"] == 42
+
+        events = client.get("/v1/events", params={"project_id": "boss-dogfood"})
+        event_types = [item["event_type"] for item in events.json()["items"]]
+        assert "account_connect.health_check_degraded" in event_types
+    finally:
+        api_main.settings.boss_edition = previous
+        api_main.commercial.settings.boss_edition = previous
+
+
 def test_account_connect_auth_session_blocks_without_hosted_url(client):
     previous_edition = api_main.settings.boss_edition
     previous_url = api_main.settings.account_connect_url
