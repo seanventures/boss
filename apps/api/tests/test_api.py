@@ -1201,6 +1201,15 @@ def test_account_connect_health_check_blocks_without_hosted_url(client):
         assert payload["hosted_org_id"] == "acct_org_missing_url"
         assert payload["error"]["reason"] == "account_connect_url_missing"
         assert payload["latency_ms"] >= 0
+        assert payload["readiness_packet_artifact_id"].startswith("art_")
+
+        packet = client.get(f"/v1/artifacts/{payload['readiness_packet_artifact_id']}")
+        assert packet.status_code == 200
+        packet_payload = packet.json()
+        assert packet_payload["artifact_type"] == "account_connect_readiness_packet"
+        assert packet_payload["content"]["health_check_id"] == payload["id"]
+        assert packet_payload["content"]["status"] == "blocked_configuration"
+        assert packet_payload["content"]["external_service_configured"] is False
 
         listed = client.get(
             "/v1/account-connect/health-checks",
@@ -1208,10 +1217,24 @@ def test_account_connect_health_check_blocks_without_hosted_url(client):
         )
         assert listed.status_code == 200
         assert listed.json()["items"][0]["id"] == payload["id"]
+        assert (
+            listed.json()["items"][0]["readiness_packet_artifact_id"]
+            == payload["readiness_packet_artifact_id"]
+        )
 
         events = client.get("/v1/events", params={"project_id": "boss-dogfood"})
-        event_types = [item["event_type"] for item in events.json()["items"]]
+        event_items = events.json()["items"]
+        event_types = [item["event_type"] for item in event_items]
         assert "account_connect.health_check_blocked" in event_types
+        blocked_event = next(
+            item
+            for item in event_items
+            if item["event_type"] == "account_connect.health_check_blocked"
+        )
+        assert (
+            blocked_event["data"]["readiness_packet_artifact_id"]
+            == payload["readiness_packet_artifact_id"]
+        )
     finally:
         api_main.settings.boss_edition = previous_edition
         api_main.commercial.settings.boss_edition = previous_edition
@@ -1221,8 +1244,11 @@ def test_account_connect_health_check_blocks_without_hosted_url(client):
 
 def test_account_connect_health_check_uses_hosted_adapter(client, monkeypatch):
     previous = api_main.settings.boss_edition
+    previous_url = api_main.settings.account_connect_url
     api_main.settings.boss_edition = "cloud"
     api_main.commercial.settings.boss_edition = "cloud"
+    api_main.settings.account_connect_url = "https://account-connect.example"
+    api_main.commercial.settings.account_connect_url = "https://account-connect.example"
 
     class FakeAccountConnectAdapter:
         def check_health(
@@ -1270,6 +1296,15 @@ def test_account_connect_health_check_uses_hosted_adapter(client, monkeypatch):
         assert payload["status"] == "degraded"
         assert payload["provider_ref"] == "acct-health-1"
         assert payload["response_metadata"]["quota"]["remaining"] == 42
+        assert payload["readiness_packet_artifact_id"].startswith("art_")
+
+        packet = client.get(f"/v1/artifacts/{payload['readiness_packet_artifact_id']}")
+        assert packet.status_code == 200
+        packet_payload = packet.json()
+        assert packet_payload["artifact_type"] == "account_connect_readiness_packet"
+        assert packet_payload["content"]["status"] == "degraded"
+        assert packet_payload["content"]["provider_ref"] == "acct-health-1"
+        assert packet_payload["content"]["external_service_configured"] is True
 
         events = client.get("/v1/events", params={"project_id": "boss-dogfood"})
         event_types = [item["event_type"] for item in events.json()["items"]]
@@ -1277,6 +1312,8 @@ def test_account_connect_health_check_uses_hosted_adapter(client, monkeypatch):
     finally:
         api_main.settings.boss_edition = previous
         api_main.commercial.settings.boss_edition = previous
+        api_main.settings.account_connect_url = previous_url
+        api_main.commercial.settings.account_connect_url = previous_url
 
 
 def test_hosted_marketplace_sync_blocks_without_hosted_url(client):

@@ -115,6 +115,7 @@ export type AccountConnectHealthCheckItem = {
   status: string;
   latencyMs?: number;
   providerRef?: string;
+  readinessPacketArtifactId?: string;
   responseMetadata: Record<string, unknown>;
   error?: Record<string, unknown>;
   checkedBy: string;
@@ -264,6 +265,7 @@ function mapHealthCheck(
     status: payload.status,
     latencyMs: payload.latency_ms,
     providerRef: payload.provider_ref,
+    readinessPacketArtifactId: payload.readiness_packet_artifact_id,
     responseMetadata: payload.response_metadata,
     error: payload.error,
     checkedBy: payload.checked_by,

@@ -25,6 +25,8 @@ fields:
     type: integer
   - name: provider_ref
     type: string
+  - name: readiness_packet_artifact_id
+    type: string
   - name: response_metadata
     type: object
   - name: error
@@ -40,4 +42,5 @@ rules:
   missing_hosted_endpoint_creates_blocked_record: true
   configured_checks_use_real_account_connect_endpoint: true
   no_fake_healthy_state: true
+  readiness_packet_artifact_required: true
   health_check_emits_event: true

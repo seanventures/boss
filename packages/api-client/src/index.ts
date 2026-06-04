@@ -156,6 +156,7 @@ export type AccountConnectHealthCheckSummary = {
   status: string;
   latency_ms?: number;
   provider_ref?: string;
+  readiness_packet_artifact_id?: string;
   response_metadata: Record<string, unknown>;
   error?: Record<string, unknown>;
   checked_by: string;

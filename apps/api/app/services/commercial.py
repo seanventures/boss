@@ -13,7 +13,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
 from ..config import Settings
-from .core import emit_event, json_hash, make_id
+from .core import create_artifact, emit_event, json_hash, make_id
 from .receipts import ReceiptService
 
 
@@ -991,6 +991,39 @@ class CommercialService:
 
         latency_ms = max(0, int((perf_counter() - started) * 1000))
         check_id = make_id("accthealth")
+        metadata_payload = metadata or {}
+        readiness_packet_artifact_id = create_artifact(
+            connection,
+            self.settings,
+            project_id,
+            None,
+            "account_connect_readiness_packet",
+            f"Account Connect readiness: {check_kind.strip() or 'hosted_service'}",
+            {
+                "object_type": "account_connect_readiness_packet",
+                "health_check_id": check_id,
+                "project_id": project_id,
+                "account_connect_org_id": active["id"] if active else None,
+                "hosted_org_id": effective_hosted_org_id,
+                "check_kind": check_kind.strip() or "hosted_service",
+                "status": status,
+                "latency_ms": latency_ms,
+                "provider_ref": provider_ref,
+                "response_metadata": response_metadata,
+                "error": error_payload,
+                "checked_by": actor,
+                "external_service_configured": bool(self.settings.account_connect_url),
+                "account_connect_required": self._account_connect_required(
+                    self.normalize_edition()
+                ),
+                "data_boundary": "internal",
+            },
+            data_boundary="internal",
+        )
+        metadata_with_artifact = {
+            **metadata_payload,
+            "readiness_packet_artifact_id": readiness_packet_artifact_id,
+        }
         connection.execute(
             text(
                 """
@@ -1019,7 +1052,7 @@ class CommercialService:
                 "response_metadata": json.dumps(response_metadata),
                 "error": json.dumps(error_payload) if error_payload else None,
                 "checked_by": actor,
-                "metadata": json.dumps(metadata or {}),
+                "metadata": json.dumps(metadata_with_artifact),
             },
         )
         emit_event(
@@ -1035,6 +1068,7 @@ class CommercialService:
                 "latency_ms": latency_ms,
                 "check_kind": check_kind,
                 "provider_ref": provider_ref,
+                "readiness_packet_artifact_id": readiness_packet_artifact_id,
                 "error_reason": error_payload.get("reason") if error_payload else None,
             },
         )
@@ -2423,8 +2457,15 @@ class CommercialService:
         }
 
     def _health_check_from_row(self, row: dict[str, Any]) -> dict[str, Any]:
+        metadata = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
+        readiness_packet_artifact_id = metadata.get("readiness_packet_artifact_id")
         return {
             **row,
+            "readiness_packet_artifact_id": (
+                readiness_packet_artifact_id
+                if isinstance(readiness_packet_artifact_id, str)
+                else None
+            ),
             "created_at": row["created_at"].isoformat(),
         }
 

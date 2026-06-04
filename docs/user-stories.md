@@ -436,8 +436,8 @@ Acceptance criteria:
 - Given an authorized ProviderOps manager links Account Connect, when `POST /v1/account-connect/link` succeeds, then BOSS persists the hosted org reference, refreshes account-connect entitlement state, and emits `account_connect.linked`.
 - Given Account Connect sync is requested without `BOSS_ACCOUNT_CONNECT_URL`, when `POST /v1/account-connect/sync` runs, then BOSS fails closed, returns a visible error, and emits `account_connect.sync_denied`.
 - Given Account Connect sync is configured, when the hosted service returns valid entitlements, then BOSS upserts local license entitlement rows and emits `account_connect.synced`.
-- Given Account Connect health is checked without `BOSS_ACCOUNT_CONNECT_URL`, when `POST /v1/account-connect/health-checks` runs, then BOSS records a blocked `AccountConnectHealthCheck` and emits `account_connect.health_check_blocked`.
-- Given Account Connect health is checked with a configured hosted endpoint, when the hosted service returns health metadata, then BOSS records status, latency, provider reference, response metadata, and an audit event without inventing a healthy state.
+- Given Account Connect health is checked without `BOSS_ACCOUNT_CONNECT_URL`, when `POST /v1/account-connect/health-checks` runs, then BOSS records a blocked `AccountConnectHealthCheck`, creates an `account_connect_readiness_packet` artifact, and emits `account_connect.health_check_blocked`.
+- Given Account Connect health is checked with a configured hosted endpoint, when the hosted service returns health metadata, then BOSS records status, latency, provider reference, response metadata, readiness packet artifact, and an audit event without inventing a healthy state.
 - Given Account Connect is unlinked, when `POST /v1/account-connect/unlink` succeeds, then BOSS marks dependent Account Connect entitlements detached and emits `account_connect.unlinked`.
 - Given a team invite is requested without an active Account Connect org, when `POST /v1/account-connect/team-invites` runs, then BOSS denies visibly and does not pretend an invite was sent.
 - Given a team invite or billing portal session requires a hosted write, when the hosted adapter is configured, then BOSS opens a `Receipt`, calls the configured Account Connect endpoint, records the hosted reference, and emits an audit event.
@@ -455,7 +455,7 @@ Acceptance criteria:
 
 - Given the commercial API is available, when Mission Control loads, then it shows edition status, Account Connect requirement/status, local-vs-hosted auth posture, license candidate, and active license entitlements.
 - Given Account Connect auth sessions exist, when Mission Control loads, then it shows hosted login URLs, blocked states, receipt IDs, hosted org linkage, and completion controls from API data.
-- Given Account Connect health checks exist, when Mission Control loads, then it shows the latest hosted readiness statuses, latency, hosted org, provider reference, and blocked/failure reasons from API data.
+- Given Account Connect health checks exist, when Mission Control loads, then it shows the latest hosted readiness statuses, latency, hosted org, provider reference, readiness packet artifact, and blocked/failure reasons from API data.
 - Given hosted marketplace listing or sync-run records exist, when Mission Control loads, then it shows hosted catalog entries, required entitlements, sync status, and blocked/failure reasons from API data.
 - Given Account Connect is not linked, when an authorized actor submits a hosted org ID, then Mission Control calls the Account Connect link API and refreshes the panel from the control plane.
 - Given Account Connect is linked, when an authorized actor requests entitlement sync or unlink, then Mission Control calls the corresponding API and relies on audit events from the backend.

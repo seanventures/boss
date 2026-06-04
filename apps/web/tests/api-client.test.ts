@@ -406,6 +406,7 @@ describe("createBossApiClient", () => {
       status: "healthy",
       latency_ms: 27,
       provider_ref: "acct-health-1",
+      readiness_packet_artifact_id: "art_acct_readiness_1",
       response_metadata: { status: "healthy" },
       checked_by: "ceo",
       metadata: {},
@@ -440,6 +441,7 @@ describe("createBossApiClient", () => {
 
     expect(listed.items[0].status).toBe("healthy");
     expect(created.provider_ref).toBe("acct-health-1");
+    expect(created.readiness_packet_artifact_id).toBe("art_acct_readiness_1");
     expect(calls[0].url).toBe(
       "http://127.0.0.1:8000/v1/account-connect/health-checks?project_id=boss-dogfood&limit=20",
     );

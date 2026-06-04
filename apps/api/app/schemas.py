@@ -200,6 +200,7 @@ class AccountConnectHealthCheckSummary(BaseModel):
     status: str
     latency_ms: Optional[int] = None
     provider_ref: Optional[str] = None
+    readiness_packet_artifact_id: Optional[str] = None
     response_metadata: dict[str, Any]
     error: Optional[dict[str, Any]] = None
     checked_by: str

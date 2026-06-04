@@ -97,6 +97,7 @@ describe("commercial, enterprise, and marketplace feeds", async () => {
           status: "healthy",
           latency_ms: 19,
           provider_ref: "acct-health-1",
+          readiness_packet_artifact_id: "art_acct_readiness_1",
           response_metadata: { status: "healthy" },
           checked_by: "ceo",
           metadata: {},
@@ -185,6 +186,7 @@ describe("commercial, enterprise, and marketplace feeds", async () => {
       status: "healthy",
       providerRef: "acct-health-1",
       latencyMs: 19,
+      readinessPacketArtifactId: "art_acct_readiness_1",
     });
     expect(feed.authSessions[0]).toMatchObject({
       providerRef: "hosted_auth_1",

@@ -3558,6 +3558,11 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                               {formatDateTime(check.createdAt)}
                               {check.providerRef ? ` / ref ${check.providerRef}` : ""}
                             </p>
+                            {check.readinessPacketArtifactId ? (
+                              <p className="detail">
+                                Readiness packet {check.readinessPacketArtifactId}
+                              </p>
+                            ) : null}
                             {check.error ? (
                               <p className="detail">
                                 Error{" "}
