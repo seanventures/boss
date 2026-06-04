@@ -133,6 +133,16 @@ class Settings(BaseSettings):
     )
     artifact_dir: Path = Field(default=Path("artifacts"), alias="BOSS_ARTIFACTS_DIR")
     core_pack_id: str = Field(default="core_v1", alias="BOSS_CORE_PACK_ID")
+    boss_edition: str = Field(default="community", alias="BOSS_EDITION")
+    account_connect_url: Optional[str] = Field(
+        default=None, alias="BOSS_ACCOUNT_CONNECT_URL"
+    )
+    account_connect_token: Optional[str] = Field(
+        default=None, alias="BOSS_ACCOUNT_CONNECT_TOKEN"
+    )
+    account_connect_timeout_seconds: int = Field(
+        default=10, alias="BOSS_ACCOUNT_CONNECT_TIMEOUT_SECONDS"
+    )
     cursor_cli_enabled: bool = Field(default=False, alias="BOSS_CURSOR_CLI_ENABLED")
     local_model_enabled: bool = Field(default=False, alias="BOSS_LOCAL_MODEL_ENABLED")
     local_model_id: Optional[str] = Field(

@@ -1,0 +1,32 @@
+kind: ObjectSpec
+id: AgentModuleInstallRecord
+version: 0.1.0
+description: Audit record for agent-module install attempts, entitlement denials, and rollback snapshots.
+fields:
+  - name: id
+    type: string
+  - name: project_id
+    type: string
+  - name: module_id
+    type: string
+  - name: action
+    type: enum
+    values: [install, install_denied, rollback]
+  - name: from_version
+    type: string
+  - name: to_version
+    type: string
+  - name: actor
+    type: string
+  - name: status
+    type: string
+  - name: entitlement_result
+    type: object
+  - name: rollback_snapshot
+    type: object
+  - name: metadata
+    type: object
+rules:
+  required_entitlements_checked_before_install: true
+  denied_installs_are_audited: true
+  previous_install_snapshot_preserved_for_rollback: true

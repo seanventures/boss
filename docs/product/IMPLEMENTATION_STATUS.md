@@ -1,7 +1,7 @@
 # BOSS Implementation Status
 
 Last updated: June 3, 2026
-Release target: `v0.3.0`
+Release target: `v0.4.0`
 
 This document summarizes the currently implemented BOSS runtime surfaces in this repository so the codebase, README, and product intent stay aligned.
 
@@ -29,6 +29,9 @@ This document summarizes the currently implemented BOSS runtime surfaces in this
   - health snapshots
 - API-first control plane:
   - project discovery for runtime-scoped clients
+  - edition, license-entitlement, and Account Connect link/unlink/sync APIs; Community runs without hosted auth, while Cloud and Enterprise Cloud editions fail closed until linked, and hosted entitlement sync uses a configured real HTTP adapter or fails closed
+  - enterprise cluster/trust records for attached/detached enterprise posture, identity/audit/governance/private-worker controls, support/SLA metadata, and blocking-gap visibility
+  - Enterprise SCIM group/user provisioning APIs that map active users to BOSS org members with explicit merged roles and permissions
   - CEO command intake
   - canonical department, policy, plan, and meeting CRUD/list surfaces
   - task and job inspection
@@ -46,7 +49,7 @@ This document summarizes the currently implemented BOSS runtime surfaces in this
   - self-improvement proposal workflow
   - role and pack discovery/install
   - RoleSpec scope checks with drift events, trust changes, and automatic autonomy downgrade
-  - agent-module catalog and install flow
+  - agent-module catalog and install flow with marketplace metadata, required-entitlement gates, denied-install records, and rollback snapshots
   - entitlement source and routing-log visibility, including API-key and official OAuth/CLI session connection lifecycle, capacity-state visibility, and structured route rejection explanations for OpenAI Codex, Anthropic Claude Code, and xAI Grok Build subscription sources
   - Model Entitlement Broker v2 APIs for model adapter inventory, entitlement pool inventory, idempotent capacity probes with durable `CapacityReceipt` rows, and canonical `ModelRouteDecision` simulate/list surfaces
   - ProviderOps provider accounts, connection tests, resource inventory sync, read-only DigitalOcean/OpenAI/Anthropic billing sync, cost ledger reads, duplicate-safe BillingAccount/CostEvent records, spendy ChangeSet-to-CostEvent recording, cost anomalies with read-only provider kill switches, ChangeSet planning/approval/apply attempts, real Cloudflare DNS record upsert actuation, real Cloudflare Worker deployment actuation, real Git-connected Cloudflare Pages deployment actuation, real DigitalOcean droplet create/destroy actuation, real DigitalOcean App Platform deployment actuation, real Supabase project create/pause actuation, real Supabase migration apply actuation, ResourceReceipts, deployment targets, provider health, drift reports, and reconciliation-run visibility
@@ -98,8 +101,10 @@ This document summarizes the currently implemented BOSS runtime surfaces in this
   - delegated org-wide RBAC through `org_members`, with org delegates available across projects in the same org, selectable in the console actor switcher, manageable through the Org Delegation UI, and still bound by explicit permissions
   - auth-session introspection through `GET /v1/auth/session`
   - break-glass access grants with requester identity, project or org target member, reason, scope, TTL, temporary permissions, event logs, revocation, expiry, and mandatory postmortem task creation
+  - enterprise cluster/trust writes gated by explicit `enterprise_manage` permission and audited with `enterprise.cluster_upserted` events
+  - enterprise SCIM provisioning writes gated by `enterprise_manage`, with group/user audit events and active-user mapping into the same org-member RBAC directory used by the rest of BOSS
   - Core Pack install for dogfood
-  - packaged agent-module catalog, install flow, and role lineage
+  - packaged agent-module catalog, entitlement-aware install flow, install governance records, and role lineage
   - deterministic RoleSpec validation for pack roles and module-provided roles
   - deterministic SkillSpec validation for typed IO, cost, retry, permissions, data boundary, policy, and real-only mode
   - model entitlement broker with routing logs, official subscription connection checks, connect/disconnect APIs, capacity-state fail-closed denials, multi-tenant denials for personal/public subscription sources, capacity receipt dedupe, and ModelRouteDecision API surfaces
@@ -179,6 +184,10 @@ The current founder-dogfood control loop is:
 - `BOSS_OIDC_PRINCIPAL_CLAIM`
 - `BOSS_OIDC_ALLOWED_ALGORITHMS`
 - `BOSS_OIDC_SUBJECT_PRINCIPALS`
+- `BOSS_EDITION`
+- `BOSS_ACCOUNT_CONNECT_URL`
+- `BOSS_ACCOUNT_CONNECT_TOKEN`
+- `BOSS_ACCOUNT_CONNECT_TIMEOUT_SECONDS`
 - `BOSS_DAILY_CAP_USD_MICROS`
 - `BOSS_MONTHLY_CAP_USD_MICROS`
 - `BOSS_BURST_CAP_USD_MICROS_PER_MIN`
@@ -213,6 +222,8 @@ The current founder-dogfood control loop is:
 ## What is intentionally still constrained
 
 - Identity is currently project/org-member based with optional API-key principal binding and standards-based OIDC bearer JWT verification. Actor ids must resolve to active project members or delegated org members with the required permission, and bound API/OIDC principals cannot impersonate another actor. Live external IdP rollout requires environment-specific issuer, audience, JWKS URL, and claim/subject mapping configuration.
+- Commercial edition and Account Connect state are persisted locally and API-visible. Community mode remains useful without hosted BOSS auth. Cloud and Enterprise Cloud modes fail closed until a hosted org link exists. Hosted entitlement sync is available through `BOSS_ACCOUNT_CONNECT_URL` and fails closed with visible events when not configured or when the hosted service fails, but hosted Account Connect login, billing portal workflows, team invites, and full marketplace service still require the future hosted service integration.
+- Enterprise cluster/trust records are implemented as planning and governance state. They normalize SSO/OIDC/SAML/SCIM, RBAC/ABAC, audit retention/export, private worker, compliance-pack, and support/SLA posture and surface blocking gaps. SCIM group/user provisioning is implemented locally and maps active users into BOSS org-member RBAC, but BOSS does not yet provide external IdP push/pull connectors, SAML login runtime, real multi-node HA infrastructure, Kubernetes charts, or external support-system integrations.
 - Local sandbox validation is implemented as allowlisted, no-shell commands in a configured sandbox clone. It is disabled by default and fails closed when enabled without repo path, commands, clean git state, or allowed executables.
 - Deployment rollout tracking now records staged GitHub deployment, post-deploy health, release-readiness, and rollback/health-decision evidence. Real Cloudflare Worker deployment, Git-connected Cloudflare Pages deployment, DigitalOcean provisioning for sandbox droplets and DigitalOcean App Platform deployments, Supabase project creation, and Supabase migration apply remain fail-closed unless official credentials, env-backed SecretRefs, and required policy switches are configured.
 - ProviderOps read-only adapter calls support DigitalOcean, Cloudflare, Supabase, OpenAI, and Anthropic through official APIs. Billing-readable provider accounts can ingest DigitalOcean billing history, OpenAI organization costs, and Anthropic organization cost reports into duplicate-safe CostEvents with explicit confidence labels; unsupported billing providers fail closed with deadletters instead of invented estimates. Spendy provider ChangeSets now create receipt-linked CostEvents with explicit confidence labels after successful actuation, and threshold-crossing observed provider cost creates a CostAnomaly, decision, and provider read-only kill switch. Provider write actuation is currently constrained to explicitly implemented skills: Cloudflare DNS record upsert, Cloudflare R2 bucket create, Cloudflare Worker deployment, Git-connected Cloudflare Pages deployment, DigitalOcean droplet create/destroy, DigitalOcean App Platform deployment, Supabase project create/pause, and Supabase migration apply are supported through the Resource Plane Kernel, while unsupported provider skills and missing credentials fail closed with ResourceReceipts/deadletters until each skill receives explicit actuation support.

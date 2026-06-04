@@ -8,6 +8,8 @@ rules:
     sso_oidc: true
     saml: true
     scim: true
+    scim_maps_to_boss_org_members: true
+    scim_deactivation_removes_effective_access: true
     rbac: true
     abac: true
   audit:

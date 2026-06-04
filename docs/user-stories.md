@@ -80,6 +80,8 @@ As a VP Agents or marketplace operator, I want worker agents packaged as modules
 Acceptance criteria:
 
 - Given an agent module in the specpack catalog, when it is installed, then BOSS records module installation and role lineage.
+- Given a module declares required marketplace entitlements, when the project lacks those entitlements, then BOSS denies installation, emits `agent_module.install_denied`, and records the entitlement result.
+- Given the project has the required entitlement, when the module is installed, then BOSS records an install governance record with entitlement result and rollback snapshot.
 - Given a governed job kind, when runtime behavior is resolved, then BOSS uses installed module configuration instead of hidden service defaults.
 - Given an unauthorized actor, when module installation is attempted, then BOSS rejects it and emits a policy denial.
 
@@ -337,6 +339,8 @@ As a self-hosted Community operator, I want BOSS to run with local auth and no B
 Acceptance criteria:
 
 - Given a Community install, when no Account Connect org is linked, then local auth, local runner, core objects, Decision Inbox, basic Budget Governor, and basic Model Entitlement Broker still work.
+- Given a Community install, when `GET /v1/edition` is called, then BOSS reports `status=active`, `account_connect_required=false`, and `local_auth_allowed=true`.
+- Given a Community install, when `GET /v1/entitlements` is called, then local edition-pack capabilities are returned without requiring hosted BOSS auth.
 - Given a Community install, when Cloud-only capabilities are requested, then BOSS explains the missing entitlement without breaking local operation.
 - Given Community packaging is documented, when licensing language is shown, then restricted or commercial modules are not described as open source without legal review.
 
@@ -347,8 +351,27 @@ As a Cloud customer admin, I want BOSS Account Connect to manage login, org iden
 Acceptance criteria:
 
 - Given BOSS Cloud is enabled, when an org is created, then Account Connect owns cloud identity and license entitlement state.
+- Given BOSS Cloud is enabled and no Account Connect org is linked, when `GET /v1/edition` is called, then BOSS reports `blocked_account_connect_required` instead of silently allowing Cloud-only behavior.
+- Given an authorized ProviderOps manager links Account Connect, when `POST /v1/account-connect/link` succeeds, then BOSS persists the hosted org reference, refreshes account-connect entitlement state, and emits `account_connect.linked`.
+- Given Account Connect sync is requested without `BOSS_ACCOUNT_CONNECT_URL`, when `POST /v1/account-connect/sync` runs, then BOSS fails closed, returns a visible error, and emits `account_connect.sync_denied`.
+- Given Account Connect sync is configured, when the hosted service returns valid entitlements, then BOSS upserts local license entitlement rows and emits `account_connect.synced`.
+- Given Account Connect is unlinked, when `POST /v1/account-connect/unlink` succeeds, then BOSS marks dependent Account Connect entitlements detached and emits `account_connect.unlinked`.
 - Given a Cloud user installs a marketplace pack, when the install starts, then publisher identity and entitlement checks are resolved through Account Connect.
 - Given Enterprise is detached, when Account Connect is unavailable, then private license and identity flows remain explicitly supported.
+
+### Story ADM-006: Govern Enterprise Trust And Clustering Posture
+
+As an enterprise admin, I want BOSS to record enterprise deployment mode, identity controls, audit posture, private worker strategy, and support/SLA commitments, so that enterprise readiness gaps are visible before production rollout.
+
+Acceptance criteria:
+
+- Given an unauthorized actor, when they attempt to create an enterprise cluster record, then BOSS denies the write and emits a visible policy-denial event.
+- Given an Enterprise Cloud cluster has SSO/OIDC or SAML, SCIM, audit exports, retention, and SLA metadata configured, when it is saved, then BOSS records it as active with no blocking gaps.
+- Given a detached self-hosted enterprise cluster lacks SSO/SAML, SCIM, private worker pools, or compliance packs, when it is saved, then BOSS marks it blocked and lists each missing control.
+- Given enterprise cluster state changes, when the write succeeds, then BOSS emits `enterprise.cluster_upserted` with deployment mode, Account Connect mode, status, and blocking gaps.
+- Given an enterprise admin maps a SCIM group to BOSS permissions, when the group is saved, then BOSS emits `enterprise.scim_group_upserted`.
+- Given an active SCIM user belongs to a mapped group, when the user is saved, then BOSS creates or updates an org member with the merged explicit role and permission grants.
+- Given a SCIM user is deactivated, when the user is saved, then BOSS removes the user's effective org-member access without deleting the audit record.
 
 ### Story ADM-002: Control Project Actors
 

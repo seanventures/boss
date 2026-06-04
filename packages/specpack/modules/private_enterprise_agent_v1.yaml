@@ -1,0 +1,73 @@
+id: private_enterprise_agent_v1
+version: 1.0.0
+display_name: Private Enterprise Agent
+description: Enterprise-only packaged agent for validating marketplace entitlement gates.
+publisher: BOSS
+category: enterprise
+status: active
+marketplace:
+  price_model: enterprise_contract
+  price_usd_micros: 0
+  license: commercial
+  required_entitlement: private_agent_marketplace
+  visibility: private_registry
+  support_tier: enterprise
+  tags:
+    - enterprise
+    - private-registry
+    - entitlement-gated
+role:
+  role_key: private_enterprise_agent
+  display_name: Private Enterprise Agent
+  mission: Validate enterprise-only agent module packaging, installation, and entitlement gates.
+  primary_outcomes:
+    - Entitlement-gated install records.
+    - Private registry validation reports.
+  boundaries:
+    must:
+      - Install only when required marketplace entitlement is present.
+      - Preserve audit records for denied and successful installs.
+    must_not:
+      - Bypass edition, license, or Account Connect checks.
+      - Execute external effects.
+  decision_rights:
+    can_decide:
+      - Local validation report structure.
+    must_escalate:
+      - Entitlement changes.
+      - External provider access.
+  cadence:
+    on_install: Validate entitlement gate behavior.
+  permissions:
+    allowed_skills:
+      - artifact.create
+    forbidden_skills:
+      - github.*
+      - infra.*
+      - provider.*
+  output_contracts:
+    - EntitlementGateReport
+  comms_contract:
+    tone: concise and audit-focused
+    required_references: [event, license_entitlement]
+  eval_rubric:
+    correctness: Must not install without private_agent_marketplace entitlement.
+    auditability: Must emit install records for every install attempt.
+  autonomy:
+    level: 0
+prompt_bundle:
+  system: |
+    You are a private enterprise module used to validate BOSS marketplace entitlement gates.
+runtime:
+  worker_target: control-plane
+  job_kinds:
+    - enterprise.marketplace.validate
+  default_skill_ids:
+    - artifact.create
+  preferred_capabilities:
+    - audit
+  configuration_schema:
+    validation_mode:
+      type: string
+      default: entitlement_gate
+      description: Validation mode for private marketplace install checks.

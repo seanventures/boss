@@ -13,6 +13,11 @@ phases:
     actor: account_connect
     outputs: [AccountConnectOrg]
     optional: true
+  - id: sync_hosted_entitlements
+    actor: account_connect
+    outputs: [LicenseEntitlement]
+    optional: true
+    failure_mode: fail_closed_with_account_connect_sync_denied_event
   - id: install_commercial_capability
     actor: pack_registry
     outputs: [PackInstall]
@@ -23,5 +28,6 @@ phases:
 rules:
   community_must_work_without_account_connect: true
   cloud_requires_account_connect: true
+  hosted_entitlement_sync_requires_configured_endpoint: true
   enterprise_can_run_attached_or_detached: true
   legal_review_required_for_license_language: true

@@ -12,6 +12,8 @@ from .config import get_settings
 from .db import begin, database_is_reachable, get_engine
 from .schemas import (
     AgentModuleDetail,
+    AgentModuleInstallRecordListResponse,
+    AgentModuleInstallRecordSummary,
     AgentModuleInstallRequest,
     AgentModuleListResponse,
     AgentModuleSummary,
@@ -19,6 +21,11 @@ from .schemas import (
     ArtifactListResponse,
     ArtifactSummary,
     AuthSessionResponse,
+    AccountConnectLinkRequest,
+    AccountConnectMutationResponse,
+    AccountConnectSyncRequest,
+    AccountConnectSyncResponse,
+    AccountConnectUnlinkRequest,
     AuditExportCounts,
     AuditExportResponse,
     AuditExportScope,
@@ -82,6 +89,15 @@ from .schemas import (
     EntitlementSourceListResponse,
     EntitlementSourceSummary,
     EntitlementSourceUpsertRequest,
+    EnterpriseClusterListResponse,
+    EnterpriseClusterSummary,
+    EnterpriseClusterUpsertRequest,
+    EnterpriseScimGroupListResponse,
+    EnterpriseScimGroupSummary,
+    EnterpriseScimGroupUpsertRequest,
+    EnterpriseScimUserListResponse,
+    EnterpriseScimUserSummary,
+    EnterpriseScimUserUpsertRequest,
     EventFeedResponse,
     EventItem,
     ExternalResourceListResponse,
@@ -143,6 +159,9 @@ from .schemas import (
     EntitlementPoolProbeRequest,
     EntitlementPoolProbeResponse,
     EntitlementPoolSummary,
+    EditionStatusResponse,
+    LicenseEntitlementListResponse,
+    LicenseEntitlementSummary,
     ModelAdapterListResponse,
     ModelAdapterSummary,
     ModelRouteDecisionListResponse,
@@ -230,6 +249,12 @@ from .services.comms import (
     InvalidCreatedByJobError,
     OutboxMessageNotFoundError,
 )
+from .services.commercial import (
+    AccountConnectConfigurationError,
+    AccountConnectLinkNotFoundError,
+    AccountConnectSyncError,
+    CommercialService,
+)
 from .services.core import emit_event
 from .services.decisions import (
     DecisionNotFoundError,
@@ -243,6 +268,7 @@ from .services.entitlements import (
     InvalidEntitlementConnectionError,
     SkillNotFoundError,
 )
+from .services.enterprise import EnterpriseService
 from .services.health import HealthSnapshotService
 from .services.infrastructure import (
     InfraResourceNotFoundError,
@@ -275,6 +301,7 @@ from .services.self_improvement import (
 )
 from .services.software_factory import SoftwareFactoryService
 from .services.specpack import (
+    AgentModuleEntitlementError,
     AgentModuleNotFoundError,
     PackNotFoundError,
     RoleNotFoundError,
@@ -291,6 +318,8 @@ software_factory = SoftwareFactoryService(settings)
 decisions = DecisionService(settings)
 specpack = SpecPackService(settings)
 entitlements = EntitlementBrokerService(settings)
+commercial = CommercialService(settings)
+enterprise = EnterpriseService(settings)
 audit = AuditTrailService(settings)
 comms = CommsService(settings)
 infrastructure = InfrastructureService(settings)
@@ -590,6 +619,28 @@ def record_policy_denial(
                     "permission": permission,
                     "reason": reason,
                 },
+            )
+    except Exception:
+        return
+
+
+def record_account_connect_sync_denial(project_id: str, actor: str, reason: str) -> None:
+    try:
+        with begin(engine) as audit_connection:
+            project_exists = audit_connection.execute(
+                text("SELECT 1 FROM projects WHERE id = :project_id"),
+                {"project_id": project_id},
+            ).first()
+            if not project_exists:
+                return
+            emit_event(
+                audit_connection,
+                project_id,
+                "account_connect.sync_denied",
+                actor,
+                "account_connect_org",
+                project_id,
+                {"reason": reason},
             )
     except Exception:
         return
@@ -1068,6 +1119,8 @@ def agent_module_summary_from_service(payload) -> AgentModuleSummary:
         tags=payload.get("tags") or [],
         price_model=payload.get("price_model"),
         price_usd_micros=payload.get("price_usd_micros"),
+        required_entitlements=payload.get("required_entitlements") or [],
+        entitlement_status=payload.get("entitlement_status") or "not_required",
         config_schema=payload.get("config_schema") or {},
         installed=bool(payload["installed"]),
         installed_by=payload.get("installed_by"),
@@ -1086,8 +1139,15 @@ def agent_module_detail_from_service(payload) -> AgentModuleDetail:
         marketplace=payload.get("marketplace") or {},
         role=payload.get("role") or {},
         role_result=payload.get("role_result") or {},
+        entitlement_result=payload.get("entitlement_result") or {},
         install_status=payload.get("install_status"),
     )
+
+
+def agent_module_install_record_summary_from_service(
+    payload,
+) -> AgentModuleInstallRecordSummary:
+    return AgentModuleInstallRecordSummary(**payload)
 
 
 def skill_summary_from_service(payload) -> SkillSummary:
@@ -1148,6 +1208,26 @@ def model_adapter_summary_from_service(payload) -> ModelAdapterSummary:
 
 def entitlement_pool_summary_from_service(payload) -> EntitlementPoolSummary:
     return EntitlementPoolSummary(**payload)
+
+
+def edition_status_from_service(payload) -> EditionStatusResponse:
+    return EditionStatusResponse(**payload)
+
+
+def license_entitlement_summary_from_service(payload) -> LicenseEntitlementSummary:
+    return LicenseEntitlementSummary(**payload)
+
+
+def enterprise_cluster_summary_from_service(payload) -> EnterpriseClusterSummary:
+    return EnterpriseClusterSummary(**payload)
+
+
+def enterprise_scim_group_summary_from_service(payload) -> EnterpriseScimGroupSummary:
+    return EnterpriseScimGroupSummary(**payload)
+
+
+def enterprise_scim_user_summary_from_service(payload) -> EnterpriseScimUserSummary:
+    return EnterpriseScimUserSummary(**payload)
 
 
 def capacity_receipt_summary_from_service(payload) -> CapacityReceiptSummary:
@@ -1217,6 +1297,277 @@ def auth_session() -> AuthSessionResponse:
         oidc_enabled=settings.oidc_enabled,
         message=message,
     )
+
+
+@app.get("/v1/edition", response_model=EditionStatusResponse)
+def get_edition(project_id: str) -> EditionStatusResponse:
+    with begin(engine) as connection:
+        return edition_status_from_service(
+            commercial.edition_status(connection, project_id)
+        )
+
+
+@app.get("/v1/entitlements", response_model=LicenseEntitlementListResponse)
+def list_license_entitlements(
+    project_id: str,
+    include_inactive: bool = False,
+) -> LicenseEntitlementListResponse:
+    with begin(engine) as connection:
+        edition = commercial.edition_status(connection, project_id)
+        items = commercial.list_license_entitlements(
+            connection,
+            project_id,
+            include_inactive=include_inactive,
+        )
+        return LicenseEntitlementListResponse(
+            project_id=project_id,
+            edition=edition_status_from_service(edition),
+            items=[license_entitlement_summary_from_service(item) for item in items],
+        )
+
+
+@app.post("/v1/account-connect/link", response_model=AccountConnectMutationResponse)
+def link_account_connect(
+    payload: AccountConnectLinkRequest,
+) -> AccountConnectMutationResponse:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection,
+            payload.project_id,
+            payload.actor,
+            "providerops_manage",
+        )
+        edition = commercial.link_account_connect_org(
+            connection,
+            payload.project_id,
+            hosted_org_id=payload.hosted_org_id,
+            actor=payload.actor,
+            connection_ref=payload.connection_ref,
+            marketplace_identity=payload.marketplace_identity,
+            billing_portal_ref=payload.billing_portal_ref,
+            connector_authorization_refs=payload.connector_authorization_refs,
+            optional_telemetry_enabled=payload.optional_telemetry_enabled,
+            metadata=payload.metadata,
+        )
+        return AccountConnectMutationResponse(
+            project_id=payload.project_id,
+            edition=edition_status_from_service(edition),
+        )
+
+
+@app.post("/v1/account-connect/unlink", response_model=AccountConnectMutationResponse)
+def unlink_account_connect(
+    payload: AccountConnectUnlinkRequest,
+) -> AccountConnectMutationResponse:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection,
+            payload.project_id,
+            payload.actor,
+            "providerops_manage",
+        )
+        try:
+            edition = commercial.unlink_account_connect_org(
+                connection,
+                payload.project_id,
+                actor=payload.actor,
+                hosted_org_id=payload.hosted_org_id,
+                reason=payload.reason,
+            )
+        except AccountConnectLinkNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        return AccountConnectMutationResponse(
+            project_id=payload.project_id,
+            edition=edition_status_from_service(edition),
+        )
+
+
+@app.post("/v1/account-connect/sync", response_model=AccountConnectSyncResponse)
+def sync_account_connect(
+    payload: AccountConnectSyncRequest,
+) -> AccountConnectSyncResponse:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection,
+            payload.project_id,
+            payload.actor,
+            "providerops_manage",
+        )
+        try:
+            result = commercial.sync_account_connect_entitlements(
+                connection,
+                payload.project_id,
+                actor=payload.actor,
+                hosted_org_id=payload.hosted_org_id,
+            )
+        except AccountConnectLinkNotFoundError as error:
+            record_account_connect_sync_denial(
+                payload.project_id,
+                payload.actor,
+                "account_connect_not_linked",
+            )
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except AccountConnectConfigurationError as error:
+            record_account_connect_sync_denial(
+                payload.project_id,
+                payload.actor,
+                "account_connect_url_missing",
+            )
+            raise HTTPException(status_code=503, detail=str(error)) from error
+        except AccountConnectSyncError as error:
+            record_account_connect_sync_denial(
+                payload.project_id,
+                payload.actor,
+                "account_connect_sync_failed",
+            )
+            raise HTTPException(status_code=502, detail=str(error)) from error
+        return AccountConnectSyncResponse(
+            project_id=result["project_id"],
+            edition=edition_status_from_service(result["edition"]),
+            synced_entitlement_count=result["synced_entitlement_count"],
+        )
+
+
+@app.get("/v1/enterprise/clusters", response_model=EnterpriseClusterListResponse)
+def list_enterprise_clusters(project_id: str) -> EnterpriseClusterListResponse:
+    with begin(engine) as connection:
+        items = enterprise.list_clusters(connection, project_id)
+        return EnterpriseClusterListResponse(
+            project_id=project_id,
+            items=[enterprise_cluster_summary_from_service(item) for item in items],
+        )
+
+
+@app.post(
+    "/v1/enterprise/clusters",
+    response_model=EnterpriseClusterSummary,
+    status_code=201,
+)
+def upsert_enterprise_cluster(
+    payload: EnterpriseClusterUpsertRequest,
+) -> EnterpriseClusterSummary:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection,
+            payload.project_id,
+            payload.actor,
+            "enterprise_manage",
+        )
+        try:
+            cluster = enterprise.upsert_cluster(
+                connection,
+                payload.project_id,
+                deployment_mode=payload.deployment_mode,
+                account_connect_mode=payload.account_connect_mode,
+                actor=payload.actor,
+                worker_pool_strategy=payload.worker_pool_strategy,
+                ha_profile=payload.ha_profile,
+                data_residency=payload.data_residency,
+                identity_controls=payload.identity_controls,
+                governance_controls=payload.governance_controls,
+                audit_controls=payload.audit_controls,
+                private_worker_pools=payload.private_worker_pools,
+                compliance_packs=payload.compliance_packs,
+                support_tier=payload.support_tier,
+                support_sla=payload.support_sla,
+                status=payload.status,
+                metadata=payload.metadata,
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        return enterprise_cluster_summary_from_service(cluster)
+
+
+@app.get(
+    "/v1/enterprise/scim/groups",
+    response_model=EnterpriseScimGroupListResponse,
+)
+def list_enterprise_scim_groups(project_id: str) -> EnterpriseScimGroupListResponse:
+    with begin(engine) as connection:
+        groups = enterprise.list_scim_groups(connection, project_id)
+        return EnterpriseScimGroupListResponse(
+            project_id=project_id,
+            items=[enterprise_scim_group_summary_from_service(group) for group in groups],
+        )
+
+
+@app.post(
+    "/v1/enterprise/scim/groups",
+    response_model=EnterpriseScimGroupSummary,
+    status_code=201,
+)
+def upsert_enterprise_scim_group(
+    payload: EnterpriseScimGroupUpsertRequest,
+) -> EnterpriseScimGroupSummary:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection,
+            payload.project_id,
+            payload.actor,
+            "enterprise_manage",
+        )
+        try:
+            group = enterprise.upsert_scim_group(
+                connection,
+                payload.project_id,
+                display_name=payload.display_name,
+                actor=payload.actor,
+                external_id=payload.external_id,
+                role_keys=payload.role_keys,
+                permissions=payload.permissions,
+                raw_group=payload.raw_group,
+                status=payload.status,
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        return enterprise_scim_group_summary_from_service(group)
+
+
+@app.get(
+    "/v1/enterprise/scim/users",
+    response_model=EnterpriseScimUserListResponse,
+)
+def list_enterprise_scim_users(project_id: str) -> EnterpriseScimUserListResponse:
+    with begin(engine) as connection:
+        users = enterprise.list_scim_users(connection, project_id)
+        return EnterpriseScimUserListResponse(
+            project_id=project_id,
+            items=[enterprise_scim_user_summary_from_service(user) for user in users],
+        )
+
+
+@app.post(
+    "/v1/enterprise/scim/users",
+    response_model=EnterpriseScimUserSummary,
+    status_code=201,
+)
+def upsert_enterprise_scim_user(
+    payload: EnterpriseScimUserUpsertRequest,
+) -> EnterpriseScimUserSummary:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection,
+            payload.project_id,
+            payload.actor,
+            "enterprise_manage",
+        )
+        try:
+            user = enterprise.upsert_scim_user(
+                connection,
+                payload.project_id,
+                user_name=payload.user_name,
+                display_name=payload.display_name,
+                actor=payload.actor,
+                external_id=payload.external_id,
+                active=payload.active,
+                role_keys=payload.role_keys,
+                permissions=payload.permissions,
+                groups=payload.groups,
+                raw_profile=payload.raw_profile,
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        return enterprise_scim_user_summary_from_service(user)
 
 
 @app.get("/v1/projects", response_model=ProjectListResponse)
@@ -2243,12 +2594,41 @@ def get_agent_module(module_id: str, project_id: str) -> AgentModuleDetail:
         return agent_module_detail_from_service(module)
 
 
+@app.get(
+    "/v1/agent-module-install-records",
+    response_model=AgentModuleInstallRecordListResponse,
+)
+def list_agent_module_install_records(
+    project_id: str,
+    module_id: Optional[str] = None,
+    limit: int = 50,
+) -> AgentModuleInstallRecordListResponse:
+    if limit < 1 or limit > 200:
+        raise HTTPException(status_code=400, detail="limit must be between 1 and 200.")
+    with begin(engine) as connection:
+        records = specpack.list_agent_module_install_records(
+            connection,
+            project_id,
+            module_id=module_id,
+            limit=limit,
+        )
+        return AgentModuleInstallRecordListResponse(
+            project_id=project_id,
+            items=[
+                agent_module_install_record_summary_from_service(record)
+                for record in records
+            ],
+        )
+
+
 @app.post(
     "/v1/agent-modules/install",
     response_model=AgentModuleDetail,
     status_code=201,
 )
 def install_agent_module(payload: AgentModuleInstallRequest) -> AgentModuleDetail:
+    entitlement_error: Optional[str] = None
+    module: Optional[dict] = None
     with begin(engine) as connection:
         try:
             require_project_actor(
@@ -2266,7 +2646,13 @@ def install_agent_module(payload: AgentModuleInstallRequest) -> AgentModuleDetai
             )
         except AgentModuleNotFoundError as error:
             raise HTTPException(status_code=404, detail=str(error)) from error
-        return agent_module_detail_from_service(module)
+        except AgentModuleEntitlementError as error:
+            entitlement_error = str(error)
+    if entitlement_error:
+        raise HTTPException(status_code=403, detail=entitlement_error)
+    if module is None:
+        raise HTTPException(status_code=500, detail="Agent module install failed.")
+    return agent_module_detail_from_service(module)
 
 
 @app.get("/v1/skills", response_model=SkillListResponse)

@@ -22,6 +22,220 @@ paths:
       summary: Inspect transport authentication, OIDC state, and principal binding
       responses:
         '200': { description: Auth session, auth method, OIDC state, and principal binding state }
+  /v1/edition:
+    get:
+      summary: Inspect effective BOSS edition, Account Connect requirement, and active commercial capabilities
+      parameters:
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Edition status; Community works without hosted auth, Cloud is blocked until Account Connect is linked }
+  /v1/entitlements:
+    get:
+      summary: List license entitlements and edition-pack capabilities for a project
+      parameters:
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+        - name: include_inactive
+          in: query
+          required: false
+          schema: { type: boolean, default: false }
+      responses:
+        '200': { description: Edition status plus active or requested inactive license entitlements }
+  /v1/account-connect/link:
+    post:
+      summary: Link a local project to a hosted BOSS Account Connect org
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id, hosted_org_id]
+              properties:
+                project_id: { type: string }
+                hosted_org_id: { type: string }
+                connection_ref: { type: string }
+                marketplace_identity: { type: object }
+                billing_portal_ref: { type: string }
+                connector_authorization_refs:
+                  type: array
+                  items: { type: string }
+                optional_telemetry_enabled: { type: boolean, default: false }
+                metadata: { type: object }
+                actor: { type: string, default: ceo }
+      responses:
+        '200': { description: Account Connect link persisted, entitlement state refreshed, and audit event emitted }
+        '403': { description: Actor is not allowed to manage ProviderOps or commercial connection state }
+  /v1/account-connect/unlink:
+    post:
+      summary: Unlink the active hosted BOSS Account Connect org
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id]
+              properties:
+                project_id: { type: string }
+                hosted_org_id: { type: string }
+                reason: { type: string }
+                actor: { type: string, default: ceo }
+      responses:
+        '200': { description: Account Connect link detached, dependent entitlements marked detached, and audit event emitted }
+        '403': { description: Actor is not allowed to manage ProviderOps or commercial connection state }
+        '404': { description: No active Account Connect link matched the request }
+  /v1/account-connect/sync:
+    post:
+      summary: Sync hosted Account Connect license entitlements through the configured real HTTP adapter
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id]
+              properties:
+                project_id: { type: string }
+                hosted_org_id: { type: string }
+                actor: { type: string, default: ceo }
+      responses:
+        '200': { description: Hosted entitlements synced into local license entitlement state and audit event emitted }
+        '403': { description: Actor is not allowed to manage ProviderOps or commercial connection state }
+        '404': { description: No active Account Connect link matched the request }
+        '502': { description: Configured Account Connect service returned an invalid or failing response }
+        '503': { description: BOSS_ACCOUNT_CONNECT_URL is not configured, so sync fails closed }
+  /v1/enterprise/clusters:
+    get:
+      summary: List enterprise deployment, clustering, trust, support, and private-worker records
+      parameters:
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Enterprise cluster/trust records with blocking gaps and normalized governance controls }
+    post:
+      summary: Create or update an enterprise cluster/trust record without provisioning infrastructure
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id]
+              properties:
+                project_id: { type: string }
+                deployment_mode:
+                  type: string
+                  enum: [enterprise_cloud, self_hosted, private_cloud, air_gapped]
+                  default: enterprise_cloud
+                account_connect_mode:
+                  type: string
+                  enum: [attached, detached]
+                  default: attached
+                worker_pool_strategy: { type: string, default: managed_workers }
+                ha_profile: { type: string, default: standard }
+                data_residency: { type: string, default: us }
+                identity_controls: { type: object }
+                governance_controls: { type: object }
+                audit_controls: { type: object }
+                private_worker_pools:
+                  type: array
+                  items: { type: object }
+                compliance_packs:
+                  type: array
+                  items: { type: string }
+                support_tier: { type: string, default: standard }
+                support_sla: { type: object }
+                status: { type: string, default: planned }
+                metadata: { type: object }
+                actor: { type: string, default: system }
+      responses:
+        '201': { description: Enterprise cluster record normalized, policy gaps calculated, and audit event emitted }
+        '403': { description: Actor is not allowed to manage enterprise trust or clustering records }
+        '422': { description: Unsupported enterprise deployment or Account Connect mode }
+  /v1/enterprise/scim/groups:
+    get:
+      summary: List Enterprise SCIM groups and their BOSS RBAC mappings
+      parameters:
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Enterprise SCIM group records with role and permission mappings }
+    post:
+      summary: Create or update a SCIM group mapping without external IdP calls
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id, display_name]
+              properties:
+                project_id: { type: string }
+                external_id: { type: string }
+                display_name: { type: string }
+                role_keys:
+                  type: array
+                  items: { type: string }
+                permissions:
+                  type: array
+                  items: { type: string }
+                raw_group: { type: object }
+                status: { type: string, default: active }
+                actor: { type: string, default: system }
+      responses:
+        '201': { description: SCIM group mapping persisted and audit event emitted }
+        '403': { description: Actor is not allowed to manage enterprise identity provisioning }
+        '422': { description: Invalid SCIM group mapping }
+  /v1/enterprise/scim/users:
+    get:
+      summary: List Enterprise SCIM users and their mapped BOSS org member ids
+      parameters:
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Enterprise SCIM user records with effective BOSS roles and permissions }
+    post:
+      summary: Create or update a SCIM user and map active users to BOSS org members
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id, user_name, display_name]
+              properties:
+                project_id: { type: string }
+                external_id: { type: string }
+                user_name: { type: string }
+                display_name: { type: string }
+                active: { type: boolean, default: true }
+                role_keys:
+                  type: array
+                  items: { type: string }
+                permissions:
+                  type: array
+                  items: { type: string }
+                groups:
+                  type: array
+                  items: { type: string }
+                raw_profile: { type: object }
+                actor: { type: string, default: system }
+      responses:
+        '201': { description: SCIM user persisted, active user mapped to org member, and audit event emitted }
+        '403': { description: Actor is not allowed to manage enterprise identity provisioning }
+        '422': { description: Invalid SCIM user payload }
   /v1/members:
     get:
       summary: List active project members and system actors
@@ -795,7 +1009,7 @@ paths:
         '422': { description: Invalid pack or role spec }
   /v1/agent-modules:
     get:
-      summary: List packaged agent modules with install status for a project
+      summary: List packaged agent modules with install and entitlement status for a project
       parameters:
         - name: project_id
           in: query
@@ -818,9 +1032,28 @@ paths:
       responses:
         '200': { description: Agent module detail }
         '404': { description: Agent module not found }
+  /v1/agent-module-install-records:
+    get:
+      summary: List agent-module install, entitlement-denial, and rollback records
+      parameters:
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+        - name: module_id
+          in: query
+          required: false
+          schema: { type: string }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, default: 50 }
+      responses:
+        '200': { description: Module install governance records with entitlement results and rollback snapshots }
+        '400': { description: Invalid limit }
   /v1/agent-modules/install:
     post:
-      summary: Install a packaged agent module into a project
+      summary: Install a packaged agent module into a project after entitlement checks
       requestBody:
         required: true
         content:
@@ -837,6 +1070,7 @@ paths:
                   additionalProperties: true
       responses:
         '201': { description: Agent module installed }
+        '403': { description: Actor lacks module management permission or required module entitlement }
         '404': { description: Agent module not found }
   /v1/skills:
     get:

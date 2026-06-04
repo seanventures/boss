@@ -595,6 +595,437 @@ def test_list_projects_returns_seeded_project_scope(client):
     assert projects["boss-dogfood"]["org_name"] == "BOSS"
 
 
+def test_community_edition_is_active_without_account_connect(client):
+    previous = api_main.settings.boss_edition
+    api_main.settings.boss_edition = "community"
+    api_main.commercial.settings.boss_edition = "community"
+    try:
+        response = client.get(
+            "/v1/edition",
+            params={"project_id": "boss-dogfood"},
+        )
+        assert response.status_code == 200
+        edition = response.json()
+        assert edition["edition_id"] == "community"
+        assert edition["status"] == "active"
+        assert edition["account_connect_required"] is False
+        assert edition["account_connect_status"] == "not_required"
+        assert edition["local_auth_allowed"] is True
+        assert edition["hosted_auth_required"] is False
+
+        entitlements = client.get(
+            "/v1/entitlements",
+            params={"project_id": "boss-dogfood"},
+        )
+        assert entitlements.status_code == 200
+        payload = entitlements.json()
+        assert payload["edition"]["edition_id"] == "community"
+        capabilities = {item["capability_key"] for item in payload["items"]}
+        assert {"local_auth", "local_runner", "local_control_plane"} <= capabilities
+        assert "core_canonical_objects" in capabilities
+        assert all(item["status"] == "active" for item in payload["items"])
+    finally:
+        api_main.settings.boss_edition = previous
+        api_main.commercial.settings.boss_edition = previous
+
+
+def test_cloud_edition_requires_account_connect_and_audits_link_unlink(client):
+    previous = api_main.settings.boss_edition
+    api_main.settings.boss_edition = "cloud"
+    api_main.commercial.settings.boss_edition = "cloud"
+    try:
+        blocked = client.get(
+            "/v1/edition",
+            params={"project_id": "boss-dogfood"},
+        )
+        assert blocked.status_code == 200
+        blocked_payload = blocked.json()
+        assert blocked_payload["edition_id"] == "cloud"
+        assert blocked_payload["status"] == "blocked_account_connect_required"
+        assert blocked_payload["account_connect_required"] is True
+        assert blocked_payload["blocked_reason"] == "account_connect_required"
+
+        link = client.post(
+            "/v1/account-connect/link",
+            json={
+                "project_id": "boss-dogfood",
+                "hosted_org_id": "acct_org_test",
+                "connection_ref": "acctconn:test",
+                "marketplace_identity": {"publisher": "seanheiney"},
+                "billing_portal_ref": "stripe:portal:test",
+                "connector_authorization_refs": ["github:installation:test"],
+                "optional_telemetry_enabled": True,
+                "metadata": {"source": "integration_test"},
+                "actor": "ceo",
+            },
+        )
+        assert link.status_code == 200
+        linked = link.json()["edition"]
+        assert linked["status"] == "active"
+        assert linked["account_connect_status"] == "linked"
+        assert linked["connection_mode"] == "cloud_required"
+        assert linked["account_connect_org"]["hosted_org_id"] == "acct_org_test"
+        assert linked["account_connect_org"]["billing_portal_ref"] == "stripe:portal:test"
+
+        entitlements = client.get(
+            "/v1/entitlements",
+            params={"project_id": "boss-dogfood"},
+        )
+        assert entitlements.status_code == 200
+        account_connect_rows = [
+            item
+            for item in entitlements.json()["items"]
+            if item["capability_key"] == "account_connect"
+            and item["source"] == "account_connect"
+        ]
+        assert account_connect_rows
+        assert account_connect_rows[0]["source"] == "account_connect"
+        assert account_connect_rows[0]["status"] == "active"
+
+        unlink = client.post(
+            "/v1/account-connect/unlink",
+            json={
+                "project_id": "boss-dogfood",
+                "hosted_org_id": "acct_org_test",
+                "reason": "operator_requested_detach",
+                "actor": "ceo",
+            },
+        )
+        assert unlink.status_code == 200
+        unlinked = unlink.json()["edition"]
+        assert unlinked["status"] == "blocked_account_connect_required"
+        assert unlinked["account_connect_status"] == "not_linked"
+
+        inactive_entitlements = client.get(
+            "/v1/entitlements",
+            params={"project_id": "boss-dogfood", "include_inactive": True},
+        )
+        assert inactive_entitlements.status_code == 200
+        detached_rows = [
+            item
+            for item in inactive_entitlements.json()["items"]
+            if item["capability_key"] == "account_connect"
+            and item["source"] == "account_connect"
+        ]
+        assert detached_rows
+        assert detached_rows[0]["status"] == "detached"
+
+        events = client.get("/v1/events", params={"project_id": "boss-dogfood"})
+        event_types = [item["event_type"] for item in events.json()["items"]]
+        assert "account_connect.linked" in event_types
+        assert "account_connect.unlinked" in event_types
+    finally:
+        api_main.settings.boss_edition = previous
+        api_main.commercial.settings.boss_edition = previous
+
+
+def test_account_connect_sync_fails_closed_without_hosted_url(client):
+    previous_edition = api_main.settings.boss_edition
+    previous_url = api_main.settings.account_connect_url
+    api_main.settings.boss_edition = "cloud"
+    api_main.commercial.settings.boss_edition = "cloud"
+    api_main.settings.account_connect_url = None
+    api_main.commercial.settings.account_connect_url = None
+    try:
+        link = client.post(
+            "/v1/account-connect/link",
+            json={
+                "project_id": "boss-dogfood",
+                "hosted_org_id": "acct_org_missing_url",
+                "actor": "ceo",
+            },
+        )
+        assert link.status_code == 200
+
+        denied = client.post(
+            "/v1/account-connect/sync",
+            json={
+                "project_id": "boss-dogfood",
+                "hosted_org_id": "acct_org_missing_url",
+                "actor": "ceo",
+            },
+        )
+        assert denied.status_code == 503
+        assert "BOSS_ACCOUNT_CONNECT_URL" in denied.json()["detail"]
+
+        events = client.get("/v1/events", params={"project_id": "boss-dogfood"})
+        event_types = [item["event_type"] for item in events.json()["items"]]
+        assert "account_connect.sync_denied" in event_types
+    finally:
+        api_main.settings.boss_edition = previous_edition
+        api_main.commercial.settings.boss_edition = previous_edition
+        api_main.settings.account_connect_url = previous_url
+        api_main.commercial.settings.account_connect_url = previous_url
+
+
+def test_account_connect_sync_upserts_hosted_entitlements(
+    client,
+    monkeypatch,
+):
+    previous = api_main.settings.boss_edition
+    api_main.settings.boss_edition = "cloud"
+    api_main.commercial.settings.boss_edition = "cloud"
+
+    class FakeAccountConnectAdapter:
+        def fetch_entitlements(self, *, hosted_org_id: str, project_id: str):
+            assert hosted_org_id == "acct_org_sync"
+            assert project_id == "boss-dogfood"
+            return [
+                {
+                    "id": "lic_hosted_marketplace",
+                    "capability_key": "marketplace_private_registry",
+                    "capabilities": ["marketplace_private_registry"],
+                    "status": "active",
+                    "source": "account_connect_hosted",
+                    "seats": 5,
+                    "metadata": {"plan": "enterprise_cloud"},
+                }
+            ]
+
+    monkeypatch.setattr(
+        api_main.commercial,
+        "account_connect_adapter",
+        FakeAccountConnectAdapter(),
+    )
+    try:
+        link = client.post(
+            "/v1/account-connect/link",
+            json={
+                "project_id": "boss-dogfood",
+                "hosted_org_id": "acct_org_sync",
+                "actor": "ceo",
+            },
+        )
+        assert link.status_code == 200
+
+        synced = client.post(
+            "/v1/account-connect/sync",
+            json={
+                "project_id": "boss-dogfood",
+                "hosted_org_id": "acct_org_sync",
+                "actor": "ceo",
+            },
+        )
+        assert synced.status_code == 200
+        assert synced.json()["synced_entitlement_count"] == 1
+
+        entitlements = client.get(
+            "/v1/entitlements",
+            params={"project_id": "boss-dogfood"},
+        )
+        hosted_rows = [
+            item
+            for item in entitlements.json()["items"]
+            if item["source"] == "account_connect_hosted"
+        ]
+        assert hosted_rows
+        assert hosted_rows[0]["capability_key"] == "marketplace_private_registry"
+        assert hosted_rows[0]["seats"] == 5
+
+        events = client.get("/v1/events", params={"project_id": "boss-dogfood"})
+        event_types = [item["event_type"] for item in events.json()["items"]]
+        assert "account_connect.synced" in event_types
+    finally:
+        api_main.settings.boss_edition = previous
+        api_main.commercial.settings.boss_edition = previous
+
+
+def test_enterprise_cluster_records_trust_controls_and_blocking_gaps(client):
+    denied = client.post(
+        "/v1/enterprise/clusters",
+        json={
+            "project_id": "boss-dogfood",
+            "deployment_mode": "enterprise_cloud",
+            "actor": "release_manager",
+        },
+    )
+    assert denied.status_code == 403
+
+    active = client.post(
+        "/v1/enterprise/clusters",
+        json={
+            "project_id": "boss-dogfood",
+            "deployment_mode": "enterprise_cloud",
+            "account_connect_mode": "attached",
+            "worker_pool_strategy": "dedicated_managed_workers",
+            "ha_profile": "regional_ha",
+            "data_residency": "us-east",
+            "identity_controls": {
+                "sso_oidc_configured": True,
+                "scim_configured": True,
+                "rbac_enabled": True,
+                "abac_enabled": True,
+            },
+            "audit_controls": {
+                "audit_exports_enabled": True,
+                "retention_days": 730,
+                "compliance_evidence_workflows": True,
+            },
+            "support_tier": "enterprise",
+            "support_sla": {
+                "response_time_hours": 2,
+                "uptime_target": "99.95%",
+            },
+            "status": "active",
+            "actor": "ceo",
+        },
+    )
+    assert active.status_code == 201
+    active_payload = active.json()
+    assert active_payload["status"] == "active"
+    assert active_payload["blocking_gaps"] == []
+    assert active_payload["identity_controls"]["sso_oidc_configured"] is True
+    assert active_payload["identity_controls"]["scim_configured"] is True
+    assert active_payload["governance_controls"]["budget_governor_precedence"] is True
+    assert (
+        active_payload["governance_controls"]["agents_receive_raw_provider_secrets"]
+        is False
+    )
+    assert active_payload["support_sla"]["response_time_hours"] == 2
+
+    blocked = client.post(
+        "/v1/enterprise/clusters",
+        json={
+            "project_id": "boss-dogfood",
+            "deployment_mode": "self_hosted",
+            "account_connect_mode": "detached",
+            "worker_pool_strategy": "private_worker_pools",
+            "ha_profile": "multi_node",
+            "data_residency": "customer_vpc",
+            "actor": "ceo",
+        },
+    )
+    assert blocked.status_code == 201
+    blocked_payload = blocked.json()
+    assert blocked_payload["status"] == "blocked"
+    assert "sso_or_saml_not_configured" in blocked_payload["blocking_gaps"]
+    assert "scim_not_configured" in blocked_payload["blocking_gaps"]
+    assert "private_worker_pool_missing" in blocked_payload["blocking_gaps"]
+    assert (
+        "detached_enterprise_compliance_pack_missing"
+        in blocked_payload["blocking_gaps"]
+    )
+
+    listed = client.get(
+        "/v1/enterprise/clusters",
+        params={"project_id": "boss-dogfood"},
+    )
+    assert listed.status_code == 200
+    clusters = listed.json()["items"]
+    assert {cluster["deployment_mode"] for cluster in clusters} >= {
+        "enterprise_cloud",
+        "self_hosted",
+    }
+
+    events = client.get("/v1/events", params={"project_id": "boss-dogfood"})
+    event_types = [item["event_type"] for item in events.json()["items"]]
+    assert "policy.denied" in event_types
+    assert "enterprise.cluster_upserted" in event_types
+
+
+def test_enterprise_scim_provisioning_maps_users_to_org_members(client):
+    denied = client.post(
+        "/v1/enterprise/scim/groups",
+        json={
+            "project_id": "boss-dogfood",
+            "display_name": "Engineering Admins",
+            "permissions": ["audit_export"],
+            "actor": "release_manager",
+        },
+    )
+    assert denied.status_code == 403
+
+    group = client.post(
+        "/v1/enterprise/scim/groups",
+        json={
+            "project_id": "boss-dogfood",
+            "external_id": "grp-eng-admins",
+            "display_name": "Engineering Admins",
+            "role_keys": ["engineering_admin"],
+            "permissions": ["audit_export", "health_refresh"],
+            "raw_group": {"schemas": ["urn:ietf:params:scim:schemas:core:2.0:Group"]},
+            "actor": "ceo",
+        },
+    )
+    assert group.status_code == 201
+    group_payload = group.json()
+    assert group_payload["display_name"] == "Engineering Admins"
+    assert "audit_export" in group_payload["permissions"]
+
+    user = client.post(
+        "/v1/enterprise/scim/users",
+        json={
+            "project_id": "boss-dogfood",
+            "external_id": "usr-alice",
+            "user_name": "Alice.Admin@example.com",
+            "display_name": "Alice Admin",
+            "groups": ["Engineering Admins"],
+            "permissions": ["command_submit"],
+            "raw_profile": {
+                "schemas": ["urn:ietf:params:scim:schemas:core:2.0:User"]
+            },
+            "actor": "ceo",
+        },
+    )
+    assert user.status_code == 201
+    user_payload = user.json()
+    assert user_payload["user_name"] == "alice.admin@example.com"
+    assert user_payload["member_id"] == "scim_alice_admin_example_com"
+    assert user_payload["active"] is True
+    assert {"command_submit", "audit_export", "health_refresh"} <= set(
+        user_payload["permissions"]
+    )
+    assert "engineering_admin" in user_payload["role_keys"]
+
+    members_response = client.get("/v1/members", params={"project_id": "boss-dogfood"})
+    member = next(
+        item
+        for item in members_response.json()["items"]
+        if item["member_id"] == "scim_alice_admin_example_com"
+    )
+    assert member["display_name"] == "Alice Admin"
+    assert "audit_export" in member["permissions"]
+
+    groups_response = client.get(
+        "/v1/enterprise/scim/groups",
+        params={"project_id": "boss-dogfood"},
+    )
+    assert groups_response.status_code == 200
+    assert groups_response.json()["items"][0]["display_name"] == "Engineering Admins"
+
+    users_response = client.get(
+        "/v1/enterprise/scim/users",
+        params={"project_id": "boss-dogfood"},
+    )
+    assert users_response.status_code == 200
+    assert users_response.json()["items"][0]["member_id"] == "scim_alice_admin_example_com"
+
+    deactivated = client.post(
+        "/v1/enterprise/scim/users",
+        json={
+            "project_id": "boss-dogfood",
+            "user_name": "alice.admin@example.com",
+            "display_name": "Alice Admin",
+            "active": False,
+            "groups": ["Engineering Admins"],
+            "actor": "ceo",
+        },
+    )
+    assert deactivated.status_code == 201
+    assert deactivated.json()["active"] is False
+
+    members_after = client.get("/v1/members", params={"project_id": "boss-dogfood"})
+    member_ids_after = {item["member_id"] for item in members_after.json()["items"]}
+    assert "scim_alice_admin_example_com" not in member_ids_after
+
+    events = client.get("/v1/events", params={"project_id": "boss-dogfood"})
+    event_types = [item["event_type"] for item in events.json()["items"]]
+    assert "policy.denied" in event_types
+    assert "enterprise.scim_group_upserted" in event_types
+    assert "enterprise.scim_user_upserted" in event_types
+    assert "org_member.upserted" in event_types
+
+
 def test_list_project_members_returns_seeded_actor_directory(client):
     response = client.get("/v1/members", params={"project_id": "boss-dogfood"})
 
@@ -1221,10 +1652,107 @@ def test_seed_installs_default_agent_modules(client):
     modules = {item["module_id"]: item for item in payload["items"]}
     assert modules["metatron_operator_v1"]["installed"] is True
     assert modules["codex_software_engineer_v1"]["installed"] is True
+    assert modules["metatron_operator_v1"]["required_entitlements"] == [
+        "basic_metatron"
+    ]
+    assert modules["codex_software_engineer_v1"]["entitlement_status"] == "allowed"
+    assert modules["private_enterprise_agent_v1"]["entitlement_status"] == (
+        "missing_required_entitlement"
+    )
     assert "plan.command" in modules["metatron_operator_v1"]["job_kinds"]
     assert "software_factory.propose_pr" in modules["codex_software_engineer_v1"][
         "job_kinds"
     ]
+
+
+def test_agent_module_install_requires_declared_marketplace_entitlement(client, engine):
+    denied = client.post(
+        "/v1/agent-modules/install",
+        json={
+            "project_id": "boss-dogfood",
+            "module_id": "private_enterprise_agent_v1",
+            "actor": "ceo",
+        },
+    )
+    assert denied.status_code == 403
+    assert "private_agent_marketplace" in denied.json()["detail"]
+
+    denied_records = client.get(
+        "/v1/agent-module-install-records",
+        params={
+            "project_id": "boss-dogfood",
+            "module_id": "private_enterprise_agent_v1",
+        },
+    )
+    assert denied_records.status_code == 200
+    assert denied_records.json()["items"][0]["action"] == "install_denied"
+    assert denied_records.json()["items"][0]["status"] == "denied"
+    assert denied_records.json()["items"][0]["entitlement_result"]["status"] == (
+        "missing_required_entitlement"
+    )
+
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                """
+                INSERT INTO license_entitlements (
+                    id, project_id, edition_id, account_connect_org_id,
+                    scope_type, scope_id, capability_key, capabilities,
+                    status, source, metadata
+                )
+                VALUES (
+                    'lic_private_agent_marketplace',
+                    'boss-dogfood',
+                    'enterprise_cloud',
+                    'acct_org_test',
+                    'project',
+                    'boss-dogfood',
+                    'private_agent_marketplace',
+                    '["private_agent_marketplace"]'::jsonb,
+                    'active',
+                    'account_connect_hosted',
+                    '{"reason":"test entitlement"}'::jsonb
+                )
+                ON CONFLICT (project_id, capability_key, source) DO UPDATE
+                SET status = EXCLUDED.status,
+                    capabilities = EXCLUDED.capabilities,
+                    updated_at = now()
+                """
+            )
+        )
+
+    installed = client.post(
+        "/v1/agent-modules/install",
+        json={
+            "project_id": "boss-dogfood",
+            "module_id": "private_enterprise_agent_v1",
+            "actor": "ceo",
+        },
+    )
+    assert installed.status_code == 201
+    payload = installed.json()
+    assert payload["module_id"] == "private_enterprise_agent_v1"
+    assert payload["install_status"] == "installed"
+    assert payload["entitlement_result"]["status"] == "allowed"
+    assert payload["role_result"]["role_key"] == "private_enterprise_agent"
+
+    records = client.get(
+        "/v1/agent-module-install-records",
+        params={
+            "project_id": "boss-dogfood",
+            "module_id": "private_enterprise_agent_v1",
+            "limit": 10,
+        },
+    )
+    assert records.status_code == 200
+    actions = [item["action"] for item in records.json()["items"]]
+    assert "install" in actions
+    assert "install_denied" in actions
+
+    events = client.get("/v1/events", params={"project_id": "boss-dogfood"})
+    event_types = [item["event_type"] for item in events.json()["items"]]
+    assert "agent_module.install_denied" in event_types
+    assert "agent_module.installed" in event_types
 
 
 def test_role_review_creates_upgrade_recommendation_when_role_is_eligible(client):

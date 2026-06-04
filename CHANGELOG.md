@@ -2,6 +2,20 @@
 
 All notable changes to BOSS are documented in this file.
 
+## v0.4.0 - 2026-06-03
+
+This release adds the commercial, Account Connect, enterprise-governance, SCIM, and entitlement-gated agent-module runtime surfaces that make PRD v2.0 executable beyond documentation.
+
+### Added
+
+- Added Community, Cloud, Enterprise Cloud, and Enterprise Self-hosted edition introspection with fail-closed Cloud Account Connect requirements and local Community mode that works without hosted BOSS auth.
+- Added BOSS Account Connect link, unlink, and hosted entitlement sync APIs with visible denied events when hosted credentials or connection state are missing.
+- Added license entitlement records and runtime entitlement checks that distinguish edition capabilities from active/trial hosted entitlements.
+- Added enterprise cluster inventory with trust metadata for SSO, SCIM, RBAC/ABAC, audit export, private workers, managed ProviderOps, compliance packs, support plans, SLA tier, and detached-license state.
+- Added SCIM group and user provisioning records that map active SCIM users into effective org-member access and remove access on deactivation.
+- Added entitlement-gated packaged agent module installs with install governance records, denial audit events, rollback snapshots, and private enterprise module coverage.
+- Added OpenAPI, TypeScript API client, specpack objects, workflows, policies, user stories, and traceability coverage for the new commercial and enterprise runtime surfaces.
+
 ## v0.3.0 - 2026-06-03
 
 This release ships the Elastic Resource Plane / ProviderOps module as core BOSS infrastructure.

@@ -58,6 +58,405 @@ describe("createBossApiClient", () => {
     expect(session.actor_binding_required).toBe(true);
   });
 
+  it("uses edition and Account Connect API contracts", async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const edition = {
+      project_id: "boss-dogfood",
+      edition_id: "cloud",
+      display_name: "BOSS Cloud",
+      status: "active",
+      account_connect_required: true,
+      account_connect_status: "linked",
+      account_connect_org: {
+        id: "acctconn_boss-dogfood_acct_org_123",
+        project_id: "boss-dogfood",
+        hosted_org_id: "acct_org_123",
+        local_org_id: "org_boss",
+        connection_mode: "cloud_required",
+        marketplace_identity: { publisher: "seanheiney" },
+        billing_portal_ref: "stripe:portal:test",
+        connector_authorization_refs: ["github:installation:test"],
+        optional_telemetry_enabled: true,
+        connection_ref: "acctconn:test",
+        status: "linked",
+        linked_by: "ceo",
+        linked_at: "2026-06-03T00:00:00Z",
+        metadata: {},
+        created_at: "2026-06-03T00:00:00Z",
+        updated_at: "2026-06-03T00:00:00Z",
+      },
+      local_auth_allowed: false,
+      hosted_auth_required: true,
+      connection_mode: "cloud_required",
+      license_candidate: "source-available-commercial",
+      legal_review_required: true,
+      included_capabilities: ["cloud_auth", "marketplace_install"],
+      commercial_capabilities: ["cloud_auth", "marketplace_install"],
+      source_pack: "cloud_edition.yaml",
+    };
+    const responses = [
+      { status: 200, body: edition },
+      {
+        status: 200,
+        body: {
+          project_id: "boss-dogfood",
+          edition,
+          items: [
+            {
+              id: "lic_boss-dogfood_account_connect",
+              project_id: "boss-dogfood",
+              edition_id: "cloud",
+              account_connect_org_id: "acct_org_123",
+              scope_type: "project",
+              scope_id: "boss-dogfood",
+              capability_key: "account_connect",
+              capabilities: ["cloud_auth"],
+              status: "active",
+              source: "account_connect",
+              metadata: {},
+            },
+          ],
+        },
+      },
+      { status: 200, body: { project_id: "boss-dogfood", edition } },
+      {
+        status: 200,
+        body: {
+          project_id: "boss-dogfood",
+          edition,
+          synced_entitlement_count: 2,
+        },
+      },
+      {
+        status: 200,
+        body: {
+          project_id: "boss-dogfood",
+          edition: {
+            ...edition,
+            status: "blocked_account_connect_required",
+            account_connect_status: "not_linked",
+            account_connect_org: undefined,
+            blocked_reason: "account_connect_required",
+          },
+        },
+      },
+    ];
+    const fetchImpl = async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({ url: String(input), init });
+      const response = responses.shift();
+      return new Response(JSON.stringify(response?.body ?? {}), {
+        status: response?.status ?? 500,
+        headers: { "Content-Type": "application/json" },
+      });
+    };
+    const client = createBossApiClient({
+      baseUrl: "http://127.0.0.1:8000",
+      fetchImpl,
+    });
+
+    const editionStatus = await client.getEdition("boss-dogfood");
+    const entitlementList = await client.listLicenseEntitlements(
+      "boss-dogfood",
+      true,
+    );
+    const linked = await client.linkAccountConnect({
+      project_id: "boss-dogfood",
+      hosted_org_id: "acct_org_123",
+      actor: "ceo",
+    });
+    const synced = await client.syncAccountConnect({
+      project_id: "boss-dogfood",
+      hosted_org_id: "acct_org_123",
+      actor: "ceo",
+    });
+    const unlinked = await client.unlinkAccountConnect({
+      project_id: "boss-dogfood",
+      hosted_org_id: "acct_org_123",
+      actor: "ceo",
+    });
+
+    expect(editionStatus.account_connect_status).toBe("linked");
+    expect(entitlementList.items[0].capability_key).toBe("account_connect");
+    expect(linked.edition.account_connect_required).toBe(true);
+    expect(synced.synced_entitlement_count).toBe(2);
+    expect(unlinked.edition.status).toBe("blocked_account_connect_required");
+    expect(calls[0].url).toBe(
+      "http://127.0.0.1:8000/v1/edition?project_id=boss-dogfood",
+    );
+    expect(calls[1].url).toContain(
+      "/v1/entitlements?project_id=boss-dogfood&include_inactive=true",
+    );
+    expect(calls[2].url).toBe(
+      "http://127.0.0.1:8000/v1/account-connect/link",
+    );
+    expect(calls[2].init?.method).toBe("POST");
+    expect(calls[3].url).toBe(
+      "http://127.0.0.1:8000/v1/account-connect/sync",
+    );
+    expect(calls[3].init?.method).toBe("POST");
+    expect(calls[4].url).toBe(
+      "http://127.0.0.1:8000/v1/account-connect/unlink",
+    );
+  });
+
+  it("uses enterprise cluster API contracts", async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const cluster = {
+      id: "entcluster_boss-dogfood_enterprise_cloud_attached",
+      org_id: "org_boss",
+      project_id: "boss-dogfood",
+      deployment_mode: "enterprise_cloud",
+      account_connect_mode: "attached",
+      worker_pool_strategy: "dedicated_managed_workers",
+      ha_profile: "regional_ha",
+      data_residency: "us-east",
+      identity_controls: {
+        sso_oidc_configured: true,
+        scim_configured: true,
+      },
+      governance_controls: {
+        budget_governor_precedence: true,
+        agents_receive_raw_provider_secrets: false,
+      },
+      audit_controls: {
+        audit_exports_enabled: true,
+        retention_days: 730,
+      },
+      private_worker_pools: [],
+      compliance_packs: ["enterprise_compliance"],
+      support_tier: "enterprise",
+      support_sla: {
+        response_time_hours: 2,
+        uptime_target: "99.95%",
+      },
+      status: "active",
+      blocking_gaps: [],
+      created_by: "ceo",
+      metadata: {},
+      created_at: "2026-06-03T00:00:00Z",
+      updated_at: "2026-06-03T00:00:00Z",
+    };
+    const responses = [
+      { status: 200, body: { project_id: "boss-dogfood", items: [cluster] } },
+      { status: 201, body: cluster },
+    ];
+    const fetchImpl = async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({ url: String(input), init });
+      const response = responses.shift();
+      return new Response(JSON.stringify(response?.body ?? {}), {
+        status: response?.status ?? 500,
+        headers: { "Content-Type": "application/json" },
+      });
+    };
+    const client = createBossApiClient({
+      baseUrl: "http://127.0.0.1:8000",
+      fetchImpl,
+    });
+
+    const listed = await client.listEnterpriseClusters("boss-dogfood");
+    const upserted = await client.upsertEnterpriseCluster({
+      project_id: "boss-dogfood",
+      deployment_mode: "enterprise_cloud",
+      account_connect_mode: "attached",
+      identity_controls: { sso_oidc_configured: true, scim_configured: true },
+      actor: "ceo",
+    });
+
+    expect(listed.items[0].blocking_gaps).toEqual([]);
+    expect(upserted.support_tier).toBe("enterprise");
+    expect(calls[0].url).toBe(
+      "http://127.0.0.1:8000/v1/enterprise/clusters?project_id=boss-dogfood",
+    );
+    expect(calls[1].url).toBe(
+      "http://127.0.0.1:8000/v1/enterprise/clusters",
+    );
+    expect(calls[1].init?.method).toBe("POST");
+  });
+
+  it("uses enterprise SCIM provisioning API contracts", async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const group = {
+      id: "scimgroup_boss-dogfood_engineering_admins",
+      org_id: "org_boss",
+      project_id: "boss-dogfood",
+      external_id: "grp-eng-admins",
+      display_name: "Engineering Admins",
+      role_keys: ["engineering_admin"],
+      permissions: ["audit_export"],
+      raw_group: {},
+      status: "active",
+      created_by: "ceo",
+      created_at: "2026-06-03T00:00:00Z",
+      updated_at: "2026-06-03T00:00:00Z",
+    };
+    const user = {
+      id: "scimuser_boss-dogfood_alice_admin_example_com",
+      org_id: "org_boss",
+      project_id: "boss-dogfood",
+      external_id: "usr-alice",
+      user_name: "alice.admin@example.com",
+      display_name: "Alice Admin",
+      member_id: "scim_alice_admin_example_com",
+      role_keys: ["engineering_admin"],
+      permissions: ["audit_export", "command_submit"],
+      groups: ["Engineering Admins"],
+      raw_profile: {},
+      status: "active",
+      active: true,
+      created_by: "ceo",
+      created_at: "2026-06-03T00:00:00Z",
+      updated_at: "2026-06-03T00:00:00Z",
+    };
+    const responses = [
+      { status: 200, body: { project_id: "boss-dogfood", items: [group] } },
+      { status: 201, body: group },
+      { status: 200, body: { project_id: "boss-dogfood", items: [user] } },
+      { status: 201, body: user },
+    ];
+    const fetchImpl = async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({ url: String(input), init });
+      const response = responses.shift();
+      return new Response(JSON.stringify(response?.body ?? {}), {
+        status: response?.status ?? 500,
+        headers: { "Content-Type": "application/json" },
+      });
+    };
+    const client = createBossApiClient({
+      baseUrl: "http://127.0.0.1:8000",
+      fetchImpl,
+    });
+
+    const groups = await client.listEnterpriseScimGroups("boss-dogfood");
+    const upsertedGroup = await client.upsertEnterpriseScimGroup({
+      project_id: "boss-dogfood",
+      display_name: "Engineering Admins",
+      permissions: ["audit_export"],
+      actor: "ceo",
+    });
+    const users = await client.listEnterpriseScimUsers("boss-dogfood");
+    const upsertedUser = await client.upsertEnterpriseScimUser({
+      project_id: "boss-dogfood",
+      user_name: "alice.admin@example.com",
+      display_name: "Alice Admin",
+      groups: ["Engineering Admins"],
+      actor: "ceo",
+    });
+
+    expect(groups.items[0].display_name).toBe("Engineering Admins");
+    expect(upsertedGroup.permissions).toContain("audit_export");
+    expect(users.items[0].member_id).toBe("scim_alice_admin_example_com");
+    expect(upsertedUser.active).toBe(true);
+    expect(calls[0].url).toBe(
+      "http://127.0.0.1:8000/v1/enterprise/scim/groups?project_id=boss-dogfood",
+    );
+    expect(calls[1].url).toBe(
+      "http://127.0.0.1:8000/v1/enterprise/scim/groups",
+    );
+    expect(calls[2].url).toBe(
+      "http://127.0.0.1:8000/v1/enterprise/scim/users?project_id=boss-dogfood",
+    );
+    expect(calls[3].url).toBe(
+      "http://127.0.0.1:8000/v1/enterprise/scim/users",
+    );
+    expect(calls[3].init?.method).toBe("POST");
+  });
+
+  it("uses agent module entitlement and install-record API contracts", async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const module = {
+      module_id: "private_enterprise_agent_v1",
+      version: "1.0.0",
+      display_name: "Private Enterprise Agent",
+      description: "Enterprise-only packaged agent.",
+      publisher: "BOSS",
+      category: "enterprise",
+      status: "active",
+      role_key: "private_enterprise_agent",
+      job_kinds: ["enterprise.marketplace.validate"],
+      default_skill_ids: ["artifact.create"],
+      tags: ["enterprise"],
+      price_model: "enterprise_contract",
+      price_usd_micros: 0,
+      required_entitlements: ["private_agent_marketplace"],
+      entitlement_status: "allowed",
+      config_schema: {},
+      installed: true,
+      installed_by: "ceo",
+      installed_at: "2026-06-03T00:00:00Z",
+      updated_at: "2026-06-03T00:00:00Z",
+      installed_version: "1.0.0",
+      config: {},
+      prompt_bundle: {},
+      runtime: {},
+      marketplace: { required_entitlement: "private_agent_marketplace" },
+      role: {},
+      role_result: { role_key: "private_enterprise_agent" },
+      entitlement_result: { status: "allowed" },
+      install_status: "installed",
+    };
+    const record = {
+      id: "agent_module_install_record_1",
+      project_id: "boss-dogfood",
+      module_id: "private_enterprise_agent_v1",
+      action: "install",
+      from_version: undefined,
+      to_version: "1.0.0",
+      actor: "ceo",
+      status: "installed",
+      entitlement_result: { status: "allowed" },
+      rollback_snapshot: {},
+      metadata: { role_key: "private_enterprise_agent" },
+      created_at: "2026-06-03T00:00:00Z",
+    };
+    const responses = [
+      { status: 200, body: { project_id: "boss-dogfood", items: [module] } },
+      { status: 201, body: module },
+      { status: 200, body: { project_id: "boss-dogfood", items: [record] } },
+    ];
+    const fetchImpl = async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({ url: String(input), init });
+      const response = responses.shift();
+      return new Response(JSON.stringify(response?.body ?? {}), {
+        status: response?.status ?? 500,
+        headers: { "Content-Type": "application/json" },
+      });
+    };
+    const client = createBossApiClient({
+      baseUrl: "http://127.0.0.1:8000",
+      fetchImpl,
+    });
+
+    const listed = await client.listAgentModules("boss-dogfood");
+    const installed = await client.installAgentModule({
+      project_id: "boss-dogfood",
+      module_id: "private_enterprise_agent_v1",
+      actor: "ceo",
+    });
+    const records = await client.listAgentModuleInstallRecords(
+      "boss-dogfood",
+      "private_enterprise_agent_v1",
+      10,
+    );
+
+    expect(listed.items[0].required_entitlements).toEqual([
+      "private_agent_marketplace",
+    ]);
+    expect(installed.entitlement_result.status).toBe("allowed");
+    expect(records.items[0].action).toBe("install");
+    expect(calls[0].url).toBe(
+      "http://127.0.0.1:8000/v1/agent-modules?project_id=boss-dogfood",
+    );
+    expect(calls[1].url).toBe(
+      "http://127.0.0.1:8000/v1/agent-modules/install",
+    );
+    expect(calls[1].init?.method).toBe("POST");
+    expect(calls[2].url).toContain(
+      "/v1/agent-module-install-records?project_id=boss-dogfood",
+    );
+    expect(calls[2].url).toContain("module_id=private_enterprise_agent_v1");
+    expect(calls[2].url).toContain("limit=10");
+  });
+
   it("manages org members through the API contract", async () => {
     const calls: Array<{ url: string; init?: RequestInit }> = [];
     const orgMember = {

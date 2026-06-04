@@ -7,6 +7,8 @@ fields:
     type: string
   - name: org_id
     type: string
+  - name: project_id
+    type: string
   - name: deployment_mode
     type: enum
     values: [enterprise_cloud, self_hosted, private_cloud, air_gapped]
@@ -19,8 +21,29 @@ fields:
     type: string
   - name: data_residency
     type: string
+  - name: identity_controls
+    type: object
+  - name: governance_controls
+    type: object
+  - name: audit_controls
+    type: object
+  - name: private_worker_pools
+    type: array
+  - name: compliance_packs
+    type: array
   - name: support_tier
     type: string
+  - name: support_sla
+    type: object
+  - name: status
+    type: enum
+    values: [planned, active, blocked, disabled]
+  - name: blocking_gaps
+    type: array
+  - name: metadata
+    type: object
 rules:
   private_workers_preserve_secret_boundaries: true
   budget_governor_still_applies: true
+  agents_receive_raw_provider_secrets: false
+  incomplete_controls_surface_blocking_gaps: true

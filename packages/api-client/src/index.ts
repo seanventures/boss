@@ -37,6 +37,222 @@ export type AuthSessionResponse = {
   message: string;
 };
 
+export type AccountConnectOrgSummary = {
+  id: string;
+  project_id: string;
+  hosted_org_id: string;
+  local_org_id: string;
+  connection_mode: string;
+  marketplace_identity: Record<string, unknown>;
+  billing_portal_ref?: string;
+  connector_authorization_refs: string[];
+  optional_telemetry_enabled: boolean;
+  connection_ref?: string;
+  status: string;
+  linked_by: string;
+  linked_at?: string;
+  unlinked_by?: string;
+  unlinked_at?: string;
+  metadata: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+};
+
+export type EditionStatusResponse = {
+  project_id: string;
+  edition_id: string;
+  display_name: string;
+  status: string;
+  account_connect_required: boolean;
+  account_connect_status: string;
+  account_connect_org?: AccountConnectOrgSummary;
+  local_auth_allowed: boolean;
+  hosted_auth_required: boolean;
+  connection_mode: string;
+  license_candidate?: string;
+  legal_review_required: boolean;
+  included_capabilities: string[];
+  commercial_capabilities: string[];
+  blocked_reason?: string;
+  source_pack: string;
+};
+
+export type LicenseEntitlementSummary = {
+  id: string;
+  project_id: string;
+  edition_id: string;
+  account_connect_org_id?: string;
+  scope_type: string;
+  scope_id: string;
+  capability_key: string;
+  capabilities: string[];
+  seats?: number;
+  status: string;
+  source: string;
+  expires_at?: string;
+  metadata: Record<string, unknown>;
+  created_at?: string;
+  updated_at?: string;
+};
+
+export type LicenseEntitlementListResponse = {
+  project_id: string;
+  edition: EditionStatusResponse;
+  items: LicenseEntitlementSummary[];
+};
+
+export type AccountConnectLinkRequest = {
+  project_id: string;
+  hosted_org_id: string;
+  connection_ref?: string;
+  marketplace_identity?: Record<string, unknown>;
+  billing_portal_ref?: string;
+  connector_authorization_refs?: string[];
+  optional_telemetry_enabled?: boolean;
+  metadata?: Record<string, unknown>;
+  actor?: string;
+};
+
+export type AccountConnectUnlinkRequest = {
+  project_id: string;
+  hosted_org_id?: string;
+  reason?: string;
+  actor?: string;
+};
+
+export type AccountConnectMutationResponse = {
+  project_id: string;
+  edition: EditionStatusResponse;
+};
+
+export type AccountConnectSyncRequest = {
+  project_id: string;
+  hosted_org_id?: string;
+  actor?: string;
+};
+
+export type AccountConnectSyncResponse = {
+  project_id: string;
+  edition: EditionStatusResponse;
+  synced_entitlement_count: number;
+};
+
+export type EnterpriseClusterSummary = {
+  id: string;
+  org_id: string;
+  project_id: string;
+  deployment_mode: string;
+  account_connect_mode: string;
+  worker_pool_strategy: string;
+  ha_profile: string;
+  data_residency: string;
+  identity_controls: Record<string, unknown>;
+  governance_controls: Record<string, unknown>;
+  audit_controls: Record<string, unknown>;
+  private_worker_pools: Array<Record<string, unknown>>;
+  compliance_packs: string[];
+  support_tier: string;
+  support_sla: Record<string, unknown>;
+  status: string;
+  blocking_gaps: string[];
+  created_by: string;
+  metadata: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+};
+
+export type EnterpriseClusterListResponse = {
+  project_id: string;
+  items: EnterpriseClusterSummary[];
+};
+
+export type EnterpriseClusterUpsertRequest = {
+  project_id: string;
+  deployment_mode?: string;
+  account_connect_mode?: string;
+  worker_pool_strategy?: string;
+  ha_profile?: string;
+  data_residency?: string;
+  identity_controls?: Record<string, unknown>;
+  governance_controls?: Record<string, unknown>;
+  audit_controls?: Record<string, unknown>;
+  private_worker_pools?: Array<Record<string, unknown>>;
+  compliance_packs?: string[];
+  support_tier?: string;
+  support_sla?: Record<string, unknown>;
+  status?: string;
+  metadata?: Record<string, unknown>;
+  actor?: string;
+};
+
+export type EnterpriseScimGroupSummary = {
+  id: string;
+  org_id: string;
+  project_id: string;
+  external_id?: string;
+  display_name: string;
+  role_keys: string[];
+  permissions: string[];
+  raw_group: Record<string, unknown>;
+  status: string;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type EnterpriseScimGroupListResponse = {
+  project_id: string;
+  items: EnterpriseScimGroupSummary[];
+};
+
+export type EnterpriseScimGroupUpsertRequest = {
+  project_id: string;
+  external_id?: string;
+  display_name: string;
+  role_keys?: string[];
+  permissions?: string[];
+  raw_group?: Record<string, unknown>;
+  status?: string;
+  actor?: string;
+};
+
+export type EnterpriseScimUserSummary = {
+  id: string;
+  org_id: string;
+  project_id: string;
+  external_id?: string;
+  user_name: string;
+  display_name: string;
+  member_id: string;
+  role_keys: string[];
+  permissions: string[];
+  groups: string[];
+  raw_profile: Record<string, unknown>;
+  status: string;
+  active: boolean;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type EnterpriseScimUserListResponse = {
+  project_id: string;
+  items: EnterpriseScimUserSummary[];
+};
+
+export type EnterpriseScimUserUpsertRequest = {
+  project_id: string;
+  external_id?: string;
+  user_name: string;
+  display_name: string;
+  active?: boolean;
+  role_keys?: string[];
+  permissions?: string[];
+  groups?: string[];
+  raw_profile?: Record<string, unknown>;
+  actor?: string;
+};
+
 export type ProjectMemberSummary = {
   id: string;
   project_id: string;
@@ -1451,6 +1667,8 @@ export type AgentModuleSummary = {
   tags: string[];
   price_model?: string;
   price_usd_micros?: number;
+  required_entitlements: string[];
+  entitlement_status: string;
   config_schema: Record<string, unknown>;
   installed: boolean;
   installed_by?: string;
@@ -1466,6 +1684,7 @@ export type AgentModuleDetail = AgentModuleSummary & {
   marketplace: Record<string, unknown>;
   role: Record<string, unknown>;
   role_result: Record<string, unknown>;
+  entitlement_result: Record<string, unknown>;
   install_status?: string;
 };
 
@@ -1479,6 +1698,26 @@ export type AgentModuleInstallRequest = {
   module_id: string;
   actor?: string;
   config?: Record<string, unknown>;
+};
+
+export type AgentModuleInstallRecordSummary = {
+  id: string;
+  project_id: string;
+  module_id: string;
+  action: string;
+  from_version?: string;
+  to_version?: string;
+  actor: string;
+  status: string;
+  entitlement_result: Record<string, unknown>;
+  rollback_snapshot: Record<string, unknown>;
+  metadata: Record<string, unknown>;
+  created_at: string;
+};
+
+export type AgentModuleInstallRecordListResponse = {
+  project_id: string;
+  items: AgentModuleInstallRecordSummary[];
 };
 
 export type SkillSummary = {
@@ -2415,6 +2654,82 @@ export function createBossApiClient(config: BossApiClientConfig) {
     getAuthSession() {
       return request<AuthSessionResponse>("GET", "/v1/auth/session");
     },
+    getEdition(projectId: string) {
+      return request<EditionStatusResponse>("GET", "/v1/edition", {
+        query: { project_id: projectId },
+      });
+    },
+    listLicenseEntitlements(projectId: string, includeInactive = false) {
+      return request<LicenseEntitlementListResponse>("GET", "/v1/entitlements", {
+        query: {
+          project_id: projectId,
+          include_inactive: String(includeInactive),
+        },
+      });
+    },
+    linkAccountConnect(payload: AccountConnectLinkRequest) {
+      return request<AccountConnectMutationResponse>(
+        "POST",
+        "/v1/account-connect/link",
+        { body: payload },
+      );
+    },
+    unlinkAccountConnect(payload: AccountConnectUnlinkRequest) {
+      return request<AccountConnectMutationResponse>(
+        "POST",
+        "/v1/account-connect/unlink",
+        { body: payload },
+      );
+    },
+    syncAccountConnect(payload: AccountConnectSyncRequest) {
+      return request<AccountConnectSyncResponse>(
+        "POST",
+        "/v1/account-connect/sync",
+        { body: payload },
+      );
+    },
+    listEnterpriseClusters(projectId: string) {
+      return request<EnterpriseClusterListResponse>(
+        "GET",
+        "/v1/enterprise/clusters",
+        { query: { project_id: projectId } },
+      );
+    },
+    upsertEnterpriseCluster(payload: EnterpriseClusterUpsertRequest) {
+      return request<EnterpriseClusterSummary>(
+        "POST",
+        "/v1/enterprise/clusters",
+        { body: payload },
+      );
+    },
+    listEnterpriseScimGroups(projectId: string) {
+      return request<EnterpriseScimGroupListResponse>(
+        "GET",
+        "/v1/enterprise/scim/groups",
+        { query: { project_id: projectId } },
+      );
+    },
+    upsertEnterpriseScimGroup(payload: EnterpriseScimGroupUpsertRequest) {
+      return request<EnterpriseScimGroupSummary>(
+        "POST",
+        "/v1/enterprise/scim/groups",
+        { body: payload },
+      );
+    },
+    listEnterpriseScimUsers(projectId: string) {
+      return request<EnterpriseScimUserListResponse>(
+        "GET",
+        "/v1/enterprise/scim/users",
+        { query: { project_id: projectId } },
+      );
+    },
+    upsertEnterpriseScimUser(payload: EnterpriseScimUserUpsertRequest) {
+      return request<EnterpriseScimUserSummary>(
+        "POST",
+        "/v1/enterprise/scim/users",
+        { body: payload },
+      );
+    },
     listProjectMembers(projectId: string) {
       return request<ProjectMemberListResponse>("GET", "/v1/members", {
         query: { project_id: projectId },
@@ -2698,6 +3013,23 @@ export function createBossApiClient(config: BossApiClientConfig) {
       return request<AgentModuleDetail>("POST", "/v1/agent-modules/install", {
         body: payload,
       });
+    },
+    listAgentModuleInstallRecords(
+      projectId: string,
+      moduleId?: string,
+      limit = 50,
+    ) {
+      return request<AgentModuleInstallRecordListResponse>(
+        "GET",
+        "/v1/agent-module-install-records",
+        {
+          query: {
+            project_id: projectId,
+            ...(moduleId ? { module_id: moduleId } : {}),
+            limit: String(limit),
+          },
+        },
+      );
     },
     listSkills() {
       return request<SkillListResponse>("GET", "/v1/skills");

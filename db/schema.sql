@@ -136,6 +136,137 @@ CREATE TABLE IF NOT EXISTS agent_module_installs (
 CREATE INDEX IF NOT EXISTS idx_agent_module_installs_project
   ON agent_module_installs(project_id, installed_at DESC);
 
+CREATE TABLE IF NOT EXISTS agent_module_install_records (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  module_id TEXT NOT NULL,
+  action TEXT NOT NULL,
+  from_version TEXT,
+  to_version TEXT,
+  actor TEXT NOT NULL,
+  status TEXT NOT NULL,
+  entitlement_result JSONB NOT NULL DEFAULT '{}'::jsonb,
+  rollback_snapshot JSONB NOT NULL DEFAULT '{}'::jsonb,
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_agent_module_install_records_project_module
+  ON agent_module_install_records(project_id, module_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS account_connect_orgs (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  hosted_org_id TEXT NOT NULL,
+  local_org_id TEXT NOT NULL,
+  connection_mode TEXT NOT NULL DEFAULT 'attached',
+  marketplace_identity JSONB NOT NULL DEFAULT '{}'::jsonb,
+  billing_portal_ref TEXT,
+  connector_authorization_refs JSONB NOT NULL DEFAULT '[]'::jsonb,
+  optional_telemetry_enabled BOOLEAN NOT NULL DEFAULT false,
+  connection_ref TEXT,
+  status TEXT NOT NULL DEFAULT 'linked',
+  linked_by TEXT NOT NULL DEFAULT 'system',
+  linked_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  unlinked_by TEXT,
+  unlinked_at TIMESTAMPTZ,
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(project_id, hosted_org_id)
+);
+CREATE INDEX IF NOT EXISTS idx_account_connect_orgs_project_status
+  ON account_connect_orgs(project_id, status, linked_at DESC);
+
+CREATE TABLE IF NOT EXISTS license_entitlements (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  edition_id TEXT NOT NULL,
+  account_connect_org_id TEXT,
+  scope_type TEXT NOT NULL DEFAULT 'project',
+  scope_id TEXT NOT NULL,
+  capability_key TEXT NOT NULL,
+  capabilities JSONB NOT NULL DEFAULT '[]'::jsonb,
+  seats INTEGER,
+  status TEXT NOT NULL DEFAULT 'active',
+  source TEXT NOT NULL DEFAULT 'local_edition',
+  expires_at TIMESTAMPTZ,
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(project_id, capability_key, source)
+);
+CREATE INDEX IF NOT EXISTS idx_license_entitlements_project_status
+  ON license_entitlements(project_id, status, edition_id);
+
+CREATE TABLE IF NOT EXISTS enterprise_clusters (
+  id TEXT PRIMARY KEY,
+  org_id TEXT NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  deployment_mode TEXT NOT NULL DEFAULT 'enterprise_cloud',
+  account_connect_mode TEXT NOT NULL DEFAULT 'attached',
+  worker_pool_strategy TEXT NOT NULL DEFAULT 'managed_workers',
+  ha_profile TEXT NOT NULL DEFAULT 'standard',
+  data_residency TEXT NOT NULL DEFAULT 'us',
+  identity_controls JSONB NOT NULL DEFAULT '{}'::jsonb,
+  governance_controls JSONB NOT NULL DEFAULT '{}'::jsonb,
+  audit_controls JSONB NOT NULL DEFAULT '{}'::jsonb,
+  private_worker_pools JSONB NOT NULL DEFAULT '[]'::jsonb,
+  compliance_packs JSONB NOT NULL DEFAULT '[]'::jsonb,
+  support_tier TEXT NOT NULL DEFAULT 'standard',
+  support_sla JSONB NOT NULL DEFAULT '{}'::jsonb,
+  status TEXT NOT NULL DEFAULT 'planned',
+  created_by TEXT NOT NULL DEFAULT 'system',
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(project_id, deployment_mode, account_connect_mode)
+);
+CREATE INDEX IF NOT EXISTS idx_enterprise_clusters_project_status
+  ON enterprise_clusters(project_id, status, deployment_mode);
+CREATE INDEX IF NOT EXISTS idx_enterprise_clusters_org
+  ON enterprise_clusters(org_id, deployment_mode);
+
+CREATE TABLE IF NOT EXISTS enterprise_scim_groups (
+  id TEXT PRIMARY KEY,
+  org_id TEXT NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  external_id TEXT,
+  display_name TEXT NOT NULL,
+  role_keys JSONB NOT NULL DEFAULT '[]'::jsonb,
+  permissions JSONB NOT NULL DEFAULT '[]'::jsonb,
+  raw_group JSONB NOT NULL DEFAULT '{}'::jsonb,
+  status TEXT NOT NULL DEFAULT 'active',
+  created_by TEXT NOT NULL DEFAULT 'system',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(project_id, display_name)
+);
+CREATE INDEX IF NOT EXISTS idx_enterprise_scim_groups_project_status
+  ON enterprise_scim_groups(project_id, status, display_name);
+
+CREATE TABLE IF NOT EXISTS enterprise_scim_users (
+  id TEXT PRIMARY KEY,
+  org_id TEXT NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  external_id TEXT,
+  user_name TEXT NOT NULL,
+  display_name TEXT NOT NULL,
+  member_id TEXT NOT NULL,
+  role_keys JSONB NOT NULL DEFAULT '[]'::jsonb,
+  permissions JSONB NOT NULL DEFAULT '[]'::jsonb,
+  groups JSONB NOT NULL DEFAULT '[]'::jsonb,
+  raw_profile JSONB NOT NULL DEFAULT '{}'::jsonb,
+  status TEXT NOT NULL DEFAULT 'active',
+  created_by TEXT NOT NULL DEFAULT 'system',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(project_id, user_name)
+);
+CREATE INDEX IF NOT EXISTS idx_enterprise_scim_users_project_status
+  ON enterprise_scim_users(project_id, status, user_name);
+CREATE INDEX IF NOT EXISTS idx_enterprise_scim_users_member
+  ON enterprise_scim_users(project_id, member_id, status);
+
 CREATE TABLE IF NOT EXISTS entitlement_sources (
   id TEXT PRIMARY KEY,
   project_id TEXT NOT NULL REFERENCES projects(id),

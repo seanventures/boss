@@ -28,6 +28,7 @@ objects:
   core:
     - rolespec
     - packspec
+    - agent_module_install_record
     - task
     - decision
     - meeting
@@ -51,6 +52,8 @@ objects:
     - license_entitlement
     - account_connect_org
     - enterprise_cluster
+    - enterprise_scim_group
+    - enterprise_scim_user
 policies:
   - default_safety
   - resource_plane_policy

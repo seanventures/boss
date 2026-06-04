@@ -3,12 +3,14 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 import yaml
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
 from ..config import Settings
+from .commercial import CommercialService
 from .core import emit_event
 
 
@@ -24,9 +26,14 @@ class AgentModuleNotFoundError(Exception):
     pass
 
 
+class AgentModuleEntitlementError(Exception):
+    pass
+
+
 class SpecPackService:
     def __init__(self, settings: Settings):
         self.settings = settings
+        self.commercial = CommercialService(settings)
 
     def _load_yaml(self, path: Path) -> dict[str, Any]:
         if not path.exists():
@@ -345,6 +352,7 @@ class SpecPackService:
             role = payload.get("role") or {}
             runtime = payload.get("runtime") or {}
             marketplace = payload.get("marketplace") or {}
+            required_entitlements = self._required_entitlements(payload)
             items.append(
                 {
                     "module_id": module_id,
@@ -362,6 +370,7 @@ class SpecPackService:
                     "tags": marketplace.get("tags") or [],
                     "price_model": marketplace.get("price_model"),
                     "price_usd_micros": marketplace.get("price_usd_micros"),
+                    "required_entitlements": required_entitlements,
                     "config_schema": runtime.get("configuration_schema") or {},
                     "prompt_bundle": payload.get("prompt_bundle") or {},
                     "runtime": runtime,
@@ -427,11 +436,18 @@ class SpecPackService:
         installed_by_module = {row["module_id"]: dict(row) for row in installed_rows}
 
         items: list[dict[str, Any]] = []
+        active_capabilities = self._project_capabilities(connection, project_id)
         for module in self.list_available_agent_modules():
             installed = installed_by_module.get(module["module_id"])
+            entitlement_result = self._entitlement_result(
+                module.get("required_entitlements") or [],
+                active_capabilities,
+            )
             items.append(
                 {
                     **module,
+                    "entitlement_status": entitlement_result["status"],
+                    "entitlement_result": entitlement_result,
                     "installed": installed is not None,
                     "installed_by": installed["installed_by"] if installed else None,
                     "installed_at": (
@@ -644,6 +660,39 @@ class SpecPackService:
         config: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         module_spec = self.load_agent_module_spec(module_id)
+        active_capabilities = self._project_capabilities(connection, project_id)
+        required_entitlements = self._required_entitlements(module_spec)
+        entitlement_result = self._entitlement_result(
+            required_entitlements,
+            active_capabilities,
+        )
+        if entitlement_result["status"] == "missing_required_entitlement":
+            self._record_agent_module_install(
+                connection,
+                project_id,
+                module_id,
+                action="install_denied",
+                actor=actor,
+                status="denied",
+                from_version=None,
+                to_version=module_spec.get("version", "0.0.0"),
+                entitlement_result=entitlement_result,
+                rollback_snapshot={},
+                metadata={"reason": "missing_required_entitlement"},
+            )
+            emit_event(
+                connection,
+                project_id,
+                "agent_module.install_denied",
+                actor,
+                "agent_module",
+                module_id,
+                entitlement_result,
+            )
+            missing = ", ".join(entitlement_result["missing_entitlements"])
+            raise AgentModuleEntitlementError(
+                f"Agent module '{module_id}' requires missing entitlement(s): {missing}."
+            )
         role_key, role_spec = self._normalize_role_spec_from_module(module_spec)
         role_result = self._upsert_role_spec(
             connection,
@@ -670,6 +719,15 @@ class SpecPackService:
             existing_install["id"]
             if existing_install
             else f"agent_module_{project_id}_{module_id}"
+        )
+        rollback_snapshot = (
+            {
+                "module_version": existing_install["module_version"],
+                "config": existing_install["config"] or {},
+                "spec": existing_install["spec"] or {},
+            }
+            if existing_install
+            else {}
         )
         matches_existing = (
             existing_install is not None
@@ -741,13 +799,183 @@ class SpecPackService:
                     "role_key": role_key,
                 },
             )
+            self._record_agent_module_install(
+                connection,
+                project_id,
+                module_id,
+                action="install",
+                actor=actor,
+                status="installed",
+                from_version=existing_install["module_version"]
+                if existing_install
+                else None,
+                to_version=module_spec.get("version", "0.0.0"),
+                entitlement_result=entitlement_result,
+                rollback_snapshot=rollback_snapshot,
+                metadata={"role_key": role_key},
+            )
 
         module = self.get_agent_module_for_project(connection, project_id, module_id)
         module["install_status"] = (
             "already_installed" if matches_existing else "installed"
         )
         module["role_result"] = role_result
+        module["entitlement_result"] = entitlement_result
         return module
+
+    def list_agent_module_install_records(
+        self,
+        connection: Connection,
+        project_id: str,
+        module_id: str | None = None,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        if module_id:
+            rows = connection.execute(
+                text(
+                    """
+                    SELECT id, project_id, module_id, action, from_version,
+                           to_version, actor, status, entitlement_result,
+                           rollback_snapshot, metadata, created_at
+                    FROM agent_module_install_records
+                    WHERE project_id = :project_id AND module_id = :module_id
+                    ORDER BY created_at DESC
+                    LIMIT :limit
+                    """
+                ),
+                {"project_id": project_id, "module_id": module_id, "limit": limit},
+            ).mappings().all()
+        else:
+            rows = connection.execute(
+                text(
+                    """
+                    SELECT id, project_id, module_id, action, from_version,
+                           to_version, actor, status, entitlement_result,
+                           rollback_snapshot, metadata, created_at
+                    FROM agent_module_install_records
+                    WHERE project_id = :project_id
+                    ORDER BY created_at DESC
+                    LIMIT :limit
+                    """
+                ),
+                {"project_id": project_id, "limit": limit},
+            ).mappings().all()
+        return [self._install_record_from_row(dict(row)) for row in rows]
+
+    def _required_entitlements(self, module_spec: dict[str, Any]) -> list[str]:
+        marketplace = module_spec.get("marketplace") or {}
+        required = marketplace.get("required_entitlements")
+        if required is None:
+            required = marketplace.get("required_entitlement")
+        if required is None:
+            return []
+        if isinstance(required, str):
+            required_values = [required]
+        elif isinstance(required, list):
+            required_values = required
+        else:
+            required_values = []
+        return sorted(
+            {
+                str(value).strip()
+                for value in required_values
+                if str(value).strip()
+            }
+        )
+
+    def _project_capabilities(
+        self,
+        connection: Connection,
+        project_id: str,
+    ) -> set[str]:
+        capabilities: set[str] = set()
+        edition = self.commercial.edition_status(connection, project_id)
+        if edition["status"] == "active":
+            capabilities.update(edition.get("included_capabilities") or [])
+        rows = connection.execute(
+            text(
+                """
+                SELECT capability_key, capabilities
+                FROM license_entitlements
+                WHERE project_id = :project_id
+                  AND status IN ('active', 'trial')
+                """
+            ),
+            {"project_id": project_id},
+        ).mappings().all()
+        for row in rows:
+            capabilities.add(row["capability_key"])
+            capabilities.update(row["capabilities"] or [])
+        return capabilities
+
+    def _entitlement_result(
+        self,
+        required_entitlements: list[str],
+        active_capabilities: set[str],
+    ) -> dict[str, Any]:
+        missing = [
+            entitlement
+            for entitlement in required_entitlements
+            if entitlement not in active_capabilities
+        ]
+        return {
+            "status": "missing_required_entitlement" if missing else "allowed",
+            "required_entitlements": required_entitlements,
+            "missing_entitlements": missing,
+            "active_capabilities": sorted(active_capabilities),
+        }
+
+    def _record_agent_module_install(
+        self,
+        connection: Connection,
+        project_id: str,
+        module_id: str,
+        *,
+        action: str,
+        actor: str,
+        status: str,
+        from_version: str | None,
+        to_version: str | None,
+        entitlement_result: dict[str, Any],
+        rollback_snapshot: dict[str, Any],
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        connection.execute(
+            text(
+                """
+                INSERT INTO agent_module_install_records (
+                    id, project_id, module_id, action, from_version, to_version,
+                    actor, status, entitlement_result, rollback_snapshot, metadata
+                )
+                VALUES (
+                    :id, :project_id, :module_id, :action, :from_version,
+                    :to_version, :actor, :status,
+                    CAST(:entitlement_result AS JSONB),
+                    CAST(:rollback_snapshot AS JSONB),
+                    CAST(:metadata AS JSONB)
+                )
+                """
+            ),
+            {
+                "id": f"agent_module_install_record_{uuid4().hex}",
+                "project_id": project_id,
+                "module_id": module_id,
+                "action": action,
+                "from_version": from_version,
+                "to_version": to_version,
+                "actor": actor,
+                "status": status,
+                "entitlement_result": json.dumps(entitlement_result),
+                "rollback_snapshot": json.dumps(rollback_snapshot),
+                "metadata": json.dumps(metadata or {}),
+            },
+        )
+
+    def _install_record_from_row(self, row: dict[str, Any]) -> dict[str, Any]:
+        return {
+            **row,
+            "created_at": row["created_at"].isoformat(),
+        }
 
     def install_pack(
         self, connection: Connection, project_id: str, pack_id: str, actor: str

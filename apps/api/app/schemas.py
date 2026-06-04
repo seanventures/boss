@@ -62,6 +62,274 @@ class AuthSessionResponse(BaseModel):
     message: str
 
 
+class AccountConnectOrgSummary(BaseModel):
+    id: str
+    project_id: str
+    hosted_org_id: str
+    local_org_id: str
+    connection_mode: str
+    marketplace_identity: dict[str, Any]
+    billing_portal_ref: Optional[str] = None
+    connector_authorization_refs: list[str]
+    optional_telemetry_enabled: bool
+    connection_ref: Optional[str] = None
+    status: str
+    linked_by: str
+    linked_at: Optional[str] = None
+    unlinked_by: Optional[str] = None
+    unlinked_at: Optional[str] = None
+    metadata: dict[str, Any]
+    created_at: str
+    updated_at: str
+
+
+class EditionStatusResponse(BaseModel):
+    project_id: str
+    edition_id: str
+    display_name: str
+    status: str
+    account_connect_required: bool
+    account_connect_status: str
+    account_connect_org: Optional[AccountConnectOrgSummary] = None
+    local_auth_allowed: bool
+    hosted_auth_required: bool
+    connection_mode: str
+    license_candidate: Optional[str] = None
+    legal_review_required: bool
+    included_capabilities: list[str]
+    commercial_capabilities: list[str]
+    blocked_reason: Optional[str] = None
+    source_pack: str
+
+
+class LicenseEntitlementSummary(BaseModel):
+    id: str
+    project_id: str
+    edition_id: str
+    account_connect_org_id: Optional[str] = None
+    scope_type: str
+    scope_id: str
+    capability_key: str
+    capabilities: list[str]
+    seats: Optional[int] = None
+    status: str
+    source: str
+    expires_at: Optional[str] = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
+class LicenseEntitlementListResponse(BaseModel):
+    project_id: str
+    edition: EditionStatusResponse
+    items: list[LicenseEntitlementSummary]
+
+
+class AccountConnectLinkRequest(BaseModel):
+    project_id: str
+    hosted_org_id: str
+    connection_ref: Optional[str] = None
+    marketplace_identity: dict[str, Any] = Field(default_factory=dict)
+    billing_portal_ref: Optional[str] = None
+    connector_authorization_refs: list[str] = Field(default_factory=list)
+    optional_telemetry_enabled: bool = False
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    actor: str = "system"
+
+    @model_validator(mode="after")
+    def validate_link(self) -> "AccountConnectLinkRequest":
+        self.project_id = _require_text(self.project_id, "project_id")
+        self.hosted_org_id = _require_text(self.hosted_org_id, "hosted_org_id")
+        self.actor = _require_text(self.actor, "actor")
+        return self
+
+
+class AccountConnectUnlinkRequest(BaseModel):
+    project_id: str
+    hosted_org_id: Optional[str] = None
+    reason: Optional[str] = None
+    actor: str = "system"
+
+    @model_validator(mode="after")
+    def validate_unlink(self) -> "AccountConnectUnlinkRequest":
+        self.project_id = _require_text(self.project_id, "project_id")
+        self.actor = _require_text(self.actor, "actor")
+        return self
+
+
+class AccountConnectMutationResponse(BaseModel):
+    project_id: str
+    edition: EditionStatusResponse
+
+
+class AccountConnectSyncRequest(BaseModel):
+    project_id: str
+    hosted_org_id: Optional[str] = None
+    actor: str = "system"
+
+    @model_validator(mode="after")
+    def validate_sync(self) -> "AccountConnectSyncRequest":
+        self.project_id = _require_text(self.project_id, "project_id")
+        self.actor = _require_text(self.actor, "actor")
+        return self
+
+
+class AccountConnectSyncResponse(BaseModel):
+    project_id: str
+    edition: EditionStatusResponse
+    synced_entitlement_count: int
+
+
+class EnterpriseClusterSummary(BaseModel):
+    id: str
+    org_id: str
+    project_id: str
+    deployment_mode: str
+    account_connect_mode: str
+    worker_pool_strategy: str
+    ha_profile: str
+    data_residency: str
+    identity_controls: dict[str, Any]
+    governance_controls: dict[str, Any]
+    audit_controls: dict[str, Any]
+    private_worker_pools: list[dict[str, Any]]
+    compliance_packs: list[str]
+    support_tier: str
+    support_sla: dict[str, Any]
+    status: str
+    blocking_gaps: list[str]
+    created_by: str
+    metadata: dict[str, Any]
+    created_at: str
+    updated_at: str
+
+
+class EnterpriseClusterListResponse(BaseModel):
+    project_id: str
+    items: list[EnterpriseClusterSummary]
+
+
+class EnterpriseClusterUpsertRequest(BaseModel):
+    project_id: str
+    deployment_mode: str = "enterprise_cloud"
+    account_connect_mode: str = "attached"
+    worker_pool_strategy: str = "managed_workers"
+    ha_profile: str = "standard"
+    data_residency: str = "us"
+    identity_controls: dict[str, Any] = Field(default_factory=dict)
+    governance_controls: dict[str, Any] = Field(default_factory=dict)
+    audit_controls: dict[str, Any] = Field(default_factory=dict)
+    private_worker_pools: list[dict[str, Any]] = Field(default_factory=list)
+    compliance_packs: list[str] = Field(default_factory=list)
+    support_tier: str = "standard"
+    support_sla: dict[str, Any] = Field(default_factory=dict)
+    status: str = "planned"
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    actor: str = "system"
+
+    @model_validator(mode="after")
+    def validate_enterprise_cluster(self) -> "EnterpriseClusterUpsertRequest":
+        self.project_id = _require_text(self.project_id, "project_id")
+        self.deployment_mode = _require_text(self.deployment_mode, "deployment_mode")
+        self.account_connect_mode = _require_text(
+            self.account_connect_mode, "account_connect_mode"
+        )
+        self.worker_pool_strategy = _require_text(
+            self.worker_pool_strategy, "worker_pool_strategy"
+        )
+        self.ha_profile = _require_text(self.ha_profile, "ha_profile")
+        self.data_residency = _require_text(self.data_residency, "data_residency")
+        self.support_tier = _require_text(self.support_tier, "support_tier")
+        self.status = _require_text(self.status, "status")
+        self.actor = _require_text(self.actor, "actor")
+        return self
+
+
+class EnterpriseScimGroupSummary(BaseModel):
+    id: str
+    org_id: str
+    project_id: str
+    external_id: Optional[str] = None
+    display_name: str
+    role_keys: list[str]
+    permissions: list[str]
+    raw_group: dict[str, Any]
+    status: str
+    created_by: str
+    created_at: str
+    updated_at: str
+
+
+class EnterpriseScimGroupListResponse(BaseModel):
+    project_id: str
+    items: list[EnterpriseScimGroupSummary]
+
+
+class EnterpriseScimGroupUpsertRequest(BaseModel):
+    project_id: str
+    external_id: Optional[str] = None
+    display_name: str
+    role_keys: list[str] = Field(default_factory=list)
+    permissions: list[str] = Field(default_factory=list)
+    raw_group: dict[str, Any] = Field(default_factory=dict)
+    status: str = "active"
+    actor: str = "system"
+
+    @model_validator(mode="after")
+    def validate_scim_group(self) -> "EnterpriseScimGroupUpsertRequest":
+        self.project_id = _require_text(self.project_id, "project_id")
+        self.display_name = _require_text(self.display_name, "display_name")
+        self.status = _require_text(self.status, "status")
+        self.actor = _require_text(self.actor, "actor")
+        return self
+
+
+class EnterpriseScimUserSummary(BaseModel):
+    id: str
+    org_id: str
+    project_id: str
+    external_id: Optional[str] = None
+    user_name: str
+    display_name: str
+    member_id: str
+    role_keys: list[str]
+    permissions: list[str]
+    groups: list[str]
+    raw_profile: dict[str, Any]
+    status: str
+    active: bool
+    created_by: str
+    created_at: str
+    updated_at: str
+
+
+class EnterpriseScimUserListResponse(BaseModel):
+    project_id: str
+    items: list[EnterpriseScimUserSummary]
+
+
+class EnterpriseScimUserUpsertRequest(BaseModel):
+    project_id: str
+    external_id: Optional[str] = None
+    user_name: str
+    display_name: str
+    active: bool = True
+    role_keys: list[str] = Field(default_factory=list)
+    permissions: list[str] = Field(default_factory=list)
+    groups: list[str] = Field(default_factory=list)
+    raw_profile: dict[str, Any] = Field(default_factory=dict)
+    actor: str = "system"
+
+    @model_validator(mode="after")
+    def validate_scim_user(self) -> "EnterpriseScimUserUpsertRequest":
+        self.project_id = _require_text(self.project_id, "project_id")
+        self.user_name = _require_text(self.user_name, "user_name")
+        self.display_name = _require_text(self.display_name, "display_name")
+        self.actor = _require_text(self.actor, "actor")
+        return self
+
+
 class ProjectMemberSummary(BaseModel):
     id: str
     project_id: str
@@ -1646,6 +1914,8 @@ class AgentModuleSummary(BaseModel):
     tags: list[str] = Field(default_factory=list)
     price_model: Optional[str] = None
     price_usd_micros: Optional[int] = None
+    required_entitlements: list[str] = Field(default_factory=list)
+    entitlement_status: str = "not_required"
     config_schema: dict[str, Any] = Field(default_factory=dict)
     installed: bool
     installed_by: Optional[str] = None
@@ -1661,6 +1931,7 @@ class AgentModuleDetail(AgentModuleSummary):
     marketplace: dict[str, Any] = Field(default_factory=dict)
     role: dict[str, Any] = Field(default_factory=dict)
     role_result: dict[str, Any] = Field(default_factory=dict)
+    entitlement_result: dict[str, Any] = Field(default_factory=dict)
     install_status: Optional[str] = None
 
 
@@ -1674,6 +1945,26 @@ class AgentModuleInstallRequest(BaseModel):
     module_id: str
     actor: str = "system"
     config: dict[str, Any] = Field(default_factory=dict)
+
+
+class AgentModuleInstallRecordSummary(BaseModel):
+    id: str
+    project_id: str
+    module_id: str
+    action: str
+    from_version: Optional[str] = None
+    to_version: Optional[str] = None
+    actor: str
+    status: str
+    entitlement_result: dict[str, Any] = Field(default_factory=dict)
+    rollback_snapshot: dict[str, Any] = Field(default_factory=dict)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    created_at: str
+
+
+class AgentModuleInstallRecordListResponse(BaseModel):
+    project_id: str
+    items: list[AgentModuleInstallRecordSummary]
 
 
 class SkillSummary(BaseModel):

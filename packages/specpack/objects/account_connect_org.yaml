@@ -20,8 +20,16 @@ fields:
     type: array
   - name: optional_telemetry_enabled
     type: boolean
+  - name: connection_ref
+    type: string
+  - name: status
+    type: enum
+    values: [linked, unlinked, disabled]
+  - name: metadata
+    type: object
 rules:
   community_may_disable: true
   cloud_requires_account_connect: true
   enterprise_can_run_detached: true
-
+  hosted_entitlement_sync_requires_configured_endpoint: true
+  missing_hosted_endpoint_fails_closed_with_event: true

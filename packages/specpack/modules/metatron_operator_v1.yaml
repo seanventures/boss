@@ -9,6 +9,7 @@ marketplace:
   price_model: workspace_install
   price_usd_micros: 29000000
   license: commercial_preview
+  required_entitlement: basic_metatron
   visibility: catalog
   support_tier: founder
   tags:
