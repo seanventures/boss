@@ -43,6 +43,10 @@ class EntitlementBrokerService:
         "suspended",
         "unavailable",
     }
+    GATEWAY_SOURCE_KINDS = {
+        "enterprise_model_gateway",
+        "managed_cloud_model_gateway",
+    }
 
     def __init__(self, settings: Settings):
         self.settings = settings
@@ -204,6 +208,22 @@ class EntitlementBrokerService:
                 self.settings.local_model_enabled and self.settings.local_model_id
             )
             return local_ready, local_ready
+        if source_id == "enterprise_model_gateway":
+            runtime_supported = bool(
+                self.settings.enterprise_model_gateway_enabled
+                and self.settings.enterprise_model_gateway_url
+            )
+            return runtime_supported, bool(
+                runtime_supported and self.settings.enterprise_model_gateway_token
+            )
+        if source_id == "managed_cloud_model_gateway":
+            runtime_supported = bool(
+                self.settings.managed_cloud_model_gateway_enabled
+                and self.settings.account_connect_url
+            )
+            return runtime_supported, bool(
+                runtime_supported and self.settings.account_connect_token
+            )
         return False, False
 
     def _credential_ref(self, source_id: str) -> Optional[str]:
@@ -225,7 +245,22 @@ class EntitlementBrokerService:
             return "BOSS_CURSOR_CLI_ENABLED"
         if source_id == "approved_local_model_host":
             return "BOSS_LOCAL_MODEL_ID"
+        if source_id == "enterprise_model_gateway":
+            return "BOSS_ENTERPRISE_MODEL_GATEWAY_TOKEN"
+        if source_id == "managed_cloud_model_gateway":
+            return "BOSS_ACCOUNT_CONNECT_TOKEN"
         return None
+
+    def _runtime_supported_models(
+        self, source_id: str, source_defaults: dict[str, Any]
+    ) -> list[str]:
+        if source_id == "enterprise_model_gateway":
+            configured = list(self.settings.enterprise_model_gateway_model_values)
+            return configured or list(source_defaults.get("supported_models") or [])
+        if source_id == "managed_cloud_model_gateway":
+            configured = list(self.settings.managed_cloud_model_gateway_model_values)
+            return configured or list(source_defaults.get("supported_models") or [])
+        return list(source_defaults.get("supported_models") or [])
 
     def _requires_official_oauth(self, source: dict[str, Any]) -> bool:
         return (
@@ -345,6 +380,8 @@ class EntitlementBrokerService:
             return "official_api"
         if source_kind in {"official_cli", "official_coding_agent"}:
             return "official_cli"
+        if source_kind in self.GATEWAY_SOURCE_KINDS:
+            return source_kind
         return source_kind
 
     def _capacity_kind_for_source(self, source: dict[str, Any]) -> str:
@@ -352,6 +389,8 @@ class EntitlementBrokerService:
         entitlement_kind = source.get("entitlement_kind")
         if source_kind == "approved_local_model":
             return "local_model"
+        if source_kind in self.GATEWAY_SOURCE_KINDS:
+            return str(source_kind)
         if source_kind == "official_api":
             return "official_api"
         if entitlement_kind in {"subscription", "licensed_seat"}:
@@ -366,6 +405,10 @@ class EntitlementBrokerService:
             return ["budget_safe", "quality_first"]
         if source_kind in {"official_cli", "official_coding_agent"}:
             return ["subscription_first", "owner_sandbox"]
+        if source_kind == "enterprise_model_gateway":
+            return ["enterprise_policy", "quality_first", "budget_safe"]
+        if source_kind == "managed_cloud_model_gateway":
+            return ["quality_first", "budget_safe"]
         return ["budget_safe"]
 
     def _pool_id(self, project_id: str, source_id: str) -> str:
@@ -451,23 +494,29 @@ class EntitlementBrokerService:
     ) -> None:
         for source_id, source_defaults in self._source_record_defaults().items():
             runtime_supported, credential_present = self._runtime_flags(source_id)
+            source_kind = source_defaults.get("source_kind", "official_api")
             stored_status = "active" if runtime_supported and credential_present else "declared"
             if runtime_supported and not credential_present:
                 stored_status = "missing_credentials"
+            owner_type = source_defaults.get("owner_type")
+            if not owner_type:
+                owner_type = (
+                    "project"
+                    if source_kind in {"official_api", *self.GATEWAY_SOURCE_KINDS}
+                    else "workspace_operator"
+                )
             self.upsert_source(
                 connection,
                 {
                     "project_id": project_id,
                     "provider": source_defaults["provider"],
                     "source_id": source_id,
-                    "source_kind": source_defaults.get("source_kind", "official_api"),
+                    "source_kind": source_kind,
                     "entitlement_kind": source_defaults.get(
                         "entitlement_kind", "usage_based_api"
                     ),
-                    "owner_type": "workspace_operator"
-                    if source_defaults.get("source_kind") != "official_api"
-                    else "project",
-                    "owner_id": "founder" if source_defaults.get("source_kind") != "official_api" else project_id,
+                    "owner_type": owner_type,
+                    "owner_id": "founder" if owner_type == "workspace_operator" else project_id,
                     "workload_classes_allowed": source_defaults.get(
                         "workload_classes_allowed", []
                     ),
@@ -488,11 +537,18 @@ class EntitlementBrokerService:
                     ),
                     "cost_mode": source_defaults.get("entitlement_kind", "usage_based_api"),
                     "limit_shape": {},
-                    "supported_models": source_defaults.get("supported_models", []),
+                    "supported_models": self._runtime_supported_models(
+                        source_id, source_defaults
+                    ),
                     "task_strengths": source_defaults.get("task_strengths", []),
-                    "risk_tier_max": 3
-                    if source_defaults.get("source_kind") == "official_api"
-                    else 1,
+                    "risk_tier_max": int(
+                        source_defaults.get(
+                            "risk_tier_max",
+                            3
+                            if source_kind in {"official_api", *self.GATEWAY_SOURCE_KINDS}
+                            else 1,
+                        )
+                    ),
                     "status": stored_status,
                     "policy_notes": source_defaults.get("policy_notes", []),
                     "runtime_supported": runtime_supported,
@@ -578,7 +634,9 @@ class EntitlementBrokerService:
                         "connection_ref": source.get(
                             "connection_ref", self._credential_ref(source_id)
                         ),
-                        "supported_models": source.get("supported_models", []) or [],
+                        "supported_models": self._runtime_supported_models(
+                            source_id, source
+                        ),
                         "task_strengths": source.get("task_strengths", []) or [],
                         "allowed_workload_classes": source.get(
                             "workload_classes_allowed", []
@@ -1038,6 +1096,32 @@ class EntitlementBrokerService:
             if allowed_tiers and model.get("tier") not in allowed_tiers:
                 continue
             candidates.append(model)
+        if provider == "boss":
+            known_ids = {model["id"] for model in candidates}
+            for model_name in supported_models:
+                model_id = (
+                    model_name if model_name.startswith("boss:") else f"boss:{model_name}"
+                )
+                if model_id in known_ids:
+                    continue
+                if allowed_tiers and "mid" not in allowed_tiers:
+                    continue
+                candidates.append(
+                    {
+                        "id": model_id,
+                        "provider": "boss",
+                        "tier": "mid",
+                        "strengths": [
+                            "planning",
+                            "coding",
+                            "reasoning",
+                            "review",
+                            "privacy_sensitive",
+                        ],
+                        "cost_class": "gateway_metered",
+                        "enabled": True,
+                    }
+                )
         return candidates
 
     def _pick_model(
@@ -1075,6 +1159,16 @@ class EntitlementBrokerService:
             if isinstance(configured, list) and configured:
                 return {normalize_data_boundary(str(item)) for item in configured}
             return set(DATA_BOUNDARIES)
+        if source.get("source_kind") == "enterprise_model_gateway":
+            configured = boundary_policy.get("enterprise_model_gateway_default")
+            if isinstance(configured, list) and configured:
+                return {normalize_data_boundary(str(item)) for item in configured}
+            return {"public", "internal", "confidential", "restricted"}
+        if source.get("source_kind") == "managed_cloud_model_gateway":
+            configured = boundary_policy.get("managed_cloud_model_gateway_default")
+            if isinstance(configured, list) and configured:
+                return {normalize_data_boundary(str(item)) for item in configured}
+            return {"public", "internal", "confidential"}
         configured = boundary_policy.get("external_official_source_default")
         if isinstance(configured, list) and configured:
             return {normalize_data_boundary(str(item)) for item in configured}
@@ -1196,6 +1290,12 @@ class EntitlementBrokerService:
         )
         disallowed_combinations = routing_policy.get("disallowed_combinations", []) or []
         allowed_tiers = self._allowed_tiers_for_budget_state(resolved_budget_state)
+        budget_state_policy = (
+            ((routing_policy.get("budget_states") or {}).get(resolved_budget_state) or {})
+        )
+        model_tiers_explicitly_empty = (
+            "allowed_tiers" in budget_state_policy and not allowed_tiers
+        )
 
         candidates: list[tuple[int, dict[str, Any], Optional[dict[str, Any]]]] = []
         rejected_sources: list[dict[str, Any]] = []
@@ -1247,6 +1347,14 @@ class EntitlementBrokerService:
                     source,
                     "data_boundary_not_allowed",
                     data_boundary=boundary,
+                )
+                continue
+            if model_tiers_explicitly_empty and source["source_kind"] != "approved_local_model":
+                self._reject_source(
+                    rejected_sources,
+                    source,
+                    "budget_state_disallows_model_spend",
+                    budget_state=resolved_budget_state,
                 )
                 continue
 

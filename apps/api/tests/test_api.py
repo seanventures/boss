@@ -6406,6 +6406,13 @@ def test_model_adapter_and_entitlement_pool_v2_surfaces_are_visible(client, engi
         and item["auth_method"] == "official_device_oauth"
         for item in adapter_items
     )
+    assert any(
+        item["source_id"] == "enterprise_model_gateway"
+        and item["access_class"] == "enterprise_model_gateway"
+        and item["multi_tenant_allowed"] is True
+        and item["credential_present"] is False
+        for item in adapter_items
+    )
 
     pools = client.get("/v1/entitlement-pools", params={"project_id": project_id})
     assert pools.status_code == 200
@@ -6417,6 +6424,150 @@ def test_model_adapter_and_entitlement_pool_v2_surfaces_are_visible(client, engi
     assert codex_pool["access_class"] == "official_cli"
     assert codex_pool["capacity_state"] == "unknown"
     assert codex_pool["budget_policy_ref"] == f"budget_policy:{project_id}"
+    gateway_pool = next(
+        item for item in pool_items if item["source_id"] == "enterprise_model_gateway"
+    )
+    assert gateway_pool["access_class"] == "enterprise_model_gateway"
+    assert gateway_pool["effective_status"] == "declared"
+    assert gateway_pool["allowed_workload_classes"] == [
+        "owner_sandbox",
+        "single_tenant_customer",
+        "multi_tenant_customer",
+        "internal_batch",
+    ]
+
+
+def test_router_preview_selects_enterprise_gateway_for_restricted_multi_tenant_work(
+    client, engine
+):
+    project_id = "boss-enterprise-gateway-route"
+    previous_enabled = api_main.entitlements.settings.enterprise_model_gateway_enabled
+    previous_url = api_main.entitlements.settings.enterprise_model_gateway_url
+    previous_token = api_main.entitlements.settings.enterprise_model_gateway_token
+    previous_models = api_main.entitlements.settings.enterprise_model_gateway_models
+    api_main.entitlements.settings.enterprise_model_gateway_enabled = True
+    api_main.entitlements.settings.enterprise_model_gateway_url = (
+        "https://models.enterprise.example"
+    )
+    api_main.entitlements.settings.enterprise_model_gateway_token = "test-gateway-token"
+    api_main.entitlements.settings.enterprise_model_gateway_models = (
+        "enterprise-gateway-auto"
+    )
+    try:
+        with engine.begin() as connection:
+            connection.execute(text(f"DELETE FROM capacity_receipts WHERE project_id = '{project_id}'"))
+            connection.execute(text(f"DELETE FROM events WHERE project_id = '{project_id}'"))
+            connection.execute(text(f"DELETE FROM routing_logs WHERE project_id = '{project_id}'"))
+            connection.execute(text(f"DELETE FROM entitlement_sources WHERE project_id = '{project_id}'"))
+            connection.execute(text(f"DELETE FROM projects WHERE id = '{project_id}'"))
+            connection.execute(
+                text(
+                    f"""
+                    INSERT INTO projects (id, workspace_id, name, slug)
+                    VALUES ('{project_id}', 'ws_boss', 'Enterprise Gateway Route', '{project_id}')
+                    """
+                )
+            )
+            api_main.members.seed_default_members(connection, project_id, "test")
+            api_main.entitlements.seed_default_sources(connection, project_id, "test")
+
+        preview = client.post(
+            "/v1/router/preview",
+            json={
+                "project_id": project_id,
+                "skill_id": "model.generate_text",
+                "task_kind": "reasoning",
+                "workload_class": "multi_tenant_customer",
+                "risk_tier": 3,
+                "data_boundary": "restricted",
+                "preferred_capabilities": ["reasoning", "privacy_sensitive"],
+                "actor": "ceo",
+            },
+        )
+    finally:
+        api_main.entitlements.settings.enterprise_model_gateway_enabled = previous_enabled
+        api_main.entitlements.settings.enterprise_model_gateway_url = previous_url
+        api_main.entitlements.settings.enterprise_model_gateway_token = previous_token
+        api_main.entitlements.settings.enterprise_model_gateway_models = previous_models
+
+    assert preview.status_code == 200
+    payload = preview.json()
+    assert payload["source_id"] == "enterprise_model_gateway"
+    assert payload["provider"] == "boss"
+    assert payload["model_id"] == "boss:enterprise-gateway-auto"
+    assert payload["data_boundary"] == "restricted"
+    assert payload["denial_reason"] is None
+    assert payload["decision"]["reservation_required"] is True
+    assert payload["decision"]["selected_source"]["connection_ref"] == (
+        "BOSS_ENTERPRISE_MODEL_GATEWAY_URL"
+    )
+
+
+def test_router_preview_budget_red_denies_paid_api_and_gateway_sources(client, engine):
+    project_id = "boss-red-budget-router"
+    previous_openai = api_main.entitlements.settings.openai_api_key
+    previous_enabled = api_main.entitlements.settings.enterprise_model_gateway_enabled
+    previous_url = api_main.entitlements.settings.enterprise_model_gateway_url
+    previous_token = api_main.entitlements.settings.enterprise_model_gateway_token
+    api_main.entitlements.settings.openai_api_key = "test-openai-key"
+    api_main.entitlements.settings.enterprise_model_gateway_enabled = True
+    api_main.entitlements.settings.enterprise_model_gateway_url = (
+        "https://models.enterprise.example"
+    )
+    api_main.entitlements.settings.enterprise_model_gateway_token = "test-gateway-token"
+    try:
+        with engine.begin() as connection:
+            connection.execute(text(f"DELETE FROM capacity_receipts WHERE project_id = '{project_id}'"))
+            connection.execute(text(f"DELETE FROM events WHERE project_id = '{project_id}'"))
+            connection.execute(text(f"DELETE FROM routing_logs WHERE project_id = '{project_id}'"))
+            connection.execute(text(f"DELETE FROM entitlement_sources WHERE project_id = '{project_id}'"))
+            connection.execute(text(f"DELETE FROM projects WHERE id = '{project_id}'"))
+            connection.execute(
+                text(
+                    f"""
+                    INSERT INTO projects (id, workspace_id, name, slug)
+                    VALUES ('{project_id}', 'ws_boss', 'Red Budget Router', '{project_id}')
+                    """
+                )
+            )
+            api_main.members.seed_default_members(connection, project_id, "test")
+            api_main.entitlements.seed_default_sources(connection, project_id, "test")
+
+        preview = client.post(
+            "/v1/router/preview",
+            json={
+                "project_id": project_id,
+                "skill_id": "model.generate_text",
+                "task_kind": "planning",
+                "workload_class": "multi_tenant_customer",
+                "risk_tier": 1,
+                "budget_state": "red",
+                "data_boundary": "internal",
+                "preferred_capabilities": ["planning"],
+                "actor": "ceo",
+            },
+        )
+    finally:
+        api_main.entitlements.settings.openai_api_key = previous_openai
+        api_main.entitlements.settings.enterprise_model_gateway_enabled = previous_enabled
+        api_main.entitlements.settings.enterprise_model_gateway_url = previous_url
+        api_main.entitlements.settings.enterprise_model_gateway_token = previous_token
+
+    assert preview.status_code == 200
+    payload = preview.json()
+    assert payload["source_id"] is None
+    assert payload["budget_state"] == "red"
+    assert payload["denial_reason"] == "no_eligible_source"
+    assert any(
+        item["source_id"] == "openai_api"
+        and item["reason"] == "budget_state_disallows_model_spend"
+        for item in payload["rejected_sources"]
+    )
+    assert any(
+        item["source_id"] == "enterprise_model_gateway"
+        and item["reason"] == "budget_state_disallows_model_spend"
+        for item in payload["rejected_sources"]
+    )
 
 
 def test_entitlement_pool_probe_writes_capacity_receipt_idempotently(client, engine):

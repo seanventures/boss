@@ -151,6 +151,26 @@ class Settings(BaseSettings):
     local_model_id: Optional[str] = Field(
         default=None, alias="BOSS_LOCAL_MODEL_ID"
     )
+    enterprise_model_gateway_enabled: bool = Field(
+        default=False, alias="BOSS_ENTERPRISE_MODEL_GATEWAY_ENABLED"
+    )
+    enterprise_model_gateway_url: Optional[str] = Field(
+        default=None, alias="BOSS_ENTERPRISE_MODEL_GATEWAY_URL"
+    )
+    enterprise_model_gateway_token: Optional[str] = Field(
+        default=None, alias="BOSS_ENTERPRISE_MODEL_GATEWAY_TOKEN"
+    )
+    enterprise_model_gateway_models: str = Field(
+        default="enterprise-gateway-auto",
+        alias="BOSS_ENTERPRISE_MODEL_GATEWAY_MODELS",
+    )
+    managed_cloud_model_gateway_enabled: bool = Field(
+        default=False, alias="BOSS_MANAGED_CLOUD_MODEL_GATEWAY_ENABLED"
+    )
+    managed_cloud_model_gateway_models: str = Field(
+        default="managed-cloud-gateway-auto",
+        alias="BOSS_MANAGED_CLOUD_MODEL_GATEWAY_MODELS",
+    )
     daily_cap_usd_micros: int = Field(
         default=10_000_000, alias="BOSS_DAILY_CAP_USD_MICROS"
     )
@@ -304,6 +324,22 @@ class Settings(BaseSettings):
             token.strip()
             for token in self.enterprise_scim_bearer_tokens.replace("\n", ",").split(",")
             if token.strip()
+        )
+
+    @property
+    def enterprise_model_gateway_model_values(self) -> tuple[str, ...]:
+        return tuple(
+            model.strip()
+            for model in self.enterprise_model_gateway_models.replace("\n", ",").split(",")
+            if model.strip()
+        )
+
+    @property
+    def managed_cloud_model_gateway_model_values(self) -> tuple[str, ...]:
+        return tuple(
+            model.strip()
+            for model in self.managed_cloud_model_gateway_models.replace("\n", ",").split(",")
+            if model.strip()
         )
 
     @property

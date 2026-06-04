@@ -161,6 +161,58 @@ providers:
         task_strengths: [privacy_sensitive, offline, low_cost_batch]
         policy_notes:
           - Local capacity requires explicit approval, observability, and reservation accounting.
+  - id: boss
+    allowed: true
+    description: BOSS-managed enterprise and hosted model gateways with explicit policy, budget, and capacity governance.
+    source_records:
+      - source_id: enterprise_model_gateway
+        source_kind: enterprise_model_gateway
+        entitlement_kind: enterprise_gateway
+        auth_method: gateway_token
+        connection_status: not_connected
+        connection_ref: BOSS_ENTERPRISE_MODEL_GATEWAY_URL
+        credential_ref: BOSS_ENTERPRISE_MODEL_GATEWAY_TOKEN
+        owner_type: project
+        workload_classes_allowed: [owner_sandbox, single_tenant_customer, multi_tenant_customer, internal_batch]
+        multi_tenant_allowed: true
+        allowed_data_boundaries: [public, internal, confidential, restricted]
+        supported_models: [enterprise-gateway-auto]
+        task_strengths: [coding, planning, reasoning, review, privacy_sensitive]
+        risk_tier_max: 3
+        connection_metadata:
+          required_env:
+            - BOSS_ENTERPRISE_MODEL_GATEWAY_ENABLED
+            - BOSS_ENTERPRISE_MODEL_GATEWAY_URL
+            - BOSS_ENTERPRISE_MODEL_GATEWAY_TOKEN
+          credential_storage: secret_ref_or_env
+          execution_boundary: private_enterprise_gateway_adapter
+        policy_notes:
+          - Enterprise gateways are authorized private capacity, not personal subscription pools.
+          - Gateway use still requires ModelRouteDecision logs and BudgetReservations for spendy work.
+          - Restricted data may route here only when the gateway is explicitly enabled and connected.
+      - source_id: managed_cloud_model_gateway
+        source_kind: managed_cloud_model_gateway
+        entitlement_kind: hosted_usage_based_gateway
+        auth_method: account_connect
+        connection_status: not_connected
+        connection_ref: BOSS_ACCOUNT_CONNECT_URL
+        credential_ref: BOSS_ACCOUNT_CONNECT_TOKEN
+        owner_type: project
+        workload_classes_allowed: [owner_sandbox, single_tenant_customer, multi_tenant_customer, internal_batch]
+        multi_tenant_allowed: true
+        allowed_data_boundaries: [public, internal, confidential]
+        supported_models: [managed-cloud-gateway-auto]
+        task_strengths: [coding, planning, reasoning, review, summarization]
+        risk_tier_max: 3
+        connection_metadata:
+          required_env:
+            - BOSS_MANAGED_CLOUD_MODEL_GATEWAY_ENABLED
+            - BOSS_ACCOUNT_CONNECT_URL
+            - BOSS_ACCOUNT_CONNECT_TOKEN
+          execution_boundary: boss_cloud_managed_gateway_adapter
+        policy_notes:
+          - Managed Cloud model gateway requires BOSS Account Connect and hosted entitlement policy.
+          - It is allowed for customer workloads only as governed hosted capacity, never as pooled personal subscriptions.
 models:
   - id: openai:gpt-5.2-codex
     provider: openai
@@ -174,21 +226,35 @@ models:
     strengths: [code, tests]
     cost_class: token_metered
     enabled: true
+  - id: boss:enterprise-gateway-auto
+    provider: boss
+    tier: mid
+    strengths: [planning, coding, reasoning, review, privacy_sensitive]
+    cost_class: gateway_metered
+    enabled: true
+  - id: boss:managed-cloud-gateway-auto
+    provider: boss
+    tier: mid
+    strengths: [planning, coding, reasoning, review, summarization]
+    cost_class: gateway_metered
+    enabled: true
 routing_policy:
   data_boundaries:
     external_official_source_default: [public, internal, confidential]
     approved_local_model_default: [public, internal, confidential, restricted, local-only]
+    enterprise_model_gateway_default: [public, internal, confidential, restricted]
+    managed_cloud_model_gateway_default: [public, internal, confidential]
     restricted_requires_explicit_source_approval: true
     local_only_requires_approved_local_model: true
   workload_class_defaults:
     owner_sandbox:
-      preferred_source_kinds: [official_cli, official_coding_agent, official_api, approved_local_model]
+      preferred_source_kinds: [official_cli, official_coding_agent, official_api, enterprise_model_gateway, managed_cloud_model_gateway, approved_local_model]
     single_tenant_customer:
-      preferred_source_kinds: [official_api, approved_local_model, official_cli]
+      preferred_source_kinds: [official_api, enterprise_model_gateway, managed_cloud_model_gateway, approved_local_model, official_cli]
     multi_tenant_customer:
-      preferred_source_kinds: [official_api]
+      preferred_source_kinds: [enterprise_model_gateway, managed_cloud_model_gateway, official_api]
     internal_batch:
-      preferred_source_kinds: [official_api, approved_local_model]
+      preferred_source_kinds: [approved_local_model, enterprise_model_gateway, managed_cloud_model_gateway, official_api]
   budget_states:
     green: { allowed_tiers: [cheap, mid] }
     yellow: { allowed_tiers: [cheap] }

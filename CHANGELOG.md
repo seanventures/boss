@@ -16,6 +16,7 @@ This release adds the commercial, Account Connect, enterprise-governance, SCIM, 
 - Added enterprise cluster inventory with trust metadata for SSO, SCIM, RBAC/ABAC, audit export, private workers, managed ProviderOps, compliance packs, support plans, SLA tier, and detached-license state.
 - Added SCIM group and user provisioning records that map active SCIM users into effective org-member access and remove access on deactivation.
 - Added entitlement-gated packaged agent module installs with install governance records, denial audit events, rollback snapshots, and private enterprise module coverage.
+- Added Model Entitlement Broker enterprise/private and managed cloud model gateway capacity sources with explicit env-backed credential checks, route/pool visibility, restricted-data enterprise routing, and red-budget paid/gateway route denial.
 - Added OpenAPI, TypeScript API client, specpack objects, workflows, policies, user stories, and traceability coverage for the new commercial and enterprise runtime surfaces.
 
 ## v0.3.0 - 2026-06-03

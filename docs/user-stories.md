@@ -355,7 +355,7 @@ Acceptance criteria:
 
 ### Story ADM-001: Route AI Capacity Safely
 
-As an agent platform admin, I want BOSS to route tasks only through approved official APIs, CLIs, agents, or local models, so that provider limits and rules are respected.
+As an agent platform admin, I want BOSS to route tasks only through approved official APIs, CLIs, agents, local models, or enterprise/managed model gateways, so that provider limits and rules are respected.
 
 Acceptance criteria:
 
@@ -367,6 +367,8 @@ Acceptance criteria:
 - Given an official OAuth/CLI session is connected for a subscription source, when owner-sandbox work is routed, then BOSS may select it and records the auth method and connection reference in the routing decision.
 - Given a source is exhausted, rate-limited, blocked, disabled, suspended, unavailable, or has zero remaining counters, when routing is evaluated, then BOSS rejects it with a capacity-specific reason and reset/observation metadata where available.
 - Given a personal subscription source and multi-tenant workload, when routing is attempted, then BOSS denies it unless provider policy explicitly allows it.
+- Given an enterprise model gateway is explicitly enabled with URL and credential reference, when restricted multi-tenant work is routed, then BOSS may select the gateway, writes a ModelRouteDecision, and still marks BudgetReservation as required for spendy generation.
+- Given a red budget state, when a paid API, managed cloud gateway, or enterprise gateway is otherwise eligible, then BOSS denies the source with `budget_state_disallows_model_spend` rather than routing around the Budget Governor.
 
 ### Story ADM-005: Audit Entitlement Pools and Capacity Receipts
 
@@ -374,7 +376,7 @@ As an agent platform admin, I want model adapters, entitlement pools, capacity p
 
 Acceptance criteria:
 
-- Given the model provider registry is loaded, when model adapters are listed, then BOSS returns each official API, official CLI, official coding agent, and approved local model adapter with auth method, workload rules, runtime status, and provider-policy notes.
+- Given the model provider registry is loaded, when model adapters are listed, then BOSS returns each official API, official CLI, official coding agent, approved local model, enterprise model gateway, and managed cloud model gateway adapter with auth method, workload rules, runtime status, and provider-policy notes.
 - Given a project has entitlement sources, when entitlement pools are listed, then BOSS returns normalized pool records with capacity state, routing modes, allowed workload classes, and budget-policy reference.
 - Given an entitled actor records observed pool capacity, when a capacity probe is submitted, then BOSS updates the pool capacity, writes a `CapacityReceipt`, emits `capacity.receipt_recorded`, and stores no raw provider secret.
 - Given the same capacity probe `dedupe_key` is submitted again, when BOSS processes the request, then it returns the prior `CapacityReceipt`, does not create a second receipt, and does not overwrite capacity state.
