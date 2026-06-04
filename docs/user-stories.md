@@ -96,6 +96,8 @@ Acceptance criteria:
 - Given an approved plan decision and budget capacity, when follow-on execution starts, then BOSS reserves PR budget and queues a leased software-factory job.
 - Given a real sandbox PR proposal, when GitHub validation completes, then BOSS stores test report and review packet artifacts.
 - Given local sandbox validation is enabled, when a PR proposal is created, then BOSS runs real allowlisted commands in the configured sandbox clone and receipt-backs the validation run.
+- Given a real sandbox PR proposal, when the release packet is created, then BOSS stores deterministic security/dependency review and release go/no-go artifacts linked to the merge decision.
+- Given a UI-affecting change, when browser validation evidence is missing, then BOSS marks the release gate conditional until browser validation evidence is attached.
 - Given failing or missing validation, when merge is considered, then BOSS blocks merge and creates visible evidence instead of silently proceeding.
 
 ### Story ENG-002: Package Agent Logic

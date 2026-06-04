@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Optional
 
 import httpx
@@ -390,6 +391,162 @@ class SoftwareFactoryService:
                 return "failed", local_summary, sources
 
         return github_validation.status, github_validation.summary, sources
+
+    def _build_security_dependency_review(
+        self,
+        files: list[FileChange],
+    ) -> dict:
+        dependency_markers = {
+            "package.json",
+            "pnpm-lock.yaml",
+            "package-lock.json",
+            "yarn.lock",
+            "requirements.txt",
+            "pyproject.toml",
+            "poetry.lock",
+            "uv.lock",
+            "dockerfile",
+            "docker-compose.yml",
+            "docker-compose.yaml",
+            "github/workflows",
+        }
+        security_markers = {
+            "auth",
+            "oidc",
+            "saml",
+            "scim",
+            "security",
+            "policy",
+            "permission",
+            "secret",
+            "token",
+            "credential",
+            ".env",
+            "config",
+        }
+        secret_pattern = re.compile(
+            r"(?i)(api[_-]?key|token|secret|password)\s*[:=]\s*['\"][^'\"\n]{8,}['\"]"
+        )
+        dependency_files: list[str] = []
+        security_sensitive_files: list[str] = []
+        findings: list[dict] = []
+        for file in files:
+            normalized = file.path.lower().lstrip("./")
+            basename = normalized.rsplit("/", 1)[-1]
+            if basename in dependency_markers or any(
+                marker in normalized for marker in dependency_markers
+            ):
+                dependency_files.append(file.path)
+            if any(marker in normalized for marker in security_markers):
+                security_sensitive_files.append(file.path)
+            matches = list(secret_pattern.finditer(file.content))
+            if matches:
+                findings.append(
+                    {
+                        "severity": "high",
+                        "kind": "hardcoded_secret_candidate",
+                        "path": file.path,
+                        "message": (
+                            "Potential hardcoded credential pattern detected; "
+                            "replace with SecretRef/env-backed configuration before merge."
+                        ),
+                        "match_count": len(matches),
+                    }
+                )
+
+        status = "passed"
+        if findings:
+            status = "failed"
+        elif dependency_files or security_sensitive_files:
+            status = "warning"
+
+        required_follow_up = []
+        if findings:
+            required_follow_up.append("Remove hardcoded credential candidates before merge.")
+        if dependency_files:
+            required_follow_up.append(
+                "Confirm dependency changes are intentional and covered by CI/security review."
+            )
+        if security_sensitive_files:
+            required_follow_up.append(
+                "Have a security-aware reviewer inspect sensitive auth/policy/config changes."
+            )
+
+        return {
+            "status": status,
+            "dependency_files": dependency_files,
+            "security_sensitive_files": security_sensitive_files,
+            "findings": findings,
+            "required_follow_up": required_follow_up,
+            "review_method": "deterministic_path_and_content_scan",
+        }
+
+    def _build_browser_validation_review(self, files: list[FileChange]) -> dict:
+        browser_relevant_files = [
+            file.path
+            for file in files
+            if file.path.startswith("apps/web/")
+            or file.path.endswith((".tsx", ".jsx", ".css", ".scss"))
+        ]
+        if not browser_relevant_files:
+            return {
+                "status": "not_applicable",
+                "browser_relevant_files": [],
+                "evidence_refs": [],
+                "required_follow_up": [],
+            }
+        return {
+            "status": "required_not_run",
+            "browser_relevant_files": browser_relevant_files,
+            "evidence_refs": [],
+            "required_follow_up": [
+                "Capture browser validation evidence before approving a UI-affecting merge."
+            ],
+        }
+
+    def _build_release_go_no_go(
+        self,
+        *,
+        validation_status: str,
+        validation_summary: str,
+        security_dependency_review: dict,
+        browser_validation: dict,
+        evidence_refs: list[str],
+    ) -> dict:
+        blockers: list[str] = []
+        warnings: list[str] = []
+        if validation_status != "passed":
+            blockers.append("ci_or_sandbox_validation_not_passed")
+        if security_dependency_review["status"] == "failed":
+            blockers.append("security_dependency_review_failed")
+        if security_dependency_review["status"] == "warning":
+            warnings.append("security_or_dependency_reviewer_required")
+        if browser_validation["status"] == "required_not_run":
+            warnings.append("browser_validation_required_before_merge")
+
+        if blockers:
+            status = "no_go"
+            recommendation = "Hold merge approval until blockers are resolved."
+        elif warnings:
+            status = "conditional_go"
+            recommendation = (
+                "Proceed only after the listed follow-up evidence is attached."
+            )
+        else:
+            status = "go"
+            recommendation = "Ready for human merge review; no auto-merge permitted."
+
+        return {
+            "status": status,
+            "blockers": blockers,
+            "warnings": warnings,
+            "validation_status": validation_status,
+            "validation_summary": validation_summary,
+            "security_dependency_status": security_dependency_review["status"],
+            "browser_validation_status": browser_validation["status"],
+            "evidence_refs": evidence_refs,
+            "recommendation": recommendation,
+        }
 
     def create_plan_artifact(
         self,
@@ -1137,6 +1294,10 @@ class SoftwareFactoryService:
                 "artifact_id": result.get("artifact_id"),
                 "diff_artifact_id": result.get("diff_artifact_id"),
                 "test_report_artifact_id": result.get("test_report_artifact_id"),
+                "security_review_artifact_id": result.get("security_review_artifact_id"),
+                "release_go_no_go_artifact_id": result.get(
+                    "release_go_no_go_artifact_id"
+                ),
                 "receipt_id": pr_receipt["id"],
                 "decision_id": result.get("decision_id"),
                 "pull_request_url": result.get("pull_request_url"),
@@ -1348,6 +1509,8 @@ class SoftwareFactoryService:
                 if isinstance(command.get("command"), str)
             )
         validation_follow_up = self._validation_follow_up_for_status(validation_status)
+        security_dependency_review = self._build_security_dependency_review(files)
+        browser_validation = self._build_browser_validation_review(files)
 
         diff_artifact_id = create_artifact(
             connection,
@@ -1361,6 +1524,25 @@ class SoftwareFactoryService:
                 "branch_name": branch_name,
                 "files_changed": [file.path for file in files],
                 "github_commits": commit_shas,
+            },
+            created_by_job_id=created_by_job_id,
+        )
+        security_review_artifact_id = create_artifact(
+            connection,
+            self.settings,
+            project_id,
+            task_id,
+            "security_dependency_review",
+            f"Security and dependency review for {title}",
+            {
+                "title": title,
+                "branch_name": branch_name,
+                "pull_request_url": pr.url,
+                "review": security_dependency_review,
+                "browser_validation": browser_validation,
+                "files_changed": [file.path for file in files],
+                "diff_artifact_id": diff_artifact_id,
+                "data_boundary": self._data_boundary_for_task(connection, task_id),
             },
             created_by_job_id=created_by_job_id,
         )
@@ -1386,6 +1568,41 @@ class SoftwareFactoryService:
                 "required_follow_up": validation_follow_up,
                 "notes": review_text,
                 "agent_module": self._module_descriptor(module_spec),
+                "security_dependency_review_artifact_id": security_review_artifact_id,
+                "security_dependency_review": security_dependency_review,
+                "browser_validation": browser_validation,
+            },
+            created_by_job_id=created_by_job_id,
+        )
+        release_go_no_go = self._build_release_go_no_go(
+            validation_status=validation_status,
+            validation_summary=validation_summary,
+            security_dependency_review=security_dependency_review,
+            browser_validation=browser_validation,
+            evidence_refs=[
+                f"artifact:{diff_artifact_id}",
+                f"artifact:{test_report_artifact_id}",
+                f"artifact:{security_review_artifact_id}",
+                f"receipt:{pr_receipt['id']}",
+            ],
+        )
+        release_go_no_go_artifact_id = create_artifact(
+            connection,
+            self.settings,
+            project_id,
+            task_id,
+            "release_go_no_go",
+            f"Release go/no-go for {title}",
+            {
+                "title": title,
+                "branch_name": branch_name,
+                "pull_request_url": pr.url,
+                "decision_input": release_go_no_go,
+                "rollback_plan": "Revert the sandbox PR branch or close the PR.",
+                "manual_approval_required": True,
+                "no_auto_merge": True,
+                "evidence_refs": release_go_no_go["evidence_refs"],
+                "data_boundary": self._data_boundary_for_task(connection, task_id),
             },
             created_by_job_id=created_by_job_id,
         )
@@ -1407,6 +1624,11 @@ class SoftwareFactoryService:
                 "local_validation": local_validation,
                 "risk_hotspots": review_text,
                 "rollback_plan": "Revert the sandbox PR branch or close the PR.",
+                "security_dependency_review": security_dependency_review,
+                "security_review_artifact_id": security_review_artifact_id,
+                "browser_validation": browser_validation,
+                "release_go_no_go": release_go_no_go,
+                "release_go_no_go_artifact_id": release_go_no_go_artifact_id,
                 "confidence_score": self._review_confidence_for_status(validation_status),
                 "recommendation": self._review_recommendation_for_status(
                     validation_status
@@ -1428,6 +1650,8 @@ class SoftwareFactoryService:
                 "artifact_id": artifact_id,
                 "diff_artifact_id": diff_artifact_id,
                 "test_report_artifact_id": test_report_artifact_id,
+                "security_review_artifact_id": security_review_artifact_id,
+                "release_go_no_go_artifact_id": release_go_no_go_artifact_id,
                 "receipt_id": pr_receipt["id"],
                 "pull_request_url": pr.url,
                 "branch_name": branch_name,
@@ -1435,6 +1659,7 @@ class SoftwareFactoryService:
                 "validation_status": validation_status,
                 "validation_summary": validation_summary,
                 "validation_sources": validation_sources,
+                "release_go_no_go_status": release_go_no_go["status"],
                 "local_validation_receipt_id": local_validation_receipt_id,
                 "agent_module_id": (
                     module_spec.get("id") if isinstance(module_spec, dict) else None
@@ -1447,6 +1672,8 @@ class SoftwareFactoryService:
             "artifact_id": artifact_id,
             "diff_artifact_id": diff_artifact_id,
             "test_report_artifact_id": test_report_artifact_id,
+            "security_review_artifact_id": security_review_artifact_id,
+            "release_go_no_go_artifact_id": release_go_no_go_artifact_id,
             "decision_id": decision_id,
             "pull_request_url": pr.url,
             "pull_request_number": pr.number,
@@ -1481,6 +1708,9 @@ class SoftwareFactoryService:
                 "source_id": route["source_id"],
                 "model_id": route["model_id"],
                 "validation_sources": validation_sources,
+                "security_review_artifact_id": security_review_artifact_id,
+                "release_go_no_go_artifact_id": release_go_no_go_artifact_id,
+                "release_go_no_go_status": release_go_no_go["status"],
                 "local_validation_receipt_id": local_validation_receipt_id,
                 "agent_module_id": (
                     module_spec.get("id") if isinstance(module_spec, dict) else None
@@ -1492,6 +1722,8 @@ class SoftwareFactoryService:
             "artifact_id": artifact_id,
             "diff_artifact_id": diff_artifact_id,
             "test_report_artifact_id": test_report_artifact_id,
+            "security_review_artifact_id": security_review_artifact_id,
+            "release_go_no_go_artifact_id": release_go_no_go_artifact_id,
             "receipt_id": pr_receipt["id"],
             "decision_id": decision_id,
             "pull_request_url": pr.url,

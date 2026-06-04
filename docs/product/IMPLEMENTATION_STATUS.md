@@ -89,6 +89,7 @@ This document summarizes the currently implemented BOSS runtime surfaces in this
   - installed agent module selected into queued proposal work
   - PR proposal -> receipt-backed GitHub draft PR
   - GitHub validation evidence captured into `test_report` and `review_packet`
+  - deterministic security/dependency review and release go/no-go artifacts linked to sandbox PR decisions
   - optional receipt-backed local sandbox validation commands captured into `test_report` and `review_packet`
   - PR review approval -> merge gate or merge job, depending on policy
   - merge -> deployment review decision
@@ -167,7 +168,7 @@ The current founder-dogfood control loop is:
 5. Approval of that decision reserves budget and queues a PR proposal job.
 6. The queued proposal job resolves through the installed software-engineer module so prompt/runtime defaults come from the packaged module.
 7. The proposal job creates a real sandbox PR against `seanheiney/boss-sandbox`.
-8. BOSS captures GitHub check-run evidence into the test report and review packet.
+8. BOSS captures GitHub check-run evidence, deterministic security/dependency review, browser-validation follow-up, and release go/no-go evidence into the test report, review packet, and merge decision.
 9. Approval of the PR review decision only queues merge work if validation passed and merge policy is enabled.
 10. Merge can create a deploy review decision.
 11. Deployment can be recorded through the GitHub Deployments API when deploy policy is enabled, with optional post-deploy health verification when configured.

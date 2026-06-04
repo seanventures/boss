@@ -3441,7 +3441,7 @@ paths:
         '200': { description: Plan artifact created, reused, or blocked }
   /v1/software-factory/proposals:
     post:
-      summary: Create a real sandbox pull request proposal behind a reservation and capture GitHub plus optional local validation evidence
+      summary: Create a real sandbox pull request proposal behind a reservation and capture validation, security/dependency, and release go/no-go evidence
       requestBody:
         required: true
         content:
@@ -3469,7 +3469,7 @@ paths:
                       path: { type: string }
                       content: { type: string }
       responses:
-        '200': { description: "Sandbox PR created, reused, or blocked, including data_boundary when policy blocks an external effect" }
+        '200': { description: "Sandbox PR created, reused, or blocked, including data_boundary when policy blocks an external effect and artifact IDs for diff, test report, security/dependency review, review packet, and release go/no-go evidence" }
   /v1/software-factory/merges:
     post:
       summary: Merge a sandbox pull request behind a receipt-backed control-plane gate after passed validation

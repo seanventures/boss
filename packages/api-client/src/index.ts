@@ -1161,6 +1161,8 @@ export type WorkerCompleteResponse = {
   artifact_id?: string;
   diff_artifact_id?: string;
   test_report_artifact_id?: string;
+  security_review_artifact_id?: string;
+  release_go_no_go_artifact_id?: string;
   decision_id?: string;
   receipt_id?: string;
   deployment_decision_id?: string;
@@ -1410,6 +1412,8 @@ export type PullRequestProposalResponse = {
   artifact_id?: string;
   diff_artifact_id?: string;
   test_report_artifact_id?: string;
+  security_review_artifact_id?: string;
+  release_go_no_go_artifact_id?: string;
   receipt_id?: string;
   decision_id?: string;
   pull_request_url?: string;

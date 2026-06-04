@@ -31,6 +31,7 @@ from apps.api.app.services.github_adapter import (
 )
 from apps.api.app.services.oidc import OidcPrincipal
 from apps.api.app.services.resource_plane import InventoryResource, ProviderCostRecord
+from apps.api.app.schemas import FileChange
 
 
 def create_local_validation_repo(tmp_path, branch_name: str):
@@ -14202,6 +14203,8 @@ def test_pr_proposal_records_github_validation_evidence(client, monkeypatch):
     assert payload["status"] == "created"
     assert payload["validation_status"] == "passed"
     assert "GitHub validation passed" in payload["validation_summary"]
+    assert payload["security_review_artifact_id"]
+    assert payload["release_go_no_go_artifact_id"]
 
     test_report = client.get(f"/v1/artifacts/{payload['test_report_artifact_id']}")
     assert test_report.status_code == 200
@@ -14209,12 +14212,87 @@ def test_pr_proposal_records_github_validation_evidence(client, monkeypatch):
     assert test_report_payload["content"]["status"] == "passed"
     assert test_report_payload["content"]["tests_added_or_run"] == ["CI"]
     assert test_report_payload["content"]["checks"][0]["conclusion"] == "success"
+    assert (
+        test_report_payload["content"]["security_dependency_review_artifact_id"]
+        == payload["security_review_artifact_id"]
+    )
+
+    security_review = client.get(
+        f"/v1/artifacts/{payload['security_review_artifact_id']}"
+    )
+    assert security_review.status_code == 200
+    security_payload = security_review.json()
+    assert security_payload["artifact_type"] == "security_dependency_review"
+    assert security_payload["content"]["review"]["status"] == "passed"
+    assert security_payload["content"]["browser_validation"]["status"] == "not_applicable"
+
+    release_gate = client.get(
+        f"/v1/artifacts/{payload['release_go_no_go_artifact_id']}"
+    )
+    assert release_gate.status_code == 200
+    release_payload = release_gate.json()
+    assert release_payload["artifact_type"] == "release_go_no_go"
+    assert release_payload["content"]["decision_input"]["status"] == "go"
+    assert (
+        f"artifact:{payload['security_review_artifact_id']}"
+        in release_payload["content"]["evidence_refs"]
+    )
 
     review_packet = client.get(f"/v1/artifacts/{payload['artifact_id']}")
     assert review_packet.status_code == 200
     review_payload = review_packet.json()
     assert review_payload["content"]["ci_validation_status"] == "passed"
     assert review_payload["content"]["confidence_score"] == "ci-passed-manual-review-required"
+    assert (
+        review_payload["content"]["security_review_artifact_id"]
+        == payload["security_review_artifact_id"]
+    )
+    assert (
+        review_payload["content"]["release_go_no_go_artifact_id"]
+        == payload["release_go_no_go_artifact_id"]
+    )
+    assert review_payload["content"]["release_go_no_go"]["status"] == "go"
+
+    with api_main.engine.begin() as connection:
+        decision = connection.execute(
+            text(
+                """
+                SELECT recommendation
+                FROM decisions
+                WHERE id = :decision_id
+                """
+            ),
+            {"decision_id": payload["decision_id"]},
+        ).mappings().one()
+    assert decision["recommendation"]["release_go_no_go_status"] == "go"
+
+
+def test_software_factory_release_gate_blocks_secret_candidates():
+    security_review = api_main.software_factory._build_security_dependency_review(
+        [
+            FileChange(
+                path="apps/api/app/config.py",
+                content='OPENAI_API_KEY = "sk-test-secret-value"',
+            )
+        ]
+    )
+    browser_validation = api_main.software_factory._build_browser_validation_review(
+        [FileChange(path="apps/web/app/page.tsx", content="export default function Page() {}")]
+    )
+    release_gate = api_main.software_factory._build_release_go_no_go(
+        validation_status="passed",
+        validation_summary="GitHub validation passed.",
+        security_dependency_review=security_review,
+        browser_validation=browser_validation,
+        evidence_refs=["artifact:test"],
+    )
+
+    assert security_review["status"] == "failed"
+    assert security_review["findings"][0]["kind"] == "hardcoded_secret_candidate"
+    assert browser_validation["status"] == "required_not_run"
+    assert release_gate["status"] == "no_go"
+    assert "security_dependency_review_failed" in release_gate["blockers"]
+    assert "browser_validation_required_before_merge" in release_gate["warnings"]
 
 
 def test_queue_merge_job_is_leasable_and_completion_passes_through(client):

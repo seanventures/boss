@@ -1211,6 +1211,8 @@ class PullRequestProposalResponse(BaseModel):
     artifact_id: Optional[str] = None
     diff_artifact_id: Optional[str] = None
     test_report_artifact_id: Optional[str] = None
+    security_review_artifact_id: Optional[str] = None
+    release_go_no_go_artifact_id: Optional[str] = None
     receipt_id: Optional[str] = None
     decision_id: Optional[str] = None
     pull_request_url: Optional[str] = None
@@ -1615,6 +1617,8 @@ class WorkerCompleteResponse(BaseModel):
     artifact_id: Optional[str] = None
     diff_artifact_id: Optional[str] = None
     test_report_artifact_id: Optional[str] = None
+    security_review_artifact_id: Optional[str] = None
+    release_go_no_go_artifact_id: Optional[str] = None
     decision_id: Optional[str] = None
     receipt_id: Optional[str] = None
     deployment_decision_id: Optional[str] = None

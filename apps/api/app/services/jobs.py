@@ -550,6 +550,12 @@ class JobLeaseService:
                 "artifact_id": result.get("artifact_id"),
                 "diff_artifact_id": result.get("diff_artifact_id"),
                 "test_report_artifact_id": result.get("test_report_artifact_id"),
+                "security_review_artifact_id": result.get(
+                    "security_review_artifact_id"
+                ),
+                "release_go_no_go_artifact_id": result.get(
+                    "release_go_no_go_artifact_id"
+                ),
                 "decision_id": result.get("decision_id"),
                 "receipt_id": result.get("receipt_id"),
                 "pull_request_url": result.get("pull_request_url"),

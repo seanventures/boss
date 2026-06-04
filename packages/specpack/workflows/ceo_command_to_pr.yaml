@@ -42,10 +42,12 @@ phases:
     owner_role: software_engineer
     skill: software_factory.codex_pr_proposal
     inputs: [ImplementationPlan, BudgetReservation, AgentModuleSelection]
-    outputs: [DiffArtifact, TestReport, ReviewPacket]
+    outputs: [DiffArtifact, TestReport, SecurityDependencyReview, ReviewPacket, ReleaseGoNoGo]
     gates:
       - tests_passed_or_explained
+      - security_dependency_review_present
       - review_packet_present
+      - release_go_no_go_present
       - agent_module_runtime_applied
   - id: pr_decision
     owner_role: release_manager
