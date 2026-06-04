@@ -134,6 +134,48 @@ class FakeControlPlaneClient:
             "provider_ref": "slack-webhook:slack:#ops",
         }
 
+    def sync_provider_resources(self, payload):
+        self.calls.append(("sync_provider_resources", payload))
+        if payload.get("provider_account_id") == "prov_fail":
+            return {
+                "project_id": payload["project_id"],
+                "runs": [
+                    {
+                        "id": "recon_failed",
+                        "status": "failed",
+                        "provider": "cloudflare",
+                        "provider_account_id": "prov_fail",
+                        "resources_seen": 0,
+                        "resources_changed": 0,
+                        "costs_seen": 0,
+                        "deadletter_id": "dlq_provider_sync",
+                        "error": {"message": "provider credentials missing"},
+                    }
+                ],
+                "resources_seen": 0,
+                "resources_changed": 0,
+                "costs_seen": 0,
+            }
+        return {
+            "project_id": payload["project_id"],
+            "runs": [
+                {
+                    "id": "recon_ok",
+                    "status": "succeeded",
+                    "provider": "digitalocean",
+                    "provider_account_id": payload.get("provider_account_id"),
+                    "resources_seen": 2,
+                    "resources_changed": 1,
+                    "costs_seen": 1,
+                    "provider_health_id": "ph_ok",
+                    "drift_report_id": "drift_ok",
+                }
+            ],
+            "resources_seen": 2,
+            "resources_changed": 1,
+            "costs_seen": 1,
+        }
+
 
 def test_worker_starts_and_exits_cleanly():
     result = subprocess.run(
@@ -163,6 +205,7 @@ def test_worker_capabilities_include_infra_job_kinds():
     assert "agent.infra_steward.infra_review" in supported
     assert "agent.model_spend_analyst.model_spend_brief" in supported
     assert "enterprise.marketplace.validate" in supported
+    assert "providerops.sync.readonly" in supported
 
 
 def test_agent_work_product_strategies_cover_initial_agent_capabilities():
@@ -410,6 +453,76 @@ def test_run_worker_cycle_completes_generic_agent_job():
     assert complete_result["agent_module"]["id"] == "pm_product_planner_v1"
     assert complete_result["agent_runtime"]["role_key"] == "pm"
     assert complete_result["work_product"]["contract"] == "FeatureBrief"
+
+
+def test_run_worker_cycle_executes_providerops_readonly_sync_job():
+    leased_job = LeasedJob(
+        id="job_providerops_sync",
+        project_id="boss-dogfood",
+        task_id=None,
+        kind="providerops.sync.readonly",
+        payload={"provider_account_id": "prov_do", "actor": "system"},
+        attempt=1,
+        max_attempts=3,
+        lease_token="lease_token",
+        lease_expires_at="future",
+    )
+    client = FakeControlPlaneClient(leased_job)
+    settings = SimpleNamespace(
+        worker_id="worker-test",
+        lease_ttl_seconds=60,
+        poll_interval_seconds=1,
+    )
+
+    ran_job = run_worker_cycle(client, settings)
+
+    assert ran_job is True
+    assert [call[0] for call in client.calls] == [
+        "poll",
+        "heartbeat",
+        "sync_provider_resources",
+        "complete",
+    ]
+    assert client.calls[2][1] == {
+        "project_id": "boss-dogfood",
+        "provider_account_id": "prov_do",
+        "actor": "system",
+    }
+    complete_result = client.calls[-1][-1]
+    assert complete_result["status"] == "succeeded"
+    assert complete_result["resources_seen"] == 2
+    assert complete_result["runs"][0]["id"] == "recon_ok"
+
+
+def test_run_worker_cycle_deadletters_failed_providerops_sync_job():
+    leased_job = LeasedJob(
+        id="job_providerops_sync_failed",
+        project_id="boss-dogfood",
+        task_id=None,
+        kind="providerops.sync.readonly",
+        payload={"provider_account_id": "prov_fail", "actor": "system"},
+        attempt=1,
+        max_attempts=3,
+        lease_token="lease_token",
+        lease_expires_at="future",
+    )
+    client = FakeControlPlaneClient(leased_job)
+    settings = SimpleNamespace(
+        worker_id="worker-test",
+        lease_ttl_seconds=60,
+        poll_interval_seconds=1,
+    )
+
+    ran_job = run_worker_cycle(client, settings)
+
+    assert ran_job is True
+    assert [call[0] for call in client.calls] == [
+        "poll",
+        "heartbeat",
+        "sync_provider_resources",
+        "fail",
+    ]
+    assert client.calls[-1][4]["message"] == "provider credentials missing"
 
 
 def test_run_worker_cycle_deadletters_unsupported_job():

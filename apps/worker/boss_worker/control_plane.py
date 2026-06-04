@@ -139,6 +139,11 @@ class ControlPlaneClient:
         response.raise_for_status()
         return response.json()
 
+    def sync_provider_resources(self, payload: dict[str, Any]) -> dict[str, Any]:
+        response = self._client.post("/v1/resources/sync", json=payload)
+        response.raise_for_status()
+        return response.json()
+
     def fail(
         self,
         worker_id: str,

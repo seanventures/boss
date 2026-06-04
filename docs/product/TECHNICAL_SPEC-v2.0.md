@@ -204,6 +204,7 @@ Rules:
 - Hosted service readiness is recorded through `AccountConnectHealthCheck` rows. Checks call only the configured Account Connect endpoint; missing configuration records a blocked check instead of a fake healthy result.
 - Hosted marketplace catalogs are recorded through `HostedMarketplaceSyncRun` and `HostedMarketplaceListing` rows. Sync calls only the configured Account Connect endpoint; missing configuration or invalid hosted responses record blocked/failed sync runs instead of synthetic listings.
 - Hosted login handshakes are represented locally as `AccountConnectAuthSession` records with receipts, callback-state validation, visible blocked states when `BOSS_ACCOUNT_CONNECT_URL` is missing, and link creation only from a successful hosted adapter response.
+- ProviderOps read-only sync can run manually through `POST /v1/resources/sync` or as a leased worker job kind, `providerops.sync.readonly`. The worker calls the same Resource Plane Kernel API; failed provider sync runs fail the job so the failure is visible as both reconciliation evidence and a job deadletter.
 
 ## Edition and Entitlement Checks
 

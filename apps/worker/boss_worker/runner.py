@@ -263,6 +263,7 @@ def capabilities() -> list[str]:
         "agent.secrets_steward.secret_boundary_review",
         "agent.vp_agents.role_review",
         "enterprise.marketplace.validate",
+        "providerops.sync.readonly",
         "plan.command",
         "plan.generate",
         "openai.plan",
@@ -658,6 +659,34 @@ def execute_job(job: LeasedJob, client: ControlPlaneClient) -> dict[str, Any]:
         if result.get("status") == "failed":
             raise RuntimeError(result.get("message") or "Outbound communication failed.")
         return result
+    if job.kind == "providerops.sync.readonly":
+        result = client.sync_provider_resources(
+            {
+                "project_id": job.project_id,
+                "provider_account_id": job.payload.get("provider_account_id"),
+                "actor": job.payload.get("actor") or "system",
+            }
+        )
+        if any(run.get("status") == "failed" for run in result.get("runs") or []):
+            failed = next(
+                run for run in result.get("runs") or [] if run.get("status") == "failed"
+            )
+            message = ((failed.get("error") or {}).get("message")) or (
+                "ProviderOps sync failed."
+            )
+            raise RuntimeError(message)
+        return {
+            "status": "succeeded",
+            "summary": (
+                f"ProviderOps read-only sync completed for "
+                f"{len(result.get('runs') or [])} provider account(s)."
+            ),
+            "sync": result,
+            "runs": result.get("runs") or [],
+            "resources_seen": result.get("resources_seen", 0),
+            "resources_changed": result.get("resources_changed", 0),
+            "costs_seen": result.get("costs_seen", 0),
+        }
     raise ValueError(f"Unsupported job kind: {job.kind}")
 
 
