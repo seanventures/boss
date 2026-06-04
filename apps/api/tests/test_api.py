@@ -1192,6 +1192,102 @@ def test_enterprise_cluster_records_trust_controls_and_blocking_gaps(client):
     assert "enterprise.cluster_upserted" in event_types
 
 
+def test_audit_export_enforces_actor_permission_and_enterprise_audit_controls(
+    client, engine
+):
+    project_id = "boss-audit-governance"
+    with engine.begin() as connection:
+        connection.execute(text(f"DELETE FROM events WHERE project_id = '{project_id}'"))
+        connection.execute(
+            text(f"DELETE FROM enterprise_clusters WHERE project_id = '{project_id}'")
+        )
+        connection.execute(text(f"DELETE FROM project_members WHERE project_id = '{project_id}'"))
+        connection.execute(text(f"DELETE FROM projects WHERE id = '{project_id}'"))
+        connection.execute(
+            text(
+                f"""
+                INSERT INTO projects (id, workspace_id, name, slug)
+                VALUES ('{project_id}', 'ws_boss', 'Audit Governance', '{project_id}')
+                """
+            )
+        )
+        api_main.members.seed_default_members(connection, project_id, "test")
+
+    denied_actor = client.get(
+        "/v1/audit/export",
+        params={"project_id": project_id, "actor": "release_manager"},
+    )
+    assert denied_actor.status_code == 403
+    assert "audit_export" in denied_actor.json()["detail"]
+
+    disabled = client.post(
+        "/v1/enterprise/clusters",
+        json={
+            "project_id": project_id,
+            "deployment_mode": "enterprise_cloud",
+            "account_connect_mode": "attached",
+            "audit_controls": {
+                "audit_exports_enabled": False,
+                "retention_days": 365,
+                "compliance_evidence_workflows": True,
+            },
+            "status": "active",
+            "actor": "ceo",
+        },
+    )
+    assert disabled.status_code == 201
+    assert disabled.json()["status"] == "blocked"
+    assert "audit_exports_disabled" in disabled.json()["blocking_gaps"]
+
+    blocked_export = client.get(
+        "/v1/audit/export",
+        params={"project_id": project_id, "actor": "ceo"},
+    )
+    assert blocked_export.status_code == 403
+    assert "audit exports are disabled" in blocked_export.json()["detail"]
+
+    enabled = client.post(
+        "/v1/enterprise/clusters",
+        json={
+            "project_id": project_id,
+            "deployment_mode": "enterprise_cloud",
+            "account_connect_mode": "attached",
+            "identity_controls": {
+                "sso_oidc_configured": True,
+                "scim_configured": True,
+            },
+            "audit_controls": {
+                "audit_exports_enabled": True,
+                "retention_days": 730,
+                "compliance_evidence_workflows": True,
+                "audit_export_mode": "on_demand",
+            },
+            "status": "active",
+            "actor": "ceo",
+        },
+    )
+    assert enabled.status_code == 201
+    assert enabled.json()["status"] == "active"
+
+    exported = client.get(
+        "/v1/audit/export",
+        params={"project_id": project_id, "actor": "ceo"},
+    )
+    assert exported.status_code == 200
+    payload = exported.json()
+    assert payload["governance"]["edition_scope"] == "enterprise"
+    assert payload["governance"]["export_allowed"] is True
+    assert payload["governance"]["audit_exports_enabled"] is True
+    assert payload["governance"]["retention_days"] == 730
+    assert payload["governance"]["audit_export_mode"] == "on_demand"
+
+    events = client.get("/v1/events", params={"project_id": project_id, "limit": 20})
+    assert events.status_code == 200
+    event_types = [item["event_type"] for item in events.json()["items"]]
+    assert "policy.denied" in event_types
+    assert "audit.export_generated" in event_types
+
+
 def test_enterprise_identity_providers_back_cluster_identity_controls(client):
     denied = client.post(
         "/v1/enterprise/identity-providers",

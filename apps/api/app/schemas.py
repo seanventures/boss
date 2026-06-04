@@ -1879,6 +1879,7 @@ class AuditExportResponse(BaseModel):
     workspace_name: str
     org_name: str
     generated_at: str
+    governance: dict[str, Any] = Field(default_factory=dict)
     scope: AuditExportScope
     counts: AuditExportCounts
     chain: dict[str, list[str]]

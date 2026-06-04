@@ -163,6 +163,9 @@ Acceptance criteria:
 - Given an effect dedupe key that already succeeded, when the effect is attempted again, then BOSS returns the prior receipt and does not repeat the effect.
 - Given a side-effect adapter failure, when retries are exhausted, then BOSS creates a deadletter or decision rather than dropping the failure.
 - Given an audit export, when scoped to a task, decision, or job, then the chain includes related tasks, jobs, decisions, artifacts, receipts, reservations, routing logs, deadletters, and events.
+- Given an actor without `audit_export`, when an audit export is requested, then BOSS rejects the request and records a visible policy denial.
+- Given an enterprise cluster disables audit exports, when an authorized actor requests an audit export, then BOSS denies the export with the enterprise audit-control reason instead of leaking the chain.
+- Given an enterprise cluster enables audit exports with a retention policy, when an export is generated, then the response includes governance metadata for export mode, retention days, cluster status, and blocking gaps.
 
 ### Story GOV-002: Export Compliance Evidence
 

@@ -3307,8 +3307,13 @@ paths:
           in: query
           required: false
           schema: { type: string }
+        - name: actor
+          in: query
+          required: false
+          schema: { type: string, default: ceo }
       responses:
-        '200': { description: Audit export including data_boundary classifications for tasks, jobs, artifacts, and receipts }
+        '200': { description: Audit export including governance metadata, retention controls, and data_boundary classifications for tasks, jobs, artifacts, and receipts }
+        '403': { description: Actor lacks audit_export permission or enterprise audit controls have disabled exports }
         '404': { description: Unknown project }
   /v1/audit/replay-bundles:
     post:

@@ -5580,16 +5580,26 @@ def export_audit_trail(
     task_id: Optional[str] = None,
     decision_id: Optional[str] = None,
     job_id: Optional[str] = None,
+    actor: str = "ceo",
 ) -> AuditExportResponse:
     with begin(engine) as connection:
         try:
+            require_project_actor(
+                connection,
+                project_id,
+                actor,
+                "audit_export",
+            )
             payload = audit.export(
                 connection,
                 project_id,
+                actor=actor,
                 task_id=task_id,
                 decision_id=decision_id,
                 job_id=job_id,
             )
+        except PermissionError as error:
+            raise HTTPException(status_code=403, detail=str(error)) from error
         except ValueError as error:
             raise HTTPException(status_code=404, detail=str(error)) from error
         return AuditExportResponse(
@@ -5598,6 +5608,7 @@ def export_audit_trail(
             workspace_name=payload["workspace_name"],
             org_name=payload["org_name"],
             generated_at=payload["generated_at"],
+            governance=payload["governance"],
             scope=AuditExportScope(**payload["scope"]),
             counts=AuditExportCounts(**payload["counts"]),
             chain=payload["chain"],

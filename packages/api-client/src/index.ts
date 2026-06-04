@@ -1573,6 +1573,7 @@ export type AuditExportResponse = {
   workspace_name: string;
   org_name: string;
   generated_at: string;
+  governance: Record<string, unknown>;
   scope: AuditExportScope;
   counts: AuditExportCounts;
   chain: Record<string, string[]>;
@@ -3918,7 +3919,7 @@ export function createBossApiClient(config: BossApiClientConfig) {
     },
     exportAuditTrail(
       projectId: string,
-      scope?: { taskId?: string; decisionId?: string; jobId?: string },
+      scope?: { taskId?: string; decisionId?: string; jobId?: string; actor?: string },
     ) {
       return request<AuditExportResponse>("GET", "/v1/audit/export", {
         query: {
@@ -3926,6 +3927,7 @@ export function createBossApiClient(config: BossApiClientConfig) {
           task_id: scope?.taskId,
           decision_id: scope?.decisionId,
           job_id: scope?.jobId,
+          actor: scope?.actor,
         },
       });
     },

@@ -108,6 +108,7 @@ class AuditTrailService:
         connection: Connection,
         project_id: str,
         *,
+        actor: Optional[str] = None,
         task_id: Optional[str] = None,
         decision_id: Optional[str] = None,
         job_id: Optional[str] = None,
@@ -127,6 +128,25 @@ class AuditTrailService:
         ).mappings().first()
         if not project:
             raise ValueError("Unknown project_id")
+
+        governance = self._enterprise_audit_governance(connection, project_id)
+        if governance.get("export_allowed") is False:
+            reason = "Enterprise audit exports are disabled by the active audit controls."
+            if actor:
+                emit_event(
+                    connection,
+                    project_id,
+                    "policy.denied",
+                    actor,
+                    "audit_export",
+                    project_id,
+                    {
+                        "permission": "audit_export",
+                        "reason": reason,
+                        "governance": governance,
+                    },
+                )
+            raise PermissionError(reason)
 
         scoped = any([task_id, decision_id, job_id])
         task_ids: set[str] = set()
@@ -263,6 +283,7 @@ class AuditTrailService:
             project_id,
             routing_log_ids=routing_log_ids if scoped else None,
         )
+        generated_at = now_utc().isoformat()
 
         chain = {
             "task_ids": sorted(task_ids),
@@ -275,12 +296,13 @@ class AuditTrailService:
             "deadletter_ids": sorted(deadletter_ids),
         }
 
-        return {
+        export_payload = {
             "project_id": project["project_id"],
             "project_name": project["project_name"],
             "workspace_name": project["workspace_name"],
             "org_name": project["org_name"],
-            "generated_at": now_utc().isoformat(),
+            "generated_at": generated_at,
+            "governance": governance,
             "scope": {
                 "task_id": task_id,
                 "decision_id": decision_id,
@@ -309,6 +331,79 @@ class AuditTrailService:
             "routing_logs": routing_logs,
             "deadletters": deadletters,
             "events": events,
+        }
+        if actor:
+            emit_event(
+                connection,
+                project_id,
+                "audit.export_generated",
+                actor,
+                "audit_export",
+                project_id,
+                {
+                    "scope": {
+                        "task_id": task_id,
+                        "decision_id": decision_id,
+                        "job_id": job_id,
+                    },
+                    "counts": export_payload["counts"],
+                    "governance": governance,
+                },
+            )
+        return export_payload
+
+    def _enterprise_audit_governance(
+        self, connection: Connection, project_id: str
+    ) -> dict[str, Any]:
+        rows = connection.execute(
+            text(
+                """
+                SELECT id, deployment_mode, account_connect_mode, audit_controls,
+                       status, metadata, updated_at
+                FROM enterprise_clusters
+                WHERE project_id = :project_id
+                ORDER BY
+                  CASE WHEN status = 'active' THEN 0 ELSE 1 END,
+                  updated_at DESC,
+                  id ASC
+                LIMIT 1
+                """
+            ),
+            {"project_id": project_id},
+        ).mappings().all()
+        if not rows:
+            return {
+                "edition_scope": "community_or_unconfigured_enterprise",
+                "cluster_id": None,
+                "export_allowed": True,
+                "audit_exports_enabled": True,
+                "retention_policy_required": False,
+                "retention_days": None,
+                "compliance_evidence_workflows": False,
+                "audit_export_mode": "on_demand",
+                "blocking_gaps": [],
+            }
+        row = dict(rows[0])
+        controls = row.get("audit_controls") or {}
+        metadata = row.get("metadata") or {}
+        audit_exports_enabled = bool(controls.get("audit_exports_enabled", True))
+        return {
+            "edition_scope": "enterprise",
+            "cluster_id": row["id"],
+            "deployment_mode": row["deployment_mode"],
+            "account_connect_mode": row["account_connect_mode"],
+            "cluster_status": row["status"],
+            "export_allowed": audit_exports_enabled,
+            "audit_exports_enabled": audit_exports_enabled,
+            "retention_policy_required": bool(
+                controls.get("retention_policy_required", True)
+            ),
+            "retention_days": controls.get("retention_days"),
+            "compliance_evidence_workflows": bool(
+                controls.get("compliance_evidence_workflows", True)
+            ),
+            "audit_export_mode": controls.get("audit_export_mode", "on_demand"),
+            "blocking_gaps": metadata.get("blocking_gaps", []),
         }
 
     def create_replay_bundle(
