@@ -247,6 +247,7 @@ The current founder-dogfood control loop is:
 - ProviderOps read-only adapter calls support DigitalOcean, Cloudflare, Supabase, OpenAI, and Anthropic through official APIs. Each reconciliation run now creates a durable `providerops_inventory_snapshot` artifact linked from run metadata, including failed runs with deadletter/error references. Billing-readable provider accounts can ingest DigitalOcean billing history, OpenAI organization costs, and Anthropic organization cost reports into duplicate-safe CostEvents with explicit confidence labels; unsupported billing providers fail closed with deadletters instead of invented estimates. Spendy provider ChangeSets now create receipt-linked CostEvents with explicit confidence labels after successful actuation, and threshold-crossing observed provider cost creates a CostAnomaly, decision, and provider read-only kill switch. Provider write actuation is currently constrained to explicitly implemented skills: Cloudflare DNS record upsert, Cloudflare R2 bucket create, Cloudflare Worker deployment, Git-connected Cloudflare Pages deployment, DigitalOcean droplet create/destroy, DigitalOcean App Platform deployment, Supabase project create/pause, and Supabase migration apply are supported through the Resource Plane Kernel, while unsupported provider skills and missing credentials fail closed with ResourceReceipts/deadletters until each skill receives explicit actuation support.
 - Real Slack/email delivery remains disabled unless policy and provider credentials explicitly permit it.
 - Enterprise SSO rollout remains environment-specific, but the runtime now supports real OIDC verification plus delegated org-wide RBAC in the current member directory.
+- External hosted and enterprise rollout readiness can be checked locally with `make release-blockers`, which runs a no-network prerequisite report for hosted Account Connect, hosted marketplace/team/billing, Enterprise SCIM/SSO, external support routing, self-hosted package artifacts, live cluster rollout evidence, and ProviderOps write enablement. The report intentionally distinguishes local implementation readiness from live external verification and does not print secret values.
 
 ## Local verification baseline
 
@@ -256,6 +257,8 @@ The current local release-grade baseline for this repo is:
 - `make test`
 - `make build`
 - `make smoke`
+- `make k8s-validate`
+- `make release-blockers`
 
 The latest passing local state at the time of this update was:
 
@@ -263,6 +266,7 @@ The latest passing local state at the time of this update was:
 - production web build passed
 - smoke passed
 - OpenAPI parsed successfully
+- external rollout blockers are reportable locally without calling hosted/provider services
 
 ## Where to look next
 

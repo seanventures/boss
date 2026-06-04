@@ -555,3 +555,14 @@ Acceptance criteria:
 - Given a sandbox deployment is recorded, when the deployment succeeds and health verification passes or is explicitly skipped by configuration, then BOSS creates a completed deployment rollout record and artifact.
 - Given post-deploy health verification fails, when BOSS records the deployment, then the rollout is blocked at the health stage and links to the blocking health/rollback decision.
 - Given an operator queries rollout history, when `GET /v1/software-factory/rollouts` is called, then BOSS returns rollout status, current stage, deployment evidence, health evidence, and rollback decision references.
+
+### Story OPS-004: Report External Rollout Blockers
+
+As a release operator, I want a deterministic release-blocker report, so that hosted and enterprise rollout gaps are visible without fake provider success.
+
+Acceptance criteria:
+
+- Given no hosted or provider environment is configured, when `make release-blockers` runs, then BOSS reports blocked Account Connect, hosted marketplace/team/billing, SCIM, identity, support, and ProviderOps write prerequisites without calling external services.
+- Given hosted/provider environment variables are configured, when the readiness checker runs, then BOSS marks those paths as requiring live external verification rather than claiming production readiness.
+- Given local Community mode is reviewed, when the readiness checker runs without hosted auth, then BOSS reports Community local mode as ready.
+- Given the checker formats output, when secret-bearing environment variables are present, then BOSS reports only variable names and never prints secret values.
