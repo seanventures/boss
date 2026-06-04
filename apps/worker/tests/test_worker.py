@@ -168,6 +168,7 @@ def test_worker_capabilities_include_infra_job_kinds():
 def test_agent_work_product_strategies_cover_initial_agent_capabilities():
     agent_capabilities = [item for item in capabilities() if item.startswith("agent.")]
 
+    assert len(agent_capabilities) == len(set(agent_capabilities))
     assert sorted(AGENT_WORK_PRODUCT_STRATEGIES) == sorted(agent_capabilities)
     for job_kind, strategy in AGENT_WORK_PRODUCT_STRATEGIES.items():
         assert strategy["contract"]

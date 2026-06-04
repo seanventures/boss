@@ -65,7 +65,7 @@ This document summarizes the currently implemented BOSS runtime surfaces in this
   - project member directory and actor-scoped write authorization
 - Worker runtime:
   - pull-based Postgres leasing
-  - resolved agent module, role, prompt, and invariant context attached to leased `agent.*` jobs before execution
+  - resolved agent module, role, prompt, invariant, cadence, eval-rubric, skill allow/deny, escalation, and runtime-contract context attached to leased `agent.*` jobs before execution, with API coverage for every seeded initial module/job kind
   - heartbeat and TTL enforcement
   - completion, failure, retry, reclaim, and deadletter handling
   - deadletter remediation that creates linked replacement jobs instead of mutating terminal job history

@@ -3424,6 +3424,70 @@ def test_agent_runtime_resolves_default_module_prompt_contract(client):
         "Produce or update output contract" in item
         for item in payload["compiled_prompt"]["checklist"]
     )
+    assert "Role allowed skills" in "\n".join(payload["compiled_prompt"]["checklist"])
+    assert payload["compiled_prompt"]["runtime_contract"]["output_contracts"] == [
+        "PRD",
+        "AcceptanceCriteria",
+        "ScopeDecision",
+    ]
+    assert payload["compiled_prompt"]["runtime_contract"]["cadence"]
+    assert payload["compiled_prompt"]["runtime_contract"]["eval_rubric"]
+    assert payload["role"]["cadence"]
+
+
+def test_all_initial_agent_modules_resolve_prompt_contracts(client):
+    modules_response = client.get(
+        "/v1/agent-modules",
+        params={"project_id": "boss-dogfood"},
+    )
+    assert modules_response.status_code == 200
+    modules = {
+        item["module_id"]: item
+        for item in modules_response.json()["items"]
+        if item["module_id"] in api_main.specpack.DEFAULT_AGENT_MODULE_IDS
+    }
+    assert sorted(modules) == sorted(api_main.specpack.DEFAULT_AGENT_MODULE_IDS)
+
+    for module_id, module in modules.items():
+        assert module["installed"] is True
+        assert module["job_kinds"], module_id
+        for job_kind in module["job_kinds"]:
+            response = client.post(
+                "/v1/agent-runtime/resolve",
+                json={
+                    "project_id": "boss-dogfood",
+                    "agent_module_id": module_id,
+                    "job_kind": job_kind,
+                    "task_payload": {
+                        "command": f"Validate runtime contract for {module_id}.",
+                        "risk_tier": 1,
+                    },
+                    "actor": "ceo",
+                },
+            )
+            assert response.status_code == 200, (module_id, job_kind, response.text)
+            payload = response.json()
+            assert payload["matched"] is True
+            assert payload["agent_module"]["id"] == module_id
+            assert payload["role"]["role_key"]
+            assert payload["role"]["output_contracts"], module_id
+            assert payload["role"]["cadence"], module_id
+            assert payload["role"]["eval_rubric"], module_id
+            assert payload["compiled_prompt"]["system"], module_id
+            assert payload["compiled_prompt"]["job"], module_id
+            assert payload["compiled_prompt"]["checklist"], module_id
+            assert payload["compiled_prompt"]["runtime_contract"]["job_kinds"]
+            assert payload["compiled_prompt"]["runtime_contract"]["allowed_skills"]
+            assert payload["compiled_prompt"]["runtime_contract"]["forbidden_skills"]
+            assert "No external effect without a Receipt." in payload[
+                "compiled_prompt"
+            ]["system"]
+            assert "Role allowed skills" in "\n".join(
+                payload["compiled_prompt"]["checklist"]
+            )
+            assert "Forbidden skills" in "\n".join(
+                payload["compiled_prompt"]["checklist"]
+            )
 
 
 def test_agent_runtime_resolution_requires_module_manage_permission(client):

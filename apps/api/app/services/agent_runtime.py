@@ -62,6 +62,7 @@ class AgentRuntimeService:
             "system": self._compile_system_prompt(module, role, prompt_bundle),
             "job": self._compile_job_prompt(job_kind, job_prompt, task_payload or {}),
             "checklist": self._compile_checklist(role, runtime),
+            "runtime_contract": self._compile_runtime_contract(role, runtime),
             "invariants": self.BOSS_INVARIANTS,
         }
         return {
@@ -86,6 +87,7 @@ class AgentRuntimeService:
                 "decision_rights": role.get("decision_rights") or {},
                 "permissions": role.get("permissions") or {},
                 "output_contracts": role.get("output_contracts") or [],
+                "cadence": role.get("cadence") or {},
                 "comms_contract": role.get("comms_contract") or {},
                 "eval_rubric": role.get("eval_rubric") or {},
                 "autonomy": role.get("autonomy") or {},
@@ -195,7 +197,10 @@ class AgentRuntimeService:
             self._format_mapping("Decision rights", role.get("decision_rights") or {}),
             self._format_mapping("Permissions", role.get("permissions") or {}),
             self._format_list("Output contracts", role.get("output_contracts") or []),
+            self._format_mapping("Cadence", role.get("cadence") or {}),
             self._format_mapping("Communication contract", role.get("comms_contract") or {}),
+            self._format_mapping("Evaluation rubric", role.get("eval_rubric") or {}),
+            self._format_mapping("Autonomy", role.get("autonomy") or {}),
             self._format_list("BOSS invariants", self.BOSS_INVARIANTS),
         ]
         return "\n\n".join(section for section in sections if section)
@@ -238,6 +243,22 @@ class AgentRuntimeService:
             "Use only allowed skills and escalate forbidden or out-of-scope actions.",
             "Create artifacts/events for material findings or outputs.",
         ]
+        permissions = role.get("permissions") or {}
+        allowed_skills = permissions.get("allowed_skills") or []
+        forbidden_skills = permissions.get("forbidden_skills") or []
+        if allowed_skills:
+            checklist.append("Role allowed skills: " + ", ".join(allowed_skills))
+        if forbidden_skills:
+            checklist.append("Forbidden skills: " + ", ".join(forbidden_skills))
+        decision_rights = role.get("decision_rights") or {}
+        escalations = decision_rights.get("must_escalate") or []
+        if escalations:
+            checklist.append("Escalate before: " + ", ".join(escalations))
+        autonomy_level = ((role.get("autonomy") or {}).get("level"))
+        if isinstance(autonomy_level, int):
+            checklist.append(
+                f"Respect autonomy level {autonomy_level}; do not exceed role rights."
+            )
         if runtime.get("default_skill_ids"):
             checklist.append(
                 "Default skills: " + ", ".join(runtime.get("default_skill_ids") or [])
@@ -245,6 +266,26 @@ class AgentRuntimeService:
         for contract in role.get("output_contracts") or []:
             checklist.append(f"Produce or update output contract: {contract}.")
         return checklist
+
+    def _compile_runtime_contract(
+        self,
+        role: dict[str, Any],
+        runtime: dict[str, Any],
+    ) -> dict[str, Any]:
+        permissions = role.get("permissions") or {}
+        decision_rights = role.get("decision_rights") or {}
+        return {
+            "worker_target": runtime.get("worker_target"),
+            "job_kinds": runtime.get("job_kinds") or [],
+            "allowed_skills": permissions.get("allowed_skills") or [],
+            "forbidden_skills": permissions.get("forbidden_skills") or [],
+            "must_escalate": decision_rights.get("must_escalate") or [],
+            "output_contracts": role.get("output_contracts") or [],
+            "cadence": role.get("cadence") or {},
+            "eval_rubric": role.get("eval_rubric") or {},
+            "autonomy": role.get("autonomy") or {},
+            "configuration_schema": runtime.get("configuration_schema") or {},
+        }
 
     def _job_prompt(
         self,
