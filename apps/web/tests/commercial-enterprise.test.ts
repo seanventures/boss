@@ -252,7 +252,11 @@ describe("commercial, enterprise, and marketplace feeds", async () => {
           evidence_refs: ["artifact:k8s_validate"],
           blocking_gaps: ["cluster_validation_private_worker_pool_blocked"],
           validated_by: "ceo",
-          metadata: {},
+          metadata: {
+            validation_packet_artifact_id: "art_cluster_packet_1",
+            blocking_decision_id: "dec_cluster_block_1",
+            live_rollout_claim: false,
+          },
           created_at: "2026-06-03T01:00:00Z",
         },
       ],
@@ -409,6 +413,11 @@ describe("commercial, enterprise, and marketplace feeds", async () => {
       validationKind: "multi_node_readiness",
       status: "blocked",
       evidenceRefs: ["artifact:k8s_validate"],
+      metadata: {
+        validation_packet_artifact_id: "art_cluster_packet_1",
+        blocking_decision_id: "dec_cluster_block_1",
+        live_rollout_claim: false,
+      },
     });
     expect(feed.summary.identityProviderCount).toBe(2);
     expect(feed.summary.activeIdentityProviders).toBe(1);

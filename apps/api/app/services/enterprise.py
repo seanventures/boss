@@ -14,7 +14,14 @@ from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
 from ..config import Settings
-from .core import emit_event, json_hash, make_id, now_utc
+from .core import (
+    create_artifact,
+    create_blocking_decision,
+    emit_event,
+    json_hash,
+    make_id,
+    now_utc,
+)
 from .members import MemberDirectoryService
 from .receipts import ReceiptService
 
@@ -869,6 +876,87 @@ class EnterpriseService:
                 "metadata": json.dumps(metadata or {}),
             },
         )
+        validation_packet = {
+            "object_type": "enterprise_cluster_validation_packet",
+            "enterprise_cluster_id": enterprise_cluster_id,
+            "validation_run_id": run_id,
+            "validation_kind": normalized_kind,
+            "status": effective_status,
+            "checks": normalized_checks,
+            "evidence_refs": refs,
+            "blocking_gaps": blocking_gaps,
+            "validated_by": actor,
+            "live_rollout_claim": False,
+            "cluster": {
+                "deployment_mode": cluster["deployment_mode"],
+                "account_connect_mode": cluster["account_connect_mode"],
+                "worker_pool_strategy": cluster["worker_pool_strategy"],
+                "ha_profile": cluster["ha_profile"],
+                "data_residency": cluster["data_residency"],
+                "support_tier": cluster["support_tier"],
+                "status": cluster["status"],
+            },
+            "metadata": metadata or {},
+            "data_boundary": "internal",
+        }
+        validation_packet_artifact_id = create_artifact(
+            connection,
+            self.settings,
+            project_id,
+            None,
+            "enterprise_cluster_validation_packet",
+            f"Enterprise cluster validation: {normalized_kind}",
+            validation_packet,
+            data_boundary="internal",
+        )
+        blocking_decision_id = None
+        if blocking_gaps:
+            blocking_decision_id = create_blocking_decision(
+                connection,
+                project_id,
+                None,
+                f"Resolve enterprise cluster validation blockers for {normalized_kind}",
+                {
+                    "action": "resolve_cluster_validation_blockers",
+                    "enterprise_cluster_id": enterprise_cluster_id,
+                    "validation_run_id": run_id,
+                    "validation_packet_artifact_id": validation_packet_artifact_id,
+                    "blocking_gaps": blocking_gaps,
+                    "reason": (
+                        "Required enterprise cluster validation checks did not pass; "
+                        "BOSS must hold rollout-sensitive work until the gaps are resolved."
+                    ),
+                },
+                {
+                    "estimated_cost_micros": 0,
+                    "currency": "USD",
+                    "confidence": "unknown",
+                    "reason": "Cluster validation remediation is human/configuration work until a ChangeSet is proposed.",
+                },
+                "enterprise_cluster_validation_blocked",
+                risk_tier=3,
+                default_action="hold",
+            )
+        enriched_metadata = {
+            **(metadata or {}),
+            "validation_packet_artifact_id": validation_packet_artifact_id,
+            "blocking_decision_id": blocking_decision_id,
+            "live_rollout_claim": False,
+        }
+        connection.execute(
+            text(
+                """
+                UPDATE enterprise_cluster_validation_runs
+                SET metadata = CAST(:metadata AS JSONB)
+                WHERE id = :id AND project_id = :project_id
+                """
+            ),
+            {
+                "id": run_id,
+                "project_id": project_id,
+                "metadata": json.dumps(enriched_metadata),
+            },
+        )
         connection.execute(
             text(
                 """
@@ -888,6 +976,9 @@ class EnterpriseService:
                             "validation_kind": normalized_kind,
                             "status": effective_status,
                             "blocking_gaps": blocking_gaps,
+                            "validation_packet_artifact_id": validation_packet_artifact_id,
+                            "blocking_decision_id": blocking_decision_id,
+                            "live_rollout_claim": False,
                         }
                     }
                 ),
@@ -905,6 +996,9 @@ class EnterpriseService:
                 "validation_kind": normalized_kind,
                 "status": effective_status,
                 "blocking_gaps": blocking_gaps,
+                "validation_packet_artifact_id": validation_packet_artifact_id,
+                "blocking_decision_id": blocking_decision_id,
+                "live_rollout_claim": False,
             },
         )
         return self._get_cluster_validation_run(connection, project_id, run_id)

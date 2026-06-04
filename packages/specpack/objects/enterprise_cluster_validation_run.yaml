@@ -27,5 +27,7 @@ fields:
 rules:
   validation_runs_are_evidence_not_live_rollout_claims: true
   required_failed_checks_create_blocking_gaps: true
+  every_run_creates_validation_packet_artifact: true
+  required_failed_checks_create_safe_hold_decision: true
   enterprise_manage_permission_required: true
   live_rollout_still_requires_environment_specific_approval: true

@@ -102,6 +102,14 @@ function formatMicros(amount: unknown): string {
   }).format(amount / 1_000_000);
 }
 
+function metadataString(
+  metadata: Record<string, unknown>,
+  key: string,
+): string | undefined {
+  const value = metadata[key];
+  return typeof value === "string" && value.trim() ? value : undefined;
+}
+
 function formatRecommendation(decision: DecisionFeedItem): string {
   const action = decision.recommendation.action;
   if (typeof action === "string" && action) {
@@ -4166,33 +4174,58 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                     </p>
                   ) : (
                     <div className="feed-list">
-                      {enterprise.clusterValidationRuns.slice(0, 6).map((run) => (
-                        <div className="feed-row" key={run.id}>
-                          <div>
-                            <h4>{titleCaseToken(run.validationKind)}</h4>
-                            <p className="detail">
-                              Cluster {run.enterpriseClusterId} / validated by{" "}
-                              {run.validatedBy} / {formatDateTime(run.createdAt)}
-                            </p>
-                            <p className="detail">
-                              Checks {run.checks.length} / evidence refs{" "}
-                              {run.evidenceRefs.length}
-                            </p>
-                            {run.blockingGaps.length > 0 ? (
+                      {enterprise.clusterValidationRuns.slice(0, 6).map((run) => {
+                        const validationPacketArtifactId = metadataString(
+                          run.metadata,
+                          "validation_packet_artifact_id",
+                        );
+                        const blockingDecisionId = metadataString(
+                          run.metadata,
+                          "blocking_decision_id",
+                        );
+                        return (
+                          <div className="feed-row" key={run.id}>
+                            <div>
+                              <h4>{titleCaseToken(run.validationKind)}</h4>
                               <p className="detail">
-                                Gaps: {run.blockingGaps.join(", ")}
+                                Cluster {run.enterpriseClusterId} / validated by{" "}
+                                {run.validatedBy} / {formatDateTime(run.createdAt)}
                               </p>
-                            ) : null}
+                              <p className="detail">
+                                Checks {run.checks.length} / evidence refs{" "}
+                                {run.evidenceRefs.length}
+                              </p>
+                              {validationPacketArtifactId ? (
+                                <p className="detail">
+                                  Validation packet: {validationPacketArtifactId}
+                                </p>
+                              ) : null}
+                              {blockingDecisionId ? (
+                                <p className="detail">
+                                  Blocking decision: {blockingDecisionId}
+                                </p>
+                              ) : null}
+                              {run.metadata.live_rollout_claim === false ? (
+                                <p className="detail">
+                                  Readiness evidence only; no live rollout claim.
+                                </p>
+                              ) : null}
+                              {run.blockingGaps.length > 0 ? (
+                                <p className="detail">
+                                  Gaps: {run.blockingGaps.join(", ")}
+                                </p>
+                              ) : null}
+                            </div>
+                            <span
+                              className={`pill${
+                                run.status === "passed" ? "" : " warn"
+                              }`}
+                            >
+                              {titleCaseToken(run.status)}
+                            </span>
                           </div>
-                          <span
-                            className={`pill${
-                              run.status === "passed" ? "" : " warn"
-                            }`}
-                          >
-                            {titleCaseToken(run.status)}
-                          </span>
-                        </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   )}
 

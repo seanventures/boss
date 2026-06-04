@@ -2002,6 +2002,44 @@ def test_enterprise_cluster_records_trust_controls_and_blocking_gaps(client):
     assert validation_payload["blocking_gaps"] == [
         "cluster_validation_private_worker_pool_blocked"
     ]
+    validation_metadata = validation_payload["metadata"]
+    validation_packet_artifact_id = validation_metadata["validation_packet_artifact_id"]
+    blocking_decision_id = validation_metadata["blocking_decision_id"]
+    assert validation_metadata["live_rollout_claim"] is False
+    assert validation_packet_artifact_id.startswith("art_")
+    assert blocking_decision_id.startswith("dec_")
+
+    validation_packet = client.get(f"/v1/artifacts/{validation_packet_artifact_id}")
+    assert validation_packet.status_code == 200
+    validation_packet_payload = validation_packet.json()
+    assert (
+        validation_packet_payload["artifact_type"]
+        == "enterprise_cluster_validation_packet"
+    )
+    assert validation_packet_payload["data_boundary"] == "internal"
+    assert validation_packet_payload["content"]["validation_run_id"] == validation_payload["id"]
+    assert validation_packet_payload["content"]["status"] == "blocked"
+    assert validation_packet_payload["content"]["live_rollout_claim"] is False
+    assert validation_packet_payload["content"]["blocking_gaps"] == [
+        "cluster_validation_private_worker_pool_blocked"
+    ]
+
+    decision_inbox = client.get(
+        "/v1/decisions/inbox", params={"project_id": "boss-dogfood"}
+    )
+    assert decision_inbox.status_code == 200
+    blocking_decisions = [
+        item
+        for item in decision_inbox.json()["items"]
+        if item["id"] == blocking_decision_id
+    ]
+    assert len(blocking_decisions) == 1
+    assert blocking_decisions[0]["status"] == "pending"
+    assert blocking_decisions[0]["default_action"] == "hold"
+    assert (
+        blocking_decisions[0]["recommendation"]["validation_packet_artifact_id"]
+        == validation_packet_artifact_id
+    )
 
     validation_list = client.get(
         "/v1/enterprise/cluster-validation-runs",
@@ -2027,6 +2065,8 @@ def test_enterprise_cluster_records_trust_controls_and_blocking_gaps(client):
     events = client.get("/v1/events", params={"project_id": "boss-dogfood"})
     event_types = [item["event_type"] for item in events.json()["items"]]
     assert "policy.denied" in event_types
+    assert "artifact.created" in event_types
+    assert "decision.created" in event_types
     assert "enterprise.cluster_upserted" in event_types
     assert "enterprise.cluster_validation_recorded" in event_types
 

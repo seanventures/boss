@@ -479,6 +479,8 @@ Acceptance criteria:
 - Given enterprise cluster state changes, when the write succeeds, then BOSS emits `enterprise.cluster_upserted` with deployment mode, Account Connect mode, status, and blocking gaps.
 - Given an enterprise admin records a cluster validation run, when required checks pass, then BOSS stores checks, evidence refs, status, actor, and emits `enterprise.cluster_validation_recorded`.
 - Given an enterprise admin records required failed or blocked checks, when the validation run is saved, then BOSS stores deterministic `blocking_gaps` and surfaces them through the API and Mission Control.
+- Given cluster validation evidence is recorded, when the validation run is saved, then BOSS creates an `enterprise_cluster_validation_packet` artifact with checks, evidence refs, blocking gaps, cluster posture, and `live_rollout_claim: false`.
+- Given required cluster validation checks fail or block, when the validation run is saved, then BOSS creates a pending safe-HOLD decision that links to the validation packet and names the blocking gaps.
 - Given cluster validation evidence is recorded, when product status is reviewed, then BOSS treats it as auditable readiness evidence and not as proof that a live production rollout occurred.
 - Given enterprise identity-provider state changes, when the write succeeds, then BOSS emits `enterprise.identity_provider_upserted` with provider type, status, and blocking gaps.
 - Given enterprise identity rollout policy changes, when the write succeeds, then BOSS emits `enterprise.identity_rollout_policy_upserted` with provider type, runtime mode, and allowed domains.
