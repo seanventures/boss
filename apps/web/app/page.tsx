@@ -5075,6 +5075,15 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                           ? ` / ${record.entitlementResult.reason}`
                           : ""}
                       </p>
+                      {metadataString(record.metadata, "module_integrity_artifact_id") ? (
+                        <p className="detail">
+                          Integrity packet:{" "}
+                          {metadataString(
+                            record.metadata,
+                            "module_integrity_artifact_id",
+                          )}
+                        </p>
+                      ) : null}
                     </div>
                     <span
                       className={`pill${record.status === "applied" ? "" : " warn"}`}

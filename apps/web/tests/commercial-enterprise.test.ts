@@ -477,7 +477,9 @@ describe("commercial, enterprise, and marketplace feeds", async () => {
             reason: "missing_entitlement",
           },
           rollback_snapshot: {},
-          metadata: {},
+          metadata: {
+            module_integrity_artifact_id: "art_agent_integrity_1",
+          },
           created_at: "2026-06-03T01:00:00Z",
         },
       ],
@@ -535,6 +537,9 @@ describe("commercial, enterprise, and marketplace feeds", async () => {
     expect(feed.installRecords[0]).toMatchObject({
       moduleId: "private_enterprise_agent_v1",
       status: "denied",
+      metadata: {
+        module_integrity_artifact_id: "art_agent_integrity_1",
+      },
     });
     expect(feed.hostedListings[0]).toMatchObject({
       packId: "private_enterprise_agent_v1",

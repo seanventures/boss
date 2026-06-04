@@ -29,6 +29,8 @@ fields:
 rules:
   required_entitlements_checked_before_install: true
   denied_installs_are_audited: true
+  lifecycle_records_link_module_integrity_artifact: true
+  integrity_artifact_records_spec_hash_and_signing_metadata: true
   previous_install_snapshot_preserved_for_rollback: true
   uninstall_preserves_snapshot_for_rollback: true
   rollback_restores_prior_snapshot: true

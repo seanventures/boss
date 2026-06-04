@@ -3564,11 +3564,26 @@ def test_agent_module_install_requires_declared_marketplace_entitlement(client, 
         },
     )
     assert denied_records.status_code == 200
-    assert denied_records.json()["items"][0]["action"] == "install_denied"
-    assert denied_records.json()["items"][0]["status"] == "denied"
-    assert denied_records.json()["items"][0]["entitlement_result"]["status"] == (
+    denied_record = denied_records.json()["items"][0]
+    assert denied_record["action"] == "install_denied"
+    assert denied_record["status"] == "denied"
+    assert denied_record["entitlement_result"]["status"] == (
         "missing_required_entitlement"
     )
+    denied_integrity = client.get(
+        f"/v1/artifacts/{denied_record['metadata']['module_integrity_artifact_id']}"
+    )
+    assert denied_integrity.status_code == 200
+    denied_integrity_payload = denied_integrity.json()
+    assert (
+        denied_integrity_payload["artifact_type"] == "agent_module_integrity_packet"
+    )
+    assert denied_integrity_payload["content"]["module_id"] == (
+        "private_enterprise_agent_v1"
+    )
+    assert denied_integrity_payload["content"]["action"] == "install_denied"
+    assert denied_integrity_payload["content"]["signing"]["status"] == "unsigned"
+    assert denied_integrity_payload["content"]["spec_hash"]
 
     with engine.begin() as connection:
         connection.execute(
@@ -3627,6 +3642,15 @@ def test_agent_module_install_requires_declared_marketplace_entitlement(client, 
     actions = [item["action"] for item in records.json()["items"]]
     assert "install" in actions
     assert "install_denied" in actions
+    install_record = next(
+        item for item in records.json()["items"] if item["action"] == "install"
+    )
+    install_integrity = client.get(
+        f"/v1/artifacts/{install_record['metadata']['module_integrity_artifact_id']}"
+    )
+    assert install_integrity.status_code == 200
+    assert install_integrity.json()["content"]["action"] == "install"
+    assert install_integrity.json()["content"]["entitlement_result"]["status"] == "allowed"
 
     events = client.get("/v1/events", params={"project_id": "boss-dogfood"})
     event_types = [item["event_type"] for item in events.json()["items"]]
@@ -4193,6 +4217,21 @@ def test_agent_module_rollback_and_uninstall_use_saved_snapshots(client, engine)
         item for item in records.json()["items"] if item["action"] == "uninstall"
     )
     assert uninstall_record["rollback_snapshot"]["config"]["branch_prefix"] == "catalog/"
+    rollback_record = next(
+        item for item in records.json()["items"] if item["action"] == "rollback"
+    )
+    rollback_integrity = client.get(
+        f"/v1/artifacts/{rollback_record['metadata']['module_integrity_artifact_id']}"
+    )
+    uninstall_integrity = client.get(
+        f"/v1/artifacts/{uninstall_record['metadata']['module_integrity_artifact_id']}"
+    )
+    assert rollback_integrity.status_code == 200
+    assert uninstall_integrity.status_code == 200
+    assert rollback_integrity.json()["content"]["action"] == "rollback"
+    assert uninstall_integrity.json()["content"]["action"] == "uninstall"
+    assert rollback_integrity.json()["content"]["config_hash"]
+    assert uninstall_integrity.json()["content"]["rollback_snapshot_hash"]
 
     events = client.get("/v1/events", params={"project_id": "boss-lab"})
     event_types = [item["event_type"] for item in events.json()["items"]]

@@ -11,7 +11,7 @@ from sqlalchemy.engine import Connection
 
 from ..config import Settings
 from .commercial import CommercialService
-from .core import emit_event
+from .core import create_artifact, emit_event, json_hash
 
 
 class PackNotFoundError(Exception):
@@ -696,6 +696,15 @@ class SpecPackService:
             active_capabilities,
         )
         if entitlement_result["status"] == "missing_required_entitlement":
+            integrity_artifact_id = self._create_agent_module_integrity_artifact(
+                connection,
+                project_id,
+                module_spec,
+                action="install_denied",
+                actor=actor,
+                entitlement_result=entitlement_result,
+                config=config or {},
+            )
             self._record_agent_module_install(
                 connection,
                 project_id,
@@ -707,7 +716,10 @@ class SpecPackService:
                 to_version=module_spec.get("version", "0.0.0"),
                 entitlement_result=entitlement_result,
                 rollback_snapshot={},
-                metadata={"reason": "missing_required_entitlement"},
+                metadata={
+                    "reason": "missing_required_entitlement",
+                    "module_integrity_artifact_id": integrity_artifact_id,
+                },
             )
             emit_event(
                 connection,
@@ -767,6 +779,16 @@ class SpecPackService:
             and role_result["status"] == "present"
         )
         if not matches_existing:
+            integrity_artifact_id = self._create_agent_module_integrity_artifact(
+                connection,
+                project_id,
+                module_spec,
+                action="install",
+                actor=actor,
+                entitlement_result=entitlement_result,
+                config=merged_config,
+                rollback_snapshot=rollback_snapshot,
+            )
             connection.execute(
                 text(
                     """
@@ -827,6 +849,7 @@ class SpecPackService:
                     "module_id": module_id,
                     "version": module_spec.get("version", "0.0.0"),
                     "role_key": role_key,
+                    "module_integrity_artifact_id": integrity_artifact_id,
                 },
             )
             self._record_agent_module_install(
@@ -842,7 +865,10 @@ class SpecPackService:
                 to_version=module_spec.get("version", "0.0.0"),
                 entitlement_result=entitlement_result,
                 rollback_snapshot=rollback_snapshot,
-                metadata={"role_key": role_key},
+                metadata={
+                    "role_key": role_key,
+                    "module_integrity_artifact_id": integrity_artifact_id,
+                },
             )
 
         module = self.get_agent_module_for_project(connection, project_id, module_id)
@@ -887,6 +913,16 @@ class SpecPackService:
             module_id,
             actor,
         )
+        integrity_artifact_id = self._create_agent_module_integrity_artifact(
+            connection,
+            project_id,
+            row["spec"] or {},
+            action="uninstall",
+            actor=actor,
+            entitlement_result={"status": "not_checked"},
+            config=row["config"] or {},
+            rollback_snapshot=rollback_snapshot,
+        )
         self._record_agent_module_install(
             connection,
             project_id,
@@ -898,7 +934,12 @@ class SpecPackService:
             to_version=None,
             entitlement_result={"status": "not_checked"},
             rollback_snapshot=rollback_snapshot,
-            metadata={"reason": reason, "role_key": row["role_key"], "role_result": role_result},
+            metadata={
+                "reason": reason,
+                "role_key": row["role_key"],
+                "role_result": role_result,
+                "module_integrity_artifact_id": integrity_artifact_id,
+            },
         )
         emit_event(
             connection,
@@ -981,6 +1022,16 @@ class SpecPackService:
                 "installed_by": actor,
             },
         )
+        integrity_artifact_id = self._create_agent_module_integrity_artifact(
+            connection,
+            project_id,
+            snapshot_spec,
+            action="rollback",
+            actor=actor,
+            entitlement_result={"status": "not_checked"},
+            config=snapshot.get("config") or {},
+            rollback_snapshot=current_snapshot,
+        )
         self._record_agent_module_install(
             connection,
             project_id,
@@ -992,7 +1043,11 @@ class SpecPackService:
             to_version=snapshot_version,
             entitlement_result={"status": "not_checked"},
             rollback_snapshot=current_snapshot,
-            metadata={"reason": reason, "role_key": role_key},
+            metadata={
+                "reason": reason,
+                "role_key": role_key,
+                "module_integrity_artifact_id": integrity_artifact_id,
+            },
         )
         emit_event(
             connection,
@@ -1244,6 +1299,72 @@ class SpecPackService:
             "missing_entitlements": missing,
             "active_capabilities": sorted(active_capabilities),
         }
+
+    def _create_agent_module_integrity_artifact(
+        self,
+        connection: Connection,
+        project_id: str,
+        module_spec: dict[str, Any],
+        *,
+        action: str,
+        actor: str,
+        entitlement_result: dict[str, Any],
+        config: dict[str, Any],
+        rollback_snapshot: dict[str, Any] | None = None,
+    ) -> str:
+        module_id = str(module_spec.get("id") or "unknown_module")
+        module_path = self._module_path(module_id)
+        try:
+            source_path = str(module_path.relative_to(self.settings.specpack_root))
+        except ValueError:
+            source_path = str(module_path)
+        marketplace = module_spec.get("marketplace") or {}
+        signing = module_spec.get("signing") or marketplace.get("signing") or {}
+        if not isinstance(signing, dict):
+            signing = {}
+        signature_ref = signing.get("signature_ref") or marketplace.get("signature_ref")
+        verification_mode = "declared_metadata_only" if signature_ref else "unsigned"
+        content = {
+            "object_type": "agent_module_integrity_packet",
+            "module_id": module_id,
+            "module_version": module_spec.get("version", "0.0.0"),
+            "display_name": module_spec.get("display_name", module_id),
+            "publisher": module_spec.get("publisher", "Unknown"),
+            "category": module_spec.get("category", "general"),
+            "action": action,
+            "actor": actor,
+            "source_path": source_path,
+            "spec_hash": json_hash(module_spec),
+            "config_hash": json_hash(config or {}),
+            "marketplace": marketplace,
+            "required_entitlements": self._required_entitlements(module_spec),
+            "entitlement_result": entitlement_result,
+            "signing": {
+                "status": verification_mode,
+                "signature_ref": signature_ref,
+                "algorithm": signing.get("algorithm"),
+                "public_key_ref": signing.get("public_key_ref"),
+                "verified_at": None,
+                "note": (
+                    "No cryptographic verification was performed; BOSS records "
+                    "declared signing metadata and the canonical spec hash."
+                    if signature_ref
+                    else "No signature metadata is declared for this local module."
+                ),
+            },
+            "rollback_snapshot_hash": json_hash(rollback_snapshot or {}),
+            "data_boundary": "internal",
+        }
+        return create_artifact(
+            connection,
+            self.settings,
+            project_id,
+            None,
+            "agent_module_integrity_packet",
+            f"Agent module integrity: {module_id} {action}",
+            content,
+            data_boundary="internal",
+        )
 
     def _record_agent_module_install(
         self,

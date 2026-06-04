@@ -54,7 +54,7 @@ This document summarizes the currently implemented BOSS runtime surfaces in this
   - self-improvement proposal workflow
   - role and pack discovery/install
   - RoleSpec scope checks with drift events, trust changes, and automatic autonomy downgrade
-  - agent-module catalog and install/uninstall/rollback lifecycle with marketplace metadata, required-entitlement gates, denied-install records, rollback snapshots, default initial-agent installation, and runtime prompt resolution
+  - agent-module catalog and install/uninstall/rollback lifecycle with marketplace metadata, required-entitlement gates, denied-install records, module integrity packet artifacts with spec hashes and signing/provenance metadata, rollback snapshots, default initial-agent installation, and runtime prompt resolution
   - entitlement source and routing-log visibility, including API-key and official OAuth/CLI session connection lifecycle, capacity-state visibility, and structured route rejection explanations for OpenAI Codex, Anthropic Claude Code, and xAI Grok Build subscription sources
   - Model Entitlement Broker v2 APIs for model adapter inventory, entitlement pool inventory, official subscription connection-session start/list/complete records, idempotent capacity probes with durable `CapacityReceipt` rows, and canonical filterable `ModelRouteDecision` simulate/list surfaces
   - ProviderOps provider accounts, connection tests, resource inventory sync through manual API/UI or leased `providerops.sync.readonly` worker jobs, durable provider inventory snapshot artifacts for successful and failed reconciliation runs, read-only DigitalOcean/OpenAI/Anthropic billing sync, cost ledger reads, duplicate-safe BillingAccount/CostEvent records, spendy ChangeSet-to-CostEvent recording, cost anomalies with read-only provider kill switches, ChangeSet planning/approval/apply attempts, real Cloudflare DNS record upsert actuation, real Cloudflare Worker deployment actuation, real Git-connected Cloudflare Pages deployment actuation, real DigitalOcean droplet create/destroy actuation, real DigitalOcean App Platform deployment actuation, real Supabase project create/pause actuation, real Supabase migration apply actuation, ResourceReceipts, deployment targets, provider health, drift reports, and reconciliation-run visibility
@@ -116,7 +116,7 @@ This document summarizes the currently implemented BOSS runtime surfaces in this
   - enterprise identity-provider writes gated by `enterprise_manage`, audited with `enterprise.identity_provider_upserted`, and blocked visibly when required OIDC/SAML/SCIM metadata is incomplete
   - enterprise SCIM provisioning writes gated by `enterprise_manage`, with group/user audit events and active-user mapping into the same org-member RBAC directory used by the rest of BOSS
   - Core Pack install for dogfood
-  - packaged agent-module catalog, entitlement-aware install flow, install governance records, and role lineage
+  - packaged agent-module catalog, entitlement-aware install flow, install governance records with module integrity packet artifacts, and role lineage
   - deterministic RoleSpec validation for pack roles and module-provided roles
   - deterministic SkillSpec validation for typed IO, cost, retry, permissions, data boundary, policy, and real-only mode
   - model entitlement broker with routing logs, official subscription connection checks, durable connection sessions, connect/disconnect APIs, capacity-state fail-closed denials, multi-tenant denials for personal/public subscription sources, capacity receipt dedupe, and filterable ModelRouteDecision API/Mission Control audit surfaces
@@ -149,7 +149,7 @@ This document summarizes the currently implemented BOSS runtime surfaces in this
   - Metatron activity queries grounded in live event data
   - self-improvement canary, rollout, and rollback submission with required evidence payloads
   - API-driven agent marketplace visibility and module installation
-  - agent module entitlement requirements, hosted marketplace listing/sync history, and install/denial history visible from the marketplace panel
+  - agent module entitlement requirements, hosted marketplace listing/sync history, and install/denial history with integrity packet references visible from the marketplace panel
   - entitlement readiness labels that distinguish active, credential-gated, adapter-ready, and registry-only sources
   - entitlement auth, connection-state, and capacity-state labels for API keys, official CLI OAuth, device OAuth, and local-host sources, with console actions for official session connect/disconnect
   - ProviderOps dashboard for provider-account registration/testing, inventory sync, Resource Explorer, Resource Janitor cleanup proposals, ChangeSet Review, Deployment Registry, provider health, drift, cost, reconciliation, and ResourceReceipt visibility

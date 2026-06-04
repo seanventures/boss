@@ -107,6 +107,8 @@ Acceptance criteria:
 - Given an agent module in the specpack catalog, when it is installed, then BOSS records module installation and role lineage.
 - Given a module declares required marketplace entitlements, when the project lacks those entitlements, then BOSS denies installation, emits `agent_module.install_denied`, and records the entitlement result.
 - Given the project has the required entitlement, when the module is installed, then BOSS records an install governance record with entitlement result and rollback snapshot.
+- Given a module install, denial, rollback, or uninstall is recorded, when the lifecycle record is inspected, then it links to an `agent_module_integrity_packet` artifact with the module spec hash, config hash, publisher, marketplace metadata, and signing/provenance state.
+- Given a local module has no signing metadata, when its integrity packet is created, then BOSS marks the signing status as `unsigned` instead of pretending cryptographic verification occurred.
 - Given a module install is updated, when the previous install is replaced, then BOSS preserves a rollback snapshot with version, config, and spec.
 - Given a module has a rollback snapshot, when rollback is requested by an authorized actor, then BOSS restores the prior spec/config, records `agent_module.rolled_back`, and keeps role lineage auditable.
 - Given an installed module is no longer allowed or desired, when uninstall is requested by an authorized actor, then BOSS deactivates the module, restores the base RoleSpec where available, records `agent_module.uninstalled`, and keeps a snapshot for rollback.
