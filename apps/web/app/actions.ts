@@ -289,6 +289,160 @@ export async function installAgentModuleAction(formData: FormData): Promise<void
   revalidatePath("/");
 }
 
+export async function linkAccountConnectAction(
+  formData: FormData,
+): Promise<void> {
+  const hostedOrgId = formData.get("hosted_org_id");
+  if (typeof hostedOrgId !== "string" || !hostedOrgId.trim()) {
+    throw new Error("hosted_org_id is required");
+  }
+  await client.linkAccountConnect({
+    project_id: getProjectId(formData),
+    hosted_org_id: hostedOrgId.trim(),
+    connection_ref: getOptionalString(formData, "connection_ref"),
+    marketplace_identity: parseOptionalJsonObjectField(
+      formData.get("marketplace_identity_json"),
+      "marketplace_identity_json",
+    ),
+    billing_portal_ref: getOptionalString(formData, "billing_portal_ref"),
+    connector_authorization_refs: parseLines(
+      formData.get("connector_authorization_refs"),
+    ),
+    optional_telemetry_enabled: parseProviderOpsCheckbox(
+      formData,
+      "optional_telemetry_enabled",
+      true,
+    ),
+    metadata: parseOptionalJsonObjectField(
+      formData.get("metadata_json"),
+      "metadata_json",
+    ),
+    actor: getActor(formData),
+  });
+  revalidatePath("/");
+}
+
+export async function unlinkAccountConnectAction(
+  formData: FormData,
+): Promise<void> {
+  await client.unlinkAccountConnect({
+    project_id: getProjectId(formData),
+    hosted_org_id: getOptionalString(formData, "hosted_org_id"),
+    reason:
+      getOptionalString(formData, "reason") ??
+      "Operator unlinked Account Connect from Mission Control.",
+    actor: getActor(formData),
+  });
+  revalidatePath("/");
+}
+
+export async function syncAccountConnectAction(formData: FormData): Promise<void> {
+  await client.syncAccountConnect({
+    project_id: getProjectId(formData),
+    hosted_org_id: getOptionalString(formData, "hosted_org_id"),
+    actor: getActor(formData),
+  });
+  revalidatePath("/");
+}
+
+export async function upsertEnterpriseClusterAction(
+  formData: FormData,
+): Promise<void> {
+  await client.upsertEnterpriseCluster({
+    project_id: getProjectId(formData),
+    deployment_mode:
+      getOptionalString(formData, "deployment_mode") ?? "enterprise_cloud",
+    account_connect_mode:
+      getOptionalString(formData, "account_connect_mode") ?? "attached",
+    worker_pool_strategy:
+      getOptionalString(formData, "worker_pool_strategy") ??
+      "dedicated_managed_workers",
+    ha_profile: getOptionalString(formData, "ha_profile") ?? "regional_ha",
+    data_residency: getOptionalString(formData, "data_residency") ?? "us",
+    identity_controls: parseOptionalJsonObjectField(
+      formData.get("identity_controls_json"),
+      "identity_controls_json",
+    ),
+    governance_controls: parseOptionalJsonObjectField(
+      formData.get("governance_controls_json"),
+      "governance_controls_json",
+    ),
+    audit_controls: parseOptionalJsonObjectField(
+      formData.get("audit_controls_json"),
+      "audit_controls_json",
+    ),
+    private_worker_pools: parseOptionalJsonArray(
+      formData.get("private_worker_pools_json"),
+      "private_worker_pools_json",
+    ),
+    compliance_packs: parseLines(formData.get("compliance_packs")),
+    support_tier: getOptionalString(formData, "support_tier") ?? "enterprise",
+    support_sla: parseOptionalJsonObjectField(
+      formData.get("support_sla_json"),
+      "support_sla_json",
+    ),
+    status: getOptionalString(formData, "status") ?? "planned",
+    metadata: parseOptionalJsonObjectField(
+      formData.get("metadata_json"),
+      "metadata_json",
+    ),
+    actor: getActor(formData),
+  });
+  revalidatePath("/");
+}
+
+export async function upsertEnterpriseScimGroupAction(
+  formData: FormData,
+): Promise<void> {
+  const displayName = formData.get("display_name");
+  if (typeof displayName !== "string" || !displayName.trim()) {
+    throw new Error("display_name is required");
+  }
+  await client.upsertEnterpriseScimGroup({
+    project_id: getProjectId(formData),
+    external_id: getOptionalString(formData, "external_id"),
+    display_name: displayName.trim(),
+    role_keys: parseLines(formData.get("role_keys")),
+    permissions: parseLines(formData.get("permissions")),
+    raw_group: parseOptionalJsonObjectField(
+      formData.get("raw_group_json"),
+      "raw_group_json",
+    ),
+    status: getOptionalString(formData, "status") ?? "active",
+    actor: getActor(formData),
+  });
+  revalidatePath("/");
+}
+
+export async function upsertEnterpriseScimUserAction(
+  formData: FormData,
+): Promise<void> {
+  const userName = formData.get("user_name");
+  const displayName = formData.get("display_name");
+  if (typeof userName !== "string" || !userName.trim()) {
+    throw new Error("user_name is required");
+  }
+  if (typeof displayName !== "string" || !displayName.trim()) {
+    throw new Error("display_name is required");
+  }
+  await client.upsertEnterpriseScimUser({
+    project_id: getProjectId(formData),
+    external_id: getOptionalString(formData, "external_id"),
+    user_name: userName.trim(),
+    display_name: displayName.trim(),
+    active: parseProviderOpsCheckbox(formData, "active", true),
+    role_keys: parseLines(formData.get("role_keys")),
+    permissions: parseLines(formData.get("permissions")),
+    groups: parseLines(formData.get("groups")),
+    raw_profile: parseOptionalJsonObjectField(
+      formData.get("raw_profile_json"),
+      "raw_profile_json",
+    ),
+    actor: getActor(formData),
+  });
+  revalidatePath("/");
+}
+
 export async function connectEntitlementSourceAction(
   formData: FormData,
 ): Promise<void> {

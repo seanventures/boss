@@ -303,6 +303,26 @@ a {
   accent-color: var(--accent);
 }
 
+.check-row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.check-row input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--accent);
+}
+
+.metric-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
 .field span {
   font-size: 0.78rem;
   letter-spacing: 0.14em;

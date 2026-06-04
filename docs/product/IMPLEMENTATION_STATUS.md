@@ -131,10 +131,13 @@ This document summarizes the currently implemented BOSS runtime surfaces in this
   - active actor selection from the project and org member directories, passed through all console write actions
   - auth-session visibility for transport authentication method, principal binding, and OIDC enablement
   - org delegation management for organization-wide actors and permissions
+  - commercial edition and Account Connect panel with edition status, local-vs-hosted auth posture, license capabilities, hosted-org link/sync/unlink controls, and entitlement rows
+  - enterprise trust panel with cluster posture, blocking gaps, support/SLA/compliance metadata, and SCIM group/user provisioning controls that write through the API
   - keyboard skip navigation and explicit accessible names for dynamic action controls
   - Metatron activity queries grounded in live event data
   - self-improvement canary, rollout, and rollback submission with required evidence payloads
   - API-driven agent marketplace visibility and module installation
+  - agent module entitlement requirements and install/denial history visible from the marketplace panel
   - entitlement readiness labels that distinguish active, credential-gated, adapter-ready, and registry-only sources
   - entitlement auth, connection-state, and capacity-state labels for API keys, official CLI OAuth, device OAuth, and local-host sources, with console actions for official session connect/disconnect
   - ProviderOps dashboard for provider-account registration/testing, inventory sync, Resource Explorer, Resource Janitor cleanup proposals, ChangeSet Review, Deployment Registry, provider health, drift, cost, reconciliation, and ResourceReceipt visibility

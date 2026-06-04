@@ -359,6 +359,18 @@ Acceptance criteria:
 - Given a Cloud user installs a marketplace pack, when the install starts, then publisher identity and entitlement checks are resolved through Account Connect.
 - Given Enterprise is detached, when Account Connect is unavailable, then private license and identity flows remain explicitly supported.
 
+### Story ADM-007: Operate Commercial State From Mission Control
+
+As a founder, Cloud admin, or enterprise operator, I want edition, Account Connect, license entitlements, enterprise posture, and SCIM provisioning visible in Mission Control, so that commercial and trust controls are not hidden behind undocumented API calls.
+
+Acceptance criteria:
+
+- Given the commercial API is available, when Mission Control loads, then it shows edition status, Account Connect requirement/status, local-vs-hosted auth posture, license candidate, and active license entitlements.
+- Given Account Connect is not linked, when an authorized actor submits a hosted org ID, then Mission Control calls the Account Connect link API and refreshes the panel from the control plane.
+- Given Account Connect is linked, when an authorized actor requests entitlement sync or unlink, then Mission Control calls the corresponding API and relies on audit events from the backend.
+- Given Enterprise cluster posture exists, when Mission Control loads, then it shows deployment mode, Account Connect mode, worker strategy, HA/data residency, support tier, compliance packs, and blocking gaps.
+- Given an authorized actor upserts SCIM groups or users, when the form is submitted, then Mission Control calls the enterprise SCIM API and active users are represented through the same org-member RBAC directory.
+
 ### Story ADM-006: Govern Enterprise Trust And Clustering Posture
 
 As an enterprise admin, I want BOSS to record enterprise deployment mode, identity controls, audit posture, private worker strategy, and support/SLA commitments, so that enterprise readiness gaps are visible before production rollout.

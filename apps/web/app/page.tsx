@@ -12,6 +12,7 @@ import {
   createDeploymentRunAction,
   installAgentModuleAction,
   installPackAction,
+  linkAccountConnectAction,
   queueOutboxMessageAction,
   refreshHealthSnapshotAction,
   recordSelfImprovementCanaryAction,
@@ -26,8 +27,13 @@ import {
   submitSelfImprovementProposalAction,
   submitOutboxDraftAction,
   submitCommandAction,
+  syncAccountConnectAction,
   syncProviderResourcesAction,
   testProviderAccountAction,
+  unlinkAccountConnectAction,
+  upsertEnterpriseClusterAction,
+  upsertEnterpriseScimGroupAction,
+  upsertEnterpriseScimUserAction,
   upsertOrgMemberAction,
   upsertWorkerPoolAction,
 } from "./actions";
@@ -40,9 +46,11 @@ import { fetchBudgetAllocationFeed } from "../lib/budget-allocations";
 import { fetchBudgetStatus } from "../lib/budget-status";
 import { fetchBreakGlassGrantFeed } from "../lib/break-glass";
 import { fetchChangeJournalFeed } from "../lib/change-journal";
+import { fetchCommercialFeed } from "../lib/commercial";
 import { fetchDeadletterFeed } from "../lib/deadletters";
 import { fetchDecisionFeed, type DecisionFeedItem } from "../lib/decisions";
 import { fetchEntitlementFeed } from "../lib/entitlements";
+import { fetchEnterpriseFeed } from "../lib/enterprise";
 import { fetchActivityFeed } from "../lib/events";
 import { fetchHealthSnapshotFeed } from "../lib/health-snapshots";
 import { fetchInfrastructureResourceFeed } from "../lib/infrastructure";
@@ -270,6 +278,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
     packs,
     roles,
     agentModules,
+    commercial,
+    enterprise,
     entitlements,
     routingLogs,
     skills,
@@ -300,6 +310,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
       fetchPackFeed(activeProjectId),
       fetchRoleFeed(activeProjectId),
       fetchAgentModuleFeed(activeProjectId),
+      fetchCommercialFeed(activeProjectId),
+      fetchEnterpriseFeed(activeProjectId),
       fetchEntitlementFeed(activeProjectId),
       fetchRoutingLogFeed(activeProjectId),
       fetchSkillFeed(),
@@ -2946,6 +2958,537 @@ export default async function HomePage({ searchParams }: HomePageProps) {
         <section className="panel-stack">
           <div className="section-head">
             <div>
+              <span className="eyebrow">Commercial Trust Layer</span>
+              <h2>Edition, Account Connect, Enterprise, and SCIM governance.</h2>
+            </div>
+            <p className="status-meta">
+              Community stays local-first. Cloud fails closed until Account Connect is
+              linked, and Enterprise trust controls are tracked as auditable runtime
+              records.
+            </p>
+          </div>
+
+          <div className="stack-grid">
+            <article className="stack-card">
+              <h3>Edition and Account Connect</h3>
+              {!commercial.apiReachable ? (
+                <p className="detail">
+                  {commercial.blockedReason ?? "Commercial API is unavailable."}
+                </p>
+              ) : !commercial.edition ? (
+                <p className="detail">No edition status is available.</p>
+              ) : (
+                <div className="feed-list">
+                  <div className="feed-row">
+                    <div>
+                      <h4>{commercial.edition.displayName}</h4>
+                      <p className="detail">
+                        {commercial.edition.editionId} / {commercial.edition.status} /{" "}
+                        {commercial.edition.connectionMode}
+                      </p>
+                      <p className="detail">
+                        Account Connect {commercial.edition.accountConnectStatus}
+                        {commercial.edition.accountConnectRequired
+                          ? " / required"
+                          : " / optional"}
+                        {commercial.edition.localAuthAllowed
+                          ? " / local auth allowed"
+                          : " / hosted auth required"}
+                      </p>
+                      <p className="detail">
+                        License posture{" "}
+                        {commercial.edition.licenseCandidate ?? "unclassified"}
+                        {commercial.edition.legalReviewRequired
+                          ? " / legal review required"
+                          : ""}
+                      </p>
+                      {commercial.edition.blockedReason ? (
+                        <p className="detail">
+                          Blocked: {commercial.edition.blockedReason}
+                        </p>
+                      ) : null}
+                    </div>
+                    <span
+                      className={`pill${
+                        commercial.edition.status === "active" ? "" : " warn"
+                      }`}
+                    >
+                      {titleCaseToken(commercial.edition.status)}
+                    </span>
+                  </div>
+
+                  {commercial.edition.accountConnectOrg ? (
+                    <div className="feed-row">
+                      <div>
+                        <h4>{commercial.edition.accountConnectOrg.hostedOrgId}</h4>
+                        <p className="detail">
+                          Linked by {commercial.edition.accountConnectOrg.linkedBy}
+                          {commercial.edition.accountConnectOrg.linkedAt
+                            ? ` at ${formatDateTime(
+                                commercial.edition.accountConnectOrg.linkedAt,
+                              )}`
+                            : ""}
+                        </p>
+                        <p className="detail">
+                          Billing{" "}
+                          {commercial.edition.accountConnectOrg.billingPortalRef ??
+                            "not connected"}{" "}
+                          / connector refs{" "}
+                          {
+                            commercial.edition.accountConnectOrg
+                              .connectorAuthorizationRefs.length
+                          }
+                        </p>
+                        <div className="composer compact">
+                          <form action={syncAccountConnectAction}>
+                            <input
+                              type="hidden"
+                              name="project_id"
+                              value={activeProjectId}
+                            />
+                            <input type="hidden" name="actor" value={activeActorId} />
+                            <input
+                              type="hidden"
+                              name="hosted_org_id"
+                              value={commercial.edition.accountConnectOrg.hostedOrgId}
+                            />
+                            <button className="button secondary" type="submit">
+                              Sync entitlements
+                            </button>
+                          </form>
+                          <form action={unlinkAccountConnectAction}>
+                            <input
+                              type="hidden"
+                              name="project_id"
+                              value={activeProjectId}
+                            />
+                            <input type="hidden" name="actor" value={activeActorId} />
+                            <input
+                              type="hidden"
+                              name="hosted_org_id"
+                              value={commercial.edition.accountConnectOrg.hostedOrgId}
+                            />
+                            <input
+                              type="hidden"
+                              name="reason"
+                              value="Operator unlinked Account Connect from Mission Control."
+                            />
+                            <button className="button secondary" type="submit">
+                              Unlink
+                            </button>
+                          </form>
+                        </div>
+                      </div>
+                      <span
+                        className={`pill${
+                          commercial.edition.accountConnectOrg.status === "linked"
+                            ? ""
+                            : " warn"
+                        }`}
+                      >
+                        {titleCaseToken(commercial.edition.accountConnectOrg.status)}
+                      </span>
+                    </div>
+                  ) : (
+                    <form action={linkAccountConnectAction} className="composer">
+                      <input type="hidden" name="project_id" value={activeProjectId} />
+                      <input type="hidden" name="actor" value={activeActorId} />
+                      <label className="field">
+                        <span>Hosted org ID</span>
+                        <input
+                          className="input"
+                          name="hosted_org_id"
+                          placeholder="acct_org_..."
+                          required
+                        />
+                      </label>
+                      <label className="field">
+                        <span>Connection SecretRef</span>
+                        <input
+                          className="input"
+                          name="connection_ref"
+                          placeholder="secretref:boss-account-connect"
+                        />
+                      </label>
+                      <label className="field">
+                        <span>Marketplace identity JSON</span>
+                        <textarea
+                          className="input"
+                          name="marketplace_identity_json"
+                          defaultValue={`{"publisher":"seanheiney"}`}
+                        />
+                      </label>
+                      <label className="field">
+                        <span>Connector authorization refs</span>
+                        <textarea
+                          className="input"
+                          name="connector_authorization_refs"
+                          placeholder="github:installation:..."
+                        />
+                      </label>
+                      <label className="field">
+                        <span>Billing portal ref</span>
+                        <input
+                          className="input"
+                          name="billing_portal_ref"
+                          placeholder="stripe:portal:..."
+                        />
+                      </label>
+                      <label className="check-row">
+                        <input
+                          type="hidden"
+                          name="optional_telemetry_enabled"
+                          value="false"
+                        />
+                        <input
+                          type="checkbox"
+                          name="optional_telemetry_enabled"
+                          value="true"
+                          defaultChecked
+                        />
+                        <span>Enable optional hosted telemetry</span>
+                      </label>
+                      <button className="button secondary" type="submit">
+                        Link Account Connect
+                      </button>
+                    </form>
+                  )}
+                </div>
+              )}
+            </article>
+
+            <article className="stack-card">
+              <h3>License entitlements</h3>
+              {!commercial.apiReachable ? (
+                <p className="detail">
+                  {commercial.blockedReason ?? "Commercial API is unavailable."}
+                </p>
+              ) : commercial.entitlements.length === 0 ? (
+                <p className="detail">
+                  No hosted license entitlements are active for this project.
+                </p>
+              ) : (
+                <div className="feed-list">
+                  {commercial.entitlements.slice(0, 8).map((entitlement) => (
+                    <div className="feed-row" key={entitlement.id}>
+                      <div>
+                        <h4>{entitlement.capabilityKey}</h4>
+                        <p className="detail">
+                          {entitlement.editionId} / {entitlement.status} /{" "}
+                          {entitlement.source}
+                        </p>
+                        <p className="detail">
+                          {entitlement.capabilities.join(", ") || "No capabilities"}
+                          {entitlement.seats ? ` / ${entitlement.seats} seats` : ""}
+                        </p>
+                        <p className="detail">
+                          Scope {entitlement.scopeType}:{entitlement.scopeId}
+                          {entitlement.expiresAt
+                            ? ` / expires ${formatDateTime(entitlement.expiresAt)}`
+                            : ""}
+                        </p>
+                      </div>
+                      <span
+                        className={`pill${
+                          entitlement.status === "active" ? "" : " warn"
+                        }`}
+                      >
+                        {titleCaseToken(entitlement.status)}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </article>
+
+            <article className="stack-card">
+              <h3>Enterprise cluster records</h3>
+              {!enterprise.apiReachable ? (
+                <p className="detail">
+                  {enterprise.blockedReason ?? "Enterprise API is unavailable."}
+                </p>
+              ) : (
+                <>
+                  <div className="metric-row">
+                    <span className="pill">
+                      {enterprise.summary.clusterCount} cluster
+                      {enterprise.summary.clusterCount === 1 ? "" : "s"}
+                    </span>
+                    <span
+                      className={`pill${
+                        enterprise.summary.blockingGapCount > 0 ? " warn" : ""
+                      }`}
+                    >
+                      {enterprise.summary.blockingGapCount} blocking gap
+                      {enterprise.summary.blockingGapCount === 1 ? "" : "s"}
+                    </span>
+                    <span className="pill">
+                      {enterprise.summary.activeScimUsers} active SCIM user
+                      {enterprise.summary.activeScimUsers === 1 ? "" : "s"}
+                    </span>
+                  </div>
+                  {enterprise.clusters.length === 0 ? (
+                    <p className="detail">No enterprise cluster record exists yet.</p>
+                  ) : (
+                    <div className="feed-list">
+                      {enterprise.clusters.map((cluster) => (
+                        <div className="feed-row" key={cluster.id}>
+                          <div>
+                            <h4>{titleCaseToken(cluster.deploymentMode)}</h4>
+                            <p className="detail">
+                              {cluster.accountConnectMode} / {cluster.workerPoolStrategy}
+                            </p>
+                            <p className="detail">
+                              {cluster.haProfile} / {cluster.dataResidency} / support{" "}
+                              {cluster.supportTier}
+                            </p>
+                            <p className="detail">
+                              Compliance{" "}
+                              {cluster.compliancePacks.join(", ") || "not configured"}
+                            </p>
+                            {cluster.blockingGaps.length > 0 ? (
+                              <p className="detail">
+                                Gaps: {cluster.blockingGaps.join(", ")}
+                              </p>
+                            ) : null}
+                          </div>
+                          <span
+                            className={`pill${
+                              cluster.status === "active" ? "" : " warn"
+                            }`}
+                          >
+                            {titleCaseToken(cluster.status)}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  <form action={upsertEnterpriseClusterAction} className="composer">
+                    <input type="hidden" name="project_id" value={activeProjectId} />
+                    <input type="hidden" name="actor" value={activeActorId} />
+                    <label className="field">
+                      <span>Deployment mode</span>
+                      <select className="input" name="deployment_mode" defaultValue="enterprise_cloud">
+                        <option value="enterprise_cloud">Enterprise Cloud</option>
+                        <option value="enterprise_self_hosted">
+                          Enterprise Self-hosted
+                        </option>
+                        <option value="community_local">Community Local</option>
+                      </select>
+                    </label>
+                    <label className="field">
+                      <span>Account Connect mode</span>
+                      <select className="input" name="account_connect_mode" defaultValue="attached">
+                        <option value="attached">Attached</option>
+                        <option value="detached">Detached</option>
+                        <option value="optional">Optional</option>
+                      </select>
+                    </label>
+                    <label className="field">
+                      <span>Worker pool strategy</span>
+                      <input
+                        className="input"
+                        name="worker_pool_strategy"
+                        defaultValue="dedicated_managed_workers"
+                      />
+                    </label>
+                    <label className="field">
+                      <span>HA profile</span>
+                      <input className="input" name="ha_profile" defaultValue="regional_ha" />
+                    </label>
+                    <label className="field">
+                      <span>Data residency</span>
+                      <input className="input" name="data_residency" defaultValue="us" />
+                    </label>
+                    <label className="field">
+                      <span>Identity controls JSON</span>
+                      <textarea
+                        className="input"
+                        name="identity_controls_json"
+                        defaultValue={`{"sso_oidc_configured":false,"scim_configured":false}`}
+                      />
+                    </label>
+                    <label className="field">
+                      <span>Governance controls JSON</span>
+                      <textarea
+                        className="input"
+                        name="governance_controls_json"
+                        defaultValue={`{"budget_governor_precedence":true,"agents_receive_raw_provider_secrets":false}`}
+                      />
+                    </label>
+                    <label className="field">
+                      <span>Audit controls JSON</span>
+                      <textarea
+                        className="input"
+                        name="audit_controls_json"
+                        defaultValue={`{"audit_export_enabled":true,"retention_days":365}`}
+                      />
+                    </label>
+                    <label className="field">
+                      <span>Private worker pools JSON</span>
+                      <textarea
+                        className="input"
+                        name="private_worker_pools_json"
+                        defaultValue={`[]`}
+                      />
+                    </label>
+                    <label className="field">
+                      <span>Compliance packs</span>
+                      <textarea
+                        className="input"
+                        name="compliance_packs"
+                        placeholder="soc2_evidence&#10;enterprise_audit"
+                      />
+                    </label>
+                    <label className="field">
+                      <span>Support tier</span>
+                      <input className="input" name="support_tier" defaultValue="enterprise" />
+                    </label>
+                    <label className="field">
+                      <span>Support SLA JSON</span>
+                      <textarea
+                        className="input"
+                        name="support_sla_json"
+                        defaultValue={`{"response_hours":4,"uptime_target":"99.9"}`}
+                      />
+                    </label>
+                    <button className="button secondary" type="submit">
+                      Save enterprise record
+                    </button>
+                  </form>
+                </>
+              )}
+            </article>
+
+            <article className="stack-card">
+              <h3>SCIM provisioning</h3>
+              {!enterprise.apiReachable ? (
+                <p className="detail">
+                  {enterprise.blockedReason ?? "Enterprise API is unavailable."}
+                </p>
+              ) : (
+                <>
+                  <div className="feed-list">
+                    {enterprise.scimGroups.length === 0 ? (
+                      <p className="detail">No SCIM groups have been provisioned.</p>
+                    ) : (
+                      enterprise.scimGroups.slice(0, 4).map((group) => (
+                        <div className="feed-row" key={group.id}>
+                          <div>
+                            <h4>{group.displayName}</h4>
+                            <p className="detail">
+                              {group.externalId ?? "no external id"} / {group.status}
+                            </p>
+                            <p className="detail">
+                              Roles {group.roleKeys.join(", ") || "none"} / permissions{" "}
+                              {group.permissions.length}
+                            </p>
+                          </div>
+                          <span className="pill">{titleCaseToken(group.status)}</span>
+                        </div>
+                      ))
+                    )}
+                    {enterprise.scimUsers.length === 0 ? (
+                      <p className="detail">No SCIM users have been provisioned.</p>
+                    ) : (
+                      enterprise.scimUsers.slice(0, 4).map((user) => (
+                        <div className="feed-row" key={user.id}>
+                          <div>
+                            <h4>{user.displayName}</h4>
+                            <p className="detail">
+                              {user.userName} / member {user.memberId} /{" "}
+                              {user.active ? "active" : "inactive"}
+                            </p>
+                            <p className="detail">
+                              Roles {user.roleKeys.join(", ") || "none"} / groups{" "}
+                              {user.groups.join(", ") || "none"}
+                            </p>
+                          </div>
+                          <span className={`pill${user.active ? "" : " warn"}`}>
+                            {user.active ? "active" : "inactive"}
+                          </span>
+                        </div>
+                      ))
+                    )}
+                  </div>
+
+                  <form action={upsertEnterpriseScimGroupAction} className="composer">
+                    <input type="hidden" name="project_id" value={activeProjectId} />
+                    <input type="hidden" name="actor" value={activeActorId} />
+                    <label className="field">
+                      <span>Group display name</span>
+                      <input className="input" name="display_name" required />
+                    </label>
+                    <label className="field">
+                      <span>External group ID</span>
+                      <input className="input" name="external_id" />
+                    </label>
+                    <label className="field">
+                      <span>Role keys</span>
+                      <textarea className="input" name="role_keys" placeholder="operator" />
+                    </label>
+                    <label className="field">
+                      <span>Permissions</span>
+                      <textarea
+                        className="input"
+                        name="permissions"
+                        placeholder="command_submit&#10;enterprise_manage"
+                      />
+                    </label>
+                    <button className="button secondary" type="submit">
+                      Upsert SCIM group
+                    </button>
+                  </form>
+
+                  <form action={upsertEnterpriseScimUserAction} className="composer">
+                    <input type="hidden" name="project_id" value={activeProjectId} />
+                    <input type="hidden" name="actor" value={activeActorId} />
+                    <label className="field">
+                      <span>User name</span>
+                      <input className="input" name="user_name" required />
+                    </label>
+                    <label className="field">
+                      <span>Display name</span>
+                      <input className="input" name="display_name" required />
+                    </label>
+                    <label className="field">
+                      <span>External user ID</span>
+                      <input className="input" name="external_id" />
+                    </label>
+                    <label className="field">
+                      <span>Role keys</span>
+                      <textarea className="input" name="role_keys" placeholder="operator" />
+                    </label>
+                    <label className="field">
+                      <span>Permissions</span>
+                      <textarea
+                        className="input"
+                        name="permissions"
+                        placeholder="command_submit&#10;enterprise_manage"
+                      />
+                    </label>
+                    <label className="field">
+                      <span>Groups</span>
+                      <textarea className="input" name="groups" placeholder="ops" />
+                    </label>
+                    <label className="check-row">
+                      <input type="hidden" name="active" value="false" />
+                      <input type="checkbox" name="active" value="true" defaultChecked />
+                      <span>Active user grants org-member access</span>
+                    </label>
+                    <button className="button secondary" type="submit">
+                      Upsert SCIM user
+                    </button>
+                  </form>
+                </>
+              )}
+            </article>
+          </div>
+        </section>
+
+        <section className="panel-stack">
+          <div className="section-head">
+            <div>
               <span className="eyebrow">Agent Marketplace</span>
               <h2>Packaged worker modules with contained prompts, skills, and runtime policy.</h2>
             </div>
@@ -2983,6 +3526,13 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                           ? ` / ${formatMicros(module.priceUsdMicros)}`
                           : ""}
                       </p>
+                      <p className="detail">
+                        Required entitlements{" "}
+                        {module.requiredEntitlements.length > 0
+                          ? module.requiredEntitlements.join(", ")
+                          : "none"}{" "}
+                        / {titleCaseToken(module.entitlementStatus)}
+                      </p>
                     </div>
                     {module.installed ? (
                       <span className="pill">
@@ -3001,6 +3551,51 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                         </button>
                       </form>
                     )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </article>
+
+          <article className="stack-card">
+            <h3>Module install records</h3>
+            {!agentModules.apiReachable ? (
+              <p className="detail">
+                {agentModules.blockedReason ?? "Agent module API is unavailable."}
+              </p>
+            ) : agentModules.installRecords.length === 0 ? (
+              <p className="detail">
+                No module install or denial records have been recorded yet.
+              </p>
+            ) : (
+              <div className="feed-list">
+                {agentModules.installRecords.slice(0, 8).map((record) => (
+                  <div className="feed-row" key={record.id}>
+                    <div>
+                      <h4>{record.moduleId}</h4>
+                      <p className="detail">
+                        {record.action} / {record.status} / actor {record.actor}
+                      </p>
+                      <p className="detail">
+                        {record.fromVersion ?? "none"} {"->"}{" "}
+                        {record.toVersion ?? "none"} /{" "}
+                        {formatDateTime(record.createdAt)}
+                      </p>
+                      <p className="detail">
+                        Entitlement result{" "}
+                        {typeof record.entitlementResult.status === "string"
+                          ? titleCaseToken(record.entitlementResult.status)
+                          : "recorded"}
+                        {typeof record.entitlementResult.reason === "string"
+                          ? ` / ${record.entitlementResult.reason}`
+                          : ""}
+                      </p>
+                    </div>
+                    <span
+                      className={`pill${record.status === "applied" ? "" : " warn"}`}
+                    >
+                      {titleCaseToken(record.status)}
+                    </span>
                   </div>
                 ))}
               </div>
