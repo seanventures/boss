@@ -106,6 +106,12 @@ DEPLOYMENT_SANDBOX_ENVIRONMENTS = {
     "sandbox",
     "preview",
 }
+DEPLOYMENT_SKILL_IDS = {
+    "cloudflare.worker.deploy",
+    "cloudflare.pages.deploy",
+    "digitalocean.app.deploy",
+    "supabase.migration.apply",
+}
 
 
 @dataclass
@@ -1417,6 +1423,14 @@ class ResourcePlaneService:
             )
             if not reservation:
                 raise ValueError("reservation_id must reference an active reservation.")
+        self._validate_deployment_changeset_environment_policies(
+            connection,
+            project_id=project_id,
+            provider_account_id=provider_account_id,
+            operations=normalized_ops,
+            rollback_plan=rollback_plan,
+            reservation_id=reservation_id,
+        )
         status = "budget_reserved" if reservation else "quoted"
         if approval_required or risk_tier >= 2 or self._operations_need_approval(normalized_ops):
             status = "pending_approval"
@@ -3340,6 +3354,7 @@ class ResourcePlaneService:
                 "domains": target["domains"],
                 "secret_refs": target["secret_refs"],
                 "required_resources": target["required_resources"],
+                "health_checks": target["health_checks"],
             },
         }
 
@@ -3388,6 +3403,65 @@ class ResourcePlaneService:
             "status_code": response.status_code,
             "expected_status": expected_status,
         }
+
+    def _validate_deployment_changeset_environment_policies(
+        self,
+        connection: Connection,
+        *,
+        project_id: str,
+        provider_account_id: Optional[str],
+        operations: list[dict[str, Any]],
+        rollback_plan: list[str],
+        reservation_id: Optional[str],
+    ) -> None:
+        for operation in operations:
+            skill_id = str(operation.get("skill_id") or "")
+            if skill_id not in DEPLOYMENT_SKILL_IDS:
+                continue
+            desired_state = operation.get("desired_state") or {}
+            environment = str(
+                desired_state.get("environment")
+                or ("production" if operation.get("production_affecting") else "")
+            ).strip()
+            if not environment:
+                raise ValueError(
+                    "Deployment ChangeSet operations require desired_state.environment."
+                )
+            target_kind = str(
+                desired_state.get("target_kind")
+                or operation.get("resource_type")
+                or ""
+            ).strip()
+            if not target_kind:
+                raise ValueError(
+                    "Deployment ChangeSet operations require desired_state.target_kind."
+                )
+            target = {
+                "id": desired_state.get("deployment_target_id")
+                or operation.get("resource_ref"),
+                "environment": environment,
+                "target_kind": target_kind,
+                "provider_account_id": provider_account_id,
+                "health_checks": desired_state.get("health_checks") or [],
+            }
+            policy = self._deployment_rollout_policy_for_target(
+                connection,
+                project_id,
+                target,
+            )
+            if not policy:
+                continue
+            block_reason = self._deployment_rollout_policy_block_reason(
+                target,
+                policy,
+                rollback_plan,
+                reservation_id,
+            )
+            if block_reason:
+                raise ValueError(
+                    "Deployment ChangeSet blocked by environment rollout policy: "
+                    f"{block_reason}."
+                )
 
     def get_provider_account(
         self, connection: Connection, project_id: str, provider_account_id: str

@@ -250,6 +250,7 @@ Acceptance criteria:
 
 - Given an agent proposes a provider write, when BOSS models the request, then it creates a `ChangeSet` containing resource diffs, risk tier, cost quote, budget reservation requirement, approvals needed, rollback plan, and expected receipts.
 - Given the ChangeSet is destructive or production-affecting, when approval is missing, then BOSS holds the action and does not call the provider.
+- Given a direct ChangeSet uses a deployment provider skill for a non-sandbox environment, when the required environment rollout policy or BudgetReservation is missing, then BOSS rejects ChangeSet creation rather than allowing a DeploymentRun bypass.
 - Given a ChangeSet is approved and budget-reserved, when a worker applies it, then each provider call creates a `ResourceReceipt` with a dedupe key and reconciliation verifies the resulting provider state.
 - Given an approved Cloudflare DNS record upsert ChangeSet with valid credentials, when BOSS applies it, then the Resource Plane Kernel calls the official Cloudflare API adapter, marks the Receipt and ResourceReceipt succeeded, and links the managed DNS resource to the receipt.
 - Given an approved Cloudflare R2 bucket creation ChangeSet with valid credentials and an active BudgetReservation, when BOSS applies it, then the Resource Plane Kernel calls the official Cloudflare R2 API, writes Receipt and ResourceReceipt records, creates an observed CostEvent, and links the managed bucket resource to the receipt.

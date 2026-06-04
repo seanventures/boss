@@ -4104,6 +4104,91 @@ def test_provider_changeset_requires_approval_and_receipts_failed_actuation(clie
     )
 
 
+def test_deployment_changeset_requires_environment_policy_and_reservation(client):
+    provider = client.post(
+        "/v1/providers",
+        json={
+            "project_id": "boss-dogfood",
+            "provider": "cloudflare",
+            "account_label": "deploy-change-cloudflare",
+            "scopes": ["read", "write", "deploy"],
+            "read_only": False,
+            "deploy_capable": True,
+            "destructive_actions_disabled": True,
+            "actor": "ceo",
+        },
+    ).json()
+    operation = {
+        "skill_id": "cloudflare.worker.deploy",
+        "action": "cloudflare.worker.deploy",
+        "resource_type": "worker",
+        "resource_ref": "boss-web-prod",
+        "desired_state": {
+            "target_kind": "cloudflare_worker",
+            "environment": "production",
+            "target_ref": "boss-web-prod",
+            "health_checks": [
+                {
+                    "name": "production health",
+                    "url": "https://boss.example.com/health",
+                    "expected_status": 200,
+                }
+            ],
+        },
+        "risk_tier": 3,
+        "production_affecting": True,
+    }
+
+    blocked = client.post(
+        "/v1/changesets",
+        json={
+            "project_id": "boss-dogfood",
+            "provider_account_id": provider["id"],
+            "title": "Deploy production worker directly",
+            "summary": "Direct deploy ChangeSet must still obey environment policy.",
+            "operations": [operation],
+            "rollback_plan": ["Redeploy previous production Worker version."],
+            "risk_tier": 3,
+            "actor": "ceo",
+        },
+    )
+    assert blocked.status_code == 422
+    assert "environment rollout policy" in blocked.json()["detail"]
+
+    upsert_deployment_environment_policy(
+        client,
+        "boss-dogfood",
+        environment="production",
+        runtime_mode="production_allowed",
+        allowed_target_kinds=["cloudflare_worker"],
+        requires_health_check=True,
+    )
+    reservation_id = reserve_for_infra_provision(
+        client,
+        "Reserve direct production deploy ChangeSet budget.",
+    )
+    created = client.post(
+        "/v1/changesets",
+        json={
+            "project_id": "boss-dogfood",
+            "provider_account_id": provider["id"],
+            "title": "Deploy production worker directly",
+            "summary": "Direct deploy ChangeSet must still obey environment policy.",
+            "operations": [operation],
+            "expected_cost_usd_micros": 100_000,
+            "reservation_id": reservation_id,
+            "rollback_plan": ["Redeploy previous production Worker version."],
+            "risk_tier": 3,
+            "actor": "ceo",
+        },
+    )
+    assert created.status_code == 201
+    payload = created.json()
+    assert payload["status"] == "pending_approval"
+    assert payload["reservation_id"] == reservation_id
+    assert payload["operations"][0]["production_affecting"] is True
+
+
 def test_provider_changeset_digitalocean_droplet_create_succeeds_with_receipts(
     client, monkeypatch
 ):
