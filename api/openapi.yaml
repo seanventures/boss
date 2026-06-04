@@ -150,6 +150,65 @@ paths:
         '404': { description: No active Account Connect link matched the request }
         '502': { description: Configured Account Connect service returned an invalid or failing response }
         '503': { description: BOSS_ACCOUNT_CONNECT_URL is not configured, so sync fails closed }
+  /v1/account-connect/auth-sessions:
+    get:
+      summary: List hosted Account Connect auth sessions and visible blocked/failed states
+      parameters:
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, default: 50 }
+      responses:
+        '200': { description: Auth session records with authorization URL, state, status, receipt, and completion metadata }
+    post:
+      summary: Start a hosted Account Connect login session through a receipt-protected adapter call
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id]
+              properties:
+                project_id: { type: string }
+                hosted_org_id: { type: string }
+                return_url: { type: string }
+                metadata: { type: object }
+                actor: { type: string, default: ceo }
+      responses:
+        '201': { description: Auth session record created; authorization_url is present only when hosted adapter succeeds }
+        '403': { description: Actor is not allowed to manage ProviderOps or commercial connection state }
+        '409': { description: Requested hosted org conflicts with the active Account Connect link }
+  /v1/account-connect/auth-sessions/{session_id}/complete:
+    post:
+      summary: Complete a hosted Account Connect auth session and link the returned hosted org
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id, code, state]
+              properties:
+                project_id: { type: string }
+                code: { type: string }
+                state: { type: string }
+                metadata: { type: object }
+                actor: { type: string, default: ceo }
+      responses:
+        '200': { description: Hosted auth completion recorded, Account Connect org linked when hosted adapter succeeds, and receipt/audit trail emitted }
+        '403': { description: Actor is not allowed to manage ProviderOps or commercial connection state }
+        '404': { description: Auth session was not found }
+        '409': { description: Callback state did not match the stored session state }
   /v1/account-connect/team-invites:
     get:
       summary: List Account Connect team invites and visible delivery/blocked states

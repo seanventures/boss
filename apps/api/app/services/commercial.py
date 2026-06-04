@@ -28,6 +28,14 @@ class AccountConnectSyncError(RuntimeError):
     pass
 
 
+class AccountConnectAuthSessionStateError(RuntimeError):
+    pass
+
+
+class AccountConnectAuthSessionNotFoundError(RuntimeError):
+    pass
+
+
 class AccountConnectAdapter:
     def __init__(self, settings: Settings):
         self.settings = settings
@@ -115,6 +123,68 @@ class AccountConnectAdapter:
         if not isinstance(hosted_ref, str) or not hosted_ref.strip():
             raise AccountConnectSyncError(
                 "Account Connect team invite response must include id or invite_id."
+        )
+        return payload
+
+    def create_auth_session(
+        self,
+        *,
+        project_id: str,
+        return_url: Optional[str],
+        state: str,
+        metadata: dict[str, Any],
+        hosted_org_id: Optional[str] = None,
+    ) -> dict[str, Any]:
+        path = "/v1/auth-sessions"
+        if hosted_org_id:
+            path = f"/v1/orgs/{quote(hosted_org_id, safe='')}/auth-sessions"
+        payload = self._post_json(
+            path,
+            {
+                "project_id": project_id,
+                "hosted_org_id": hosted_org_id,
+                "return_url": return_url,
+                "state": state,
+                "metadata": metadata,
+            },
+        )
+        authorization_url = payload.get("authorization_url")
+        if not isinstance(authorization_url, str) or not authorization_url.strip():
+            raise AccountConnectSyncError(
+                "Account Connect auth session response must include authorization_url."
+            )
+        return payload
+
+    def complete_auth_session(
+        self,
+        *,
+        project_id: str,
+        provider_ref: str,
+        code: str,
+        state: str,
+        metadata: dict[str, Any],
+        hosted_org_id: Optional[str] = None,
+    ) -> dict[str, Any]:
+        if hosted_org_id:
+            path = (
+                f"/v1/orgs/{quote(hosted_org_id, safe='')}/auth-sessions/"
+                f"{quote(provider_ref, safe='')}/complete"
+            )
+        else:
+            path = f"/v1/auth-sessions/{quote(provider_ref, safe='')}/complete"
+        payload = self._post_json(
+            path,
+            {
+                "project_id": project_id,
+                "code": code,
+                "state": state,
+                "metadata": metadata,
+            },
+        )
+        hosted_ref = payload.get("hosted_org_id")
+        if not isinstance(hosted_ref, str) or not hosted_ref.strip():
+            raise AccountConnectSyncError(
+                "Account Connect auth completion response must include hosted_org_id."
             )
         return payload
 
@@ -717,6 +787,360 @@ class CommercialService:
             "synced_entitlement_count": synced_count,
         }
 
+    def list_auth_sessions(
+        self, connection: Connection, project_id: str, limit: int = 50
+    ) -> list[dict[str, Any]]:
+        rows = connection.execute(
+            text(
+                """
+                SELECT id, project_id, account_connect_org_id, hosted_org_id,
+                       authorization_url, return_url, provider_ref, state, status,
+                       receipt_id, created_by, expires_at, completed_at, metadata,
+                       created_at, updated_at
+                FROM account_connect_auth_sessions
+                WHERE project_id = :project_id
+                ORDER BY created_at DESC
+                LIMIT :limit
+                """
+            ),
+            {"project_id": project_id, "limit": limit},
+        ).mappings().all()
+        return [self._auth_session_from_row(dict(row)) for row in rows]
+
+    def create_auth_session(
+        self,
+        connection: Connection,
+        project_id: str,
+        *,
+        actor: str,
+        return_url: Optional[str] = None,
+        hosted_org_id: Optional[str] = None,
+        metadata: Optional[dict[str, Any]] = None,
+    ) -> dict[str, Any]:
+        active = self.active_account_connect_org(connection, project_id)
+        if active and hosted_org_id and active["hosted_org_id"] != hosted_org_id:
+            emit_event(
+                connection,
+                project_id,
+                "account_connect.auth_session_denied",
+                actor,
+                "account_connect_auth_session",
+                project_id,
+                {
+                    "reason": "account_connect_hosted_org_mismatch",
+                    "requested_hosted_org_id": hosted_org_id,
+                    "active_hosted_org_id": active["hosted_org_id"],
+                },
+            )
+            raise AccountConnectAuthSessionStateError(
+                "Hosted org ID does not match the active Account Connect link."
+            )
+
+        effective_hosted_org_id = hosted_org_id or (
+            active["hosted_org_id"] if active else None
+        )
+        session_id = make_id("acctauth")
+        state = make_id("acctstate")
+        metadata_payload = metadata or {}
+        dedupe_payload = {
+            "hosted_org_id": effective_hosted_org_id,
+            "return_url": return_url,
+            "created_by": actor,
+            "metadata": metadata_payload,
+        }
+        receipt, created = self._create_account_connect_receipt(
+            connection,
+            project_id,
+            dedupe_key=(
+                f"account-connect-auth-session-create:{project_id}:"
+                f"{json_hash(dedupe_payload)}"
+            ),
+            effect_kind="account_connect.auth_session.create",
+            effect_scope={
+                "hosted_org_id": effective_hosted_org_id,
+                "data_boundary": "confidential",
+            },
+            payload=dedupe_payload,
+        )
+        if not created and receipt.get("status") == "succeeded":
+            existing = self._auth_session_by_receipt(
+                connection, project_id, receipt["id"]
+            )
+            if existing:
+                return existing
+
+        authorization_url = None
+        provider_ref = None
+        expires_at = None
+        status = "ready"
+        event_type = "account_connect.auth_session_created"
+        record_metadata = dict(metadata_payload)
+        try:
+            hosted = self.account_connect_adapter.create_auth_session(
+                project_id=project_id,
+                return_url=return_url,
+                state=state,
+                metadata=metadata_payload,
+                hosted_org_id=effective_hosted_org_id,
+            )
+            authorization_url = str(hosted["authorization_url"])
+            provider_ref = (
+                str(hosted.get("id") or hosted.get("session_id"))
+                if hosted.get("id") or hosted.get("session_id")
+                else None
+            )
+            hosted_org_response = hosted.get("hosted_org_id")
+            if isinstance(hosted_org_response, str) and hosted_org_response.strip():
+                effective_hosted_org_id = hosted_org_response.strip()
+            expires_at = hosted.get("expires_at")
+            self.receipts.mark_succeeded(
+                connection,
+                receipt["id"],
+                provider_ref,
+                {
+                    "provider_ref": provider_ref,
+                    "authorization_url_present": True,
+                    "hosted_org_id": effective_hosted_org_id,
+                    "expires_at": expires_at,
+                },
+            )
+        except AccountConnectConfigurationError as error:
+            status = "blocked_configuration"
+            event_type = "account_connect.auth_session_blocked"
+            record_metadata["blocked_reason"] = "account_connect_url_missing"
+            self.receipts.mark_failed(connection, receipt["id"], {"message": str(error)})
+        except AccountConnectSyncError as error:
+            status = "failed"
+            event_type = "account_connect.auth_session_failed"
+            record_metadata["failure_reason"] = str(error)
+            self.receipts.mark_failed(connection, receipt["id"], {"message": str(error)})
+
+        connection.execute(
+            text(
+                """
+                INSERT INTO account_connect_auth_sessions (
+                    id, project_id, account_connect_org_id, hosted_org_id,
+                    authorization_url, return_url, provider_ref, state, status,
+                    receipt_id, created_by, expires_at, metadata
+                )
+                VALUES (
+                    :id, :project_id, :account_connect_org_id, :hosted_org_id,
+                    :authorization_url, :return_url, :provider_ref, :state,
+                    :status, :receipt_id, :created_by,
+                    CAST(:expires_at AS TIMESTAMPTZ), CAST(:metadata AS JSONB)
+                )
+                """
+            ),
+            {
+                "id": session_id,
+                "project_id": project_id,
+                "account_connect_org_id": active["id"] if active else None,
+                "hosted_org_id": effective_hosted_org_id,
+                "authorization_url": authorization_url,
+                "return_url": return_url,
+                "provider_ref": provider_ref,
+                "state": state,
+                "status": status,
+                "receipt_id": receipt["id"],
+                "created_by": actor,
+                "expires_at": expires_at,
+                "metadata": json.dumps(record_metadata),
+            },
+        )
+        emit_event(
+            connection,
+            project_id,
+            event_type,
+            actor,
+            "account_connect_auth_session",
+            session_id,
+            {
+                "hosted_org_id": effective_hosted_org_id,
+                "status": status,
+                "receipt_id": receipt["id"],
+                "authorization_url_present": bool(authorization_url),
+            },
+        )
+        created_row = self._auth_session_by_id(connection, session_id)
+        if not created_row:
+            raise AccountConnectSyncError(
+                "Account Connect auth session record was not saved."
+            )
+        return created_row
+
+    def complete_auth_session(
+        self,
+        connection: Connection,
+        session_id: str,
+        *,
+        project_id: str,
+        actor: str,
+        code: str,
+        state: str,
+        metadata: Optional[dict[str, Any]] = None,
+    ) -> dict[str, Any]:
+        session = self._auth_session_by_id(connection, session_id)
+        if not session or session["project_id"] != project_id:
+            raise AccountConnectAuthSessionNotFoundError(
+                f"Account Connect auth session '{session_id}' was not found."
+            )
+        if session["status"] == "completed":
+            return session
+        if session["state"] != state:
+            emit_event(
+                connection,
+                project_id,
+                "account_connect.auth_session_denied",
+                actor,
+                "account_connect_auth_session",
+                session_id,
+                {"reason": "state_mismatch", "status": session["status"]},
+            )
+            raise AccountConnectAuthSessionStateError(
+                "Account Connect auth session state did not match."
+            )
+
+        metadata_payload = metadata or {}
+        provider_ref = session.get("provider_ref") or session_id
+        receipt, _created = self._create_account_connect_receipt(
+            connection,
+            project_id,
+            dedupe_key=f"account-connect-auth-session-complete:{session_id}",
+            effect_kind="account_connect.auth_session.complete",
+            effect_scope={
+                "hosted_org_id": session.get("hosted_org_id"),
+                "provider_ref": provider_ref,
+                "data_boundary": "confidential",
+            },
+            payload={
+                "session_id": session_id,
+                "state": state,
+                "code_hash": json_hash({"code": code}),
+                "metadata": metadata_payload,
+            },
+        )
+
+        status = "completed"
+        event_type = "account_connect.auth_session_completed"
+        record_metadata = dict(session.get("metadata") or {})
+        record_metadata.update(metadata_payload)
+        mark_completed = True
+        account_connect_org_id = session.get("account_connect_org_id")
+        hosted_org_id = session.get("hosted_org_id")
+        try:
+            hosted = self.account_connect_adapter.complete_auth_session(
+                project_id=project_id,
+                provider_ref=provider_ref,
+                code=code,
+                state=state,
+                metadata=metadata_payload,
+                hosted_org_id=hosted_org_id,
+            )
+            hosted_org_id = str(hosted["hosted_org_id"]).strip()
+            marketplace_identity = hosted.get("marketplace_identity")
+            connector_authorization_refs = hosted.get("connector_authorization_refs")
+            if not isinstance(marketplace_identity, dict):
+                marketplace_identity = {}
+            if not isinstance(connector_authorization_refs, list):
+                connector_authorization_refs = []
+            edition = self.link_account_connect_org(
+                connection,
+                project_id,
+                hosted_org_id=hosted_org_id,
+                actor=actor,
+                connection_ref=hosted.get("connection_ref")
+                if isinstance(hosted.get("connection_ref"), str)
+                else None,
+                marketplace_identity=marketplace_identity,
+                billing_portal_ref=hosted.get("billing_portal_ref")
+                if isinstance(hosted.get("billing_portal_ref"), str)
+                else None,
+                connector_authorization_refs=[
+                    str(item)
+                    for item in connector_authorization_refs
+                    if isinstance(item, str) and item.strip()
+                ],
+                optional_telemetry_enabled=bool(
+                    hosted.get("optional_telemetry_enabled", False)
+                ),
+                metadata={
+                    "source": "hosted_auth_session",
+                    "auth_session_id": session_id,
+                    **(hosted.get("metadata") if isinstance(hosted.get("metadata"), dict) else {}),
+                },
+            )
+            active = edition.get("account_connect_org")
+            account_connect_org_id = active["id"] if active else account_connect_org_id
+            self.receipts.mark_succeeded(
+                connection,
+                receipt["id"],
+                provider_ref,
+                {
+                    "provider_ref": provider_ref,
+                    "hosted_org_id": hosted_org_id,
+                    "linked": bool(active),
+                },
+            )
+        except AccountConnectConfigurationError as error:
+            status = "blocked_configuration"
+            event_type = "account_connect.auth_session_blocked"
+            mark_completed = False
+            record_metadata["blocked_reason"] = "account_connect_url_missing"
+            self.receipts.mark_failed(connection, receipt["id"], {"message": str(error)})
+        except AccountConnectSyncError as error:
+            status = "failed"
+            event_type = "account_connect.auth_session_failed"
+            mark_completed = False
+            record_metadata["failure_reason"] = str(error)
+            self.receipts.mark_failed(connection, receipt["id"], {"message": str(error)})
+
+        connection.execute(
+            text(
+                """
+                UPDATE account_connect_auth_sessions
+                SET account_connect_org_id = :account_connect_org_id,
+                    hosted_org_id = :hosted_org_id,
+                    status = :status,
+                    receipt_id = :receipt_id,
+                    completed_at = CASE
+                      WHEN :mark_completed THEN now()
+                      ELSE completed_at
+                    END,
+                    metadata = CAST(:metadata AS JSONB),
+                    updated_at = now()
+                WHERE id = :id
+                """
+            ),
+            {
+                "id": session_id,
+                "account_connect_org_id": account_connect_org_id,
+                "hosted_org_id": hosted_org_id,
+                "status": status,
+                "receipt_id": receipt["id"],
+                "mark_completed": mark_completed,
+                "metadata": json.dumps(record_metadata),
+            },
+        )
+        emit_event(
+            connection,
+            project_id,
+            event_type,
+            actor,
+            "account_connect_auth_session",
+            session_id,
+            {
+                "hosted_org_id": hosted_org_id,
+                "status": status,
+                "receipt_id": receipt["id"],
+            },
+        )
+        updated = self._auth_session_by_id(connection, session_id)
+        if not updated:
+            raise AccountConnectSyncError(
+                "Account Connect auth session record was not saved."
+            )
+        return updated
+
     def list_team_invites(
         self, connection: Connection, project_id: str, limit: int = 50
     ) -> list[dict[str, Any]]:
@@ -1261,6 +1685,44 @@ class CommercialService:
         ).mappings().first()
         return self._billing_session_from_row(dict(row)) if row else None
 
+    def _auth_session_by_id(
+        self, connection: Connection, session_id: str
+    ) -> Optional[dict[str, Any]]:
+        row = connection.execute(
+            text(
+                """
+                SELECT id, project_id, account_connect_org_id, hosted_org_id,
+                       authorization_url, return_url, provider_ref, state, status,
+                       receipt_id, created_by, expires_at, completed_at, metadata,
+                       created_at, updated_at
+                FROM account_connect_auth_sessions
+                WHERE id = :id
+                """
+            ),
+            {"id": session_id},
+        ).mappings().first()
+        return self._auth_session_from_row(dict(row)) if row else None
+
+    def _auth_session_by_receipt(
+        self, connection: Connection, project_id: str, receipt_id: str
+    ) -> Optional[dict[str, Any]]:
+        row = connection.execute(
+            text(
+                """
+                SELECT id, project_id, account_connect_org_id, hosted_org_id,
+                       authorization_url, return_url, provider_ref, state, status,
+                       receipt_id, created_by, expires_at, completed_at, metadata,
+                       created_at, updated_at
+                FROM account_connect_auth_sessions
+                WHERE project_id = :project_id AND receipt_id = :receipt_id
+                ORDER BY created_at DESC
+                LIMIT 1
+                """
+            ),
+            {"project_id": project_id, "receipt_id": receipt_id},
+        ).mappings().first()
+        return self._auth_session_from_row(dict(row)) if row else None
+
     def _emit_sync_denied(
         self,
         connection: Connection,
@@ -1330,6 +1792,19 @@ class CommercialService:
             **row,
             "expires_at": row["expires_at"].isoformat()
             if row.get("expires_at") is not None
+            else None,
+            "created_at": row["created_at"].isoformat(),
+            "updated_at": row["updated_at"].isoformat(),
+        }
+
+    def _auth_session_from_row(self, row: dict[str, Any]) -> dict[str, Any]:
+        return {
+            **row,
+            "expires_at": row["expires_at"].isoformat()
+            if row.get("expires_at") is not None
+            else None,
+            "completed_at": row["completed_at"].isoformat()
+            if row.get("completed_at") is not None
             else None,
             "created_at": row["created_at"].isoformat(),
             "updated_at": row["updated_at"].isoformat(),

@@ -6,6 +6,7 @@ vi.mock("../lib/client", () => ({
   client: {
     getEdition: vi.fn(),
     listLicenseEntitlements: vi.fn(),
+    listAccountConnectAuthSessions: vi.fn(),
     listAccountConnectTeamInvites: vi.fn(),
     listAccountConnectBillingPortalSessions: vi.fn(),
     listEnterpriseClusters: vi.fn(),
@@ -80,6 +81,28 @@ describe("commercial, enterprise, and marketplace feeds", async () => {
         },
       ],
     });
+    vi.mocked(client.listAccountConnectAuthSessions).mockResolvedValueOnce({
+      project_id: "boss-dogfood",
+      items: [
+        {
+          id: "acctauth_1",
+          project_id: "boss-dogfood",
+          account_connect_org_id: "acctconn_1",
+          hosted_org_id: "hosted_org_1",
+          authorization_url: "https://accounts.example/oauth/authorize",
+          return_url: "https://boss.local/account-connect/callback",
+          provider_ref: "hosted_auth_1",
+          state: "acctstate_1",
+          status: "ready",
+          receipt_id: "rcpt_auth",
+          created_by: "ceo",
+          expires_at: "2026-06-04T00:00:00Z",
+          metadata: {},
+          created_at: "2026-06-03T00:00:00Z",
+          updated_at: "2026-06-03T00:00:00Z",
+        },
+      ],
+    });
     vi.mocked(client.listAccountConnectTeamInvites).mockResolvedValueOnce({
       project_id: "boss-dogfood",
       items: [
@@ -134,6 +157,11 @@ describe("commercial, enterprise, and marketplace feeds", async () => {
     expect(feed.entitlements[0]).toMatchObject({
       capabilityKey: "private_agent_marketplace",
       seats: 5,
+    });
+    expect(feed.authSessions[0]).toMatchObject({
+      providerRef: "hosted_auth_1",
+      authorizationUrl: "https://accounts.example/oauth/authorize",
+      status: "ready",
     });
     expect(feed.teamInvites[0]).toMatchObject({
       email: "ops@example.com",

@@ -27,6 +27,10 @@ from .schemas import (
     ArtifactSummary,
     AuthSessionResponse,
     SamlLoginResponse,
+    AccountConnectAuthSessionCompleteRequest,
+    AccountConnectAuthSessionCreateRequest,
+    AccountConnectAuthSessionListResponse,
+    AccountConnectAuthSessionSummary,
     AccountConnectLinkRequest,
     AccountConnectBillingPortalSessionCreateRequest,
     AccountConnectBillingPortalSessionListResponse,
@@ -288,6 +292,8 @@ from .services.comms import (
     OutboxMessageNotFoundError,
 )
 from .services.commercial import (
+    AccountConnectAuthSessionNotFoundError,
+    AccountConnectAuthSessionStateError,
     AccountConnectConfigurationError,
     AccountConnectLinkNotFoundError,
     AccountConnectSyncError,
@@ -1346,6 +1352,12 @@ def license_entitlement_summary_from_service(payload) -> LicenseEntitlementSumma
     return LicenseEntitlementSummary(**payload)
 
 
+def account_connect_auth_session_from_service(
+    payload,
+) -> AccountConnectAuthSessionSummary:
+    return AccountConnectAuthSessionSummary(**payload)
+
+
 def account_connect_team_invite_from_service(
     payload,
 ) -> AccountConnectTeamInviteSummary:
@@ -1846,6 +1858,100 @@ def sync_account_connect(
             edition=edition_status_from_service(result["edition"]),
             synced_entitlement_count=result["synced_entitlement_count"],
         )
+
+
+@app.get(
+    "/v1/account-connect/auth-sessions",
+    response_model=AccountConnectAuthSessionListResponse,
+)
+def list_account_connect_auth_sessions(
+    project_id: str,
+    limit: int = 50,
+) -> AccountConnectAuthSessionListResponse:
+    with begin(engine) as connection:
+        items = commercial.list_auth_sessions(connection, project_id, limit=limit)
+        return AccountConnectAuthSessionListResponse(
+            project_id=project_id,
+            items=[
+                account_connect_auth_session_from_service(item)
+                for item in items
+            ],
+        )
+
+
+@app.post(
+    "/v1/account-connect/auth-sessions",
+    response_model=AccountConnectAuthSessionSummary,
+    status_code=201,
+)
+def create_account_connect_auth_session(
+    payload: AccountConnectAuthSessionCreateRequest,
+) -> AccountConnectAuthSessionSummary:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection,
+            payload.project_id,
+            payload.actor,
+            "providerops_manage",
+        )
+        try:
+            session = commercial.create_auth_session(
+                connection,
+                payload.project_id,
+                actor=payload.actor,
+                return_url=payload.return_url,
+                hosted_org_id=payload.hosted_org_id,
+                metadata=payload.metadata,
+            )
+        except AccountConnectAuthSessionStateError as error:
+            record_account_connect_denial(
+                payload.project_id,
+                payload.actor,
+                "account_connect.auth_session_denied",
+                "account_connect_hosted_org_mismatch",
+                "account_connect_auth_session",
+            )
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        return account_connect_auth_session_from_service(session)
+
+
+@app.post(
+    "/v1/account-connect/auth-sessions/{session_id}/complete",
+    response_model=AccountConnectAuthSessionSummary,
+)
+def complete_account_connect_auth_session(
+    session_id: str,
+    payload: AccountConnectAuthSessionCompleteRequest,
+) -> AccountConnectAuthSessionSummary:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection,
+            payload.project_id,
+            payload.actor,
+            "providerops_manage",
+        )
+        try:
+            session = commercial.complete_auth_session(
+                connection,
+                session_id,
+                project_id=payload.project_id,
+                actor=payload.actor,
+                code=payload.code,
+                state=payload.state,
+                metadata=payload.metadata,
+            )
+        except AccountConnectAuthSessionNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except AccountConnectAuthSessionStateError as error:
+            record_account_connect_denial(
+                payload.project_id,
+                payload.actor,
+                "account_connect.auth_session_denied",
+                "state_mismatch",
+                "account_connect_auth_session",
+            )
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        return account_connect_auth_session_from_service(session)
 
 
 @app.get(

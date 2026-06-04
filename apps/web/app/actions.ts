@@ -397,6 +397,50 @@ export async function syncAccountConnectAction(formData: FormData): Promise<void
   revalidatePath("/");
 }
 
+export async function createAccountConnectAuthSessionAction(
+  formData: FormData,
+): Promise<void> {
+  await client.createAccountConnectAuthSession({
+    project_id: getProjectId(formData),
+    hosted_org_id: getOptionalString(formData, "hosted_org_id"),
+    return_url: getOptionalString(formData, "return_url"),
+    metadata: parseOptionalJsonObjectField(
+      formData.get("metadata_json"),
+      "metadata_json",
+    ),
+    actor: getActor(formData),
+  });
+  revalidatePath("/");
+}
+
+export async function completeAccountConnectAuthSessionAction(
+  formData: FormData,
+): Promise<void> {
+  const sessionId = formData.get("session_id");
+  const code = formData.get("code");
+  const state = formData.get("state");
+  if (typeof sessionId !== "string" || !sessionId.trim()) {
+    throw new Error("session_id is required");
+  }
+  if (typeof code !== "string" || !code.trim()) {
+    throw new Error("code is required");
+  }
+  if (typeof state !== "string" || !state.trim()) {
+    throw new Error("state is required");
+  }
+  await client.completeAccountConnectAuthSession(sessionId.trim(), {
+    project_id: getProjectId(formData),
+    code: code.trim(),
+    state: state.trim(),
+    metadata: parseOptionalJsonObjectField(
+      formData.get("metadata_json"),
+      "metadata_json",
+    ),
+    actor: getActor(formData),
+  });
+  revalidatePath("/");
+}
+
 export async function createAccountConnectTeamInviteAction(
   formData: FormData,
 ): Promise<void> {

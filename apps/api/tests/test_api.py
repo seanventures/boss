@@ -1176,6 +1176,189 @@ def test_account_connect_sync_upserts_hosted_entitlements(
         api_main.commercial.settings.boss_edition = previous
 
 
+def test_account_connect_auth_session_blocks_without_hosted_url(client):
+    previous_edition = api_main.settings.boss_edition
+    previous_url = api_main.settings.account_connect_url
+    api_main.settings.boss_edition = "cloud"
+    api_main.commercial.settings.boss_edition = "cloud"
+    api_main.settings.account_connect_url = None
+    api_main.commercial.settings.account_connect_url = None
+    try:
+        created = client.post(
+            "/v1/account-connect/auth-sessions",
+            json={
+                "project_id": "boss-dogfood",
+                "return_url": "https://boss.local/account-connect/callback",
+                "metadata": {"source": "test"},
+                "actor": "ceo",
+            },
+        )
+        assert created.status_code == 201
+        session = created.json()
+        assert session["status"] == "blocked_configuration"
+        assert session["authorization_url"] is None
+        assert session["receipt_id"]
+        assert session["metadata"]["blocked_reason"] == "account_connect_url_missing"
+
+        receipts = client.get("/v1/receipts", params={"project_id": "boss-dogfood"})
+        receipt = next(
+            item
+            for item in receipts.json()["items"]
+            if item["id"] == session["receipt_id"]
+        )
+        assert receipt["status"] == "failed"
+        assert receipt["effect_kind"] == "account_connect.auth_session.create"
+
+        listed = client.get(
+            "/v1/account-connect/auth-sessions",
+            params={"project_id": "boss-dogfood"},
+        )
+        assert listed.status_code == 200
+        assert listed.json()["items"][0]["id"] == session["id"]
+
+        events = client.get("/v1/events", params={"project_id": "boss-dogfood"})
+        event_types = [item["event_type"] for item in events.json()["items"]]
+        assert "account_connect.auth_session_blocked" in event_types
+    finally:
+        api_main.settings.boss_edition = previous_edition
+        api_main.commercial.settings.boss_edition = previous_edition
+        api_main.settings.account_connect_url = previous_url
+        api_main.commercial.settings.account_connect_url = previous_url
+
+
+def test_account_connect_auth_session_uses_hosted_adapter_and_links_org(
+    client,
+    monkeypatch,
+):
+    previous = api_main.settings.boss_edition
+    api_main.settings.boss_edition = "cloud"
+    api_main.commercial.settings.boss_edition = "cloud"
+
+    class FakeAccountConnectAdapter:
+        def fetch_entitlements(self, *, hosted_org_id: str, project_id: str):
+            return []
+
+        def create_auth_session(
+            self,
+            *,
+            project_id: str,
+            return_url: Optional[str],
+            state: str,
+            metadata: dict,
+            hosted_org_id: Optional[str] = None,
+        ):
+            assert project_id == "boss-dogfood"
+            assert return_url == "https://boss.local/account-connect/callback"
+            assert hosted_org_id is None
+            assert metadata == {"source": "test"}
+            assert state.startswith("acctstate_")
+            return {
+                "session_id": "hosted_auth_123",
+                "authorization_url": "https://accounts.example/oauth/authorize",
+                "expires_at": "2026-06-04T00:00:00Z",
+            }
+
+        def complete_auth_session(
+            self,
+            *,
+            project_id: str,
+            provider_ref: str,
+            code: str,
+            state: str,
+            metadata: dict,
+            hosted_org_id: Optional[str] = None,
+        ):
+            assert project_id == "boss-dogfood"
+            assert provider_ref == "hosted_auth_123"
+            assert code == "callback-code"
+            assert state.startswith("acctstate_")
+            assert hosted_org_id is None
+            assert metadata == {"source": "callback"}
+            return {
+                "hosted_org_id": "acct_org_hosted_auth",
+                "connection_ref": "acctconn:hosted-auth",
+                "marketplace_identity": {"publisher": "seanheiney"},
+                "billing_portal_ref": "stripe:portal:hosted",
+                "connector_authorization_refs": ["github:installation:hosted"],
+                "optional_telemetry_enabled": True,
+                "metadata": {"login_method": "oauth"},
+            }
+
+    monkeypatch.setattr(
+        api_main.commercial,
+        "account_connect_adapter",
+        FakeAccountConnectAdapter(),
+    )
+    try:
+        created = client.post(
+            "/v1/account-connect/auth-sessions",
+            json={
+                "project_id": "boss-dogfood",
+                "return_url": "https://boss.local/account-connect/callback",
+                "metadata": {"source": "test"},
+                "actor": "ceo",
+            },
+        )
+        assert created.status_code == 201
+        session = created.json()
+        assert session["status"] == "ready"
+        assert session["provider_ref"] == "hosted_auth_123"
+        assert session["authorization_url"] == "https://accounts.example/oauth/authorize"
+        assert session["receipt_id"]
+
+        mismatch = client.post(
+            f"/v1/account-connect/auth-sessions/{session['id']}/complete",
+            json={
+                "project_id": "boss-dogfood",
+                "code": "callback-code",
+                "state": "wrong-state",
+                "actor": "ceo",
+            },
+        )
+        assert mismatch.status_code == 409
+
+        completed = client.post(
+            f"/v1/account-connect/auth-sessions/{session['id']}/complete",
+            json={
+                "project_id": "boss-dogfood",
+                "code": "callback-code",
+                "state": session["state"],
+                "metadata": {"source": "callback"},
+                "actor": "ceo",
+            },
+        )
+        assert completed.status_code == 200
+        completed_session = completed.json()
+        assert completed_session["status"] == "completed"
+        assert completed_session["hosted_org_id"] == "acct_org_hosted_auth"
+        assert completed_session["completed_at"]
+
+        edition = client.get(
+            "/v1/edition",
+            params={"project_id": "boss-dogfood"},
+        )
+        assert edition.status_code == 200
+        account_connect = edition.json()["account_connect_org"]
+        assert account_connect["hosted_org_id"] == "acct_org_hosted_auth"
+        assert account_connect["connection_ref"] == "acctconn:hosted-auth"
+        assert account_connect["billing_portal_ref"] == "stripe:portal:hosted"
+
+        receipts = client.get("/v1/receipts", params={"project_id": "boss-dogfood"})
+        receipt_kinds = {item["effect_kind"] for item in receipts.json()["items"]}
+        assert "account_connect.auth_session.create" in receipt_kinds
+        assert "account_connect.auth_session.complete" in receipt_kinds
+
+        events = client.get("/v1/events", params={"project_id": "boss-dogfood"})
+        event_types = [item["event_type"] for item in events.json()["items"]]
+        assert "account_connect.auth_session_created" in event_types
+        assert "account_connect.auth_session_denied" in event_types
+        assert "account_connect.auth_session_completed" in event_types
+        assert "account_connect.linked" in event_types
+    finally:
+        api_main.settings.boss_edition = previous
+        api_main.commercial.settings.boss_edition = previous
+
+
 def test_account_connect_team_invite_blocks_without_hosted_url_and_records_receipt(
     client,
 ):

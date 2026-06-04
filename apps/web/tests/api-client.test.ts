@@ -238,6 +238,23 @@ describe("createBossApiClient", () => {
 
   it("uses Account Connect team invite and billing portal API contracts", async () => {
     const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const authSession = {
+      id: "acctauth_1",
+      project_id: "boss-dogfood",
+      account_connect_org_id: "acctconn_1",
+      hosted_org_id: "acct_org_123",
+      authorization_url: "https://accounts.example/oauth/authorize",
+      return_url: "https://boss.local/account-connect/callback",
+      provider_ref: "hosted_auth_123",
+      state: "acctstate_123",
+      status: "ready",
+      receipt_id: "rcpt_auth",
+      created_by: "ceo",
+      expires_at: "2026-06-04T00:00:00Z",
+      metadata: {},
+      created_at: "2026-06-03T00:00:00Z",
+      updated_at: "2026-06-03T00:00:00Z",
+    };
     const invite = {
       id: "acctinvite_1",
       project_id: "boss-dogfood",
@@ -274,6 +291,9 @@ describe("createBossApiClient", () => {
       updated_at: "2026-06-03T00:00:00Z",
     };
     const responses = [
+      { status: 200, body: { project_id: "boss-dogfood", items: [authSession] } },
+      { status: 201, body: authSession },
+      { status: 200, body: { ...authSession, status: "completed" } },
       { status: 200, body: { project_id: "boss-dogfood", items: [invite] } },
       { status: 201, body: invite },
       { status: 200, body: { ...invite, status: "revoked" } },
@@ -296,6 +316,23 @@ describe("createBossApiClient", () => {
       fetchImpl,
     });
 
+    const authSessions = await client.listAccountConnectAuthSessions(
+      "boss-dogfood",
+    );
+    const createdAuthSession = await client.createAccountConnectAuthSession({
+      project_id: "boss-dogfood",
+      return_url: "https://boss.local/account-connect/callback",
+      actor: "ceo",
+    });
+    const completedAuthSession = await client.completeAccountConnectAuthSession(
+      "acctauth_1",
+      {
+        project_id: "boss-dogfood",
+        code: "callback-code",
+        state: "acctstate_123",
+        actor: "ceo",
+      },
+    );
     const invites = await client.listAccountConnectTeamInvites("boss-dogfood");
     const createdInvite = await client.createAccountConnectTeamInvite({
       project_id: "boss-dogfood",
@@ -319,25 +356,41 @@ describe("createBossApiClient", () => {
       actor: "ceo",
     });
 
+    expect(authSessions.items[0].provider_ref).toBe("hosted_auth_123");
+    expect(createdAuthSession.authorization_url).toBe(
+      "https://accounts.example/oauth/authorize",
+    );
+    expect(completedAuthSession.status).toBe("completed");
     expect(invites.items[0].email).toBe("ops@example.com");
     expect(createdInvite.hosted_invite_ref).toBe("hosted_invite_123");
     expect(revokedInvite.status).toBe("revoked");
     expect(sessions.items[0].provider_ref).toBe("bps_123");
     expect(createdSession.portal_url).toBe("https://billing.example/session/123");
     expect(calls[0].url).toBe(
-      "http://127.0.0.1:8000/v1/account-connect/team-invites?project_id=boss-dogfood&limit=50",
+      "http://127.0.0.1:8000/v1/account-connect/auth-sessions?project_id=boss-dogfood&limit=50",
     );
     expect(calls[1].url).toBe(
-      "http://127.0.0.1:8000/v1/account-connect/team-invites",
+      "http://127.0.0.1:8000/v1/account-connect/auth-sessions",
     );
     expect(calls[1].init?.method).toBe("POST");
     expect(calls[2].url).toBe(
-      "http://127.0.0.1:8000/v1/account-connect/team-invites/acctinvite_1/revoke",
+      "http://127.0.0.1:8000/v1/account-connect/auth-sessions/acctauth_1/complete",
     );
+    expect(calls[2].init?.method).toBe("POST");
     expect(calls[3].url).toBe(
-      "http://127.0.0.1:8000/v1/account-connect/billing-portal-sessions?project_id=boss-dogfood&limit=50",
+      "http://127.0.0.1:8000/v1/account-connect/team-invites?project_id=boss-dogfood&limit=50",
     );
     expect(calls[4].url).toBe(
+      "http://127.0.0.1:8000/v1/account-connect/team-invites",
+    );
+    expect(calls[4].init?.method).toBe("POST");
+    expect(calls[5].url).toBe(
+      "http://127.0.0.1:8000/v1/account-connect/team-invites/acctinvite_1/revoke",
+    );
+    expect(calls[6].url).toBe(
+      "http://127.0.0.1:8000/v1/account-connect/billing-portal-sessions?project_id=boss-dogfood&limit=50",
+    );
+    expect(calls[7].url).toBe(
       "http://127.0.0.1:8000/v1/account-connect/billing-portal-sessions",
     );
   });

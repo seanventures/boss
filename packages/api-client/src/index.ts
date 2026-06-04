@@ -147,6 +147,46 @@ export type AccountConnectSyncResponse = {
   synced_entitlement_count: number;
 };
 
+export type AccountConnectAuthSessionSummary = {
+  id: string;
+  project_id: string;
+  account_connect_org_id?: string;
+  hosted_org_id?: string;
+  authorization_url?: string;
+  return_url?: string;
+  provider_ref?: string;
+  state: string;
+  status: string;
+  receipt_id?: string;
+  created_by: string;
+  expires_at?: string;
+  completed_at?: string;
+  metadata: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+};
+
+export type AccountConnectAuthSessionListResponse = {
+  project_id: string;
+  items: AccountConnectAuthSessionSummary[];
+};
+
+export type AccountConnectAuthSessionCreateRequest = {
+  project_id: string;
+  hosted_org_id?: string;
+  return_url?: string;
+  metadata?: Record<string, unknown>;
+  actor?: string;
+};
+
+export type AccountConnectAuthSessionCompleteRequest = {
+  project_id: string;
+  code: string;
+  state: string;
+  metadata?: Record<string, unknown>;
+  actor?: string;
+};
+
 export type AccountConnectTeamInviteSummary = {
   id: string;
   project_id: string;
@@ -3144,6 +3184,32 @@ export function createBossApiClient(config: BossApiClientConfig) {
       return request<AccountConnectSyncResponse>(
         "POST",
         "/v1/account-connect/sync",
+        { body: payload },
+      );
+    },
+    listAccountConnectAuthSessions(projectId: string, limit = 50) {
+      return request<AccountConnectAuthSessionListResponse>(
+        "GET",
+        "/v1/account-connect/auth-sessions",
+        { query: { project_id: projectId, limit: String(limit) } },
+      );
+    },
+    createAccountConnectAuthSession(
+      payload: AccountConnectAuthSessionCreateRequest,
+    ) {
+      return request<AccountConnectAuthSessionSummary>(
+        "POST",
+        "/v1/account-connect/auth-sessions",
+        { body: payload },
+      );
+    },
+    completeAccountConnectAuthSession(
+      sessionId: string,
+      payload: AccountConnectAuthSessionCompleteRequest,
+    ) {
+      return request<AccountConnectAuthSessionSummary>(
+        "POST",
+        `/v1/account-connect/auth-sessions/${encodeURIComponent(sessionId)}/complete`,
         { body: payload },
       );
     },

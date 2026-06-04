@@ -12,7 +12,9 @@ import {
   createDecisionDigestAction,
   createOpsDigestAction,
   createDeploymentRunAction,
+  completeAccountConnectAuthSessionAction,
   createAccountConnectBillingPortalSessionAction,
+  createAccountConnectAuthSessionAction,
   createAccountConnectTeamInviteAction,
   createEnterpriseSupportCaseAction,
   installAgentModuleAction,
@@ -3476,6 +3478,140 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                     </form>
                   )}
                 </div>
+              )}
+            </article>
+
+            <article className="stack-card">
+              <h3>Hosted auth sessions</h3>
+              {!commercial.apiReachable ? (
+                <p className="detail">
+                  {commercial.blockedReason ?? "Commercial API is unavailable."}
+                </p>
+              ) : (
+                <>
+                  {commercial.authSessions.length === 0 ? (
+                    <p className="detail">
+                      No hosted Account Connect auth sessions have been requested.
+                    </p>
+                  ) : (
+                    <div className="feed-list">
+                      {commercial.authSessions.slice(0, 6).map((session) => (
+                        <div className="feed-row" key={session.id}>
+                          <div>
+                            <h4>{session.providerRef ?? session.id}</h4>
+                            <p className="detail">
+                              {titleCaseToken(session.status)} / receipt{" "}
+                              {session.receiptId ?? "not opened"} / hosted org{" "}
+                              {session.hostedOrgId ?? "pending"}
+                            </p>
+                            <p className="detail">
+                              Return URL {session.returnUrl ?? "not set"}
+                              {session.expiresAt
+                                ? ` / expires ${formatDateTime(session.expiresAt)}`
+                                : ""}
+                              {session.completedAt
+                                ? ` / completed ${formatDateTime(session.completedAt)}`
+                                : ""}
+                            </p>
+                            {session.authorizationUrl ? (
+                              <p className="detail">
+                                <a href={session.authorizationUrl} rel="noreferrer">
+                                  Open hosted Account Connect login
+                                </a>
+                              </p>
+                            ) : (
+                              <p className="detail">
+                                No hosted login URL was issued; check status and receipt.
+                              </p>
+                            )}
+                            {session.status === "ready" ? (
+                              <form
+                                action={completeAccountConnectAuthSessionAction}
+                                className="composer compact"
+                              >
+                                <input
+                                  type="hidden"
+                                  name="project_id"
+                                  value={activeProjectId}
+                                />
+                                <input
+                                  type="hidden"
+                                  name="actor"
+                                  value={activeActorId}
+                                />
+                                <input
+                                  type="hidden"
+                                  name="session_id"
+                                  value={session.id}
+                                />
+                                <input
+                                  type="hidden"
+                                  name="state"
+                                  value={session.state}
+                                />
+                                <input
+                                  className="input"
+                                  name="code"
+                                  type="password"
+                                  aria-label="Hosted callback code"
+                                  placeholder="Hosted callback code"
+                                />
+                                <button className="button secondary" type="submit">
+                                  Complete hosted login
+                                </button>
+                              </form>
+                            ) : null}
+                          </div>
+                          <span
+                            className={`pill${
+                              session.status === "ready" ||
+                              session.status === "completed"
+                                ? ""
+                                : " warn"
+                            }`}
+                          >
+                            {titleCaseToken(session.status)}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  <form
+                    action={createAccountConnectAuthSessionAction}
+                    className="composer"
+                  >
+                    <input type="hidden" name="project_id" value={activeProjectId} />
+                    <input type="hidden" name="actor" value={activeActorId} />
+                    <label className="field">
+                      <span>Hosted org ID (optional)</span>
+                      <input
+                        className="input"
+                        name="hosted_org_id"
+                        placeholder="acct_org_..."
+                      />
+                    </label>
+                    <label className="field">
+                      <span>Return URL</span>
+                      <input
+                        className="input"
+                        name="return_url"
+                        placeholder="https://boss.local/account-connect/callback"
+                      />
+                    </label>
+                    <label className="field">
+                      <span>Metadata JSON</span>
+                      <textarea
+                        className="input"
+                        name="metadata_json"
+                        defaultValue={`{"source":"mission_control"}`}
+                      />
+                    </label>
+                    <button className="button secondary" type="submit">
+                      Start hosted Account Connect login
+                    </button>
+                  </form>
+                </>
               )}
             </article>
 

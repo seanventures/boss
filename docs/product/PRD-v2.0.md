@@ -542,6 +542,7 @@ Rules:
 - BOSS Cloud requires Account Connect.
 - Enterprise can run attached or detached.
 - Account Connect is valuable but optional for self-host Community.
+- Hosted login must be represented in the local control plane by durable auth-session records, receipts, state validation, visible blocked/failed states, and an auditable Account Connect org link only after the hosted adapter returns a verified hosted organization.
 
 ### Clustering and Scaling Monetization
 

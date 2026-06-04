@@ -177,6 +177,29 @@ CREATE TABLE IF NOT EXISTS account_connect_orgs (
 CREATE INDEX IF NOT EXISTS idx_account_connect_orgs_project_status
   ON account_connect_orgs(project_id, status, linked_at DESC);
 
+CREATE TABLE IF NOT EXISTS account_connect_auth_sessions (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  account_connect_org_id TEXT REFERENCES account_connect_orgs(id) ON DELETE SET NULL,
+  hosted_org_id TEXT,
+  authorization_url TEXT,
+  return_url TEXT,
+  provider_ref TEXT,
+  state TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'requested',
+  receipt_id TEXT REFERENCES receipts(id),
+  created_by TEXT NOT NULL DEFAULT 'system',
+  expires_at TIMESTAMPTZ,
+  completed_at TIMESTAMPTZ,
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_account_connect_auth_sessions_project
+  ON account_connect_auth_sessions(project_id, status, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_account_connect_auth_sessions_provider_ref
+  ON account_connect_auth_sessions(project_id, provider_ref);
+
 CREATE TABLE IF NOT EXISTS license_entitlements (
   id TEXT PRIMARY KEY,
   project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,

@@ -191,6 +191,68 @@ class AccountConnectSyncResponse(BaseModel):
     synced_entitlement_count: int
 
 
+class AccountConnectAuthSessionSummary(BaseModel):
+    id: str
+    project_id: str
+    account_connect_org_id: Optional[str] = None
+    hosted_org_id: Optional[str] = None
+    authorization_url: Optional[str] = None
+    return_url: Optional[str] = None
+    provider_ref: Optional[str] = None
+    state: str
+    status: str
+    receipt_id: Optional[str] = None
+    created_by: str
+    expires_at: Optional[str] = None
+    completed_at: Optional[str] = None
+    metadata: dict[str, Any]
+    created_at: str
+    updated_at: str
+
+
+class AccountConnectAuthSessionListResponse(BaseModel):
+    project_id: str
+    items: list[AccountConnectAuthSessionSummary]
+
+
+class AccountConnectAuthSessionCreateRequest(BaseModel):
+    project_id: str
+    hosted_org_id: Optional[str] = None
+    return_url: Optional[str] = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    actor: str = "system"
+
+    @model_validator(mode="after")
+    def validate_auth_session_create(
+        self,
+    ) -> "AccountConnectAuthSessionCreateRequest":
+        self.project_id = _require_text(self.project_id, "project_id")
+        self.actor = _require_text(self.actor, "actor")
+        if self.hosted_org_id is not None:
+            self.hosted_org_id = _require_text(self.hosted_org_id, "hosted_org_id")
+        if self.return_url is not None:
+            self.return_url = _require_text(self.return_url, "return_url")
+        return self
+
+
+class AccountConnectAuthSessionCompleteRequest(BaseModel):
+    project_id: str
+    code: str
+    state: str
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    actor: str = "system"
+
+    @model_validator(mode="after")
+    def validate_auth_session_complete(
+        self,
+    ) -> "AccountConnectAuthSessionCompleteRequest":
+        self.project_id = _require_text(self.project_id, "project_id")
+        self.code = _require_text(self.code, "code")
+        self.state = _require_text(self.state, "state")
+        self.actor = _require_text(self.actor, "actor")
+        return self
+
+
 class AccountConnectTeamInviteSummary(BaseModel):
     id: str
     project_id: str

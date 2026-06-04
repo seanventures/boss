@@ -1,0 +1,43 @@
+kind: ObjectSpec
+id: AccountConnectAuthSession
+version: 0.1.0
+description: Receipt-linked hosted Account Connect login session used to attach Cloud or Enterprise projects without making hosted auth a Community dependency.
+fields:
+  - name: id
+    type: string
+  - name: project_id
+    type: string
+  - name: account_connect_org_id
+    type: string
+  - name: hosted_org_id
+    type: string
+  - name: authorization_url
+    type: string
+  - name: return_url
+    type: string
+  - name: provider_ref
+    type: string
+  - name: state
+    type: string
+  - name: status
+    type: enum
+    values:
+      - requested
+      - ready
+      - completed
+      - blocked_configuration
+      - failed
+  - name: receipt_id
+    type: string
+  - name: expires_at
+    type: datetime
+  - name: completed_at
+    type: datetime
+  - name: metadata
+    type: object
+rules:
+  hosted_auth_requires_receipt: true
+  missing_hosted_endpoint_creates_blocked_record: true
+  completion_state_must_match: true
+  successful_completion_links_account_connect_org: true
+  community_must_not_require_hosted_auth: true

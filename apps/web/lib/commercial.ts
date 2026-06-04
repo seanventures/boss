@@ -1,4 +1,5 @@
 import {
+  type AccountConnectAuthSessionSummary,
   type AccountConnectBillingPortalSessionSummary,
   type AccountConnectTeamInviteSummary,
   BossApiError,
@@ -90,12 +91,29 @@ export type AccountConnectBillingPortalSessionItem = {
   createdAt: string;
 };
 
+export type AccountConnectAuthSessionItem = {
+  id: string;
+  hostedOrgId?: string;
+  authorizationUrl?: string;
+  returnUrl?: string;
+  providerRef?: string;
+  state: string;
+  status: string;
+  receiptId?: string;
+  createdBy: string;
+  expiresAt?: string;
+  completedAt?: string;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+};
+
 export type CommercialFeed = {
   projectId: string;
   apiReachable: boolean;
   blockedReason?: string;
   edition?: CommercialEditionItem;
   entitlements: LicenseEntitlementItem[];
+  authSessions: AccountConnectAuthSessionItem[];
   teamInvites: AccountConnectTeamInviteItem[];
   billingPortalSessions: AccountConnectBillingPortalSessionItem[];
 };
@@ -200,6 +218,26 @@ function mapBillingPortalSession(
   };
 }
 
+function mapAuthSession(
+  payload: AccountConnectAuthSessionSummary,
+): AccountConnectAuthSessionItem {
+  return {
+    id: payload.id,
+    hostedOrgId: payload.hosted_org_id,
+    authorizationUrl: payload.authorization_url,
+    returnUrl: payload.return_url,
+    providerRef: payload.provider_ref,
+    state: payload.state,
+    status: payload.status,
+    receiptId: payload.receipt_id,
+    createdBy: payload.created_by,
+    expiresAt: payload.expires_at,
+    completedAt: payload.completed_at,
+    metadata: payload.metadata,
+    createdAt: payload.created_at,
+  };
+}
+
 export function emptyCommercialFeed(
   reason?: string,
   projectId = PROJECT_ID,
@@ -209,6 +247,7 @@ export function emptyCommercialFeed(
     apiReachable: false,
     blockedReason: reason,
     entitlements: [],
+    authSessions: [],
     teamInvites: [],
     billingPortalSessions: [],
   };
@@ -222,11 +261,13 @@ export async function fetchCommercialFeed(
     const [
       edition,
       entitlementList,
+      authSessions,
       teamInvites,
       billingPortalSessions,
     ] = await Promise.all([
       client.getEdition(resolvedProjectId),
       client.listLicenseEntitlements(resolvedProjectId, true),
+      client.listAccountConnectAuthSessions(resolvedProjectId),
       client.listAccountConnectTeamInvites(resolvedProjectId),
       client.listAccountConnectBillingPortalSessions(resolvedProjectId),
     ]);
@@ -235,6 +276,7 @@ export async function fetchCommercialFeed(
       apiReachable: true,
       edition: mapEdition(edition),
       entitlements: entitlementList.items.map(mapEntitlement),
+      authSessions: authSessions.items.map(mapAuthSession),
       teamInvites: teamInvites.items.map(mapTeamInvite),
       billingPortalSessions: billingPortalSessions.items.map(
         mapBillingPortalSession,

@@ -54,6 +54,7 @@ objects:
     - edition
     - license_entitlement
     - account_connect_org
+    - account_connect_auth_session
     - account_connect_team_invite
     - account_connect_billing_portal_session
     - enterprise_cluster

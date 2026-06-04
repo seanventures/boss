@@ -1,6 +1,6 @@
 # BOSS User Stories and Acceptance Criteria
 
-Last updated: June 3, 2026
+Last updated: June 4, 2026
 
 These stories are derived from `docs/product/PRD-v2.0.md`, `docs/product/TECHNICAL_SPEC-v2.0.md`, `reference/boss_build_spec_pack/docs/CODEX_RUNBOOK.md`, `packages/specpack/workflows/ceo_command_to_pr.yaml`, `packages/specpack/workflows/providerops_readonly_sync.yaml`, `packages/specpack/workflows/changeset_apply_with_receipts.yaml`, `packages/specpack/workflows/deployment_run.yaml`, `packages/specpack/workflows/model_entitlement_routing.yaml`, `packages/specpack/policies/default_safety.yaml`, `packages/specpack/policies/resource_plane_policy.yaml`, `packages/specpack/policies/budget_governor_policy.yaml`, and `packages/specpack/policies/model_entitlement_policy.yaml`.
 
@@ -420,6 +420,10 @@ Acceptance criteria:
 
 - Given BOSS Cloud is enabled, when an org is created, then Account Connect owns cloud identity and license entitlement state.
 - Given BOSS Cloud is enabled and no Account Connect org is linked, when `GET /v1/edition` is called, then BOSS reports `blocked_account_connect_required` instead of silently allowing Cloud-only behavior.
+- Given hosted Account Connect login is started, when `POST /v1/account-connect/auth-sessions` succeeds, then BOSS creates an `AccountConnectAuthSession` with a Receipt, callback state, hosted authorization URL when configured, and audit event.
+- Given hosted Account Connect login is started without `BOSS_ACCOUNT_CONNECT_URL`, when the request runs, then BOSS creates a blocked auth-session record with a failed Receipt and emits `account_connect.auth_session_blocked`.
+- Given a hosted Account Connect callback is completed, when the callback state matches and the hosted adapter returns a hosted org, then BOSS completes the auth session, links the Account Connect org, records the completion Receipt, and emits audit events.
+- Given a hosted Account Connect callback has the wrong state, when completion is attempted, then BOSS rejects it, emits `account_connect.auth_session_denied`, and does not link the hosted org.
 - Given an authorized ProviderOps manager links Account Connect, when `POST /v1/account-connect/link` succeeds, then BOSS persists the hosted org reference, refreshes account-connect entitlement state, and emits `account_connect.linked`.
 - Given Account Connect sync is requested without `BOSS_ACCOUNT_CONNECT_URL`, when `POST /v1/account-connect/sync` runs, then BOSS fails closed, returns a visible error, and emits `account_connect.sync_denied`.
 - Given Account Connect sync is configured, when the hosted service returns valid entitlements, then BOSS upserts local license entitlement rows and emits `account_connect.synced`.
@@ -437,6 +441,7 @@ As a founder, Cloud admin, or enterprise operator, I want edition, Account Conne
 Acceptance criteria:
 
 - Given the commercial API is available, when Mission Control loads, then it shows edition status, Account Connect requirement/status, local-vs-hosted auth posture, license candidate, and active license entitlements.
+- Given Account Connect auth sessions exist, when Mission Control loads, then it shows hosted login URLs, blocked states, receipt IDs, hosted org linkage, and completion controls from API data.
 - Given Account Connect is not linked, when an authorized actor submits a hosted org ID, then Mission Control calls the Account Connect link API and refreshes the panel from the control plane.
 - Given Account Connect is linked, when an authorized actor requests entitlement sync or unlink, then Mission Control calls the corresponding API and relies on audit events from the backend.
 - Given Enterprise cluster posture exists, when Mission Control loads, then it shows deployment mode, Account Connect mode, worker strategy, HA/data residency, support tier, compliance packs, and blocking gaps.

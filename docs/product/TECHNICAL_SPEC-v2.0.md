@@ -201,6 +201,7 @@ Rules:
 - Cloud requires Account Connect.
 - Enterprise can run attached or detached.
 - Account Connect must not become a hard dependency for open-source Community operation.
+- Hosted login handshakes are represented locally as `AccountConnectAuthSession` records with receipts, callback-state validation, visible blocked states when `BOSS_ACCOUNT_CONNECT_URL` is missing, and link creation only from a successful hosted adapter response.
 
 ## Edition and Entitlement Checks
 
@@ -211,6 +212,7 @@ Objects:
 - `Edition`
 - `LicenseEntitlement`
 - `AccountConnectOrg`
+- `AccountConnectAuthSession`
 - `EnterpriseCluster`
 - `EnterpriseIdentityProvider`
 - `PackListing`
@@ -331,6 +333,9 @@ Commercial:
 - `POST /v1/account-connect/link`
 - `POST /v1/account-connect/unlink`
 - `POST /v1/account-connect/sync`
+- `GET /v1/account-connect/auth-sessions`
+- `POST /v1/account-connect/auth-sessions`
+- `POST /v1/account-connect/auth-sessions/{id}/complete`
 - `GET /v1/account-connect/team-invites`
 - `POST /v1/account-connect/team-invites`
 - `POST /v1/account-connect/team-invites/{id}/revoke`
