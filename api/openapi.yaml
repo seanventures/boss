@@ -2025,8 +2025,59 @@ paths:
           in: query
           required: false
           schema: { type: integer, default: 25 }
+        - name: provider
+          in: query
+          required: false
+          schema: { type: string }
+        - name: source_id
+          in: query
+          required: false
+          schema: { type: string }
+        - name: model_id
+          in: query
+          required: false
+          schema: { type: string }
+        - name: task_kind
+          in: query
+          required: false
+          schema: { type: string }
+        - name: workload_class
+          in: query
+          required: false
+          schema: { type: string }
+        - name: budget_state
+          in: query
+          required: false
+          schema: { type: string }
+        - name: data_boundary
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [public, internal, confidential, restricted, local-only]
+        - name: risk_tier
+          in: query
+          required: false
+          schema: { type: integer, minimum: 0, maximum: 3 }
+        - name: routing_mode
+          in: query
+          required: false
+          schema: { type: string }
+        - name: denial_reason
+          in: query
+          required: false
+          schema: { type: string }
+        - name: denied_only
+          in: query
+          required: false
+          schema: { type: boolean, default: false }
+        - name: selected_only
+          in: query
+          required: false
+          schema: { type: boolean, default: false }
       responses:
-        '200': { description: ModelRouteDecision list derived from persisted routing logs }
+        '200': { description: Filterable ModelRouteDecision list derived from persisted routing logs }
+        '400': { description: Invalid limit or mutually exclusive filters }
   /v1/model-route-decisions/simulate:
     post:
       summary: Simulate model routing through the entitlement broker and persist a ModelRouteDecision

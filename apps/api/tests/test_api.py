@@ -8159,6 +8159,93 @@ def test_model_route_decision_simulate_and_list_v2_surface(client, engine):
     assert listed.status_code == 200
     assert any(item["id"] == decision["id"] for item in listed.json()["items"])
 
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                """
+                INSERT INTO routing_logs (
+                    id, project_id, skill_id, task_kind, workload_class, risk_tier,
+                    data_boundary, budget_state, selected_source_id, selected_provider,
+                    selected_model_id, denial_reason, rejected_sources, decision
+                )
+                VALUES (
+                    'route_filtered_denied', :project_id, 'model.generate_text',
+                    'coding', 'multi_tenant_customer', 2, 'restricted', 'red',
+                    NULL, NULL, NULL, 'budget_state_disallows_model_spend',
+                    CAST(:rejected_sources AS JSONB),
+                    CAST(:decision AS JSONB)
+                )
+                """
+            ),
+            {
+                "project_id": project_id,
+                "rejected_sources": json.dumps(
+                    [
+                        {
+                            "source_id": "openai_api",
+                            "reason": "budget_state_disallows_model_spend",
+                        }
+                    ]
+                ),
+                "decision": json.dumps(
+                    {
+                        "routing_mode": "budget_safe",
+                        "provider_rule_compliance": False,
+                        "reservation_required": True,
+                    }
+                ),
+            },
+        )
+
+    provider_filtered = client.get(
+        "/v1/model-route-decisions",
+        params={"project_id": project_id, "provider": "openai", "limit": 10},
+    )
+    assert provider_filtered.status_code == 200
+    assert [item["id"] for item in provider_filtered.json()["items"]] == [
+        decision["id"]
+    ]
+
+    denied_filtered = client.get(
+        "/v1/model-route-decisions",
+        params={"project_id": project_id, "denied_only": True, "limit": 10},
+    )
+    assert denied_filtered.status_code == 200
+    assert [item["id"] for item in denied_filtered.json()["items"]] == [
+        "route_filtered_denied"
+    ]
+    assert denied_filtered.json()["items"][0]["policy_result"] == {
+        "allowed": False,
+        "denial_reason": "budget_state_disallows_model_spend",
+        "provider_rule_compliance": False,
+        "reservation_required": True,
+    }
+
+    boundary_filtered = client.get(
+        "/v1/model-route-decisions",
+        params={
+            "project_id": project_id,
+            "data_boundary": "restricted",
+            "budget_state": "red",
+            "risk_tier": 2,
+            "limit": 10,
+        },
+    )
+    assert boundary_filtered.status_code == 200
+    assert [item["id"] for item in boundary_filtered.json()["items"]] == [
+        "route_filtered_denied"
+    ]
+
+    conflicting_filters = client.get(
+        "/v1/model-route-decisions",
+        params={
+            "project_id": project_id,
+            "denied_only": True,
+            "selected_only": True,
+        },
+    )
+    assert conflicting_filters.status_code == 400
+
 
 def test_command_proposal_creates_task_job_artifact_and_task_lookup(client, engine):
     response = client.post(

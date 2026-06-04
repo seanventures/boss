@@ -56,6 +56,7 @@ import {
   upsertOrgMemberAction,
   upsertWorkerPoolAction,
 } from "./actions";
+import type { DataBoundary } from "@boss/api-client";
 import { fetchAuditSummary } from "../lib/audit";
 import { fetchArtifactFeed } from "../lib/artifacts";
 import { fetchAgentModuleFeed } from "../lib/agent-modules";
@@ -278,6 +279,21 @@ export default async function HomePage({ searchParams }: HomePageProps) {
   const metatronTaskId = getParam(resolvedSearchParams?.task_id);
   const metatronDecisionId = getParam(resolvedSearchParams?.decision_id);
   const requestedActorId = getParam(resolvedSearchParams?.actor);
+  const routingProviderFilter = getParam(resolvedSearchParams?.route_provider);
+  const routingBudgetFilter = getParam(resolvedSearchParams?.route_budget);
+  const routingBoundaryParam = getParam(resolvedSearchParams?.route_boundary);
+  const routingBoundaryFilter = (
+    ["public", "internal", "confidential", "restricted", "local-only"].includes(
+      routingBoundaryParam ?? "",
+    )
+      ? routingBoundaryParam
+      : undefined
+  ) as DataBoundary | undefined;
+  const routingOutcomeParam = getParam(resolvedSearchParams?.route_outcome);
+  const routingOutcomeFilter =
+    routingOutcomeParam === "selected" || routingOutcomeParam === "denied"
+      ? routingOutcomeParam
+      : undefined;
   const projects = await fetchProjectFeed(requestedProjectId);
   const activeProjectId = projects.items.some(
     (project) => project.id === requestedProjectId,
@@ -338,7 +354,13 @@ export default async function HomePage({ searchParams }: HomePageProps) {
       fetchCommercialFeed(activeProjectId),
       fetchEnterpriseFeed(activeProjectId),
       fetchEntitlementFeed(activeProjectId),
-      fetchRoutingLogFeed(activeProjectId),
+      fetchRoutingLogFeed(activeProjectId, 8, {
+        provider: routingProviderFilter,
+        budget_state: routingBudgetFilter,
+        data_boundary: routingBoundaryFilter,
+        selected_only: routingOutcomeFilter === "selected" ? true : undefined,
+        denied_only: routingOutcomeFilter === "denied" ? true : undefined,
+      }),
       fetchSkillFeed(),
       fetchProviderOpsFeed(activeProjectId),
       fetchReceiptFeed(activeProjectId),
@@ -5168,13 +5190,82 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             </article>
 
             <article className="stack-card">
-              <h3>Routing logs</h3>
+              <h3>Model route decisions</h3>
+              <form className="input-grid" method="get">
+                <input name="project_id" type="hidden" value={activeProjectId} />
+                <label className="field">
+                  <span>Provider</span>
+                  <select
+                    className="input"
+                    defaultValue={routingProviderFilter ?? ""}
+                    name="route_provider"
+                  >
+                    <option value="">All providers</option>
+                    {Array.from(
+                      new Set(entitlements.items.map((source) => source.provider)),
+                    )
+                      .sort()
+                      .map((provider) => (
+                        <option key={provider} value={provider}>
+                          {titleCaseToken(provider)}
+                        </option>
+                      ))}
+                  </select>
+                </label>
+                <label className="field">
+                  <span>Budget state</span>
+                  <select
+                    className="input"
+                    defaultValue={routingBudgetFilter ?? ""}
+                    name="route_budget"
+                  >
+                    <option value="">All budget states</option>
+                    {["green", "yellow", "orange", "red", "frozen"].map((state) => (
+                      <option key={state} value={state}>
+                        {titleCaseToken(state)}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="field">
+                  <span>Data boundary</span>
+                  <select
+                    className="input"
+                    defaultValue={routingBoundaryFilter ?? ""}
+                    name="route_boundary"
+                  >
+                    <option value="">All boundaries</option>
+                    {["public", "internal", "confidential", "restricted", "local-only"].map(
+                      (boundary) => (
+                        <option key={boundary} value={boundary}>
+                          {titleCaseToken(boundary)}
+                        </option>
+                      ),
+                    )}
+                  </select>
+                </label>
+                <label className="field">
+                  <span>Outcome</span>
+                  <select
+                    className="input"
+                    defaultValue={routingOutcomeFilter ?? ""}
+                    name="route_outcome"
+                  >
+                    <option value="">Selected and denied</option>
+                    <option value="selected">Selected only</option>
+                    <option value="denied">Denied only</option>
+                  </select>
+                </label>
+                <button className="button secondary" type="submit">
+                  Filter decisions
+                </button>
+              </form>
               {!routingLogs.apiReachable ? (
                 <p className="detail">
-                  {routingLogs.blockedReason ?? "Routing log API is unavailable."}
+                  {routingLogs.blockedReason ?? "Route decision API is unavailable."}
                 </p>
               ) : routingLogs.items.length === 0 ? (
-                <p className="detail">No routing decisions have been logged yet.</p>
+                <p className="detail">No model route decisions match these filters.</p>
               ) : (
                 <div className="feed-list">
                   {routingLogs.items.map((route) => (
@@ -5188,20 +5279,29 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                         </p>
                         <p className="detail">
                           {route.workloadClass} / {route.dataBoundary} /{" "}
+                          {titleCaseToken(route.budgetState)} budget /{" "}
                           {formatDateTime(route.createdAt)}
                         </p>
                         <p className="detail">
-                          {route.selectedSource
+                          {route.selectedSourceId
                             ? `Auth ${
+                                route.selectedSource &&
                                 typeof route.selectedSource.auth_method === "string"
                                   ? titleCaseToken(route.selectedSource.auth_method)
                                   : "Unknown"
                               } / capacity ${
+                                route.selectedSource &&
                                 typeof route.selectedSource.capacity_state === "string"
                                   ? titleCaseToken(route.selectedSource.capacity_state)
                                   : "Unknown"
-                              }`
+                              } / ${titleCaseToken(route.routingMode)}`
                             : routingRejectionSummary(route.rejectedSources)}
+                        </p>
+                        <p className="detail">
+                          Policy {route.policyAllowed ? "allowed" : "denied"} /{" "}
+                          {route.reservationRequired
+                            ? "BudgetReservation required"
+                            : "No reservation required by skill policy"}
                         </p>
                       </div>
                       <code className="mono">{route.id}</code>

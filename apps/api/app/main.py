@@ -208,6 +208,7 @@ from .schemas import (
     PolicyRecordListResponse,
     PolicyRecordSummary,
     CapacityReceiptSummary,
+    DataBoundary,
     EntitlementPoolListResponse,
     EntitlementPoolProbeRequest,
     EntitlementPoolProbeResponse,
@@ -4245,12 +4246,48 @@ def probe_entitlement_pool(
     response_model=ModelRouteDecisionListResponse,
 )
 def list_model_route_decisions(
-    project_id: str, limit: int = 25
+    project_id: str,
+    limit: int = 25,
+    skill_id: Optional[str] = None,
+    task_kind: Optional[str] = None,
+    workload_class: Optional[str] = None,
+    selected_provider: Optional[str] = Query(default=None, alias="provider"),
+    selected_source_id: Optional[str] = Query(default=None, alias="source_id"),
+    selected_model_id: Optional[str] = Query(default=None, alias="model_id"),
+    routing_mode: Optional[str] = None,
+    budget_state: Optional[str] = None,
+    data_boundary: Optional[DataBoundary] = None,
+    risk_tier: Optional[int] = Query(default=None, ge=0, le=3),
+    denial_reason: Optional[str] = None,
+    denied_only: bool = False,
+    selected_only: bool = False,
 ) -> ModelRouteDecisionListResponse:
     if limit < 1 or limit > 200:
         raise HTTPException(status_code=400, detail="limit must be between 1 and 200.")
+    if denied_only and selected_only:
+        raise HTTPException(
+            status_code=400,
+            detail="denied_only and selected_only filters cannot both be true.",
+        )
+    filters = {
+        "skill_id": skill_id,
+        "task_kind": task_kind,
+        "workload_class": workload_class,
+        "selected_provider": selected_provider,
+        "selected_source_id": selected_source_id,
+        "selected_model_id": selected_model_id,
+        "routing_mode": routing_mode,
+        "budget_state": budget_state,
+        "data_boundary": data_boundary,
+        "risk_tier": risk_tier,
+        "denial_reason": denial_reason,
+        "denied_only": denied_only,
+        "selected_only": selected_only,
+    }
     with begin(engine) as connection:
-        items = entitlements.list_model_route_decisions(connection, project_id, limit)
+        items = entitlements.list_model_route_decisions(
+            connection, project_id, limit, filters
+        )
         return ModelRouteDecisionListResponse(
             project_id=project_id,
             items=[model_route_decision_summary_from_service(item) for item in items],

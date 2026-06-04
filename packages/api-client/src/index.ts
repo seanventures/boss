@@ -2528,6 +2528,23 @@ export type ModelRouteDecisionListResponse = {
   items: ModelRouteDecisionSummary[];
 };
 
+export type ModelRouteDecisionListFilters = {
+  limit?: number;
+  skill_id?: string;
+  task_kind?: string;
+  workload_class?: string;
+  provider?: string;
+  source_id?: string;
+  model_id?: string;
+  routing_mode?: string;
+  budget_state?: string;
+  data_boundary?: DataBoundary;
+  risk_tier?: number;
+  denial_reason?: string;
+  denied_only?: boolean;
+  selected_only?: boolean;
+};
+
 export type ModelRouteDecisionSimulateRequest = RoutingPreviewRequest;
 
 export type ModelRouteDecisionSimulateResponse = {
@@ -3919,12 +3936,35 @@ export function createBossApiClient(config: BossApiClientConfig) {
         },
       );
     },
-    listModelRouteDecisions(projectId: string, limit = 25) {
+    listModelRouteDecisions(
+      projectId: string,
+      filtersOrLimit: number | ModelRouteDecisionListFilters = 25,
+    ) {
+      const filters =
+        typeof filtersOrLimit === "number"
+          ? { limit: filtersOrLimit }
+          : filtersOrLimit;
       return request<ModelRouteDecisionListResponse>(
         "GET",
         "/v1/model-route-decisions",
         {
-          query: { project_id: projectId, limit },
+          query: {
+            project_id: projectId,
+            limit: filters.limit ?? 25,
+            skill_id: filters.skill_id,
+            task_kind: filters.task_kind,
+            workload_class: filters.workload_class,
+            provider: filters.provider,
+            source_id: filters.source_id,
+            model_id: filters.model_id,
+            routing_mode: filters.routing_mode,
+            budget_state: filters.budget_state,
+            data_boundary: filters.data_boundary,
+            risk_tier: filters.risk_tier,
+            denial_reason: filters.denial_reason,
+            denied_only: filters.denied_only,
+            selected_only: filters.selected_only,
+          },
         },
       );
     },

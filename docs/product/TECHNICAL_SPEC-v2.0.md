@@ -320,7 +320,7 @@ Model Entitlement:
 - `GET /v1/model-adapters`
 - `GET /v1/entitlement-pools`
 - `POST /v1/entitlement-pools/{id}/probe`
-- `GET /v1/model-route-decisions`
+- `GET /v1/model-route-decisions` with filters for provider, source, model, task kind, workload class, budget state, data boundary, risk tier, routing mode, denial reason, selected-only, and denied-only audit review.
 - `POST /v1/model-route-decisions/simulate`
 
 Budget:

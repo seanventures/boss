@@ -1175,22 +1175,66 @@ class EntitlementBrokerService:
         return {"public", "internal", "confidential"}
 
     def list_routing_logs(
-        self, connection: Connection, project_id: str, limit: int = 25
+        self,
+        connection: Connection,
+        project_id: str,
+        limit: int = 25,
+        filters: Optional[dict[str, Any]] = None,
     ) -> list[dict[str, Any]]:
+        filters = filters or {}
+        conditions = ["project_id = :project_id"]
+        params: dict[str, Any] = {"project_id": project_id, "limit": limit}
+
+        equality_columns = {
+            "skill_id": "skill_id",
+            "task_kind": "task_kind",
+            "workload_class": "workload_class",
+            "budget_state": "budget_state",
+            "selected_provider": "selected_provider",
+            "selected_source_id": "selected_source_id",
+            "selected_model_id": "selected_model_id",
+            "denial_reason": "denial_reason",
+        }
+        for key, column in equality_columns.items():
+            value = filters.get(key)
+            if value is not None:
+                conditions.append(f"{column} = :{key}")
+                params[key] = value
+
+        if filters.get("data_boundary") is not None:
+            conditions.append("data_boundary = :data_boundary")
+            params["data_boundary"] = normalize_data_boundary(filters["data_boundary"])
+
+        if filters.get("risk_tier") is not None:
+            conditions.append("risk_tier = :risk_tier")
+            params["risk_tier"] = int(filters["risk_tier"])
+
+        if filters.get("routing_mode") is not None:
+            conditions.append(
+                "COALESCE(NULLIF(decision->>'routing_mode', ''), 'budget_safe') = :routing_mode"
+            )
+            params["routing_mode"] = filters["routing_mode"]
+
+        if filters.get("denied_only"):
+            conditions.append("denial_reason IS NOT NULL")
+        if filters.get("selected_only"):
+            conditions.append("selected_source_id IS NOT NULL AND denial_reason IS NULL")
+
+        where_clause = " AND ".join(conditions)
         rows = connection.execute(
             text(
-                """
+                f"""
                 SELECT id, project_id, skill_id, task_kind, workload_class, risk_tier,
                        data_boundary, budget_state, selected_source_id, selected_provider,
                        selected_model_id, denial_reason, rejected_sources, decision,
                        created_at
                 FROM routing_logs
-                WHERE project_id = :project_id
+                WHERE {where_clause}
                 ORDER BY created_at DESC
                 LIMIT :limit
                 """
             ),
-            {"project_id": project_id, "limit": limit},
+            params,
         ).mappings().all()
         return [
             {
@@ -1225,11 +1269,15 @@ class EntitlementBrokerService:
         return payload
 
     def list_model_route_decisions(
-        self, connection: Connection, project_id: str, limit: int = 25
+        self,
+        connection: Connection,
+        project_id: str,
+        limit: int = 25,
+        filters: Optional[dict[str, Any]] = None,
     ) -> list[dict[str, Any]]:
         return [
             self._route_decision_from_log(log)
-            for log in self.list_routing_logs(connection, project_id, limit)
+            for log in self.list_routing_logs(connection, project_id, limit, filters)
         ]
 
     def simulate_model_route_decision(

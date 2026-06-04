@@ -400,6 +400,7 @@ Acceptance criteria:
 - Given an entitled actor records observed pool capacity, when a capacity probe is submitted, then BOSS updates the pool capacity, writes a `CapacityReceipt`, emits `capacity.receipt_recorded`, and stores no raw provider secret.
 - Given the same capacity probe `dedupe_key` is submitted again, when BOSS processes the request, then it returns the prior `CapacityReceipt`, does not create a second receipt, and does not overwrite capacity state.
 - Given route simulation is requested, when the Model Entitlement Broker evaluates sources, then BOSS writes and returns a canonical `ModelRouteDecision` with selected pool, rejected-source reasons, capacity snapshot, budget state, and policy result.
+- Given an operator audits model routing, when route decisions are listed by provider, source, model, task kind, workload class, budget state, data boundary, risk tier, routing mode, denial reason, or selected/denied outcome, then BOSS returns only matching persisted `ModelRouteDecision` records and rejects contradictory selected-only plus denied-only filters.
 
 ### Story ADM-003: Run Community Without Hosted Auth
 

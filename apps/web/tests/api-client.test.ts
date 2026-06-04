@@ -1367,7 +1367,12 @@ describe("createBossApiClient", () => {
       workload_class: "owner_sandbox",
       actor: "ceo",
     });
-    const listed = await client.listModelRouteDecisions("boss-dogfood", 5);
+    const listed = await client.listModelRouteDecisions("boss-dogfood", {
+      limit: 5,
+      provider: "openai",
+      data_boundary: "internal",
+      selected_only: true,
+    });
 
     expect(adapters.items[0].source_id).toBe("openai_api");
     expect(pools.items[0].id).toBe(pool.id);
@@ -1383,9 +1388,12 @@ describe("createBossApiClient", () => {
     expect(calls[3].url).toBe(
       "http://127.0.0.1:8000/v1/model-route-decisions/simulate",
     );
-    expect(calls[4].url).toContain(
-      "/v1/model-route-decisions?project_id=boss-dogfood&limit=5",
-    );
+    expect(calls[4].url).toContain("/v1/model-route-decisions?");
+    expect(calls[4].url).toContain("project_id=boss-dogfood");
+    expect(calls[4].url).toContain("limit=5");
+    expect(calls[4].url).toContain("provider=openai");
+    expect(calls[4].url).toContain("data_boundary=internal");
+    expect(calls[4].url).toContain("selected_only=true");
   });
 
   it("creates compliance evidence bundles through the API contract", async () => {
