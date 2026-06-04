@@ -33,6 +33,7 @@ objects:
     - decision
     - meeting
     - receipt
+    - deadletter
   resource_plane:
     - provider_account
     - provider_adapter

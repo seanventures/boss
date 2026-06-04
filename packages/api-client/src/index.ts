@@ -2735,12 +2735,45 @@ export type DeadletterItem = {
   source_id: string;
   reason: string;
   payload: Record<string, unknown>;
+  status: string;
+  incident_task_id?: string;
+  incident_artifact_id?: string;
+  remediation_decision_id?: string;
+  requeued_job_id?: string;
+  resolved_by?: string;
+  resolved_at?: string;
   created_at: string;
+  updated_at?: string;
 };
 
 export type DeadletterListResponse = {
   project_id: string;
   items: DeadletterItem[];
+};
+
+export type DeadletterIncidentRequest = {
+  actor?: string;
+  severity?: "low" | "medium" | "high" | "critical";
+  summary?: string;
+};
+
+export type DeadletterIncidentResponse = {
+  status: string;
+  deadletter: DeadletterItem;
+  incident_task_id: string;
+  incident_artifact_id: string;
+};
+
+export type DeadletterRequeueRequest = {
+  actor?: string;
+  reason?: string;
+  run_after_seconds?: number;
+};
+
+export type DeadletterRequeueResponse = {
+  status: string;
+  deadletter: DeadletterItem;
+  requeued_job_id: string;
 };
 
 export type EventItem = {
@@ -3834,6 +3867,23 @@ export function createBossApiClient(config: BossApiClientConfig) {
       return request<DeadletterListResponse>("GET", "/v1/deadletters", {
         query: { project_id: projectId, limit },
       });
+    },
+    createDeadletterIncident(
+      deadletterId: string,
+      payload: DeadletterIncidentRequest,
+    ) {
+      return request<DeadletterIncidentResponse>(
+        "POST",
+        `/v1/deadletters/${deadletterId}/incident`,
+        { body: payload },
+      );
+    },
+    requeueDeadletterJob(deadletterId: string, payload: DeadletterRequeueRequest) {
+      return request<DeadletterRequeueResponse>(
+        "POST",
+        `/v1/deadletters/${deadletterId}/requeue`,
+        { body: payload },
+      );
     },
   };
 }

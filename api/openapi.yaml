@@ -3155,6 +3155,50 @@ paths:
           schema: { type: integer, default: 50 }
       responses:
         '200': { description: Deadletters }
+  /v1/deadletters/{deadletter_id}/incident:
+    post:
+      summary: Create a deadletter incident packet and investigation task
+      parameters:
+        - name: deadletter_id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                actor: { type: string, default: system }
+                severity: { type: string, enum: [low, medium, high, critical], default: high }
+                summary: { type: string }
+      responses:
+        '200': { description: Incident packet and task created or returned idempotently }
+        '400': { description: Invalid deadletter remediation request }
+        '404': { description: Deadletter not found }
+  /v1/deadletters/{deadletter_id}/requeue:
+    post:
+      summary: Requeue a terminal job deadletter
+      parameters:
+        - name: deadletter_id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                actor: { type: string, default: system }
+                reason: { type: string, default: operator_requested_requeue }
+                run_after_seconds: { type: integer, minimum: 0, maximum: 3600, default: 0 }
+      responses:
+        '200': { description: New queued job created or existing requeue returned idempotently }
+        '400': { description: Deadletter is not requeueable }
+        '404': { description: Deadletter not found }
 components:
   securitySchemes:
     BossBearerAuth:

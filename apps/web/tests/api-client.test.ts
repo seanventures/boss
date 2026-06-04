@@ -1958,4 +1958,77 @@ describe("createBossApiClient", () => {
     expect(meeting.minutes_artifact_id).toBe("art_minutes");
     expect(meeting.action_task_ids).toEqual(["tsk_action"]);
   });
+
+  it("uses deadletter remediation API contracts", async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const deadletter = {
+      id: "dlq_1",
+      project_id: "boss-dogfood",
+      source_kind: "job",
+      source_id: "job_1",
+      reason: "terminal failure",
+      payload: { message: "terminal failure" },
+      status: "requeued",
+      incident_task_id: "tsk_incident",
+      incident_artifact_id: "art_incident",
+      requeued_job_id: "job_requeued",
+      resolved_by: "ceo",
+      resolved_at: "2026-06-03T00:00:00Z",
+      created_at: "2026-06-03T00:00:00Z",
+      updated_at: "2026-06-03T00:00:00Z",
+    };
+    const responses = [
+      {
+        status: 200,
+        body: {
+          status: "incident_created",
+          deadletter: { ...deadletter, status: "incident_created" },
+          incident_task_id: "tsk_incident",
+          incident_artifact_id: "art_incident",
+        },
+      },
+      {
+        status: 200,
+        body: {
+          status: "requeued",
+          deadletter,
+          requeued_job_id: "job_requeued",
+        },
+      },
+    ];
+    const fetchImpl = async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({ url: String(input), init });
+      const next = responses.shift();
+      return new Response(JSON.stringify(next?.body ?? {}), {
+        status: next?.status ?? 500,
+        headers: { "Content-Type": "application/json" },
+      });
+    };
+    const client = createBossApiClient({
+      baseUrl: "http://127.0.0.1:8000",
+      fetchImpl,
+    });
+
+    const incident = await client.createDeadletterIncident("dlq_1", {
+      actor: "ceo",
+      severity: "critical",
+    });
+    const requeued = await client.requeueDeadletterJob("dlq_1", {
+      actor: "ceo",
+      reason: "root_cause_fixed",
+    });
+
+    expect(calls[0].url).toBe(
+      "http://127.0.0.1:8000/v1/deadletters/dlq_1/incident",
+    );
+    expect(JSON.parse(String(calls[0].init?.body))).toMatchObject({
+      actor: "ceo",
+      severity: "critical",
+    });
+    expect(calls[1].url).toBe(
+      "http://127.0.0.1:8000/v1/deadletters/dlq_1/requeue",
+    );
+    expect(incident.incident_artifact_id).toBe("art_incident");
+    expect(requeued.requeued_job_id).toBe("job_requeued");
+  });
 });

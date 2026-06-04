@@ -25,7 +25,7 @@ This document summarizes the currently implemented BOSS runtime surfaces in this
   - receipts
   - budget reservations and cost receipts
   - events
-  - deadletters
+  - deadletters with incident packets, investigation tasks, and safe job requeue links
   - health snapshots
 - API-first control plane:
   - project discovery for runtime-scoped clients
@@ -37,6 +37,7 @@ This document summarizes the currently implemented BOSS runtime surfaces in this
   - CEO command intake
   - canonical department, policy, plan, and meeting CRUD/list/run surfaces
   - task and job inspection
+  - deadletter remediation APIs for incident packet creation and terminal job requeue
   - change journal list/detail for diff, review, deployment, self-improvement, infrastructure, and role-governance artifacts
   - budget quote, reserve, release, and status
   - hierarchical budget allocations
@@ -65,6 +66,7 @@ This document summarizes the currently implemented BOSS runtime surfaces in this
   - resolved agent module, role, prompt, and invariant context attached to leased `agent.*` jobs before execution
   - heartbeat and TTL enforcement
   - completion, failure, retry, reclaim, and deadletter handling
+  - deadletter remediation that creates linked replacement jobs instead of mutating terminal job history
   - generic initial-agent job completion into durable `agent_brief` artifacts with audit events
   - leased infrastructure create/delete job kinds
   - budget-state claim-time controls

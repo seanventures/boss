@@ -9586,6 +9586,148 @@ def test_deadletters_are_visible_via_api(client):
     assert item["source_kind"] == "job"
     assert item["source_id"] == job_id
     assert item["reason"] == "terminal failure"
+    assert item["status"] == "open"
+
+
+def test_deadletter_incident_and_job_requeue_are_audited_and_idempotent(client, engine):
+    created = client.post(
+        "/v1/jobs",
+        json={
+            "project_id": "boss-dogfood",
+            "kind": "plan.generate",
+            "payload": {"command": "Create a draft plan for remediation."},
+            "max_attempts": 1,
+        },
+    )
+    assert created.status_code == 201
+    job_id = created.json()["id"]
+
+    leased = client.post(
+        "/v1/worker/poll",
+        json={
+            "worker_id": "worker-deadletter-remediation",
+            "capabilities": ["plan.generate"],
+            "lease_ttl_seconds": 60,
+        },
+    ).json()["job"]
+    client.post(
+        "/v1/worker/heartbeat",
+        json={
+            "worker_id": "worker-deadletter-remediation",
+            "job_id": job_id,
+            "lease_token": leased["lease_token"],
+            "lease_ttl_seconds": 60,
+        },
+    )
+    fail = client.post(
+        "/v1/worker/fail",
+        json={
+            "worker_id": "worker-deadletter-remediation",
+            "job_id": job_id,
+            "lease_token": leased["lease_token"],
+            "error": {"message": "terminal failure requiring COO packet"},
+            "retryable": False,
+            "retry_delay_seconds": 0,
+        },
+    )
+    assert fail.status_code == 200
+    deadletter_id = fail.json()["deadletter_id"]
+
+    incident = client.post(
+        f"/v1/deadletters/{deadletter_id}/incident",
+        json={
+            "actor": "ceo",
+            "severity": "critical",
+            "summary": "Terminal job failure must be reviewed before retry.",
+        },
+    )
+    assert incident.status_code == 200
+    incident_payload = incident.json()
+    assert incident_payload["status"] == "incident_created"
+    assert incident_payload["incident_task_id"].startswith("tsk_")
+    assert incident_payload["incident_artifact_id"].startswith("art_")
+
+    artifact = client.get(f"/v1/artifacts/{incident_payload['incident_artifact_id']}")
+    assert artifact.status_code == 200
+    artifact_payload = artifact.json()
+    assert artifact_payload["artifact_type"] == "deadletter_incident_packet"
+    assert artifact_payload["content"]["deadletter_id"] == deadletter_id
+    assert "No silent drops." in artifact_payload["content"]["boss_invariants"]
+
+    duplicate_incident = client.post(
+        f"/v1/deadletters/{deadletter_id}/incident",
+        json={"actor": "ceo", "severity": "high"},
+    )
+    assert duplicate_incident.status_code == 200
+    assert (
+        duplicate_incident.json()["incident_artifact_id"]
+        == incident_payload["incident_artifact_id"]
+    )
+
+    requeue = client.post(
+        f"/v1/deadletters/{deadletter_id}/requeue",
+        json={
+            "actor": "ceo",
+            "reason": "root_cause_fixed",
+            "run_after_seconds": 0,
+        },
+    )
+    assert requeue.status_code == 200
+    requeue_payload = requeue.json()
+    assert requeue_payload["status"] == "requeued"
+    requeued_job_id = requeue_payload["requeued_job_id"]
+    assert requeued_job_id.startswith("job_")
+
+    with engine.begin() as connection:
+        row = connection.execute(
+            text(
+                """
+                SELECT status, kind, payload, attempt
+                FROM jobs
+                WHERE id = :job_id
+                """
+            ),
+            {"job_id": requeued_job_id},
+        ).mappings().one()
+    assert row["status"] == "queued"
+    assert row["kind"] == "plan.generate"
+    assert row["attempt"] == 0
+    assert row["payload"]["requeue"]["source_job_id"] == job_id
+    assert row["payload"]["requeue"]["source_deadletter_id"] == deadletter_id
+
+    duplicate_requeue = client.post(
+        f"/v1/deadletters/{deadletter_id}/requeue",
+        json={"actor": "ceo", "reason": "retry_button_double_click"},
+    )
+    assert duplicate_requeue.status_code == 200
+    assert duplicate_requeue.json()["requeued_job_id"] == requeued_job_id
+
+    events = client.get("/v1/events", params={"project_id": "boss-dogfood"})
+    event_types = [item["event_type"] for item in events.json()["items"]]
+    assert "deadletter.incident_created" in event_types
+    assert "deadletter.requeued" in event_types
+
+
+def test_deadletter_requeue_rejects_non_job_sources(client, engine):
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                """
+                INSERT INTO deadletters (id, project_id, source_kind, source_id, reason, payload)
+                VALUES (
+                    'dlq_non_job_test', 'boss-dogfood', 'provider_sync',
+                    'sync_123', 'provider credentials missing', '{}'::jsonb
+                )
+                """
+            )
+        )
+
+    response = client.post(
+        "/v1/deadletters/dlq_non_job_test/requeue",
+        json={"actor": "ceo"},
+    )
+    assert response.status_code == 400
+    assert response.json()["detail"] == "only job deadletters can be requeued"
 
 
 def test_worker_complete_creates_plan_artifact_and_decision(client):

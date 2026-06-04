@@ -1271,8 +1271,24 @@ CREATE TABLE IF NOT EXISTS deadletters (
   source_id TEXT NOT NULL,
   reason TEXT NOT NULL,
   payload JSONB NOT NULL DEFAULT '{}'::jsonb,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  status TEXT NOT NULL DEFAULT 'open',
+  incident_task_id TEXT,
+  incident_artifact_id TEXT,
+  remediation_decision_id TEXT,
+  requeued_job_id TEXT,
+  resolved_by TEXT,
+  resolved_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+ALTER TABLE deadletters ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'open';
+ALTER TABLE deadletters ADD COLUMN IF NOT EXISTS incident_task_id TEXT;
+ALTER TABLE deadletters ADD COLUMN IF NOT EXISTS incident_artifact_id TEXT;
+ALTER TABLE deadletters ADD COLUMN IF NOT EXISTS remediation_decision_id TEXT;
+ALTER TABLE deadletters ADD COLUMN IF NOT EXISTS requeued_job_id TEXT;
+ALTER TABLE deadletters ADD COLUMN IF NOT EXISTS resolved_by TEXT;
+ALTER TABLE deadletters ADD COLUMN IF NOT EXISTS resolved_at TIMESTAMPTZ;
+ALTER TABLE deadletters ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now();
 
 CREATE TABLE IF NOT EXISTS events (
   id TEXT PRIMARY KEY,

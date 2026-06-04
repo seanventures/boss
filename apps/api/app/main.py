@@ -90,8 +90,12 @@ from .schemas import (
     DecisionDigestRequest,
     DecisionDigestResponse,
     DecisionInboxResponse,
+    DeadletterIncidentRequest,
+    DeadletterIncidentResponse,
     DeadletterItem,
     DeadletterListResponse,
+    DeadletterRequeueRequest,
+    DeadletterRequeueResponse,
     DriftReportListResponse,
     DriftReportSummary,
     EntitlementSourceConnectRequest,
@@ -271,6 +275,7 @@ from .services.commercial import (
     CommercialService,
 )
 from .services.core import emit_event
+from .services.deadletters import DeadletterRemediationService
 from .services.decisions import (
     DecisionNotFoundError,
     DecisionService,
@@ -346,6 +351,7 @@ metatron = MetatronService(settings)
 role_governance = RoleGovernanceService(settings)
 members = MemberDirectoryService(settings)
 canonical = CanonicalObjectService()
+deadletter_remediation = DeadletterRemediationService(settings)
 break_glass = BreakGlassService()
 resource_plane = ResourcePlaneService(settings)
 oidc_auth = OidcAuthenticator(settings)
@@ -886,6 +892,9 @@ def artifact_detail_from_row(row) -> ArtifactDetail:
 
 
 def deadletter_item_from_row(row) -> DeadletterItem:
+    created_at = row["created_at"]
+    updated_at = row.get("updated_at")
+    resolved_at = row.get("resolved_at")
     return DeadletterItem(
         id=row["id"],
         project_id=row["project_id"],
@@ -893,7 +902,21 @@ def deadletter_item_from_row(row) -> DeadletterItem:
         source_id=row["source_id"],
         reason=row["reason"],
         payload=row["payload"] or {},
-        created_at=row["created_at"].isoformat(),
+        status=row.get("status") or "open",
+        incident_task_id=row.get("incident_task_id"),
+        incident_artifact_id=row.get("incident_artifact_id"),
+        remediation_decision_id=row.get("remediation_decision_id"),
+        requeued_job_id=row.get("requeued_job_id"),
+        resolved_by=row.get("resolved_by"),
+        resolved_at=resolved_at.isoformat()
+        if hasattr(resolved_at, "isoformat")
+        else resolved_at,
+        created_at=created_at.isoformat()
+        if hasattr(created_at, "isoformat")
+        else str(created_at),
+        updated_at=updated_at.isoformat()
+        if hasattr(updated_at, "isoformat")
+        else updated_at,
     )
 
 
@@ -4933,7 +4956,10 @@ def list_deadletters(project_id: str, limit: int = 50) -> DeadletterListResponse
         rows = connection.execute(
             text(
                 """
-                SELECT id, project_id, source_kind, source_id, reason, payload, created_at
+                SELECT id, project_id, source_kind, source_id, reason, payload,
+                       status, incident_task_id, incident_artifact_id,
+                       remediation_decision_id, requeued_job_id, resolved_by,
+                       resolved_at, created_at, updated_at
                 FROM deadletters
                 WHERE project_id = :project_id
                 ORDER BY created_at DESC
@@ -4945,6 +4971,83 @@ def list_deadletters(project_id: str, limit: int = 50) -> DeadletterListResponse
         return DeadletterListResponse(
             project_id=project_id,
             items=[deadletter_item_from_row(row) for row in rows],
+        )
+
+
+@app.post(
+    "/v1/deadletters/{deadletter_id}/incident",
+    response_model=DeadletterIncidentResponse,
+)
+def create_deadletter_incident(
+    deadletter_id: str, payload: DeadletterIncidentRequest
+) -> DeadletterIncidentResponse:
+    with begin(engine) as connection:
+        row = connection.execute(
+            text("SELECT project_id FROM deadletters WHERE id = :deadletter_id"),
+            {"deadletter_id": deadletter_id},
+        ).mappings().first()
+        if not row:
+            raise HTTPException(status_code=404, detail="deadletter not found")
+        require_project_actor(
+            connection,
+            row["project_id"],
+            payload.actor,
+            "task_create",
+        )
+        try:
+            result = deadletter_remediation.create_incident_packet(
+                connection,
+                deadletter_id=deadletter_id,
+                actor=payload.actor,
+                severity=payload.severity,
+                summary=payload.summary,
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        item = deadletter_item_from_row(result)
+        return DeadletterIncidentResponse(
+            status=item.status,
+            deadletter=item,
+            incident_task_id=item.incident_task_id or "",
+            incident_artifact_id=item.incident_artifact_id or "",
+        )
+
+
+@app.post(
+    "/v1/deadletters/{deadletter_id}/requeue",
+    response_model=DeadletterRequeueResponse,
+)
+def requeue_deadletter_job(
+    deadletter_id: str, payload: DeadletterRequeueRequest
+) -> DeadletterRequeueResponse:
+    with begin(engine) as connection:
+        row = connection.execute(
+            text("SELECT project_id FROM deadletters WHERE id = :deadletter_id"),
+            {"deadletter_id": deadletter_id},
+        ).mappings().first()
+        if not row:
+            raise HTTPException(status_code=404, detail="deadletter not found")
+        require_project_actor(
+            connection,
+            row["project_id"],
+            payload.actor,
+            "task_create",
+        )
+        try:
+            result = deadletter_remediation.requeue_job_deadletter(
+                connection,
+                deadletter_id=deadletter_id,
+                actor=payload.actor,
+                reason=payload.reason,
+                run_after_seconds=payload.run_after_seconds,
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        item = deadletter_item_from_row(result)
+        return DeadletterRequeueResponse(
+            status=item.status,
+            deadletter=item,
+            requeued_job_id=item.requeued_job_id or "",
         )
 
 

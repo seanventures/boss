@@ -619,6 +619,41 @@ export async function createReplayBundleAction(formData: FormData): Promise<void
   revalidatePath("/");
 }
 
+export async function createDeadletterIncidentAction(
+  formData: FormData,
+): Promise<void> {
+  const deadletterId = formData.get("deadletter_id");
+  if (typeof deadletterId !== "string" || !deadletterId.trim()) {
+    throw new Error("deadletter_id is required");
+  }
+  await client.createDeadletterIncident(deadletterId.trim(), {
+    actor: getActor(formData),
+    severity:
+      (getOptionalString(formData, "severity") as
+        | "low"
+        | "medium"
+        | "high"
+        | "critical"
+        | undefined) ?? "high",
+    summary: getOptionalString(formData, "summary"),
+  });
+  revalidatePath("/");
+}
+
+export async function requeueDeadletterJobAction(
+  formData: FormData,
+): Promise<void> {
+  const deadletterId = formData.get("deadletter_id");
+  if (typeof deadletterId !== "string" || !deadletterId.trim()) {
+    throw new Error("deadletter_id is required");
+  }
+  await client.requeueDeadletterJob(deadletterId.trim(), {
+    actor: getActor(formData),
+    reason: getOptionalString(formData, "reason") ?? "operator_requested_requeue",
+  });
+  revalidatePath("/");
+}
+
 export async function createComplianceEvidenceBundleAction(
   formData: FormData,
 ): Promise<void> {

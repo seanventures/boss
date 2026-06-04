@@ -60,6 +60,19 @@ Acceptance criteria:
 - Given a Metatron query, when BOSS answers, then the answer includes freshness and source references.
 - Given a denied action, failed job, or blocked effect, when I inspect activity, then it appears in events, deadletters, or decisions.
 
+### Story OPS-001: Remediate Deadletters
+
+As a COO/operator, I want deadletters to create incident packets and safe requeue jobs, so that no failed work remains a passive dashboard item.
+
+Acceptance criteria:
+
+- Given an open deadletter, when an authorized actor creates an incident packet, then BOSS stores a `deadletter_incident_packet` artifact, creates an investigation task, links both to the deadletter, and emits `deadletter.incident_created`.
+- Given the same incident request is retried, when the deadletter already has an incident packet and task, then BOSS returns the existing links instead of creating duplicate tasks or artifacts.
+- Given a job deadletter whose source job is terminal, when an authorized actor requeues it, then BOSS creates a new queued job with payload references to the source job and deadletter and emits `deadletter.requeued`.
+- Given the same requeue request is retried, when the deadletter already has a requeued job, then BOSS returns the existing job ID instead of creating a duplicate queued job.
+- Given a non-job deadletter, when requeue is requested, then BOSS rejects it and leaves the deadletter visible for manual remediation.
+- Given Mission Control renders deadletters, when remediation links exist, then it shows incident packet/task and requeued job state from the API.
+
 ## Product / Engineering
 
 ### Story ENG-001: Produce Reviewable Software Work

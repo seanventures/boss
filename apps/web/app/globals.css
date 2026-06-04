@@ -383,6 +383,13 @@ a {
   border: 1px solid var(--panel-border);
 }
 
+.inline-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
 .grid h2 {
   margin: 0;
   font-size: 1rem;

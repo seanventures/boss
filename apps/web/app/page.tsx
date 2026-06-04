@@ -8,6 +8,7 @@ import {
   createReplayBundleAction,
   createBreakGlassGrantAction,
   createComplianceEvidenceBundleAction,
+  createDeadletterIncidentAction,
   createDecisionDigestAction,
   createDeploymentRunAction,
   createAccountConnectBillingPortalSessionAction,
@@ -24,6 +25,7 @@ import {
   resolveDecisionAction,
   rollbackAgentModuleAction,
   rollbackSelfImprovementProposalAction,
+  requeueDeadletterJobAction,
   runAutoscalerPlanAction,
   runDeploymentHealthCheckAction,
   runResourceJanitorAction,
@@ -4362,8 +4364,72 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                       <div>
                         <h4>{deadletter.reason}</h4>
                         <p className="detail">
-                          {deadletter.sourceKind} / {formatDateTime(deadletter.createdAt)}
+                          {deadletter.sourceKind} / {deadletter.status} /{" "}
+                          {formatDateTime(deadletter.createdAt)}
                         </p>
+                        {deadletter.incidentArtifactId ? (
+                          <p className="detail">
+                            Incident {deadletter.incidentArtifactId} / task{" "}
+                            {deadletter.incidentTaskId ?? "not linked"}
+                          </p>
+                        ) : null}
+                        {deadletter.requeuedJobId ? (
+                          <p className="detail">
+                            Requeued as {deadletter.requeuedJobId} by{" "}
+                            {deadletter.resolvedBy ?? "unknown"}
+                          </p>
+                        ) : null}
+                        <div className="inline-actions">
+                          <form action={createDeadletterIncidentAction}>
+                            <input
+                              type="hidden"
+                              name="deadletter_id"
+                              value={deadletter.id}
+                            />
+                            <input
+                              type="hidden"
+                              name="project_id"
+                              value={activeProjectId}
+                            />
+                            <input
+                              type="hidden"
+                              name="actor"
+                              value={activeActorId}
+                            />
+                            <input type="hidden" name="severity" value="high" />
+                            <button className="button secondary" type="submit">
+                              Incident packet
+                            </button>
+                          </form>
+                          {deadletter.sourceKind === "job" &&
+                          !deadletter.requeuedJobId ? (
+                            <form action={requeueDeadletterJobAction}>
+                              <input
+                                type="hidden"
+                                name="deadletter_id"
+                                value={deadletter.id}
+                              />
+                              <input
+                                type="hidden"
+                                name="project_id"
+                                value={activeProjectId}
+                              />
+                              <input
+                                type="hidden"
+                                name="actor"
+                                value={activeActorId}
+                              />
+                              <input
+                                type="hidden"
+                                name="reason"
+                                value="operator_requested_requeue"
+                              />
+                              <button className="button secondary" type="submit">
+                                Requeue job
+                              </button>
+                            </form>
+                          ) : null}
+                        </div>
                       </div>
                       <code className="mono">{deadletter.sourceId}</code>
                     </div>

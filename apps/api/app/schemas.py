@@ -1719,12 +1719,45 @@ class DeadletterItem(BaseModel):
     source_id: str
     reason: str
     payload: dict[str, Any] = Field(default_factory=dict)
+    status: str = "open"
+    incident_task_id: Optional[str] = None
+    incident_artifact_id: Optional[str] = None
+    remediation_decision_id: Optional[str] = None
+    requeued_job_id: Optional[str] = None
+    resolved_by: Optional[str] = None
+    resolved_at: Optional[str] = None
     created_at: str
+    updated_at: Optional[str] = None
 
 
 class DeadletterListResponse(BaseModel):
     project_id: str
     items: list[DeadletterItem]
+
+
+class DeadletterIncidentRequest(BaseModel):
+    actor: str = "system"
+    severity: Literal["low", "medium", "high", "critical"] = "high"
+    summary: Optional[str] = None
+
+
+class DeadletterIncidentResponse(BaseModel):
+    status: str
+    deadletter: DeadletterItem
+    incident_task_id: str
+    incident_artifact_id: str
+
+
+class DeadletterRequeueRequest(BaseModel):
+    actor: str = "system"
+    reason: str = "operator_requested_requeue"
+    run_after_seconds: int = Field(default=0, ge=0, le=3600)
+
+
+class DeadletterRequeueResponse(BaseModel):
+    status: str
+    deadletter: DeadletterItem
+    requeued_job_id: str
 
 
 class BudgetReservationSummary(BaseModel):

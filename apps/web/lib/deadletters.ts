@@ -7,6 +7,13 @@ export type DeadletterFeedItem = {
   sourceKind: string;
   sourceId: string;
   reason: string;
+  status: string;
+  incidentTaskId?: string;
+  incidentArtifactId?: string;
+  remediationDecisionId?: string;
+  requeuedJobId?: string;
+  resolvedBy?: string;
+  resolvedAt?: string;
   createdAt: string;
 };
 
@@ -23,6 +30,13 @@ function mapDeadletter(payload: DeadletterItem): DeadletterFeedItem {
     sourceKind: payload.source_kind,
     sourceId: payload.source_id,
     reason: payload.reason,
+    status: payload.status,
+    incidentTaskId: payload.incident_task_id,
+    incidentArtifactId: payload.incident_artifact_id,
+    remediationDecisionId: payload.remediation_decision_id,
+    requeuedJobId: payload.requeued_job_id,
+    resolvedBy: payload.resolved_by,
+    resolvedAt: payload.resolved_at,
     createdAt: payload.created_at,
   };
 }

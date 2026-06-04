@@ -1,0 +1,26 @@
+kind: ObjectSchema
+object: Deadletter
+version: 0.1.0
+fields:
+  id: string
+  project_id: string
+  source_kind: string
+  source_id: string
+  reason: string
+  payload: object
+  status:
+    enum: [open, incident_created, requeued, resolved, deadlettered]
+  incident_task_id: string?
+  incident_artifact_id: string?
+  remediation_decision_id: string?
+  requeued_job_id: string?
+  resolved_by: string?
+  resolved_at: timestamp?
+  created_at: timestamp
+  updated_at: timestamp
+rules:
+  no_silent_drop: true
+  incident_packet_is_idempotent: true
+  job_requeue_creates_new_job: true
+  terminal_history_must_not_be_mutated: true
+  non_job_requeue_fails_closed: true
