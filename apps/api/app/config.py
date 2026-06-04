@@ -143,6 +143,9 @@ class Settings(BaseSettings):
     account_connect_timeout_seconds: int = Field(
         default=10, alias="BOSS_ACCOUNT_CONNECT_TIMEOUT_SECONDS"
     )
+    enterprise_scim_bearer_tokens: str = Field(
+        default="", alias="BOSS_ENTERPRISE_SCIM_BEARER_TOKENS"
+    )
     cursor_cli_enabled: bool = Field(default=False, alias="BOSS_CURSOR_CLI_ENABLED")
     local_model_enabled: bool = Field(default=False, alias="BOSS_LOCAL_MODEL_ENABLED")
     local_model_id: Optional[str] = Field(
@@ -293,6 +296,14 @@ class Settings(BaseSettings):
             and self.oidc_audience
             and self.oidc_jwks_url
             and self.oidc_algorithm_values
+        )
+
+    @property
+    def enterprise_scim_bearer_token_values(self) -> tuple[str, ...]:
+        return tuple(
+            token.strip()
+            for token in self.enterprise_scim_bearer_tokens.replace("\n", ",").split(",")
+            if token.strip()
         )
 
     @property

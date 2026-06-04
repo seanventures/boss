@@ -1410,6 +1410,184 @@ def test_enterprise_scim_provisioning_maps_users_to_org_members(client):
     assert "org_member.upserted" in event_types
 
 
+def test_enterprise_scim_protocol_runtime_requires_token_and_active_provider(client):
+    previous_tokens = api_main.settings.enterprise_scim_bearer_tokens
+    try:
+        api_main.settings.enterprise_scim_bearer_tokens = ""
+        missing_token_config = client.get("/scim/v2/boss-dogfood/Users")
+        assert missing_token_config.status_code == 503
+        assert "BOSS_ENTERPRISE_SCIM_BEARER_TOKENS" in missing_token_config.json()[
+            "detail"
+        ]
+
+        api_main.settings.enterprise_scim_bearer_tokens = "scim-secret"
+        missing_auth = client.get("/scim/v2/boss-dogfood/Users")
+        assert missing_auth.status_code == 401
+
+        missing_provider = client.get(
+            "/scim/v2/boss-dogfood/Users",
+            headers={"Authorization": "Bearer scim-secret"},
+        )
+        assert missing_provider.status_code == 403
+        assert missing_provider.json()["detail"] == (
+            "No active SCIM identity provider is configured."
+        )
+
+        events = client.get("/v1/events", params={"project_id": "boss-dogfood"})
+        assert "enterprise.scim_runtime_blocked" in [
+            item["event_type"] for item in events.json()["items"]
+        ]
+    finally:
+        api_main.settings.enterprise_scim_bearer_tokens = previous_tokens
+
+
+def test_enterprise_scim_protocol_provisions_groups_users_and_deactivates(client):
+    previous_tokens = api_main.settings.enterprise_scim_bearer_tokens
+    api_main.settings.enterprise_scim_bearer_tokens = "scim-secret"
+    headers = {"Authorization": "Bearer scim-secret"}
+    try:
+        provider = client.post(
+            "/v1/enterprise/identity-providers",
+            json={
+                "project_id": "boss-dogfood",
+                "provider_key": "okta_scim",
+                "provider_type": "scim",
+                "display_name": "Okta SCIM",
+                "scim_base_url": "https://boss.example/scim/v2/boss-dogfood",
+                "secret_ref": "env:BOSS_ENTERPRISE_SCIM_BEARER_TOKENS",
+                "status": "active",
+                "actor": "ceo",
+            },
+        )
+        assert provider.status_code == 201
+        assert provider.json()["status"] == "active"
+
+        group = client.post(
+            "/scim/v2/boss-dogfood/Groups",
+            headers=headers,
+            json={
+                "schemas": [
+                    "urn:ietf:params:scim:schemas:core:2.0:Group",
+                    "urn:boss:params:scim:schemas:extension:2.0:Group",
+                ],
+                "externalId": "grp-ops-admin",
+                "displayName": "Ops Admins",
+                "urn:boss:params:scim:schemas:extension:2.0:Group": {
+                    "roleKeys": ["ops_admin"],
+                    "permissions": ["audit_export", "enterprise_manage"],
+                },
+            },
+        )
+        assert group.status_code == 201
+        group_payload = group.json()
+        assert group_payload["id"] == "scimgroup_boss-dogfood_ops_admins"
+        assert group_payload[
+            "urn:boss:params:scim:schemas:extension:2.0:Group"
+        ]["permissions"] == ["audit_export", "enterprise_manage"]
+
+        listed_groups = client.get(
+            "/scim/v2/boss-dogfood/Groups",
+            headers=headers,
+            params={"filter": 'displayName eq "Ops Admins"'},
+        )
+        assert listed_groups.status_code == 200
+        assert listed_groups.json()["totalResults"] == 1
+
+        user = client.post(
+            "/scim/v2/boss-dogfood/Users",
+            headers=headers,
+            json={
+                "schemas": [
+                    "urn:ietf:params:scim:schemas:core:2.0:User",
+                    "urn:boss:params:scim:schemas:extension:2.0:User",
+                ],
+                "externalId": "usr-bob-ops",
+                "userName": "Bob.Ops@example.com",
+                "name": {"formatted": "Bob Ops"},
+                "active": True,
+                "groups": [{"value": "grp-ops-admin", "display": "Ops Admins"}],
+                "urn:boss:params:scim:schemas:extension:2.0:User": {
+                    "permissions": ["command_submit"]
+                },
+            },
+        )
+        assert user.status_code == 201
+        user_payload = user.json()
+        assert user_payload["userName"] == "bob.ops@example.com"
+        assert user_payload[
+            "urn:boss:params:scim:schemas:extension:2.0:User"
+        ]["memberId"] == "scim_bob_ops_example_com"
+        assert {"command_submit", "audit_export", "enterprise_manage"} <= set(
+            user_payload["urn:boss:params:scim:schemas:extension:2.0:User"][
+                "permissions"
+            ]
+        )
+
+        fetched_user = client.get(
+            f"/scim/v2/boss-dogfood/Users/{user_payload['id']}",
+            headers=headers,
+        )
+        assert fetched_user.status_code == 200
+        assert fetched_user.json()["displayName"] == "Bob Ops"
+
+        listed_users = client.get(
+            "/scim/v2/boss-dogfood/Users",
+            headers=headers,
+            params={"filter": 'userName eq "bob.ops@example.com"'},
+        )
+        assert listed_users.status_code == 200
+        assert listed_users.json()["totalResults"] == 1
+
+        replaced_user = client.put(
+            f"/scim/v2/boss-dogfood/Users/{user_payload['id']}",
+            headers=headers,
+            json={
+                "userName": "bob.ops@example.com",
+                "displayName": "Bob Ops Updated",
+                "active": True,
+                "groups": [{"value": "Ops Admins"}],
+                "urn:boss:params:scim:schemas:extension:2.0:User": {
+                    "roleKeys": ["incident_commander"]
+                },
+            },
+        )
+        assert replaced_user.status_code == 200
+        assert replaced_user.json()["displayName"] == "Bob Ops Updated"
+        assert "incident_commander" in replaced_user.json()[
+            "urn:boss:params:scim:schemas:extension:2.0:User"
+        ]["roleKeys"]
+
+        delete_user = client.delete(
+            f"/scim/v2/boss-dogfood/Users/{user_payload['id']}",
+            headers=headers,
+        )
+        assert delete_user.status_code == 204
+        members_after = client.get("/v1/members", params={"project_id": "boss-dogfood"})
+        assert "scim_bob_ops_example_com" not in {
+            item["member_id"] for item in members_after.json()["items"]
+        }
+
+        delete_group = client.delete(
+            f"/scim/v2/boss-dogfood/Groups/{group_payload['id']}",
+            headers=headers,
+        )
+        assert delete_group.status_code == 204
+        inactive_group = client.get(
+            f"/scim/v2/boss-dogfood/Groups/{group_payload['id']}",
+            headers=headers,
+        )
+        assert inactive_group.status_code == 200
+        assert inactive_group.json()["active"] is False
+
+        events = client.get("/v1/events", params={"project_id": "boss-dogfood"})
+        event_types = [item["event_type"] for item in events.json()["items"]]
+        assert "enterprise.identity_provider_upserted" in event_types
+        assert "enterprise.scim_group_upserted" in event_types
+        assert "enterprise.scim_user_upserted" in event_types
+    finally:
+        api_main.settings.enterprise_scim_bearer_tokens = previous_tokens
+
+
 def test_list_project_members_returns_seeded_actor_directory(client):
     response = client.get("/v1/members", params={"project_id": "boss-dogfood"})
 

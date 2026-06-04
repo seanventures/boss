@@ -220,6 +220,36 @@ class EnterpriseService:
         ).mappings().all()
         return [self._scim_group_from_row(dict(row)) for row in rows]
 
+    def scim_runtime_status(
+        self,
+        connection: Connection,
+        project_id: str,
+    ) -> dict[str, Any]:
+        provider = connection.execute(
+            text(
+                """
+                SELECT id, provider_key, display_name, scim_base_url, secret_ref
+                FROM enterprise_identity_providers
+                WHERE project_id = :project_id
+                  AND provider_type = 'scim'
+                  AND status = 'active'
+                  AND jsonb_array_length(blocking_gaps) = 0
+                ORDER BY updated_at DESC
+                LIMIT 1
+                """
+            ),
+            {"project_id": project_id},
+        ).mappings().first()
+        if not provider:
+            return {
+                "enabled": False,
+                "reason": "active_scim_identity_provider_missing",
+            }
+        return {
+            "enabled": True,
+            "provider": dict(provider),
+        }
+
     def upsert_scim_group(
         self,
         connection: Connection,
@@ -426,6 +456,61 @@ class EnterpriseService:
             },
         )
         return self._get_scim_user_by_name(connection, project_id, normalized_user_name)
+
+    def get_scim_group_by_identifier(
+        self,
+        connection: Connection,
+        project_id: str,
+        identifier: str,
+    ) -> dict[str, Any]:
+        row = connection.execute(
+            text(
+                """
+                SELECT id, org_id, project_id, external_id, display_name,
+                       role_keys, permissions, raw_group, status, created_by,
+                       created_at, updated_at
+                FROM enterprise_scim_groups
+                WHERE project_id = :project_id
+                  AND (
+                    id = :identifier
+                    OR external_id = :identifier
+                    OR display_name = :identifier
+                  )
+                """
+            ),
+            {"project_id": project_id, "identifier": identifier},
+        ).mappings().first()
+        if row is None:
+            raise ValueError(f"SCIM group '{identifier}' was not found.")
+        return self._scim_group_from_row(dict(row))
+
+    def get_scim_user_by_identifier(
+        self,
+        connection: Connection,
+        project_id: str,
+        identifier: str,
+    ) -> dict[str, Any]:
+        row = connection.execute(
+            text(
+                """
+                SELECT id, org_id, project_id, external_id, user_name,
+                       display_name, member_id, role_keys, permissions, groups,
+                       raw_profile, status, created_by, created_at, updated_at
+                FROM enterprise_scim_users
+                WHERE project_id = :project_id
+                  AND (
+                    id = :identifier
+                    OR external_id = :identifier
+                    OR user_name = :identifier
+                    OR member_id = :identifier
+                  )
+                """
+            ),
+            {"project_id": project_id, "identifier": identifier.lower()},
+        ).mappings().first()
+        if row is None:
+            raise ValueError(f"SCIM user '{identifier}' was not found.")
+        return self._scim_user_from_row(dict(row))
 
     def list_clusters(
         self,

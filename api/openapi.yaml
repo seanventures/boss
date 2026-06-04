@@ -204,6 +204,190 @@ paths:
         '201': { description: Billing portal session record created; portal URL is present only when hosted adapter succeeds }
         '403': { description: Actor is not allowed to manage ProviderOps or commercial connection state }
         '404': { description: No active Account Connect link matched the request }
+  /scim/v2/{project_id}/Groups:
+    get:
+      summary: SCIM 2.0 list groups for an active Enterprise SCIM provider
+      security: [{ scimBearerAuth: [] }]
+      parameters:
+        - name: project_id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: filter
+          in: query
+          required: false
+          schema: { type: string }
+          description: Supports displayName eq "Group Name".
+      responses:
+        '200': { description: SCIM ListResponse of mapped BOSS groups }
+        '401': { description: Missing or invalid SCIM bearer token }
+        '403': { description: No active non-blocked SCIM identity provider is configured }
+        '503': { description: SCIM runtime token configuration is missing }
+    post:
+      summary: SCIM 2.0 create or update a group mapping
+      security: [{ scimBearerAuth: [] }]
+      parameters:
+        - name: project_id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/scim+json:
+            schema: { type: object }
+          application/json:
+            schema: { type: object }
+      responses:
+        '201': { description: SCIM Group resource with BOSS role/permission extension }
+        '400': { description: Invalid SCIM group payload }
+        '401': { description: Missing or invalid SCIM bearer token }
+        '403': { description: No active non-blocked SCIM identity provider is configured }
+  /scim/v2/{project_id}/Groups/{group_id}:
+    get:
+      summary: SCIM 2.0 fetch a group by SCIM id, externalId, or displayName
+      security: [{ scimBearerAuth: [] }]
+      parameters:
+        - name: project_id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: group_id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: SCIM Group resource }
+        '404': { description: Group not found }
+    put:
+      summary: SCIM 2.0 replace a group mapping
+      security: [{ scimBearerAuth: [] }]
+      parameters:
+        - name: project_id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: group_id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/scim+json:
+            schema: { type: object }
+          application/json:
+            schema: { type: object }
+      responses:
+        '200': { description: Replaced SCIM Group resource }
+        '400': { description: Invalid SCIM group payload }
+    delete:
+      summary: SCIM 2.0 deactivate a group mapping without deleting audit history
+      security: [{ scimBearerAuth: [] }]
+      parameters:
+        - name: project_id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: group_id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '204': { description: Group marked inactive }
+        '404': { description: Group not found }
+  /scim/v2/{project_id}/Users:
+    get:
+      summary: SCIM 2.0 list users for an active Enterprise SCIM provider
+      security: [{ scimBearerAuth: [] }]
+      parameters:
+        - name: project_id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: filter
+          in: query
+          required: false
+          schema: { type: string }
+          description: Supports userName eq "user@example.com".
+      responses:
+        '200': { description: SCIM ListResponse of mapped BOSS users }
+        '401': { description: Missing or invalid SCIM bearer token }
+        '403': { description: No active non-blocked SCIM identity provider is configured }
+        '503': { description: SCIM runtime token configuration is missing }
+    post:
+      summary: SCIM 2.0 create or update a user and effective BOSS org member
+      security: [{ scimBearerAuth: [] }]
+      parameters:
+        - name: project_id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/scim+json:
+            schema: { type: object }
+          application/json:
+            schema: { type: object }
+      responses:
+        '201': { description: SCIM User resource with BOSS member/permission extension }
+        '400': { description: Invalid SCIM user payload }
+        '401': { description: Missing or invalid SCIM bearer token }
+        '403': { description: No active non-blocked SCIM identity provider is configured }
+  /scim/v2/{project_id}/Users/{user_id}:
+    get:
+      summary: SCIM 2.0 fetch a user by SCIM id, externalId, userName, or member id
+      security: [{ scimBearerAuth: [] }]
+      parameters:
+        - name: project_id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: user_id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: SCIM User resource }
+        '404': { description: User not found }
+    put:
+      summary: SCIM 2.0 replace a user and effective BOSS org member mapping
+      security: [{ scimBearerAuth: [] }]
+      parameters:
+        - name: project_id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: user_id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/scim+json:
+            schema: { type: object }
+          application/json:
+            schema: { type: object }
+      responses:
+        '200': { description: Replaced SCIM User resource }
+        '400': { description: Invalid SCIM user payload }
+    delete:
+      summary: SCIM 2.0 deactivate a user and remove effective org-member access
+      security: [{ scimBearerAuth: [] }]
+      parameters:
+        - name: project_id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: user_id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '204': { description: User marked inactive and org-member access disabled }
+        '404': { description: User not found }
   /v1/enterprise/clusters:
     get:
       summary: List enterprise deployment, clustering, trust, support, and private-worker records
@@ -3247,3 +3431,7 @@ components:
       in: header
       name: X-BOSS-API-Key
       description: Alternate API key header accepted when `BOSS_REQUIRE_API_AUTH=true`.
+    scimBearerAuth:
+      type: http
+      scheme: bearer
+      description: Enterprise SCIM provisioning token configured through `BOSS_ENTERPRISE_SCIM_BEARER_TOKENS`; separate from normal BOSS API keys.

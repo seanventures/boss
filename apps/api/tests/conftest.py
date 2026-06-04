@@ -8,6 +8,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from apps.api.app.bootstrap import seed
 from apps.api.app.config import get_settings
 from apps.api.app.main import app
+from apps.api.app.services.entitlements import EntitlementBrokerService
 from apps.api.app.services.members import MemberDirectoryService
 from apps.api.app.services.specpack import SpecPackService
 
@@ -37,6 +38,7 @@ def seeded_database(engine):
 @pytest.fixture(autouse=True)
 def clean_tables(engine):
     settings = get_settings()
+    entitlements = EntitlementBrokerService(settings)
     members = MemberDirectoryService(settings)
     specpack = SpecPackService(settings)
     with engine.begin() as connection:
@@ -48,6 +50,7 @@ def clean_tables(engine):
         connection.execute(text("DELETE FROM enterprise_scim_groups"))
         connection.execute(text("DELETE FROM enterprise_identity_providers"))
         connection.execute(text("DELETE FROM enterprise_clusters"))
+        connection.execute(text("DELETE FROM deployment_rollouts"))
         connection.execute(text("DELETE FROM resource_receipts"))
         connection.execute(text("DELETE FROM scale_plans"))
         connection.execute(text("DELETE FROM worker_pools"))
@@ -67,6 +70,8 @@ def clean_tables(engine):
         connection.execute(text("DELETE FROM provider_accounts"))
         connection.execute(text("DELETE FROM secret_refs"))
         connection.execute(text("DELETE FROM resource_policies"))
+        connection.execute(text("DELETE FROM capacity_receipts"))
+        connection.execute(text("DELETE FROM entitlement_sources"))
         connection.execute(text("DELETE FROM cost_receipts"))
         connection.execute(text("DELETE FROM budget_reservations"))
         connection.execute(text("DELETE FROM budget_allocations"))
@@ -81,7 +86,6 @@ def clean_tables(engine):
         connection.execute(text("DELETE FROM break_glass_grants"))
         connection.execute(text("DELETE FROM project_members"))
         connection.execute(text("DELETE FROM org_members"))
-        connection.execute(text("DELETE FROM deployment_rollouts"))
         connection.execute(text("DELETE FROM infra_resources"))
         connection.execute(text("DELETE FROM receipts"))
         connection.execute(text("DELETE FROM deadletters"))
@@ -101,6 +105,11 @@ def clean_tables(engine):
             "test-reset",
         )
         specpack.install_default_agent_modules(
+            connection,
+            settings.default_project_id,
+            "test-reset",
+        )
+        entitlements.seed_default_sources(
             connection,
             settings.default_project_id,
             "test-reset",

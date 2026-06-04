@@ -225,6 +225,7 @@ Objects:
 - `EnterpriseIdentityProvider`: OIDC, SAML, or SCIM metadata with status, test status, blocking gaps, and SecretRefs.
 - `EnterpriseScimGroup`: external group mapped to BOSS roles and permissions.
 - `EnterpriseScimUser`: external user mapped to an effective BOSS org-member record.
+- SCIM 2.0 runtime endpoints: `/scim/v2/{project_id}/Groups` and `/scim/v2/{project_id}/Users` for IdP push provisioning.
 
 Rules:
 
@@ -232,6 +233,7 @@ Rules:
 - Incomplete OIDC/SAML/SCIM provider records remain visible but cannot satisfy enterprise cluster identity controls.
 - If an operator marks an incomplete IdP record active, BOSS stores it as `blocked` with explicit `blocking_gaps`.
 - Complete active IdP records can satisfy enterprise cluster OIDC/SAML/SCIM blocking-gap evaluation.
+- IdP-facing SCIM runtime provisioning is fail-closed unless `BOSS_ENTERPRISE_SCIM_BEARER_TOKENS` is configured and the project has an active, non-blocked SCIM identity-provider record. SCIM create/update/delete maps through deterministic BOSS group/user provisioning and never stores raw SCIM bearer tokens.
 - This registry is not fake hosted login. Live OIDC/SAML auth still requires environment-specific issuer, audience, JWKS/cert, redirect, and claim-mapping configuration.
 
 ## Clustering and Enterprise HA

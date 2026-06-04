@@ -439,6 +439,9 @@ Acceptance criteria:
 - Given an enterprise admin maps a SCIM group to BOSS permissions, when the group is saved, then BOSS emits `enterprise.scim_group_upserted`.
 - Given an active SCIM user belongs to a mapped group, when the user is saved, then BOSS creates or updates an org member with the merged explicit role and permission grants.
 - Given a SCIM user is deactivated, when the user is saved, then BOSS removes the user's effective org-member access without deleting the audit record.
+- Given an external IdP calls `/scim/v2/{project_id}/Users` or `/Groups` without a configured SCIM bearer token, when provisioning is attempted, then BOSS fails closed with a SCIM error and does not mutate identity state.
+- Given an external IdP calls SCIM runtime endpoints with a valid bearer token but no active non-blocked SCIM provider record, when provisioning is attempted, then BOSS returns a visible blocked SCIM error and emits `enterprise.scim_runtime_blocked`.
+- Given an external IdP creates, replaces, lists, filters, or deletes SCIM users/groups with a valid bearer token and active SCIM provider record, when the request runs, then BOSS maps it through the same audited SCIM group/user and org-member provisioning path used by the internal API.
 
 ### Story ADM-002: Control Project Actors
 

@@ -1,10 +1,11 @@
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
+import re
 from secrets import compare_digest
-from typing import Optional
+from typing import Any, Optional
 
 from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from sqlalchemy import text
 
 from .bootstrap import seed
@@ -1321,6 +1322,185 @@ def enterprise_scim_user_summary_from_service(payload) -> EnterpriseScimUserSumm
     return EnterpriseScimUserSummary(**payload)
 
 
+SCIM_LIST_SCHEMA = "urn:ietf:params:scim:api:messages:2.0:ListResponse"
+SCIM_USER_SCHEMA = "urn:ietf:params:scim:schemas:core:2.0:User"
+SCIM_GROUP_SCHEMA = "urn:ietf:params:scim:schemas:core:2.0:Group"
+BOSS_SCIM_USER_EXTENSION = "urn:boss:params:scim:schemas:extension:2.0:User"
+BOSS_SCIM_GROUP_EXTENSION = "urn:boss:params:scim:schemas:extension:2.0:Group"
+
+
+def scim_error(status_code: int, detail: str) -> JSONResponse:
+    return JSONResponse(
+        status_code=status_code,
+        content={
+            "schemas": ["urn:ietf:params:scim:api:messages:2.0:Error"],
+            "status": str(status_code),
+            "detail": detail,
+        },
+        headers={"WWW-Authenticate": "Bearer"} if status_code == 401 else None,
+    )
+
+
+def require_enterprise_scim_access(
+    request: Request,
+    connection,
+    project_id: str,
+) -> Optional[JSONResponse]:
+    configured_tokens = settings.enterprise_scim_bearer_token_values
+    if not configured_tokens:
+        return scim_error(
+            503,
+            "BOSS_ENTERPRISE_SCIM_BEARER_TOKENS is required before SCIM runtime provisioning.",
+        )
+    token = extract_bearer_token(request)
+    if not token or not api_token_allowed(token, configured_tokens):
+        return scim_error(401, "Valid enterprise SCIM bearer token required.")
+    runtime = enterprise.scim_runtime_status(connection, project_id)
+    if not runtime["enabled"]:
+        emit_event(
+            connection,
+            project_id,
+            "enterprise.scim_runtime_blocked",
+            "scim",
+            "enterprise_identity_provider",
+            project_id,
+            {"reason": runtime["reason"]},
+        )
+        return scim_error(403, "No active SCIM identity provider is configured.")
+    return None
+
+
+def scim_extension(payload: dict[str, Any], schema: str) -> dict[str, Any]:
+    extension = payload.get(schema) or payload.get("boss") or {}
+    return extension if isinstance(extension, dict) else {}
+
+
+def scim_token_list(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(item).strip() for item in value if str(item).strip()]
+
+
+def scim_group_values(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    values: list[str] = []
+    for item in value:
+        if isinstance(item, dict):
+            raw = item.get("value") or item.get("display") or item.get("$ref")
+            if raw:
+                values.append(str(raw))
+        elif str(item).strip():
+            values.append(str(item))
+    return values
+
+
+def scim_display_name(payload: dict[str, Any]) -> str:
+    display_name = payload.get("displayName")
+    if isinstance(display_name, str) and display_name.strip():
+        return display_name.strip()
+    name = payload.get("name")
+    if isinstance(name, dict):
+        formatted = name.get("formatted")
+        if isinstance(formatted, str) and formatted.strip():
+            return formatted.strip()
+    user_name = payload.get("userName")
+    return str(user_name).strip() if user_name else ""
+
+
+def scim_group_payload_to_service(payload: dict[str, Any]) -> dict[str, Any]:
+    extension = scim_extension(payload, BOSS_SCIM_GROUP_EXTENSION)
+    return {
+        "external_id": payload.get("externalId") or payload.get("id"),
+        "display_name": str(payload.get("displayName") or "").strip(),
+        "role_keys": scim_token_list(extension.get("roleKeys") or extension.get("role_keys")),
+        "permissions": scim_token_list(extension.get("permissions")),
+        "raw_group": payload,
+        "status": "active" if payload.get("active", True) is not False else "inactive",
+    }
+
+
+def scim_user_payload_to_service(payload: dict[str, Any]) -> dict[str, Any]:
+    extension = scim_extension(payload, BOSS_SCIM_USER_EXTENSION)
+    return {
+        "external_id": payload.get("externalId") or payload.get("id"),
+        "user_name": str(payload.get("userName") or "").strip().lower(),
+        "display_name": scim_display_name(payload),
+        "active": bool(payload.get("active", True)),
+        "role_keys": scim_token_list(extension.get("roleKeys") or extension.get("role_keys")),
+        "permissions": scim_token_list(extension.get("permissions")),
+        "groups": scim_group_values(payload.get("groups")),
+        "raw_profile": payload,
+    }
+
+
+def scim_group_resource(group: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "schemas": [SCIM_GROUP_SCHEMA, BOSS_SCIM_GROUP_EXTENSION],
+        "id": group["id"],
+        "externalId": group.get("external_id"),
+        "displayName": group["display_name"],
+        "active": group["status"] == "active",
+        "members": [],
+        BOSS_SCIM_GROUP_EXTENSION: {
+            "roleKeys": group.get("role_keys") or [],
+            "permissions": group.get("permissions") or [],
+        },
+        "meta": {
+            "resourceType": "Group",
+            "created": group["created_at"],
+            "lastModified": group["updated_at"],
+        },
+    }
+
+
+def scim_user_resource(user: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "schemas": [SCIM_USER_SCHEMA, BOSS_SCIM_USER_EXTENSION],
+        "id": user["id"],
+        "externalId": user.get("external_id"),
+        "userName": user["user_name"],
+        "displayName": user["display_name"],
+        "active": user["active"],
+        "groups": [{"value": group, "display": group} for group in user.get("groups") or []],
+        BOSS_SCIM_USER_EXTENSION: {
+            "memberId": user["member_id"],
+            "roleKeys": user.get("role_keys") or [],
+            "permissions": user.get("permissions") or [],
+        },
+        "meta": {
+            "resourceType": "User",
+            "created": user["created_at"],
+            "lastModified": user["updated_at"],
+        },
+    }
+
+
+def scim_list_response(
+    resources: list[dict[str, Any]],
+    *,
+    start_index: int = 1,
+) -> dict[str, Any]:
+    return {
+        "schemas": [SCIM_LIST_SCHEMA],
+        "totalResults": len(resources),
+        "startIndex": start_index,
+        "itemsPerPage": len(resources),
+        "Resources": resources,
+    }
+
+
+def scim_filter_value(filter_expression: Optional[str], attribute: str) -> Optional[str]:
+    if not filter_expression:
+        return None
+    match = re.fullmatch(
+        rf"\s*{re.escape(attribute)}\s+eq\s+\"([^\"]+)\"\s*",
+        filter_expression,
+        flags=re.IGNORECASE,
+    )
+    return match.group(1) if match else None
+
+
 def capacity_receipt_summary_from_service(payload) -> CapacityReceiptSummary:
     return CapacityReceiptSummary(**payload)
 
@@ -1867,6 +2047,264 @@ def upsert_enterprise_scim_user(
         except ValueError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
         return enterprise_scim_user_summary_from_service(user)
+
+
+@app.get("/scim/v2/{project_id}/Groups")
+def scim_list_groups(
+    project_id: str,
+    request: Request,
+    filter: Optional[str] = Query(default=None),  # noqa: A002 - SCIM parameter name.
+):
+    with begin(engine) as connection:
+        denied = require_enterprise_scim_access(request, connection, project_id)
+        if denied:
+            return denied
+        groups = enterprise.list_scim_groups(connection, project_id)
+        display_filter = scim_filter_value(filter, "displayName")
+        if display_filter:
+            groups = [group for group in groups if group["display_name"] == display_filter]
+        return scim_list_response([scim_group_resource(group) for group in groups])
+
+
+@app.post("/scim/v2/{project_id}/Groups", status_code=201)
+async def scim_create_group(
+    project_id: str,
+    request: Request,
+):
+    with begin(engine) as connection:
+        denied = require_enterprise_scim_access(request, connection, project_id)
+        if denied:
+            return denied
+        payload = await request.json()
+        if not isinstance(payload, dict):
+            return scim_error(400, "SCIM group payload must be a JSON object.")
+        service_payload = scim_group_payload_to_service(payload)
+        try:
+            group = enterprise.upsert_scim_group(
+                connection,
+                project_id,
+                display_name=service_payload["display_name"],
+                actor="scim",
+                external_id=service_payload["external_id"],
+                role_keys=service_payload["role_keys"],
+                permissions=service_payload["permissions"],
+                raw_group=service_payload["raw_group"],
+                status=service_payload["status"],
+            )
+        except ValueError as error:
+            return scim_error(400, str(error))
+        return scim_group_resource(group)
+
+
+@app.get("/scim/v2/{project_id}/Groups/{group_id}")
+def scim_get_group(
+    project_id: str,
+    group_id: str,
+    request: Request,
+):
+    with begin(engine) as connection:
+        denied = require_enterprise_scim_access(request, connection, project_id)
+        if denied:
+            return denied
+        try:
+            group = enterprise.get_scim_group_by_identifier(connection, project_id, group_id)
+        except ValueError as error:
+            return scim_error(404, str(error))
+        return scim_group_resource(group)
+
+
+@app.put("/scim/v2/{project_id}/Groups/{group_id}")
+async def scim_replace_group(
+    project_id: str,
+    group_id: str,
+    request: Request,
+):
+    with begin(engine) as connection:
+        denied = require_enterprise_scim_access(request, connection, project_id)
+        if denied:
+            return denied
+        payload = await request.json()
+        if not isinstance(payload, dict):
+            return scim_error(400, "SCIM group payload must be a JSON object.")
+        payload.setdefault("externalId", group_id)
+        service_payload = scim_group_payload_to_service(payload)
+        try:
+            group = enterprise.upsert_scim_group(
+                connection,
+                project_id,
+                display_name=service_payload["display_name"],
+                actor="scim",
+                external_id=service_payload["external_id"],
+                role_keys=service_payload["role_keys"],
+                permissions=service_payload["permissions"],
+                raw_group=service_payload["raw_group"],
+                status=service_payload["status"],
+            )
+        except ValueError as error:
+            return scim_error(400, str(error))
+        return scim_group_resource(group)
+
+
+@app.delete("/scim/v2/{project_id}/Groups/{group_id}", status_code=204)
+def scim_delete_group(
+    project_id: str,
+    group_id: str,
+    request: Request,
+):
+    with begin(engine) as connection:
+        denied = require_enterprise_scim_access(request, connection, project_id)
+        if denied:
+            return denied
+        try:
+            group = enterprise.get_scim_group_by_identifier(connection, project_id, group_id)
+            enterprise.upsert_scim_group(
+                connection,
+                project_id,
+                display_name=group["display_name"],
+                actor="scim",
+                external_id=group.get("external_id"),
+                role_keys=group.get("role_keys") or [],
+                permissions=group.get("permissions") or [],
+                raw_group=group.get("raw_group") or {},
+                status="inactive",
+            )
+        except ValueError as error:
+            return scim_error(404, str(error))
+        return Response(status_code=204)
+
+
+@app.get("/scim/v2/{project_id}/Users")
+def scim_list_users(
+    project_id: str,
+    request: Request,
+    filter: Optional[str] = Query(default=None),  # noqa: A002 - SCIM parameter name.
+):
+    with begin(engine) as connection:
+        denied = require_enterprise_scim_access(request, connection, project_id)
+        if denied:
+            return denied
+        users = enterprise.list_scim_users(connection, project_id)
+        user_name_filter = scim_filter_value(filter, "userName")
+        if user_name_filter:
+            users = [
+                user
+                for user in users
+                if user["user_name"] == user_name_filter.strip().lower()
+            ]
+        return scim_list_response([scim_user_resource(user) for user in users])
+
+
+@app.post("/scim/v2/{project_id}/Users", status_code=201)
+async def scim_create_user(
+    project_id: str,
+    request: Request,
+):
+    with begin(engine) as connection:
+        denied = require_enterprise_scim_access(request, connection, project_id)
+        if denied:
+            return denied
+        payload = await request.json()
+        if not isinstance(payload, dict):
+            return scim_error(400, "SCIM user payload must be a JSON object.")
+        service_payload = scim_user_payload_to_service(payload)
+        try:
+            user = enterprise.upsert_scim_user(
+                connection,
+                project_id,
+                user_name=service_payload["user_name"],
+                display_name=service_payload["display_name"],
+                actor="scim",
+                external_id=service_payload["external_id"],
+                active=service_payload["active"],
+                role_keys=service_payload["role_keys"],
+                permissions=service_payload["permissions"],
+                groups=service_payload["groups"],
+                raw_profile=service_payload["raw_profile"],
+            )
+        except ValueError as error:
+            return scim_error(400, str(error))
+        return scim_user_resource(user)
+
+
+@app.get("/scim/v2/{project_id}/Users/{user_id}")
+def scim_get_user(
+    project_id: str,
+    user_id: str,
+    request: Request,
+):
+    with begin(engine) as connection:
+        denied = require_enterprise_scim_access(request, connection, project_id)
+        if denied:
+            return denied
+        try:
+            user = enterprise.get_scim_user_by_identifier(connection, project_id, user_id)
+        except ValueError as error:
+            return scim_error(404, str(error))
+        return scim_user_resource(user)
+
+
+@app.put("/scim/v2/{project_id}/Users/{user_id}")
+async def scim_replace_user(
+    project_id: str,
+    user_id: str,
+    request: Request,
+):
+    with begin(engine) as connection:
+        denied = require_enterprise_scim_access(request, connection, project_id)
+        if denied:
+            return denied
+        payload = await request.json()
+        if not isinstance(payload, dict):
+            return scim_error(400, "SCIM user payload must be a JSON object.")
+        payload.setdefault("externalId", user_id)
+        service_payload = scim_user_payload_to_service(payload)
+        try:
+            user = enterprise.upsert_scim_user(
+                connection,
+                project_id,
+                user_name=service_payload["user_name"],
+                display_name=service_payload["display_name"],
+                actor="scim",
+                external_id=service_payload["external_id"],
+                active=service_payload["active"],
+                role_keys=service_payload["role_keys"],
+                permissions=service_payload["permissions"],
+                groups=service_payload["groups"],
+                raw_profile=service_payload["raw_profile"],
+            )
+        except ValueError as error:
+            return scim_error(400, str(error))
+        return scim_user_resource(user)
+
+
+@app.delete("/scim/v2/{project_id}/Users/{user_id}", status_code=204)
+def scim_delete_user(
+    project_id: str,
+    user_id: str,
+    request: Request,
+):
+    with begin(engine) as connection:
+        denied = require_enterprise_scim_access(request, connection, project_id)
+        if denied:
+            return denied
+        try:
+            user = enterprise.get_scim_user_by_identifier(connection, project_id, user_id)
+            enterprise.upsert_scim_user(
+                connection,
+                project_id,
+                user_name=user["user_name"],
+                display_name=user["display_name"],
+                actor="scim",
+                external_id=user.get("external_id"),
+                active=False,
+                role_keys=user.get("role_keys") or [],
+                permissions=user.get("permissions") or [],
+                groups=user.get("groups") or [],
+                raw_profile=user.get("raw_profile") or {},
+            )
+        except ValueError as error:
+            return scim_error(404, str(error))
+        return Response(status_code=204)
 
 
 @app.get("/v1/projects", response_model=ProjectListResponse)
