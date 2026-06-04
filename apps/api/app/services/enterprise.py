@@ -237,9 +237,9 @@ class EnterpriseService:
             },
         )
         if active:
-            self.members.upsert_org_member(
+            self.members.upsert_member(
                 connection,
-                org_id=org_id,
+                project_id=project_id,
                 member_id=member_id,
                 display_name=normalized_display_name,
                 member_type="human",
@@ -251,12 +251,12 @@ class EnterpriseService:
             connection.execute(
                 text(
                     """
-                    UPDATE org_members
+                    UPDATE project_members
                     SET status = 'inactive', updated_at = now()
-                    WHERE org_id = :org_id AND member_id = :member_id
+                    WHERE project_id = :project_id AND member_id = :member_id
                     """
                 ),
-                {"org_id": org_id, "member_id": member_id},
+                {"project_id": project_id, "member_id": member_id},
             )
         emit_event(
             connection,
@@ -272,7 +272,7 @@ class EnterpriseService:
                 "groups": requested_groups,
                 "role_keys": effective_roles,
                 "permissions": effective_permissions,
-                "mapped_to_org_member": active,
+                "mapped_to_project_member": active,
             },
         )
         return self._get_scim_user_by_name(connection, project_id, normalized_user_name)

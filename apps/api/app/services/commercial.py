@@ -283,6 +283,43 @@ class CommercialService:
         connection.execute(
             text(
                 """
+                UPDATE account_connect_orgs
+                SET status = 'unlinked',
+                    unlinked_by = :actor,
+                    unlinked_at = now(),
+                    metadata = metadata || CAST(:metadata AS JSONB),
+                    updated_at = now()
+                WHERE project_id = :project_id
+                  AND status = 'linked'
+                  AND hosted_org_id <> :hosted_org_id
+                """
+            ),
+            {
+                "project_id": project_id,
+                "hosted_org_id": hosted_org_id,
+                "actor": actor,
+                "metadata": json.dumps(
+                    {"unlink_reason": "superseded_by_new_account_connect_link"}
+                ),
+            },
+        )
+        connection.execute(
+            text(
+                """
+                UPDATE license_entitlements
+                SET status = 'detached',
+                    updated_at = now()
+                WHERE project_id = :project_id
+                  AND account_connect_org_id IS NOT NULL
+                  AND account_connect_org_id <> :hosted_org_id
+                  AND status IN ('active', 'trial')
+                """
+            ),
+            {"project_id": project_id, "hosted_org_id": hosted_org_id},
+        )
+        connection.execute(
+            text(
+                """
                 INSERT INTO account_connect_orgs (
                     id, project_id, hosted_org_id, local_org_id, connection_mode,
                     marketplace_identity, billing_portal_ref,
@@ -414,11 +451,11 @@ class CommercialService:
                     unlinked_at = now(),
                     metadata = metadata || CAST(:metadata AS JSONB),
                     updated_at = now()
-                WHERE id = :id
+                WHERE project_id = :project_id AND status = 'linked'
                 """
             ),
             {
-                "id": active["id"],
+                "project_id": project_id,
                 "actor": actor,
                 "metadata": json.dumps({"unlink_reason": reason or "operator_unlinked"}),
             },
@@ -429,7 +466,12 @@ class CommercialService:
                 UPDATE license_entitlements
                 SET status = 'detached',
                     updated_at = now()
-                WHERE project_id = :project_id AND source = 'account_connect'
+                WHERE project_id = :project_id
+                  AND (
+                    source = 'account_connect'
+                    OR account_connect_org_id IS NOT NULL
+                  )
+                  AND status IN ('active', 'trial')
                 """
             ),
             {"project_id": project_id},
@@ -499,6 +541,7 @@ class CommercialService:
             )
             raise
         synced_count = 0
+        synced_pairs: set[tuple[str, str]] = set()
         for entitlement in entitlements:
             capability_key = str(entitlement.get("capability_key") or "").strip()
             if not capability_key:
@@ -511,7 +554,10 @@ class CommercialService:
                     f"Hosted entitlement '{capability_key}' has invalid capabilities."
                 )
             status = str(entitlement.get("status") or "active").strip() or "active"
-            source = str(entitlement.get("source") or "account_connect_hosted")
+            source = (
+                str(entitlement.get("source") or "account_connect_hosted").strip()
+                or "account_connect_hosted"
+            )
             entitlement_id = (
                 str(entitlement.get("id") or "").strip()
                 or f"lic_{project_id}_hosted_{capability_key}"
@@ -565,6 +611,46 @@ class CommercialService:
                 },
             )
             synced_count += 1
+            synced_pairs.add((source, capability_key))
+        revoked_count = 0
+        active_hosted_rows = connection.execute(
+            text(
+                """
+                SELECT capability_key, source
+                FROM license_entitlements
+                WHERE project_id = :project_id
+                  AND account_connect_org_id = :account_connect_org_id
+                  AND source <> 'account_connect'
+                  AND status IN ('active', 'trial')
+                """
+            ),
+            {
+                "project_id": project_id,
+                "account_connect_org_id": active["hosted_org_id"],
+            },
+        ).mappings().all()
+        for row in active_hosted_rows:
+            row_pair = (row["source"], row["capability_key"])
+            if row_pair in synced_pairs:
+                continue
+            connection.execute(
+                text(
+                    """
+                    UPDATE license_entitlements
+                    SET status = 'revoked',
+                        updated_at = now()
+                    WHERE project_id = :project_id
+                      AND capability_key = :capability_key
+                      AND source = :source
+                    """
+                ),
+                {
+                    "project_id": project_id,
+                    "capability_key": row["capability_key"],
+                    "source": row["source"],
+                },
+            )
+            revoked_count += 1
         emit_event(
             connection,
             project_id,
@@ -575,6 +661,7 @@ class CommercialService:
             {
                 "hosted_org_id": active["hosted_org_id"],
                 "synced_entitlement_count": synced_count,
+                "revoked_entitlement_count": revoked_count,
             },
         )
         return {

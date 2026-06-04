@@ -182,7 +182,7 @@ class MemberDirectoryService:
                 SELECT id, project_id, member_id, display_name, member_type, role_keys,
                        permissions, status, created_by, created_at, updated_at
                 FROM project_members
-                WHERE project_id = :project_id
+                WHERE project_id = :project_id AND status = 'active'
                 ORDER BY member_type ASC, display_name ASC, member_id ASC
                 """
             ),

@@ -899,6 +899,16 @@ class SpecPackService:
                 FROM license_entitlements
                 WHERE project_id = :project_id
                   AND status IN ('active', 'trial')
+                  AND (
+                    account_connect_org_id IS NULL
+                    OR EXISTS (
+                      SELECT 1
+                      FROM account_connect_orgs aco
+                      WHERE aco.project_id = license_entitlements.project_id
+                        AND aco.hosted_org_id = license_entitlements.account_connect_org_id
+                        AND aco.status = 'linked'
+                    )
+                  )
                 """
             ),
             {"project_id": project_id},
