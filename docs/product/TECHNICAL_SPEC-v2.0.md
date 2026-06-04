@@ -209,11 +209,30 @@ Objects:
 - `LicenseEntitlement`
 - `AccountConnectOrg`
 - `EnterpriseCluster`
+- `EnterpriseIdentityProvider`
 - `PackListing`
 - `PackInstall`
 - `MarketplacePublisher`
 
 Community capabilities must remain useful. Enterprise capabilities should focus on scale, governance, compliance, private infrastructure, managed workers, support, and commercial safety.
+
+## Enterprise Identity Provider Registry
+
+Enterprise identity rollout is tracked as auditable control-plane state before any external login path is enabled.
+
+Objects:
+
+- `EnterpriseIdentityProvider`: OIDC, SAML, or SCIM metadata with status, test status, blocking gaps, and SecretRefs.
+- `EnterpriseScimGroup`: external group mapped to BOSS roles and permissions.
+- `EnterpriseScimUser`: external user mapped to an effective BOSS org-member record.
+
+Rules:
+
+- Agents never receive raw IdP secrets; SCIM connector credentials are represented only as `SecretRef`.
+- Incomplete OIDC/SAML/SCIM provider records remain visible but cannot satisfy enterprise cluster identity controls.
+- If an operator marks an incomplete IdP record active, BOSS stores it as `blocked` with explicit `blocking_gaps`.
+- Complete active IdP records can satisfy enterprise cluster OIDC/SAML/SCIM blocking-gap evaluation.
+- This registry is not fake hosted login. Live OIDC/SAML auth still requires environment-specific issuer, audience, JWKS/cert, redirect, and claim-mapping configuration.
 
 ## Clustering and Enterprise HA
 
@@ -302,6 +321,8 @@ Commercial:
 - `POST /v1/account-connect/team-invites/{id}/revoke`
 - `GET /v1/account-connect/billing-portal-sessions`
 - `POST /v1/account-connect/billing-portal-sessions`
+- `GET /v1/enterprise/identity-providers`
+- `POST /v1/enterprise/identity-providers`
 - `GET /v1/packs`
 - `POST /v1/packs/install`
 

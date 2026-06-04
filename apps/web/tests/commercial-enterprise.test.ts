@@ -9,6 +9,7 @@ vi.mock("../lib/client", () => ({
     listAccountConnectTeamInvites: vi.fn(),
     listAccountConnectBillingPortalSessions: vi.fn(),
     listEnterpriseClusters: vi.fn(),
+    listEnterpriseIdentityProviders: vi.fn(),
     listEnterpriseScimGroups: vi.fn(),
     listEnterpriseScimUsers: vi.fn(),
     listAgentModules: vi.fn(),
@@ -173,6 +174,44 @@ describe("commercial, enterprise, and marketplace feeds", async () => {
         },
       ],
     });
+    vi.mocked(client.listEnterpriseIdentityProviders).mockResolvedValueOnce({
+      project_id: "boss-dogfood",
+      items: [
+        {
+          id: "entidp_boss-dogfood_okta_oidc",
+          org_id: "org_boss",
+          project_id: "boss-dogfood",
+          provider_key: "okta_oidc",
+          provider_type: "oidc",
+          display_name: "Okta OIDC",
+          issuer: "https://idp.example",
+          audience: "boss-api",
+          jwks_url: "https://idp.example/.well-known/jwks.json",
+          status: "active",
+          test_status: "not_tested",
+          blocking_gaps: [],
+          metadata: {},
+          created_by: "ceo",
+          created_at: "2026-06-03T00:00:00Z",
+          updated_at: "2026-06-03T01:00:00Z",
+        },
+        {
+          id: "entidp_boss-dogfood_saml_pending",
+          org_id: "org_boss",
+          project_id: "boss-dogfood",
+          provider_key: "saml_pending",
+          provider_type: "saml",
+          display_name: "Pending SAML",
+          status: "blocked",
+          test_status: "not_tested",
+          blocking_gaps: ["saml_sso_url_missing"],
+          metadata: {},
+          created_by: "ceo",
+          created_at: "2026-06-03T00:00:00Z",
+          updated_at: "2026-06-03T01:00:00Z",
+        },
+      ],
+    });
     vi.mocked(client.listEnterpriseScimGroups).mockResolvedValueOnce({
       project_id: "boss-dogfood",
       items: [
@@ -219,8 +258,11 @@ describe("commercial, enterprise, and marketplace feeds", async () => {
     const feed = await fetchEnterpriseFeed("boss-dogfood");
 
     expect(feed.summary.clusterCount).toBe(1);
+    expect(feed.summary.identityProviderCount).toBe(2);
+    expect(feed.summary.activeIdentityProviders).toBe(1);
     expect(feed.summary.activeScimUsers).toBe(1);
-    expect(feed.summary.blockingGapCount).toBe(1);
+    expect(feed.summary.blockingGapCount).toBe(2);
+    expect(feed.identityProviders[0].providerKey).toBe("okta_oidc");
     expect(feed.scimUsers[0].memberId).toBe("scim_ops_example_com");
   });
 

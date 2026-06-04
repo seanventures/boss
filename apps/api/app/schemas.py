@@ -345,6 +345,67 @@ class EnterpriseClusterUpsertRequest(BaseModel):
         return self
 
 
+class EnterpriseIdentityProviderSummary(BaseModel):
+    id: str
+    org_id: str
+    project_id: str
+    provider_key: str
+    provider_type: str
+    display_name: str
+    issuer: Optional[str] = None
+    audience: Optional[str] = None
+    entity_id: Optional[str] = None
+    sso_url: Optional[str] = None
+    jwks_url: Optional[str] = None
+    certificate_fingerprint: Optional[str] = None
+    scim_base_url: Optional[str] = None
+    secret_ref: Optional[str] = None
+    status: str
+    test_status: str
+    blocking_gaps: list[str]
+    metadata: dict[str, Any]
+    created_by: str
+    created_at: str
+    updated_at: str
+
+
+class EnterpriseIdentityProviderListResponse(BaseModel):
+    project_id: str
+    items: list[EnterpriseIdentityProviderSummary]
+
+
+class EnterpriseIdentityProviderUpsertRequest(BaseModel):
+    project_id: str
+    provider_key: str
+    provider_type: str
+    display_name: str
+    issuer: Optional[str] = None
+    audience: Optional[str] = None
+    entity_id: Optional[str] = None
+    sso_url: Optional[str] = None
+    jwks_url: Optional[str] = None
+    certificate_fingerprint: Optional[str] = None
+    scim_base_url: Optional[str] = None
+    secret_ref: Optional[str] = None
+    status: str = "planned"
+    test_status: str = "not_tested"
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    actor: str = "system"
+
+    @model_validator(mode="after")
+    def validate_identity_provider(
+        self,
+    ) -> "EnterpriseIdentityProviderUpsertRequest":
+        self.project_id = _require_text(self.project_id, "project_id")
+        self.provider_key = _require_text(self.provider_key, "provider_key")
+        self.provider_type = _require_text(self.provider_type, "provider_type")
+        self.display_name = _require_text(self.display_name, "display_name")
+        self.status = _require_text(self.status, "status")
+        self.test_status = _require_text(self.test_status, "test_status")
+        self.actor = _require_text(self.actor, "actor")
+        return self
+
+
 class EnterpriseScimGroupSummary(BaseModel):
     id: str
     org_id: str

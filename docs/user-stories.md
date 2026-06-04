@@ -372,6 +372,7 @@ Acceptance criteria:
 - Given Account Connect is not linked, when an authorized actor submits a hosted org ID, then Mission Control calls the Account Connect link API and refreshes the panel from the control plane.
 - Given Account Connect is linked, when an authorized actor requests entitlement sync or unlink, then Mission Control calls the corresponding API and relies on audit events from the backend.
 - Given Enterprise cluster posture exists, when Mission Control loads, then it shows deployment mode, Account Connect mode, worker strategy, HA/data residency, support tier, compliance packs, and blocking gaps.
+- Given enterprise identity-provider records exist, when Mission Control loads, then it shows OIDC, SAML, and SCIM provider status, SecretRefs, and blocking gaps.
 - Given an authorized actor upserts SCIM groups or users, when the form is submitted, then Mission Control calls the enterprise SCIM API and active users are represented through the same org-member RBAC directory.
 
 ### Story ADM-006: Govern Enterprise Trust And Clustering Posture
@@ -382,8 +383,11 @@ Acceptance criteria:
 
 - Given an unauthorized actor, when they attempt to create an enterprise cluster record, then BOSS denies the write and emits a visible policy-denial event.
 - Given an Enterprise Cloud cluster has SSO/OIDC or SAML, SCIM, audit exports, retention, and SLA metadata configured, when it is saved, then BOSS records it as active with no blocking gaps.
+- Given complete active OIDC and SCIM identity-provider records exist, when an Enterprise Cloud cluster is saved without manual identity flags, then BOSS treats those provider records as satisfying the corresponding identity controls.
+- Given an operator marks an incomplete SAML/OIDC/SCIM provider active, when BOSS saves it, then BOSS stores the record as blocked with explicit blocking gaps instead of silently treating it as configured.
 - Given a detached self-hosted enterprise cluster lacks SSO/SAML, SCIM, private worker pools, or compliance packs, when it is saved, then BOSS marks it blocked and lists each missing control.
 - Given enterprise cluster state changes, when the write succeeds, then BOSS emits `enterprise.cluster_upserted` with deployment mode, Account Connect mode, status, and blocking gaps.
+- Given enterprise identity-provider state changes, when the write succeeds, then BOSS emits `enterprise.identity_provider_upserted` with provider type, status, and blocking gaps.
 - Given an enterprise admin maps a SCIM group to BOSS permissions, when the group is saved, then BOSS emits `enterprise.scim_group_upserted`.
 - Given an active SCIM user belongs to a mapped group, when the user is saved, then BOSS creates or updates an org member with the merged explicit role and permission grants.
 - Given a SCIM user is deactivated, when the user is saved, then BOSS removes the user's effective org-member access without deleting the audit record.

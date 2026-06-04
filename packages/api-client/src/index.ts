@@ -259,6 +259,54 @@ export type EnterpriseClusterUpsertRequest = {
   actor?: string;
 };
 
+export type EnterpriseIdentityProviderSummary = {
+  id: string;
+  org_id: string;
+  project_id: string;
+  provider_key: string;
+  provider_type: string;
+  display_name: string;
+  issuer?: string;
+  audience?: string;
+  entity_id?: string;
+  sso_url?: string;
+  jwks_url?: string;
+  certificate_fingerprint?: string;
+  scim_base_url?: string;
+  secret_ref?: string;
+  status: string;
+  test_status: string;
+  blocking_gaps: string[];
+  metadata: Record<string, unknown>;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type EnterpriseIdentityProviderListResponse = {
+  project_id: string;
+  items: EnterpriseIdentityProviderSummary[];
+};
+
+export type EnterpriseIdentityProviderUpsertRequest = {
+  project_id: string;
+  provider_key: string;
+  provider_type: string;
+  display_name: string;
+  issuer?: string;
+  audience?: string;
+  entity_id?: string;
+  sso_url?: string;
+  jwks_url?: string;
+  certificate_fingerprint?: string;
+  scim_base_url?: string;
+  secret_ref?: string;
+  status?: string;
+  test_status?: string;
+  metadata?: Record<string, unknown>;
+  actor?: string;
+};
+
 export type EnterpriseScimGroupSummary = {
   id: string;
   org_id: string;
@@ -2815,6 +2863,22 @@ export function createBossApiClient(config: BossApiClientConfig) {
       return request<EnterpriseClusterSummary>(
         "POST",
         "/v1/enterprise/clusters",
+        { body: payload },
+      );
+    },
+    listEnterpriseIdentityProviders(projectId: string) {
+      return request<EnterpriseIdentityProviderListResponse>(
+        "GET",
+        "/v1/enterprise/identity-providers",
+        { query: { project_id: projectId } },
+      );
+    },
+    upsertEnterpriseIdentityProvider(
+      payload: EnterpriseIdentityProviderUpsertRequest,
+    ) {
+      return request<EnterpriseIdentityProviderSummary>(
+        "POST",
+        "/v1/enterprise/identity-providers",
         { body: payload },
       );
     },

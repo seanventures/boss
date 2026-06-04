@@ -226,6 +226,35 @@ CREATE INDEX IF NOT EXISTS idx_enterprise_clusters_project_status
 CREATE INDEX IF NOT EXISTS idx_enterprise_clusters_org
   ON enterprise_clusters(org_id, deployment_mode);
 
+CREATE TABLE IF NOT EXISTS enterprise_identity_providers (
+  id TEXT PRIMARY KEY,
+  org_id TEXT NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  provider_key TEXT NOT NULL,
+  provider_type TEXT NOT NULL,
+  display_name TEXT NOT NULL,
+  issuer TEXT,
+  audience TEXT,
+  entity_id TEXT,
+  sso_url TEXT,
+  jwks_url TEXT,
+  certificate_fingerprint TEXT,
+  scim_base_url TEXT,
+  secret_ref TEXT,
+  status TEXT NOT NULL DEFAULT 'planned',
+  test_status TEXT NOT NULL DEFAULT 'not_tested',
+  blocking_gaps JSONB NOT NULL DEFAULT '[]'::jsonb,
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_by TEXT NOT NULL DEFAULT 'system',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(project_id, provider_key)
+);
+CREATE INDEX IF NOT EXISTS idx_enterprise_identity_providers_project_status
+  ON enterprise_identity_providers(project_id, status, provider_type);
+CREATE INDEX IF NOT EXISTS idx_enterprise_identity_providers_org
+  ON enterprise_identity_providers(org_id, provider_type);
+
 CREATE TABLE IF NOT EXISTS enterprise_scim_groups (
   id TEXT PRIMARY KEY,
   org_id TEXT NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,

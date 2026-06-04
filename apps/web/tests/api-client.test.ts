@@ -467,6 +467,67 @@ describe("createBossApiClient", () => {
     expect(calls[3].init?.method).toBe("POST");
   });
 
+  it("uses enterprise identity provider API contracts", async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const provider = {
+      id: "entidp_boss-dogfood_okta_oidc",
+      org_id: "org_boss",
+      project_id: "boss-dogfood",
+      provider_key: "okta_oidc",
+      provider_type: "oidc",
+      display_name: "Okta OIDC",
+      issuer: "https://idp.example",
+      audience: "boss-api",
+      jwks_url: "https://idp.example/.well-known/jwks.json",
+      status: "active",
+      test_status: "not_tested",
+      blocking_gaps: [],
+      metadata: {},
+      created_by: "ceo",
+      created_at: "2026-06-03T00:00:00Z",
+      updated_at: "2026-06-03T00:00:00Z",
+    };
+    const responses = [
+      { status: 200, body: { project_id: "boss-dogfood", items: [provider] } },
+      { status: 201, body: provider },
+    ];
+    const fetchImpl = async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({ url: String(input), init });
+      const response = responses.shift();
+      return new Response(JSON.stringify(response?.body ?? {}), {
+        status: response?.status ?? 500,
+        headers: { "Content-Type": "application/json" },
+      });
+    };
+    const client = createBossApiClient({
+      baseUrl: "http://127.0.0.1:8000",
+      fetchImpl,
+    });
+
+    const listed = await client.listEnterpriseIdentityProviders("boss-dogfood");
+    const upserted = await client.upsertEnterpriseIdentityProvider({
+      project_id: "boss-dogfood",
+      provider_key: "okta_oidc",
+      provider_type: "oidc",
+      display_name: "Okta OIDC",
+      issuer: "https://idp.example",
+      audience: "boss-api",
+      jwks_url: "https://idp.example/.well-known/jwks.json",
+      status: "active",
+      actor: "ceo",
+    });
+
+    expect(listed.items[0].provider_type).toBe("oidc");
+    expect(upserted.status).toBe("active");
+    expect(calls[0].url).toBe(
+      "http://127.0.0.1:8000/v1/enterprise/identity-providers?project_id=boss-dogfood",
+    );
+    expect(calls[1].url).toBe(
+      "http://127.0.0.1:8000/v1/enterprise/identity-providers",
+    );
+    expect(calls[1].init?.method).toBe("POST");
+  });
+
   it("uses agent module entitlement and install-record API contracts", async () => {
     const calls: Array<{ url: string; init?: RequestInit }> = [];
     const module = {

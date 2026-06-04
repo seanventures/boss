@@ -254,6 +254,51 @@ paths:
         '201': { description: Enterprise cluster record normalized, policy gaps calculated, and audit event emitted }
         '403': { description: Actor is not allowed to manage enterprise trust or clustering records }
         '422': { description: Unsupported enterprise deployment or Account Connect mode }
+  /v1/enterprise/identity-providers:
+    get:
+      summary: List enterprise OIDC, SAML, and SCIM identity-provider metadata records
+      parameters:
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Enterprise identity-provider records with blocking gaps and SecretRef metadata }
+    post:
+      summary: Create or update an enterprise identity-provider metadata record without external IdP calls
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id, provider_key, provider_type, display_name]
+              properties:
+                project_id: { type: string }
+                provider_key: { type: string }
+                provider_type:
+                  type: string
+                  enum: [oidc, saml, scim]
+                display_name: { type: string }
+                issuer: { type: string }
+                audience: { type: string }
+                entity_id: { type: string }
+                sso_url: { type: string }
+                jwks_url: { type: string }
+                certificate_fingerprint: { type: string }
+                scim_base_url: { type: string }
+                secret_ref: { type: string }
+                status:
+                  type: string
+                  enum: [planned, active, blocked, disabled]
+                  default: planned
+                test_status: { type: string, default: not_tested }
+                metadata: { type: object }
+                actor: { type: string, default: system }
+      responses:
+        '201': { description: Enterprise identity-provider metadata saved, blocking gaps calculated, and audit event emitted }
+        '403': { description: Actor is not allowed to manage enterprise trust records }
+        '422': { description: Unsupported provider type, unsupported status, or invalid required metadata }
   /v1/enterprise/scim/groups:
     get:
       summary: List Enterprise SCIM groups and their BOSS RBAC mappings

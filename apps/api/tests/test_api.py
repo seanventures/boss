@@ -1192,6 +1192,121 @@ def test_enterprise_cluster_records_trust_controls_and_blocking_gaps(client):
     assert "enterprise.cluster_upserted" in event_types
 
 
+def test_enterprise_identity_providers_back_cluster_identity_controls(client):
+    denied = client.post(
+        "/v1/enterprise/identity-providers",
+        json={
+            "project_id": "boss-dogfood",
+            "provider_key": "okta_oidc",
+            "provider_type": "oidc",
+            "display_name": "Okta OIDC",
+            "issuer": "https://idp.example",
+            "audience": "boss-api",
+            "jwks_url": "https://idp.example/.well-known/jwks.json",
+            "status": "active",
+            "actor": "release_manager",
+        },
+    )
+    assert denied.status_code == 403
+
+    oidc = client.post(
+        "/v1/enterprise/identity-providers",
+        json={
+            "project_id": "boss-dogfood",
+            "provider_key": "okta_oidc",
+            "provider_type": "oidc",
+            "display_name": "Okta OIDC",
+            "issuer": "https://idp.example",
+            "audience": "boss-api",
+            "jwks_url": "https://idp.example/.well-known/jwks.json",
+            "status": "active",
+            "actor": "ceo",
+        },
+    )
+    assert oidc.status_code == 201
+    oidc_payload = oidc.json()
+    assert oidc_payload["status"] == "active"
+    assert oidc_payload["blocking_gaps"] == []
+
+    scim = client.post(
+        "/v1/enterprise/identity-providers",
+        json={
+            "project_id": "boss-dogfood",
+            "provider_key": "okta_scim",
+            "provider_type": "scim",
+            "display_name": "Okta SCIM",
+            "scim_base_url": "https://idp.example/scim/v2",
+            "secret_ref": "secretref:okta-scim-token",
+            "status": "active",
+            "actor": "ceo",
+        },
+    )
+    assert scim.status_code == 201
+    assert scim.json()["status"] == "active"
+
+    incomplete_saml = client.post(
+        "/v1/enterprise/identity-providers",
+        json={
+            "project_id": "boss-dogfood",
+            "provider_key": "saml_pending",
+            "provider_type": "saml",
+            "display_name": "Pending SAML",
+            "entity_id": "urn:boss:test",
+            "status": "active",
+            "actor": "ceo",
+        },
+    )
+    assert incomplete_saml.status_code == 201
+    saml_payload = incomplete_saml.json()
+    assert saml_payload["status"] == "blocked"
+    assert "saml_sso_url_missing" in saml_payload["blocking_gaps"]
+    assert "saml_certificate_fingerprint_missing" in saml_payload["blocking_gaps"]
+
+    listed = client.get(
+        "/v1/enterprise/identity-providers",
+        params={"project_id": "boss-dogfood"},
+    )
+    assert listed.status_code == 200
+    assert {item["provider_key"] for item in listed.json()["items"]} == {
+        "okta_oidc",
+        "okta_scim",
+        "saml_pending",
+    }
+
+    cluster = client.post(
+        "/v1/enterprise/clusters",
+        json={
+            "project_id": "boss-dogfood",
+            "deployment_mode": "enterprise_cloud",
+            "account_connect_mode": "attached",
+            "audit_controls": {
+                "audit_exports_enabled": True,
+                "retention_days": 365,
+                "compliance_evidence_workflows": True,
+            },
+            "status": "active",
+            "actor": "ceo",
+        },
+    )
+    assert cluster.status_code == 201
+    cluster_payload = cluster.json()
+    assert cluster_payload["status"] == "active"
+    assert cluster_payload["blocking_gaps"] == []
+    assert cluster_payload["identity_controls"]["sso_oidc_configured"] is True
+    assert cluster_payload["identity_controls"]["scim_configured"] is True
+    assert cluster_payload["metadata"]["identity_provider_status"] == {
+        "oidc": True,
+        "saml": False,
+        "scim": True,
+    }
+
+    events = client.get("/v1/events", params={"project_id": "boss-dogfood"})
+    event_types = [item["event_type"] for item in events.json()["items"]]
+    assert "policy.denied" in event_types
+    assert "enterprise.identity_provider_upserted" in event_types
+    assert "enterprise.cluster_upserted" in event_types
+
+
 def test_enterprise_scim_provisioning_maps_users_to_org_members(client):
     denied = client.post(
         "/v1/enterprise/scim/groups",

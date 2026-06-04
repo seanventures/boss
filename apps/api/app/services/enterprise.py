@@ -22,6 +22,8 @@ class EnterpriseService:
         "air_gapped",
     }
     ACCOUNT_CONNECT_MODES = {"attached", "detached"}
+    IDENTITY_PROVIDER_TYPES = {"oidc", "saml", "scim"}
+    IDENTITY_PROVIDER_STATUSES = {"planned", "active", "blocked", "disabled"}
 
     def __init__(self, settings: Settings):
         self.settings = settings
@@ -49,6 +51,154 @@ class EnterpriseService:
             {"project_id": project_id},
         ).mappings().first()
         return row["org_id"] if row else self.settings.default_org_id
+
+    def list_identity_providers(
+        self,
+        connection: Connection,
+        project_id: str,
+    ) -> list[dict[str, Any]]:
+        rows = connection.execute(
+            text(
+                """
+                SELECT id, org_id, project_id, provider_key, provider_type,
+                       display_name, issuer, audience, entity_id, sso_url,
+                       jwks_url, certificate_fingerprint, scim_base_url,
+                       secret_ref, status, test_status, blocking_gaps,
+                       metadata, created_by, created_at, updated_at
+                FROM enterprise_identity_providers
+                WHERE project_id = :project_id
+                ORDER BY provider_type ASC, display_name ASC
+                """
+            ),
+            {"project_id": project_id},
+        ).mappings().all()
+        return [self._identity_provider_from_row(dict(row)) for row in rows]
+
+    def upsert_identity_provider(
+        self,
+        connection: Connection,
+        project_id: str,
+        *,
+        provider_key: str,
+        provider_type: str,
+        display_name: str,
+        actor: str,
+        issuer: Optional[str] = None,
+        audience: Optional[str] = None,
+        entity_id: Optional[str] = None,
+        sso_url: Optional[str] = None,
+        jwks_url: Optional[str] = None,
+        certificate_fingerprint: Optional[str] = None,
+        scim_base_url: Optional[str] = None,
+        secret_ref: Optional[str] = None,
+        status: str = "planned",
+        test_status: str = "not_tested",
+        metadata: Optional[dict[str, Any]] = None,
+    ) -> dict[str, Any]:
+        org_id = self._project_org_id(connection, project_id)
+        normalized_key = self._id_token(provider_key)
+        normalized_type = provider_type.strip().lower()
+        normalized_display_name = display_name.strip()
+        normalized_status = status.strip().lower()
+        if not normalized_key:
+            raise ValueError("identity provider provider_key must not be blank.")
+        if normalized_type not in self.IDENTITY_PROVIDER_TYPES:
+            raise ValueError(f"Unsupported identity provider type: {provider_type}")
+        if not normalized_display_name:
+            raise ValueError("identity provider display_name must not be blank.")
+        if normalized_status not in self.IDENTITY_PROVIDER_STATUSES:
+            raise ValueError(f"Unsupported identity provider status: {status}")
+        gaps = self._identity_provider_gaps(
+            provider_type=normalized_type,
+            issuer=issuer,
+            audience=audience,
+            entity_id=entity_id,
+            sso_url=sso_url,
+            jwks_url=jwks_url,
+            certificate_fingerprint=certificate_fingerprint,
+            scim_base_url=scim_base_url,
+            secret_ref=secret_ref,
+        )
+        effective_status = (
+            "blocked" if normalized_status == "active" and gaps else normalized_status
+        )
+        provider_id = f"entidp_{project_id}_{normalized_key}"
+        connection.execute(
+            text(
+                """
+                INSERT INTO enterprise_identity_providers (
+                    id, org_id, project_id, provider_key, provider_type,
+                    display_name, issuer, audience, entity_id, sso_url,
+                    jwks_url, certificate_fingerprint, scim_base_url,
+                    secret_ref, status, test_status, blocking_gaps,
+                    metadata, created_by
+                )
+                VALUES (
+                    :id, :org_id, :project_id, :provider_key, :provider_type,
+                    :display_name, :issuer, :audience, :entity_id, :sso_url,
+                    :jwks_url, :certificate_fingerprint, :scim_base_url,
+                    :secret_ref, :status, :test_status,
+                    CAST(:blocking_gaps AS JSONB), CAST(:metadata AS JSONB),
+                    :created_by
+                )
+                ON CONFLICT (project_id, provider_key) DO UPDATE
+                SET provider_type = EXCLUDED.provider_type,
+                    display_name = EXCLUDED.display_name,
+                    issuer = EXCLUDED.issuer,
+                    audience = EXCLUDED.audience,
+                    entity_id = EXCLUDED.entity_id,
+                    sso_url = EXCLUDED.sso_url,
+                    jwks_url = EXCLUDED.jwks_url,
+                    certificate_fingerprint = EXCLUDED.certificate_fingerprint,
+                    scim_base_url = EXCLUDED.scim_base_url,
+                    secret_ref = EXCLUDED.secret_ref,
+                    status = EXCLUDED.status,
+                    test_status = EXCLUDED.test_status,
+                    blocking_gaps = EXCLUDED.blocking_gaps,
+                    metadata = EXCLUDED.metadata,
+                    created_by = EXCLUDED.created_by,
+                    updated_at = now()
+                """
+            ),
+            {
+                "id": provider_id,
+                "org_id": org_id,
+                "project_id": project_id,
+                "provider_key": normalized_key,
+                "provider_type": normalized_type,
+                "display_name": normalized_display_name,
+                "issuer": self._optional_text(issuer),
+                "audience": self._optional_text(audience),
+                "entity_id": self._optional_text(entity_id),
+                "sso_url": self._optional_text(sso_url),
+                "jwks_url": self._optional_text(jwks_url),
+                "certificate_fingerprint": self._optional_text(
+                    certificate_fingerprint
+                ),
+                "scim_base_url": self._optional_text(scim_base_url),
+                "secret_ref": self._optional_text(secret_ref),
+                "status": effective_status,
+                "test_status": test_status.strip() if test_status.strip() else "not_tested",
+                "blocking_gaps": json.dumps(gaps),
+                "metadata": json.dumps(metadata or {}),
+                "created_by": actor,
+            },
+        )
+        emit_event(
+            connection,
+            project_id,
+            "enterprise.identity_provider_upserted",
+            actor,
+            "enterprise_identity_provider",
+            provider_id,
+            {
+                "provider_key": normalized_key,
+                "provider_type": normalized_type,
+                "status": effective_status,
+                "blocking_gaps": gaps,
+            },
+        )
+        return self._get_identity_provider(connection, project_id, normalized_key)
 
     def list_scim_groups(
         self,
@@ -328,9 +478,14 @@ class EnterpriseService:
             )
         org_id = self._project_org_id(connection, project_id)
         policy = self._load_policy().get("rules", {})
+        identity_provider_status = self._active_identity_provider_status(
+            connection,
+            project_id,
+        )
         normalized_identity = self._normalize_identity_controls(
             identity_controls or {},
             policy.get("identity") or {},
+            identity_provider_status,
         )
         normalized_governance = self._normalize_governance_controls(
             governance_controls or {},
@@ -360,6 +515,7 @@ class EnterpriseService:
         cluster_metadata = {
             **(metadata or {}),
             "blocking_gaps": blocking_gaps,
+            "identity_provider_status": identity_provider_status,
             "policy_id": "enterprise_governance_policy",
         }
         connection.execute(
@@ -465,19 +621,27 @@ class EnterpriseService:
         self,
         controls: dict[str, Any],
         policy: dict[str, Any],
+        identity_provider_status: dict[str, bool],
     ) -> dict[str, Any]:
+        oidc_configured = bool(
+            controls.get(
+                "sso_oidc_configured",
+                self.settings.oidc_enabled and self.settings.oidc_configured,
+            )
+        ) or bool(identity_provider_status.get("oidc"))
+        saml_configured = bool(controls.get("saml_configured", False)) or bool(
+            identity_provider_status.get("saml")
+        )
+        scim_configured = bool(controls.get("scim_configured", False)) or bool(
+            identity_provider_status.get("scim")
+        )
         return {
             "sso_oidc_required": bool(policy.get("sso_oidc", True)),
-            "sso_oidc_configured": bool(
-                controls.get(
-                    "sso_oidc_configured",
-                    self.settings.oidc_enabled and self.settings.oidc_configured,
-                )
-            ),
+            "sso_oidc_configured": oidc_configured,
             "saml_required": bool(policy.get("saml", True)),
-            "saml_configured": bool(controls.get("saml_configured", False)),
+            "saml_configured": saml_configured,
             "scim_required": bool(policy.get("scim", True)),
-            "scim_configured": bool(controls.get("scim_configured", False)),
+            "scim_configured": scim_configured,
             "rbac_enabled": bool(controls.get("rbac_enabled", policy.get("rbac", True))),
             "abac_enabled": bool(controls.get("abac_enabled", policy.get("abac", True))),
             "principal_binding_required": bool(
@@ -583,6 +747,101 @@ class EnterpriseService:
             "created_at": row["created_at"].isoformat(),
             "updated_at": row["updated_at"].isoformat(),
         }
+
+    def _get_identity_provider(
+        self,
+        connection: Connection,
+        project_id: str,
+        provider_key: str,
+    ) -> dict[str, Any]:
+        row = connection.execute(
+            text(
+                """
+                SELECT id, org_id, project_id, provider_key, provider_type,
+                       display_name, issuer, audience, entity_id, sso_url,
+                       jwks_url, certificate_fingerprint, scim_base_url,
+                       secret_ref, status, test_status, blocking_gaps,
+                       metadata, created_by, created_at, updated_at
+                FROM enterprise_identity_providers
+                WHERE project_id = :project_id AND provider_key = :provider_key
+                """
+            ),
+            {"project_id": project_id, "provider_key": provider_key},
+        ).mappings().first()
+        if row is None:
+            raise ValueError(f"Identity provider '{provider_key}' was not found.")
+        return self._identity_provider_from_row(dict(row))
+
+    def _active_identity_provider_status(
+        self,
+        connection: Connection,
+        project_id: str,
+    ) -> dict[str, bool]:
+        rows = connection.execute(
+            text(
+                """
+                SELECT provider_type
+                FROM enterprise_identity_providers
+                WHERE project_id = :project_id
+                  AND status = 'active'
+                  AND jsonb_array_length(blocking_gaps) = 0
+                """
+            ),
+            {"project_id": project_id},
+        ).mappings().all()
+        return {
+            "oidc": any(row["provider_type"] == "oidc" for row in rows),
+            "saml": any(row["provider_type"] == "saml" for row in rows),
+            "scim": any(row["provider_type"] == "scim" for row in rows),
+        }
+
+    def _identity_provider_gaps(
+        self,
+        *,
+        provider_type: str,
+        issuer: Optional[str],
+        audience: Optional[str],
+        entity_id: Optional[str],
+        sso_url: Optional[str],
+        jwks_url: Optional[str],
+        certificate_fingerprint: Optional[str],
+        scim_base_url: Optional[str],
+        secret_ref: Optional[str],
+    ) -> list[str]:
+        gaps: list[str] = []
+        if provider_type == "oidc":
+            if not self._optional_text(issuer):
+                gaps.append("oidc_issuer_missing")
+            if not self._optional_text(audience):
+                gaps.append("oidc_audience_missing")
+            if not self._optional_text(jwks_url):
+                gaps.append("oidc_jwks_url_missing")
+        elif provider_type == "saml":
+            if not self._optional_text(entity_id):
+                gaps.append("saml_entity_id_missing")
+            if not self._optional_text(sso_url):
+                gaps.append("saml_sso_url_missing")
+            if not self._optional_text(certificate_fingerprint):
+                gaps.append("saml_certificate_fingerprint_missing")
+        elif provider_type == "scim":
+            if not self._optional_text(scim_base_url):
+                gaps.append("scim_base_url_missing")
+            if not self._optional_text(secret_ref):
+                gaps.append("scim_secret_ref_missing")
+        return gaps
+
+    def _identity_provider_from_row(self, row: dict[str, Any]) -> dict[str, Any]:
+        return {
+            **row,
+            "created_at": row["created_at"].isoformat(),
+            "updated_at": row["updated_at"].isoformat(),
+        }
+
+    def _optional_text(self, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        return cleaned or None
 
     def _get_scim_group_by_name(
         self,

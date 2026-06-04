@@ -443,6 +443,48 @@ export async function upsertEnterpriseClusterAction(
   revalidatePath("/");
 }
 
+export async function upsertEnterpriseIdentityProviderAction(
+  formData: FormData,
+): Promise<void> {
+  const providerKey = formData.get("provider_key");
+  const providerType = formData.get("provider_type");
+  const displayName = formData.get("display_name");
+  if (typeof providerKey !== "string" || !providerKey.trim()) {
+    throw new Error("provider_key is required");
+  }
+  if (typeof providerType !== "string" || !providerType.trim()) {
+    throw new Error("provider_type is required");
+  }
+  if (typeof displayName !== "string" || !displayName.trim()) {
+    throw new Error("display_name is required");
+  }
+  await client.upsertEnterpriseIdentityProvider({
+    project_id: getProjectId(formData),
+    provider_key: providerKey.trim(),
+    provider_type: providerType.trim(),
+    display_name: displayName.trim(),
+    issuer: getOptionalString(formData, "issuer"),
+    audience: getOptionalString(formData, "audience"),
+    entity_id: getOptionalString(formData, "entity_id"),
+    sso_url: getOptionalString(formData, "sso_url"),
+    jwks_url: getOptionalString(formData, "jwks_url"),
+    certificate_fingerprint: getOptionalString(
+      formData,
+      "certificate_fingerprint",
+    ),
+    scim_base_url: getOptionalString(formData, "scim_base_url"),
+    secret_ref: getOptionalString(formData, "secret_ref"),
+    status: getOptionalString(formData, "status") ?? "planned",
+    test_status: getOptionalString(formData, "test_status") ?? "not_tested",
+    metadata: parseOptionalJsonObjectField(
+      formData.get("metadata_json"),
+      "metadata_json",
+    ),
+    actor: getActor(formData),
+  });
+  revalidatePath("/");
+}
+
 export async function upsertEnterpriseScimGroupAction(
   formData: FormData,
 ): Promise<void> {

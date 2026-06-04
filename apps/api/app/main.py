@@ -99,6 +99,9 @@ from .schemas import (
     EnterpriseClusterListResponse,
     EnterpriseClusterSummary,
     EnterpriseClusterUpsertRequest,
+    EnterpriseIdentityProviderListResponse,
+    EnterpriseIdentityProviderSummary,
+    EnterpriseIdentityProviderUpsertRequest,
     EnterpriseScimGroupListResponse,
     EnterpriseScimGroupSummary,
     EnterpriseScimGroupUpsertRequest,
@@ -1269,6 +1272,12 @@ def enterprise_cluster_summary_from_service(payload) -> EnterpriseClusterSummary
     return EnterpriseClusterSummary(**payload)
 
 
+def enterprise_identity_provider_summary_from_service(
+    payload,
+) -> EnterpriseIdentityProviderSummary:
+    return EnterpriseIdentityProviderSummary(**payload)
+
+
 def enterprise_scim_group_summary_from_service(payload) -> EnterpriseScimGroupSummary:
     return EnterpriseScimGroupSummary(**payload)
 
@@ -1673,6 +1682,64 @@ def upsert_enterprise_cluster(
         except ValueError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
         return enterprise_cluster_summary_from_service(cluster)
+
+
+@app.get(
+    "/v1/enterprise/identity-providers",
+    response_model=EnterpriseIdentityProviderListResponse,
+)
+def list_enterprise_identity_providers(
+    project_id: str,
+) -> EnterpriseIdentityProviderListResponse:
+    with begin(engine) as connection:
+        providers = enterprise.list_identity_providers(connection, project_id)
+        return EnterpriseIdentityProviderListResponse(
+            project_id=project_id,
+            items=[
+                enterprise_identity_provider_summary_from_service(provider)
+                for provider in providers
+            ],
+        )
+
+
+@app.post(
+    "/v1/enterprise/identity-providers",
+    response_model=EnterpriseIdentityProviderSummary,
+    status_code=201,
+)
+def upsert_enterprise_identity_provider(
+    payload: EnterpriseIdentityProviderUpsertRequest,
+) -> EnterpriseIdentityProviderSummary:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection,
+            payload.project_id,
+            payload.actor,
+            "enterprise_manage",
+        )
+        try:
+            provider = enterprise.upsert_identity_provider(
+                connection,
+                payload.project_id,
+                provider_key=payload.provider_key,
+                provider_type=payload.provider_type,
+                display_name=payload.display_name,
+                actor=payload.actor,
+                issuer=payload.issuer,
+                audience=payload.audience,
+                entity_id=payload.entity_id,
+                sso_url=payload.sso_url,
+                jwks_url=payload.jwks_url,
+                certificate_fingerprint=payload.certificate_fingerprint,
+                scim_base_url=payload.scim_base_url,
+                secret_ref=payload.secret_ref,
+                status=payload.status,
+                test_status=payload.test_status,
+                metadata=payload.metadata,
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        return enterprise_identity_provider_summary_from_service(provider)
 
 
 @app.get(

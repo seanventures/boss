@@ -35,6 +35,7 @@ import {
   unlinkAccountConnectAction,
   revokeAccountConnectTeamInviteAction,
   upsertEnterpriseClusterAction,
+  upsertEnterpriseIdentityProviderAction,
   upsertEnterpriseScimGroupAction,
   upsertEnterpriseScimUserAction,
   upsertOrgMemberAction,
@@ -3435,6 +3436,10 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                       {enterprise.summary.blockingGapCount === 1 ? "" : "s"}
                     </span>
                     <span className="pill">
+                      {enterprise.summary.activeIdentityProviders}/
+                      {enterprise.summary.identityProviderCount} active IdP
+                    </span>
+                    <span className="pill">
                       {enterprise.summary.activeScimUsers} active SCIM user
                       {enterprise.summary.activeScimUsers === 1 ? "" : "s"}
                     </span>
@@ -3482,10 +3487,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                       <span>Deployment mode</span>
                       <select className="input" name="deployment_mode" defaultValue="enterprise_cloud">
                         <option value="enterprise_cloud">Enterprise Cloud</option>
-                        <option value="enterprise_self_hosted">
-                          Enterprise Self-hosted
-                        </option>
-                        <option value="community_local">Community Local</option>
+                        <option value="self_hosted">Self-hosted</option>
+                        <option value="private_cloud">Private Cloud</option>
+                        <option value="air_gapped">Air-gapped</option>
                       </select>
                     </label>
                     <label className="field">
@@ -3493,7 +3497,6 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                       <select className="input" name="account_connect_mode" defaultValue="attached">
                         <option value="attached">Attached</option>
                         <option value="detached">Detached</option>
-                        <option value="optional">Optional</option>
                       </select>
                     </label>
                     <label className="field">
@@ -3566,6 +3569,126 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                     </label>
                     <button className="button secondary" type="submit">
                       Save enterprise record
+                    </button>
+                  </form>
+                </>
+              )}
+            </article>
+
+            <article className="stack-card">
+              <h3>Enterprise identity providers</h3>
+              {!enterprise.apiReachable ? (
+                <p className="detail">
+                  {enterprise.blockedReason ?? "Enterprise API is unavailable."}
+                </p>
+              ) : (
+                <>
+                  {enterprise.identityProviders.length === 0 ? (
+                    <p className="detail">
+                      No OIDC, SAML, or SCIM identity provider metadata has been
+                      registered.
+                    </p>
+                  ) : (
+                    <div className="feed-list">
+                      {enterprise.identityProviders.slice(0, 6).map((provider) => (
+                        <div className="feed-row" key={provider.id}>
+                          <div>
+                            <h4>{provider.displayName}</h4>
+                            <p className="detail">
+                              {provider.providerKey} /{" "}
+                              {titleCaseToken(provider.providerType)} /{" "}
+                              {provider.testStatus}
+                            </p>
+                            <p className="detail">
+                              Ref{" "}
+                              {provider.issuer ??
+                                provider.entityId ??
+                                provider.scimBaseUrl ??
+                                "not configured"}{" "}
+                              / SecretRef {provider.secretRef ?? "not required"}
+                            </p>
+                            {provider.blockingGaps.length > 0 ? (
+                              <p className="detail">
+                                Gaps: {provider.blockingGaps.join(", ")}
+                              </p>
+                            ) : null}
+                          </div>
+                          <span
+                            className={`pill${
+                              provider.status === "active" ? "" : " warn"
+                            }`}
+                          >
+                            {titleCaseToken(provider.status)}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  <form
+                    action={upsertEnterpriseIdentityProviderAction}
+                    className="composer"
+                  >
+                    <input type="hidden" name="project_id" value={activeProjectId} />
+                    <input type="hidden" name="actor" value={activeActorId} />
+                    <label className="field">
+                      <span>Provider key</span>
+                      <input className="input" name="provider_key" required />
+                    </label>
+                    <label className="field">
+                      <span>Provider type</span>
+                      <select className="input" name="provider_type" defaultValue="oidc">
+                        <option value="oidc">OIDC</option>
+                        <option value="saml">SAML</option>
+                        <option value="scim">SCIM</option>
+                      </select>
+                    </label>
+                    <label className="field">
+                      <span>Display name</span>
+                      <input className="input" name="display_name" required />
+                    </label>
+                    <label className="field">
+                      <span>Issuer</span>
+                      <input className="input" name="issuer" placeholder="https://idp.example" />
+                    </label>
+                    <label className="field">
+                      <span>Audience</span>
+                      <input className="input" name="audience" placeholder="boss-api" />
+                    </label>
+                    <label className="field">
+                      <span>JWKS URL</span>
+                      <input className="input" name="jwks_url" placeholder="https://idp.example/.well-known/jwks.json" />
+                    </label>
+                    <label className="field">
+                      <span>SAML entity ID</span>
+                      <input className="input" name="entity_id" />
+                    </label>
+                    <label className="field">
+                      <span>SAML SSO URL</span>
+                      <input className="input" name="sso_url" />
+                    </label>
+                    <label className="field">
+                      <span>SAML certificate fingerprint</span>
+                      <input className="input" name="certificate_fingerprint" />
+                    </label>
+                    <label className="field">
+                      <span>SCIM base URL</span>
+                      <input className="input" name="scim_base_url" />
+                    </label>
+                    <label className="field">
+                      <span>SecretRef</span>
+                      <input className="input" name="secret_ref" placeholder="secretref:idp-token" />
+                    </label>
+                    <label className="field">
+                      <span>Status</span>
+                      <select className="input" name="status" defaultValue="planned">
+                        <option value="planned">Planned</option>
+                        <option value="active">Active</option>
+                        <option value="disabled">Disabled</option>
+                      </select>
+                    </label>
+                    <button className="button secondary" type="submit">
+                      Save identity provider
                     </button>
                   </form>
                 </>

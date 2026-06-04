@@ -1,0 +1,56 @@
+kind: ObjectSpec
+id: EnterpriseIdentityProvider
+version: 0.1.0
+description: Auditable enterprise OIDC, SAML, or SCIM identity-provider metadata record.
+fields:
+  - name: id
+    type: string
+  - name: org_id
+    type: string
+  - name: project_id
+    type: string
+  - name: provider_key
+    type: string
+  - name: provider_type
+    type: enum
+    values: [oidc, saml, scim]
+  - name: display_name
+    type: string
+  - name: issuer
+    type: string
+    optional: true
+  - name: audience
+    type: string
+    optional: true
+  - name: entity_id
+    type: string
+    optional: true
+  - name: sso_url
+    type: string
+    optional: true
+  - name: jwks_url
+    type: string
+    optional: true
+  - name: certificate_fingerprint
+    type: string
+    optional: true
+  - name: scim_base_url
+    type: string
+    optional: true
+  - name: secret_ref
+    type: string
+    optional: true
+  - name: status
+    type: enum
+    values: [planned, active, blocked, disabled]
+  - name: test_status
+    type: string
+  - name: blocking_gaps
+    type: array
+  - name: metadata
+    type: object
+rules:
+  agents_receive_raw_idp_secrets: false
+  scim_connectors_use_secret_refs: true
+  incomplete_active_records_become_blocked: true
+  provider_metadata_can_satisfy_enterprise_identity_controls: true

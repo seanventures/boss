@@ -89,7 +89,7 @@ Model/capacity objects: `ProviderAccount`, `ProviderAdapter`, `EntitlementPool`,
 
 ProviderOps objects: `ExternalResource`, `Capability`, `DeploymentTarget`, `DeploymentRun`, `ChangeSet`, `ResourceReceipt`, `DriftReport`, `ProviderHealth`, `SecretRef`, `ResourcePolicy`, `ScalePlan`, `ResourceInventorySnapshot`.
 
-Commercial objects: `Edition`, `LicenseEntitlement`, `AccountConnectOrg`, `PackListing`, `PackInstall`, `MarketplacePublisher`, `EnterpriseCluster`.
+Commercial objects: `Edition`, `LicenseEntitlement`, `AccountConnectOrg`, `PackListing`, `PackInstall`, `MarketplacePublisher`, `EnterpriseCluster`, `EnterpriseIdentityProvider`.
 
 ### YAML Examples
 

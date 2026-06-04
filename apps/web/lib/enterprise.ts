@@ -1,6 +1,7 @@
 import {
   BossApiError,
   type EnterpriseClusterSummary,
+  type EnterpriseIdentityProviderSummary,
   type EnterpriseScimGroupSummary,
   type EnterpriseScimUserSummary,
 } from "@boss/api-client";
@@ -37,6 +38,25 @@ export type EnterpriseScimGroupItem = {
   updatedAt: string;
 };
 
+export type EnterpriseIdentityProviderItem = {
+  id: string;
+  providerKey: string;
+  providerType: string;
+  displayName: string;
+  issuer?: string;
+  audience?: string;
+  entityId?: string;
+  ssoUrl?: string;
+  jwksUrl?: string;
+  certificateFingerprint?: string;
+  scimBaseUrl?: string;
+  secretRef?: string;
+  status: string;
+  testStatus: string;
+  blockingGaps: string[];
+  updatedAt: string;
+};
+
 export type EnterpriseScimUserItem = {
   id: string;
   externalId?: string;
@@ -56,10 +76,13 @@ export type EnterpriseFeed = {
   apiReachable: boolean;
   blockedReason?: string;
   clusters: EnterpriseClusterItem[];
+  identityProviders: EnterpriseIdentityProviderItem[];
   scimGroups: EnterpriseScimGroupItem[];
   scimUsers: EnterpriseScimUserItem[];
   summary: {
     clusterCount: number;
+    identityProviderCount: number;
+    activeIdentityProviders: number;
     activeScimUsers: number;
     blockingGapCount: number;
   };
@@ -83,6 +106,29 @@ function mapCluster(payload: EnterpriseClusterSummary): EnterpriseClusterItem {
     status: payload.status,
     blockingGaps: payload.blocking_gaps,
     createdBy: payload.created_by,
+    updatedAt: payload.updated_at,
+  };
+}
+
+function mapIdentityProvider(
+  payload: EnterpriseIdentityProviderSummary,
+): EnterpriseIdentityProviderItem {
+  return {
+    id: payload.id,
+    providerKey: payload.provider_key,
+    providerType: payload.provider_type,
+    displayName: payload.display_name,
+    issuer: payload.issuer,
+    audience: payload.audience,
+    entityId: payload.entity_id,
+    ssoUrl: payload.sso_url,
+    jwksUrl: payload.jwks_url,
+    certificateFingerprint: payload.certificate_fingerprint,
+    scimBaseUrl: payload.scim_base_url,
+    secretRef: payload.secret_ref,
+    status: payload.status,
+    testStatus: payload.test_status,
+    blockingGaps: payload.blocking_gaps,
     updatedAt: payload.updated_at,
   };
 }
@@ -126,10 +172,13 @@ export function emptyEnterpriseFeed(
     apiReachable: false,
     blockedReason: reason,
     clusters: [],
+    identityProviders: [],
     scimGroups: [],
     scimUsers: [],
     summary: {
       clusterCount: 0,
+      identityProviderCount: 0,
+      activeIdentityProviders: 0,
       activeScimUsers: 0,
       blockingGapCount: 0,
     },
@@ -141,26 +190,38 @@ export async function fetchEnterpriseFeed(
 ): Promise<EnterpriseFeed> {
   const resolvedProjectId = resolveProjectId(projectId);
   try {
-    const [clusters, scimGroups, scimUsers] = await Promise.all([
+    const [clusters, identityProviders, scimGroups, scimUsers] = await Promise.all([
       client.listEnterpriseClusters(resolvedProjectId),
+      client.listEnterpriseIdentityProviders(resolvedProjectId),
       client.listEnterpriseScimGroups(resolvedProjectId),
       client.listEnterpriseScimUsers(resolvedProjectId),
     ]);
     const clusterItems = clusters.items.map(mapCluster);
+    const providerItems = identityProviders.items.map(mapIdentityProvider);
     const userItems = scimUsers.items.map(mapScimUser);
     return {
       projectId: resolvedProjectId,
       apiReachable: true,
       clusters: clusterItems,
+      identityProviders: providerItems,
       scimGroups: scimGroups.items.map(mapScimGroup),
       scimUsers: userItems,
       summary: {
         clusterCount: clusterItems.length,
+        identityProviderCount: providerItems.length,
+        activeIdentityProviders: providerItems.filter(
+          (provider) => provider.status === "active",
+        ).length,
         activeScimUsers: userItems.filter((user) => user.active).length,
-        blockingGapCount: clusterItems.reduce(
-          (total, cluster) => total + cluster.blockingGaps.length,
-          0,
-        ),
+        blockingGapCount:
+          clusterItems.reduce(
+            (total, cluster) => total + cluster.blockingGaps.length,
+            0,
+          ) +
+          providerItems.reduce(
+            (total, provider) => total + provider.blockingGaps.length,
+            0,
+          ),
       },
     };
   } catch (error) {
