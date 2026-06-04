@@ -18,7 +18,7 @@ This document summarizes the currently implemented BOSS runtime surfaces in this
   - departments
   - policy records
   - plans
-  - meetings
+  - meetings with structured run outputs, transcript/minutes artifacts, linked action tasks, decision cards, blocked state, and dissent records
   - jobs and leases
   - decisions
   - artifacts
@@ -35,7 +35,7 @@ This document summarizes the currently implemented BOSS runtime surfaces in this
   - enterprise OIDC/SAML/SCIM identity-provider metadata APIs with SecretRefs, blocking-gap evaluation, cluster identity-control integration, and Mission Control controls
   - Enterprise SCIM group/user provisioning APIs that map active users to BOSS org members with explicit merged roles and permissions
   - CEO command intake
-  - canonical department, policy, plan, and meeting CRUD/list surfaces
+  - canonical department, policy, plan, and meeting CRUD/list/run surfaces
   - task and job inspection
   - change journal list/detail for diff, review, deployment, self-improvement, infrastructure, and role-governance artifacts
   - budget quote, reserve, release, and status

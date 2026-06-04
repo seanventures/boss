@@ -61,6 +61,7 @@ import { fetchActivityFeed } from "../lib/events";
 import { fetchHealthSnapshotFeed } from "../lib/health-snapshots";
 import { fetchInfrastructureResourceFeed } from "../lib/infrastructure";
 import { fetchMemberFeed, fetchOrgMemberFeed } from "../lib/members";
+import { fetchMeetingFeed } from "../lib/meetings";
 import { fetchMetatronQuery } from "../lib/metatron";
 import { fetchPackFeed } from "../lib/packs";
 import { fetchProviderOpsFeed } from "../lib/providerops";
@@ -277,6 +278,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
     status,
     decisions,
     tasks,
+    meetings,
     artifacts,
     events,
     healthSnapshots,
@@ -309,6 +311,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
       fetchStatus(activeProjectId),
       fetchDecisionFeed(activeProjectId),
       fetchTaskFeed(activeProjectId),
+      fetchMeetingFeed(activeProjectId),
       fetchArtifactFeed(activeProjectId),
       fetchActivityFeed(activeProjectId),
       fetchHealthSnapshotFeed(activeProjectId),
@@ -4219,6 +4222,58 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                         ) : null}
                       </div>
                       <code className="mono">{task.id}</code>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </article>
+
+            <article className="stack-card">
+              <h3>Meeting timeline</h3>
+              {!meetings.apiReachable ? (
+                <p className="detail">
+                  {meetings.blockedReason ?? "Meeting API is unavailable."}
+                </p>
+              ) : meetings.items.length === 0 ? (
+                <p className="detail">
+                  No structured meetings have been scheduled or run yet.
+                </p>
+              ) : (
+                <div className="feed-list">
+                  {meetings.items.map((meeting) => (
+                    <div className="feed-row" key={meeting.id}>
+                      <div>
+                        <h4>{meeting.title}</h4>
+                        <p className="detail">
+                          {meeting.status} / participants{" "}
+                          {meeting.participants.length} / agenda{" "}
+                          {meeting.agenda.length}
+                        </p>
+                        <p className="detail">
+                          Actions {meeting.actionTaskIds.length} / decisions{" "}
+                          {meeting.decisions.length} / dissent{" "}
+                          {meeting.dissentRecords.length}
+                        </p>
+                        {meeting.blockedState ? (
+                          <p className="detail">
+                            Blocked:{" "}
+                            {String(
+                              meeting.blockedState.reason ??
+                                meeting.blockedState.next_action ??
+                                "review required",
+                            )}
+                          </p>
+                        ) : null}
+                        {meeting.minutesArtifactId ? (
+                          <p className="detail">
+                            Minutes {meeting.minutesArtifactId} / transcript{" "}
+                            {meeting.transcriptArtifactId ?? "not linked"}
+                          </p>
+                        ) : (
+                          <p className="detail">{meeting.purpose}</p>
+                        )}
+                      </div>
+                      <code className="mono">{meeting.id}</code>
                     </div>
                   ))}
                 </div>

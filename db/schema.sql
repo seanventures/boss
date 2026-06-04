@@ -445,12 +445,22 @@ CREATE TABLE IF NOT EXISTS meetings (
   status TEXT NOT NULL DEFAULT 'scheduled',
   participants JSONB NOT NULL DEFAULT '[]'::jsonb,
   agenda JSONB NOT NULL DEFAULT '[]'::jsonb,
+  transcript_artifact_id TEXT,
   minutes_artifact_id TEXT,
+  action_task_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
   decisions JSONB NOT NULL DEFAULT '[]'::jsonb,
+  dissent_records JSONB NOT NULL DEFAULT '[]'::jsonb,
+  blocked_state JSONB,
+  completed_at TIMESTAMPTZ,
   created_by TEXT NOT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+ALTER TABLE meetings ADD COLUMN IF NOT EXISTS transcript_artifact_id TEXT;
+ALTER TABLE meetings ADD COLUMN IF NOT EXISTS action_task_ids JSONB NOT NULL DEFAULT '[]'::jsonb;
+ALTER TABLE meetings ADD COLUMN IF NOT EXISTS dissent_records JSONB NOT NULL DEFAULT '[]'::jsonb;
+ALTER TABLE meetings ADD COLUMN IF NOT EXISTS blocked_state JSONB;
+ALTER TABLE meetings ADD COLUMN IF NOT EXISTS completed_at TIMESTAMPTZ;
 
 CREATE TABLE IF NOT EXISTS artifacts (
   id TEXT PRIMARY KEY,

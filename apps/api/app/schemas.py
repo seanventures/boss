@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Literal, Optional
+from typing import Any, Literal, Optional, Union
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -1379,8 +1379,13 @@ class MeetingSummary(BaseModel):
     status: str
     participants: list[str] = Field(default_factory=list)
     agenda: list[str] = Field(default_factory=list)
+    transcript_artifact_id: Optional[str] = None
     minutes_artifact_id: Optional[str] = None
+    action_task_ids: list[str] = Field(default_factory=list)
     decisions: list[Any] = Field(default_factory=list)
+    dissent_records: list[Any] = Field(default_factory=list)
+    blocked_state: Optional[dict[str, Any]] = None
+    completed_at: Optional[str] = None
     created_by: str
     created_at: str
     updated_at: str
@@ -1393,6 +1398,61 @@ class MeetingCreateRequest(BaseModel):
     participants: list[str] = Field(default_factory=list)
     agenda: list[str] = Field(default_factory=list)
     actor: str = "ceo"
+
+
+class MeetingTranscriptEntry(BaseModel):
+    speaker: str
+    message: str
+    role_id: Optional[str] = None
+    phase: Optional[str] = None
+    timestamp: Optional[str] = None
+    references: list[str] = Field(default_factory=list)
+
+
+class MeetingActionItem(BaseModel):
+    title: str
+    description: Optional[str] = None
+    summary: Optional[str] = None
+    owner_role_id: Optional[str] = None
+    due_at: Optional[str] = None
+    priority: str = "p2"
+    risk_tier: int = Field(default=1, ge=0, le=3)
+    data_boundary: DataBoundary = "internal"
+
+
+class MeetingDecisionItem(BaseModel):
+    question: str
+    recommendation: Union[dict[str, Any], str] = Field(default_factory=dict)
+    options: list[dict[str, Any]] = Field(default_factory=list)
+    risk_tier: int = Field(default=1, ge=0, le=3)
+    cost_summary: dict[str, Any] = Field(default_factory=dict)
+    deadline_at: Optional[str] = None
+    default_action: str = "hold"
+    task_id: Optional[str] = None
+
+
+class MeetingRunRequest(BaseModel):
+    actor: str = "program_manager"
+    outcome_status: Literal["completed", "blocked"] = "completed"
+    transcript: list[MeetingTranscriptEntry]
+    minutes: dict[str, Any]
+    action_items: list[MeetingActionItem] = Field(default_factory=list)
+    decision_items: list[MeetingDecisionItem] = Field(default_factory=list)
+    consensus_reached: bool = True
+    dissent_records: list[dict[str, Any]] = Field(default_factory=list)
+    blocked_state: Optional[dict[str, Any]] = None
+
+    @model_validator(mode="after")
+    def validate_meeting_outputs(self) -> "MeetingRunRequest":
+        if not self.transcript:
+            raise ValueError("transcript must contain at least one entry.")
+        if not self.minutes:
+            raise ValueError("minutes must be a non-empty object.")
+        if self.outcome_status == "blocked" and not self.blocked_state:
+            raise ValueError("blocked_state is required when outcome_status is blocked.")
+        if not self.consensus_reached and not self.dissent_records:
+            raise ValueError("dissent_records are required when consensus_reached is false.")
+        return self
 
 
 class MeetingListResponse(BaseModel):

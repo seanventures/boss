@@ -6601,6 +6601,173 @@ def test_canonical_work_objects_have_stable_ids_lifecycles_and_events(client):
     assert "meeting.created" in event_types
 
 
+def test_meeting_run_materializes_minutes_actions_decisions_and_events(client):
+    meeting = client.post(
+        "/v1/meetings",
+        json={
+            "project_id": "boss-dogfood",
+            "title": "Release go/no-go",
+            "purpose": "Decide whether the sandbox release can advance.",
+            "participants": ["ceo", "program_manager", "release_manager"],
+            "agenda": ["readiness", "risks", "decision"],
+            "actor": "ceo",
+        },
+    )
+    assert meeting.status_code == 201
+    meeting_id = meeting.json()["id"]
+
+    run = client.post(
+        f"/v1/meetings/{meeting_id}/run",
+        json={
+            "actor": "ceo",
+            "transcript": [
+                {
+                    "speaker": "program_manager",
+                    "message": "The release packet is complete.",
+                    "phase": "propose",
+                },
+                {
+                    "speaker": "release_manager",
+                    "message": "Rollback instructions are present.",
+                    "phase": "vote",
+                },
+            ],
+            "minutes": {
+                "summary": "Release readiness reviewed.",
+                "outcomes": ["Proceed only after CEO approval."],
+            },
+            "action_items": [
+                {
+                    "title": "Attach final smoke report",
+                    "description": "Link the smoke test artifact to the release packet.",
+                    "owner_role_id": "qa",
+                    "priority": "p1",
+                    "risk_tier": 1,
+                }
+            ],
+            "decision_items": [
+                {
+                    "question": "Approve sandbox release go/no-go?",
+                    "recommendation": {"summary": "Approve after smoke report link."},
+                    "risk_tier": 2,
+                    "default_action": "hold",
+                }
+            ],
+        },
+    )
+    assert run.status_code == 200
+    payload = run.json()
+    assert payload["status"] == "completed"
+    assert payload["transcript_artifact_id"].startswith("art_")
+    assert payload["minutes_artifact_id"].startswith("art_")
+    assert len(payload["action_task_ids"]) == 1
+    assert payload["decisions"][0]["decision_id"].startswith("dec_")
+    assert payload["completed_at"]
+
+    minutes = client.get(f"/v1/artifacts/{payload['minutes_artifact_id']}")
+    assert minutes.status_code == 200
+    assert minutes.json()["artifact_type"] == "meeting_minutes"
+    assert minutes.json()["content"]["transcript_artifact_id"] == payload["transcript_artifact_id"]
+
+    tasks = client.get("/v1/tasks", params={"project_id": "boss-dogfood"})
+    assert tasks.status_code == 200
+    assert any(
+        item["id"] in payload["action_task_ids"]
+        and item["dedupe_key"] == f"meeting:{meeting_id}:action:1"
+        for item in tasks.json()["items"]
+    )
+
+    decisions = client.get("/v1/decisions/inbox", params={"project_id": "boss-dogfood"})
+    assert decisions.status_code == 200
+    assert any(
+        item["id"] == payload["decisions"][0]["decision_id"]
+        and item["default_action"] == "hold"
+        and item["risk_tier"] == 2
+        for item in decisions.json()["items"]
+    )
+
+    rerun = client.post(
+        f"/v1/meetings/{meeting_id}/run",
+        json={
+            "actor": "ceo",
+            "transcript": [{"speaker": "ceo", "message": "Run again."}],
+            "minutes": {"summary": "Duplicate run."},
+        },
+    )
+    assert rerun.status_code == 409
+
+    events = client.get("/v1/events", params={"project_id": "boss-dogfood"})
+    event_types = [item["event_type"] for item in events.json()["items"]]
+    assert "meeting.completed" in event_types
+    assert "artifact.created" in event_types
+    assert "task.created" in event_types
+    assert "decision.created" in event_types
+
+
+def test_meeting_run_requires_blocked_state_and_dissent_records(client):
+    meeting = client.post(
+        "/v1/meetings",
+        json={
+            "project_id": "boss-dogfood",
+            "title": "Architecture review",
+            "purpose": "Resolve provider boundary concerns.",
+            "participants": ["cao", "cto"],
+            "agenda": ["proposal", "dissent"],
+            "actor": "ceo",
+        },
+    )
+    assert meeting.status_code == 201
+    meeting_id = meeting.json()["id"]
+
+    missing_blocker = client.post(
+        f"/v1/meetings/{meeting_id}/run",
+        json={
+            "actor": "ceo",
+            "outcome_status": "blocked",
+            "transcript": [{"speaker": "cao", "message": "We are blocked."}],
+            "minutes": {"summary": "No safe decision yet."},
+        },
+    )
+    assert missing_blocker.status_code == 422
+
+    missing_dissent = client.post(
+        f"/v1/meetings/{meeting_id}/run",
+        json={
+            "actor": "ceo",
+            "transcript": [{"speaker": "cto", "message": "I disagree."}],
+            "minutes": {"summary": "Consensus failed."},
+            "consensus_reached": False,
+        },
+    )
+    assert missing_dissent.status_code == 422
+
+    blocked = client.post(
+        f"/v1/meetings/{meeting_id}/run",
+        json={
+            "actor": "ceo",
+            "outcome_status": "blocked",
+            "transcript": [{"speaker": "cao", "message": "Approval policy is unclear."}],
+            "minutes": {"summary": "Blocked on approval policy."},
+            "consensus_reached": False,
+            "dissent_records": [
+                {"role_id": "cto", "position": "Do not proceed without policy change."}
+            ],
+            "blocked_state": {
+                "reason": "approval_policy_gap",
+                "next_action": "Create a policy clarification decision.",
+            },
+        },
+    )
+    assert blocked.status_code == 200
+    payload = blocked.json()
+    assert payload["status"] == "blocked"
+    assert payload["blocked_state"]["reason"] == "approval_policy_gap"
+    assert payload["dissent_records"][0]["role_id"] == "cto"
+
+    events = client.get("/v1/events", params={"project_id": "boss-dogfood"})
+    assert "meeting.blocked" in [item["event_type"] for item in events.json()["items"]]
+
+
 def test_artifact_list_and_detail_return_created_artifacts(client):
     response = client.post(
         "/v1/commands/propose",

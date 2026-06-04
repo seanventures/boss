@@ -770,6 +770,86 @@ paths:
                 actor: { type: string, default: ceo }
       responses:
         '201': { description: Meeting created }
+  /v1/meetings/{meeting_id}/run:
+    post:
+      summary: Run a structured meeting and materialize outputs
+      parameters:
+        - name: meeting_id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [transcript, minutes]
+              properties:
+                actor: { type: string, default: program_manager }
+                outcome_status: { type: string, enum: [completed, blocked], default: completed }
+                transcript:
+                  type: array
+                  items:
+                    type: object
+                    required: [speaker, message]
+                    properties:
+                      speaker: { type: string }
+                      message: { type: string }
+                      role_id: { type: string }
+                      phase: { type: string }
+                      timestamp: { type: string }
+                      references:
+                        type: array
+                        items: { type: string }
+                minutes:
+                  type: object
+                  additionalProperties: true
+                action_items:
+                  type: array
+                  items:
+                    type: object
+                    required: [title]
+                    properties:
+                      title: { type: string }
+                      description: { type: string }
+                      summary: { type: string }
+                      owner_role_id: { type: string }
+                      due_at: { type: string }
+                      priority: { type: string, default: p2 }
+                      risk_tier: { type: integer, minimum: 0, maximum: 3, default: 1 }
+                      data_boundary:
+                        type: string
+                        enum: [public, internal, confidential, restricted, local-only]
+                        default: internal
+                decision_items:
+                  type: array
+                  items:
+                    type: object
+                    required: [question]
+                    properties:
+                      question: { type: string }
+                      recommendation: {}
+                      options:
+                        type: array
+                        items: { type: object }
+                      risk_tier: { type: integer, minimum: 0, maximum: 3, default: 1 }
+                      cost_summary: { type: object }
+                      deadline_at: { type: string }
+                      default_action: { type: string, default: hold }
+                      task_id: { type: string }
+                consensus_reached: { type: boolean, default: true }
+                dissent_records:
+                  type: array
+                  items: { type: object }
+                blocked_state:
+                  type: object
+                  additionalProperties: true
+      responses:
+        '200': { description: Meeting completed or blocked with durable outputs }
+        '400': { description: Invalid meeting output contract }
+        '404': { description: Meeting not found }
+        '409': { description: Meeting already terminal }
   /v1/jobs/{job_id}:
     get:
       summary: Get job

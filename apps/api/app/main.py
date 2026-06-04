@@ -143,6 +143,7 @@ from .schemas import (
     OpenAIPlanResponse,
     MeetingCreateRequest,
     MeetingListResponse,
+    MeetingRunRequest,
     MeetingSummary,
     OrgMemberListResponse,
     OrgMemberSummary,
@@ -2375,6 +2376,44 @@ def create_meeting(payload: MeetingCreateRequest) -> MeetingSummary:
             agenda=payload.agenda,
             actor=payload.actor,
         )
+        return MeetingSummary(**result)
+
+
+@app.post("/v1/meetings/{meeting_id}/run", response_model=MeetingSummary)
+def run_meeting(meeting_id: str, payload: MeetingRunRequest) -> MeetingSummary:
+    with begin(engine) as connection:
+        row = connection.execute(
+            text("SELECT project_id FROM meetings WHERE id = :meeting_id"),
+            {"meeting_id": meeting_id},
+        ).mappings().first()
+        if not row:
+            raise HTTPException(status_code=404, detail="meeting not found")
+        require_project_actor(
+            connection,
+            row["project_id"],
+            payload.actor,
+            "task_create",
+        )
+        try:
+            result = canonical.run_meeting(
+                connection,
+                settings,
+                meeting_id=meeting_id,
+                actor=payload.actor,
+                transcript=[item.model_dump() for item in payload.transcript],
+                minutes=payload.minutes,
+                action_items=[item.model_dump() for item in payload.action_items],
+                decision_items=[item.model_dump() for item in payload.decision_items],
+                dissent_records=payload.dissent_records,
+                blocked_state=payload.blocked_state,
+                outcome_status=payload.outcome_status,
+                consensus_reached=payload.consensus_reached,
+            )
+        except ValueError as error:
+            detail = str(error)
+            if "already" in detail:
+                raise HTTPException(status_code=409, detail=detail) from error
+            raise HTTPException(status_code=400, detail=detail) from error
         return MeetingSummary(**result)
 
 

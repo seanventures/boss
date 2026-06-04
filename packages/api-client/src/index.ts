@@ -688,8 +688,13 @@ export type MeetingSummary = {
   status: string;
   participants: string[];
   agenda: string[];
+  transcript_artifact_id?: string;
   minutes_artifact_id?: string;
+  action_task_ids: string[];
   decisions: unknown[];
+  dissent_records: unknown[];
+  blocked_state?: Record<string, unknown> | null;
+  completed_at?: string;
   created_by: string;
   created_at: string;
   updated_at: string;
@@ -702,6 +707,43 @@ export type MeetingCreateRequest = {
   participants?: string[];
   agenda?: string[];
   actor?: string;
+};
+
+export type MeetingRunRequest = {
+  actor?: string;
+  outcome_status?: "completed" | "blocked";
+  transcript: Array<{
+    speaker: string;
+    message: string;
+    role_id?: string;
+    phase?: string;
+    timestamp?: string;
+    references?: string[];
+  }>;
+  minutes: Record<string, unknown>;
+  action_items?: Array<{
+    title: string;
+    description?: string;
+    summary?: string;
+    owner_role_id?: string;
+    due_at?: string;
+    priority?: string;
+    risk_tier?: number;
+    data_boundary?: DataBoundary;
+  }>;
+  decision_items?: Array<{
+    question: string;
+    recommendation?: Record<string, unknown> | string;
+    options?: Array<Record<string, unknown>>;
+    risk_tier?: number;
+    cost_summary?: Record<string, unknown>;
+    deadline_at?: string;
+    default_action?: string;
+    task_id?: string;
+  }>;
+  consensus_reached?: boolean;
+  dissent_records?: Array<Record<string, unknown>>;
+  blocked_state?: Record<string, unknown>;
 };
 
 export type MeetingListResponse = {
@@ -3056,6 +3098,11 @@ export function createBossApiClient(config: BossApiClientConfig) {
     },
     createMeeting(payload: MeetingCreateRequest) {
       return request<MeetingSummary>("POST", "/v1/meetings", {
+        body: payload,
+      });
+    },
+    runMeeting(meetingId: string, payload: MeetingRunRequest) {
+      return request<MeetingSummary>("POST", `/v1/meetings/${meetingId}/run`, {
         body: payload,
       });
     },

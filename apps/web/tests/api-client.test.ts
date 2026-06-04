@@ -1904,4 +1904,58 @@ describe("createBossApiClient", () => {
     expect(detail.content.summary).toBe("Opened PR");
     expect(scope.allowed).toBe(false);
   });
+
+  it("uses structured meeting run API contract", async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const responseBody = {
+      id: "mtg_release",
+      project_id: "boss-dogfood",
+      title: "Release go/no-go",
+      purpose: "Review release readiness.",
+      status: "completed",
+      participants: ["ceo", "program_manager"],
+      agenda: ["readiness"],
+      transcript_artifact_id: "art_transcript",
+      minutes_artifact_id: "art_minutes",
+      action_task_ids: ["tsk_action"],
+      decisions: [{ decision_id: "dec_release", question: "Approve release?" }],
+      dissent_records: [],
+      blocked_state: null,
+      completed_at: "2026-06-03T00:00:00Z",
+      created_by: "ceo",
+      created_at: "2026-06-03T00:00:00Z",
+      updated_at: "2026-06-03T00:00:00Z",
+    };
+    const fetchImpl = async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({ url: String(input), init });
+      return new Response(JSON.stringify(responseBody), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    };
+    const client = createBossApiClient({
+      baseUrl: "http://127.0.0.1:8000",
+      fetchImpl,
+    });
+
+    const meeting = await client.runMeeting("mtg_release", {
+      actor: "program_manager",
+      transcript: [{ speaker: "program_manager", message: "Ready." }],
+      minutes: { summary: "Ready with approval." },
+      action_items: [{ title: "Attach smoke report", priority: "p1" }],
+      decision_items: [{ question: "Approve release?", risk_tier: 2 }],
+    });
+
+    expect(calls[0].url).toBe(
+      "http://127.0.0.1:8000/v1/meetings/mtg_release/run",
+    );
+    expect(calls[0].init?.method).toBe("POST");
+    expect(JSON.parse(String(calls[0].init?.body))).toMatchObject({
+      actor: "program_manager",
+      minutes: { summary: "Ready with approval." },
+      action_items: [{ title: "Attach smoke report", priority: "p1" }],
+    });
+    expect(meeting.minutes_artifact_id).toBe("art_minutes");
+    expect(meeting.action_task_ids).toEqual(["tsk_action"]);
+  });
 });

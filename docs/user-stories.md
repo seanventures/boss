@@ -91,6 +91,20 @@ Acceptance criteria:
 - Given an `agent.*` job completes, when the worker returns a brief, then BOSS stores an `agent_brief` artifact and emits `agent.brief_created`.
 - Given an unauthorized actor, when module installation is attempted, then BOSS rejects it and emits a policy denial.
 
+### Story ENG-003: Run Structured Operating Meetings
+
+As a Program Manager, I want meetings to produce durable transcripts, minutes, decisions, action items, blocked state, and dissent records, so that operating discussions become auditable work instead of disappearing into chat.
+
+Acceptance criteria:
+
+- Given a scheduled meeting, when an authorized actor runs it with transcript and minutes, then BOSS stores transcript and minutes artifacts and links them to the meeting.
+- Given action items in a meeting run, when the run completes, then BOSS creates first-class tasks with meeting dedupe keys and links their IDs to the meeting.
+- Given decision items in a meeting run, when the run completes, then BOSS creates pending decision cards with risk, default action, recommendation, and meeting evidence references.
+- Given a blocked meeting, when the run is submitted without blocked state, then BOSS rejects the request before creating artifacts, tasks, or decisions.
+- Given consensus is not reached, when the run is submitted without dissent records, then BOSS rejects the request before creating artifacts, tasks, or decisions.
+- Given a meeting is already completed or blocked, when a duplicate run is submitted, then BOSS rejects it and does not create duplicate action tasks or decision cards.
+- Given Mission Control loads, when meeting records exist, then it shows meeting status, minutes/transcript references, action counts, decision counts, blocked state, and dissent counts from the API.
+
 ## Finance / Governance
 
 ### Story FIN-001: Govern Spend
