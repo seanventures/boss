@@ -1,0 +1,67 @@
+id: EntitlementConnectionSession
+version: 1
+description: Durable audit record for starting and completing an official model-subscription OAuth or CLI session connection.
+fields:
+  - name: id
+    type: string
+    required: true
+  - name: project_id
+    type: string
+    required: true
+  - name: source_id
+    type: string
+    required: true
+  - name: provider
+    type: string
+    required: true
+  - name: auth_method
+    type: string
+    required: true
+  - name: connection_mode
+    type: string
+    required: true
+  - name: status
+    type: enum
+    values:
+      - operator_action_required
+      - completed
+      - expired
+      - failed
+    required: true
+  - name: requested_scopes
+    type: string[]
+    required: true
+  - name: login_command
+    type: string
+  - name: connection_ref
+    type: string
+    description: SecretRef or local official-session reference; never a raw OAuth token.
+  - name: instructions
+    type: object
+    required: true
+  - name: metadata
+    type: object
+    required: true
+  - name: error
+    type: object
+    required: true
+  - name: requested_by
+    type: string
+    required: true
+  - name: completed_by
+    type: string
+  - name: expires_at
+    type: datetime
+  - name: created_at
+    type: datetime
+    required: true
+  - name: updated_at
+    type: datetime
+    required: true
+  - name: completed_at
+    type: datetime
+invariants:
+  - BOSS never stores raw OAuth access or refresh tokens in this object.
+  - Agents receive only typed session status and non-secret instructions, never provider credentials.
+  - Completion requires a SecretRef or local session reference from an authorized operator or local runner.
+  - Public subscription sources remain single-owner/single-tenant unless provider policy explicitly allows otherwise.

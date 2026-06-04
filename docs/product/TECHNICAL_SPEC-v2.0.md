@@ -131,6 +131,7 @@ Core objects:
 
 - `ProviderAdapter`
 - `EntitlementPool`
+- `EntitlementConnectionSession`
 - `ModelRouteDecision`
 - `CapacityReceipt`
 - `ModelProviderHealth`
@@ -322,6 +323,9 @@ Model Entitlement:
 - `POST /v1/entitlement-pools/{id}/probe`
 - `GET /v1/model-route-decisions` with filters for provider, source, model, task kind, workload class, budget state, data boundary, risk tier, routing mode, denial reason, selected-only, and denied-only audit review.
 - `POST /v1/model-route-decisions/simulate`
+- `GET /v1/entitlement-connection-sessions`
+- `POST /v1/entitlements/sources/{source_id}/connection-sessions`
+- `POST /v1/entitlement-connection-sessions/{session_id}/complete`
 
 Budget:
 

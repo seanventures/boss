@@ -29,6 +29,14 @@ class InvalidEntitlementConnectionError(Exception):
     pass
 
 
+class EntitlementConnectionSessionNotFoundError(Exception):
+    pass
+
+
+class EntitlementConnectionSessionStateError(Exception):
+    pass
+
+
 class EntitlementBrokerService:
     OFFICIAL_OAUTH_METHODS = {
         "official_cli_oauth",
@@ -954,6 +962,258 @@ class EntitlementBrokerService:
         raise EntitlementSourceNotFoundError(
             f"Entitlement source '{source_id}' not found for project '{project_id}'."
         )
+
+    def _connection_session_from_row(self, row: dict[str, Any]) -> dict[str, Any]:
+        payload = dict(row)
+        for key in ("created_at", "updated_at", "completed_at", "expires_at"):
+            if payload.get(key) is not None and hasattr(payload[key], "isoformat"):
+                payload[key] = payload[key].isoformat()
+        return payload
+
+    def list_connection_sessions(
+        self,
+        connection: Connection,
+        project_id: str,
+        *,
+        source_id: Optional[str] = None,
+        limit: int = 25,
+    ) -> list[dict[str, Any]]:
+        conditions = ["project_id = :project_id"]
+        params: dict[str, Any] = {"project_id": project_id, "limit": limit}
+        if source_id:
+            conditions.append("source_id = :source_id")
+            params["source_id"] = source_id
+        rows = connection.execute(
+            text(
+                f"""
+                SELECT id, project_id, source_id, provider, auth_method,
+                       connection_mode, status, requested_scopes, authorization_url,
+                       device_code, user_code, verification_uri, login_command,
+                       connection_ref, instructions, metadata, error, requested_by,
+                       completed_by, expires_at, created_at, updated_at, completed_at
+                FROM entitlement_connection_sessions
+                WHERE {" AND ".join(conditions)}
+                ORDER BY created_at DESC
+                LIMIT :limit
+                """
+            ),
+            params,
+        ).mappings().all()
+        return [self._connection_session_from_row(dict(row)) for row in rows]
+
+    def get_connection_session(
+        self, connection: Connection, project_id: str, session_id: str
+    ) -> dict[str, Any]:
+        row = connection.execute(
+            text(
+                """
+                SELECT id, project_id, source_id, provider, auth_method,
+                       connection_mode, status, requested_scopes, authorization_url,
+                       device_code, user_code, verification_uri, login_command,
+                       connection_ref, instructions, metadata, error, requested_by,
+                       completed_by, expires_at, created_at, updated_at, completed_at
+                FROM entitlement_connection_sessions
+                WHERE project_id = :project_id AND id = :id
+                """
+            ),
+            {"project_id": project_id, "id": session_id},
+        ).mappings().first()
+        if row is None:
+            raise EntitlementConnectionSessionNotFoundError(
+                f"Entitlement connection session '{session_id}' not found for project '{project_id}'."
+            )
+        return self._connection_session_from_row(dict(row))
+
+    def create_connection_session(
+        self,
+        connection: Connection,
+        project_id: str,
+        source_id: str,
+        *,
+        actor: str,
+        connection_mode: Optional[str] = None,
+        requested_scopes: Optional[list[str]] = None,
+        metadata: Optional[dict[str, Any]] = None,
+    ) -> dict[str, Any]:
+        source = self.get_source(connection, project_id, source_id)
+        if not self._requires_official_oauth(source):
+            raise InvalidEntitlementConnectionError(
+                "Only official OAuth-backed subscription or coding-agent sources use connection sessions."
+            )
+        source_metadata = source.get("connection_metadata") or {}
+        supported_modes = source_metadata.get("supported_connection_modes") or []
+        if not isinstance(supported_modes, list):
+            supported_modes = []
+        resolved_mode = connection_mode or (supported_modes[0] if supported_modes else "official_cli_oauth")
+        if supported_modes and resolved_mode not in supported_modes:
+            raise InvalidEntitlementConnectionError(
+                f"connection_mode must be one of: {', '.join(str(item) for item in supported_modes)}"
+            )
+        login_command = source_metadata.get("login_command")
+        if not isinstance(login_command, str) or not login_command.strip():
+            raise InvalidEntitlementConnectionError(
+                "Official-session connection is not configured with a provider login command."
+            )
+        scopes = requested_scopes if requested_scopes is not None else source.get("oauth_scopes", [])
+        instructions = {
+            "official_auth_surface": source_metadata.get("official_auth_surface"),
+            "login_command": login_command,
+            "supported_connection_modes": supported_modes,
+            "operator_action": "Run the official provider login flow on the authorized local runner, then complete this session with a SecretRef or local session reference.",
+            "secret_handling": "BOSS stores only SecretRefs or local session references; agents never receive raw provider credentials.",
+            "provider_rules": source.get("policy_notes") or [],
+        }
+        session_id = make_id("entconn")
+        connection.execute(
+            text(
+                """
+                INSERT INTO entitlement_connection_sessions (
+                    id, project_id, source_id, provider, auth_method, connection_mode,
+                    status, requested_scopes, login_command, instructions, metadata,
+                    requested_by, expires_at
+                )
+                VALUES (
+                    :id, :project_id, :source_id, :provider, :auth_method,
+                    :connection_mode, 'operator_action_required',
+                    CAST(:requested_scopes AS JSONB), :login_command,
+                    CAST(:instructions AS JSONB), CAST(:metadata AS JSONB),
+                    :requested_by, now() + interval '30 minutes'
+                )
+                """
+            ),
+            {
+                "id": session_id,
+                "project_id": project_id,
+                "source_id": source_id,
+                "provider": source["provider"],
+                "auth_method": source.get("auth_method", "official_cli_oauth"),
+                "connection_mode": resolved_mode,
+                "requested_scopes": json.dumps(scopes or []),
+                "login_command": login_command,
+                "instructions": json.dumps(instructions),
+                "metadata": json.dumps(metadata or {}),
+                "requested_by": actor,
+            },
+        )
+        emit_event(
+            connection,
+            project_id,
+            "entitlement.connection_session_started",
+            actor,
+            "entitlement_connection_session",
+            session_id,
+            {
+                "source_id": source_id,
+                "provider": source["provider"],
+                "auth_method": source.get("auth_method"),
+                "connection_mode": resolved_mode,
+            },
+        )
+        return self.get_connection_session(connection, project_id, session_id)
+
+    def complete_connection_session(
+        self,
+        connection: Connection,
+        project_id: str,
+        session_id: str,
+        *,
+        actor: str,
+        connection_ref: str,
+        oauth_scopes: Optional[list[str]] = None,
+        connection_metadata: Optional[dict[str, Any]] = None,
+        observed_capacity: Optional[dict[str, Any]] = None,
+    ) -> dict[str, Any]:
+        session = self.get_connection_session(connection, project_id, session_id)
+        if session["status"] != "operator_action_required":
+            raise EntitlementConnectionSessionStateError(
+                f"Connection session '{session_id}' is {session['status']} and cannot be completed."
+            )
+        expired = connection.execute(
+            text(
+                """
+                SELECT expires_at IS NOT NULL AND expires_at < now() AS expired
+                FROM entitlement_connection_sessions
+                WHERE project_id = :project_id AND id = :id
+                """
+            ),
+            {"project_id": project_id, "id": session_id},
+        ).scalar_one()
+        if expired:
+            connection.execute(
+                text(
+                    """
+                    UPDATE entitlement_connection_sessions
+                    SET status = 'expired',
+                        error = CAST(:error AS JSONB),
+                        updated_at = now()
+                    WHERE project_id = :project_id AND id = :id
+                    """
+                ),
+                {
+                    "project_id": project_id,
+                    "id": session_id,
+                    "error": json.dumps({"reason": "connection_session_expired"}),
+                },
+            )
+            raise EntitlementConnectionSessionStateError(
+                f"Connection session '{session_id}' has expired."
+            )
+        source = self.connect_source(
+            connection,
+            project_id,
+            session["source_id"],
+            actor=actor,
+            connection_ref=connection_ref,
+            auth_method=session["auth_method"],
+            oauth_scopes=oauth_scopes or session.get("requested_scopes") or [],
+            connection_metadata={
+                **(connection_metadata or {}),
+                "connection_session_id": session_id,
+                "connection_mode": session["connection_mode"],
+            },
+            observed_capacity={
+                **(observed_capacity or {}),
+                "official_connection_session_id": session_id,
+            },
+        )
+        connection.execute(
+            text(
+                """
+                UPDATE entitlement_connection_sessions
+                SET status = 'completed',
+                    connection_ref = :connection_ref,
+                    metadata = metadata || CAST(:metadata AS JSONB),
+                    completed_by = :completed_by,
+                    completed_at = now(),
+                    updated_at = now()
+                WHERE project_id = :project_id AND id = :id
+                """
+            ),
+            {
+                "project_id": project_id,
+                "id": session_id,
+                "connection_ref": connection_ref,
+                "metadata": json.dumps(connection_metadata or {}),
+                "completed_by": actor,
+            },
+        )
+        emit_event(
+            connection,
+            project_id,
+            "entitlement.connection_session_completed",
+            actor,
+            "entitlement_connection_session",
+            session_id,
+            {
+                "source_id": session["source_id"],
+                "provider": session["provider"],
+                "connection_status": source["connection_status"],
+            },
+        )
+        return {
+            "session": self.get_connection_session(connection, project_id, session_id),
+            "source": source,
+        }
 
     def connect_source(
         self,

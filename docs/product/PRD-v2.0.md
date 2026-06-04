@@ -85,7 +85,7 @@ Core objects: `Org`, `Workspace`, `Project`, `User`, `Membership`, `Task`, `Plan
 
 Budget/finance objects: `BudgetPolicy`, `BudgetAllocation`, `BudgetReservation`, `CostReceipt`, `CostEvent`, `Commitment`, `BillingAccount`, `ReconciliationRun`.
 
-Model/capacity objects: `ProviderAccount`, `ProviderAdapter`, `EntitlementPool`, `ModelRouteDecision`, `CapacityReceipt`, `ModelProviderHealth`, `LocalRunner`, `ExecutionNode`, `WorkerPool`.
+Model/capacity objects: `ProviderAccount`, `ProviderAdapter`, `EntitlementPool`, `EntitlementConnectionSession`, `ModelRouteDecision`, `CapacityReceipt`, `ModelProviderHealth`, `LocalRunner`, `ExecutionNode`, `WorkerPool`.
 
 ProviderOps objects: `ExternalResource`, `Capability`, `DeploymentTarget`, `DeploymentEnvironmentPolicy`, `DeploymentRun`, `ChangeSet`, `ResourceReceipt`, `DriftReport`, `ProviderHealth`, `SecretRef`, `ResourcePolicy`, `ScalePlan`, `ResourceInventorySnapshot`.
 
@@ -350,6 +350,7 @@ Requirements:
 
 - `ProviderAdapter` objects.
 - `EntitlementPool` objects.
+- `EntitlementConnectionSession` objects for official CLI/OAuth subscription connection attempts.
 - `CapacityReceipt` objects.
 - `ModelRouteDecision` objects.
 - Provider cooldowns.

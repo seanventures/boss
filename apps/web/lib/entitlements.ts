@@ -1,4 +1,8 @@
-import { BossApiError, type EntitlementSourceSummary } from "@boss/api-client";
+import {
+  BossApiError,
+  type EntitlementConnectionSessionSummary,
+  type EntitlementSourceSummary,
+} from "@boss/api-client";
 
 import { client, PROJECT_ID, resolveProjectId } from "./client";
 
@@ -23,11 +27,30 @@ export type EntitlementSourceFeedItem = {
   supportedModels: string[];
 };
 
+export type EntitlementConnectionSessionFeedItem = {
+  id: string;
+  sourceId: string;
+  provider: string;
+  authMethod: string;
+  connectionMode: string;
+  status: string;
+  requestedScopes: string[];
+  loginCommand?: string;
+  connectionRef?: string;
+  instructions: Record<string, unknown>;
+  requestedBy: string;
+  completedBy?: string;
+  expiresAt?: string;
+  createdAt: string;
+  completedAt?: string;
+};
+
 export type EntitlementFeed = {
   projectId: string;
   apiReachable: boolean;
   blockedReason?: string;
   items: EntitlementSourceFeedItem[];
+  connectionSessions: EntitlementConnectionSessionFeedItem[];
 };
 
 function mapSource(payload: EntitlementSourceSummary): EntitlementSourceFeedItem {
@@ -66,12 +89,35 @@ function mapSource(payload: EntitlementSourceSummary): EntitlementSourceFeedItem
   };
 }
 
+function mapConnectionSession(
+  payload: EntitlementConnectionSessionSummary,
+): EntitlementConnectionSessionFeedItem {
+  return {
+    id: payload.id,
+    sourceId: payload.source_id,
+    provider: payload.provider,
+    authMethod: payload.auth_method,
+    connectionMode: payload.connection_mode,
+    status: payload.status,
+    requestedScopes: payload.requested_scopes,
+    loginCommand: payload.login_command,
+    connectionRef: payload.connection_ref,
+    instructions: payload.instructions,
+    requestedBy: payload.requested_by,
+    completedBy: payload.completed_by,
+    expiresAt: payload.expires_at,
+    createdAt: payload.created_at,
+    completedAt: payload.completed_at,
+  };
+}
+
 export function emptyEntitlementFeed(reason?: string, projectId = PROJECT_ID): EntitlementFeed {
   return {
     projectId: resolveProjectId(projectId),
     apiReachable: false,
     blockedReason: reason,
     items: [],
+    connectionSessions: [],
   };
 }
 
@@ -79,11 +125,16 @@ export async function fetchEntitlementFeed(
   projectId = PROJECT_ID,
 ): Promise<EntitlementFeed> {
   try {
-    const payload = await client.listEntitlementSources(resolveProjectId(projectId));
+    const resolvedProjectId = resolveProjectId(projectId);
+    const [payload, sessions] = await Promise.all([
+      client.listEntitlementSources(resolvedProjectId),
+      client.listEntitlementConnectionSessions(resolvedProjectId, { limit: 20 }),
+    ]);
     return {
       projectId: payload.project_id,
       apiReachable: true,
       items: payload.items.map(mapSource),
+      connectionSessions: sessions.items.map(mapConnectionSession),
     };
   } catch (error) {
     if (error instanceof BossApiError) {

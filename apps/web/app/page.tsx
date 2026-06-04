@@ -1,7 +1,7 @@
 import {
   applyChangeSetAction,
   approveChangeSetAction,
-  connectEntitlementSourceAction,
+  completeEntitlementConnectionSessionAction,
   createChangeSetAction,
   createDeploymentTargetAction,
   createProviderAccountAction,
@@ -9,6 +9,7 @@ import {
   createBreakGlassGrantAction,
   createComplianceEvidenceBundleAction,
   createDeadletterIncidentAction,
+  createEntitlementConnectionSessionAction,
   createDecisionDigestAction,
   createOpsDigestAction,
   createDeploymentRunAction,
@@ -5071,7 +5072,19 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                 <p className="detail">No entitlement sources are registered.</p>
               ) : (
                 <div className="feed-list">
-                  {entitlements.items.map((source) => (
+                  {entitlements.items.map((source) => {
+                    const sourceConnectionSessions =
+                      entitlements.connectionSessions.filter(
+                        (session) => session.sourceId === source.sourceId,
+                      );
+                    const supportedConnectionModes = Array.isArray(
+                      source.connectionMetadata.supported_connection_modes,
+                    )
+                      ? source.connectionMetadata.supported_connection_modes.filter(
+                          (mode): mode is string => typeof mode === "string",
+                        )
+                      : [];
+                    return (
                     <div className="feed-row" key={source.id}>
                       <div>
                         <h4>{source.sourceId}</h4>
@@ -5128,51 +5141,143 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                               </button>
                             </form>
                           ) : (
-                            <form
-                              action={connectEntitlementSourceAction}
-                              className="composer compact"
-                            >
-                              <input
-                                type="hidden"
-                                name="project_id"
-                                value={activeProjectId}
-                              />
-                              <input type="hidden" name="actor" value={activeActorId} />
-                              <input
-                                type="hidden"
-                                name="source_id"
-                                value={source.sourceId}
-                              />
-                              <input
-                                type="hidden"
-                                name="auth_method"
-                                value={source.authMethod}
-                              />
-                              <input
-                                className="input"
-                                name="connection_ref"
-                                aria-label="Official session connection reference"
-                                placeholder="SecretRef or local session ref"
-                                required
-                              />
-                              <textarea
-                                className="input"
-                                name="oauth_scopes"
-                                aria-label="OAuth scopes"
-                                defaultValue={source.oauthScopes.join("\n")}
-                                placeholder="One OAuth scope per line"
-                              />
-                              <textarea
-                                className="input"
-                                name="observed_capacity_json"
-                                aria-label="Observed capacity JSON"
-                                defaultValue={`{"capacity_state":"available"}`}
-                                placeholder="Observed capacity JSON"
-                              />
-                              <button className="button secondary" type="submit">
-                                Connect official session
-                              </button>
-                            </form>
+                            <div className="feed-list">
+                              <form
+                                action={createEntitlementConnectionSessionAction}
+                                className="composer compact"
+                              >
+                                <input
+                                  type="hidden"
+                                  name="project_id"
+                                  value={activeProjectId}
+                                />
+                                <input
+                                  type="hidden"
+                                  name="actor"
+                                  value={activeActorId}
+                                />
+                                <input
+                                  type="hidden"
+                                  name="source_id"
+                                  value={source.sourceId}
+                                />
+                                <label className="field">
+                                  <span>Connection mode</span>
+                                  <select
+                                    className="input"
+                                    name="connection_mode"
+                                    defaultValue={supportedConnectionModes[0] ?? ""}
+                                  >
+                                    {supportedConnectionModes.length === 0 ? (
+                                      <option value="">Official provider login</option>
+                                    ) : (
+                                      supportedConnectionModes.map((mode) => (
+                                        <option key={mode} value={mode}>
+                                          {titleCaseToken(mode)}
+                                        </option>
+                                      ))
+                                    )}
+                                  </select>
+                                </label>
+                                <textarea
+                                  className="input"
+                                  name="requested_scopes"
+                                  aria-label="Requested OAuth scopes"
+                                  defaultValue={source.oauthScopes.join("\n")}
+                                  placeholder="One OAuth scope per line"
+                                />
+                                <button className="button secondary" type="submit">
+                                  Start official session
+                                </button>
+                              </form>
+
+                              {sourceConnectionSessions.length === 0 ? (
+                                <p className="detail">
+                                  Start a session to get official login instructions
+                                  before recording a local session reference.
+                                </p>
+                              ) : (
+                                sourceConnectionSessions.map((session) => (
+                                  <div className="feed-row" key={session.id}>
+                                    <div>
+                                      <h4>{session.connectionMode}</h4>
+                                      <p className="detail">
+                                        {titleCaseToken(session.status)} / requested by{" "}
+                                        {session.requestedBy} /{" "}
+                                        {formatDateTime(session.createdAt)}
+                                      </p>
+                                      <p className="detail">
+                                        Login command:{" "}
+                                        <code className="mono">
+                                          {session.loginCommand ?? "official provider login"}
+                                        </code>
+                                      </p>
+                                      {typeof session.instructions.operator_action ===
+                                      "string" ? (
+                                        <p className="detail">
+                                          {session.instructions.operator_action}
+                                        </p>
+                                      ) : null}
+                                      {session.status ===
+                                      "operator_action_required" ? (
+                                        <form
+                                          action={
+                                            completeEntitlementConnectionSessionAction
+                                          }
+                                          className="composer compact"
+                                        >
+                                          <input
+                                            type="hidden"
+                                            name="project_id"
+                                            value={activeProjectId}
+                                          />
+                                          <input
+                                            type="hidden"
+                                            name="actor"
+                                            value={activeActorId}
+                                          />
+                                          <input
+                                            type="hidden"
+                                            name="session_id"
+                                            value={session.id}
+                                          />
+                                          <input
+                                            className="input"
+                                            name="connection_ref"
+                                            aria-label="Official session connection reference"
+                                            placeholder="SecretRef or local session ref"
+                                            required
+                                          />
+                                          <textarea
+                                            className="input"
+                                            name="oauth_scopes"
+                                            aria-label="OAuth scopes"
+                                            defaultValue={session.requestedScopes.join(
+                                              "\n",
+                                            )}
+                                            placeholder="One OAuth scope per line"
+                                          />
+                                          <textarea
+                                            className="input"
+                                            name="observed_capacity_json"
+                                            aria-label="Observed capacity JSON"
+                                            defaultValue={`{"capacity_state":"available"}`}
+                                            placeholder="Observed capacity JSON"
+                                          />
+                                          <button
+                                            className="button secondary"
+                                            type="submit"
+                                          >
+                                            Complete session
+                                          </button>
+                                        </form>
+                                      ) : null}
+                                    </div>
+                                    <code className="mono">{session.id}</code>
+                                  </div>
+                                ))
+                              )}
+                            </div>
                           )
                         ) : null}
                       </div>
@@ -5184,7 +5289,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                         {entitlementBadge(source)}
                       </span>
                     </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
             </article>

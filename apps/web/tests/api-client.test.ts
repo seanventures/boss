@@ -1396,6 +1396,115 @@ describe("createBossApiClient", () => {
     expect(calls[4].url).toContain("selected_only=true");
   });
 
+  it("manages entitlement connection sessions through the API contract", async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const source = {
+      id: "src_boss-dogfood_openai_codex_chatgpt",
+      project_id: "boss-dogfood",
+      provider: "openai",
+      source_id: "openai_codex_chatgpt",
+      source_kind: "official_cli",
+      entitlement_kind: "subscription",
+      owner_type: "workspace_operator",
+      owner_id: "founder",
+      workload_classes_allowed: ["owner_sandbox"],
+      multi_tenant_allowed: false,
+      cost_mode: "subscription",
+      limit_shape: {},
+      supported_models: ["codex"],
+      task_strengths: ["coding"],
+      risk_tier_max: 1,
+      status: "active",
+      effective_status: "active",
+      auth_method: "official_cli_oauth",
+      connection_status: "connected",
+      connection_ref: "secretref://local/codex-session",
+      oauth_scopes: ["codex.local"],
+      connection_metadata: {},
+      policy_notes: [],
+      observed_capacity: { capacity_state: "available" },
+      runtime_supported: true,
+      created_at: "2026-06-04T00:00:00Z",
+      updated_at: "2026-06-04T00:00:00Z",
+    };
+    const session = {
+      id: "entconn_1",
+      project_id: "boss-dogfood",
+      source_id: "openai_codex_chatgpt",
+      provider: "openai",
+      auth_method: "official_cli_oauth",
+      connection_mode: "browser_oauth",
+      status: "operator_action_required",
+      requested_scopes: ["codex.local"],
+      login_command: "codex login",
+      instructions: { operator_action: "Run codex login" },
+      metadata: {},
+      error: {},
+      requested_by: "ceo",
+      created_at: "2026-06-04T00:00:00Z",
+      updated_at: "2026-06-04T00:00:00Z",
+    };
+    const responses = [
+      { status: 201, body: session },
+      { status: 200, body: { project_id: "boss-dogfood", items: [session] } },
+      {
+        status: 200,
+        body: {
+          project_id: "boss-dogfood",
+          session: { ...session, status: "completed", completed_by: "ceo" },
+          source,
+        },
+      },
+    ];
+    const fetchImpl = async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({ url: String(input), init });
+      const response = responses.shift();
+      return new Response(JSON.stringify(response?.body ?? {}), {
+        status: response?.status ?? 500,
+        headers: { "Content-Type": "application/json" },
+      });
+    };
+    const client = createBossApiClient({
+      baseUrl: "http://127.0.0.1:8000",
+      fetchImpl,
+    });
+
+    const started = await client.createEntitlementConnectionSession(
+      "openai_codex_chatgpt",
+      {
+        project_id: "boss-dogfood",
+        connection_mode: "browser_oauth",
+        requested_scopes: ["codex.local"],
+        actor: "ceo",
+      },
+    );
+    const listed = await client.listEntitlementConnectionSessions("boss-dogfood", {
+      source_id: "openai_codex_chatgpt",
+      limit: 5,
+    });
+    const completed = await client.completeEntitlementConnectionSession("entconn_1", {
+      project_id: "boss-dogfood",
+      connection_ref: "secretref://local/codex-session",
+      oauth_scopes: ["codex.local"],
+      actor: "ceo",
+    });
+
+    expect(started.login_command).toBe("codex login");
+    expect(listed.items[0].id).toBe("entconn_1");
+    expect(completed.source.connection_status).toBe("connected");
+    expect(calls[0].url).toContain(
+      "/v1/entitlements/sources/openai_codex_chatgpt/connection-sessions",
+    );
+    expect(calls[0].init?.method).toBe("POST");
+    expect(calls[1].url).toContain(
+      "/v1/entitlement-connection-sessions?project_id=boss-dogfood&source_id=openai_codex_chatgpt&limit=5",
+    );
+    expect(calls[2].url).toContain(
+      "/v1/entitlement-connection-sessions/entconn_1/complete",
+    );
+    expect(calls[2].init?.method).toBe("POST");
+  });
+
   it("creates compliance evidence bundles through the API contract", async () => {
     const calls: Array<{ url: string; init?: RequestInit }> = [];
     const fetchImpl = async (input: RequestInfo | URL, init?: RequestInit) => {

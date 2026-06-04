@@ -2383,6 +2383,60 @@ export type EntitlementSourceDisconnectRequest = {
   actor?: string;
 };
 
+export type EntitlementConnectionSessionSummary = {
+  id: string;
+  project_id: string;
+  source_id: string;
+  provider: string;
+  auth_method: string;
+  connection_mode: string;
+  status: string;
+  requested_scopes: string[];
+  authorization_url?: string;
+  device_code?: string;
+  user_code?: string;
+  verification_uri?: string;
+  login_command?: string;
+  connection_ref?: string;
+  instructions: Record<string, unknown>;
+  metadata: Record<string, unknown>;
+  error: Record<string, unknown>;
+  requested_by: string;
+  completed_by?: string;
+  expires_at?: string;
+  created_at: string;
+  updated_at: string;
+  completed_at?: string;
+};
+
+export type EntitlementConnectionSessionListResponse = {
+  project_id: string;
+  items: EntitlementConnectionSessionSummary[];
+};
+
+export type EntitlementConnectionSessionCreateRequest = {
+  project_id: string;
+  connection_mode?: string;
+  requested_scopes?: string[];
+  metadata?: Record<string, unknown>;
+  actor?: string;
+};
+
+export type EntitlementConnectionSessionCompleteRequest = {
+  project_id: string;
+  connection_ref: string;
+  oauth_scopes?: string[];
+  connection_metadata?: Record<string, unknown>;
+  observed_capacity?: Record<string, unknown>;
+  actor?: string;
+};
+
+export type EntitlementConnectionSessionCompleteResponse = {
+  project_id: string;
+  session: EntitlementConnectionSessionSummary;
+  source: EntitlementSourceSummary;
+};
+
 export type EntitlementPoolSummary = {
   id: string;
   project_id: string;
@@ -3998,6 +4052,46 @@ export function createBossApiClient(config: BossApiClientConfig) {
       return request<EntitlementSourceSummary>(
         "POST",
         `/v1/entitlements/sources/${encodeURIComponent(sourceId)}/connect`,
+        {
+          body: payload,
+        },
+      );
+    },
+    listEntitlementConnectionSessions(
+      projectId: string,
+      options: { source_id?: string; limit?: number } = {},
+    ) {
+      return request<EntitlementConnectionSessionListResponse>(
+        "GET",
+        "/v1/entitlement-connection-sessions",
+        {
+          query: {
+            project_id: projectId,
+            source_id: options.source_id,
+            limit: options.limit ?? 25,
+          },
+        },
+      );
+    },
+    createEntitlementConnectionSession(
+      sourceId: string,
+      payload: EntitlementConnectionSessionCreateRequest,
+    ) {
+      return request<EntitlementConnectionSessionSummary>(
+        "POST",
+        `/v1/entitlements/sources/${encodeURIComponent(sourceId)}/connection-sessions`,
+        {
+          body: payload,
+        },
+      );
+    },
+    completeEntitlementConnectionSession(
+      sessionId: string,
+      payload: EntitlementConnectionSessionCompleteRequest,
+    ) {
+      return request<EntitlementConnectionSessionCompleteResponse>(
+        "POST",
+        `/v1/entitlement-connection-sessions/${encodeURIComponent(sessionId)}/complete`,
         {
           body: payload,
         },

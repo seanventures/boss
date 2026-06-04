@@ -7688,6 +7688,102 @@ def test_entitlement_source_connect_rejects_non_oauth_subscription_method(client
     assert "official OAuth" in response.json()["detail"]
 
 
+def test_entitlement_connection_session_lifecycle_for_public_subscriptions(
+    client, engine
+):
+    project_id = "boss-entitlement-sessions"
+    with engine.begin() as connection:
+        connection.execute(text(f"DELETE FROM events WHERE project_id = '{project_id}'"))
+        connection.execute(
+            text(
+                f"DELETE FROM entitlement_connection_sessions WHERE project_id = '{project_id}'"
+            )
+        )
+        connection.execute(text(f"DELETE FROM routing_logs WHERE project_id = '{project_id}'"))
+        connection.execute(
+            text(f"DELETE FROM entitlement_sources WHERE project_id = '{project_id}'")
+        )
+        connection.execute(text(f"DELETE FROM projects WHERE id = '{project_id}'"))
+        connection.execute(
+            text(
+                f"""
+                INSERT INTO projects (id, workspace_id, name, slug)
+                VALUES ('{project_id}', 'ws_boss', 'Entitlement Sessions', '{project_id}')
+                """
+            )
+        )
+        api_main.members.seed_default_members(connection, project_id, "test")
+        api_main.entitlements.seed_default_sources(connection, project_id, "test")
+
+    api_session = client.post(
+        "/v1/entitlements/sources/openai_api/connection-sessions",
+        json={"project_id": project_id, "actor": "ceo"},
+    )
+    assert api_session.status_code == 422
+
+    started = client.post(
+        "/v1/entitlements/sources/openai_codex_chatgpt/connection-sessions",
+        json={
+            "project_id": project_id,
+            "connection_mode": "browser_oauth",
+            "requested_scopes": ["codex.local"],
+            "actor": "ceo",
+        },
+    )
+    assert started.status_code == 201
+    session = started.json()
+    assert session["source_id"] == "openai_codex_chatgpt"
+    assert session["status"] == "operator_action_required"
+    assert session["login_command"] == "codex login"
+    assert session["instructions"]["secret_handling"].startswith("BOSS stores only")
+
+    listed = client.get(
+        "/v1/entitlement-connection-sessions",
+        params={"project_id": project_id, "source_id": "openai_codex_chatgpt"},
+    )
+    assert listed.status_code == 200
+    assert [item["id"] for item in listed.json()["items"]] == [session["id"]]
+
+    completed = client.post(
+        f"/v1/entitlement-connection-sessions/{session['id']}/complete",
+        json={
+            "project_id": project_id,
+            "connection_ref": "secretref://local/codex-session",
+            "oauth_scopes": ["codex.local"],
+            "connection_metadata": {"verified_by": "local_runner"},
+            "observed_capacity": {"capacity_state": "available", "remaining_units": 8},
+            "actor": "ceo",
+        },
+    )
+    assert completed.status_code == 200
+    completed_payload = completed.json()
+    assert completed_payload["session"]["status"] == "completed"
+    assert completed_payload["session"]["completed_by"] == "ceo"
+    assert completed_payload["source"]["connection_status"] == "connected"
+    assert (
+        completed_payload["source"]["observed_capacity"][
+            "official_connection_session_id"
+        ]
+        == session["id"]
+    )
+
+    duplicate_complete = client.post(
+        f"/v1/entitlement-connection-sessions/{session['id']}/complete",
+        json={
+            "project_id": project_id,
+            "connection_ref": "secretref://local/codex-session",
+            "actor": "ceo",
+        },
+    )
+    assert duplicate_complete.status_code == 422
+
+    events = client.get("/v1/events", params={"project_id": project_id, "limit": 10})
+    assert events.status_code == 200
+    event_types = [item["event_type"] for item in events.json()["items"]]
+    assert "entitlement.connection_session_started" in event_types
+    assert "entitlement.connection_session_completed" in event_types
+
+
 def test_router_preview_rejects_exhausted_subscription_capacity(client, engine):
     project_id = "boss-entitlement-capacity"
     with engine.begin() as connection:

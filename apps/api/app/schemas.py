@@ -2835,6 +2835,60 @@ class EntitlementSourceDisconnectRequest(BaseModel):
     actor: str = "system"
 
 
+class EntitlementConnectionSessionSummary(BaseModel):
+    id: str
+    project_id: str
+    source_id: str
+    provider: str
+    auth_method: str
+    connection_mode: str
+    status: str
+    requested_scopes: list[str]
+    authorization_url: Optional[str] = None
+    device_code: Optional[str] = None
+    user_code: Optional[str] = None
+    verification_uri: Optional[str] = None
+    login_command: Optional[str] = None
+    connection_ref: Optional[str] = None
+    instructions: dict[str, Any]
+    metadata: dict[str, Any]
+    error: dict[str, Any]
+    requested_by: str
+    completed_by: Optional[str] = None
+    expires_at: Optional[str] = None
+    created_at: str
+    updated_at: str
+    completed_at: Optional[str] = None
+
+
+class EntitlementConnectionSessionListResponse(BaseModel):
+    project_id: str
+    items: list[EntitlementConnectionSessionSummary]
+
+
+class EntitlementConnectionSessionCreateRequest(BaseModel):
+    project_id: str
+    connection_mode: Optional[str] = None
+    requested_scopes: list[str] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    actor: str = "system"
+
+
+class EntitlementConnectionSessionCompleteRequest(BaseModel):
+    project_id: str
+    connection_ref: str
+    oauth_scopes: list[str] = Field(default_factory=list)
+    connection_metadata: dict[str, Any] = Field(default_factory=dict)
+    observed_capacity: dict[str, Any] = Field(default_factory=dict)
+    actor: str = "system"
+
+
+class EntitlementConnectionSessionCompleteResponse(BaseModel):
+    project_id: str
+    session: EntitlementConnectionSessionSummary
+    source: EntitlementSourceSummary
+
+
 class EntitlementPoolSummary(BaseModel):
     id: str
     project_id: str

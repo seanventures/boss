@@ -410,6 +410,36 @@ ALTER TABLE entitlement_sources ADD COLUMN IF NOT EXISTS connection_ref TEXT;
 ALTER TABLE entitlement_sources ADD COLUMN IF NOT EXISTS oauth_scopes JSONB NOT NULL DEFAULT '[]'::jsonb;
 ALTER TABLE entitlement_sources ADD COLUMN IF NOT EXISTS connection_metadata JSONB NOT NULL DEFAULT '{}'::jsonb;
 
+CREATE TABLE IF NOT EXISTS entitlement_connection_sessions (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  source_id TEXT NOT NULL,
+  provider TEXT NOT NULL,
+  auth_method TEXT NOT NULL,
+  connection_mode TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'operator_action_required',
+  requested_scopes JSONB NOT NULL DEFAULT '[]'::jsonb,
+  authorization_url TEXT,
+  device_code TEXT,
+  user_code TEXT,
+  verification_uri TEXT,
+  login_command TEXT,
+  connection_ref TEXT,
+  instructions JSONB NOT NULL DEFAULT '{}'::jsonb,
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+  error JSONB NOT NULL DEFAULT '{}'::jsonb,
+  requested_by TEXT NOT NULL DEFAULT 'system',
+  completed_by TEXT,
+  expires_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  completed_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_entitlement_connection_sessions_project_created
+  ON entitlement_connection_sessions(project_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_entitlement_connection_sessions_source_status
+  ON entitlement_connection_sessions(project_id, source_id, status);
+
 CREATE TABLE IF NOT EXISTS capacity_receipts (
   id TEXT PRIMARY KEY,
   project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,

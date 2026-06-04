@@ -2173,6 +2173,57 @@ paths:
                 actor: { type: string, default: system }
       responses:
         '201': { description: Entitlement source upserted with auth method and connection state }
+  /v1/entitlement-connection-sessions:
+    get:
+      summary: List durable official model-subscription connection sessions for a project
+      parameters:
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+        - name: source_id
+          in: query
+          required: false
+          schema: { type: string }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, default: 25, minimum: 1, maximum: 200 }
+      responses:
+        '200': { description: Connection-session history with official login instructions and completion state }
+        '400': { description: Invalid limit }
+  /v1/entitlements/sources/{source_id}/connection-sessions:
+    post:
+      summary: Start a durable official-session connection attempt for a public model subscription source
+      description: Creates an audit record with official provider login instructions. BOSS does not scrape provider UIs or store raw OAuth tokens.
+      parameters:
+        - name: source_id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id]
+              properties:
+                project_id: { type: string }
+                connection_mode:
+                  type: string
+                  description: One of the provider-declared official modes, such as browser_oauth or device_oauth.
+                requested_scopes:
+                  type: array
+                  items: { type: string }
+                metadata:
+                  type: object
+                  description: Non-secret operator/local-runner context for the connection attempt.
+                actor: { type: string, default: system }
+      responses:
+        '201': { description: Connection session created with operator-action instructions }
+        '404': { description: Entitlement source not found }
+        '422': { description: Source is not an official OAuth-backed subscription source or has invalid connection mode }
   /v1/entitlements/sources/{source_id}/connect:
     post:
       summary: Record a verified official OAuth/session connection for an entitlement source
@@ -2210,6 +2261,40 @@ paths:
         '200': { description: Entitlement source connected and event recorded }
         '404': { description: Entitlement source not found }
         '422': { description: Subscription source requires an official OAuth connection method }
+  /v1/entitlement-connection-sessions/{session_id}/complete:
+    post:
+      summary: Complete an official model-subscription connection session with a SecretRef or local session reference
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id, connection_ref]
+              properties:
+                project_id: { type: string }
+                connection_ref:
+                  type: string
+                  description: SecretRef or local official-session reference; never a raw OAuth token.
+                oauth_scopes:
+                  type: array
+                  items: { type: string }
+                connection_metadata:
+                  type: object
+                  description: Non-secret verification metadata from the operator or local runner.
+                observed_capacity:
+                  type: object
+                  description: Observed capacity state after the official login completed.
+                actor: { type: string, default: system }
+      responses:
+        '200': { description: Connection session completed and entitlement source connected }
+        '404': { description: Connection session not found }
+        '422': { description: Session is expired, already completed, or otherwise not completable }
   /v1/entitlements/sources/{source_id}/disconnect:
     post:
       summary: Revoke the local official-session reference for an entitlement source

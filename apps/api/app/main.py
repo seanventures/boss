@@ -119,6 +119,11 @@ from .schemas import (
     EntitlementSourceListResponse,
     EntitlementSourceSummary,
     EntitlementSourceUpsertRequest,
+    EntitlementConnectionSessionCompleteRequest,
+    EntitlementConnectionSessionCompleteResponse,
+    EntitlementConnectionSessionCreateRequest,
+    EntitlementConnectionSessionListResponse,
+    EntitlementConnectionSessionSummary,
     EnterpriseClusterListResponse,
     EnterpriseClusterSummary,
     EnterpriseClusterValidationRunCreateRequest,
@@ -321,6 +326,8 @@ from .services.decisions import (
 )
 from .services.entitlements import (
     EntitlementBrokerService,
+    EntitlementConnectionSessionNotFoundError,
+    EntitlementConnectionSessionStateError,
     EntitlementPoolNotFoundError,
     EntitlementSourceNotFoundError,
     InvalidEntitlementConnectionError,
@@ -1347,6 +1354,12 @@ def entitlement_source_summary_from_service(
         created_at=payload["created_at"],
         updated_at=payload["updated_at"],
     )
+
+
+def entitlement_connection_session_summary_from_service(
+    payload,
+) -> EntitlementConnectionSessionSummary:
+    return EntitlementConnectionSessionSummary(**payload)
 
 
 def model_adapter_summary_from_service(payload) -> ModelAdapterSummary:
@@ -4339,6 +4352,33 @@ def list_entitlement_sources(project_id: str) -> EntitlementSourceListResponse:
         )
 
 
+@app.get(
+    "/v1/entitlement-connection-sessions",
+    response_model=EntitlementConnectionSessionListResponse,
+)
+def list_entitlement_connection_sessions(
+    project_id: str,
+    source_id: Optional[str] = None,
+    limit: int = 25,
+) -> EntitlementConnectionSessionListResponse:
+    if limit < 1 or limit > 200:
+        raise HTTPException(status_code=400, detail="limit must be between 1 and 200.")
+    with begin(engine) as connection:
+        items = entitlements.list_connection_sessions(
+            connection,
+            project_id,
+            source_id=source_id,
+            limit=limit,
+        )
+        return EntitlementConnectionSessionListResponse(
+            project_id=project_id,
+            items=[
+                entitlement_connection_session_summary_from_service(item)
+                for item in items
+            ],
+        )
+
+
 @app.post(
     "/v1/entitlements/sources",
     response_model=EntitlementSourceSummary,
@@ -4360,6 +4400,39 @@ def upsert_entitlement_source(
             actor=payload.actor,
         )
         return entitlement_source_summary_from_service(item)
+
+
+@app.post(
+    "/v1/entitlements/sources/{source_id}/connection-sessions",
+    response_model=EntitlementConnectionSessionSummary,
+    status_code=201,
+)
+def create_entitlement_connection_session(
+    source_id: str,
+    payload: EntitlementConnectionSessionCreateRequest,
+) -> EntitlementConnectionSessionSummary:
+    with begin(engine) as connection:
+        try:
+            require_project_actor(
+                connection,
+                payload.project_id,
+                payload.actor,
+                "entitlement_manage",
+            )
+            session = entitlements.create_connection_session(
+                connection,
+                payload.project_id,
+                source_id,
+                actor=payload.actor,
+                connection_mode=payload.connection_mode,
+                requested_scopes=payload.requested_scopes,
+                metadata=payload.metadata,
+            )
+        except EntitlementSourceNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except InvalidEntitlementConnectionError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        return entitlement_connection_session_summary_from_service(session)
 
 
 @app.post(
@@ -4394,6 +4467,48 @@ def connect_entitlement_source(
         except InvalidEntitlementConnectionError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
         return entitlement_source_summary_from_service(item)
+
+
+@app.post(
+    "/v1/entitlement-connection-sessions/{session_id}/complete",
+    response_model=EntitlementConnectionSessionCompleteResponse,
+)
+def complete_entitlement_connection_session(
+    session_id: str,
+    payload: EntitlementConnectionSessionCompleteRequest,
+) -> EntitlementConnectionSessionCompleteResponse:
+    with begin(engine) as connection:
+        try:
+            require_project_actor(
+                connection,
+                payload.project_id,
+                payload.actor,
+                "entitlement_manage",
+            )
+            result = entitlements.complete_connection_session(
+                connection,
+                payload.project_id,
+                session_id,
+                actor=payload.actor,
+                connection_ref=payload.connection_ref,
+                oauth_scopes=payload.oauth_scopes,
+                connection_metadata=payload.connection_metadata,
+                observed_capacity=payload.observed_capacity,
+            )
+        except EntitlementConnectionSessionNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except (
+            EntitlementConnectionSessionStateError,
+            InvalidEntitlementConnectionError,
+        ) as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        return EntitlementConnectionSessionCompleteResponse(
+            project_id=payload.project_id,
+            session=entitlement_connection_session_summary_from_service(
+                result["session"]
+            ),
+            source=entitlement_source_summary_from_service(result["source"]),
+        )
 
 
 @app.post(

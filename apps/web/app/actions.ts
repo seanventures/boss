@@ -809,6 +809,54 @@ export async function connectEntitlementSourceAction(
   revalidatePath("/");
 }
 
+export async function createEntitlementConnectionSessionAction(
+  formData: FormData,
+): Promise<void> {
+  const sourceId = formData.get("source_id");
+  if (typeof sourceId !== "string" || !sourceId.trim()) {
+    throw new Error("source_id is required");
+  }
+  await client.createEntitlementConnectionSession(sourceId.trim(), {
+    project_id: getProjectId(formData),
+    connection_mode: getOptionalString(formData, "connection_mode"),
+    requested_scopes: parseLines(formData.get("requested_scopes")),
+    metadata: parseOptionalJsonObjectField(
+      formData.get("metadata_json"),
+      "metadata_json",
+    ),
+    actor: getActor(formData),
+  });
+  revalidatePath("/");
+}
+
+export async function completeEntitlementConnectionSessionAction(
+  formData: FormData,
+): Promise<void> {
+  const sessionId = formData.get("session_id");
+  const connectionRef = formData.get("connection_ref");
+  if (typeof sessionId !== "string" || !sessionId.trim()) {
+    throw new Error("session_id is required");
+  }
+  if (typeof connectionRef !== "string" || !connectionRef.trim()) {
+    throw new Error("connection_ref is required");
+  }
+  await client.completeEntitlementConnectionSession(sessionId.trim(), {
+    project_id: getProjectId(formData),
+    connection_ref: connectionRef.trim(),
+    oauth_scopes: parseLines(formData.get("oauth_scopes")),
+    connection_metadata: parseOptionalJsonObjectField(
+      formData.get("connection_metadata_json"),
+      "connection_metadata_json",
+    ),
+    observed_capacity: parseOptionalJsonObjectField(
+      formData.get("observed_capacity_json"),
+      "observed_capacity_json",
+    ),
+    actor: getActor(formData),
+  });
+  revalidatePath("/");
+}
+
 export async function disconnectEntitlementSourceAction(
   formData: FormData,
 ): Promise<void> {
