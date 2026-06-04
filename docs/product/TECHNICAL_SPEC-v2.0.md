@@ -293,7 +293,7 @@ Pack types:
 
 BOSS Account Connect provides marketplace identity for Cloud and attached Enterprise. Community must support local import/export of packs without hosted identity.
 
-## Planned API Surfaces
+## API Surface Inventory
 
 ProviderOps:
 
@@ -362,4 +362,4 @@ Commercial:
 - `GET /v1/packs`
 - `POST /v1/packs/install`
 
-These planned endpoints do not imply implementation status. `docs/product/IMPLEMENTATION_STATUS.md` remains the shipped-runtime status source.
+This endpoint inventory is the product/API contract map; `docs/product/IMPLEMENTATION_STATUS.md` remains the shipped-runtime status source for each surface.
