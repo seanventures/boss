@@ -1,0 +1,51 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: boss-bootstrap-seed
+  namespace: boss
+  labels:
+    app.kubernetes.io/name: boss
+    app.kubernetes.io/component: bootstrap
+spec:
+  backoffLimit: 2
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: boss
+        app.kubernetes.io/component: bootstrap
+    spec:
+      restartPolicy: OnFailure
+      serviceAccountName: boss-control-plane
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: bootstrap
+          image: ghcr.io/seanheiney/boss-api:0.4.0
+          imagePullPolicy: IfNotPresent
+          command: ["python", "-m", "apps.api.app.bootstrap"]
+          envFrom:
+            - configMapRef:
+                name: boss-config
+            - secretRef:
+                name: boss-secrets
+          volumeMounts:
+            - name: artifacts
+              mountPath: /var/lib/boss/artifacts
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            capabilities:
+              drop: ["ALL"]
+      volumes:
+        - name: artifacts
+          persistentVolumeClaim:
+            claimName: boss-artifacts

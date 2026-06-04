@@ -5,7 +5,7 @@ PIP := $(VENV)/bin/pip
 BOSS_POSTGRES_PORT ?= 5432
 DATABASE_URL ?= postgresql+psycopg://boss:boss@localhost:$(BOSS_POSTGRES_PORT)/boss
 
-.PHONY: install install-node install-python wait-db dev test lint build seed smoke real-smoke-plan real-smoke-pr real-smoke-merge real-smoke-deploy worker-drain-once sandbox-template
+.PHONY: install install-node install-python wait-db dev test lint build seed smoke k8s-validate real-smoke-plan real-smoke-pr real-smoke-merge real-smoke-deploy worker-drain-once sandbox-template
 
 install: install-node install-python
 
@@ -46,6 +46,9 @@ smoke: install-python
 	docker compose -f infra/docker-compose.yml up -d db
 	DATABASE_URL=$(DATABASE_URL) $(PYTHON) scripts/wait_for_postgres.py
 	DATABASE_URL=$(DATABASE_URL) $(PYTHON) -m apps.api.tests.smoke
+
+k8s-validate: install-python
+	$(PYTHON) scripts/validate_kubernetes_manifests.py
 
 real-smoke-plan: install-python
 	docker compose -f infra/docker-compose.yml up -d db

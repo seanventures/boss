@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: boss-artifacts
+  namespace: boss
+  labels:
+    app.kubernetes.io/name: boss
+    app.kubernetes.io/component: artifacts
+spec:
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 10Gi

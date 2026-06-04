@@ -1,0 +1,15 @@
+.DS_Store
+.git
+.github
+.pytest_cache
+.ruff_cache
+.venv
+artifacts
+node_modules
+tmp
+apps/web/.next
+apps/web/node_modules
+packages/*/node_modules
+*.log
+*.zip
+image.png

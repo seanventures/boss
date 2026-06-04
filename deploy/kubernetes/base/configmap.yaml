@@ -1,0 +1,28 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: boss-config
+  namespace: boss
+  labels:
+    app.kubernetes.io/name: boss
+data:
+  BOSS_EDITION: "enterprise_self_hosted"
+  BOSS_REQUIRE_API_AUTH: "true"
+  BOSS_DEFAULT_ORG_ID: "org_boss"
+  BOSS_DEFAULT_WORKSPACE_ID: "ws_boss"
+  BOSS_DEFAULT_PROJECT_ID: "boss-dogfood"
+  BOSS_CORE_PACK_ID: "core_v1"
+  BOSS_ARTIFACTS_DIR: "/var/lib/boss/artifacts"
+  BOSS_CONTROL_PLANE_URL: "http://boss-api.boss.svc.cluster.local:8000"
+  NEXT_PUBLIC_BOSS_API_URL: "http://boss-api.boss.svc.cluster.local:8000"
+  NEXT_PUBLIC_BOSS_PROJECT_ID: "boss-dogfood"
+  BOSS_INFRA_REAL_PROVISION_ALLOWED: "false"
+  BOSS_EMAIL_REAL_SEND_ALLOWED: "false"
+  BOSS_SLACK_REAL_SEND_ALLOWED: "false"
+  BOSS_ENABLE_SANDBOX_MERGE: "false"
+  BOSS_ENABLE_SANDBOX_DEPLOY: "false"
+  BOSS_DAILY_CAP_USD_MICROS: "10000000"
+  BOSS_MONTHLY_CAP_USD_MICROS: "200000000"
+  BOSS_BURST_CAP_USD_MICROS_PER_MIN: "100000"
+  BOSS_POLL_INTERVAL_SECONDS: "15"
+  BOSS_LEASE_TTL_SECONDS: "60"
