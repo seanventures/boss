@@ -438,6 +438,73 @@ paths:
         '201': { description: Enterprise cluster record normalized, policy gaps calculated, and audit event emitted }
         '403': { description: Actor is not allowed to manage enterprise trust or clustering records }
         '422': { description: Unsupported enterprise deployment or Account Connect mode }
+  /v1/enterprise/support-cases:
+    get:
+      summary: List enterprise support/SLA cases for a project
+      parameters:
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, default: 50, minimum: 1, maximum: 200 }
+      responses:
+        '200': { description: Enterprise support cases with SLA due dates, hosted escalation state, receipts, and metadata }
+    post:
+      summary: Create a local enterprise support case and optionally request receipt-backed hosted escalation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id, title, description]
+              properties:
+                project_id: { type: string }
+                title: { type: string }
+                description: { type: string }
+                severity:
+                  type: string
+                  enum: [critical, high, normal, low]
+                  default: normal
+                category: { type: string, default: support }
+                enterprise_cluster_id: { type: string }
+                escalate_to_hosted: { type: boolean, default: false }
+                metadata: { type: object }
+                actor: { type: string, default: system }
+      responses:
+        '201': { description: Support case created; hosted escalation is submitted, failed, or blocked visibly }
+        '403': { description: Actor is not allowed to manage enterprise support records }
+        '422': { description: Unsupported severity, unknown project, or invalid support payload }
+  /v1/enterprise/support-cases/{case_id}:
+    post:
+      summary: Update local enterprise support case status, assignment, or metadata
+      parameters:
+        - name: case_id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id]
+              properties:
+                project_id: { type: string }
+                status:
+                  type: string
+                  enum: [open, hosted_submitted, in_progress, blocked_configuration, failed, resolved, closed]
+                assigned_to: { type: string }
+                metadata: { type: object }
+                actor: { type: string, default: system }
+      responses:
+        '200': { description: Support case status or assignment updated and audited }
+        '403': { description: Actor is not allowed to manage enterprise support records }
+        '404': { description: Support case was not found }
   /v1/enterprise/identity-providers:
     get:
       summary: List enterprise OIDC, SAML, and SCIM identity-provider metadata records

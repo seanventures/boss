@@ -447,6 +447,9 @@ Acceptance criteria:
 - Given an external IdP calls `/scim/v2/{project_id}/Users` or `/Groups` without a configured SCIM bearer token, when provisioning is attempted, then BOSS fails closed with a SCIM error and does not mutate identity state.
 - Given an external IdP calls SCIM runtime endpoints with a valid bearer token but no active non-blocked SCIM provider record, when provisioning is attempted, then BOSS returns a visible blocked SCIM error and emits `enterprise.scim_runtime_blocked`.
 - Given an external IdP creates, replaces, lists, filters, or deletes SCIM users/groups with a valid bearer token and active SCIM provider record, when the request runs, then BOSS maps it through the same audited SCIM group/user and org-member provisioning path used by the internal API.
+- Given an enterprise operator creates a local support case, when BOSS records it, then the case has severity, category, support tier, SLA due date, status, and audit event without requiring hosted BOSS auth.
+- Given hosted support escalation is requested, when Account Connect or hosted support endpoint configuration is missing, then BOSS creates a blocked support case, writes a failed Receipt, and emits a visible blocked event instead of inventing a hosted ticket.
+- Given an enterprise operator updates support case status or assignment, when the update succeeds, then BOSS persists the lifecycle change and emits `enterprise.support_case_updated`.
 
 ### Story ADM-002: Control Project Actors
 

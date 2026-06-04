@@ -345,6 +345,72 @@ class EnterpriseClusterUpsertRequest(BaseModel):
         return self
 
 
+class EnterpriseSupportCaseSummary(BaseModel):
+    id: str
+    org_id: str
+    project_id: str
+    enterprise_cluster_id: Optional[str] = None
+    account_connect_org_id: Optional[str] = None
+    hosted_org_id: Optional[str] = None
+    title: str
+    severity: str
+    category: str
+    description: str
+    status: str
+    sla_due_at: Optional[str] = None
+    response_time_hours: int
+    hosted_case_ref: Optional[str] = None
+    receipt_id: Optional[str] = None
+    assigned_to: Optional[str] = None
+    created_by: str
+    metadata: dict[str, Any]
+    created_at: str
+    updated_at: str
+
+
+class EnterpriseSupportCaseListResponse(BaseModel):
+    project_id: str
+    items: list[EnterpriseSupportCaseSummary]
+
+
+class EnterpriseSupportCaseCreateRequest(BaseModel):
+    project_id: str
+    title: str
+    description: str
+    severity: str = "normal"
+    category: str = "support"
+    enterprise_cluster_id: Optional[str] = None
+    escalate_to_hosted: bool = False
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    actor: str = "system"
+
+    @model_validator(mode="after")
+    def validate_support_case(self) -> "EnterpriseSupportCaseCreateRequest":
+        self.project_id = _require_text(self.project_id, "project_id")
+        self.title = _require_text(self.title, "title")
+        self.description = _require_text(self.description, "description")
+        self.severity = _require_text(self.severity, "severity")
+        self.category = _require_text(self.category, "category")
+        self.actor = _require_text(self.actor, "actor")
+        return self
+
+
+class EnterpriseSupportCaseUpdateRequest(BaseModel):
+    project_id: str
+    status: Optional[str] = None
+    assigned_to: Optional[str] = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    actor: str = "system"
+
+    @model_validator(mode="after")
+    def validate_support_case_update(self) -> "EnterpriseSupportCaseUpdateRequest":
+        self.project_id = _require_text(self.project_id, "project_id")
+        if self.status is not None:
+            self.status = _require_text(self.status, "status")
+        self.actor = _require_text(self.actor, "actor")
+        return self
+
+
 class EnterpriseIdentityProviderSummary(BaseModel):
     id: str
     org_id: str

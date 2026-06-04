@@ -259,6 +259,54 @@ export type EnterpriseClusterUpsertRequest = {
   actor?: string;
 };
 
+export type EnterpriseSupportCaseSummary = {
+  id: string;
+  org_id: string;
+  project_id: string;
+  enterprise_cluster_id?: string;
+  account_connect_org_id?: string;
+  hosted_org_id?: string;
+  title: string;
+  severity: string;
+  category: string;
+  description: string;
+  status: string;
+  sla_due_at?: string;
+  response_time_hours: number;
+  hosted_case_ref?: string;
+  receipt_id?: string;
+  assigned_to?: string;
+  created_by: string;
+  metadata: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+};
+
+export type EnterpriseSupportCaseListResponse = {
+  project_id: string;
+  items: EnterpriseSupportCaseSummary[];
+};
+
+export type EnterpriseSupportCaseCreateRequest = {
+  project_id: string;
+  title: string;
+  description: string;
+  severity?: string;
+  category?: string;
+  enterprise_cluster_id?: string;
+  escalate_to_hosted?: boolean;
+  metadata?: Record<string, unknown>;
+  actor?: string;
+};
+
+export type EnterpriseSupportCaseUpdateRequest = {
+  project_id: string;
+  status?: string;
+  assigned_to?: string;
+  metadata?: Record<string, unknown>;
+  actor?: string;
+};
+
 export type EnterpriseIdentityProviderSummary = {
   id: string;
   org_id: string;
@@ -3033,6 +3081,30 @@ export function createBossApiClient(config: BossApiClientConfig) {
       return request<EnterpriseClusterSummary>(
         "POST",
         "/v1/enterprise/clusters",
+        { body: payload },
+      );
+    },
+    listEnterpriseSupportCases(projectId: string, limit = 50) {
+      return request<EnterpriseSupportCaseListResponse>(
+        "GET",
+        "/v1/enterprise/support-cases",
+        { query: { project_id: projectId, limit } },
+      );
+    },
+    createEnterpriseSupportCase(payload: EnterpriseSupportCaseCreateRequest) {
+      return request<EnterpriseSupportCaseSummary>(
+        "POST",
+        "/v1/enterprise/support-cases",
+        { body: payload },
+      );
+    },
+    updateEnterpriseSupportCase(
+      caseId: string,
+      payload: EnterpriseSupportCaseUpdateRequest,
+    ) {
+      return request<EnterpriseSupportCaseSummary>(
+        "POST",
+        `/v1/enterprise/support-cases/${encodeURIComponent(caseId)}`,
         { body: payload },
       );
     },

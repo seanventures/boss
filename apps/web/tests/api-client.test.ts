@@ -379,6 +379,79 @@ describe("createBossApiClient", () => {
     expect(calls[1].init?.method).toBe("POST");
   });
 
+  it("uses enterprise support case API contracts", async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const supportCase = {
+      id: "entsup_1",
+      org_id: "org_boss",
+      project_id: "boss-dogfood",
+      enterprise_cluster_id: "entcluster_1",
+      account_connect_org_id: "acctconn_1",
+      hosted_org_id: "acct_hosted",
+      title: "Hosted escalation",
+      severity: "high",
+      category: "support",
+      description: "Need enterprise support.",
+      status: "blocked_configuration",
+      sla_due_at: "2026-06-03T04:00:00Z",
+      response_time_hours: 4,
+      hosted_case_ref: undefined,
+      receipt_id: "rcpt_support",
+      assigned_to: undefined,
+      created_by: "ceo",
+      metadata: { blocked_reason: "account_connect_url_missing" },
+      created_at: "2026-06-03T00:00:00Z",
+      updated_at: "2026-06-03T00:00:00Z",
+    };
+    const responses = [
+      { status: 200, body: { project_id: "boss-dogfood", items: [supportCase] } },
+      { status: 201, body: supportCase },
+      { status: 200, body: { ...supportCase, status: "in_progress", assigned_to: "cto" } },
+    ];
+    const fetchImpl = async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({ url: String(input), init });
+      const response = responses.shift();
+      return new Response(JSON.stringify(response?.body ?? {}), {
+        status: response?.status ?? 500,
+        headers: { "Content-Type": "application/json" },
+      });
+    };
+    const client = createBossApiClient({
+      baseUrl: "http://127.0.0.1:8000",
+      fetchImpl,
+    });
+
+    const listed = await client.listEnterpriseSupportCases("boss-dogfood");
+    const created = await client.createEnterpriseSupportCase({
+      project_id: "boss-dogfood",
+      title: "Hosted escalation",
+      description: "Need enterprise support.",
+      severity: "high",
+      escalate_to_hosted: true,
+      actor: "ceo",
+    });
+    const updated = await client.updateEnterpriseSupportCase("entsup_1", {
+      project_id: "boss-dogfood",
+      status: "in_progress",
+      assigned_to: "cto",
+      actor: "ceo",
+    });
+
+    expect(listed.items[0].receipt_id).toBe("rcpt_support");
+    expect(created.metadata.blocked_reason).toBe("account_connect_url_missing");
+    expect(updated.assigned_to).toBe("cto");
+    expect(calls[0].url).toBe(
+      "http://127.0.0.1:8000/v1/enterprise/support-cases?project_id=boss-dogfood&limit=50",
+    );
+    expect(calls[1].url).toBe(
+      "http://127.0.0.1:8000/v1/enterprise/support-cases",
+    );
+    expect(calls[1].init?.method).toBe("POST");
+    expect(calls[2].url).toBe(
+      "http://127.0.0.1:8000/v1/enterprise/support-cases/entsup_1",
+    );
+  });
+
   it("uses enterprise SCIM provisioning API contracts", async () => {
     const calls: Array<{ url: string; init?: RequestInit }> = [];
     const group = {

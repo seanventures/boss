@@ -116,6 +116,10 @@ from .schemas import (
     EnterpriseScimUserListResponse,
     EnterpriseScimUserSummary,
     EnterpriseScimUserUpsertRequest,
+    EnterpriseSupportCaseCreateRequest,
+    EnterpriseSupportCaseListResponse,
+    EnterpriseSupportCaseSummary,
+    EnterpriseSupportCaseUpdateRequest,
     EventFeedResponse,
     EventItem,
     ExternalResourceListResponse,
@@ -1308,6 +1312,12 @@ def enterprise_cluster_summary_from_service(payload) -> EnterpriseClusterSummary
     return EnterpriseClusterSummary(**payload)
 
 
+def enterprise_support_case_summary_from_service(
+    payload,
+) -> EnterpriseSupportCaseSummary:
+    return EnterpriseSupportCaseSummary(**payload)
+
+
 def enterprise_identity_provider_summary_from_service(
     payload,
 ) -> EnterpriseIdentityProviderSummary:
@@ -1897,6 +1907,89 @@ def upsert_enterprise_cluster(
         except ValueError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
         return enterprise_cluster_summary_from_service(cluster)
+
+
+@app.get(
+    "/v1/enterprise/support-cases",
+    response_model=EnterpriseSupportCaseListResponse,
+)
+def list_enterprise_support_cases(
+    project_id: str,
+    limit: int = 50,
+) -> EnterpriseSupportCaseListResponse:
+    if limit < 1 or limit > 200:
+        raise HTTPException(status_code=400, detail="limit must be between 1 and 200.")
+    with begin(engine) as connection:
+        items = enterprise.list_support_cases(connection, project_id, limit)
+        return EnterpriseSupportCaseListResponse(
+            project_id=project_id,
+            items=[
+                enterprise_support_case_summary_from_service(item) for item in items
+            ],
+        )
+
+
+@app.post(
+    "/v1/enterprise/support-cases",
+    response_model=EnterpriseSupportCaseSummary,
+    status_code=201,
+)
+def create_enterprise_support_case(
+    payload: EnterpriseSupportCaseCreateRequest,
+) -> EnterpriseSupportCaseSummary:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection,
+            payload.project_id,
+            payload.actor,
+            "enterprise_manage",
+        )
+        try:
+            item = enterprise.create_support_case(
+                connection,
+                payload.project_id,
+                title=payload.title,
+                description=payload.description,
+                actor=payload.actor,
+                severity=payload.severity,
+                category=payload.category,
+                enterprise_cluster_id=payload.enterprise_cluster_id,
+                escalate_to_hosted=payload.escalate_to_hosted,
+                metadata=payload.metadata,
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        return enterprise_support_case_summary_from_service(item)
+
+
+@app.post(
+    "/v1/enterprise/support-cases/{case_id}",
+    response_model=EnterpriseSupportCaseSummary,
+)
+def update_enterprise_support_case(
+    case_id: str,
+    payload: EnterpriseSupportCaseUpdateRequest,
+) -> EnterpriseSupportCaseSummary:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection,
+            payload.project_id,
+            payload.actor,
+            "enterprise_manage",
+        )
+        try:
+            item = enterprise.update_support_case(
+                connection,
+                payload.project_id,
+                case_id,
+                actor=payload.actor,
+                status=payload.status,
+                assigned_to=payload.assigned_to,
+                metadata=payload.metadata,
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        return enterprise_support_case_summary_from_service(item)
 
 
 @app.get(

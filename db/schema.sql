@@ -650,6 +650,33 @@ CREATE INDEX IF NOT EXISTS idx_tasks_project_parent ON tasks(project_id, parent_
 ALTER TABLE jobs ADD COLUMN IF NOT EXISTS data_boundary TEXT NOT NULL DEFAULT 'internal';
 ALTER TABLE receipts ADD COLUMN IF NOT EXISTS data_boundary TEXT NOT NULL DEFAULT 'internal';
 
+CREATE TABLE IF NOT EXISTS enterprise_support_cases (
+  id TEXT PRIMARY KEY,
+  org_id TEXT NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  enterprise_cluster_id TEXT REFERENCES enterprise_clusters(id) ON DELETE SET NULL,
+  account_connect_org_id TEXT REFERENCES account_connect_orgs(id) ON DELETE SET NULL,
+  hosted_org_id TEXT,
+  title TEXT NOT NULL,
+  severity TEXT NOT NULL DEFAULT 'normal',
+  category TEXT NOT NULL DEFAULT 'support',
+  description TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'open',
+  sla_due_at TIMESTAMPTZ,
+  response_time_hours INTEGER NOT NULL DEFAULT 24,
+  hosted_case_ref TEXT,
+  receipt_id TEXT REFERENCES receipts(id) ON DELETE SET NULL,
+  assigned_to TEXT,
+  created_by TEXT NOT NULL DEFAULT 'system',
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_enterprise_support_cases_project_status
+  ON enterprise_support_cases(project_id, status, severity);
+CREATE INDEX IF NOT EXISTS idx_enterprise_support_cases_sla
+  ON enterprise_support_cases(project_id, sla_due_at);
+
 CREATE TABLE IF NOT EXISTS account_connect_team_invites (
   id TEXT PRIMARY KEY,
   project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,

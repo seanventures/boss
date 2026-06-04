@@ -2,16 +2,99 @@ from __future__ import annotations
 
 import json
 import re
+from datetime import timedelta
 from pathlib import Path
 from typing import Any, Optional
+from urllib.error import HTTPError, URLError
+from urllib.parse import quote
+from urllib.request import Request, urlopen
 
 import yaml
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
 from ..config import Settings
-from .core import emit_event
+from .core import emit_event, json_hash, make_id, now_utc
 from .members import MemberDirectoryService
+from .receipts import ReceiptService
+
+
+class EnterpriseSupportConfigurationError(RuntimeError):
+    pass
+
+
+class EnterpriseSupportEscalationError(RuntimeError):
+    pass
+
+
+class EnterpriseSupportAdapter:
+    def __init__(self, settings: Settings):
+        self.settings = settings
+
+    def create_hosted_case(
+        self,
+        *,
+        hosted_org_id: str,
+        project_id: str,
+        title: str,
+        severity: str,
+        category: str,
+        description: str,
+        metadata: dict[str, Any],
+    ) -> dict[str, Any]:
+        if not self.settings.account_connect_url:
+            raise EnterpriseSupportConfigurationError(
+                "BOSS_ACCOUNT_CONNECT_URL is required before hosted support escalation."
+            )
+        base_url = self.settings.account_connect_url.rstrip("/")
+        url = (
+            f"{base_url}/v1/orgs/{quote(hosted_org_id, safe='')}"
+            "/support-cases"
+        )
+        payload = json.dumps(
+            {
+                "project_id": project_id,
+                "title": title,
+                "severity": severity,
+                "category": category,
+                "description": description,
+                "metadata": metadata,
+            }
+        ).encode("utf-8")
+        headers = {
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+            "User-Agent": "boss-control-plane/0.4",
+        }
+        if self.settings.account_connect_token:
+            headers["Authorization"] = f"Bearer {self.settings.account_connect_token}"
+        request = Request(url, data=payload, headers=headers, method="POST")
+        try:
+            with urlopen(  # noqa: S310 - configured trusted Account Connect endpoint.
+                request,
+                timeout=self.settings.account_connect_timeout_seconds,
+            ) as response:
+                raw = response.read().decode("utf-8")
+        except HTTPError as error:
+            raise EnterpriseSupportEscalationError(
+                f"Hosted support escalation failed with HTTP {error.code}."
+            ) from error
+        except URLError as error:
+            raise EnterpriseSupportEscalationError(
+                f"Hosted support escalation failed: {error.reason}."
+            ) from error
+        try:
+            response_payload = json.loads(raw)
+        except json.JSONDecodeError as error:
+            raise EnterpriseSupportEscalationError(
+                "Hosted support escalation returned invalid JSON."
+            ) from error
+        case_ref = response_payload.get("id") or response_payload.get("case_id")
+        if not isinstance(case_ref, str) or not case_ref.strip():
+            raise EnterpriseSupportEscalationError(
+                "Hosted support escalation response did not include a case id."
+            )
+        return response_payload
 
 
 class EnterpriseService:
@@ -28,6 +111,8 @@ class EnterpriseService:
     def __init__(self, settings: Settings):
         self.settings = settings
         self.members = MemberDirectoryService(settings)
+        self.receipts = ReceiptService()
+        self.support_adapter = EnterpriseSupportAdapter(settings)
 
     def _policy_path(self) -> Path:
         return self.settings.specpack_root / "policies" / "enterprise_governance_policy.yaml"
@@ -534,6 +619,294 @@ class EnterpriseService:
         ).mappings().all()
         return [self._cluster_from_row(dict(row)) for row in rows]
 
+    def list_support_cases(
+        self,
+        connection: Connection,
+        project_id: str,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        rows = connection.execute(
+            text(
+                """
+                SELECT id, org_id, project_id, enterprise_cluster_id,
+                       account_connect_org_id, hosted_org_id, title, severity,
+                       category, description, status, sla_due_at,
+                       response_time_hours, hosted_case_ref, receipt_id,
+                       assigned_to, created_by, metadata, created_at, updated_at
+                FROM enterprise_support_cases
+                WHERE project_id = :project_id
+                ORDER BY created_at DESC
+                LIMIT :limit
+                """
+            ),
+            {"project_id": project_id, "limit": limit},
+        ).mappings().all()
+        return [self._support_case_from_row(dict(row)) for row in rows]
+
+    def create_support_case(
+        self,
+        connection: Connection,
+        project_id: str,
+        *,
+        title: str,
+        description: str,
+        actor: str,
+        severity: str = "normal",
+        category: str = "support",
+        enterprise_cluster_id: Optional[str] = None,
+        escalate_to_hosted: bool = False,
+        metadata: Optional[dict[str, Any]] = None,
+    ) -> dict[str, Any]:
+        cleaned_title = self._required_text(title, "support case title")
+        cleaned_description = self._required_text(
+            description, "support case description"
+        )
+        normalized_severity = self._id_token(severity)
+        normalized_category = self._id_token(category)
+        if normalized_severity not in {"critical", "high", "normal", "low"}:
+            raise ValueError(f"Unsupported support severity: {severity}")
+        scope = self._project_scope(connection, project_id)
+        cluster = self._active_or_requested_cluster(
+            connection, project_id, enterprise_cluster_id
+        )
+        response_hours = self._support_response_hours(cluster, normalized_severity)
+        sla_due_at = now_utc() + timedelta(hours=response_hours)
+        active_account = self._active_account_connect_org(connection, project_id)
+        case_id = make_id("entsup")
+        metadata_payload = {
+            **(metadata or {}),
+            "escalate_to_hosted": escalate_to_hosted,
+            "support_tier": cluster.get("support_tier") if cluster else "community",
+        }
+        receipt_id = None
+        hosted_case_ref = None
+        hosted_org_id = active_account.get("hosted_org_id") if active_account else None
+        account_connect_org_id = active_account.get("id") if active_account else None
+        status = "open"
+        event_type = "enterprise.support_case_created"
+
+        if escalate_to_hosted:
+            dedupe_payload = {
+                "project_id": project_id,
+                "title": cleaned_title,
+                "severity": normalized_severity,
+                "category": normalized_category,
+                "description": cleaned_description,
+                "hosted_org_id": hosted_org_id,
+            }
+            receipt, created = self.receipts.create_or_reuse(
+                connection,
+                scope["org_id"],
+                scope["workspace_id"],
+                project_id,
+                f"enterprise-support-case:{project_id}:{json_hash(dedupe_payload)}",
+                "enterprise.support_case.create",
+                {
+                    "hosted_org_id": hosted_org_id,
+                    "severity": normalized_severity,
+                    "data_boundary": "confidential",
+                },
+                dedupe_payload,
+                data_boundary="confidential",
+            )
+            receipt_id = receipt["id"]
+            if not created and receipt.get("status") == "succeeded":
+                existing = self._support_case_by_receipt(
+                    connection, project_id, receipt["id"]
+                )
+                if existing:
+                    return existing
+            if not active_account:
+                status = "blocked_configuration"
+                event_type = "enterprise.support_case_blocked"
+                metadata_payload["blocked_reason"] = "account_connect_org_missing"
+                self.receipts.mark_failed(
+                    connection,
+                    receipt["id"],
+                    {"message": "No active Account Connect org is linked."},
+                )
+            else:
+                try:
+                    hosted = self.support_adapter.create_hosted_case(
+                        hosted_org_id=active_account["hosted_org_id"],
+                        project_id=project_id,
+                        title=cleaned_title,
+                        severity=normalized_severity,
+                        category=normalized_category,
+                        description=cleaned_description,
+                        metadata=metadata_payload,
+                    )
+                    hosted_case_ref = str(hosted.get("id") or hosted.get("case_id"))
+                    status = str(hosted.get("status") or "hosted_submitted")
+                    event_type = "enterprise.support_case_escalated"
+                    metadata_payload["hosted_status"] = status
+                    self.receipts.mark_succeeded(
+                        connection,
+                        receipt["id"],
+                        hosted_case_ref,
+                        {
+                            "hosted_case_ref": hosted_case_ref,
+                            "status": status,
+                        },
+                    )
+                except EnterpriseSupportConfigurationError as error:
+                    status = "blocked_configuration"
+                    event_type = "enterprise.support_case_blocked"
+                    metadata_payload["blocked_reason"] = "account_connect_url_missing"
+                    self.receipts.mark_failed(
+                        connection, receipt["id"], {"message": str(error)}
+                    )
+                except EnterpriseSupportEscalationError as error:
+                    status = "failed"
+                    event_type = "enterprise.support_case_failed"
+                    metadata_payload["failure_reason"] = str(error)
+                    self.receipts.mark_failed(
+                        connection, receipt["id"], {"message": str(error)}
+                    )
+
+        connection.execute(
+            text(
+                """
+                INSERT INTO enterprise_support_cases (
+                    id, org_id, project_id, enterprise_cluster_id,
+                    account_connect_org_id, hosted_org_id, title, severity,
+                    category, description, status, sla_due_at,
+                    response_time_hours, hosted_case_ref, receipt_id,
+                    assigned_to, created_by, metadata
+                )
+                VALUES (
+                    :id, :org_id, :project_id, :enterprise_cluster_id,
+                    :account_connect_org_id, :hosted_org_id, :title, :severity,
+                    :category, :description, :status, :sla_due_at,
+                    :response_time_hours, :hosted_case_ref, :receipt_id,
+                    :assigned_to, :created_by, CAST(:metadata AS JSONB)
+                )
+                """
+            ),
+            {
+                "id": case_id,
+                "org_id": scope["org_id"],
+                "project_id": project_id,
+                "enterprise_cluster_id": cluster.get("id") if cluster else None,
+                "account_connect_org_id": account_connect_org_id,
+                "hosted_org_id": hosted_org_id,
+                "title": cleaned_title,
+                "severity": normalized_severity,
+                "category": normalized_category,
+                "description": cleaned_description,
+                "status": status,
+                "sla_due_at": sla_due_at,
+                "response_time_hours": response_hours,
+                "hosted_case_ref": hosted_case_ref,
+                "receipt_id": receipt_id,
+                "assigned_to": None,
+                "created_by": actor,
+                "metadata": json.dumps(metadata_payload),
+            },
+        )
+        emit_event(
+            connection,
+            project_id,
+            event_type,
+            actor,
+            "enterprise_support_case",
+            case_id,
+            {
+                "severity": normalized_severity,
+                "status": status,
+                "sla_due_at": sla_due_at.isoformat(),
+                "receipt_id": receipt_id,
+                "hosted_case_ref": hosted_case_ref,
+            },
+        )
+        return self.get_support_case(connection, project_id, case_id)
+
+    def update_support_case(
+        self,
+        connection: Connection,
+        project_id: str,
+        case_id: str,
+        *,
+        actor: str,
+        status: Optional[str] = None,
+        assigned_to: Optional[str] = None,
+        metadata: Optional[dict[str, Any]] = None,
+    ) -> dict[str, Any]:
+        existing = self.get_support_case(connection, project_id, case_id)
+        normalized_status = self._id_token(status) if status else existing["status"]
+        if normalized_status not in {
+            "open",
+            "hosted_submitted",
+            "in_progress",
+            "blocked_configuration",
+            "failed",
+            "resolved",
+            "closed",
+        }:
+            raise ValueError(f"Unsupported support case status: {status}")
+        merged_metadata = {
+            **(existing.get("metadata") or {}),
+            **(metadata or {}),
+            "last_updated_by": actor,
+        }
+        connection.execute(
+            text(
+                """
+                UPDATE enterprise_support_cases
+                SET status = :status,
+                    assigned_to = :assigned_to,
+                    metadata = CAST(:metadata AS JSONB),
+                    updated_at = now()
+                WHERE project_id = :project_id AND id = :id
+                """
+            ),
+            {
+                "project_id": project_id,
+                "id": case_id,
+                "status": normalized_status,
+                "assigned_to": assigned_to
+                if assigned_to is not None
+                else existing.get("assigned_to"),
+                "metadata": json.dumps(merged_metadata),
+            },
+        )
+        emit_event(
+            connection,
+            project_id,
+            "enterprise.support_case_updated",
+            actor,
+            "enterprise_support_case",
+            case_id,
+            {
+                "status": normalized_status,
+                "assigned_to": assigned_to
+                if assigned_to is not None
+                else existing.get("assigned_to"),
+            },
+        )
+        return self.get_support_case(connection, project_id, case_id)
+
+    def get_support_case(
+        self, connection: Connection, project_id: str, case_id: str
+    ) -> dict[str, Any]:
+        row = connection.execute(
+            text(
+                """
+                SELECT id, org_id, project_id, enterprise_cluster_id,
+                       account_connect_org_id, hosted_org_id, title, severity,
+                       category, description, status, sla_due_at,
+                       response_time_hours, hosted_case_ref, receipt_id,
+                       assigned_to, created_by, metadata, created_at, updated_at
+                FROM enterprise_support_cases
+                WHERE project_id = :project_id AND id = :id
+                """
+            ),
+            {"project_id": project_id, "id": case_id},
+        ).mappings().first()
+        if row is None:
+            raise ValueError(f"Enterprise support case '{case_id}' was not found.")
+        return self._support_case_from_row(dict(row))
+
     def upsert_cluster(
         self,
         connection: Connection,
@@ -701,6 +1074,116 @@ class EnterpriseService:
         if row is None:
             raise ValueError(f"Enterprise cluster '{cluster_id}' was not found.")
         return self._cluster_from_row(dict(row))
+
+    def _project_scope(self, connection: Connection, project_id: str) -> dict[str, str]:
+        row = connection.execute(
+            text(
+                """
+                SELECT p.id AS project_id, p.workspace_id, w.org_id
+                FROM projects p
+                JOIN workspaces w ON w.id = p.workspace_id
+                WHERE p.id = :project_id
+                """
+            ),
+            {"project_id": project_id},
+        ).mappings().first()
+        if not row:
+            raise ValueError(f"Project '{project_id}' was not found.")
+        return dict(row)
+
+    def _active_account_connect_org(
+        self, connection: Connection, project_id: str
+    ) -> Optional[dict[str, Any]]:
+        row = connection.execute(
+            text(
+                """
+                SELECT id, project_id, hosted_org_id, local_org_id,
+                       connection_mode, status
+                FROM account_connect_orgs
+                WHERE project_id = :project_id AND status IN ('linked', 'active')
+                ORDER BY linked_at DESC
+                LIMIT 1
+                """
+            ),
+            {"project_id": project_id},
+        ).mappings().first()
+        return dict(row) if row else None
+
+    def _active_or_requested_cluster(
+        self,
+        connection: Connection,
+        project_id: str,
+        enterprise_cluster_id: Optional[str],
+    ) -> Optional[dict[str, Any]]:
+        if enterprise_cluster_id:
+            return self.get_cluster(connection, enterprise_cluster_id, project_id)
+        row = connection.execute(
+            text(
+                """
+                SELECT id, org_id, project_id, deployment_mode, account_connect_mode,
+                       worker_pool_strategy, ha_profile, data_residency,
+                       identity_controls, governance_controls, audit_controls,
+                       private_worker_pools, compliance_packs, support_tier,
+                       support_sla, status, created_by, metadata, created_at, updated_at
+                FROM enterprise_clusters
+                WHERE project_id = :project_id
+                ORDER BY
+                  CASE WHEN status = 'active' THEN 0 ELSE 1 END,
+                  updated_at DESC,
+                  id ASC
+                LIMIT 1
+                """
+            ),
+            {"project_id": project_id},
+        ).mappings().first()
+        return self._cluster_from_row(dict(row)) if row else None
+
+    def _support_response_hours(
+        self, cluster: Optional[dict[str, Any]], severity: str
+    ) -> int:
+        if severity == "critical":
+            return 1
+        if severity == "high":
+            return 4
+        if severity == "low":
+            return 48
+        if cluster:
+            support_sla = cluster.get("support_sla") or {}
+            response_hours = support_sla.get("response_time_hours")
+            if isinstance(response_hours, int) and response_hours > 0:
+                return response_hours
+        return 24
+
+    def _support_case_by_receipt(
+        self, connection: Connection, project_id: str, receipt_id: str
+    ) -> Optional[dict[str, Any]]:
+        row = connection.execute(
+            text(
+                """
+                SELECT id, org_id, project_id, enterprise_cluster_id,
+                       account_connect_org_id, hosted_org_id, title, severity,
+                       category, description, status, sla_due_at,
+                       response_time_hours, hosted_case_ref, receipt_id,
+                       assigned_to, created_by, metadata, created_at, updated_at
+                FROM enterprise_support_cases
+                WHERE project_id = :project_id AND receipt_id = :receipt_id
+                ORDER BY created_at DESC
+                LIMIT 1
+                """
+            ),
+            {"project_id": project_id, "receipt_id": receipt_id},
+        ).mappings().first()
+        return self._support_case_from_row(dict(row)) if row else None
+
+    def _support_case_from_row(self, row: dict[str, Any]) -> dict[str, Any]:
+        return {
+            **row,
+            "sla_due_at": row["sla_due_at"].isoformat()
+            if row.get("sla_due_at")
+            else None,
+            "created_at": row["created_at"].isoformat(),
+            "updated_at": row["updated_at"].isoformat(),
+        }
 
     def _normalize_identity_controls(
         self,
@@ -927,6 +1410,12 @@ class EnterpriseService:
             return None
         cleaned = value.strip()
         return cleaned or None
+
+    def _required_text(self, value: str, field_name: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError(f"{field_name} must not be blank.")
+        return cleaned
 
     def _get_scim_group_by_name(
         self,

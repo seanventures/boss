@@ -1288,6 +1288,179 @@ def test_audit_export_enforces_actor_permission_and_enterprise_audit_controls(
     assert "audit.export_generated" in event_types
 
 
+def test_enterprise_support_cases_track_sla_and_fail_closed_hosted_escalation(
+    client, engine
+):
+    project_id = "boss-support-sla"
+    previous_url = api_main.settings.account_connect_url
+    previous_commercial_url = api_main.commercial.settings.account_connect_url
+    previous_enterprise_url = api_main.enterprise.settings.account_connect_url
+    api_main.settings.account_connect_url = None
+    api_main.commercial.settings.account_connect_url = None
+    api_main.enterprise.settings.account_connect_url = None
+    try:
+        with engine.begin() as connection:
+            connection.execute(text(f"DELETE FROM receipts WHERE project_id = '{project_id}'"))
+            connection.execute(text(f"DELETE FROM events WHERE project_id = '{project_id}'"))
+            connection.execute(
+                text(f"DELETE FROM enterprise_support_cases WHERE project_id = '{project_id}'")
+            )
+            connection.execute(
+                text(f"DELETE FROM enterprise_clusters WHERE project_id = '{project_id}'")
+            )
+            connection.execute(
+                text(f"DELETE FROM account_connect_orgs WHERE project_id = '{project_id}'")
+            )
+            connection.execute(
+                text(f"DELETE FROM project_members WHERE project_id = '{project_id}'")
+            )
+            connection.execute(text(f"DELETE FROM projects WHERE id = '{project_id}'"))
+            connection.execute(
+                text(
+                    f"""
+                    INSERT INTO projects (id, workspace_id, name, slug)
+                    VALUES ('{project_id}', 'ws_boss', 'Support SLA', '{project_id}')
+                    """
+                )
+            )
+            api_main.members.seed_default_members(connection, project_id, "test")
+
+        denied = client.post(
+            "/v1/enterprise/support-cases",
+            json={
+                "project_id": project_id,
+                "title": "Release help",
+                "description": "Need help with release readiness.",
+                "actor": "release_manager",
+            },
+        )
+        assert denied.status_code == 403
+
+        cluster = client.post(
+            "/v1/enterprise/clusters",
+            json={
+                "project_id": project_id,
+                "deployment_mode": "enterprise_cloud",
+                "account_connect_mode": "attached",
+                "identity_controls": {
+                    "sso_oidc_configured": True,
+                    "scim_configured": True,
+                },
+                "audit_controls": {
+                    "audit_exports_enabled": True,
+                    "retention_days": 365,
+                    "compliance_evidence_workflows": True,
+                },
+                "support_tier": "enterprise",
+                "support_sla": {"response_time_hours": 2, "uptime_target": "99.95%"},
+                "status": "active",
+                "actor": "ceo",
+            },
+        )
+        assert cluster.status_code == 201
+        cluster_id = cluster.json()["id"]
+
+        local_case = client.post(
+            "/v1/enterprise/support-cases",
+            json={
+                "project_id": project_id,
+                "enterprise_cluster_id": cluster_id,
+                "title": "Validate enterprise rollout",
+                "description": "Track a local support readiness item.",
+                "severity": "normal",
+                "category": "release",
+                "metadata": {"component": "helm"},
+                "actor": "ceo",
+            },
+        )
+        assert local_case.status_code == 201
+        local_payload = local_case.json()
+        assert local_payload["status"] == "open"
+        assert local_payload["response_time_hours"] == 2
+        assert local_payload["sla_due_at"]
+        assert local_payload["receipt_id"] is None
+
+        link = client.post(
+            "/v1/account-connect/link",
+            json={
+                "project_id": project_id,
+                "hosted_org_id": "acct_support_sla",
+                "actor": "ceo",
+            },
+        )
+        assert link.status_code == 200
+
+        escalated = client.post(
+            "/v1/enterprise/support-cases",
+            json={
+                "project_id": project_id,
+                "enterprise_cluster_id": cluster_id,
+                "title": "Hosted escalation",
+                "description": "Escalate to hosted support when configured.",
+                "severity": "high",
+                "category": "support",
+                "escalate_to_hosted": True,
+                "actor": "ceo",
+            },
+        )
+        assert escalated.status_code == 201
+        escalated_payload = escalated.json()
+        assert escalated_payload["status"] == "blocked_configuration"
+        assert escalated_payload["response_time_hours"] == 4
+        assert escalated_payload["receipt_id"]
+        assert escalated_payload["metadata"]["blocked_reason"] == (
+            "account_connect_url_missing"
+        )
+
+        updated = client.post(
+            f"/v1/enterprise/support-cases/{local_payload['id']}",
+            json={
+                "project_id": project_id,
+                "status": "in_progress",
+                "assigned_to": "cto",
+                "metadata": {"triage": "accepted"},
+                "actor": "ceo",
+            },
+        )
+        assert updated.status_code == 200
+        assert updated.json()["status"] == "in_progress"
+        assert updated.json()["assigned_to"] == "cto"
+        assert updated.json()["metadata"]["triage"] == "accepted"
+
+        listed = client.get(
+            "/v1/enterprise/support-cases",
+            params={"project_id": project_id},
+        )
+        assert listed.status_code == 200
+        assert {item["id"] for item in listed.json()["items"]} >= {
+            local_payload["id"],
+            escalated_payload["id"],
+        }
+
+        receipts = client.get("/v1/receipts", params={"project_id": project_id})
+        assert receipts.status_code == 200
+        receipt = next(
+            item
+            for item in receipts.json()["items"]
+            if item["id"] == escalated_payload["receipt_id"]
+        )
+        assert receipt["effect_kind"] == "enterprise.support_case.create"
+        assert receipt["status"] == "failed"
+        assert receipt["data_boundary"] == "confidential"
+
+        events = client.get("/v1/events", params={"project_id": project_id, "limit": 30})
+        assert events.status_code == 200
+        event_types = [item["event_type"] for item in events.json()["items"]]
+        assert "policy.denied" in event_types
+        assert "enterprise.support_case_created" in event_types
+        assert "enterprise.support_case_blocked" in event_types
+        assert "enterprise.support_case_updated" in event_types
+    finally:
+        api_main.settings.account_connect_url = previous_url
+        api_main.commercial.settings.account_connect_url = previous_commercial_url
+        api_main.enterprise.settings.account_connect_url = previous_enterprise_url
+
+
 def test_enterprise_identity_providers_back_cluster_identity_controls(client):
     denied = client.post(
         "/v1/enterprise/identity-providers",
