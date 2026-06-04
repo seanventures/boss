@@ -1,6 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import type { DataBoundary } from "@boss/api-client";
 import { client, PROJECT_ID, resolveProjectId } from "../lib/client";
 import { buildCommandRequest } from "../lib/commands";
 
@@ -26,6 +27,19 @@ function parseLines(value: FormDataEntryValue | null): string[] {
     .split("\n")
     .map((item) => item.trim())
     .filter(Boolean);
+}
+
+function parseDataBoundaries(value: FormDataEntryValue | null): DataBoundary[] {
+  const allowed = new Set<DataBoundary>([
+    "public",
+    "internal",
+    "confidential",
+    "restricted",
+    "local-only",
+  ]);
+  return parseLines(value).filter((item): item is DataBoundary =>
+    allowed.has(item as DataBoundary),
+  );
 }
 
 function parseInteger(value: FormDataEntryValue | null, fallback: number): number {
@@ -728,6 +742,39 @@ export async function createComplianceEvidenceBundleAction(
 ): Promise<void> {
   await client.createComplianceEvidenceBundle({
     project_id: getProjectId(formData),
+    actor: getActor(formData),
+  });
+  revalidatePath("/");
+}
+
+export async function upsertCommsChannelPolicyAction(
+  formData: FormData,
+): Promise<void> {
+  const provider = formData.get("provider");
+  const deliveryMode = formData.get("delivery_mode");
+  if (typeof provider !== "string" || !provider.trim()) {
+    throw new Error("provider is required");
+  }
+  if (typeof deliveryMode !== "string" || !deliveryMode.trim()) {
+    throw new Error("delivery_mode is required");
+  }
+  await client.upsertCommsChannelPolicy({
+    project_id: getProjectId(formData),
+    provider: provider.trim(),
+    delivery_mode:
+      deliveryMode === "disabled" ||
+      deliveryMode === "draft_only" ||
+      deliveryMode === "real_send_allowed"
+        ? deliveryMode
+        : "draft_only",
+    allowed_data_boundaries: parseDataBoundaries(
+      formData.get("allowed_data_boundaries"),
+    ),
+    rollout_notes: getOptionalString(formData, "rollout_notes"),
+    metadata: parseOptionalJsonObjectField(
+      formData.get("metadata_json"),
+      "metadata_json",
+    ),
     actor: getActor(formData),
   });
   revalidatePath("/");

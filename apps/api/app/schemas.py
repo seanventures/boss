@@ -2055,6 +2055,44 @@ class OutboxMessageListResponse(BaseModel):
     items: list[OutboxMessageSummary]
 
 
+class CommsChannelPolicySummary(BaseModel):
+    id: str
+    project_id: str
+    provider: str
+    delivery_mode: str
+    allowed_data_boundaries: list[DataBoundary]
+    rollout_notes: Optional[str] = None
+    status: str
+    created_by: str
+    metadata: dict[str, Any]
+    created_at: str
+    updated_at: str
+
+
+class CommsChannelPolicyListResponse(BaseModel):
+    project_id: str
+    items: list[CommsChannelPolicySummary]
+
+
+class CommsChannelPolicyUpsertRequest(BaseModel):
+    project_id: str
+    provider: str
+    delivery_mode: Literal["disabled", "draft_only", "real_send_allowed"]
+    allowed_data_boundaries: list[DataBoundary] = Field(
+        default_factory=lambda: ["public", "internal"]
+    )
+    rollout_notes: Optional[str] = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    actor: str = "executive_console"
+
+    @model_validator(mode="after")
+    def validate_comms_policy(self) -> "CommsChannelPolicyUpsertRequest":
+        self.project_id = _require_text(self.project_id, "project_id")
+        self.provider = _require_text(self.provider, "provider")
+        self.actor = _require_text(self.actor, "actor")
+        return self
+
+
 class OutboxQueueRequest(BaseModel):
     project_id: str
     reservation_id: str

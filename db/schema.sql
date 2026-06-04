@@ -1296,6 +1296,23 @@ CREATE TABLE IF NOT EXISTS outbox_messages (
 );
 ALTER TABLE outbox_messages ADD COLUMN IF NOT EXISTS data_boundary TEXT NOT NULL DEFAULT 'internal';
 
+CREATE TABLE IF NOT EXISTS comms_channel_policies (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id),
+  provider TEXT NOT NULL,
+  delivery_mode TEXT NOT NULL DEFAULT 'draft_only',
+  allowed_data_boundaries JSONB NOT NULL DEFAULT '["public", "internal"]'::jsonb,
+  rollout_notes TEXT,
+  status TEXT NOT NULL DEFAULT 'active',
+  created_by TEXT NOT NULL DEFAULT 'system',
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(project_id, provider)
+);
+CREATE INDEX IF NOT EXISTS idx_comms_channel_policies_project
+  ON comms_channel_policies(project_id, provider, status);
+
 CREATE TABLE IF NOT EXISTS inbox_messages (
   id TEXT PRIMARY KEY,
   project_id TEXT REFERENCES projects(id),

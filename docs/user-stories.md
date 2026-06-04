@@ -327,9 +327,21 @@ As an operator, I want outbound email to run through the same receipt-backed out
 
 Acceptance criteria:
 
-- Given an outbox message with an `email:` channel and working SMTP configuration, when delivery runs with a reservation, then BOSS creates a receipt and acknowledges the outbox message.
-- Given email delivery is disabled or missing SMTP configuration, when delivery is attempted, then BOSS blocks visibly, releases the reservation, and records a decision instead of pretending email was sent.
+- Given an outbox message with an `email:` channel, a `real_send_allowed` email rollout policy, allowed data boundary, and working SMTP configuration, when delivery runs with a reservation, then BOSS creates a receipt and acknowledges the outbox message.
+- Given email delivery has no active rollout policy or the policy is not `real_send_allowed`, when delivery is attempted, then BOSS writes a failed receipt, releases the reservation, creates a visible decision/event, and does not call SMTP.
+- Given email delivery is policy-allowed but disabled or missing SMTP configuration, when delivery is attempted, then BOSS blocks visibly, releases the reservation, and records a decision instead of pretending email was sent.
 - Given restricted or local-only data, when an email outbox message would be delivered, then BOSS blocks before opening a receipt or contacting SMTP.
+
+### Story OPS-004A: Govern Communications Rollout Policies
+
+As an operator, I want Slack and email delivery rollout policies to be explicit per project, so that draft-only communication cannot accidentally become real external sends.
+
+Acceptance criteria:
+
+- Given an actor without `comms_manage`, when they try to create a channel rollout policy, then BOSS rejects the change and records a policy denial.
+- Given an authorized operator saves a Slack or email rollout policy, when the API responds, then BOSS persists provider, delivery mode, allowed data boundaries, rollout notes, metadata, actor, and emits `comms.channel_policy_upserted`.
+- Given Mission Control loads the communications panel, when policies exist, then it shows provider, delivery mode, allowed boundaries, notes, actor, and update time.
+- Given no active policy exists for the provider, when a worker attempts real delivery, then BOSS blocks after creating a failed receipt and before calling the provider adapter.
 
 ### Story OPS-006: Process Decision Replies and Comms Cadence
 

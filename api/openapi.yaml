@@ -2459,6 +2459,45 @@ paths:
           schema: { type: integer, default: 100 }
       responses:
         '200': { description: Provider inventory and cost reconciliation run history }
+  /v1/comms/policies:
+    get:
+      summary: List communications rollout policies for a project
+      parameters:
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Slack/email rollout policies that govern real sends by provider and data boundary }
+    post:
+      summary: Create or update a communications rollout policy
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id, provider, delivery_mode]
+              properties:
+                project_id: { type: string }
+                provider:
+                  type: string
+                  enum: [slack, email]
+                delivery_mode:
+                  type: string
+                  enum: [disabled, draft_only, real_send_allowed]
+                allowed_data_boundaries:
+                  type: array
+                  items:
+                    type: string
+                    enum: [public, internal, confidential, restricted, local-only]
+                  default: [public, internal]
+                rollout_notes: { type: string }
+                metadata: { type: object }
+                actor: { type: string, default: executive_console }
+      responses:
+        '201': { description: Communications rollout policy saved and event emitted }
+        '403': { description: Actor lacks comms_manage permission }
   /v1/comms/outbox:
     get:
       summary: List outbound communication records for a project

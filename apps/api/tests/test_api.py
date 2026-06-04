@@ -117,6 +117,30 @@ def configure_pr_proposal_integrations(monkeypatch):
     )
 
 
+def upsert_comms_policy(
+    client,
+    project_id: str,
+    provider: str,
+    delivery_mode: str = "real_send_allowed",
+    allowed_data_boundaries: Optional[list[str]] = None,
+):
+    response = client.post(
+        "/v1/comms/policies",
+        json={
+            "project_id": project_id,
+            "provider": provider,
+            "delivery_mode": delivery_mode,
+            "allowed_data_boundaries": allowed_data_boundaries
+            or ["public", "internal"],
+            "rollout_notes": "test rollout policy",
+            "metadata": {"source": "test"},
+            "actor": "executive_console",
+        },
+    )
+    assert response.status_code == 201
+    return response.json()
+
+
 def _canonicalize_xml(element: ET.Element) -> bytes:
     xml = ET.tostring(element, encoding="unicode")
     return ET.canonicalize(xml_data=xml, with_comments=False).encode("utf-8")
@@ -7869,6 +7893,37 @@ def test_comms_outbox_and_inbox_are_visible(client):
     assert inbox_payload["id"] in [item["id"] for item in inbox_list.json()["items"]]
 
 
+def test_comms_channel_policies_are_permissioned_and_visible(client):
+    denied = client.post(
+        "/v1/comms/policies",
+        json={
+            "project_id": "boss-dogfood",
+            "provider": "slack",
+            "delivery_mode": "real_send_allowed",
+            "allowed_data_boundaries": ["public", "internal"],
+            "actor": "metatron",
+        },
+    )
+    assert denied.status_code == 403
+
+    policy = upsert_comms_policy(
+        client,
+        "boss-dogfood",
+        "slack",
+        delivery_mode="draft_only",
+        allowed_data_boundaries=["public"],
+    )
+    assert policy["provider"] == "slack"
+    assert policy["delivery_mode"] == "draft_only"
+    assert policy["allowed_data_boundaries"] == ["public"]
+
+    listed = client.get(
+        "/v1/comms/policies", params={"project_id": "boss-dogfood"}
+    )
+    assert listed.status_code == 200
+    assert policy["id"] in [item["id"] for item in listed.json()["items"]]
+
+
 def test_decision_digest_creates_artifact_and_optional_outbox_draft(client, engine):
     with engine.begin() as connection:
         connection.execute(
@@ -8695,6 +8750,7 @@ def test_outbox_queue_rejects_cross_project_message_reference(client, engine):
 
 
 def test_outbox_delivery_blocks_when_slack_delivery_is_disabled(client, engine):
+    upsert_comms_policy(client, "boss-dogfood", "slack")
     outbox = client.post(
         "/v1/comms/outbox",
         json={
@@ -8756,7 +8812,122 @@ def test_outbox_delivery_blocks_when_slack_delivery_is_disabled(client, engine):
     assert outbox_status == "blocked"
 
 
+def test_outbox_delivery_requires_channel_policy_before_real_send(
+    client, engine, monkeypatch
+):
+    project_id = "boss-comms-policy-required"
+    with engine.begin() as connection:
+        connection.execute(
+            text("DELETE FROM comms_channel_policies WHERE project_id = :project_id"),
+            {"project_id": project_id},
+        )
+        connection.execute(
+            text("DELETE FROM project_members WHERE project_id = :project_id"),
+            {"project_id": project_id},
+        )
+        connection.execute(
+            text("DELETE FROM projects WHERE id = :project_id"),
+            {"project_id": project_id},
+        )
+        connection.execute(
+            text(
+                """
+                INSERT INTO projects (id, workspace_id, name, slug)
+                VALUES (
+                    :project_id, 'ws_boss', 'BOSS Comms Policy Required',
+                    'boss-comms-policy-required'
+                )
+                """
+            ),
+            {"project_id": project_id},
+        )
+        api_main.members.seed_default_members(connection, project_id, "test")
+
+    outbox = client.post(
+        "/v1/comms/outbox",
+        json={
+            "project_id": project_id,
+            "channel": "slack:#ops",
+            "subject": "Policy required",
+            "body": "This should not reach Slack without a rollout policy.",
+            "dedupe_key": "outbox-policy-required-1",
+        },
+    )
+    assert outbox.status_code == 201
+    message_id = outbox.json()["id"]
+
+    reserve = client.post(
+        "/v1/budget/reserve",
+        json={
+            "project_id": project_id,
+            "category": "comms",
+            "amount_usd_micros": 50_000,
+            "reason": "Attempt Slack delivery without channel policy.",
+        },
+    )
+    assert reserve.status_code == 201
+    reservation_id = reserve.json()["reservation_id"]
+
+    previous_allowed = api_main.comms.settings.slack_real_send_allowed
+    previous_webhook = api_main.comms.settings.slack_webhook_url
+    api_main.comms.settings.slack_real_send_allowed = True
+    api_main.comms.settings.slack_webhook_url = "https://hooks.slack.com/services/test"
+    called = {"value": False}
+
+    def fail_if_called(channel, subject, body):
+        called["value"] = True
+        raise AssertionError("Slack adapter must not be called without policy.")
+
+    monkeypatch.setattr(api_main.comms.slack, "post_message", fail_if_called)
+    try:
+        response = client.post(
+            f"/v1/comms/outbox/{message_id}/deliver",
+            json={
+                "project_id": project_id,
+                "reservation_id": reservation_id,
+                "dedupe_key": "outbox-policy-required-delivery-1",
+            },
+        )
+    finally:
+        api_main.comms.settings.slack_real_send_allowed = previous_allowed
+        api_main.comms.settings.slack_webhook_url = previous_webhook
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "blocked"
+    assert payload["receipt_id"]
+    assert payload["decision_id"]
+    assert "communications channel policy" in payload["message"]
+    assert called["value"] is False
+
+    with engine.begin() as connection:
+        reservation_status = connection.execute(
+            text("SELECT status FROM budget_reservations WHERE id = :reservation_id"),
+            {"reservation_id": reservation_id},
+        ).scalar_one()
+        outbox_status = connection.execute(
+            text("SELECT status FROM outbox_messages WHERE id = :message_id"),
+            {"message_id": message_id},
+        ).scalar_one()
+        receipt = connection.execute(
+            text(
+                """
+                SELECT effect_kind, status, error
+                FROM receipts
+                WHERE dedupe_key = 'outbox-policy-required-delivery-1'
+                """
+            )
+        ).mappings().one()
+
+    assert reservation_status == "released"
+    assert outbox_status == "blocked"
+    assert receipt["effect_kind"] == "slack.message.post"
+    assert receipt["status"] == "failed"
+    assert receipt["error"]["reason"] == "comms_policy_missing"
+
+
 def test_outbox_delivery_succeeds_and_creates_receipt(client, engine, monkeypatch):
+    upsert_comms_policy(client, "boss-dogfood", "slack")
     outbox = client.post(
         "/v1/comms/outbox",
         json={
@@ -8835,6 +9006,7 @@ def test_outbox_delivery_succeeds_and_creates_receipt(client, engine, monkeypatc
 
 
 def test_outbox_email_delivery_blocks_when_email_delivery_is_disabled(client, engine):
+    upsert_comms_policy(client, "boss-dogfood", "email")
     outbox = client.post(
         "/v1/comms/outbox",
         json={
@@ -8915,6 +9087,7 @@ def test_outbox_email_delivery_blocks_when_email_delivery_is_disabled(client, en
 def test_outbox_email_delivery_succeeds_and_creates_receipt(
     client, engine, monkeypatch
 ):
+    upsert_comms_policy(client, "boss-dogfood", "email")
     outbox = client.post(
         "/v1/comms/outbox",
         json={

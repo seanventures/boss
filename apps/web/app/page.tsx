@@ -44,6 +44,7 @@ import {
   upsertEnterpriseIdentityProviderAction,
   upsertEnterpriseScimGroupAction,
   upsertEnterpriseScimUserAction,
+  upsertCommsChannelPolicyAction,
   updateEnterpriseSupportCaseAction,
   upsertOrgMemberAction,
   upsertWorkerPoolAction,
@@ -2846,6 +2847,108 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                   Create outbox draft
                 </button>
               </form>
+            </article>
+
+            <article className="stack-card">
+              <h3>Channel rollout policies</h3>
+              {!outbox.apiReachable ? (
+                <p className="detail">
+                  {outbox.blockedReason ?? "Outbox API is unavailable."}
+                </p>
+              ) : (
+                <>
+                  {outbox.policies.length === 0 ? (
+                    <p className="detail">
+                      No real-send policy exists. Slack and email delivery will block
+                      after writing a receipt until a policy is approved.
+                    </p>
+                  ) : (
+                    <div className="feed-list">
+                      {outbox.policies.map((policy) => (
+                        <div className="feed-row" key={policy.id}>
+                          <div>
+                            <h4>{titleCaseToken(policy.provider)}</h4>
+                            <p className="detail">
+                              {titleCaseToken(policy.deliveryMode)} / boundaries{" "}
+                              {policy.allowedDataBoundaries.join(", ") || "none"}
+                            </p>
+                            <p className="detail">
+                              Updated by {policy.createdBy} at{" "}
+                              {formatDateTime(policy.updatedAt)}
+                            </p>
+                            {policy.rolloutNotes ? (
+                              <p className="detail">{policy.rolloutNotes}</p>
+                            ) : null}
+                          </div>
+                          <span
+                            className={`pill${
+                              policy.deliveryMode === "real_send_allowed"
+                                ? ""
+                                : " warn"
+                            }`}
+                          >
+                            {titleCaseToken(policy.deliveryMode)}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  <form
+                    action={upsertCommsChannelPolicyAction}
+                    className="composer compact"
+                  >
+                    <input type="hidden" name="project_id" value={activeProjectId} />
+                    <input type="hidden" name="actor" value={activeActorId} />
+                    <label className="field">
+                      <span>Provider</span>
+                      <select className="input" name="provider" defaultValue="slack">
+                        <option value="slack">Slack</option>
+                        <option value="email">Email</option>
+                      </select>
+                    </label>
+                    <label className="field">
+                      <span>Delivery mode</span>
+                      <select
+                        className="input"
+                        name="delivery_mode"
+                        defaultValue="draft_only"
+                      >
+                        <option value="disabled">Disabled</option>
+                        <option value="draft_only">Draft only</option>
+                        <option value="real_send_allowed">Real send allowed</option>
+                      </select>
+                    </label>
+                    <label className="field">
+                      <span>Allowed data boundaries</span>
+                      <textarea
+                        className="textarea"
+                        name="allowed_data_boundaries"
+                        defaultValue={"public\ninternal"}
+                      />
+                    </label>
+                    <label className="field">
+                      <span>Rollout notes</span>
+                      <textarea
+                        className="textarea"
+                        name="rollout_notes"
+                        placeholder="Approval, environment, and credential rollout notes."
+                      />
+                    </label>
+                    <label className="field">
+                      <span>Metadata JSON</span>
+                      <textarea
+                        className="textarea"
+                        name="metadata_json"
+                        defaultValue={`{"source":"mission_control"}`}
+                      />
+                    </label>
+                    <button className="button secondary" type="submit">
+                      Save channel policy
+                    </button>
+                  </form>
+                </>
+              )}
             </article>
 
             <article className="stack-card">

@@ -39,6 +39,120 @@ class CommsService:
         self.slack = SlackAdapter(settings)
         self.email = EmailAdapter(settings)
 
+    def list_channel_policies(
+        self,
+        connection: Connection,
+        project_id: str,
+    ) -> list[dict]:
+        rows = connection.execute(
+            text(
+                """
+                SELECT id, project_id, provider, delivery_mode,
+                       allowed_data_boundaries, rollout_notes, status,
+                       created_by, metadata, created_at, updated_at
+                FROM comms_channel_policies
+                WHERE project_id = :project_id
+                ORDER BY provider ASC
+                """
+            ),
+            {"project_id": project_id},
+        ).mappings().all()
+        return [dict(row) for row in rows]
+
+    def get_channel_policy(
+        self,
+        connection: Connection,
+        project_id: str,
+        provider: str,
+    ) -> Optional[dict]:
+        row = connection.execute(
+            text(
+                """
+                SELECT id, project_id, provider, delivery_mode,
+                       allowed_data_boundaries, rollout_notes, status,
+                       created_by, metadata, created_at, updated_at
+                FROM comms_channel_policies
+                WHERE project_id = :project_id
+                  AND provider = :provider
+                  AND status = 'active'
+                """
+            ),
+            {"project_id": project_id, "provider": provider},
+        ).mappings().first()
+        return dict(row) if row else None
+
+    def upsert_channel_policy(
+        self,
+        connection: Connection,
+        project_id: str,
+        provider: str,
+        delivery_mode: str,
+        allowed_data_boundaries: list[str],
+        actor: str,
+        rollout_notes: Optional[str] = None,
+        metadata: Optional[dict] = None,
+    ) -> dict:
+        normalized_provider = provider.strip().lower()
+        normalized_mode = delivery_mode.strip().lower()
+        if normalized_provider not in {"slack", "email"}:
+            raise ValueError(f"Unsupported communications provider: {provider}")
+        if normalized_mode not in {"disabled", "draft_only", "real_send_allowed"}:
+            raise ValueError(f"Unsupported communications delivery mode: {delivery_mode}")
+        boundaries = [
+            normalize_data_boundary(boundary)
+            for boundary in allowed_data_boundaries
+            if str(boundary).strip()
+        ] or ["public", "internal"]
+        policy_id = f"comms_policy_{project_id}_{normalized_provider}"
+        connection.execute(
+            text(
+                """
+                INSERT INTO comms_channel_policies (
+                    id, project_id, provider, delivery_mode,
+                    allowed_data_boundaries, rollout_notes, status,
+                    created_by, metadata
+                )
+                VALUES (
+                    :id, :project_id, :provider, :delivery_mode,
+                    CAST(:allowed_data_boundaries AS JSONB), :rollout_notes,
+                    'active', :created_by, CAST(:metadata AS JSONB)
+                )
+                ON CONFLICT (project_id, provider) DO UPDATE
+                SET delivery_mode = EXCLUDED.delivery_mode,
+                    allowed_data_boundaries = EXCLUDED.allowed_data_boundaries,
+                    rollout_notes = EXCLUDED.rollout_notes,
+                    status = 'active',
+                    created_by = EXCLUDED.created_by,
+                    metadata = EXCLUDED.metadata,
+                    updated_at = now()
+                """
+            ),
+            {
+                "id": policy_id,
+                "project_id": project_id,
+                "provider": normalized_provider,
+                "delivery_mode": normalized_mode,
+                "allowed_data_boundaries": json.dumps(boundaries),
+                "rollout_notes": rollout_notes,
+                "created_by": actor,
+                "metadata": json.dumps(metadata or {}),
+            },
+        )
+        emit_event(
+            connection,
+            project_id,
+            "comms.channel_policy_upserted",
+            actor,
+            "comms_channel_policy",
+            policy_id,
+            {
+                "provider": normalized_provider,
+                "delivery_mode": normalized_mode,
+                "allowed_data_boundaries": boundaries,
+            },
+        )
+        return self.get_channel_policy(connection, project_id, normalized_provider)
+
     def create_outbox_message(
         self,
         connection: Connection,
@@ -408,6 +522,67 @@ class CommsService:
                 "message_id": message_id,
             }
 
+        policy_block = self._delivery_policy_block(
+            connection,
+            project_id,
+            provider,
+            boundary,
+        )
+        if policy_block:
+            self.receipts.mark_failed(
+                connection,
+                receipt["id"],
+                {
+                    "message": policy_block["message"],
+                    "reason": policy_block["reason"],
+                },
+            )
+            self.budget.release(
+                connection,
+                project_id,
+                reservation_id,
+                "Released reservation because communications delivery policy blocked "
+                f"{provider['label']} real send.",
+            )
+            self._set_outbox_status(connection, message_id, "blocked", receipt["id"])
+            decision_id = create_blocking_decision(
+                connection,
+                project_id,
+                None,
+                f"{provider['label']} real delivery is not enabled by project policy",
+                {
+                    "action": "upsert_comms_channel_policy",
+                    "provider": provider["key"],
+                    "required_delivery_mode": "real_send_allowed",
+                },
+                {
+                    "outbox_message_id": message_id,
+                    "channel": message["channel"],
+                    "receipt_id": receipt["id"],
+                    "reason": policy_block["reason"],
+                },
+                f"{provider['key']}_delivery_policy_blocked",
+            )
+            emit_event(
+                connection,
+                project_id,
+                "outbox.blocked",
+                "comms_worker",
+                "outbox_message",
+                message_id,
+                {
+                    "decision_id": decision_id,
+                    "receipt_id": receipt["id"],
+                    "reason": policy_block["reason"],
+                },
+            )
+            return {
+                "status": "blocked",
+                "decision_id": decision_id,
+                "receipt_id": receipt["id"],
+                "message": policy_block["message"],
+            }
+
         self._set_outbox_status(connection, message_id, "sending", receipt["id"])
         try:
             provider_ref = self._send_message(
@@ -519,6 +694,40 @@ class CommsService:
                 "label": "Email",
                 "effect_kind": "email.message.send",
                 "skill_id": "email.send_real",
+            }
+        return None
+
+    def _delivery_policy_block(
+        self,
+        connection: Connection,
+        project_id: str,
+        provider: dict[str, str],
+        boundary: str,
+    ) -> Optional[dict[str, str]]:
+        policy = self.get_channel_policy(connection, project_id, provider["key"])
+        if not policy:
+            return {
+                "reason": "comms_policy_missing",
+                "message": (
+                    f"{provider['label']} real delivery requires an active "
+                    "communications channel policy."
+                ),
+            }
+        if policy["delivery_mode"] != "real_send_allowed":
+            return {
+                "reason": "comms_policy_not_real_send",
+                "message": (
+                    f"{provider['label']} delivery mode is {policy['delivery_mode']}; "
+                    "real_send_allowed is required."
+                ),
+            }
+        allowed = set(policy.get("allowed_data_boundaries") or [])
+        if boundary not in allowed:
+            return {
+                "reason": "comms_policy_data_boundary_blocked",
+                "message": (
+                    f"{provider['label']} policy does not allow {boundary} data."
+                ),
             }
         return None
 

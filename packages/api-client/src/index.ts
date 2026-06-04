@@ -1727,6 +1727,35 @@ export type OutboxMessageListResponse = {
   items: OutboxMessageSummary[];
 };
 
+export type CommsChannelPolicySummary = {
+  id: string;
+  project_id: string;
+  provider: string;
+  delivery_mode: string;
+  allowed_data_boundaries: DataBoundary[];
+  rollout_notes?: string;
+  status: string;
+  created_by: string;
+  metadata: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+};
+
+export type CommsChannelPolicyListResponse = {
+  project_id: string;
+  items: CommsChannelPolicySummary[];
+};
+
+export type CommsChannelPolicyUpsertRequest = {
+  project_id: string;
+  provider: string;
+  delivery_mode: "disabled" | "draft_only" | "real_send_allowed";
+  allowed_data_boundaries?: DataBoundary[];
+  rollout_notes?: string;
+  metadata?: Record<string, unknown>;
+  actor?: string;
+};
+
 export type OutboxQueueRequest = {
   project_id: string;
   reservation_id: string;
@@ -3765,6 +3794,16 @@ export function createBossApiClient(config: BossApiClientConfig) {
     listOutboxMessages(projectId: string, limit = 50) {
       return request<OutboxMessageListResponse>("GET", "/v1/comms/outbox", {
         query: { project_id: projectId, limit },
+      });
+    },
+    listCommsChannelPolicies(projectId: string) {
+      return request<CommsChannelPolicyListResponse>("GET", "/v1/comms/policies", {
+        query: { project_id: projectId },
+      });
+    },
+    upsertCommsChannelPolicy(payload: CommsChannelPolicyUpsertRequest) {
+      return request<CommsChannelPolicySummary>("POST", "/v1/comms/policies", {
+        body: payload,
       });
     },
     createOutboxMessage(payload: OutboxMessageCreateRequest) {

@@ -61,6 +61,9 @@ from .schemas import (
     ChangeJournalResponse,
     CommandProposeRequest,
     CommandProposeResponse,
+    CommsChannelPolicyListResponse,
+    CommsChannelPolicySummary,
+    CommsChannelPolicyUpsertRequest,
     ComplianceEvidenceBundleRequest,
     ComplianceEvidenceBundleResponse,
     ComplianceEvidenceCounts,
@@ -978,6 +981,22 @@ def outbox_message_summary_from_row(row) -> OutboxMessageSummary:
         dedupe_key=row["dedupe_key"],
         data_boundary=row.get("data_boundary") or "internal",
         receipt_id=row.get("receipt_id"),
+        created_at=row["created_at"].isoformat(),
+        updated_at=row["updated_at"].isoformat(),
+    )
+
+
+def comms_channel_policy_summary_from_row(row) -> CommsChannelPolicySummary:
+    return CommsChannelPolicySummary(
+        id=row["id"],
+        project_id=row["project_id"],
+        provider=row["provider"],
+        delivery_mode=row["delivery_mode"],
+        allowed_data_boundaries=row["allowed_data_boundaries"] or [],
+        rollout_notes=row.get("rollout_notes"),
+        status=row["status"],
+        created_by=row["created_by"],
+        metadata=row["metadata"] or {},
         created_at=row["created_at"].isoformat(),
         updated_at=row["updated_at"].isoformat(),
     )
@@ -4591,6 +4610,49 @@ def list_reconciliation_runs(
             project_id=project_id,
             items=[ReconciliationRunSummary(**item) for item in items],
         )
+
+
+@app.get("/v1/comms/policies", response_model=CommsChannelPolicyListResponse)
+def list_comms_channel_policies(
+    project_id: str,
+) -> CommsChannelPolicyListResponse:
+    with begin(engine) as connection:
+        items = comms.list_channel_policies(connection, project_id)
+        return CommsChannelPolicyListResponse(
+            project_id=project_id,
+            items=[comms_channel_policy_summary_from_row(item) for item in items],
+        )
+
+
+@app.post(
+    "/v1/comms/policies",
+    response_model=CommsChannelPolicySummary,
+    status_code=201,
+)
+def upsert_comms_channel_policy(
+    payload: CommsChannelPolicyUpsertRequest,
+) -> CommsChannelPolicySummary:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection,
+            payload.project_id,
+            payload.actor,
+            "comms_manage",
+        )
+        try:
+            item = comms.upsert_channel_policy(
+                connection,
+                payload.project_id,
+                provider=payload.provider,
+                delivery_mode=payload.delivery_mode,
+                allowed_data_boundaries=list(payload.allowed_data_boundaries),
+                actor=payload.actor,
+                rollout_notes=payload.rollout_notes,
+                metadata=payload.metadata,
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        return comms_channel_policy_summary_from_row(item)
 
 
 @app.get("/v1/comms/outbox", response_model=OutboxMessageListResponse)

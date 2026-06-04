@@ -59,7 +59,7 @@ Owns stateless workers, local runners, code workers, review workers, test worker
 
 ### Communications Plane
 
-Owns Slack, email, chat, optional voice/SMS later, outbox/inbox ACK, persona rendering, quiet hours, escalation rules, threading, delivery receipts, and communication deadletters.
+Owns Slack, email, chat, optional voice/SMS later, outbox/inbox ACK, persona rendering, quiet hours, escalation rules, threading, channel rollout policies, delivery receipts, and communication deadletters.
 
 ### Elastic Resource Plane / ProviderOps
 
@@ -477,7 +477,7 @@ Consensus protocol: `propose -> critique -> revise -> vote -> record dissent -> 
 
 ## Communications and Presence
 
-BOSS supports Slack-style internal chat, email as durable command/receipt backbone, optional Google Chat, optional SMS/voice escalation later, persona identity rendering, urgency tiers, quiet hours, ACK-required critical messages, durable Outbox/Inbox objects, no silent drops, deadletters, and escalations.
+BOSS supports Slack-style internal chat, email as durable command/receipt backbone, optional Google Chat, optional SMS/voice escalation later, persona identity rendering, urgency tiers, quiet hours, ACK-required critical messages, durable Outbox/Inbox objects, no silent drops, deadletters, and escalations. Real Slack/email sends require an explicit per-project channel rollout policy, allowed data boundary, BudgetReservation, Receipt, provider credentials, and visible policy-block decisions when not configured.
 
 ## Knowledge, Memory, and SSP
 

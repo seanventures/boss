@@ -1235,6 +1235,89 @@ describe("createBossApiClient", () => {
     expect(digest.outbox_message_id).toBe("out_digest");
   });
 
+  it("manages communications channel rollout policies", async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const responses = [
+      {
+        status: 200,
+        body: {
+          project_id: "boss-dogfood",
+          items: [
+            {
+              id: "comms_policy_boss-dogfood_slack",
+              project_id: "boss-dogfood",
+              provider: "slack",
+              delivery_mode: "draft_only",
+              allowed_data_boundaries: ["public", "internal"],
+              rollout_notes: "Owner approval pending.",
+              status: "active",
+              created_by: "executive_console",
+              metadata: { source: "mission_control" },
+              created_at: "2026-06-03T00:00:00Z",
+              updated_at: "2026-06-03T00:00:00Z",
+            },
+          ],
+        },
+      },
+      {
+        status: 201,
+        body: {
+          id: "comms_policy_boss-dogfood_email",
+          project_id: "boss-dogfood",
+          provider: "email",
+          delivery_mode: "real_send_allowed",
+          allowed_data_boundaries: ["public"],
+          rollout_notes: "SMTP sandbox approved.",
+          status: "active",
+          created_by: "release_manager",
+          metadata: { approval_ref: "dec_1" },
+          created_at: "2026-06-03T00:00:00Z",
+          updated_at: "2026-06-03T00:01:00Z",
+        },
+      },
+    ];
+    const fetchImpl = async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({ url: String(input), init });
+      const next = responses.shift();
+      if (!next) {
+        throw new Error("unexpected extra request");
+      }
+      return new Response(JSON.stringify(next.body), {
+        status: next.status,
+        headers: { "Content-Type": "application/json" },
+      });
+    };
+    const client = createBossApiClient({
+      baseUrl: "http://127.0.0.1:8000",
+      fetchImpl,
+    });
+
+    const listed = await client.listCommsChannelPolicies("boss-dogfood");
+    const policy = await client.upsertCommsChannelPolicy({
+      project_id: "boss-dogfood",
+      provider: "email",
+      delivery_mode: "real_send_allowed",
+      allowed_data_boundaries: ["public"],
+      rollout_notes: "SMTP sandbox approved.",
+      metadata: { approval_ref: "dec_1" },
+      actor: "release_manager",
+    });
+
+    expect(calls[0].url).toBe(
+      "http://127.0.0.1:8000/v1/comms/policies?project_id=boss-dogfood",
+    );
+    expect(calls[1].url).toBe(
+      "http://127.0.0.1:8000/v1/comms/policies",
+    );
+    expect(JSON.parse(String(calls[1].init?.body))).toMatchObject({
+      provider: "email",
+      delivery_mode: "real_send_allowed",
+      allowed_data_boundaries: ["public"],
+    });
+    expect(listed.items[0].delivery_mode).toBe("draft_only");
+    expect(policy.provider).toBe("email");
+  });
+
   it("lists deployment rollouts through the API contract", async () => {
     const urls: string[] = [];
     const fetchImpl = async (input: RequestInfo | URL) => {

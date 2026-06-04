@@ -10,7 +10,7 @@ BOSS is a durable, API-first control plane for accountable AI labor. The technic
 
 - Control Plane: canonical tenant state, tasks, plans, decisions, approvals, policies, budgets, receipts, events, audit, roles, packs, Mission Control, and Metatron.
 - Execution Plane: leases, stateless workers, local runners, cloud workers, browser workers, code/test/review workers, deployment workers, comms workers, worker pools, local model serving, and enterprise private workers.
-- Communications Plane: outbox/inbox, ACK, persona rendering, quiet hours, escalation, delivery receipts, and deadletters.
+- Communications Plane: outbox/inbox, ACK, persona rendering, quiet hours, escalation, channel rollout policies, delivery receipts, and deadletters.
 - Elastic Resource Plane / ProviderOps: provider accounts, adapters, inventory, billing, deployments, ChangeSets, ResourceReceipts, drift, health, reconciliation, janitor, and autoscaler policy.
 - Model Entitlement Broker / AI Capacity Router: adapter discovery, entitlement pools, capacity state, route decisions, cooldowns, fallback selection, local/subscription/API/enterprise gateway routing.
 - Skills Registry: typed skills, risk tier, data boundary, permissions, retry policy, cost estimates, artifact requirements, receipt requirements.

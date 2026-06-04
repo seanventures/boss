@@ -1,5 +1,6 @@
 import {
   BossApiError,
+  type CommsChannelPolicySummary,
   type InboxMessageSummary,
   type OutboxMessageSummary,
 } from "@boss/api-client";
@@ -16,11 +17,23 @@ export type OutboxFeedItem = {
   createdAt: string;
 };
 
+export type CommsPolicyItem = {
+  id: string;
+  provider: string;
+  deliveryMode: string;
+  allowedDataBoundaries: string[];
+  rolloutNotes?: string;
+  status: string;
+  createdBy: string;
+  updatedAt: string;
+};
+
 export type OutboxFeed = {
   projectId: string;
   apiReachable: boolean;
   blockedReason?: string;
   items: OutboxFeedItem[];
+  policies: CommsPolicyItem[];
 };
 
 export type InboxFeedItem = {
@@ -51,6 +64,19 @@ function mapOutbox(payload: OutboxMessageSummary): OutboxFeedItem {
   };
 }
 
+function mapPolicy(payload: CommsChannelPolicySummary): CommsPolicyItem {
+  return {
+    id: payload.id,
+    provider: payload.provider,
+    deliveryMode: payload.delivery_mode,
+    allowedDataBoundaries: payload.allowed_data_boundaries,
+    rolloutNotes: payload.rollout_notes,
+    status: payload.status,
+    createdBy: payload.created_by,
+    updatedAt: payload.updated_at,
+  };
+}
+
 function mapInbox(payload: InboxMessageSummary): InboxFeedItem {
   return {
     id: payload.id,
@@ -68,6 +94,7 @@ export function emptyOutboxFeed(reason?: string, projectId = PROJECT_ID): Outbox
     apiReachable: false,
     blockedReason: reason,
     items: [],
+    policies: [],
   };
 }
 
@@ -84,12 +111,17 @@ export async function fetchOutboxFeed(
   projectId = PROJECT_ID,
   limit = 8,
 ): Promise<OutboxFeed> {
+  const resolvedProjectId = resolveProjectId(projectId);
   try {
-    const payload = await client.listOutboxMessages(resolveProjectId(projectId), limit);
+    const [payload, policies] = await Promise.all([
+      client.listOutboxMessages(resolvedProjectId, limit),
+      client.listCommsChannelPolicies(resolvedProjectId),
+    ]);
     return {
       projectId: payload.project_id,
       apiReachable: true,
       items: payload.items.map(mapOutbox),
+      policies: policies.items.map(mapPolicy),
     };
   } catch (error) {
     if (error instanceof BossApiError) {
