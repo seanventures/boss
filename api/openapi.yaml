@@ -627,7 +627,7 @@ paths:
           required: false
           schema: { type: integer, default: 50, minimum: 1, maximum: 200 }
       responses:
-        '200': { description: Enterprise support cases with SLA due dates, hosted escalation state, receipts, and metadata }
+        '200': { description: Enterprise support cases with SLA due dates, hosted escalation state, receipts, support_packet_artifact_id, and metadata }
     post:
       summary: Create a local enterprise support case and optionally request receipt-backed hosted escalation
       requestBody:
@@ -651,7 +651,7 @@ paths:
                 metadata: { type: object }
                 actor: { type: string, default: system }
       responses:
-        '201': { description: Support case created; hosted escalation is submitted, failed, or blocked visibly }
+        '201': { description: Support case created with support_packet_artifact_id; hosted escalation is submitted, failed, or blocked visibly }
         '403': { description: Actor is not allowed to manage enterprise support records }
         '422': { description: Unsupported severity, unknown project, or invalid support payload }
   /v1/enterprise/support-cases/{case_id}:

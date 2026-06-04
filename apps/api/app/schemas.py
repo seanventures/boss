@@ -587,6 +587,7 @@ class EnterpriseSupportCaseSummary(BaseModel):
     response_time_hours: int
     hosted_case_ref: Optional[str] = None
     receipt_id: Optional[str] = None
+    support_packet_artifact_id: Optional[str] = None
     assigned_to: Optional[str] = None
     created_by: str
     metadata: dict[str, Any]

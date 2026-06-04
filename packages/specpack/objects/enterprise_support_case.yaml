@@ -35,6 +35,8 @@ fields:
     type: string
   - name: receipt_id
     type: string
+  - name: support_packet_artifact_id
+    type: string
   - name: assigned_to
     type: string
   - name: metadata
@@ -43,5 +45,6 @@ rules:
   local_case_tracking_works_without_account_connect: true
   hosted_escalation_requires_account_connect_link: true
   hosted_escalation_requires_receipt: true
+  support_packet_artifact_required: true
   missing_hosted_endpoint_creates_blocked_case: true
   lifecycle_updates_emit_events: true

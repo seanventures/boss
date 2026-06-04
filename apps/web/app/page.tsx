@@ -4342,6 +4342,11 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                               {supportCase.receiptId ?? "local case"} / hosted{" "}
                               {supportCase.hostedCaseRef ?? "not escalated"}
                             </p>
+                            {supportCase.supportPacketArtifactId ? (
+                              <p className="detail">
+                                Support packet {supportCase.supportPacketArtifactId}
+                              </p>
+                            ) : null}
                             {supportCase.enterpriseClusterId ? (
                               <p className="detail">
                                 Cluster {supportCase.enterpriseClusterId} / Account Connect{" "}

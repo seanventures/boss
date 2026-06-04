@@ -386,6 +386,7 @@ export type EnterpriseSupportCaseSummary = {
   response_time_hours: number;
   hosted_case_ref?: string;
   receipt_id?: string;
+  support_packet_artifact_id?: string;
   assigned_to?: string;
   created_by: string;
   metadata: Record<string, unknown>;

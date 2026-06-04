@@ -2296,6 +2296,18 @@ def test_enterprise_support_cases_track_sla_and_fail_closed_hosted_escalation(
         assert local_payload["response_time_hours"] == 2
         assert local_payload["sla_due_at"]
         assert local_payload["receipt_id"] is None
+        assert local_payload["support_packet_artifact_id"].startswith("art_")
+
+        local_packet = client.get(
+            f"/v1/artifacts/{local_payload['support_packet_artifact_id']}"
+        )
+        assert local_packet.status_code == 200
+        local_packet_payload = local_packet.json()
+        assert local_packet_payload["artifact_type"] == "enterprise_support_case_packet"
+        assert local_packet_payload["data_boundary"] == "confidential"
+        assert local_packet_payload["content"]["support_case_id"] == local_payload["id"]
+        assert local_packet_payload["content"]["status"] == "open"
+        assert local_packet_payload["content"]["hosted_support_claim"] is False
 
         link = client.post(
             "/v1/account-connect/link",
@@ -2326,6 +2338,26 @@ def test_enterprise_support_cases_track_sla_and_fail_closed_hosted_escalation(
         assert escalated_payload["response_time_hours"] == 4
         assert escalated_payload["receipt_id"]
         assert escalated_payload["metadata"]["blocked_reason"] == (
+            "account_connect_url_missing"
+        )
+        assert escalated_payload["support_packet_artifact_id"].startswith("art_")
+
+        escalated_packet = client.get(
+            f"/v1/artifacts/{escalated_payload['support_packet_artifact_id']}"
+        )
+        assert escalated_packet.status_code == 200
+        escalated_packet_payload = escalated_packet.json()
+        assert (
+            escalated_packet_payload["artifact_type"]
+            == "enterprise_support_case_packet"
+        )
+        assert escalated_packet_payload["content"]["status"] == (
+            "blocked_configuration"
+        )
+        assert escalated_packet_payload["content"]["receipt_id"] == (
+            escalated_payload["receipt_id"]
+        )
+        assert escalated_packet_payload["content"]["metadata"]["blocked_reason"] == (
             "account_connect_url_missing"
         )
 
@@ -2372,6 +2404,12 @@ def test_enterprise_support_cases_track_sla_and_fail_closed_hosted_escalation(
         assert "enterprise.support_case_created" in event_types
         assert "enterprise.support_case_blocked" in event_types
         assert "enterprise.support_case_updated" in event_types
+        support_created = next(
+            item
+            for item in events.json()["items"]
+            if item["event_type"] == "enterprise.support_case_created"
+        )
+        assert support_created["data"]["support_packet_artifact_id"].startswith("art_")
     finally:
         api_main.settings.account_connect_url = previous_url
         api_main.commercial.settings.account_connect_url = previous_commercial_url

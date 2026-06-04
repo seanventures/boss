@@ -461,7 +461,7 @@ Acceptance criteria:
 - Given Account Connect is linked, when an authorized actor requests entitlement sync or unlink, then Mission Control calls the corresponding API and relies on audit events from the backend.
 - Given Enterprise cluster posture exists, when Mission Control loads, then it shows deployment mode, Account Connect mode, worker strategy, HA/data residency, support tier, compliance packs, and blocking gaps.
 - Given Enterprise cluster validation runs exist, when Mission Control loads, then it shows validation kind, status, checks, evidence references, blocking gaps, actor, and timestamp from API data.
-- Given enterprise support cases exist, when Mission Control loads, then it shows open and blocked cases, SLA due dates, hosted escalation refs, receipt IDs, assignments, and blocked reasons.
+- Given enterprise support cases exist, when Mission Control loads, then it shows open and blocked cases, SLA due dates, hosted escalation refs, receipt IDs, support packet artifacts, assignments, and blocked reasons.
 - Given enterprise identity-provider records exist, when Mission Control loads, then it shows OIDC, SAML, and SCIM provider status, SecretRefs, and blocking gaps.
 - Given enterprise identity rollout policies exist, when Mission Control loads, then it shows provider type, runtime mode, allowed domains, rollout notes, actor, and update time.
 - Given an authorized actor upserts SCIM groups or users, when the form is submitted, then Mission Control calls the enterprise SCIM API and active users are represented through the same org-member RBAC directory.
@@ -496,9 +496,9 @@ Acceptance criteria:
 - Given an external IdP calls SCIM runtime endpoints with a valid bearer token but no active non-blocked SCIM provider record, when provisioning is attempted, then BOSS returns a visible blocked SCIM error and emits `enterprise.scim_runtime_blocked`.
 - Given an external IdP calls SCIM runtime endpoints with a valid bearer token and active provider but no `provisioning_allowed` rollout policy, when provisioning is attempted, then BOSS returns a visible blocked SCIM error and emits `enterprise.scim_runtime_blocked`.
 - Given an external IdP creates, replaces, lists, filters, or deletes SCIM users/groups with a valid bearer token, active SCIM provider record, and `provisioning_allowed` rollout policy, when the request runs, then BOSS maps it through the same audited SCIM group/user and org-member provisioning path used by the internal API.
-- Given an enterprise operator creates a local support case, when BOSS records it, then the case has severity, category, support tier, SLA due date, status, and audit event without requiring hosted BOSS auth.
+- Given an enterprise operator creates a local support case, when BOSS records it, then the case has severity, category, support tier, SLA due date, status, support packet artifact, and audit event without requiring hosted BOSS auth.
 - Given hosted support escalation is requested, when Account Connect or hosted support endpoint configuration is missing, then BOSS creates a blocked support case, writes a failed Receipt, and emits a visible blocked event instead of inventing a hosted ticket.
-- Given enterprise support cases exist, when Mission Control loads, then BOSS renders the case list with status, severity, SLA due date, hosted reference, receipt, assignment, and blocked reason.
+- Given enterprise support cases exist, when Mission Control loads, then BOSS renders the case list with status, severity, SLA due date, hosted reference, receipt, support packet artifact, assignment, and blocked reason.
 - Given an enterprise operator updates support case status or assignment, when the update succeeds, then BOSS persists the lifecycle change and emits `enterprise.support_case_updated`.
 
 ### Story ADM-002: Control Project Actors

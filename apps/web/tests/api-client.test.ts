@@ -593,6 +593,7 @@ describe("createBossApiClient", () => {
       response_time_hours: 4,
       hosted_case_ref: undefined,
       receipt_id: "rcpt_support",
+      support_packet_artifact_id: "art_support_packet_1",
       assigned_to: undefined,
       created_by: "ceo",
       metadata: { blocked_reason: "account_connect_url_missing" },
@@ -634,6 +635,7 @@ describe("createBossApiClient", () => {
     });
 
     expect(listed.items[0].receipt_id).toBe("rcpt_support");
+    expect(created.support_packet_artifact_id).toBe("art_support_packet_1");
     expect(created.metadata.blocked_reason).toBe("account_connect_url_missing");
     expect(updated.assigned_to).toBe("cto");
     expect(calls[0].url).toBe(

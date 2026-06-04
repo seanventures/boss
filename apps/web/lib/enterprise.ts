@@ -99,6 +99,7 @@ export type EnterpriseSupportCaseItem = {
   hostedOrgId?: string;
   hostedCaseRef?: string;
   receiptId?: string;
+  supportPacketArtifactId?: string;
   assignedTo?: string;
   createdBy: string;
   metadata: Record<string, unknown>;
@@ -265,6 +266,7 @@ function mapSupportCase(
     hostedOrgId: payload.hosted_org_id,
     hostedCaseRef: payload.hosted_case_ref,
     receiptId: payload.receipt_id,
+    supportPacketArtifactId: payload.support_packet_artifact_id,
     assignedTo: payload.assigned_to,
     createdBy: payload.created_by,
     metadata: payload.metadata,

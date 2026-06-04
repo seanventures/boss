@@ -1148,6 +1148,39 @@ class EnterpriseService:
                         connection, receipt["id"], {"message": str(error)}
                     )
 
+        support_packet_artifact_id = create_artifact(
+            connection,
+            self.settings,
+            project_id,
+            None,
+            "enterprise_support_case_packet",
+            f"Enterprise support case: {cleaned_title}",
+            {
+                "object_type": "enterprise_support_case_packet",
+                "support_case_id": case_id,
+                "project_id": project_id,
+                "enterprise_cluster_id": cluster.get("id") if cluster else None,
+                "account_connect_org_id": account_connect_org_id,
+                "hosted_org_id": hosted_org_id,
+                "title": cleaned_title,
+                "severity": normalized_severity,
+                "category": normalized_category,
+                "description": cleaned_description,
+                "status": status,
+                "sla_due_at": sla_due_at.isoformat(),
+                "response_time_hours": response_hours,
+                "hosted_case_ref": hosted_case_ref,
+                "receipt_id": receipt_id,
+                "created_by": actor,
+                "escalate_to_hosted": escalate_to_hosted,
+                "hosted_support_claim": bool(hosted_case_ref),
+                "metadata": metadata_payload,
+                "data_boundary": "confidential",
+            },
+            data_boundary="confidential",
+        )
+        metadata_payload["support_packet_artifact_id"] = support_packet_artifact_id
+
         connection.execute(
             text(
                 """
@@ -1201,6 +1234,7 @@ class EnterpriseService:
                 "sla_due_at": sla_due_at.isoformat(),
                 "receipt_id": receipt_id,
                 "hosted_case_ref": hosted_case_ref,
+                "support_packet_artifact_id": support_packet_artifact_id,
             },
         )
         return self.get_support_case(connection, project_id, case_id)
@@ -1560,8 +1594,15 @@ class EnterpriseService:
         return self._support_case_from_row(dict(row)) if row else None
 
     def _support_case_from_row(self, row: dict[str, Any]) -> dict[str, Any]:
+        metadata = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
+        support_packet_artifact_id = metadata.get("support_packet_artifact_id")
         return {
             **row,
+            "support_packet_artifact_id": (
+                support_packet_artifact_id
+                if isinstance(support_packet_artifact_id, str)
+                else None
+            ),
             "sla_due_at": row["sla_due_at"].isoformat()
             if row.get("sla_due_at")
             else None,

@@ -381,6 +381,7 @@ describe("commercial, enterprise, and marketplace feeds", async () => {
           response_time_hours: 4,
           hosted_case_ref: undefined,
           receipt_id: "rcpt_support_1",
+          support_packet_artifact_id: "art_support_packet_1",
           assigned_to: undefined,
           created_by: "ceo",
           metadata: { blocked_reason: "account_connect_url_missing" },
@@ -434,6 +435,7 @@ describe("commercial, enterprise, and marketplace feeds", async () => {
     expect(feed.supportCases[0]).toMatchObject({
       title: "Hosted escalation blocked",
       receiptId: "rcpt_support_1",
+      supportPacketArtifactId: "art_support_packet_1",
       hostedOrgId: "hosted_org_1",
     });
   });
