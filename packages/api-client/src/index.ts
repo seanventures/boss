@@ -346,6 +346,40 @@ export type EnterpriseIdentityProviderListResponse = {
   items: EnterpriseIdentityProviderSummary[];
 };
 
+export type EnterpriseIdentityRolloutPolicySummary = {
+  id: string;
+  org_id: string;
+  project_id: string;
+  provider_type: string;
+  runtime_mode: string;
+  allowed_domains: string[];
+  rollout_notes?: string;
+  status: string;
+  created_by: string;
+  metadata: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+};
+
+export type EnterpriseIdentityRolloutPolicyListResponse = {
+  project_id: string;
+  items: EnterpriseIdentityRolloutPolicySummary[];
+};
+
+export type EnterpriseIdentityRolloutPolicyUpsertRequest = {
+  project_id: string;
+  provider_type: string;
+  runtime_mode?:
+    | "disabled"
+    | "metadata_only"
+    | "auth_allowed"
+    | "provisioning_allowed";
+  allowed_domains?: string[];
+  rollout_notes?: string;
+  metadata?: Record<string, unknown>;
+  actor?: string;
+};
+
 export type EnterpriseIdentityProviderUpsertRequest = {
   project_id: string;
   provider_key: string;
@@ -3151,6 +3185,22 @@ export function createBossApiClient(config: BossApiClientConfig) {
       return request<EnterpriseSupportCaseSummary>(
         "POST",
         `/v1/enterprise/support-cases/${encodeURIComponent(caseId)}`,
+        { body: payload },
+      );
+    },
+    listEnterpriseIdentityRolloutPolicies(projectId: string) {
+      return request<EnterpriseIdentityRolloutPolicyListResponse>(
+        "GET",
+        "/v1/enterprise/identity-rollout-policies",
+        { query: { project_id: projectId } },
+      );
+    },
+    upsertEnterpriseIdentityRolloutPolicy(
+      payload: EnterpriseIdentityRolloutPolicyUpsertRequest,
+    ) {
+      return request<EnterpriseIdentityRolloutPolicySummary>(
+        "POST",
+        "/v1/enterprise/identity-rollout-policies",
         { body: payload },
       );
     },

@@ -107,6 +107,12 @@ class EnterpriseService:
     ACCOUNT_CONNECT_MODES = {"attached", "detached"}
     IDENTITY_PROVIDER_TYPES = {"oidc", "saml", "scim"}
     IDENTITY_PROVIDER_STATUSES = {"planned", "active", "blocked", "disabled"}
+    IDENTITY_ROLLOUT_MODES = {
+        "disabled",
+        "metadata_only",
+        "auth_allowed",
+        "provisioning_allowed",
+    }
 
     def __init__(self, settings: Settings):
         self.settings = settings
@@ -158,6 +164,129 @@ class EnterpriseService:
             {"project_id": project_id},
         ).mappings().all()
         return [self._identity_provider_from_row(dict(row)) for row in rows]
+
+    def list_identity_rollout_policies(
+        self,
+        connection: Connection,
+        project_id: str,
+    ) -> list[dict[str, Any]]:
+        rows = connection.execute(
+            text(
+                """
+                SELECT id, org_id, project_id, provider_type, runtime_mode,
+                       allowed_domains, rollout_notes, status, created_by,
+                       metadata, created_at, updated_at
+                FROM enterprise_identity_rollout_policies
+                WHERE project_id = :project_id
+                ORDER BY provider_type ASC
+                """
+            ),
+            {"project_id": project_id},
+        ).mappings().all()
+        return [self._identity_rollout_policy_from_row(dict(row)) for row in rows]
+
+    def upsert_identity_rollout_policy(
+        self,
+        connection: Connection,
+        project_id: str,
+        *,
+        provider_type: str,
+        runtime_mode: str,
+        actor: str,
+        allowed_domains: Optional[list[str]] = None,
+        rollout_notes: Optional[str] = None,
+        metadata: Optional[dict[str, Any]] = None,
+    ) -> dict[str, Any]:
+        org_id = self._project_org_id(connection, project_id)
+        normalized_type = provider_type.strip().lower()
+        normalized_mode = runtime_mode.strip().lower()
+        if normalized_type not in self.IDENTITY_PROVIDER_TYPES:
+            raise ValueError(f"Unsupported identity provider type: {provider_type}")
+        if normalized_mode not in self.IDENTITY_ROLLOUT_MODES:
+            raise ValueError(f"Unsupported identity rollout mode: {runtime_mode}")
+        domains = self._normalize_tokens(allowed_domains or [])
+        policy_id = f"entidpol_{project_id}_{normalized_type}"
+        connection.execute(
+            text(
+                """
+                INSERT INTO enterprise_identity_rollout_policies (
+                    id, org_id, project_id, provider_type, runtime_mode,
+                    allowed_domains, rollout_notes, status, created_by, metadata
+                )
+                VALUES (
+                    :id, :org_id, :project_id, :provider_type, :runtime_mode,
+                    CAST(:allowed_domains AS JSONB), :rollout_notes, 'active',
+                    :created_by, CAST(:metadata AS JSONB)
+                )
+                ON CONFLICT (project_id, provider_type) DO UPDATE
+                SET runtime_mode = EXCLUDED.runtime_mode,
+                    allowed_domains = EXCLUDED.allowed_domains,
+                    rollout_notes = EXCLUDED.rollout_notes,
+                    status = 'active',
+                    created_by = EXCLUDED.created_by,
+                    metadata = EXCLUDED.metadata,
+                    updated_at = now()
+                """
+            ),
+            {
+                "id": policy_id,
+                "org_id": org_id,
+                "project_id": project_id,
+                "provider_type": normalized_type,
+                "runtime_mode": normalized_mode,
+                "allowed_domains": json.dumps(domains),
+                "rollout_notes": rollout_notes,
+                "created_by": actor,
+                "metadata": json.dumps(metadata or {}),
+            },
+        )
+        emit_event(
+            connection,
+            project_id,
+            "enterprise.identity_rollout_policy_upserted",
+            actor,
+            "enterprise_identity_rollout_policy",
+            policy_id,
+            {
+                "provider_type": normalized_type,
+                "runtime_mode": normalized_mode,
+                "allowed_domains": domains,
+            },
+        )
+        return self._get_identity_rollout_policy(connection, project_id, normalized_type)
+
+    def identity_rollout_status(
+        self,
+        connection: Connection,
+        project_id: str,
+        provider_type: str,
+        required_mode: str,
+    ) -> dict[str, Any]:
+        normalized_type = provider_type.strip().lower()
+        normalized_required_mode = required_mode.strip().lower()
+        policy = self._get_identity_rollout_policy(
+            connection, project_id, normalized_type
+        )
+        if not policy:
+            return {"enabled": False, "reason": "identity_rollout_policy_missing"}
+        if policy["status"] != "active":
+            return {
+                "enabled": False,
+                "reason": "identity_rollout_policy_inactive",
+                "policy": policy,
+            }
+        allowed_modes = {
+            "metadata_only": {"metadata_only", "auth_allowed", "provisioning_allowed"},
+            "auth_allowed": {"auth_allowed"},
+            "provisioning_allowed": {"provisioning_allowed"},
+        }.get(normalized_required_mode, {normalized_required_mode})
+        if policy["runtime_mode"] not in allowed_modes:
+            return {
+                "enabled": False,
+                "reason": "identity_rollout_policy_mode_blocked",
+                "policy": policy,
+            }
+        return {"enabled": True, "policy": policy}
 
     def upsert_identity_provider(
         self,
@@ -330,9 +459,23 @@ class EnterpriseService:
                 "enabled": False,
                 "reason": "active_scim_identity_provider_missing",
             }
+        rollout = self.identity_rollout_status(
+            connection,
+            project_id,
+            "scim",
+            "provisioning_allowed",
+        )
+        if not rollout["enabled"]:
+            return {
+                "enabled": False,
+                "reason": rollout["reason"],
+                "provider": dict(provider),
+                "policy": rollout.get("policy"),
+            }
         return {
             "enabled": True,
             "provider": dict(provider),
+            "policy": rollout.get("policy"),
         }
 
     def upsert_scim_group(
@@ -1340,6 +1483,28 @@ class EnterpriseService:
             raise ValueError(f"Identity provider '{provider_key}' was not found.")
         return self._identity_provider_from_row(dict(row))
 
+    def _get_identity_rollout_policy(
+        self,
+        connection: Connection,
+        project_id: str,
+        provider_type: str,
+    ) -> Optional[dict[str, Any]]:
+        row = connection.execute(
+            text(
+                """
+                SELECT id, org_id, project_id, provider_type, runtime_mode,
+                       allowed_domains, rollout_notes, status, created_by,
+                       metadata, created_at, updated_at
+                FROM enterprise_identity_rollout_policies
+                WHERE project_id = :project_id
+                  AND provider_type = :provider_type
+                  AND status = 'active'
+                """
+            ),
+            {"project_id": project_id, "provider_type": provider_type},
+        ).mappings().first()
+        return self._identity_rollout_policy_from_row(dict(row)) if row else None
+
     def _active_identity_provider_status(
         self,
         connection: Connection,
@@ -1357,10 +1522,29 @@ class EnterpriseService:
             ),
             {"project_id": project_id},
         ).mappings().all()
+        active_provider_types = {row["provider_type"] for row in rows}
+        policies = connection.execute(
+            text(
+                """
+                SELECT provider_type, runtime_mode
+                FROM enterprise_identity_rollout_policies
+                WHERE project_id = :project_id
+                  AND status = 'active'
+                """
+            ),
+            {"project_id": project_id},
+        ).mappings().all()
+        policy_modes = {
+            row["provider_type"]: row["runtime_mode"]
+            for row in policies
+        }
         return {
-            "oidc": any(row["provider_type"] == "oidc" for row in rows),
-            "saml": any(row["provider_type"] == "saml" for row in rows),
-            "scim": any(row["provider_type"] == "scim" for row in rows),
+            "oidc": "oidc" in active_provider_types
+            and policy_modes.get("oidc") == "auth_allowed",
+            "saml": "saml" in active_provider_types
+            and policy_modes.get("saml") == "auth_allowed",
+            "scim": "scim" in active_provider_types
+            and policy_modes.get("scim") == "provisioning_allowed",
         }
 
     def _identity_provider_gaps(
@@ -1399,6 +1583,15 @@ class EnterpriseService:
         return gaps
 
     def _identity_provider_from_row(self, row: dict[str, Any]) -> dict[str, Any]:
+        return {
+            **row,
+            "created_at": row["created_at"].isoformat(),
+            "updated_at": row["updated_at"].isoformat(),
+        }
+
+    def _identity_rollout_policy_from_row(
+        self, row: dict[str, Any]
+    ) -> dict[str, Any]:
         return {
             **row,
             "created_at": row["created_at"].isoformat(),

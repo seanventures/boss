@@ -589,6 +589,35 @@ export async function upsertEnterpriseIdentityProviderAction(
   revalidatePath("/");
 }
 
+export async function upsertEnterpriseIdentityRolloutPolicyAction(
+  formData: FormData,
+): Promise<void> {
+  const providerType = formData.get("provider_type");
+  const runtimeMode = formData.get("runtime_mode");
+  if (typeof providerType !== "string" || !providerType.trim()) {
+    throw new Error("provider_type is required");
+  }
+  await client.upsertEnterpriseIdentityRolloutPolicy({
+    project_id: getProjectId(formData),
+    provider_type: providerType.trim(),
+    runtime_mode:
+      runtimeMode === "metadata_only" ||
+      runtimeMode === "auth_allowed" ||
+      runtimeMode === "provisioning_allowed" ||
+      runtimeMode === "disabled"
+        ? runtimeMode
+        : "disabled",
+    allowed_domains: parseLines(formData.get("allowed_domains")),
+    rollout_notes: getOptionalString(formData, "rollout_notes"),
+    metadata: parseOptionalJsonObjectField(
+      formData.get("metadata_json"),
+      "metadata_json",
+    ),
+    actor: getActor(formData),
+  });
+  revalidatePath("/");
+}
+
 export async function upsertEnterpriseScimGroupAction(
   formData: FormData,
 ): Promise<void> {

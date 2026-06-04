@@ -42,6 +42,7 @@ import {
   revokeAccountConnectTeamInviteAction,
   upsertEnterpriseClusterAction,
   upsertEnterpriseIdentityProviderAction,
+  upsertEnterpriseIdentityRolloutPolicyAction,
   upsertEnterpriseScimGroupAction,
   upsertEnterpriseScimUserAction,
   upsertCommsChannelPolicyAction,
@@ -4058,6 +4059,107 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                     </label>
                     <button className="button secondary" type="submit">
                       Save identity provider
+                    </button>
+                  </form>
+                </>
+              )}
+            </article>
+
+            <article className="stack-card">
+              <h3>Identity rollout policies</h3>
+              {!enterprise.apiReachable ? (
+                <p className="detail">
+                  {enterprise.blockedReason ?? "Enterprise API is unavailable."}
+                </p>
+              ) : (
+                <>
+                  {enterprise.identityRolloutPolicies.length === 0 ? (
+                    <p className="detail">
+                      No identity rollout policy is configured. SAML login and SCIM
+                      runtime provisioning stay blocked until a policy is approved.
+                    </p>
+                  ) : (
+                    <div className="feed-list">
+                      {enterprise.identityRolloutPolicies.map((policy) => (
+                        <div className="feed-row" key={policy.id}>
+                          <div>
+                            <h4>{titleCaseToken(policy.providerType)}</h4>
+                            <p className="detail">
+                              {titleCaseToken(policy.runtimeMode)} / domains{" "}
+                              {policy.allowedDomains.join(", ") || "not restricted"}
+                            </p>
+                            <p className="detail">
+                              Updated by {policy.createdBy} at{" "}
+                              {formatDateTime(policy.updatedAt)}
+                            </p>
+                            {policy.rolloutNotes ? (
+                              <p className="detail">{policy.rolloutNotes}</p>
+                            ) : null}
+                          </div>
+                          <span
+                            className={`pill${
+                              policy.runtimeMode === "auth_allowed" ||
+                              policy.runtimeMode === "provisioning_allowed"
+                                ? ""
+                                : " warn"
+                            }`}
+                          >
+                            {titleCaseToken(policy.runtimeMode)}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  <form
+                    action={upsertEnterpriseIdentityRolloutPolicyAction}
+                    className="composer compact"
+                  >
+                    <input type="hidden" name="project_id" value={activeProjectId} />
+                    <input type="hidden" name="actor" value={activeActorId} />
+                    <label className="field">
+                      <span>Provider type</span>
+                      <select className="input" name="provider_type" defaultValue="saml">
+                        <option value="oidc">OIDC</option>
+                        <option value="saml">SAML</option>
+                        <option value="scim">SCIM</option>
+                      </select>
+                    </label>
+                    <label className="field">
+                      <span>Runtime mode</span>
+                      <select className="input" name="runtime_mode" defaultValue="disabled">
+                        <option value="disabled">Disabled</option>
+                        <option value="metadata_only">Metadata only</option>
+                        <option value="auth_allowed">Auth allowed</option>
+                        <option value="provisioning_allowed">Provisioning allowed</option>
+                      </select>
+                    </label>
+                    <label className="field">
+                      <span>Allowed domains</span>
+                      <textarea
+                        className="textarea"
+                        name="allowed_domains"
+                        placeholder="example.com"
+                      />
+                    </label>
+                    <label className="field">
+                      <span>Rollout notes</span>
+                      <textarea
+                        className="textarea"
+                        name="rollout_notes"
+                        placeholder="Approval, IdP environment, and rollback notes."
+                      />
+                    </label>
+                    <label className="field">
+                      <span>Metadata JSON</span>
+                      <textarea
+                        className="textarea"
+                        name="metadata_json"
+                        defaultValue={`{"source":"mission_control"}`}
+                      />
+                    </label>
+                    <button className="button secondary" type="submit">
+                      Save rollout policy
                     </button>
                   </form>
                 </>

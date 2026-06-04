@@ -545,6 +545,44 @@ paths:
         '200': { description: Support case status or assignment updated and audited }
         '403': { description: Actor is not allowed to manage enterprise support records }
         '404': { description: Support case was not found }
+  /v1/enterprise/identity-rollout-policies:
+    get:
+      summary: List enterprise identity runtime rollout policies
+      parameters:
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: OIDC, SAML, and SCIM runtime rollout policies for a project }
+    post:
+      summary: Create or update an enterprise identity runtime rollout policy
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id, provider_type]
+              properties:
+                project_id: { type: string }
+                provider_type:
+                  type: string
+                  enum: [oidc, saml, scim]
+                runtime_mode:
+                  type: string
+                  enum: [disabled, metadata_only, auth_allowed, provisioning_allowed]
+                  default: disabled
+                allowed_domains:
+                  type: array
+                  items: { type: string }
+                rollout_notes: { type: string }
+                metadata: { type: object }
+                actor: { type: string, default: system }
+      responses:
+        '201': { description: Identity rollout policy saved and audit event emitted }
+        '403': { description: Actor is not allowed to manage enterprise trust records }
+        '422': { description: Unsupported identity provider type or runtime mode }
   /v1/enterprise/identity-providers:
     get:
       summary: List enterprise OIDC, SAML, and SCIM identity-provider metadata records

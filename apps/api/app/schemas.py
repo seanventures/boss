@@ -450,6 +450,55 @@ class EnterpriseIdentityProviderListResponse(BaseModel):
     items: list[EnterpriseIdentityProviderSummary]
 
 
+class EnterpriseIdentityRolloutPolicySummary(BaseModel):
+    id: str
+    org_id: str
+    project_id: str
+    provider_type: str
+    runtime_mode: str
+    allowed_domains: list[str]
+    rollout_notes: Optional[str] = None
+    status: str
+    created_by: str
+    metadata: dict[str, Any]
+    created_at: str
+    updated_at: str
+
+
+class EnterpriseIdentityRolloutPolicyListResponse(BaseModel):
+    project_id: str
+    items: list[EnterpriseIdentityRolloutPolicySummary]
+
+
+class EnterpriseIdentityRolloutPolicyUpsertRequest(BaseModel):
+    project_id: str
+    provider_type: str
+    runtime_mode: Literal[
+        "disabled",
+        "metadata_only",
+        "auth_allowed",
+        "provisioning_allowed",
+    ] = "disabled"
+    allowed_domains: list[str] = Field(default_factory=list)
+    rollout_notes: Optional[str] = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    actor: str = "system"
+
+    @model_validator(mode="after")
+    def validate_identity_rollout_policy(
+        self,
+    ) -> "EnterpriseIdentityRolloutPolicyUpsertRequest":
+        self.project_id = _require_text(self.project_id, "project_id")
+        self.provider_type = _require_text(self.provider_type, "provider_type")
+        self.actor = _require_text(self.actor, "actor")
+        self.allowed_domains = [
+            domain.strip().lower()
+            for domain in self.allowed_domains
+            if domain and domain.strip()
+        ]
+        return self
+
+
 class EnterpriseIdentityProviderUpsertRequest(BaseModel):
     project_id: str
     provider_key: str

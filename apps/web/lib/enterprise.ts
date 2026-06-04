@@ -1,6 +1,7 @@
 import {
   BossApiError,
   type EnterpriseClusterSummary,
+  type EnterpriseIdentityRolloutPolicySummary,
   type EnterpriseIdentityProviderSummary,
   type EnterpriseScimGroupSummary,
   type EnterpriseSupportCaseSummary,
@@ -58,6 +59,17 @@ export type EnterpriseIdentityProviderItem = {
   updatedAt: string;
 };
 
+export type EnterpriseIdentityRolloutPolicyItem = {
+  id: string;
+  providerType: string;
+  runtimeMode: string;
+  allowedDomains: string[];
+  rolloutNotes?: string;
+  status: string;
+  createdBy: string;
+  updatedAt: string;
+};
+
 export type EnterpriseScimUserItem = {
   id: string;
   externalId?: string;
@@ -98,6 +110,7 @@ export type EnterpriseFeed = {
   blockedReason?: string;
   clusters: EnterpriseClusterItem[];
   identityProviders: EnterpriseIdentityProviderItem[];
+  identityRolloutPolicies: EnterpriseIdentityRolloutPolicyItem[];
   scimGroups: EnterpriseScimGroupItem[];
   scimUsers: EnterpriseScimUserItem[];
   supportCases: EnterpriseSupportCaseItem[];
@@ -154,6 +167,21 @@ function mapIdentityProvider(
     status: payload.status,
     testStatus: payload.test_status,
     blockingGaps: payload.blocking_gaps,
+    updatedAt: payload.updated_at,
+  };
+}
+
+function mapIdentityRolloutPolicy(
+  payload: EnterpriseIdentityRolloutPolicySummary,
+): EnterpriseIdentityRolloutPolicyItem {
+  return {
+    id: payload.id,
+    providerType: payload.provider_type,
+    runtimeMode: payload.runtime_mode,
+    allowedDomains: payload.allowed_domains,
+    rolloutNotes: payload.rollout_notes,
+    status: payload.status,
+    createdBy: payload.created_by,
     updatedAt: payload.updated_at,
   };
 }
@@ -222,6 +250,7 @@ export function emptyEnterpriseFeed(
     blockedReason: reason,
     clusters: [],
     identityProviders: [],
+    identityRolloutPolicies: [],
     scimGroups: [],
     scimUsers: [],
     supportCases: [],
@@ -246,12 +275,14 @@ export async function fetchEnterpriseFeed(
     const [
       clusters,
       identityProviders,
+      identityRolloutPolicies,
       scimGroups,
       scimUsers,
       supportCases,
     ] = await Promise.all([
       client.listEnterpriseClusters(resolvedProjectId),
       client.listEnterpriseIdentityProviders(resolvedProjectId),
+      client.listEnterpriseIdentityRolloutPolicies(resolvedProjectId),
       client.listEnterpriseScimGroups(resolvedProjectId),
       client.listEnterpriseScimUsers(resolvedProjectId),
       client.listEnterpriseSupportCases(resolvedProjectId),
@@ -265,6 +296,9 @@ export async function fetchEnterpriseFeed(
       apiReachable: true,
       clusters: clusterItems,
       identityProviders: providerItems,
+      identityRolloutPolicies: identityRolloutPolicies.items.map(
+        mapIdentityRolloutPolicy,
+      ),
       scimGroups: scimGroups.items.map(mapScimGroup),
       scimUsers: userItems,
       supportCases: supportItems,

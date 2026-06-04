@@ -22,6 +22,7 @@ This release adds the commercial, Account Connect, enterprise-governance, SCIM, 
 - Added Mission Control support/SLA panels for open and blocked enterprise support cases, hosted escalation receipts, SLA due dates, and case lifecycle/assignment updates.
 - Added constrained Enterprise SAML runtime support with service-provider metadata, signed RSA-SHA256 ACS verification, certificate fingerprint checks, hashed expiring bearer sessions, and fail-closed SAML audit events.
 - Added per-project communications channel rollout policies so Slack/email real sends require explicit `real_send_allowed` policy, allowed data boundary, BudgetReservation, Receipt, provider credentials, and visible policy-block decisions when not configured.
+- Added per-project Enterprise identity rollout policies so OIDC/SAML/SCIM metadata does not imply live rollout; SAML ACS and SCIM provisioning fail closed until the matching policy explicitly allows authentication or provisioning.
 - Added OpenAPI, TypeScript API client, specpack objects, workflows, policies, user stories, and traceability coverage for the new commercial and enterprise runtime surfaces.
 
 ## v0.3.0 - 2026-06-03

@@ -394,6 +394,20 @@ class SamlSessionService:
             raise SamlConfigurationError(
                 "No active non-blocked SAML identity provider is configured."
             )
+        rollout = self._identity_rollout_status(connection, project_id, "saml")
+        if not rollout["enabled"]:
+            emit_event(
+                connection,
+                project_id,
+                "enterprise.saml_runtime_blocked",
+                "saml",
+                "enterprise_identity_rollout_policy",
+                rollout.get("policy_id") or project_id,
+                {"reason": rollout["reason"], "provider_id": provider["id"]},
+            )
+            raise SamlConfigurationError(
+                "SAML identity rollout policy does not allow authentication."
+            )
         try:
             principal = self.authenticator.verify_response(saml_response, provider)
             self.members.require_member(
@@ -466,6 +480,34 @@ class SamlSessionService:
             provider_id=provider["id"],
             expires_at=expires_at.isoformat(),
         )
+
+    def _identity_rollout_status(
+        self,
+        connection: Connection,
+        project_id: str,
+        provider_type: str,
+    ) -> dict[str, Any]:
+        row = connection.execute(
+            text(
+                """
+                SELECT id, runtime_mode, status
+                FROM enterprise_identity_rollout_policies
+                WHERE project_id = :project_id
+                  AND provider_type = :provider_type
+                  AND status = 'active'
+                """
+            ),
+            {"project_id": project_id, "provider_type": provider_type},
+        ).mappings().first()
+        if not row:
+            return {"enabled": False, "reason": "identity_rollout_policy_missing"}
+        if row["runtime_mode"] != "auth_allowed":
+            return {
+                "enabled": False,
+                "reason": "identity_rollout_policy_mode_blocked",
+                "policy_id": row["id"],
+            }
+        return {"enabled": True, "policy_id": row["id"]}
 
     def authenticate_token(
         self,

@@ -597,9 +597,28 @@ describe("createBossApiClient", () => {
       created_at: "2026-06-03T00:00:00Z",
       updated_at: "2026-06-03T00:00:00Z",
     };
+    const rolloutPolicy = {
+      id: "entidpol_boss-dogfood_saml",
+      org_id: "org_boss",
+      project_id: "boss-dogfood",
+      provider_type: "saml",
+      runtime_mode: "auth_allowed",
+      allowed_domains: ["example.com"],
+      rollout_notes: "SAML dogfood approved.",
+      status: "active",
+      created_by: "ceo",
+      metadata: {},
+      created_at: "2026-06-03T00:00:00Z",
+      updated_at: "2026-06-03T00:00:00Z",
+    };
     const responses = [
       { status: 200, body: { project_id: "boss-dogfood", items: [provider] } },
       { status: 201, body: provider },
+      {
+        status: 200,
+        body: { project_id: "boss-dogfood", items: [rolloutPolicy] },
+      },
+      { status: 201, body: rolloutPolicy },
     ];
     const fetchImpl = async (input: RequestInfo | URL, init?: RequestInit) => {
       calls.push({ url: String(input), init });
@@ -626,9 +645,21 @@ describe("createBossApiClient", () => {
       status: "active",
       actor: "ceo",
     });
+    const rolloutPolicies = await client.listEnterpriseIdentityRolloutPolicies(
+      "boss-dogfood",
+    );
+    const upsertedPolicy = await client.upsertEnterpriseIdentityRolloutPolicy({
+      project_id: "boss-dogfood",
+      provider_type: "saml",
+      runtime_mode: "auth_allowed",
+      allowed_domains: ["example.com"],
+      actor: "ceo",
+    });
 
     expect(listed.items[0].provider_type).toBe("oidc");
     expect(upserted.status).toBe("active");
+    expect(rolloutPolicies.items[0].runtime_mode).toBe("auth_allowed");
+    expect(upsertedPolicy.provider_type).toBe("saml");
     expect(calls[0].url).toBe(
       "http://127.0.0.1:8000/v1/enterprise/identity-providers?project_id=boss-dogfood",
     );
@@ -636,6 +667,12 @@ describe("createBossApiClient", () => {
       "http://127.0.0.1:8000/v1/enterprise/identity-providers",
     );
     expect(calls[1].init?.method).toBe("POST");
+    expect(calls[2].url).toBe(
+      "http://127.0.0.1:8000/v1/enterprise/identity-rollout-policies?project_id=boss-dogfood",
+    );
+    expect(calls[3].url).toBe(
+      "http://127.0.0.1:8000/v1/enterprise/identity-rollout-policies",
+    );
   });
 
   it("uses agent module entitlement and install-record API contracts", async () => {

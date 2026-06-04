@@ -141,6 +141,28 @@ def upsert_comms_policy(
     return response.json()
 
 
+def upsert_identity_rollout_policy(
+    client,
+    project_id: str,
+    provider_type: str,
+    runtime_mode: str,
+):
+    response = client.post(
+        "/v1/enterprise/identity-rollout-policies",
+        json={
+            "project_id": project_id,
+            "provider_type": provider_type,
+            "runtime_mode": runtime_mode,
+            "allowed_domains": ["example.com"],
+            "rollout_notes": "test identity rollout policy",
+            "metadata": {"source": "test"},
+            "actor": "ceo",
+        },
+    )
+    assert response.status_code == 201
+    return response.json()
+
+
 def _canonicalize_xml(element: ET.Element) -> bytes:
     xml = ET.tostring(element, encoding="unicode")
     return ET.canonicalize(xml_data=xml, with_comments=False).encode("utf-8")
@@ -685,6 +707,7 @@ def test_enterprise_saml_runtime_verifies_assertion_and_binds_session(client, en
     previous_member_attribute = api_main.settings.enterprise_saml_member_attribute
     with engine.begin() as connection:
         connection.execute(text("DELETE FROM enterprise_saml_sessions WHERE project_id = :project_id"), {"project_id": project_id})
+        connection.execute(text("DELETE FROM enterprise_identity_rollout_policies WHERE project_id = :project_id"), {"project_id": project_id})
         connection.execute(text("DELETE FROM enterprise_identity_providers WHERE project_id = :project_id"), {"project_id": project_id})
         connection.execute(text("DELETE FROM events WHERE project_id = :project_id"), {"project_id": project_id})
         connection.execute(text("DELETE FROM project_members WHERE project_id = :project_id"), {"project_id": project_id})
@@ -752,6 +775,20 @@ def test_enterprise_saml_runtime_verifies_assertion_and_binds_session(client, en
             subject="ceo@example.com",
             member_id="ceo",
         )
+        blocked_by_policy = client.post(
+            f"/saml/v2/{project_id}/acs",
+            json={"SAMLResponse": response},
+        )
+        assert blocked_by_policy.status_code == 403
+        assert "rollout policy" in blocked_by_policy.json()["detail"]
+
+        api_main.settings.enterprise_saml_enabled = False
+        rollout_policy = upsert_identity_rollout_policy(
+            client, project_id, "saml", "auth_allowed"
+        )
+        assert rollout_policy["runtime_mode"] == "auth_allowed"
+        api_main.settings.enterprise_saml_enabled = True
+
         login = client.post(
             f"/saml/v2/{project_id}/acs",
             json={"SAMLResponse": response},
@@ -1791,6 +1828,24 @@ def test_enterprise_identity_providers_back_cluster_identity_controls(client):
     )
     assert scim.status_code == 201
     assert scim.json()["status"] == "active"
+    denied_rollout = client.post(
+        "/v1/enterprise/identity-rollout-policies",
+        json={
+            "project_id": "boss-dogfood",
+            "provider_type": "oidc",
+            "runtime_mode": "auth_allowed",
+            "actor": "release_manager",
+        },
+    )
+    assert denied_rollout.status_code == 403
+    oidc_rollout = upsert_identity_rollout_policy(
+        client, "boss-dogfood", "oidc", "auth_allowed"
+    )
+    scim_rollout = upsert_identity_rollout_policy(
+        client, "boss-dogfood", "scim", "provisioning_allowed"
+    )
+    assert oidc_rollout["runtime_mode"] == "auth_allowed"
+    assert scim_rollout["runtime_mode"] == "provisioning_allowed"
 
     incomplete_saml = client.post(
         "/v1/enterprise/identity-providers",
@@ -1852,6 +1907,7 @@ def test_enterprise_identity_providers_back_cluster_identity_controls(client):
     event_types = [item["event_type"] for item in events.json()["items"]]
     assert "policy.denied" in event_types
     assert "enterprise.identity_provider_upserted" in event_types
+    assert "enterprise.identity_rollout_policy_upserted" in event_types
     assert "enterprise.cluster_upserted" in event_types
 
 
@@ -1958,22 +2014,52 @@ def test_enterprise_scim_provisioning_maps_users_to_org_members(client):
     assert "org_member.upserted" in event_types
 
 
-def test_enterprise_scim_protocol_runtime_requires_token_and_active_provider(client):
+def test_enterprise_scim_protocol_runtime_requires_token_and_active_provider(
+    client, engine
+):
+    project_id = "boss-scim-runtime-missing"
+    with engine.begin() as connection:
+        connection.execute(
+            text("DELETE FROM enterprise_identity_rollout_policies WHERE project_id = :project_id"),
+            {"project_id": project_id},
+        )
+        connection.execute(
+            text("DELETE FROM enterprise_identity_providers WHERE project_id = :project_id"),
+            {"project_id": project_id},
+        )
+        connection.execute(
+            text("DELETE FROM project_members WHERE project_id = :project_id"),
+            {"project_id": project_id},
+        )
+        connection.execute(
+            text("DELETE FROM projects WHERE id = :project_id"),
+            {"project_id": project_id},
+        )
+        connection.execute(
+            text(
+                """
+                INSERT INTO projects (id, workspace_id, name, slug)
+                VALUES (:project_id, 'ws_boss', 'BOSS SCIM Runtime Missing', :project_id)
+                """
+            ),
+            {"project_id": project_id},
+        )
+        api_main.members.seed_default_members(connection, project_id, "test")
     previous_tokens = api_main.settings.enterprise_scim_bearer_tokens
     try:
         api_main.settings.enterprise_scim_bearer_tokens = ""
-        missing_token_config = client.get("/scim/v2/boss-dogfood/Users")
+        missing_token_config = client.get(f"/scim/v2/{project_id}/Users")
         assert missing_token_config.status_code == 503
         assert "BOSS_ENTERPRISE_SCIM_BEARER_TOKENS" in missing_token_config.json()[
             "detail"
         ]
 
         api_main.settings.enterprise_scim_bearer_tokens = "scim-secret"
-        missing_auth = client.get("/scim/v2/boss-dogfood/Users")
+        missing_auth = client.get(f"/scim/v2/{project_id}/Users")
         assert missing_auth.status_code == 401
 
         missing_provider = client.get(
-            "/scim/v2/boss-dogfood/Users",
+            f"/scim/v2/{project_id}/Users",
             headers={"Authorization": "Bearer scim-secret"},
         )
         assert missing_provider.status_code == 403
@@ -1981,7 +2067,7 @@ def test_enterprise_scim_protocol_runtime_requires_token_and_active_provider(cli
             "No active SCIM identity provider is configured."
         )
 
-        events = client.get("/v1/events", params={"project_id": "boss-dogfood"})
+        events = client.get("/v1/events", params={"project_id": project_id})
         assert "enterprise.scim_runtime_blocked" in [
             item["event_type"] for item in events.json()["items"]
         ]
@@ -2009,6 +2095,10 @@ def test_enterprise_scim_protocol_provisions_groups_users_and_deactivates(client
         )
         assert provider.status_code == 201
         assert provider.json()["status"] == "active"
+        rollout_policy = upsert_identity_rollout_policy(
+            client, "boss-dogfood", "scim", "provisioning_allowed"
+        )
+        assert rollout_policy["runtime_mode"] == "provisioning_allowed"
 
         group = client.post(
             "/scim/v2/boss-dogfood/Groups",
@@ -10844,10 +10934,30 @@ def test_deadletter_requeue_rejects_non_job_sources(client, engine):
 
 
 def test_ops_queue_inspection_and_digest_use_live_control_plane_state(client, engine):
+    project_id = "boss-ops-inspection"
+    with engine.begin() as connection:
+        connection.execute(text("DELETE FROM deadletters WHERE project_id = :project_id"), {"project_id": project_id})
+        connection.execute(text("DELETE FROM jobs WHERE project_id = :project_id"), {"project_id": project_id})
+        connection.execute(text("DELETE FROM decisions WHERE project_id = :project_id"), {"project_id": project_id})
+        connection.execute(text("DELETE FROM artifacts WHERE project_id = :project_id"), {"project_id": project_id})
+        connection.execute(text("DELETE FROM events WHERE project_id = :project_id"), {"project_id": project_id})
+        connection.execute(text("DELETE FROM project_members WHERE project_id = :project_id"), {"project_id": project_id})
+        connection.execute(text("DELETE FROM projects WHERE id = :project_id"), {"project_id": project_id})
+        connection.execute(
+            text(
+                """
+                INSERT INTO projects (id, workspace_id, name, slug)
+                VALUES (:project_id, 'ws_boss', 'BOSS Ops Inspection', :project_id)
+                """
+            ),
+            {"project_id": project_id},
+        )
+        api_main.members.seed_default_members(connection, project_id, "test")
+
     queued_job = client.post(
         "/v1/jobs",
         json={
-            "project_id": "boss-dogfood",
+            "project_id": project_id,
             "kind": "plan.generate",
             "payload": {"command": "Queued work for ops inspection."},
         },
@@ -10858,7 +10968,7 @@ def test_ops_queue_inspection_and_digest_use_live_control_plane_state(client, en
     stale_job = client.post(
         "/v1/jobs",
         json={
-            "project_id": "boss-dogfood",
+            "project_id": project_id,
             "kind": "agent.coo.ops_digest",
             "payload": {"command": "Lease me then become stale."},
         },
@@ -10879,7 +10989,7 @@ def test_ops_queue_inspection_and_digest_use_live_control_plane_state(client, en
     deadlettered = client.post(
         "/v1/jobs",
         json={
-            "project_id": "boss-dogfood",
+            "project_id": project_id,
             "kind": "plan.generate",
             "payload": {"command": "Deadletter me for ops inspection."},
             "max_attempts": 1,
@@ -10928,12 +11038,12 @@ def test_ops_queue_inspection_and_digest_use_live_control_plane_state(client, en
                     id, project_id, source_kind, source_id, reason, payload
                 )
                 VALUES (
-                    'dlq_ops_inspect', 'boss-dogfood', 'job', :deadlettered_job_id,
+                    'dlq_ops_inspect', :project_id, 'job', :deadlettered_job_id,
                     'manual terminal ops failure', '{"message":"terminal"}'::jsonb
                 )
                 """
             ),
-            {"deadlettered_job_id": deadlettered_job_id},
+            {"deadlettered_job_id": deadlettered_job_id, "project_id": project_id},
         )
         connection.execute(
             text(
@@ -10953,21 +11063,22 @@ def test_ops_queue_inspection_and_digest_use_live_control_plane_state(client, en
                     cost_summary, default_action, status
                 )
                 VALUES (
-                    'dec_ops_inspect', 'boss-dogfood', 'Approve ops remediation?',
+                    'dec_ops_inspect', :project_id, 'Approve ops remediation?',
                     '{"summary":"Review queue blockers"}'::jsonb,
                     '[]'::jsonb, 2, '{}'::jsonb, 'hold', 'pending'
                 )
                 """
-            )
+            ),
+            {"project_id": project_id},
         )
 
     queue = client.get(
         "/v1/ops/queue",
-        params={"project_id": "boss-dogfood", "limit": 20},
+        params={"project_id": project_id, "limit": 20},
     )
     assert queue.status_code == 200
     payload = queue.json()
-    assert payload["project_id"] == "boss-dogfood"
+    assert payload["project_id"] == project_id
     assert payload["job_status_counts"]["failed_retryable"] >= 1
     assert payload["job_status_counts"]["deadlettered"] >= 1
     assert queued_job_id in payload["ready_job_ids"]
@@ -10981,7 +11092,7 @@ def test_ops_queue_inspection_and_digest_use_live_control_plane_state(client, en
 
     digest = client.post(
         "/v1/ops/digests",
-        json={"project_id": "boss-dogfood", "actor": "coo", "limit": 20},
+        json={"project_id": project_id, "actor": "coo", "limit": 20},
     )
     assert digest.status_code == 201
     digest_payload = digest.json()
@@ -10996,7 +11107,7 @@ def test_ops_queue_inspection_and_digest_use_live_control_plane_state(client, en
     assert inspection["ready_job_ids"]
     assert "No silent drops." in artifact_payload["content"]["boss_invariants"]
 
-    events = client.get("/v1/events", params={"project_id": "boss-dogfood"})
+    events = client.get("/v1/events", params={"project_id": project_id})
     assert "ops.digest_created" in [item["event_type"] for item in events.json()["items"]]
 
 

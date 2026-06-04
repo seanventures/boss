@@ -112,6 +112,9 @@ from .schemas import (
     EnterpriseClusterListResponse,
     EnterpriseClusterSummary,
     EnterpriseClusterUpsertRequest,
+    EnterpriseIdentityRolloutPolicyListResponse,
+    EnterpriseIdentityRolloutPolicySummary,
+    EnterpriseIdentityRolloutPolicyUpsertRequest,
     EnterpriseIdentityProviderListResponse,
     EnterpriseIdentityProviderSummary,
     EnterpriseIdentityProviderUpsertRequest,
@@ -1368,6 +1371,12 @@ def enterprise_identity_provider_summary_from_service(
     return EnterpriseIdentityProviderSummary(**payload)
 
 
+def enterprise_identity_rollout_policy_summary_from_service(
+    payload,
+) -> EnterpriseIdentityRolloutPolicySummary:
+    return EnterpriseIdentityRolloutPolicySummary(**payload)
+
+
 def enterprise_scim_group_summary_from_service(payload) -> EnterpriseScimGroupSummary:
     return EnterpriseScimGroupSummary(**payload)
 
@@ -2117,6 +2126,55 @@ def update_enterprise_support_case(
         except ValueError as error:
             raise HTTPException(status_code=404, detail=str(error)) from error
         return enterprise_support_case_summary_from_service(item)
+
+
+@app.get(
+    "/v1/enterprise/identity-rollout-policies",
+    response_model=EnterpriseIdentityRolloutPolicyListResponse,
+)
+def list_enterprise_identity_rollout_policies(
+    project_id: str,
+) -> EnterpriseIdentityRolloutPolicyListResponse:
+    with begin(engine) as connection:
+        policies = enterprise.list_identity_rollout_policies(connection, project_id)
+        return EnterpriseIdentityRolloutPolicyListResponse(
+            project_id=project_id,
+            items=[
+                enterprise_identity_rollout_policy_summary_from_service(policy)
+                for policy in policies
+            ],
+        )
+
+
+@app.post(
+    "/v1/enterprise/identity-rollout-policies",
+    response_model=EnterpriseIdentityRolloutPolicySummary,
+    status_code=201,
+)
+def upsert_enterprise_identity_rollout_policy(
+    payload: EnterpriseIdentityRolloutPolicyUpsertRequest,
+) -> EnterpriseIdentityRolloutPolicySummary:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection,
+            payload.project_id,
+            payload.actor,
+            "enterprise_manage",
+        )
+        try:
+            policy = enterprise.upsert_identity_rollout_policy(
+                connection,
+                payload.project_id,
+                provider_type=payload.provider_type,
+                runtime_mode=payload.runtime_mode,
+                allowed_domains=payload.allowed_domains,
+                rollout_notes=payload.rollout_notes,
+                metadata=payload.metadata,
+                actor=payload.actor,
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        return enterprise_identity_rollout_policy_summary_from_service(policy)
 
 
 @app.get(

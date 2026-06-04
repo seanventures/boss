@@ -10,6 +10,7 @@ vi.mock("../lib/client", () => ({
     listAccountConnectBillingPortalSessions: vi.fn(),
     listEnterpriseClusters: vi.fn(),
     listEnterpriseIdentityProviders: vi.fn(),
+    listEnterpriseIdentityRolloutPolicies: vi.fn(),
     listEnterpriseScimGroups: vi.fn(),
     listEnterpriseScimUsers: vi.fn(),
     listEnterpriseSupportCases: vi.fn(),
@@ -213,6 +214,25 @@ describe("commercial, enterprise, and marketplace feeds", async () => {
         },
       ],
     });
+    vi.mocked(client.listEnterpriseIdentityRolloutPolicies).mockResolvedValueOnce({
+      project_id: "boss-dogfood",
+      items: [
+        {
+          id: "entidpol_boss-dogfood_saml",
+          org_id: "org_boss",
+          project_id: "boss-dogfood",
+          provider_type: "saml",
+          runtime_mode: "auth_allowed",
+          allowed_domains: ["example.com"],
+          rollout_notes: "Dogfood SAML approved.",
+          status: "active",
+          created_by: "ceo",
+          metadata: {},
+          created_at: "2026-06-03T00:00:00Z",
+          updated_at: "2026-06-03T01:00:00Z",
+        },
+      ],
+    });
     vi.mocked(client.listEnterpriseScimGroups).mockResolvedValueOnce({
       project_id: "boss-dogfood",
       items: [
@@ -312,6 +332,7 @@ describe("commercial, enterprise, and marketplace feeds", async () => {
     expect(feed.summary.openSupportCases).toBe(1);
     expect(feed.summary.blockedSupportCases).toBe(1);
     expect(feed.identityProviders[0].providerKey).toBe("okta_oidc");
+    expect(feed.identityRolloutPolicies[0].runtimeMode).toBe("auth_allowed");
     expect(feed.scimUsers[0].memberId).toBe("scim_ops_example_com");
     expect(feed.supportCases[0]).toMatchObject({
       title: "Hosted escalation blocked",

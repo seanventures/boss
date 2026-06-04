@@ -487,7 +487,7 @@ Rule: no critical continuity should depend on a live chat thread.
 
 ## Enterprise Governance and Compliance
 
-Enterprise governance requirements include RBAC, ABAC, SSO/OIDC/SAML, SCIM, audit exports, retention policies, BYOK/KMS later, connector permission governance, security policy packs, compliance evidence workflows, private workers, private model gateway, data residency, VPC/private networking later, air-gapped enterprise later, and enterprise support/SLA.
+Enterprise governance requirements include RBAC, ABAC, SSO/OIDC/SAML, SCIM, identity-provider rollout policies, audit exports, retention policies, BYOK/KMS later, connector permission governance, security policy packs, compliance evidence workflows, private workers, private model gateway, data residency, VPC/private networking later, air-gapped enterprise later, and enterprise support/SLA.
 
 ## Commercial Strategy and Open-Core Packaging
 

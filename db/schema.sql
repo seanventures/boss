@@ -255,6 +255,24 @@ CREATE INDEX IF NOT EXISTS idx_enterprise_identity_providers_project_status
 CREATE INDEX IF NOT EXISTS idx_enterprise_identity_providers_org
   ON enterprise_identity_providers(org_id, provider_type);
 
+CREATE TABLE IF NOT EXISTS enterprise_identity_rollout_policies (
+  id TEXT PRIMARY KEY,
+  org_id TEXT NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  provider_type TEXT NOT NULL,
+  runtime_mode TEXT NOT NULL DEFAULT 'disabled',
+  allowed_domains JSONB NOT NULL DEFAULT '[]'::jsonb,
+  rollout_notes TEXT,
+  status TEXT NOT NULL DEFAULT 'active',
+  created_by TEXT NOT NULL DEFAULT 'system',
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(project_id, provider_type)
+);
+CREATE INDEX IF NOT EXISTS idx_enterprise_identity_rollout_policies_project
+  ON enterprise_identity_rollout_policies(project_id, provider_type, status);
+
 CREATE TABLE IF NOT EXISTS enterprise_saml_sessions (
   id TEXT PRIMARY KEY,
   org_id TEXT NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,

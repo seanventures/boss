@@ -439,6 +439,7 @@ Acceptance criteria:
 - Given Enterprise cluster posture exists, when Mission Control loads, then it shows deployment mode, Account Connect mode, worker strategy, HA/data residency, support tier, compliance packs, and blocking gaps.
 - Given enterprise support cases exist, when Mission Control loads, then it shows open and blocked cases, SLA due dates, hosted escalation refs, receipt IDs, assignments, and blocked reasons.
 - Given enterprise identity-provider records exist, when Mission Control loads, then it shows OIDC, SAML, and SCIM provider status, SecretRefs, and blocking gaps.
+- Given enterprise identity rollout policies exist, when Mission Control loads, then it shows provider type, runtime mode, allowed domains, rollout notes, actor, and update time.
 - Given an authorized actor upserts SCIM groups or users, when the form is submitted, then Mission Control calls the enterprise SCIM API and active users are represented through the same org-member RBAC directory.
 
 ### Story ADM-006: Govern Enterprise Trust And Clustering Posture
@@ -448,21 +449,24 @@ As an enterprise admin, I want BOSS to record enterprise deployment mode, identi
 Acceptance criteria:
 
 - Given an unauthorized actor, when they attempt to create an enterprise cluster record, then BOSS denies the write and emits a visible policy-denial event.
-- Given an Enterprise Cloud cluster has SSO/OIDC or SAML, SCIM, audit exports, retention, and SLA metadata configured, when it is saved, then BOSS records it as active with no blocking gaps.
-- Given complete active OIDC and SCIM identity-provider records exist, when an Enterprise Cloud cluster is saved without manual identity flags, then BOSS treats those provider records as satisfying the corresponding identity controls.
+- Given an Enterprise Cloud cluster has SSO/OIDC or SAML, SCIM, matching identity rollout policies, audit exports, retention, and SLA metadata configured, when it is saved, then BOSS records it as active with no blocking gaps.
+- Given complete active OIDC and SCIM identity-provider records exist with matching rollout policies, when an Enterprise Cloud cluster is saved without manual identity flags, then BOSS treats those provider records as satisfying the corresponding identity controls.
 - Given an operator marks an incomplete SAML/OIDC/SCIM provider active, when BOSS saves it, then BOSS stores the record as blocked with explicit blocking gaps instead of silently treating it as configured.
 - Given Enterprise SAML is disabled or no active SAML provider exists, when a SAML ACS request arrives, then BOSS fails closed and emits a visible runtime-blocked event.
+- Given an active SAML provider exists without an `auth_allowed` rollout policy, when ACS receives a SAMLResponse, then BOSS rejects the login, emits `enterprise.saml_runtime_blocked`, and does not create a session.
 - Given an active SAML provider exists and Enterprise SAML is enabled, when a signed SAMLResponse is posted to ACS, then BOSS verifies the RSA-SHA256 assertion signature, certificate fingerprint, issuer, audience, time window, and member mapping before creating a hashed expiring bearer session.
 - Given a SAMLResponse is unsigned, has the wrong audience, uses an unsupported signature, or maps to no authorized member, when ACS handles it, then BOSS rejects the login and emits `enterprise.saml_login_failed`.
 - Given a detached self-hosted enterprise cluster lacks SSO/SAML, SCIM, private worker pools, or compliance packs, when it is saved, then BOSS marks it blocked and lists each missing control.
 - Given enterprise cluster state changes, when the write succeeds, then BOSS emits `enterprise.cluster_upserted` with deployment mode, Account Connect mode, status, and blocking gaps.
 - Given enterprise identity-provider state changes, when the write succeeds, then BOSS emits `enterprise.identity_provider_upserted` with provider type, status, and blocking gaps.
+- Given enterprise identity rollout policy changes, when the write succeeds, then BOSS emits `enterprise.identity_rollout_policy_upserted` with provider type, runtime mode, and allowed domains.
 - Given an enterprise admin maps a SCIM group to BOSS permissions, when the group is saved, then BOSS emits `enterprise.scim_group_upserted`.
 - Given an active SCIM user belongs to a mapped group, when the user is saved, then BOSS creates or updates an org member with the merged explicit role and permission grants.
 - Given a SCIM user is deactivated, when the user is saved, then BOSS removes the user's effective org-member access without deleting the audit record.
 - Given an external IdP calls `/scim/v2/{project_id}/Users` or `/Groups` without a configured SCIM bearer token, when provisioning is attempted, then BOSS fails closed with a SCIM error and does not mutate identity state.
 - Given an external IdP calls SCIM runtime endpoints with a valid bearer token but no active non-blocked SCIM provider record, when provisioning is attempted, then BOSS returns a visible blocked SCIM error and emits `enterprise.scim_runtime_blocked`.
-- Given an external IdP creates, replaces, lists, filters, or deletes SCIM users/groups with a valid bearer token and active SCIM provider record, when the request runs, then BOSS maps it through the same audited SCIM group/user and org-member provisioning path used by the internal API.
+- Given an external IdP calls SCIM runtime endpoints with a valid bearer token and active provider but no `provisioning_allowed` rollout policy, when provisioning is attempted, then BOSS returns a visible blocked SCIM error and emits `enterprise.scim_runtime_blocked`.
+- Given an external IdP creates, replaces, lists, filters, or deletes SCIM users/groups with a valid bearer token, active SCIM provider record, and `provisioning_allowed` rollout policy, when the request runs, then BOSS maps it through the same audited SCIM group/user and org-member provisioning path used by the internal API.
 - Given an enterprise operator creates a local support case, when BOSS records it, then the case has severity, category, support tier, SLA due date, status, and audit event without requiring hosted BOSS auth.
 - Given hosted support escalation is requested, when Account Connect or hosted support endpoint configuration is missing, then BOSS creates a blocked support case, writes a failed Receipt, and emits a visible blocked event instead of inventing a hosted ticket.
 - Given enterprise support cases exist, when Mission Control loads, then BOSS renders the case list with status, severity, SLA due date, hosted reference, receipt, assignment, and blocked reason.
