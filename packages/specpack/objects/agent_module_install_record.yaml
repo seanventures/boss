@@ -11,7 +11,7 @@ fields:
     type: string
   - name: action
     type: enum
-    values: [install, install_denied, rollback]
+    values: [install, install_denied, uninstall, rollback]
   - name: from_version
     type: string
   - name: to_version
@@ -30,3 +30,5 @@ rules:
   required_entitlements_checked_before_install: true
   denied_installs_are_audited: true
   previous_install_snapshot_preserved_for_rollback: true
+  uninstall_preserves_snapshot_for_rollback: true
+  rollback_restores_prior_snapshot: true

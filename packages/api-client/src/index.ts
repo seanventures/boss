@@ -1822,6 +1822,12 @@ export type AgentModuleInstallRequest = {
   config?: Record<string, unknown>;
 };
 
+export type AgentModuleLifecycleRequest = {
+  project_id: string;
+  actor?: string;
+  reason?: string;
+};
+
 export type AgentModuleInstallRecordSummary = {
   id: string;
   project_id: string;
@@ -3212,6 +3218,26 @@ export function createBossApiClient(config: BossApiClientConfig) {
       return request<AgentModuleDetail>("POST", "/v1/agent-modules/install", {
         body: payload,
       });
+    },
+    uninstallAgentModule(
+      moduleId: string,
+      payload: AgentModuleLifecycleRequest,
+    ) {
+      return request<AgentModuleDetail>(
+        "POST",
+        `/v1/agent-modules/${encodeURIComponent(moduleId)}/uninstall`,
+        { body: payload },
+      );
+    },
+    rollbackAgentModule(
+      moduleId: string,
+      payload: AgentModuleLifecycleRequest,
+    ) {
+      return request<AgentModuleDetail>(
+        "POST",
+        `/v1/agent-modules/${encodeURIComponent(moduleId)}/rollback`,
+        { body: payload },
+      );
     },
     resolveAgentRuntime(payload: AgentRuntimeResolveRequest) {
       return request<AgentRuntimeResolveResponse>(

@@ -1211,6 +1211,53 @@ paths:
         '201': { description: Agent module installed }
         '403': { description: Actor lacks module management permission or required module entitlement }
         '404': { description: Agent module not found }
+  /v1/agent-modules/{module_id}/uninstall:
+    post:
+      summary: Deactivate an installed agent module and restore base role spec where available
+      parameters:
+        - name: module_id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id]
+              properties:
+                project_id: { type: string }
+                actor: { type: string, default: system }
+                reason: { type: string }
+      responses:
+        '200': { description: Agent module uninstalled or already inactive }
+        '403': { description: Actor lacks module management permission }
+        '404': { description: Agent module not found }
+  /v1/agent-modules/{module_id}/rollback:
+    post:
+      summary: Restore an agent module from its latest rollback snapshot
+      parameters:
+        - name: module_id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id]
+              properties:
+                project_id: { type: string }
+                actor: { type: string, default: system }
+                reason: { type: string }
+      responses:
+        '200': { description: Agent module rolled back from snapshot }
+        '403': { description: Actor lacks module management permission }
+        '404': { description: Agent module not found }
+        '409': { description: No rollback snapshot is available }
   /v1/agent-runtime/resolve:
     post:
       summary: Resolve the installed agent module, role prompt, skills, and runtime contract for a job kind

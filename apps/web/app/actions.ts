@@ -289,6 +289,36 @@ export async function installAgentModuleAction(formData: FormData): Promise<void
   revalidatePath("/");
 }
 
+export async function uninstallAgentModuleAction(
+  formData: FormData,
+): Promise<void> {
+  const moduleId = formData.get("module_id");
+  if (typeof moduleId !== "string" || !moduleId) {
+    throw new Error("module_id is required");
+  }
+  await client.uninstallAgentModule(moduleId, {
+    project_id: getProjectId(formData),
+    actor: getActor(formData),
+    reason: getOptionalString(formData, "reason"),
+  });
+  revalidatePath("/");
+}
+
+export async function rollbackAgentModuleAction(
+  formData: FormData,
+): Promise<void> {
+  const moduleId = formData.get("module_id");
+  if (typeof moduleId !== "string" || !moduleId) {
+    throw new Error("module_id is required");
+  }
+  await client.rollbackAgentModule(moduleId, {
+    project_id: getProjectId(formData),
+    actor: getActor(formData),
+    reason: getOptionalString(formData, "reason"),
+  });
+  revalidatePath("/");
+}
+
 export async function linkAccountConnectAction(
   formData: FormData,
 ): Promise<void> {

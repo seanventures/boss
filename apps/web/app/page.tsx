@@ -22,6 +22,7 @@ import {
   disconnectEntitlementSourceAction,
   revokeBreakGlassGrantAction,
   resolveDecisionAction,
+  rollbackAgentModuleAction,
   rollbackSelfImprovementProposalAction,
   runAutoscalerPlanAction,
   runDeploymentHealthCheckAction,
@@ -33,6 +34,7 @@ import {
   syncProviderResourcesAction,
   testProviderAccountAction,
   unlinkAccountConnectAction,
+  uninstallAgentModuleAction,
   revokeAccountConnectTeamInviteAction,
   upsertEnterpriseClusterAction,
   upsertEnterpriseIdentityProviderAction,
@@ -3870,12 +3872,40 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                       </p>
                     </div>
                     {module.installed ? (
-                      <span className="pill">
-                        installed
-                        {module.installedAt
-                          ? ` ${formatDateTime(module.installedAt)}`
-                          : ""}
-                      </span>
+                      <div className="button-stack">
+                        <span className="pill">
+                          installed
+                          {module.installedAt
+                            ? ` ${formatDateTime(module.installedAt)}`
+                            : ""}
+                        </span>
+                        <form action={uninstallAgentModuleAction}>
+                          <input type="hidden" name="module_id" value={module.moduleId} />
+                          <input type="hidden" name="project_id" value={activeProjectId} />
+                          <input type="hidden" name="actor" value={activeActorId} />
+                          <input
+                            type="hidden"
+                            name="reason"
+                            value="Disabled from Mission Control marketplace."
+                          />
+                          <button className="button ghost" type="submit">
+                            Uninstall
+                          </button>
+                        </form>
+                        <form action={rollbackAgentModuleAction}>
+                          <input type="hidden" name="module_id" value={module.moduleId} />
+                          <input type="hidden" name="project_id" value={activeProjectId} />
+                          <input type="hidden" name="actor" value={activeActorId} />
+                          <input
+                            type="hidden"
+                            name="reason"
+                            value="Rollback requested from Mission Control marketplace."
+                          />
+                          <button className="button secondary" type="submit">
+                            Roll back
+                          </button>
+                        </form>
+                      </div>
                     ) : (
                       <form action={installAgentModuleAction}>
                         <input type="hidden" name="module_id" value={module.moduleId} />

@@ -2107,6 +2107,20 @@ class AgentModuleInstallRequest(BaseModel):
     config: dict[str, Any] = Field(default_factory=dict)
 
 
+class AgentModuleLifecycleRequest(BaseModel):
+    project_id: str
+    actor: str = "system"
+    reason: Optional[str] = None
+
+    @model_validator(mode="after")
+    def validate_agent_module_lifecycle(self) -> "AgentModuleLifecycleRequest":
+        self.project_id = _require_text(self.project_id, "project_id")
+        self.actor = _require_text(self.actor, "actor")
+        if self.reason is not None:
+            self.reason = _require_text(self.reason, "reason")
+        return self
+
+
 class AgentModuleInstallRecordSummary(BaseModel):
     id: str
     project_id: str

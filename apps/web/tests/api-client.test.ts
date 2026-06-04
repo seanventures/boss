@@ -588,11 +588,25 @@ describe("createBossApiClient", () => {
       role: { role_key: "pm" },
       config: {},
     };
+    const uninstalled = {
+      ...module,
+      installed: false,
+      install_status: "uninstalled",
+      role_result: { status: "restored_base_role" },
+    };
+    const rolledBack = {
+      ...module,
+      installed: true,
+      install_status: "rolled_back",
+      config: { branch_prefix: "catalog/" },
+    };
     const responses = [
       { status: 200, body: { project_id: "boss-dogfood", items: [module] } },
       { status: 201, body: module },
       { status: 200, body: { project_id: "boss-dogfood", items: [record] } },
       { status: 200, body: runtime },
+      { status: 200, body: uninstalled },
+      { status: 200, body: rolledBack },
     ];
     const fetchImpl = async (input: RequestInfo | URL, init?: RequestInit) => {
       calls.push({ url: String(input), init });
@@ -624,6 +638,22 @@ describe("createBossApiClient", () => {
       task_payload: { command: "Scope Decision Inbox defaults." },
       actor: "ceo",
     });
+    const disabled = await client.uninstallAgentModule(
+      "private_enterprise_agent_v1",
+      {
+        project_id: "boss-dogfood",
+        actor: "ceo",
+        reason: "Disable private module.",
+      },
+    );
+    const rollback = await client.rollbackAgentModule(
+      "private_enterprise_agent_v1",
+      {
+        project_id: "boss-dogfood",
+        actor: "ceo",
+        reason: "Restore previous install.",
+      },
+    );
 
     expect(listed.items[0].required_entitlements).toEqual([
       "private_agent_marketplace",
@@ -631,6 +661,8 @@ describe("createBossApiClient", () => {
     expect(installed.entitlement_result.status).toBe("allowed");
     expect(records.items[0].action).toBe("install");
     expect(resolved.agent_module?.id).toBe("pm_product_planner_v1");
+    expect(disabled.install_status).toBe("uninstalled");
+    expect(rollback.install_status).toBe("rolled_back");
     expect(calls[0].url).toBe(
       "http://127.0.0.1:8000/v1/agent-modules?project_id=boss-dogfood",
     );
@@ -647,6 +679,12 @@ describe("createBossApiClient", () => {
       "http://127.0.0.1:8000/v1/agent-runtime/resolve",
     );
     expect(calls[3].init?.method).toBe("POST");
+    expect(calls[4].url).toBe(
+      "http://127.0.0.1:8000/v1/agent-modules/private_enterprise_agent_v1/uninstall",
+    );
+    expect(calls[5].url).toBe(
+      "http://127.0.0.1:8000/v1/agent-modules/private_enterprise_agent_v1/rollback",
+    );
   });
 
   it("manages org members through the API contract", async () => {

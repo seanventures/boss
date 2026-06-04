@@ -2643,6 +2643,120 @@ def test_agent_module_install_is_idempotent_and_updates_role_lineage(client, eng
     assert payload["branch_name"].startswith("catalog/proposal-")
 
 
+def test_agent_module_rollback_and_uninstall_use_saved_snapshots(client, engine):
+    with engine.begin() as connection:
+        connection.execute(text("DELETE FROM events WHERE project_id = 'boss-lab'"))
+        connection.execute(
+            text("DELETE FROM agent_module_install_records WHERE project_id = 'boss-lab'")
+        )
+        connection.execute(
+            text("DELETE FROM agent_module_installs WHERE project_id = 'boss-lab'")
+        )
+        connection.execute(text("DELETE FROM roles WHERE project_id = 'boss-lab'"))
+        connection.execute(
+            text("DELETE FROM pack_installs WHERE project_id = 'boss-lab'")
+        )
+        connection.execute(text("DELETE FROM projects WHERE id = 'boss-lab'"))
+        connection.execute(
+            text(
+                """
+                INSERT INTO projects (id, workspace_id, name, slug)
+                VALUES ('boss-lab', 'ws_boss', 'BOSS Lab', 'boss-lab')
+                """
+            )
+        )
+        api_main.members.seed_default_members(connection, "boss-lab", "test")
+
+    first = client.post(
+        "/v1/agent-modules/install",
+        json={
+            "project_id": "boss-lab",
+            "module_id": "codex_software_engineer_v1",
+            "actor": "ceo",
+            "config": {"branch_prefix": "catalog/"},
+        },
+    )
+    assert first.status_code == 201
+
+    updated = client.post(
+        "/v1/agent-modules/install",
+        json={
+            "project_id": "boss-lab",
+            "module_id": "codex_software_engineer_v1",
+            "actor": "ceo",
+            "config": {"branch_prefix": "next/"},
+        },
+    )
+    assert updated.status_code == 201
+    assert updated.json()["config"]["branch_prefix"] == "next/"
+
+    rolled_back = client.post(
+        "/v1/agent-modules/codex_software_engineer_v1/rollback",
+        json={
+            "project_id": "boss-lab",
+            "actor": "ceo",
+            "reason": "Restore previous branch prefix.",
+        },
+    )
+    assert rolled_back.status_code == 200
+    rollback_payload = rolled_back.json()
+    assert rollback_payload["install_status"] == "rolled_back"
+    assert rollback_payload["installed"] is True
+    assert rollback_payload["config"]["branch_prefix"] == "catalog/"
+
+    uninstalled = client.post(
+        "/v1/agent-modules/codex_software_engineer_v1/uninstall",
+        json={
+            "project_id": "boss-lab",
+            "actor": "ceo",
+            "reason": "Disable software engineer module.",
+        },
+    )
+    assert uninstalled.status_code == 200
+    uninstall_payload = uninstalled.json()
+    assert uninstall_payload["install_status"] == "uninstalled"
+    assert uninstall_payload["installed"] is False
+    assert uninstall_payload["role_result"]["status"] == "restored_base_role"
+
+    role = client.get(
+        "/v1/roles/software_engineer", params={"project_id": "boss-lab"}
+    )
+    assert role.status_code == 200
+    assert role.json()["source_module_id"] is None
+
+    unresolved = client.post(
+        "/v1/agent-runtime/resolve",
+        json={
+            "project_id": "boss-lab",
+            "job_kind": "software_factory.propose_pr",
+            "actor": "ceo",
+        },
+    )
+    assert unresolved.status_code == 404
+
+    records = client.get(
+        "/v1/agent-module-install-records",
+        params={
+            "project_id": "boss-lab",
+            "module_id": "codex_software_engineer_v1",
+            "limit": 10,
+        },
+    )
+    assert records.status_code == 200
+    actions = [item["action"] for item in records.json()["items"]]
+    assert "rollback" in actions
+    assert "uninstall" in actions
+    uninstall_record = next(
+        item for item in records.json()["items"] if item["action"] == "uninstall"
+    )
+    assert uninstall_record["rollback_snapshot"]["config"]["branch_prefix"] == "catalog/"
+
+    events = client.get("/v1/events", params={"project_id": "boss-lab"})
+    event_types = [item["event_type"] for item in events.json()["items"]]
+    assert "agent_module.rolled_back" in event_types
+    assert "agent_module.uninstalled" in event_types
+
+
 def test_skill_registry_and_seeded_entitlement_sources_are_visible(client):
     skills = client.get("/v1/skills")
     assert skills.status_code == 200

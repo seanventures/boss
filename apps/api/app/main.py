@@ -15,6 +15,7 @@ from .schemas import (
     AgentModuleInstallRecordListResponse,
     AgentModuleInstallRecordSummary,
     AgentModuleInstallRequest,
+    AgentModuleLifecycleRequest,
     AgentModuleListResponse,
     AgentRuntimeResolveRequest,
     AgentRuntimeResolveResponse,
@@ -316,6 +317,7 @@ from .services.software_factory import SoftwareFactoryService
 from .services.specpack import (
     AgentModuleEntitlementError,
     AgentModuleNotFoundError,
+    AgentModuleRollbackError,
     PackNotFoundError,
     RoleNotFoundError,
     SpecPackService,
@@ -2921,6 +2923,68 @@ def install_agent_module(payload: AgentModuleInstallRequest) -> AgentModuleDetai
     if module is None:
         raise HTTPException(status_code=500, detail="Agent module install failed.")
     return agent_module_detail_from_service(module)
+
+
+@app.post(
+    "/v1/agent-modules/{module_id}/uninstall",
+    response_model=AgentModuleDetail,
+)
+def uninstall_agent_module(
+    module_id: str,
+    payload: AgentModuleLifecycleRequest,
+) -> AgentModuleDetail:
+    with begin(engine) as connection:
+        try:
+            require_project_actor(
+                connection,
+                payload.project_id,
+                payload.actor,
+                "module_manage",
+            )
+            module = specpack.uninstall_agent_module(
+                connection,
+                payload.project_id,
+                module_id,
+                payload.actor,
+                payload.reason,
+            )
+        except AgentModuleNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        return agent_module_detail_from_service(module)
+
+
+@app.post(
+    "/v1/agent-modules/{module_id}/rollback",
+    response_model=AgentModuleDetail,
+)
+def rollback_agent_module(
+    module_id: str,
+    payload: AgentModuleLifecycleRequest,
+) -> AgentModuleDetail:
+    with begin(engine) as connection:
+        try:
+            require_project_actor(
+                connection,
+                payload.project_id,
+                payload.actor,
+                "module_manage",
+            )
+            module = specpack.rollback_agent_module(
+                connection,
+                payload.project_id,
+                module_id,
+                payload.actor,
+                payload.reason,
+            )
+        except AgentModuleNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except AgentModuleRollbackError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        return agent_module_detail_from_service(module)
 
 
 @app.post("/v1/agent-runtime/resolve", response_model=AgentRuntimeResolveResponse)

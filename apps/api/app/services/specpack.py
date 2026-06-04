@@ -30,6 +30,10 @@ class AgentModuleEntitlementError(Exception):
     pass
 
 
+class AgentModuleRollbackError(Exception):
+    pass
+
+
 class SpecPackService:
     DEFAULT_AGENT_MODULE_IDS = [
         "metatron_operator_v1",
@@ -448,6 +452,7 @@ class SpecPackService:
                        installed_at, updated_at
                 FROM agent_module_installs
                 WHERE project_id = :project_id
+                  AND status = 'active'
                 ORDER BY installed_at DESC
                 """
             ),
@@ -642,6 +647,10 @@ class SpecPackService:
             raise AgentModuleNotFoundError(
                 f"Agent module '{module_id}' is not installed for project"
             )
+        if row["status"] != "active":
+            raise AgentModuleNotFoundError(
+                f"Agent module '{module_id}' is not active for project"
+            )
         spec = dict(row["spec"] or {})
         spec["version"] = row["module_version"]
         spec["config"] = row["config"] or {}
@@ -728,7 +737,7 @@ class SpecPackService:
         existing_install = connection.execute(
             text(
                 """
-                SELECT id, module_version, config, spec
+                SELECT id, module_version, config, spec, status
                 FROM agent_module_installs
                 WHERE project_id = :project_id AND module_id = :module_id
                 """
@@ -754,6 +763,7 @@ class SpecPackService:
             and existing_install["module_version"] == module_spec.get("version", "0.0.0")
             and (existing_install["config"] or {}) == merged_config
             and (existing_install["spec"] or {}) == module_spec
+            and existing_install["status"] == module_spec.get("status", "active")
             and role_result["status"] == "present"
         )
         if not matches_existing:
@@ -843,6 +853,167 @@ class SpecPackService:
         module["entitlement_result"] = entitlement_result
         return module
 
+    def uninstall_agent_module(
+        self,
+        connection: Connection,
+        project_id: str,
+        module_id: str,
+        actor: str,
+        reason: str | None = None,
+    ) -> dict[str, Any]:
+        row = self._agent_module_install_row(connection, project_id, module_id)
+        if row["status"] != "active":
+            module = self.get_agent_module_for_project(connection, project_id, module_id)
+            module["install_status"] = "already_uninstalled"
+            module["role_result"] = {"status": "unchanged"}
+            module["entitlement_result"] = {"status": "not_checked"}
+            return module
+
+        rollback_snapshot = self._install_snapshot(row)
+        connection.execute(
+            text(
+                """
+                UPDATE agent_module_installs
+                SET status = 'inactive', updated_at = now()
+                WHERE id = :id
+                """
+            ),
+            {"id": row["id"]},
+        )
+        role_result = self._restore_role_after_module_removal(
+            connection,
+            project_id,
+            row["role_key"],
+            module_id,
+            actor,
+        )
+        self._record_agent_module_install(
+            connection,
+            project_id,
+            module_id,
+            action="uninstall",
+            actor=actor,
+            status="uninstalled",
+            from_version=row["module_version"],
+            to_version=None,
+            entitlement_result={"status": "not_checked"},
+            rollback_snapshot=rollback_snapshot,
+            metadata={"reason": reason, "role_key": row["role_key"], "role_result": role_result},
+        )
+        emit_event(
+            connection,
+            project_id,
+            "agent_module.uninstalled",
+            actor,
+            "agent_module",
+            module_id,
+            {"module_id": module_id, "version": row["module_version"], "reason": reason},
+        )
+        module = self.get_agent_module_for_project(connection, project_id, module_id)
+        module["install_status"] = "uninstalled"
+        module["role_result"] = role_result
+        module["entitlement_result"] = {"status": "not_checked"}
+        return module
+
+    def rollback_agent_module(
+        self,
+        connection: Connection,
+        project_id: str,
+        module_id: str,
+        actor: str,
+        reason: str | None = None,
+    ) -> dict[str, Any]:
+        current_row = self._agent_module_install_row(connection, project_id, module_id)
+        snapshot = self._latest_agent_module_rollback_snapshot(
+            connection,
+            project_id,
+            module_id,
+        )
+        snapshot_spec = snapshot.get("spec")
+        snapshot_version = snapshot.get("module_version")
+        if not isinstance(snapshot_spec, dict) or not isinstance(snapshot_version, str):
+            raise AgentModuleRollbackError(
+                f"Agent module '{module_id}' has no usable rollback snapshot."
+            )
+        role_key, role_spec = self._normalize_role_spec_from_module(snapshot_spec)
+        role_result = self._upsert_role_spec(
+            connection,
+            project_id,
+            role_key,
+            role_spec,
+            actor,
+            source_module_id=snapshot_spec["id"],
+            source_module_version=snapshot_version,
+        )
+        current_snapshot = self._install_snapshot(current_row)
+        connection.execute(
+            text(
+                """
+                UPDATE agent_module_installs
+                SET module_version = :module_version,
+                    role_key = :role_key,
+                    display_name = :display_name,
+                    publisher = :publisher,
+                    category = :category,
+                    description = :description,
+                    marketplace = CAST(:marketplace AS JSONB),
+                    runtime = CAST(:runtime AS JSONB),
+                    config = CAST(:config AS JSONB),
+                    spec = CAST(:spec AS JSONB),
+                    installed_by = :installed_by,
+                    status = 'active',
+                    updated_at = now()
+                WHERE id = :id
+                """
+            ),
+            {
+                "id": current_row["id"],
+                "module_version": snapshot_version,
+                "role_key": role_key,
+                "display_name": snapshot_spec.get("display_name", module_id),
+                "publisher": snapshot_spec.get("publisher", "Unknown"),
+                "category": snapshot_spec.get("category", "general"),
+                "description": snapshot_spec.get("description", ""),
+                "marketplace": json.dumps(snapshot_spec.get("marketplace") or {}),
+                "runtime": json.dumps(snapshot_spec.get("runtime") or {}),
+                "config": json.dumps(snapshot.get("config") or {}),
+                "spec": json.dumps(snapshot_spec),
+                "installed_by": actor,
+            },
+        )
+        self._record_agent_module_install(
+            connection,
+            project_id,
+            module_id,
+            action="rollback",
+            actor=actor,
+            status="rolled_back",
+            from_version=current_row["module_version"],
+            to_version=snapshot_version,
+            entitlement_result={"status": "not_checked"},
+            rollback_snapshot=current_snapshot,
+            metadata={"reason": reason, "role_key": role_key},
+        )
+        emit_event(
+            connection,
+            project_id,
+            "agent_module.rolled_back",
+            actor,
+            "agent_module",
+            module_id,
+            {
+                "module_id": module_id,
+                "from_version": current_row["module_version"],
+                "to_version": snapshot_version,
+                "reason": reason,
+            },
+        )
+        module = self.get_agent_module_for_project(connection, project_id, module_id)
+        module["install_status"] = "rolled_back"
+        module["role_result"] = role_result
+        module["entitlement_result"] = {"status": "not_checked"}
+        return module
+
     def install_default_agent_modules(
         self,
         connection: Connection,
@@ -892,6 +1063,124 @@ class SpecPackService:
                 {"project_id": project_id, "limit": limit},
             ).mappings().all()
         return [self._install_record_from_row(dict(row)) for row in rows]
+
+    def _agent_module_install_row(
+        self,
+        connection: Connection,
+        project_id: str,
+        module_id: str,
+    ) -> dict[str, Any]:
+        row = connection.execute(
+            text(
+                """
+                SELECT id, project_id, module_id, module_version, role_key,
+                       display_name, publisher, category, description,
+                       marketplace, runtime, config, spec, installed_by, status
+                FROM agent_module_installs
+                WHERE project_id = :project_id AND module_id = :module_id
+                """
+            ),
+            {"project_id": project_id, "module_id": module_id},
+        ).mappings().first()
+        if not row:
+            raise AgentModuleNotFoundError(
+                f"Agent module '{module_id}' is not installed for project"
+            )
+        return dict(row)
+
+    def _install_snapshot(self, row: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "module_version": row["module_version"],
+            "config": row.get("config") or {},
+            "spec": row.get("spec") or {},
+            "status": row.get("status"),
+        }
+
+    def _latest_agent_module_rollback_snapshot(
+        self,
+        connection: Connection,
+        project_id: str,
+        module_id: str,
+    ) -> dict[str, Any]:
+        row = connection.execute(
+            text(
+                """
+                SELECT rollback_snapshot
+                FROM agent_module_install_records
+                WHERE project_id = :project_id
+                  AND module_id = :module_id
+                  AND rollback_snapshot <> '{}'::jsonb
+                ORDER BY created_at DESC
+                LIMIT 1
+                """
+            ),
+            {"project_id": project_id, "module_id": module_id},
+        ).mappings().first()
+        if not row:
+            raise AgentModuleRollbackError(
+                f"Agent module '{module_id}' has no rollback snapshot."
+            )
+        snapshot = row["rollback_snapshot"] or {}
+        if not isinstance(snapshot, dict) or not snapshot:
+            raise AgentModuleRollbackError(
+                f"Agent module '{module_id}' has no rollback snapshot."
+            )
+        return snapshot
+
+    def _restore_role_after_module_removal(
+        self,
+        connection: Connection,
+        project_id: str,
+        role_key: str,
+        module_id: str,
+        actor: str,
+    ) -> dict[str, Any]:
+        role = connection.execute(
+            text(
+                """
+                SELECT id, source_module_id
+                FROM roles
+                WHERE project_id = :project_id AND role_key = :role_key
+                ORDER BY created_at DESC, id DESC
+                LIMIT 1
+                """
+            ),
+            {"project_id": project_id, "role_key": role_key},
+        ).mappings().first()
+        if not role or role.get("source_module_id") != module_id:
+            return {"role_key": role_key, "status": "unchanged"}
+        try:
+            base_role_spec = self.load_role_spec(role_key)
+        except RoleNotFoundError:
+            connection.execute(
+                text(
+                    """
+                    UPDATE roles
+                    SET source_module_id = NULL,
+                        source_module_version = NULL
+                    WHERE id = :id
+                    """
+                ),
+                {"id": role["id"]},
+            )
+            emit_event(
+                connection,
+                project_id,
+                "role.source_module_cleared",
+                actor,
+                "role",
+                role["id"],
+                {"role_key": role_key, "source_module_id": module_id},
+            )
+            return {"role_key": role_key, "status": "source_cleared"}
+        result = self._upsert_role_spec(
+            connection,
+            project_id,
+            role_key,
+            base_role_spec,
+            actor,
+        )
+        return {**result, "status": "restored_base_role"}
 
     def _required_entitlements(self, module_spec: dict[str, Any]) -> list[str]:
         marketplace = module_spec.get("marketplace") or {}

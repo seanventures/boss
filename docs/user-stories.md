@@ -82,6 +82,9 @@ Acceptance criteria:
 - Given an agent module in the specpack catalog, when it is installed, then BOSS records module installation and role lineage.
 - Given a module declares required marketplace entitlements, when the project lacks those entitlements, then BOSS denies installation, emits `agent_module.install_denied`, and records the entitlement result.
 - Given the project has the required entitlement, when the module is installed, then BOSS records an install governance record with entitlement result and rollback snapshot.
+- Given a module install is updated, when the previous install is replaced, then BOSS preserves a rollback snapshot with version, config, and spec.
+- Given a module has a rollback snapshot, when rollback is requested by an authorized actor, then BOSS restores the prior spec/config, records `agent_module.rolled_back`, and keeps role lineage auditable.
+- Given an installed module is no longer allowed or desired, when uninstall is requested by an authorized actor, then BOSS deactivates the module, restores the base RoleSpec where available, records `agent_module.uninstalled`, and keeps a snapshot for rollback.
 - Given a governed job kind, when runtime behavior is resolved, then BOSS uses installed module configuration instead of hidden service defaults.
 - Given a default dogfood project is seeded, when BOSS installs initial agent modules, then Metatron, COO, CAO, CTO, PM, QA, Release Manager, Program Manager, VP Agents, ProviderOps Manager, FinOps Sentinel, Resource Janitor, Infra Steward, Deployment Manager, Secrets Steward, Model Spend Analyst, and Software Engineer modules are active.
 - Given a worker leases an `agent.*` job, when the job kind maps to an installed module, then the payload includes the resolved module, role, prompt checklist, BOSS invariants, skill defaults, and runtime configuration before execution.
