@@ -8,6 +8,7 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 BASE = ROOT / "deploy" / "kubernetes" / "base"
+HELM = ROOT / "deploy" / "helm" / "boss"
 
 
 class ManifestValidationError(RuntimeError):
@@ -126,9 +127,78 @@ def validate_kubernetes_base() -> list[dict[str, Any]]:
     return resources
 
 
+def validate_helm_chart() -> dict[str, Any]:
+    chart = yaml.safe_load((HELM / "Chart.yaml").read_text(encoding="utf-8"))
+    values = yaml.safe_load((HELM / "values.yaml").read_text(encoding="utf-8"))
+    if chart.get("name") != "boss":
+        raise ManifestValidationError("Helm chart must be named boss.")
+    if chart.get("type") != "application":
+        raise ManifestValidationError("Helm chart type must be application.")
+    if (values.get("auth") or {}).get("requireApiAuth") is not True:
+        raise ManifestValidationError("Helm chart must enable API auth by default.")
+    if (values.get("secrets") or {}).get("create") is not False:
+        raise ManifestValidationError(
+            "Helm chart must not create placeholder secrets by default."
+        )
+    safety = values.get("safety") or {}
+    for key in (
+        "infraRealProvisionAllowed",
+        "emailRealSendAllowed",
+        "slackRealSendAllowed",
+        "sandboxMergeEnabled",
+        "sandboxDeployEnabled",
+    ):
+        if safety.get(key) is not False:
+            raise ManifestValidationError(f"Helm safety default must keep {key} false.")
+
+    templates = HELM / "templates"
+    required_templates = {
+        "_helpers.tpl",
+        "configmap.yaml",
+        "secret.yaml",
+        "serviceaccount.yaml",
+        "artifacts-pvc.yaml",
+        "api.yaml",
+        "web.yaml",
+        "worker.yaml",
+        "bootstrap-job.yaml",
+        "networkpolicy.yaml",
+    }
+    present = {path.name for path in templates.iterdir() if path.is_file()}
+    missing = sorted(required_templates - present)
+    if missing:
+        raise ManifestValidationError(f"Helm chart missing templates: {missing}")
+
+    required_fragments = {
+        "api.yaml": ["kind: Deployment", "HorizontalPodAutoscaler", "PodDisruptionBudget"],
+        "web.yaml": ["kind: Deployment", "HorizontalPodAutoscaler", "PodDisruptionBudget"],
+        "worker.yaml": [
+            "kind: Deployment",
+            "BOSS_WORKER_API_KEY",
+            "HorizontalPodAutoscaler",
+            "PodDisruptionBudget",
+        ],
+        "bootstrap-job.yaml": ["kind: Job", "apps.api.app.bootstrap"],
+        "secret.yaml": ["if .Values.secrets.create", "kind: Secret"],
+    }
+    for template_name, fragments in required_fragments.items():
+        text_payload = (templates / template_name).read_text(encoding="utf-8")
+        for fragment in fragments:
+            if fragment not in text_payload:
+                raise ManifestValidationError(
+                    f"Helm template {template_name} missing required fragment: {fragment}"
+                )
+
+    return {"chart": chart, "values": values, "templates": sorted(present)}
+
+
 def main() -> None:
     resources = validate_kubernetes_base()
-    print(f"Validated {len(resources)} Kubernetes resources from {BASE}.")
+    helm = validate_helm_chart()
+    print(
+        f"Validated {len(resources)} Kubernetes resources from {BASE} "
+        f"and Helm chart {helm['chart']['version']} from {HELM}."
+    )
 
 
 if __name__ == "__main__":

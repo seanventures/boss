@@ -1,0 +1,98 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "boss.fullname" . }}-worker
+  labels:
+    {{- include "boss.labels" . | nindent 4 }}
+    app.kubernetes.io/component: worker
+spec:
+  replicas: {{ .Values.worker.replicas }}
+  selector:
+    matchLabels:
+      {{- include "boss.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: worker
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        {{- include "boss.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: worker
+    spec:
+      serviceAccountName: {{ include "boss.fullname" . }}-control-plane
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: worker
+          image: "{{ .Values.images.worker.repository }}:{{ .Values.images.worker.tag }}"
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          env:
+            - name: BOSS_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "boss.secretName" . }}
+                  key: BOSS_WORKER_API_KEY
+          envFrom:
+            - configMapRef:
+                name: {{ include "boss.fullname" . }}-config
+            - secretRef:
+                name: {{ include "boss.secretName" . }}
+          resources:
+            {{- toYaml .Values.worker.resources | nindent 12 }}
+          volumeMounts:
+            - name: artifacts
+              mountPath: {{ .Values.global.artifactPath }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            capabilities:
+              drop: ["ALL"]
+      volumes:
+        - name: artifacts
+          persistentVolumeClaim:
+            claimName: {{ default (printf "%s-artifacts" (include "boss.fullname" .)) .Values.artifacts.persistence.existingClaim }}
+{{- if .Values.worker.podDisruptionBudget.enabled }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "boss.fullname" . }}-worker
+  labels:
+    {{- include "boss.labels" . | nindent 4 }}
+    app.kubernetes.io/component: worker
+spec:
+  minAvailable: {{ .Values.worker.podDisruptionBudget.minAvailable }}
+  selector:
+    matchLabels:
+      {{- include "boss.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: worker
+{{- end }}
+{{- if .Values.worker.autoscaling.enabled }}
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "boss.fullname" . }}-worker
+  labels:
+    {{- include "boss.labels" . | nindent 4 }}
+    app.kubernetes.io/component: worker
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "boss.fullname" . }}-worker
+  minReplicas: {{ .Values.worker.autoscaling.minReplicas }}
+  maxReplicas: {{ .Values.worker.autoscaling.maxReplicas }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.worker.autoscaling.targetCPUUtilizationPercentage }}
+{{- end }}

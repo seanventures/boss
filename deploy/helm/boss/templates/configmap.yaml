@@ -1,0 +1,27 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "boss.fullname" . }}-config
+  labels:
+    {{- include "boss.labels" . | nindent 4 }}
+data:
+  BOSS_EDITION: {{ .Values.global.edition | quote }}
+  BOSS_REQUIRE_API_AUTH: {{ .Values.auth.requireApiAuth | quote }}
+  BOSS_DEFAULT_ORG_ID: {{ .Values.project.orgId | quote }}
+  BOSS_DEFAULT_WORKSPACE_ID: {{ .Values.project.workspaceId | quote }}
+  BOSS_DEFAULT_PROJECT_ID: {{ .Values.project.projectId | quote }}
+  BOSS_CORE_PACK_ID: {{ .Values.project.corePackId | quote }}
+  BOSS_ARTIFACTS_DIR: {{ .Values.global.artifactPath | quote }}
+  BOSS_CONTROL_PLANE_URL: {{ printf "http://%s-api.%s.svc.cluster.local:8000" (include "boss.fullname" .) .Release.Namespace | quote }}
+  NEXT_PUBLIC_BOSS_API_URL: {{ .Values.web.publicApiUrl | quote }}
+  NEXT_PUBLIC_BOSS_PROJECT_ID: {{ .Values.project.projectId | quote }}
+  BOSS_INFRA_REAL_PROVISION_ALLOWED: {{ .Values.safety.infraRealProvisionAllowed | quote }}
+  BOSS_EMAIL_REAL_SEND_ALLOWED: {{ .Values.safety.emailRealSendAllowed | quote }}
+  BOSS_SLACK_REAL_SEND_ALLOWED: {{ .Values.safety.slackRealSendAllowed | quote }}
+  BOSS_ENABLE_SANDBOX_MERGE: {{ .Values.safety.sandboxMergeEnabled | quote }}
+  BOSS_ENABLE_SANDBOX_DEPLOY: {{ .Values.safety.sandboxDeployEnabled | quote }}
+  BOSS_DAILY_CAP_USD_MICROS: {{ .Values.budget.dailyCapUsdMicros | quote }}
+  BOSS_MONTHLY_CAP_USD_MICROS: {{ .Values.budget.monthlyCapUsdMicros | quote }}
+  BOSS_BURST_CAP_USD_MICROS_PER_MIN: {{ .Values.budget.burstCapUsdMicrosPerMin | quote }}
+  BOSS_POLL_INTERVAL_SECONDS: {{ .Values.worker.pollIntervalSeconds | quote }}
+  BOSS_LEASE_TTL_SECONDS: {{ .Values.worker.leaseTtlSeconds | quote }}

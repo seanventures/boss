@@ -259,7 +259,7 @@ Enterprise architecture:
 - Advanced budget/resource governance.
 - Air-gapped updates later.
 
-The baseline Kubernetes self-hosted package is implemented under `deploy/kubernetes/base`. It runs API, web, and worker as independent workloads, applies schema/bootstrap through a Job, enables API auth by default, mounts a shared artifacts PVC, adds HPA/PDB guardrails, and leaves `boss-secrets` as an explicit operator-created Secret so fake credentials are never applied by default. Live multi-node rollout, cloud-specific ingress/DNS/storage overlays, and Helm packaging remain environment-specific.
+The baseline Kubernetes self-hosted package is implemented under `deploy/kubernetes/base`, with an equivalent Helm chart under `deploy/helm/boss`. It runs API, web, and worker as independent workloads, applies schema/bootstrap through a Job, enables API auth by default, mounts a shared artifacts PVC, adds HPA/PDB guardrails, and leaves `boss-secrets` as an explicit operator-created Secret so fake credentials are never applied by default. Live multi-node rollout and cloud-specific ingress/DNS/storage overlays remain environment-specific.
 
 ## Marketplace and Pack Registry
 

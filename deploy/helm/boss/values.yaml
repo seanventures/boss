@@ -1,0 +1,119 @@
+global:
+  edition: enterprise_self_hosted
+  imagePullPolicy: IfNotPresent
+  artifactPath: /var/lib/boss/artifacts
+
+images:
+  api:
+    repository: ghcr.io/seanheiney/boss-api
+    tag: "0.4.0"
+  web:
+    repository: ghcr.io/seanheiney/boss-web
+    tag: "0.4.0"
+  worker:
+    repository: ghcr.io/seanheiney/boss-worker
+    tag: "0.4.0"
+
+project:
+  orgId: org_boss
+  workspaceId: ws_boss
+  projectId: boss-dogfood
+  corePackId: core_v1
+
+auth:
+  requireApiAuth: true
+  existingSecret: boss-secrets
+
+secrets:
+  create: false
+  name: boss-secrets
+  stringData:
+    DATABASE_URL: REPLACE_WITH_POSTGRES_URL
+    BOSS_API_KEYS: REPLACE_WITH_COMMA_SEPARATED_API_KEYS
+    BOSS_API_KEY_PRINCIPALS: REPLACE_WITH_API_KEY_TO_MEMBER_MAPPING
+    BOSS_API_KEY: REPLACE_WITH_WEB_API_KEY
+    BOSS_WORKER_API_KEY: REPLACE_WITH_WORKER_API_KEY
+
+safety:
+  infraRealProvisionAllowed: false
+  emailRealSendAllowed: false
+  slackRealSendAllowed: false
+  sandboxMergeEnabled: false
+  sandboxDeployEnabled: false
+
+budget:
+  dailyCapUsdMicros: "10000000"
+  monthlyCapUsdMicros: "200000000"
+  burstCapUsdMicrosPerMin: "100000"
+
+api:
+  replicas: 2
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 5
+    targetCPUUtilizationPercentage: 70
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+
+web:
+  replicas: 2
+  publicApiUrl: http://boss-api.boss.svc.cluster.local:8000
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 5
+    targetCPUUtilizationPercentage: 70
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+
+worker:
+  replicas: 2
+  pollIntervalSeconds: "15"
+  leaseTtlSeconds: "60"
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+  autoscaling:
+    enabled: true
+    minReplicas: 1
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 70
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+
+artifacts:
+  persistence:
+    enabled: true
+    existingClaim: ""
+    accessModes:
+      - ReadWriteMany
+    size: 10Gi
+
+bootstrap:
+  enabled: true
+  backoffLimit: 2
+
+networkPolicy:
+  enabled: true

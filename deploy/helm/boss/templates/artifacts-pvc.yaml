@@ -1,0 +1,15 @@
+{{- if and .Values.artifacts.persistence.enabled (not .Values.artifacts.persistence.existingClaim) }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "boss.fullname" . }}-artifacts
+  labels:
+    {{- include "boss.labels" . | nindent 4 }}
+    app.kubernetes.io/component: artifacts
+spec:
+  accessModes:
+    {{- toYaml .Values.artifacts.persistence.accessModes | nindent 4 }}
+  resources:
+    requests:
+      storage: {{ .Values.artifacts.persistence.size | quote }}
+{{- end }}

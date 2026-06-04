@@ -9,6 +9,7 @@ This release adds the commercial, Account Connect, enterprise-governance, SCIM, 
 ### Added
 
 - Added the first Enterprise self-hosted Kubernetes package with container Dockerfiles, API/web/worker workloads, bootstrap Job, HPA/PDB guardrails, shared artifact PVC, secret-template guardrails, and a manifest validation command/test.
+- Added the first Enterprise Helm chart for self-hosted BOSS with configurable images, replicas, HPA/PDBs, artifact persistence, bootstrap Job, fail-closed safety defaults, and explicit operator-managed secrets.
 - Added Community, Cloud, Enterprise Cloud, and Enterprise Self-hosted edition introspection with fail-closed Cloud Account Connect requirements and local Community mode that works without hosted BOSS auth.
 - Added BOSS Account Connect link, unlink, and hosted entitlement sync APIs with visible denied events when hosted credentials or connection state are missing.
 - Added license entitlement records and runtime entitlement checks that distinguish edition capabilities from active/trial hosted entitlements.

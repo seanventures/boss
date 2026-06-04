@@ -1,4 +1,7 @@
-from scripts.validate_kubernetes_manifests import validate_kubernetes_base
+from scripts.validate_kubernetes_manifests import (
+    validate_helm_chart,
+    validate_kubernetes_base,
+)
 
 
 def test_kubernetes_base_contains_enterprise_ha_workloads_and_guardrails():
@@ -17,3 +20,14 @@ def test_kubernetes_base_contains_enterprise_ha_workloads_and_guardrails():
 
     assert {"boss-api", "boss-web", "boss-worker"} <= deployment_names
     assert {"boss-api", "boss-web", "boss-worker"} <= hpa_names
+
+
+def test_helm_chart_keeps_enterprise_self_hosted_defaults_fail_closed():
+    chart = validate_helm_chart()
+    values = chart["values"]
+
+    assert values["auth"]["requireApiAuth"] is True
+    assert values["secrets"]["create"] is False
+    assert values["safety"]["infraRealProvisionAllowed"] is False
+    assert values["safety"]["sandboxDeployEnabled"] is False
+    assert {"api.yaml", "web.yaml", "worker.yaml"} <= set(chart["templates"])
