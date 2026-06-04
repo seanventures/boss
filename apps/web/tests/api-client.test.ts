@@ -432,9 +432,31 @@ describe("createBossApiClient", () => {
       created_at: "2026-06-03T00:00:00Z",
       updated_at: "2026-06-03T00:00:00Z",
     };
+    const validationRun = {
+      id: "entclval_1",
+      org_id: "org_boss",
+      project_id: "boss-dogfood",
+      enterprise_cluster_id: "entcluster_boss-dogfood_enterprise_cloud_attached",
+      validation_kind: "multi_node_readiness",
+      status: "passed",
+      checks: [
+        {
+          name: "kubernetes_manifests",
+          status: "passed",
+          required: true,
+        },
+      ],
+      evidence_refs: ["artifact:k8s_validate"],
+      blocking_gaps: [],
+      validated_by: "ceo",
+      metadata: {},
+      created_at: "2026-06-03T00:05:00Z",
+    };
     const responses = [
       { status: 200, body: { project_id: "boss-dogfood", items: [cluster] } },
       { status: 201, body: cluster },
+      { status: 200, body: { project_id: "boss-dogfood", items: [validationRun] } },
+      { status: 201, body: validationRun },
     ];
     const fetchImpl = async (input: RequestInfo | URL, init?: RequestInit) => {
       calls.push({ url: String(input), init });
@@ -457,9 +479,30 @@ describe("createBossApiClient", () => {
       identity_controls: { sso_oidc_configured: true, scim_configured: true },
       actor: "ceo",
     });
+    const validationRuns = await client.listEnterpriseClusterValidationRuns(
+      "boss-dogfood",
+      "entcluster_boss-dogfood_enterprise_cloud_attached",
+    );
+    const createdValidationRun =
+      await client.createEnterpriseClusterValidationRun({
+        project_id: "boss-dogfood",
+        enterprise_cluster_id: "entcluster_boss-dogfood_enterprise_cloud_attached",
+        validation_kind: "multi_node_readiness",
+        checks: [
+          {
+            name: "kubernetes_manifests",
+            status: "passed",
+            required: true,
+          },
+        ],
+        evidence_refs: ["artifact:k8s_validate"],
+        actor: "ceo",
+      });
 
     expect(listed.items[0].blocking_gaps).toEqual([]);
     expect(upserted.support_tier).toBe("enterprise");
+    expect(validationRuns.items[0].validation_kind).toBe("multi_node_readiness");
+    expect(createdValidationRun.evidence_refs).toEqual(["artifact:k8s_validate"]);
     expect(calls[0].url).toBe(
       "http://127.0.0.1:8000/v1/enterprise/clusters?project_id=boss-dogfood",
     );
@@ -467,6 +510,13 @@ describe("createBossApiClient", () => {
       "http://127.0.0.1:8000/v1/enterprise/clusters",
     );
     expect(calls[1].init?.method).toBe("POST");
+    expect(calls[2].url).toBe(
+      "http://127.0.0.1:8000/v1/enterprise/cluster-validation-runs?project_id=boss-dogfood&enterprise_cluster_id=entcluster_boss-dogfood_enterprise_cloud_attached&limit=50",
+    );
+    expect(calls[3].url).toBe(
+      "http://127.0.0.1:8000/v1/enterprise/cluster-validation-runs",
+    );
+    expect(calls[3].init?.method).toBe("POST");
   });
 
   it("uses enterprise support case API contracts", async () => {

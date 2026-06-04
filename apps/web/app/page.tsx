@@ -17,6 +17,7 @@ import {
   createAccountConnectAuthSessionAction,
   createAccountConnectTeamInviteAction,
   createEnterpriseSupportCaseAction,
+  createEnterpriseClusterValidationRunAction,
   installAgentModuleAction,
   installPackAction,
   linkAccountConnectAction,
@@ -4031,6 +4032,115 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                     </label>
                     <button className="button secondary" type="submit">
                       Save enterprise record
+                    </button>
+                  </form>
+                </>
+              )}
+            </article>
+
+            <article className="stack-card">
+              <h3>Cluster validation evidence</h3>
+              {!enterprise.apiReachable ? (
+                <p className="detail">
+                  {enterprise.blockedReason ?? "Enterprise API is unavailable."}
+                </p>
+              ) : (
+                <>
+                  {enterprise.clusterValidationRuns.length === 0 ? (
+                    <p className="detail">
+                      No enterprise cluster validation runs have been recorded.
+                    </p>
+                  ) : (
+                    <div className="feed-list">
+                      {enterprise.clusterValidationRuns.slice(0, 6).map((run) => (
+                        <div className="feed-row" key={run.id}>
+                          <div>
+                            <h4>{titleCaseToken(run.validationKind)}</h4>
+                            <p className="detail">
+                              Cluster {run.enterpriseClusterId} / validated by{" "}
+                              {run.validatedBy} / {formatDateTime(run.createdAt)}
+                            </p>
+                            <p className="detail">
+                              Checks {run.checks.length} / evidence refs{" "}
+                              {run.evidenceRefs.length}
+                            </p>
+                            {run.blockingGaps.length > 0 ? (
+                              <p className="detail">
+                                Gaps: {run.blockingGaps.join(", ")}
+                              </p>
+                            ) : null}
+                          </div>
+                          <span
+                            className={`pill${
+                              run.status === "passed" ? "" : " warn"
+                            }`}
+                          >
+                            {titleCaseToken(run.status)}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  <form
+                    action={createEnterpriseClusterValidationRunAction}
+                    className="composer"
+                  >
+                    <input type="hidden" name="project_id" value={activeProjectId} />
+                    <input type="hidden" name="actor" value={activeActorId} />
+                    <label className="field">
+                      <span>Enterprise cluster ID</span>
+                      <input
+                        className="input"
+                        name="enterprise_cluster_id"
+                        placeholder="entcluster_..."
+                        defaultValue={enterprise.clusters[0]?.id ?? ""}
+                        required
+                      />
+                    </label>
+                    <label className="field">
+                      <span>Validation kind</span>
+                      <input
+                        className="input"
+                        name="validation_kind"
+                        defaultValue="multi_node_readiness"
+                      />
+                    </label>
+                    <label className="field">
+                      <span>Status</span>
+                      <select className="input" name="status" defaultValue="passed">
+                        <option value="passed">Passed</option>
+                        <option value="warning">Warning</option>
+                        <option value="failed">Failed</option>
+                        <option value="blocked">Blocked</option>
+                      </select>
+                    </label>
+                    <label className="field">
+                      <span>Checks JSON</span>
+                      <textarea
+                        className="input"
+                        name="checks_json"
+                        defaultValue={`[{"name":"kubernetes_manifests","status":"passed","required":true,"message":"make k8s-validate passed"}]`}
+                      />
+                    </label>
+                    <label className="field">
+                      <span>Evidence refs</span>
+                      <textarea
+                        className="input"
+                        name="evidence_refs"
+                        placeholder="artifact:release_packet_..."
+                      />
+                    </label>
+                    <label className="field">
+                      <span>Metadata JSON</span>
+                      <textarea
+                        className="input"
+                        name="metadata_json"
+                        defaultValue={`{"source":"mission_control"}`}
+                      />
+                    </label>
+                    <button className="button secondary" type="submit">
+                      Record validation run
                     </button>
                   </form>
                 </>

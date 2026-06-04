@@ -50,6 +50,7 @@ def clean_tables(engine):
         connection.execute(text("DELETE FROM enterprise_scim_users"))
         connection.execute(text("DELETE FROM enterprise_scim_groups"))
         connection.execute(text("DELETE FROM enterprise_identity_providers"))
+        connection.execute(text("DELETE FROM enterprise_cluster_validation_runs"))
         connection.execute(text("DELETE FROM enterprise_clusters"))
         connection.execute(text("DELETE FROM deployment_rollouts"))
         connection.execute(text("DELETE FROM resource_receipts"))

@@ -58,6 +58,7 @@ objects:
     - account_connect_team_invite
     - account_connect_billing_portal_session
     - enterprise_cluster
+    - enterprise_cluster_validation_run
     - enterprise_identity_provider
     - enterprise_scim_group
     - enterprise_scim_user

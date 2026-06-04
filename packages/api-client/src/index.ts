@@ -290,6 +290,37 @@ export type EnterpriseClusterListResponse = {
   items: EnterpriseClusterSummary[];
 };
 
+export type EnterpriseClusterValidationRunSummary = {
+  id: string;
+  org_id: string;
+  project_id: string;
+  enterprise_cluster_id: string;
+  validation_kind: string;
+  status: string;
+  checks: Array<Record<string, unknown>>;
+  evidence_refs: string[];
+  blocking_gaps: string[];
+  validated_by: string;
+  metadata: Record<string, unknown>;
+  created_at: string;
+};
+
+export type EnterpriseClusterValidationRunListResponse = {
+  project_id: string;
+  items: EnterpriseClusterValidationRunSummary[];
+};
+
+export type EnterpriseClusterValidationRunCreateRequest = {
+  project_id: string;
+  enterprise_cluster_id: string;
+  validation_kind: string;
+  status?: string;
+  checks: Array<Record<string, unknown>>;
+  evidence_refs?: string[];
+  metadata?: Record<string, unknown>;
+  actor?: string;
+};
+
 export type EnterpriseClusterUpsertRequest = {
   project_id: string;
   deployment_mode?: string;
@@ -3266,6 +3297,34 @@ export function createBossApiClient(config: BossApiClientConfig) {
       return request<EnterpriseClusterSummary>(
         "POST",
         "/v1/enterprise/clusters",
+        { body: payload },
+      );
+    },
+    listEnterpriseClusterValidationRuns(
+      projectId: string,
+      enterpriseClusterId?: string,
+      limit = 50,
+    ) {
+      return request<EnterpriseClusterValidationRunListResponse>(
+        "GET",
+        "/v1/enterprise/cluster-validation-runs",
+        {
+          query: {
+            project_id: projectId,
+            ...(enterpriseClusterId
+              ? { enterprise_cluster_id: enterpriseClusterId }
+              : {}),
+            limit,
+          },
+        },
+      );
+    },
+    createEnterpriseClusterValidationRun(
+      payload: EnterpriseClusterValidationRunCreateRequest,
+    ) {
+      return request<EnterpriseClusterValidationRunSummary>(
+        "POST",
+        "/v1/enterprise/cluster-validation-runs",
         { body: payload },
       );
     },

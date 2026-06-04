@@ -113,6 +113,7 @@ class EnterpriseService:
         "auth_allowed",
         "provisioning_allowed",
     }
+    CLUSTER_VALIDATION_STATUSES = {"passed", "warning", "failed", "blocked"}
 
     def __init__(self, settings: Settings):
         self.settings = settings
@@ -762,6 +763,152 @@ class EnterpriseService:
         ).mappings().all()
         return [self._cluster_from_row(dict(row)) for row in rows]
 
+    def list_cluster_validation_runs(
+        self,
+        connection: Connection,
+        project_id: str,
+        *,
+        enterprise_cluster_id: Optional[str] = None,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        if enterprise_cluster_id:
+            rows = connection.execute(
+                text(
+                    """
+                    SELECT id, org_id, project_id, enterprise_cluster_id,
+                           validation_kind, status, checks, evidence_refs,
+                           blocking_gaps, validated_by, metadata, created_at
+                    FROM enterprise_cluster_validation_runs
+                    WHERE project_id = :project_id
+                      AND enterprise_cluster_id = :enterprise_cluster_id
+                    ORDER BY created_at DESC
+                    LIMIT :limit
+                    """
+                ),
+                {
+                    "project_id": project_id,
+                    "enterprise_cluster_id": enterprise_cluster_id,
+                    "limit": limit,
+                },
+            ).mappings().all()
+            return [self._cluster_validation_run_from_row(dict(row)) for row in rows]
+
+        rows = connection.execute(
+            text(
+                """
+                SELECT id, org_id, project_id, enterprise_cluster_id,
+                       validation_kind, status, checks, evidence_refs,
+                       blocking_gaps, validated_by, metadata, created_at
+                FROM enterprise_cluster_validation_runs
+                WHERE project_id = :project_id
+                ORDER BY created_at DESC
+                LIMIT :limit
+                """
+            ),
+            {"project_id": project_id, "limit": limit},
+        ).mappings().all()
+        return [self._cluster_validation_run_from_row(dict(row)) for row in rows]
+
+    def record_cluster_validation_run(
+        self,
+        connection: Connection,
+        project_id: str,
+        *,
+        enterprise_cluster_id: str,
+        validation_kind: str,
+        status: str,
+        checks: list[dict[str, Any]],
+        evidence_refs: Optional[list[str]],
+        actor: str,
+        metadata: Optional[dict[str, Any]] = None,
+    ) -> dict[str, Any]:
+        cluster = self.get_cluster(connection, enterprise_cluster_id, project_id)
+        normalized_kind = self._id_token(validation_kind)
+        if not normalized_kind:
+            raise ValueError("validation_kind must not be blank.")
+        normalized_status = self._id_token(status)
+        if normalized_status not in self.CLUSTER_VALIDATION_STATUSES:
+            raise ValueError(f"Unsupported cluster validation status: {status}")
+        normalized_checks = self._normalize_cluster_validation_checks(checks)
+        refs = self._normalize_tokens(evidence_refs or [])
+        blocking_gaps = self._cluster_validation_blocking_gaps(normalized_checks)
+        effective_status = (
+            "blocked"
+            if blocking_gaps and normalized_status in {"passed", "warning"}
+            else normalized_status
+        )
+        run_id = make_id("entclval")
+        connection.execute(
+            text(
+                """
+                INSERT INTO enterprise_cluster_validation_runs (
+                    id, org_id, project_id, enterprise_cluster_id,
+                    validation_kind, status, checks, evidence_refs,
+                    blocking_gaps, validated_by, metadata
+                )
+                VALUES (
+                    :id, :org_id, :project_id, :enterprise_cluster_id,
+                    :validation_kind, :status, CAST(:checks AS JSONB),
+                    CAST(:evidence_refs AS JSONB),
+                    CAST(:blocking_gaps AS JSONB), :validated_by,
+                    CAST(:metadata AS JSONB)
+                )
+                """
+            ),
+            {
+                "id": run_id,
+                "org_id": cluster["org_id"],
+                "project_id": project_id,
+                "enterprise_cluster_id": enterprise_cluster_id,
+                "validation_kind": normalized_kind,
+                "status": effective_status,
+                "checks": json.dumps(normalized_checks),
+                "evidence_refs": json.dumps(refs),
+                "blocking_gaps": json.dumps(blocking_gaps),
+                "validated_by": actor,
+                "metadata": json.dumps(metadata or {}),
+            },
+        )
+        connection.execute(
+            text(
+                """
+                UPDATE enterprise_clusters
+                SET metadata = metadata || CAST(:metadata AS JSONB),
+                    updated_at = now()
+                WHERE id = :id AND project_id = :project_id
+                """
+            ),
+            {
+                "id": enterprise_cluster_id,
+                "project_id": project_id,
+                "metadata": json.dumps(
+                    {
+                        "latest_validation": {
+                            "id": run_id,
+                            "validation_kind": normalized_kind,
+                            "status": effective_status,
+                            "blocking_gaps": blocking_gaps,
+                        }
+                    }
+                ),
+            },
+        )
+        emit_event(
+            connection,
+            project_id,
+            "enterprise.cluster_validation_recorded",
+            actor,
+            "enterprise_cluster_validation_run",
+            run_id,
+            {
+                "enterprise_cluster_id": enterprise_cluster_id,
+                "validation_kind": normalized_kind,
+                "status": effective_status,
+                "blocking_gaps": blocking_gaps,
+            },
+        )
+        return self._get_cluster_validation_run(connection, project_id, run_id)
+
     def list_support_cases(
         self,
         connection: Connection,
@@ -1327,6 +1474,68 @@ class EnterpriseService:
             "created_at": row["created_at"].isoformat(),
             "updated_at": row["updated_at"].isoformat(),
         }
+
+    def _get_cluster_validation_run(
+        self, connection: Connection, project_id: str, run_id: str
+    ) -> dict[str, Any]:
+        row = connection.execute(
+            text(
+                """
+                SELECT id, org_id, project_id, enterprise_cluster_id,
+                       validation_kind, status, checks, evidence_refs,
+                       blocking_gaps, validated_by, metadata, created_at
+                FROM enterprise_cluster_validation_runs
+                WHERE project_id = :project_id AND id = :id
+                """
+            ),
+            {"project_id": project_id, "id": run_id},
+        ).mappings().first()
+        if row is None:
+            raise ValueError(f"Enterprise cluster validation run '{run_id}' was not found.")
+        return self._cluster_validation_run_from_row(dict(row))
+
+    def _cluster_validation_run_from_row(self, row: dict[str, Any]) -> dict[str, Any]:
+        return {
+            **row,
+            "created_at": row["created_at"].isoformat(),
+        }
+
+    def _normalize_cluster_validation_checks(
+        self, checks: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        if not checks:
+            raise ValueError("cluster validation checks must not be empty.")
+        normalized: list[dict[str, Any]] = []
+        for item in checks:
+            if not isinstance(item, dict):
+                raise ValueError("cluster validation checks must be objects.")
+            name = self._id_token(str(item.get("name") or ""))
+            status = self._id_token(str(item.get("status") or ""))
+            if not name:
+                raise ValueError("cluster validation check name must not be blank.")
+            if status not in self.CLUSTER_VALIDATION_STATUSES:
+                raise ValueError(
+                    f"Unsupported cluster validation check status: {status}"
+                )
+            normalized.append(
+                {
+                    "name": name,
+                    "status": status,
+                    "required": bool(item.get("required", True)),
+                    "message": self._optional_text(item.get("message")),
+                    "evidence_ref": self._optional_text(item.get("evidence_ref")),
+                }
+            )
+        return normalized
+
+    def _cluster_validation_blocking_gaps(
+        self, checks: list[dict[str, Any]]
+    ) -> list[str]:
+        gaps: list[str] = []
+        for item in checks:
+            if item["required"] and item["status"] in {"failed", "blocked"}:
+                gaps.append(f"cluster_validation_{item['name']}_{item['status']}")
+        return gaps
 
     def _normalize_identity_controls(
         self,

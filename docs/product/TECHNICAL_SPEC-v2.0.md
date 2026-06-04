@@ -270,6 +270,8 @@ Enterprise architecture:
 
 The baseline Kubernetes self-hosted package is implemented under `deploy/kubernetes/base`, with an equivalent Helm chart under `deploy/helm/boss`. It runs API, web, and worker as independent workloads, applies schema/bootstrap through a Job, enables API auth by default, mounts a shared artifacts PVC, adds HPA/PDB guardrails, and leaves `boss-secrets` as an explicit operator-created Secret so fake credentials are never applied by default. Live multi-node rollout and cloud-specific ingress/DNS/storage overlays remain environment-specific.
 
+`EnterpriseClusterValidationRun` records local readiness evidence for Kubernetes manifests, Helm charts, multi-node readiness, failover drills, backup/restore checks, private worker pools, ingress/TLS, and support/SLA readiness. Validation runs are auditable evidence and can create blocking gaps from failed required checks, but they are not claims that a live production rollout happened.
+
 ## Marketplace and Pack Registry
 
 Pack registry objects include `PackSpec`, `PackListing`, `MarketplacePublisher`, `PackInstall`, signatures/trust metadata later, and private enterprise registries.
@@ -343,6 +345,8 @@ Commercial:
 - `POST /v1/account-connect/billing-portal-sessions`
 - `GET /v1/enterprise/identity-providers`
 - `POST /v1/enterprise/identity-providers`
+- `GET /v1/enterprise/cluster-validation-runs`
+- `POST /v1/enterprise/cluster-validation-runs`
 - `GET /v1/packs`
 - `POST /v1/packs/install`
 

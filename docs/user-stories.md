@@ -445,6 +445,7 @@ Acceptance criteria:
 - Given Account Connect is not linked, when an authorized actor submits a hosted org ID, then Mission Control calls the Account Connect link API and refreshes the panel from the control plane.
 - Given Account Connect is linked, when an authorized actor requests entitlement sync or unlink, then Mission Control calls the corresponding API and relies on audit events from the backend.
 - Given Enterprise cluster posture exists, when Mission Control loads, then it shows deployment mode, Account Connect mode, worker strategy, HA/data residency, support tier, compliance packs, and blocking gaps.
+- Given Enterprise cluster validation runs exist, when Mission Control loads, then it shows validation kind, status, checks, evidence references, blocking gaps, actor, and timestamp from API data.
 - Given enterprise support cases exist, when Mission Control loads, then it shows open and blocked cases, SLA due dates, hosted escalation refs, receipt IDs, assignments, and blocked reasons.
 - Given enterprise identity-provider records exist, when Mission Control loads, then it shows OIDC, SAML, and SCIM provider status, SecretRefs, and blocking gaps.
 - Given enterprise identity rollout policies exist, when Mission Control loads, then it shows provider type, runtime mode, allowed domains, rollout notes, actor, and update time.
@@ -466,6 +467,9 @@ Acceptance criteria:
 - Given a SAMLResponse is unsigned, has the wrong audience, uses an unsupported signature, or maps to no authorized member, when ACS handles it, then BOSS rejects the login and emits `enterprise.saml_login_failed`.
 - Given a detached self-hosted enterprise cluster lacks SSO/SAML, SCIM, private worker pools, or compliance packs, when it is saved, then BOSS marks it blocked and lists each missing control.
 - Given enterprise cluster state changes, when the write succeeds, then BOSS emits `enterprise.cluster_upserted` with deployment mode, Account Connect mode, status, and blocking gaps.
+- Given an enterprise admin records a cluster validation run, when required checks pass, then BOSS stores checks, evidence refs, status, actor, and emits `enterprise.cluster_validation_recorded`.
+- Given an enterprise admin records required failed or blocked checks, when the validation run is saved, then BOSS stores deterministic `blocking_gaps` and surfaces them through the API and Mission Control.
+- Given cluster validation evidence is recorded, when product status is reviewed, then BOSS treats it as auditable readiness evidence and not as proof that a live production rollout occurred.
 - Given enterprise identity-provider state changes, when the write succeeds, then BOSS emits `enterprise.identity_provider_upserted` with provider type, status, and blocking gaps.
 - Given enterprise identity rollout policy changes, when the write succeeds, then BOSS emits `enterprise.identity_rollout_policy_upserted` with provider type, runtime mode, and allowed domains.
 - Given an enterprise admin maps a SCIM group to BOSS permissions, when the group is saved, then BOSS emits `enterprise.scim_group_upserted`.

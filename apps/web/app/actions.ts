@@ -130,6 +130,17 @@ function parseOptionalJsonArray(
   return parsed as Array<Record<string, unknown>>;
 }
 
+function parseRequiredJsonArrayField(
+  value: FormDataEntryValue | null,
+  fieldName: string,
+): Array<Record<string, unknown>> {
+  const parsed = parseOptionalJsonArray(value, fieldName);
+  if (parsed.length === 0) {
+    throw new Error(`${fieldName} must contain at least one JSON object`);
+  }
+  return parsed;
+}
+
 function parseProviderOpsCheckbox(
   formData: FormData,
   name: string,
@@ -530,6 +541,30 @@ export async function upsertEnterpriseClusterAction(
       "support_sla_json",
     ),
     status: getOptionalString(formData, "status") ?? "planned",
+    metadata: parseOptionalJsonObjectField(
+      formData.get("metadata_json"),
+      "metadata_json",
+    ),
+    actor: getActor(formData),
+  });
+  revalidatePath("/");
+}
+
+export async function createEnterpriseClusterValidationRunAction(
+  formData: FormData,
+): Promise<void> {
+  const clusterId = formData.get("enterprise_cluster_id");
+  if (typeof clusterId !== "string" || !clusterId.trim()) {
+    throw new Error("enterprise_cluster_id is required");
+  }
+  await client.createEnterpriseClusterValidationRun({
+    project_id: getProjectId(formData),
+    enterprise_cluster_id: clusterId.trim(),
+    validation_kind:
+      getOptionalString(formData, "validation_kind") ?? "multi_node_readiness",
+    status: getOptionalString(formData, "status") ?? "passed",
+    checks: parseRequiredJsonArrayField(formData.get("checks_json"), "checks_json"),
+    evidence_refs: parseLines(formData.get("evidence_refs")),
     metadata: parseOptionalJsonObjectField(
       formData.get("metadata_json"),
       "metadata_json",

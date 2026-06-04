@@ -1704,6 +1704,71 @@ def test_enterprise_cluster_records_trust_controls_and_blocking_gaps(client):
         in blocked_payload["blocking_gaps"]
     )
 
+    validation_denied = client.post(
+        "/v1/enterprise/cluster-validation-runs",
+        json={
+            "project_id": "boss-dogfood",
+            "enterprise_cluster_id": active_payload["id"],
+            "validation_kind": "multi_node_readiness",
+            "checks": [
+                {
+                    "name": "kubernetes_manifests",
+                    "status": "passed",
+                    "required": True,
+                }
+            ],
+            "actor": "release_manager",
+        },
+    )
+    assert validation_denied.status_code == 403
+
+    validation = client.post(
+        "/v1/enterprise/cluster-validation-runs",
+        json={
+            "project_id": "boss-dogfood",
+            "enterprise_cluster_id": blocked_payload["id"],
+            "validation_kind": "multi_node_readiness",
+            "status": "passed",
+            "checks": [
+                {
+                    "name": "kubernetes_manifests",
+                    "status": "passed",
+                    "required": True,
+                    "message": "make k8s-validate passed",
+                    "evidence_ref": "artifact:k8s_validate",
+                },
+                {
+                    "name": "private_worker_pool",
+                    "status": "blocked",
+                    "required": True,
+                    "message": "No private worker pool endpoint configured.",
+                },
+            ],
+            "evidence_refs": ["artifact:k8s_validate"],
+            "metadata": {"source": "test"},
+            "actor": "ceo",
+        },
+    )
+    assert validation.status_code == 201
+    validation_payload = validation.json()
+    assert validation_payload["status"] == "blocked"
+    assert validation_payload["validation_kind"] == "multi_node_readiness"
+    assert validation_payload["checks"][0]["name"] == "kubernetes_manifests"
+    assert validation_payload["evidence_refs"] == ["artifact:k8s_validate"]
+    assert validation_payload["blocking_gaps"] == [
+        "cluster_validation_private_worker_pool_blocked"
+    ]
+
+    validation_list = client.get(
+        "/v1/enterprise/cluster-validation-runs",
+        params={
+            "project_id": "boss-dogfood",
+            "enterprise_cluster_id": blocked_payload["id"],
+        },
+    )
+    assert validation_list.status_code == 200
+    assert validation_list.json()["items"][0]["id"] == validation_payload["id"]
+
     listed = client.get(
         "/v1/enterprise/clusters",
         params={"project_id": "boss-dogfood"},
@@ -1719,6 +1784,7 @@ def test_enterprise_cluster_records_trust_controls_and_blocking_gaps(client):
     event_types = [item["event_type"] for item in events.json()["items"]]
     assert "policy.denied" in event_types
     assert "enterprise.cluster_upserted" in event_types
+    assert "enterprise.cluster_validation_recorded" in event_types
 
 
 def test_audit_export_enforces_actor_permission_and_enterprise_audit_controls(

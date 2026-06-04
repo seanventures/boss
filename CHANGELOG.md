@@ -15,6 +15,7 @@ This release adds the commercial, Account Connect, enterprise-governance, SCIM, 
 - Added BOSS Account Connect hosted-auth session APIs and Mission Control history with receipt-backed session creation/completion, callback-state validation, hosted-org linking from the adapter response, and visible blocked records when hosted configuration is missing.
 - Added license entitlement records and runtime entitlement checks that distinguish edition capabilities from active/trial hosted entitlements.
 - Added enterprise cluster inventory with trust metadata for SSO, SCIM, RBAC/ABAC, audit export, private workers, managed ProviderOps, compliance packs, support plans, SLA tier, and detached-license state.
+- Added Enterprise cluster validation runs for auditable HA/Kubernetes/private-worker readiness evidence with required-check blocking gaps and Mission Control visibility.
 - Added SCIM group and user provisioning records that map active SCIM users into effective org-member access and remove access on deactivation.
 - Added entitlement-gated packaged agent module installs with install governance records, denial audit events, rollback snapshots, and private enterprise module coverage.
 - Added Model Entitlement Broker enterprise/private and managed cloud model gateway capacity sources with explicit env-backed credential checks, route/pool visibility, restricted-data enterprise routing, and red-budget paid/gateway route denial.

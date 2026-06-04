@@ -118,6 +118,9 @@ from .schemas import (
     EntitlementSourceUpsertRequest,
     EnterpriseClusterListResponse,
     EnterpriseClusterSummary,
+    EnterpriseClusterValidationRunCreateRequest,
+    EnterpriseClusterValidationRunListResponse,
+    EnterpriseClusterValidationRunSummary,
     EnterpriseClusterUpsertRequest,
     EnterpriseIdentityRolloutPolicyListResponse,
     EnterpriseIdentityRolloutPolicySummary,
@@ -1374,6 +1377,12 @@ def enterprise_cluster_summary_from_service(payload) -> EnterpriseClusterSummary
     return EnterpriseClusterSummary(**payload)
 
 
+def enterprise_cluster_validation_run_summary_from_service(
+    payload,
+) -> EnterpriseClusterValidationRunSummary:
+    return EnterpriseClusterValidationRunSummary(**payload)
+
+
 def enterprise_support_case_summary_from_service(
     payload,
 ) -> EnterpriseSupportCaseSummary:
@@ -2152,6 +2161,65 @@ def upsert_enterprise_cluster(
         except ValueError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
         return enterprise_cluster_summary_from_service(cluster)
+
+
+@app.get(
+    "/v1/enterprise/cluster-validation-runs",
+    response_model=EnterpriseClusterValidationRunListResponse,
+)
+def list_enterprise_cluster_validation_runs(
+    project_id: str,
+    enterprise_cluster_id: Optional[str] = None,
+    limit: int = 50,
+) -> EnterpriseClusterValidationRunListResponse:
+    if limit < 1 or limit > 200:
+        raise HTTPException(status_code=422, detail="limit must be between 1 and 200")
+    with begin(engine) as connection:
+        items = enterprise.list_cluster_validation_runs(
+            connection,
+            project_id,
+            enterprise_cluster_id=enterprise_cluster_id,
+            limit=limit,
+        )
+        return EnterpriseClusterValidationRunListResponse(
+            project_id=project_id,
+            items=[
+                enterprise_cluster_validation_run_summary_from_service(item)
+                for item in items
+            ],
+        )
+
+
+@app.post(
+    "/v1/enterprise/cluster-validation-runs",
+    response_model=EnterpriseClusterValidationRunSummary,
+    status_code=201,
+)
+def create_enterprise_cluster_validation_run(
+    payload: EnterpriseClusterValidationRunCreateRequest,
+) -> EnterpriseClusterValidationRunSummary:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection,
+            payload.project_id,
+            payload.actor,
+            "enterprise_manage",
+        )
+        try:
+            run = enterprise.record_cluster_validation_run(
+                connection,
+                payload.project_id,
+                enterprise_cluster_id=payload.enterprise_cluster_id,
+                validation_kind=payload.validation_kind,
+                status=payload.status,
+                checks=payload.checks,
+                evidence_refs=payload.evidence_refs,
+                actor=payload.actor,
+                metadata=payload.metadata,
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        return enterprise_cluster_validation_run_summary_from_service(run)
 
 
 @app.get(

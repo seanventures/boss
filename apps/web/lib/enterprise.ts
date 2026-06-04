@@ -1,6 +1,7 @@
 import {
   BossApiError,
   type EnterpriseClusterSummary,
+  type EnterpriseClusterValidationRunSummary,
   type EnterpriseIdentityRolloutPolicySummary,
   type EnterpriseIdentityProviderSummary,
   type EnterpriseScimGroupSummary,
@@ -104,11 +105,25 @@ export type EnterpriseSupportCaseItem = {
   updatedAt: string;
 };
 
+export type EnterpriseClusterValidationRunItem = {
+  id: string;
+  enterpriseClusterId: string;
+  validationKind: string;
+  status: string;
+  checks: Array<Record<string, unknown>>;
+  evidenceRefs: string[];
+  blockingGaps: string[];
+  validatedBy: string;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+};
+
 export type EnterpriseFeed = {
   projectId: string;
   apiReachable: boolean;
   blockedReason?: string;
   clusters: EnterpriseClusterItem[];
+  clusterValidationRuns: EnterpriseClusterValidationRunItem[];
   identityProviders: EnterpriseIdentityProviderItem[];
   identityRolloutPolicies: EnterpriseIdentityRolloutPolicyItem[];
   scimGroups: EnterpriseScimGroupItem[];
@@ -145,6 +160,23 @@ function mapCluster(payload: EnterpriseClusterSummary): EnterpriseClusterItem {
     blockingGaps: payload.blocking_gaps,
     createdBy: payload.created_by,
     updatedAt: payload.updated_at,
+  };
+}
+
+function mapClusterValidationRun(
+  payload: EnterpriseClusterValidationRunSummary,
+): EnterpriseClusterValidationRunItem {
+  return {
+    id: payload.id,
+    enterpriseClusterId: payload.enterprise_cluster_id,
+    validationKind: payload.validation_kind,
+    status: payload.status,
+    checks: payload.checks,
+    evidenceRefs: payload.evidence_refs,
+    blockingGaps: payload.blocking_gaps,
+    validatedBy: payload.validated_by,
+    metadata: payload.metadata,
+    createdAt: payload.created_at,
   };
 }
 
@@ -249,6 +281,7 @@ export function emptyEnterpriseFeed(
     apiReachable: false,
     blockedReason: reason,
     clusters: [],
+    clusterValidationRuns: [],
     identityProviders: [],
     identityRolloutPolicies: [],
     scimGroups: [],
@@ -274,6 +307,7 @@ export async function fetchEnterpriseFeed(
   try {
     const [
       clusters,
+      clusterValidationRuns,
       identityProviders,
       identityRolloutPolicies,
       scimGroups,
@@ -281,6 +315,7 @@ export async function fetchEnterpriseFeed(
       supportCases,
     ] = await Promise.all([
       client.listEnterpriseClusters(resolvedProjectId),
+      client.listEnterpriseClusterValidationRuns(resolvedProjectId),
       client.listEnterpriseIdentityProviders(resolvedProjectId),
       client.listEnterpriseIdentityRolloutPolicies(resolvedProjectId),
       client.listEnterpriseScimGroups(resolvedProjectId),
@@ -288,6 +323,9 @@ export async function fetchEnterpriseFeed(
       client.listEnterpriseSupportCases(resolvedProjectId),
     ]);
     const clusterItems = clusters.items.map(mapCluster);
+    const validationItems = clusterValidationRuns.items.map(
+      mapClusterValidationRun,
+    );
     const providerItems = identityProviders.items.map(mapIdentityProvider);
     const userItems = scimUsers.items.map(mapScimUser);
     const supportItems = supportCases.items.map(mapSupportCase);
@@ -295,6 +333,7 @@ export async function fetchEnterpriseFeed(
       projectId: resolvedProjectId,
       apiReachable: true,
       clusters: clusterItems,
+      clusterValidationRuns: validationItems,
       identityProviders: providerItems,
       identityRolloutPolicies: identityRolloutPolicies.items.map(
         mapIdentityRolloutPolicy,
@@ -321,6 +360,10 @@ export async function fetchEnterpriseFeed(
         blockingGapCount:
           clusterItems.reduce(
             (total, cluster) => total + cluster.blockingGaps.length,
+            0,
+          ) +
+          validationItems.reduce(
+            (total, run) => total + run.blockingGaps.length,
             0,
           ) +
           providerItems.reduce(

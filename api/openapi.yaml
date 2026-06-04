@@ -537,6 +537,50 @@ paths:
         '201': { description: Enterprise cluster record normalized, policy gaps calculated, and audit event emitted }
         '403': { description: Actor is not allowed to manage enterprise trust or clustering records }
         '422': { description: Unsupported enterprise deployment or Account Connect mode }
+  /v1/enterprise/cluster-validation-runs:
+    get:
+      summary: List auditable Enterprise cluster validation runs
+      parameters:
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+        - name: enterprise_cluster_id
+          in: query
+          required: false
+          schema: { type: string }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, default: 50 }
+      responses:
+        '200': { description: Cluster validation run records with checks, evidence references, status, and blocking gaps }
+    post:
+      summary: Record Enterprise cluster validation evidence without claiming a live rollout occurred
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id, enterprise_cluster_id, validation_kind, checks]
+              properties:
+                project_id: { type: string }
+                enterprise_cluster_id: { type: string }
+                validation_kind: { type: string }
+                status: { type: string, default: passed }
+                checks:
+                  type: array
+                  items: { type: object }
+                evidence_refs:
+                  type: array
+                  items: { type: string }
+                metadata: { type: object }
+                actor: { type: string, default: ceo }
+      responses:
+        '201': { description: Validation run recorded and enterprise.cluster_validation_recorded event emitted }
+        '403': { description: Actor is not allowed to manage enterprise trust or clustering records }
+        '422': { description: Invalid cluster, status, or check payload }
   /v1/enterprise/support-cases:
     get:
       summary: List enterprise support/SLA cases for a project

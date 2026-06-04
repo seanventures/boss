@@ -249,6 +249,23 @@ CREATE INDEX IF NOT EXISTS idx_enterprise_clusters_project_status
 CREATE INDEX IF NOT EXISTS idx_enterprise_clusters_org
   ON enterprise_clusters(org_id, deployment_mode);
 
+CREATE TABLE IF NOT EXISTS enterprise_cluster_validation_runs (
+  id TEXT PRIMARY KEY,
+  org_id TEXT NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  enterprise_cluster_id TEXT NOT NULL REFERENCES enterprise_clusters(id) ON DELETE CASCADE,
+  validation_kind TEXT NOT NULL,
+  status TEXT NOT NULL,
+  checks JSONB NOT NULL DEFAULT '[]'::jsonb,
+  evidence_refs JSONB NOT NULL DEFAULT '[]'::jsonb,
+  blocking_gaps JSONB NOT NULL DEFAULT '[]'::jsonb,
+  validated_by TEXT NOT NULL DEFAULT 'system',
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_enterprise_cluster_validation_runs_project
+  ON enterprise_cluster_validation_runs(project_id, enterprise_cluster_id, created_at DESC);
+
 CREATE TABLE IF NOT EXISTS enterprise_identity_providers (
   id TEXT PRIMARY KEY,
   org_id TEXT NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,

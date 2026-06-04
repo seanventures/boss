@@ -10,6 +10,7 @@ vi.mock("../lib/client", () => ({
     listAccountConnectTeamInvites: vi.fn(),
     listAccountConnectBillingPortalSessions: vi.fn(),
     listEnterpriseClusters: vi.fn(),
+    listEnterpriseClusterValidationRuns: vi.fn(),
     listEnterpriseIdentityProviders: vi.fn(),
     listEnterpriseIdentityRolloutPolicies: vi.fn(),
     listEnterpriseScimGroups: vi.fn(),
@@ -204,6 +205,31 @@ describe("commercial, enterprise, and marketplace feeds", async () => {
         },
       ],
     });
+    vi.mocked(client.listEnterpriseClusterValidationRuns).mockResolvedValueOnce({
+      project_id: "boss-dogfood",
+      items: [
+        {
+          id: "entclval_1",
+          org_id: "org_boss",
+          project_id: "boss-dogfood",
+          enterprise_cluster_id: "cluster_1",
+          validation_kind: "multi_node_readiness",
+          status: "blocked",
+          checks: [
+            {
+              name: "private_worker_pool",
+              status: "blocked",
+              required: true,
+            },
+          ],
+          evidence_refs: ["artifact:k8s_validate"],
+          blocking_gaps: ["cluster_validation_private_worker_pool_blocked"],
+          validated_by: "ceo",
+          metadata: {},
+          created_at: "2026-06-03T01:00:00Z",
+        },
+      ],
+    });
     vi.mocked(client.listEnterpriseIdentityProviders).mockResolvedValueOnce({
       project_id: "boss-dogfood",
       items: [
@@ -352,10 +378,15 @@ describe("commercial, enterprise, and marketplace feeds", async () => {
     const feed = await fetchEnterpriseFeed("boss-dogfood");
 
     expect(feed.summary.clusterCount).toBe(1);
+    expect(feed.clusterValidationRuns[0]).toMatchObject({
+      validationKind: "multi_node_readiness",
+      status: "blocked",
+      evidenceRefs: ["artifact:k8s_validate"],
+    });
     expect(feed.summary.identityProviderCount).toBe(2);
     expect(feed.summary.activeIdentityProviders).toBe(1);
     expect(feed.summary.activeScimUsers).toBe(1);
-    expect(feed.summary.blockingGapCount).toBe(2);
+    expect(feed.summary.blockingGapCount).toBe(3);
     expect(feed.summary.supportCaseCount).toBe(2);
     expect(feed.summary.openSupportCases).toBe(1);
     expect(feed.summary.blockedSupportCases).toBe(1);

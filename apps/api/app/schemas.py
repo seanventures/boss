@@ -381,6 +381,52 @@ class EnterpriseClusterListResponse(BaseModel):
     items: list[EnterpriseClusterSummary]
 
 
+class EnterpriseClusterValidationRunSummary(BaseModel):
+    id: str
+    org_id: str
+    project_id: str
+    enterprise_cluster_id: str
+    validation_kind: str
+    status: str
+    checks: list[dict[str, Any]]
+    evidence_refs: list[str]
+    blocking_gaps: list[str]
+    validated_by: str
+    metadata: dict[str, Any]
+    created_at: str
+
+
+class EnterpriseClusterValidationRunListResponse(BaseModel):
+    project_id: str
+    items: list[EnterpriseClusterValidationRunSummary]
+
+
+class EnterpriseClusterValidationRunCreateRequest(BaseModel):
+    project_id: str
+    enterprise_cluster_id: str
+    validation_kind: str
+    status: str = "passed"
+    checks: list[dict[str, Any]]
+    evidence_refs: list[str] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    actor: str = "system"
+
+    @model_validator(mode="after")
+    def validate_cluster_validation(
+        self,
+    ) -> "EnterpriseClusterValidationRunCreateRequest":
+        self.project_id = _require_text(self.project_id, "project_id")
+        self.enterprise_cluster_id = _require_text(
+            self.enterprise_cluster_id, "enterprise_cluster_id"
+        )
+        self.validation_kind = _require_text(self.validation_kind, "validation_kind")
+        self.status = _require_text(self.status, "status")
+        if not self.checks:
+            raise ValueError("checks must contain at least one validation check.")
+        self.actor = _require_text(self.actor, "actor")
+        return self
+
+
 class EnterpriseClusterUpsertRequest(BaseModel):
     project_id: str
     deployment_mode: str = "enterprise_cloud"

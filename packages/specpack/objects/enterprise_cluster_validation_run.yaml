@@ -1,0 +1,31 @@
+kind: ObjectSpec
+id: EnterpriseClusterValidationRun
+version: 0.1.0
+description: Auditable evidence record for Enterprise HA, Kubernetes, private-worker, failover, backup, or rollout-readiness validation.
+fields:
+  - name: id
+    type: string
+  - name: project_id
+    type: string
+  - name: enterprise_cluster_id
+    type: string
+  - name: validation_kind
+    type: string
+  - name: status
+    type: enum
+    values: [passed, warning, failed, blocked]
+  - name: checks
+    type: array
+  - name: evidence_refs
+    type: array
+  - name: blocking_gaps
+    type: array
+  - name: validated_by
+    type: string
+  - name: metadata
+    type: object
+rules:
+  validation_runs_are_evidence_not_live_rollout_claims: true
+  required_failed_checks_create_blocking_gaps: true
+  enterprise_manage_permission_required: true
+  live_rollout_still_requires_environment_specific_approval: true
