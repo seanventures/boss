@@ -3,6 +3,7 @@ from contextvars import ContextVar
 import re
 from secrets import compare_digest
 from typing import Any, Optional
+from urllib.parse import parse_qs
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, Response
@@ -25,6 +26,7 @@ from .schemas import (
     ArtifactListResponse,
     ArtifactSummary,
     AuthSessionResponse,
+    SamlLoginResponse,
     AccountConnectLinkRequest,
     AccountConnectBillingPortalSessionCreateRequest,
     AccountConnectBillingPortalSessionListResponse,
@@ -315,6 +317,11 @@ from .services.oidc import (
     OidcAuthenticator,
     OidcConfigurationError,
 )
+from .services.saml import (
+    SamlAuthenticationError,
+    SamlConfigurationError,
+    SamlSessionService,
+)
 from .services.ops import OpsQueueService
 from .services.receipts import ReceiptService
 from .services.resource_plane import (
@@ -365,6 +372,7 @@ ops_queue = OpsQueueService(settings)
 break_glass = BreakGlassService()
 resource_plane = ResourcePlaneService(settings)
 oidc_auth = OidcAuthenticator(settings)
+saml_sessions = SamlSessionService(settings)
 current_api_principal: ContextVar[Optional[str]] = ContextVar(
     "current_api_principal",
     default=None,
@@ -418,7 +426,11 @@ def api_token_allowed(token: str, allowed_tokens: tuple[str, ...]) -> bool:
 
 @app.middleware("http")
 async def require_transport_auth_for_v1(request: Request, call_next):
-    auth_required = settings.require_api_auth or settings.oidc_enabled
+    auth_required = (
+        settings.require_api_auth
+        or settings.oidc_enabled
+        or settings.enterprise_saml_enabled
+    )
     if not request.url.path.startswith("/v1/") or not auth_required:
         principal_token = current_api_principal.set(None)
         authenticated_token = current_transport_authenticated.set(False)
@@ -431,7 +443,12 @@ async def require_transport_auth_for_v1(request: Request, call_next):
             current_auth_method.reset(auth_method_token)
 
     allowed_tokens = settings.api_key_values
-    if settings.require_api_auth and not allowed_tokens and not settings.oidc_enabled:
+    if (
+        settings.require_api_auth
+        and not allowed_tokens
+        and not settings.oidc_enabled
+        and not settings.enterprise_saml_enabled
+    ):
         return JSONResponse(
             status_code=503,
             content={
@@ -471,6 +488,14 @@ async def require_transport_auth_for_v1(request: Request, call_next):
                     headers={"WWW-Authenticate": "Bearer"},
                 )
             auth_method = "oidc"
+    if not auth_method and settings.enterprise_saml_enabled:
+        bearer_token = extract_bearer_token(request)
+        if bearer_token:
+            with begin(engine) as connection:
+                session = saml_sessions.authenticate_token(connection, bearer_token)
+            if session:
+                principal = session["member_id"]
+                auth_method = "saml"
 
     if not auth_method:
         return JSONResponse(
@@ -1555,13 +1580,23 @@ def health() -> HealthResponse:
 def auth_session() -> AuthSessionResponse:
     principal = current_api_principal.get()
     auth_method = current_auth_method.get()
-    binding_required = bool(settings.api_key_principal_map) or settings.oidc_enabled
+    binding_required = (
+        bool(settings.api_key_principal_map)
+        or settings.oidc_enabled
+        or settings.enterprise_saml_enabled
+    )
     transport_authenticated = current_transport_authenticated.get()
-    auth_required = settings.require_api_auth or settings.oidc_enabled
+    auth_required = (
+        settings.require_api_auth
+        or settings.oidc_enabled
+        or settings.enterprise_saml_enabled
+    )
     if not auth_required:
         message = "API authentication is disabled for this runtime."
     elif settings.oidc_enabled and not settings.oidc_configured:
         message = "OIDC authentication is enabled but not fully configured."
+    elif settings.enterprise_saml_enabled and auth_method == "saml":
+        message = f"Authenticated as project member '{principal}' via saml."
     elif binding_required and principal:
         method_label = auth_method or "transport"
         message = f"Authenticated as project member '{principal}' via {method_label}."
@@ -1577,6 +1612,79 @@ def auth_session() -> AuthSessionResponse:
         auth_method=auth_method,
         oidc_enabled=settings.oidc_enabled,
         message=message,
+    )
+
+
+@app.get("/saml/v2/{project_id}/metadata", response_class=Response)
+def saml_metadata(project_id: str, request: Request) -> Response:
+    with begin(engine) as connection:
+        metadata_xml = saml_sessions.metadata(
+            connection,
+            project_id,
+            str(request.base_url).rstrip("/"),
+        )
+    return Response(content=metadata_xml, media_type="application/samlmetadata+xml")
+
+
+async def saml_response_from_request(request: Request) -> str:
+    content_type = request.headers.get("content-type", "").split(";")[0].strip()
+    if content_type == "application/json":
+        payload = await request.json()
+        value = payload.get("SAMLResponse") if isinstance(payload, dict) else None
+    else:
+        body = (await request.body()).decode("utf-8")
+        parsed = parse_qs(body)
+        values = parsed.get("SAMLResponse") or parsed.get("saml_response")
+        value = values[0] if values else None
+    if not isinstance(value, str) or not value.strip():
+        raise HTTPException(status_code=422, detail="SAMLResponse is required.")
+    return value.strip()
+
+
+@app.post("/saml/v2/{project_id}/acs", response_model=SamlLoginResponse)
+async def saml_acs(project_id: str, request: Request) -> SamlLoginResponse:
+    if not settings.enterprise_saml_enabled:
+        with begin(engine) as connection:
+            emit_event(
+                connection,
+                project_id,
+                "enterprise.saml_runtime_blocked",
+                "saml",
+                "enterprise_identity_provider",
+                project_id,
+                {"reason": "enterprise_saml_disabled"},
+            )
+        raise HTTPException(
+            status_code=503,
+            detail="BOSS_ENTERPRISE_SAML_ENABLED is required before SAML login.",
+        )
+    saml_response = await saml_response_from_request(request)
+    saml_error: Optional[Exception] = None
+    session = None
+    with begin(engine) as connection:
+        try:
+            session = saml_sessions.create_session(
+                connection,
+                project_id,
+                saml_response,
+            )
+        except SamlConfigurationError as error:
+            saml_error = error
+        except SamlAuthenticationError as error:
+            saml_error = error
+    if isinstance(saml_error, SamlConfigurationError):
+        raise HTTPException(status_code=403, detail=str(saml_error)) from saml_error
+    if isinstance(saml_error, SamlAuthenticationError):
+        raise HTTPException(status_code=401, detail=str(saml_error)) from saml_error
+    if session is None:
+        raise HTTPException(status_code=500, detail="SAML session was not created.")
+    return SamlLoginResponse(
+        project_id=project_id,
+        session_id=session.id,
+        access_token=session.token,
+        member_id=session.member_id,
+        provider_id=session.provider_id,
+        expires_at=session.expires_at,
     )
 
 

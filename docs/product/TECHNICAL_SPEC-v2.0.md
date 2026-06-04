@@ -223,6 +223,7 @@ Enterprise identity rollout is tracked as auditable control-plane state before a
 Objects:
 
 - `EnterpriseIdentityProvider`: OIDC, SAML, or SCIM metadata with status, test status, blocking gaps, and SecretRefs.
+- `EnterpriseSamlSession`: hashed, expiring bearer session created only after a signed SAML assertion is verified against active provider metadata.
 - `EnterpriseScimGroup`: external group mapped to BOSS roles and permissions.
 - `EnterpriseScimUser`: external user mapped to an effective BOSS org-member record.
 - SCIM 2.0 runtime endpoints: `/scim/v2/{project_id}/Groups` and `/scim/v2/{project_id}/Users` for IdP push provisioning.
@@ -233,8 +234,11 @@ Rules:
 - Incomplete OIDC/SAML/SCIM provider records remain visible but cannot satisfy enterprise cluster identity controls.
 - If an operator marks an incomplete IdP record active, BOSS stores it as `blocked` with explicit `blocking_gaps`.
 - Complete active IdP records can satisfy enterprise cluster OIDC/SAML/SCIM blocking-gap evaluation.
+- SAML runtime login is available through `/saml/v2/{project_id}/metadata` and `/saml/v2/{project_id}/acs` only when `BOSS_ENTERPRISE_SAML_ENABLED=true`.
+- SAML ACS accepts API JSON or form-encoded `SAMLResponse`, verifies an enveloped RSA-SHA256 XML signature on the Assertion, validates the signing certificate fingerprint, issuer, audience, time conditions, and member mapping, then stores only a hashed expiring bearer token.
+- Unsigned, unsupported, expired, unmapped, or misconfigured SAML attempts fail closed and emit visible enterprise SAML events.
 - IdP-facing SCIM runtime provisioning is fail-closed unless `BOSS_ENTERPRISE_SCIM_BEARER_TOKENS` is configured and the project has an active, non-blocked SCIM identity-provider record. SCIM create/update/delete maps through deterministic BOSS group/user provisioning and never stores raw SCIM bearer tokens.
-- This registry is not fake hosted login. Live OIDC/SAML auth still requires environment-specific issuer, audience, JWKS/cert, redirect, and claim-mapping configuration.
+- Live OIDC/SAML auth still requires environment-specific issuer, audience, JWKS/cert, redirect, and claim-mapping configuration.
 
 ## Clustering and Enterprise HA
 

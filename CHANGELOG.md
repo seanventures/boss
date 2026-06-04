@@ -20,6 +20,7 @@ This release adds the commercial, Account Connect, enterprise-governance, SCIM, 
 - Added Enterprise audit-export governance with `audit_export` actor enforcement, audit-export disable gates, retention/export-mode metadata in audit exports, and `audit.export_generated` events.
 - Added Enterprise support/SLA case records with local case tracking, SLA due dates, lifecycle updates, and receipt-backed hosted escalation that blocks visibly when Account Connect support is not configured.
 - Added Mission Control support/SLA panels for open and blocked enterprise support cases, hosted escalation receipts, SLA due dates, and case lifecycle/assignment updates.
+- Added constrained Enterprise SAML runtime support with service-provider metadata, signed RSA-SHA256 ACS verification, certificate fingerprint checks, hashed expiring bearer sessions, and fail-closed SAML audit events.
 - Added OpenAPI, TypeScript API client, specpack objects, workflows, policies, user stories, and traceability coverage for the new commercial and enterprise runtime surfaces.
 
 ## v0.3.0 - 2026-06-03

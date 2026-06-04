@@ -1,0 +1,36 @@
+kind: ObjectSpec
+id: EnterpriseSamlSession
+version: 0.1.0
+description: Short-lived enterprise SAML bearer session created only after signed assertion verification.
+fields:
+  - name: id
+    type: string
+  - name: org_id
+    type: string
+  - name: project_id
+    type: string
+  - name: provider_id
+    type: string
+  - name: member_id
+    type: string
+  - name: subject
+    type: string
+  - name: token_hash
+    type: string
+  - name: status
+    type: enum
+    values: [active, revoked, expired]
+  - name: claims
+    type: object
+  - name: expires_at
+    type: datetime
+  - name: last_seen_at
+    type: datetime
+    optional: true
+rules:
+  raw_saml_bearer_tokens_stored: false
+  signed_assertion_required: true
+  certificate_fingerprint_required: true
+  audience_and_time_conditions_required: true
+  mapped_member_must_exist: true
+  failed_logins_emit_events: true

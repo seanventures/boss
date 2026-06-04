@@ -1,11 +1,17 @@
 import json
 import subprocess
+import base64
 from datetime import datetime, timedelta, timezone
 from typing import Optional
+import xml.etree.ElementTree as ET
 
 import pytest
 import jwt
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import padding
 from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.x509.oid import NameOID
 from sqlalchemy import text
 
 from apps.api.app import main as api_main
@@ -109,6 +115,134 @@ def configure_pr_proposal_integrations(monkeypatch):
             ],
         ),
     )
+
+
+def _canonicalize_xml(element: ET.Element) -> bytes:
+    xml = ET.tostring(element, encoding="unicode")
+    return ET.canonicalize(xml_data=xml, with_comments=False).encode("utf-8")
+
+
+def create_saml_certificate(private_key):
+    subject = issuer = x509.Name(
+        [x509.NameAttribute(NameOID.COMMON_NAME, "BOSS Test SAML IdP")]
+    )
+    return (
+        x509.CertificateBuilder()
+        .subject_name(subject)
+        .issuer_name(issuer)
+        .public_key(private_key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(datetime.now(timezone.utc) - timedelta(minutes=5))
+        .not_valid_after(datetime.now(timezone.utc) + timedelta(days=1))
+        .sign(private_key, hashes.SHA256())
+    )
+
+
+def signed_saml_response(
+    *,
+    private_key,
+    certificate,
+    issuer: str,
+    audience: str,
+    subject: str,
+    member_id: str,
+) -> str:
+    saml_ns = "urn:oasis:names:tc:SAML:2.0:assertion"
+    protocol_ns = "urn:oasis:names:tc:SAML:2.0:protocol"
+    dsig_ns = "http://www.w3.org/2000/09/xmldsig#"
+    ET.register_namespace("saml", saml_ns)
+    ET.register_namespace("samlp", protocol_ns)
+    ET.register_namespace("ds", dsig_ns)
+
+    response = ET.Element(
+        f"{{{protocol_ns}}}Response",
+        {"ID": "resp_test", "Version": "2.0"},
+    )
+    assertion = ET.SubElement(
+        response,
+        f"{{{saml_ns}}}Assertion",
+        {"ID": "assert_test", "Version": "2.0"},
+    )
+    ET.SubElement(assertion, f"{{{saml_ns}}}Issuer").text = issuer
+    subject_el = ET.SubElement(assertion, f"{{{saml_ns}}}Subject")
+    ET.SubElement(subject_el, f"{{{saml_ns}}}NameID").text = subject
+    conditions = ET.SubElement(
+        assertion,
+        f"{{{saml_ns}}}Conditions",
+        {
+            "NotBefore": (
+                datetime.now(timezone.utc) - timedelta(minutes=1)
+            ).isoformat(),
+            "NotOnOrAfter": (
+                datetime.now(timezone.utc) + timedelta(minutes=5)
+            ).isoformat(),
+        },
+    )
+    audience_restriction = ET.SubElement(
+        conditions,
+        f"{{{saml_ns}}}AudienceRestriction",
+    )
+    ET.SubElement(audience_restriction, f"{{{saml_ns}}}Audience").text = audience
+    attributes = ET.SubElement(assertion, f"{{{saml_ns}}}AttributeStatement")
+    attribute = ET.SubElement(
+        attributes,
+        f"{{{saml_ns}}}Attribute",
+        {"Name": "boss_member_id"},
+    )
+    ET.SubElement(attribute, f"{{{saml_ns}}}AttributeValue").text = member_id
+
+    hasher = hashes.Hash(hashes.SHA256())
+    hasher.update(_canonicalize_xml(assertion))
+    digest = base64.b64encode(hasher.finalize()).decode("ascii")
+
+    signature = ET.SubElement(assertion, f"{{{dsig_ns}}}Signature")
+    signed_info = ET.SubElement(signature, f"{{{dsig_ns}}}SignedInfo")
+    ET.SubElement(
+        signed_info,
+        f"{{{dsig_ns}}}CanonicalizationMethod",
+        {"Algorithm": "http://www.w3.org/2006/12/xml-c14n11"},
+    )
+    ET.SubElement(
+        signed_info,
+        f"{{{dsig_ns}}}SignatureMethod",
+        {"Algorithm": "http://www.w3.org/2001/04/xmldsig-more#rsa-sha256"},
+    )
+    reference = ET.SubElement(
+        signed_info,
+        f"{{{dsig_ns}}}Reference",
+        {"URI": "#assert_test"},
+    )
+    transforms = ET.SubElement(reference, f"{{{dsig_ns}}}Transforms")
+    ET.SubElement(
+        transforms,
+        f"{{{dsig_ns}}}Transform",
+        {"Algorithm": "http://www.w3.org/2000/09/xmldsig#enveloped-signature"},
+    )
+    ET.SubElement(
+        transforms,
+        f"{{{dsig_ns}}}Transform",
+        {"Algorithm": "http://www.w3.org/2006/12/xml-c14n11"},
+    )
+    ET.SubElement(
+        reference,
+        f"{{{dsig_ns}}}DigestMethod",
+        {"Algorithm": "http://www.w3.org/2001/04/xmlenc#sha256"},
+    )
+    ET.SubElement(reference, f"{{{dsig_ns}}}DigestValue").text = digest
+    signature_value = private_key.sign(
+        _canonicalize_xml(signed_info),
+        padding.PKCS1v15(),
+        hashes.SHA256(),
+    )
+    ET.SubElement(signature, f"{{{dsig_ns}}}SignatureValue").text = base64.b64encode(
+        signature_value
+    ).decode("ascii")
+    key_info = ET.SubElement(signature, f"{{{dsig_ns}}}KeyInfo")
+    x509_data = ET.SubElement(key_info, f"{{{dsig_ns}}}X509Data")
+    ET.SubElement(x509_data, f"{{{dsig_ns}}}X509Certificate").text = base64.b64encode(
+        certificate.public_bytes(serialization.Encoding.DER)
+    ).decode("ascii")
+    return base64.b64encode(ET.tostring(response, encoding="utf-8")).decode("ascii")
 
 
 def reserve_for_pr_proposal(client) -> str:
@@ -518,6 +652,127 @@ def test_oidc_authenticator_verifies_signed_jwt_and_member_claim(monkeypatch):
     assert principal.member_id == "ceo"
     assert principal.subject == "sub-ceo"
     assert principal.issuer == "https://issuer.example.com"
+
+
+def test_enterprise_saml_runtime_verifies_assertion_and_binds_session(client, engine):
+    project_id = "boss-saml-runtime"
+    previous_saml_enabled = api_main.settings.enterprise_saml_enabled
+    previous_saml_ttl = api_main.settings.enterprise_saml_session_ttl_minutes
+    previous_member_attribute = api_main.settings.enterprise_saml_member_attribute
+    with engine.begin() as connection:
+        connection.execute(text("DELETE FROM enterprise_saml_sessions WHERE project_id = :project_id"), {"project_id": project_id})
+        connection.execute(text("DELETE FROM enterprise_identity_providers WHERE project_id = :project_id"), {"project_id": project_id})
+        connection.execute(text("DELETE FROM events WHERE project_id = :project_id"), {"project_id": project_id})
+        connection.execute(text("DELETE FROM project_members WHERE project_id = :project_id"), {"project_id": project_id})
+        connection.execute(text("DELETE FROM projects WHERE id = :project_id"), {"project_id": project_id})
+        connection.execute(
+            text(
+                """
+                INSERT INTO projects (id, workspace_id, name, slug)
+                VALUES (:project_id, 'ws_boss', 'BOSS SAML Runtime', :project_id)
+                """
+            ),
+            {"project_id": project_id},
+        )
+        api_main.members.seed_default_members(connection, project_id, "test")
+
+    try:
+        api_main.settings.enterprise_saml_enabled = False
+        disabled = client.post(
+            f"/saml/v2/{project_id}/acs",
+            json={"SAMLResponse": "not-yet-validated"},
+        )
+        assert disabled.status_code == 503
+
+        api_main.settings.enterprise_saml_enabled = True
+        api_main.settings.enterprise_saml_session_ttl_minutes = 30
+        api_main.settings.enterprise_saml_member_attribute = "boss_member_id"
+        missing_provider = client.post(
+            f"/saml/v2/{project_id}/acs",
+            json={"SAMLResponse": base64.b64encode(b"<empty />").decode("ascii")},
+        )
+        assert missing_provider.status_code == 403
+
+        api_main.settings.enterprise_saml_enabled = False
+        private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        certificate = create_saml_certificate(private_key)
+        fingerprint = certificate.fingerprint(hashes.SHA256()).hex()
+        provider = client.post(
+            "/v1/enterprise/identity-providers",
+            json={
+                "project_id": project_id,
+                "provider_key": "okta_saml",
+                "provider_type": "saml",
+                "display_name": "Okta SAML",
+                "issuer": "https://idp.example/saml",
+                "entity_id": "urn:boss:test:saml",
+                "sso_url": "https://idp.example/sso",
+                "certificate_fingerprint": fingerprint,
+                "status": "active",
+                "actor": "ceo",
+            },
+        )
+        assert provider.status_code == 201
+        assert provider.json()["status"] == "active"
+        api_main.settings.enterprise_saml_enabled = True
+
+        metadata = client.get(f"/saml/v2/{project_id}/metadata")
+        assert metadata.status_code == 200
+        assert "AssertionConsumerService" in metadata.text
+
+        response = signed_saml_response(
+            private_key=private_key,
+            certificate=certificate,
+            issuer="https://idp.example/saml",
+            audience="urn:boss:test:saml",
+            subject="ceo@example.com",
+            member_id="ceo",
+        )
+        login = client.post(
+            f"/saml/v2/{project_id}/acs",
+            json={"SAMLResponse": response},
+        )
+        assert login.status_code == 200
+        login_payload = login.json()
+        assert login_payload["access_token"].startswith("boss_saml_")
+        assert login_payload["member_id"] == "ceo"
+
+        session = client.get(
+            "/v1/auth/session",
+            headers=auth_headers(login_payload["access_token"]),
+        )
+        assert session.status_code == 200
+        assert session.json()["principal_member_id"] == "ceo"
+        assert session.json()["auth_method"] == "saml"
+
+        wrong_audience = signed_saml_response(
+            private_key=private_key,
+            certificate=certificate,
+            issuer="https://idp.example/saml",
+            audience="urn:wrong:audience",
+            subject="ceo@example.com",
+            member_id="ceo",
+        )
+        rejected = client.post(
+            f"/saml/v2/{project_id}/acs",
+            json={"SAMLResponse": wrong_audience},
+        )
+        assert rejected.status_code == 401
+        assert "audience" in rejected.json()["detail"]
+
+        events = client.get(
+            "/v1/events",
+            params={"project_id": project_id, "limit": 20},
+            headers=auth_headers(login_payload["access_token"]),
+        )
+        event_types = [item["event_type"] for item in events.json()["items"]]
+        assert "enterprise.saml_runtime_blocked" in event_types
+        assert "enterprise.saml_login_succeeded" in event_types
+        assert "enterprise.saml_login_failed" in event_types
+    finally:
+        api_main.settings.enterprise_saml_enabled = previous_saml_enabled
+        api_main.settings.enterprise_saml_session_ttl_minutes = previous_saml_ttl
+        api_main.settings.enterprise_saml_member_attribute = previous_member_attribute
 
 
 def test_api_key_principal_binding_applies_to_decision_transitions(client, engine):

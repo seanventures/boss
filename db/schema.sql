@@ -255,6 +255,26 @@ CREATE INDEX IF NOT EXISTS idx_enterprise_identity_providers_project_status
 CREATE INDEX IF NOT EXISTS idx_enterprise_identity_providers_org
   ON enterprise_identity_providers(org_id, provider_type);
 
+CREATE TABLE IF NOT EXISTS enterprise_saml_sessions (
+  id TEXT PRIMARY KEY,
+  org_id TEXT NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  provider_id TEXT NOT NULL REFERENCES enterprise_identity_providers(id) ON DELETE CASCADE,
+  member_id TEXT NOT NULL,
+  subject TEXT NOT NULL,
+  token_hash TEXT NOT NULL UNIQUE,
+  status TEXT NOT NULL DEFAULT 'active',
+  claims JSONB NOT NULL DEFAULT '{}'::jsonb,
+  expires_at TIMESTAMPTZ NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_seen_at TIMESTAMPTZ,
+  revoked_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_enterprise_saml_sessions_project
+  ON enterprise_saml_sessions(project_id, member_id, status, expires_at);
+CREATE INDEX IF NOT EXISTS idx_enterprise_saml_sessions_token
+  ON enterprise_saml_sessions(token_hash, status, expires_at);
+
 CREATE TABLE IF NOT EXISTS enterprise_scim_groups (
   id TEXT PRIMARY KEY,
   org_id TEXT NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,

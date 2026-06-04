@@ -146,6 +146,15 @@ class Settings(BaseSettings):
     enterprise_scim_bearer_tokens: str = Field(
         default="", alias="BOSS_ENTERPRISE_SCIM_BEARER_TOKENS"
     )
+    enterprise_saml_enabled: bool = Field(
+        default=False, alias="BOSS_ENTERPRISE_SAML_ENABLED"
+    )
+    enterprise_saml_session_ttl_minutes: int = Field(
+        default=480, alias="BOSS_ENTERPRISE_SAML_SESSION_TTL_MINUTES"
+    )
+    enterprise_saml_member_attribute: str = Field(
+        default="boss_member_id", alias="BOSS_ENTERPRISE_SAML_MEMBER_ATTRIBUTE"
+    )
     cursor_cli_enabled: bool = Field(default=False, alias="BOSS_CURSOR_CLI_ENABLED")
     local_model_enabled: bool = Field(default=False, alias="BOSS_LOCAL_MODEL_ENABLED")
     local_model_id: Optional[str] = Field(

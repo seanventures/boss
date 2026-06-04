@@ -22,6 +22,46 @@ paths:
       summary: Inspect transport authentication, OIDC state, and principal binding
       responses:
         '200': { description: Auth session, auth method, OIDC state, and principal binding state }
+  /saml/v2/{project_id}/metadata:
+    get:
+      security: []
+      summary: Return BOSS SAML service-provider metadata for an enterprise project
+      parameters:
+        - name: project_id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: SAML service-provider metadata XML with ACS endpoint }
+  /saml/v2/{project_id}/acs:
+    post:
+      security: []
+      summary: Exchange a signed enterprise SAMLResponse for a short-lived BOSS bearer session
+      parameters:
+        - name: project_id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [SAMLResponse]
+              properties:
+                SAMLResponse: { type: string }
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required: [SAMLResponse]
+              properties:
+                SAMLResponse: { type: string }
+      responses:
+        '200': { description: Signed assertion verified; hashed SAML session stored; bearer token returned }
+        '401': { description: Assertion signature, certificate, audience, time, issuer, or member mapping failed }
+        '403': { description: No active non-blocked SAML provider is configured }
+        '503': { description: BOSS_ENTERPRISE_SAML_ENABLED is not enabled }
   /v1/edition:
     get:
       summary: Inspect effective BOSS edition, Account Connect requirement, and active commercial capabilities

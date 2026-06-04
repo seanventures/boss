@@ -439,6 +439,9 @@ Acceptance criteria:
 - Given an Enterprise Cloud cluster has SSO/OIDC or SAML, SCIM, audit exports, retention, and SLA metadata configured, when it is saved, then BOSS records it as active with no blocking gaps.
 - Given complete active OIDC and SCIM identity-provider records exist, when an Enterprise Cloud cluster is saved without manual identity flags, then BOSS treats those provider records as satisfying the corresponding identity controls.
 - Given an operator marks an incomplete SAML/OIDC/SCIM provider active, when BOSS saves it, then BOSS stores the record as blocked with explicit blocking gaps instead of silently treating it as configured.
+- Given Enterprise SAML is disabled or no active SAML provider exists, when a SAML ACS request arrives, then BOSS fails closed and emits a visible runtime-blocked event.
+- Given an active SAML provider exists and Enterprise SAML is enabled, when a signed SAMLResponse is posted to ACS, then BOSS verifies the RSA-SHA256 assertion signature, certificate fingerprint, issuer, audience, time window, and member mapping before creating a hashed expiring bearer session.
+- Given a SAMLResponse is unsigned, has the wrong audience, uses an unsupported signature, or maps to no authorized member, when ACS handles it, then BOSS rejects the login and emits `enterprise.saml_login_failed`.
 - Given a detached self-hosted enterprise cluster lacks SSO/SAML, SCIM, private worker pools, or compliance packs, when it is saved, then BOSS marks it blocked and lists each missing control.
 - Given enterprise cluster state changes, when the write succeeds, then BOSS emits `enterprise.cluster_upserted` with deployment mode, Account Connect mode, status, and blocking gaps.
 - Given enterprise identity-provider state changes, when the write succeeds, then BOSS emits `enterprise.identity_provider_upserted` with provider type, status, and blocking gaps.

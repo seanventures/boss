@@ -58,6 +58,43 @@ describe("createBossApiClient", () => {
     expect(session.actor_binding_required).toBe(true);
   });
 
+  it("creates SAML sessions through the API-driven ACS contract", async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const fetchImpl = async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({ url: String(input), init });
+      return new Response(
+        JSON.stringify({
+          project_id: "boss-dogfood",
+          session_id: "saml_session_1",
+          access_token: "boss_saml_token",
+          token_type: "bearer",
+          member_id: "ceo",
+          provider_id: "entidp_boss-dogfood_okta_saml",
+          expires_at: "2026-06-04T01:00:00Z",
+        }),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        },
+      );
+    };
+    const client = createBossApiClient({
+      baseUrl: "http://127.0.0.1:8000",
+      fetchImpl,
+    });
+
+    const session = await client.createSamlSession("boss-dogfood", "base64-saml");
+
+    expect(calls[0].url).toBe(
+      "http://127.0.0.1:8000/saml/v2/boss-dogfood/acs",
+    );
+    expect(calls[0].init?.method).toBe("POST");
+    expect(JSON.parse(String(calls[0].init?.body))).toEqual({
+      SAMLResponse: "base64-saml",
+    });
+    expect(session.member_id).toBe("ceo");
+  });
+
   it("uses edition and Account Connect API contracts", async () => {
     const calls: Array<{ url: string; init?: RequestInit }> = [];
     const edition = {

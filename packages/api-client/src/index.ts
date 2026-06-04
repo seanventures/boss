@@ -37,6 +37,16 @@ export type AuthSessionResponse = {
   message: string;
 };
 
+export type SamlLoginResponse = {
+  project_id: string;
+  session_id: string;
+  access_token: string;
+  token_type: string;
+  member_id: string;
+  provider_id: string;
+  expires_at: string;
+};
+
 export type AccountConnectOrgSummary = {
   id: string;
   project_id: string;
@@ -2993,6 +3003,13 @@ export function createBossApiClient(config: BossApiClientConfig) {
     },
     getAuthSession() {
       return request<AuthSessionResponse>("GET", "/v1/auth/session");
+    },
+    createSamlSession(projectId: string, samlResponse: string) {
+      return request<SamlLoginResponse>(
+        "POST",
+        `/saml/v2/${encodeURIComponent(projectId)}/acs`,
+        { body: { SAMLResponse: samlResponse } },
+      );
     },
     getEdition(projectId: string) {
       return request<EditionStatusResponse>("GET", "/v1/edition", {

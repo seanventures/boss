@@ -62,6 +62,16 @@ class AuthSessionResponse(BaseModel):
     message: str
 
 
+class SamlLoginResponse(BaseModel):
+    project_id: str
+    session_id: str
+    access_token: str
+    token_type: str = "bearer"
+    member_id: str
+    provider_id: str
+    expires_at: str
+
+
 class AccountConnectOrgSummary(BaseModel):
     id: str
     project_id: str
