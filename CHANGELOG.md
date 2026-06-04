@@ -13,6 +13,7 @@ This release adds the commercial, Account Connect, enterprise-governance, SCIM, 
 - Added Community, Cloud, Enterprise Cloud, and Enterprise Self-hosted edition introspection with fail-closed Cloud Account Connect requirements and local Community mode that works without hosted BOSS auth.
 - Added BOSS Account Connect link, unlink, and hosted entitlement sync APIs with visible denied events when hosted credentials or connection state are missing.
 - Added BOSS Account Connect hosted health-check APIs and Mission Control readiness history so configured hosted endpoints are checked for real and missing configuration records blocked evidence instead of fake healthy status.
+- Added hosted marketplace catalog sync through Account Connect with durable sync-run/listing records, Mission Control visibility, and blocked/failed states when hosted configuration or responses are unavailable.
 - Added BOSS Account Connect hosted-auth session APIs and Mission Control history with receipt-backed session creation/completion, callback-state validation, hosted-org linking from the adapter response, and visible blocked records when hosted configuration is missing.
 - Added license entitlement records and runtime entitlement checks that distinguish edition capabilities from active/trial hosted entitlements.
 - Added enterprise cluster inventory with trust metadata for SSO, SCIM, RBAC/ABAC, audit export, private workers, managed ProviderOps, compliance packs, support plans, SLA tier, and detached-license state.

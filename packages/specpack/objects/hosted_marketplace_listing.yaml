@@ -1,0 +1,47 @@
+kind: ObjectSpec
+id: HostedMarketplaceListing
+version: 0.1.0
+description: Locally persisted listing from the hosted BOSS Account Connect marketplace catalog.
+fields:
+  - name: id
+    type: string
+  - name: project_id
+    type: string
+  - name: account_connect_org_id
+    type: string
+  - name: hosted_org_id
+    type: string
+  - name: listing_id
+    type: string
+  - name: pack_id
+    type: string
+  - name: version
+    type: string
+  - name: display_name
+    type: string
+  - name: publisher
+    type: string
+  - name: category
+    type: string
+  - name: status
+    type: enum
+    values: [active, available, disabled, removed]
+  - name: price_model
+    type: string
+  - name: price_usd_micros
+    type: integer
+  - name: required_entitlements
+    type: array
+  - name: capabilities
+    type: array
+  - name: source_url
+    type: string
+  - name: metadata
+    type: object
+  - name: last_sync_run_id
+    type: string
+rules:
+  sourced_from_real_account_connect_sync: true
+  listings_do_not_install_or_purchase_by_themselves: true
+  entitlement_checks_still_gate_install: true
+  no_synthetic_hosted_listings: true

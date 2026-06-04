@@ -2161,6 +2161,67 @@ export type AgentModuleLifecycleRequest = {
   reason?: string;
 };
 
+export type HostedMarketplaceListingSummary = {
+  id: string;
+  project_id: string;
+  account_connect_org_id?: string;
+  hosted_org_id?: string;
+  listing_id: string;
+  pack_id: string;
+  version: string;
+  display_name: string;
+  publisher: string;
+  category: string;
+  description?: string;
+  status: string;
+  price_model?: string;
+  price_usd_micros?: number;
+  required_entitlements: string[];
+  capabilities: string[];
+  source_url?: string;
+  metadata: Record<string, unknown>;
+  last_sync_run_id?: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type HostedMarketplaceListingListResponse = {
+  project_id: string;
+  items: HostedMarketplaceListingSummary[];
+};
+
+export type HostedMarketplaceSyncRunSummary = {
+  id: string;
+  project_id: string;
+  account_connect_org_id?: string;
+  hosted_org_id?: string;
+  status: string;
+  listing_count: number;
+  provider_ref?: string;
+  error?: Record<string, unknown>;
+  synced_by: string;
+  metadata: Record<string, unknown>;
+  created_at: string;
+};
+
+export type HostedMarketplaceSyncRunListResponse = {
+  project_id: string;
+  items: HostedMarketplaceSyncRunSummary[];
+};
+
+export type HostedMarketplaceSyncRequest = {
+  project_id: string;
+  hosted_org_id?: string;
+  metadata?: Record<string, unknown>;
+  actor?: string;
+};
+
+export type HostedMarketplaceSyncResponse = {
+  project_id: string;
+  sync_run: HostedMarketplaceSyncRunSummary;
+  listing_count: number;
+};
+
 export type AgentModuleInstallRecordSummary = {
   id: string;
   project_id: string;
@@ -3743,6 +3804,39 @@ export function createBossApiClient(config: BossApiClientConfig) {
       return request<AgentModuleListResponse>("GET", "/v1/agent-modules", {
         query: { project_id: projectId },
       });
+    },
+    listHostedMarketplaceListings(
+      projectId: string,
+      includeInactive = false,
+      limit = 50,
+    ) {
+      return request<HostedMarketplaceListingListResponse>(
+        "GET",
+        "/v1/marketplace/listings",
+        {
+          query: {
+            project_id: projectId,
+            include_inactive: includeInactive,
+            limit: String(limit),
+          },
+        },
+      );
+    },
+    listHostedMarketplaceSyncRuns(projectId: string, limit = 50) {
+      return request<HostedMarketplaceSyncRunListResponse>(
+        "GET",
+        "/v1/marketplace/sync-runs",
+        {
+          query: { project_id: projectId, limit: String(limit) },
+        },
+      );
+    },
+    syncHostedMarketplace(payload: HostedMarketplaceSyncRequest) {
+      return request<HostedMarketplaceSyncResponse>(
+        "POST",
+        "/v1/marketplace/sync",
+        { body: payload },
+      );
     },
     getAgentModule(projectId: string, moduleId: string) {
       return request<AgentModuleDetail>(

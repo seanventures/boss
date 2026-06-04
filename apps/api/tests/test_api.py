@@ -1278,6 +1278,148 @@ def test_account_connect_health_check_uses_hosted_adapter(client, monkeypatch):
         api_main.commercial.settings.boss_edition = previous
 
 
+def test_hosted_marketplace_sync_blocks_without_hosted_url(client):
+    previous_edition = api_main.settings.boss_edition
+    previous_url = api_main.settings.account_connect_url
+    api_main.settings.boss_edition = "cloud"
+    api_main.commercial.settings.boss_edition = "cloud"
+    api_main.settings.account_connect_url = None
+    api_main.commercial.settings.account_connect_url = None
+    try:
+        link = client.post(
+            "/v1/account-connect/link",
+            json={
+                "project_id": "boss-dogfood",
+                "hosted_org_id": "acct_org_marketplace",
+                "actor": "ceo",
+            },
+        )
+        assert link.status_code == 200
+
+        sync = client.post(
+            "/v1/marketplace/sync",
+            json={
+                "project_id": "boss-dogfood",
+                "hosted_org_id": "acct_org_marketplace",
+                "metadata": {"source": "test"},
+                "actor": "ceo",
+            },
+        )
+        assert sync.status_code == 201
+        payload = sync.json()
+        assert payload["sync_run"]["status"] == "blocked_configuration"
+        assert payload["sync_run"]["error"]["reason"] == "account_connect_url_missing"
+        assert payload["listing_count"] == 0
+
+        runs = client.get(
+            "/v1/marketplace/sync-runs",
+            params={"project_id": "boss-dogfood"},
+        )
+        assert runs.status_code == 200
+        assert runs.json()["items"][0]["id"] == payload["sync_run"]["id"]
+
+        listings = client.get(
+            "/v1/marketplace/listings",
+            params={"project_id": "boss-dogfood"},
+        )
+        assert listings.status_code == 200
+        assert listings.json()["items"] == []
+
+        events = client.get("/v1/events", params={"project_id": "boss-dogfood"})
+        event_types = [item["event_type"] for item in events.json()["items"]]
+        assert "marketplace.sync_blocked" in event_types
+    finally:
+        api_main.settings.boss_edition = previous_edition
+        api_main.commercial.settings.boss_edition = previous_edition
+        api_main.settings.account_connect_url = previous_url
+        api_main.commercial.settings.account_connect_url = previous_url
+
+
+def test_hosted_marketplace_sync_uses_account_connect_adapter(client, monkeypatch):
+    previous = api_main.settings.boss_edition
+    api_main.settings.boss_edition = "cloud"
+    api_main.commercial.settings.boss_edition = "cloud"
+
+    class FakeAccountConnectAdapter:
+        def fetch_marketplace_pack_listings(
+            self,
+            *,
+            hosted_org_id: str,
+            project_id: str,
+        ):
+            assert hosted_org_id == "acct_org_marketplace"
+            assert project_id == "boss-dogfood"
+            return {
+                "provider_ref": "marketplace-sync-1",
+                "items": [
+                    {
+                        "listing_id": "listing_private_agent",
+                        "pack_id": "private_enterprise_agent_v1",
+                        "version": "1.0.0",
+                        "display_name": "Private Enterprise Agent",
+                        "publisher": "BOSS",
+                        "category": "enterprise",
+                        "description": "Enterprise-only hosted module.",
+                        "status": "active",
+                        "price_model": "enterprise_contract",
+                        "price_usd_micros": 0,
+                        "required_entitlements": ["private_agent_marketplace"],
+                        "capabilities": ["agent_module.install"],
+                        "source_url": "https://accounts.example/marketplace/private",
+                        "metadata": {"verified": True},
+                    }
+                ],
+                "metadata": {"catalog_version": "2026-06-04"},
+            }
+
+    monkeypatch.setattr(
+        api_main.commercial,
+        "account_connect_adapter",
+        FakeAccountConnectAdapter(),
+    )
+    try:
+        link = client.post(
+            "/v1/account-connect/link",
+            json={
+                "project_id": "boss-dogfood",
+                "hosted_org_id": "acct_org_marketplace",
+                "actor": "ceo",
+            },
+        )
+        assert link.status_code == 200
+
+        sync = client.post(
+            "/v1/marketplace/sync",
+            json={
+                "project_id": "boss-dogfood",
+                "hosted_org_id": "acct_org_marketplace",
+                "metadata": {"source": "test"},
+                "actor": "ceo",
+            },
+        )
+        assert sync.status_code == 201
+        assert sync.json()["listing_count"] == 1
+        assert sync.json()["sync_run"]["provider_ref"] == "marketplace-sync-1"
+
+        listings = client.get(
+            "/v1/marketplace/listings",
+            params={"project_id": "boss-dogfood"},
+        )
+        assert listings.status_code == 200
+        listing = listings.json()["items"][0]
+        assert listing["listing_id"] == "listing_private_agent"
+        assert listing["pack_id"] == "private_enterprise_agent_v1"
+        assert listing["required_entitlements"] == ["private_agent_marketplace"]
+        assert listing["metadata"]["verified"] is True
+
+        events = client.get("/v1/events", params={"project_id": "boss-dogfood"})
+        event_types = [item["event_type"] for item in events.json()["items"]]
+        assert "marketplace.synced" in event_types
+    finally:
+        api_main.settings.boss_edition = previous
+        api_main.commercial.settings.boss_edition = previous
+
+
 def test_account_connect_auth_session_blocks_without_hosted_url(client):
     previous_edition = api_main.settings.boss_edition
     previous_url = api_main.settings.account_connect_url

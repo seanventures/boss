@@ -19,6 +19,8 @@ vi.mock("../lib/client", () => ({
     listEnterpriseSupportCases: vi.fn(),
     listAgentModules: vi.fn(),
     listAgentModuleInstallRecords: vi.fn(),
+    listHostedMarketplaceListings: vi.fn(),
+    listHostedMarketplaceSyncRuns: vi.fn(),
   },
 }));
 
@@ -471,6 +473,49 @@ describe("commercial, enterprise, and marketplace feeds", async () => {
         },
       ],
     });
+    vi.mocked(client.listHostedMarketplaceListings).mockResolvedValueOnce({
+      project_id: "boss-dogfood",
+      items: [
+        {
+          id: "mklisting_1",
+          project_id: "boss-dogfood",
+          account_connect_org_id: "acctconn_1",
+          hosted_org_id: "hosted_org_1",
+          listing_id: "listing_private_agent",
+          pack_id: "private_enterprise_agent_v1",
+          version: "1.0.0",
+          display_name: "Private Enterprise Agent",
+          publisher: "BOSS",
+          category: "enterprise",
+          description: "Enterprise-only hosted module.",
+          status: "active",
+          price_model: "enterprise_contract",
+          required_entitlements: ["private_agent_marketplace"],
+          capabilities: ["agent_module.install"],
+          metadata: {},
+          last_sync_run_id: "mktsync_1",
+          created_at: "2026-06-04T00:00:00Z",
+          updated_at: "2026-06-04T00:00:00Z",
+        },
+      ],
+    });
+    vi.mocked(client.listHostedMarketplaceSyncRuns).mockResolvedValueOnce({
+      project_id: "boss-dogfood",
+      items: [
+        {
+          id: "mktsync_1",
+          project_id: "boss-dogfood",
+          account_connect_org_id: "acctconn_1",
+          hosted_org_id: "hosted_org_1",
+          status: "synced",
+          listing_count: 1,
+          provider_ref: "marketplace-sync-1",
+          synced_by: "ceo",
+          metadata: {},
+          created_at: "2026-06-04T00:00:00Z",
+        },
+      ],
+    });
 
     const feed = await fetchAgentModuleFeed("boss-dogfood");
 
@@ -481,6 +526,14 @@ describe("commercial, enterprise, and marketplace feeds", async () => {
     expect(feed.installRecords[0]).toMatchObject({
       moduleId: "private_enterprise_agent_v1",
       status: "denied",
+    });
+    expect(feed.hostedListings[0]).toMatchObject({
+      packId: "private_enterprise_agent_v1",
+      requiredEntitlements: ["private_agent_marketplace"],
+    });
+    expect(feed.marketplaceSyncRuns[0]).toMatchObject({
+      status: "synced",
+      providerRef: "marketplace-sync-1",
     });
   });
 });

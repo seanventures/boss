@@ -1,0 +1,37 @@
+kind: ObjectSpec
+id: HostedMarketplaceSyncRun
+version: 0.1.0
+description: Auditable read-only hosted marketplace catalog sync attempt through BOSS Account Connect.
+fields:
+  - name: id
+    type: string
+  - name: project_id
+    type: string
+  - name: account_connect_org_id
+    type: string
+  - name: hosted_org_id
+    type: string
+  - name: status
+    type: enum
+    values:
+      - synced
+      - blocked_configuration
+      - failed
+  - name: listing_count
+    type: integer
+  - name: provider_ref
+    type: string
+  - name: error
+    type: object
+  - name: synced_by
+    type: string
+  - name: metadata
+    type: object
+  - name: created_at
+    type: datetime
+rules:
+  sync_is_read_only: true
+  missing_account_connect_url_creates_blocked_run: true
+  invalid_hosted_response_creates_failed_run: true
+  configured_sync_uses_real_account_connect_endpoint: true
+  sync_emits_event: true

@@ -229,6 +229,75 @@ class AccountConnectHealthCheckRunRequest(BaseModel):
         return self
 
 
+class HostedMarketplaceListingSummary(BaseModel):
+    id: str
+    project_id: str
+    account_connect_org_id: Optional[str] = None
+    hosted_org_id: Optional[str] = None
+    listing_id: str
+    pack_id: str
+    version: str
+    display_name: str
+    publisher: str
+    category: str
+    description: Optional[str] = None
+    status: str
+    price_model: Optional[str] = None
+    price_usd_micros: Optional[int] = None
+    required_entitlements: list[str]
+    capabilities: list[str]
+    source_url: Optional[str] = None
+    metadata: dict[str, Any]
+    last_sync_run_id: Optional[str] = None
+    created_at: str
+    updated_at: str
+
+
+class HostedMarketplaceListingListResponse(BaseModel):
+    project_id: str
+    items: list[HostedMarketplaceListingSummary]
+
+
+class HostedMarketplaceSyncRunSummary(BaseModel):
+    id: str
+    project_id: str
+    account_connect_org_id: Optional[str] = None
+    hosted_org_id: Optional[str] = None
+    status: str
+    listing_count: int
+    provider_ref: Optional[str] = None
+    error: Optional[dict[str, Any]] = None
+    synced_by: str
+    metadata: dict[str, Any]
+    created_at: str
+
+
+class HostedMarketplaceSyncRunListResponse(BaseModel):
+    project_id: str
+    items: list[HostedMarketplaceSyncRunSummary]
+
+
+class HostedMarketplaceSyncRequest(BaseModel):
+    project_id: str
+    hosted_org_id: Optional[str] = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    actor: str = "system"
+
+    @model_validator(mode="after")
+    def validate_marketplace_sync(self) -> "HostedMarketplaceSyncRequest":
+        self.project_id = _require_text(self.project_id, "project_id")
+        self.actor = _require_text(self.actor, "actor")
+        if self.hosted_org_id is not None:
+            self.hosted_org_id = _require_text(self.hosted_org_id, "hosted_org_id")
+        return self
+
+
+class HostedMarketplaceSyncResponse(BaseModel):
+    project_id: str
+    sync_run: HostedMarketplaceSyncRunSummary
+    listing_count: int
+
+
 class AccountConnectAuthSessionSummary(BaseModel):
     id: str
     project_id: str

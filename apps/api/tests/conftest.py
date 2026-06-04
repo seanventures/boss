@@ -46,6 +46,8 @@ def clean_tables(engine):
         connection.execute(text("DELETE FROM account_connect_auth_sessions"))
         connection.execute(text("DELETE FROM account_connect_health_checks"))
         connection.execute(text("DELETE FROM account_connect_team_invites"))
+        connection.execute(text("DELETE FROM hosted_marketplace_pack_listings"))
+        connection.execute(text("DELETE FROM hosted_marketplace_sync_runs"))
         connection.execute(text("DELETE FROM license_entitlements"))
         connection.execute(text("DELETE FROM account_connect_orgs"))
         connection.execute(text("DELETE FROM enterprise_scim_users"))

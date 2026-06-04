@@ -58,6 +58,8 @@ objects:
     - account_connect_auth_session
     - account_connect_team_invite
     - account_connect_billing_portal_session
+    - hosted_marketplace_listing
+    - hosted_marketplace_sync_run
     - enterprise_cluster
     - enterprise_cluster_validation_run
     - enterprise_identity_provider

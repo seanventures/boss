@@ -116,6 +116,38 @@ class AccountConnectAdapter:
             )
         return payload
 
+    def fetch_marketplace_pack_listings(
+        self,
+        *,
+        hosted_org_id: str,
+        project_id: str,
+    ) -> dict[str, Any]:
+        query = urlencode({"project_id": project_id})
+        payload = self._get_json(
+            f"/v1/orgs/{quote(hosted_org_id, safe='')}/marketplace/packs?{query}"
+        )
+        raw_items = (
+            payload.get("items")
+            or payload.get("listings")
+            or payload.get("packs")
+        )
+        if not isinstance(raw_items, list):
+            raise AccountConnectSyncError(
+                "Account Connect marketplace response must include an items list."
+            )
+        items: list[dict[str, Any]] = []
+        for item in raw_items:
+            if not isinstance(item, dict):
+                raise AccountConnectSyncError(
+                    "Account Connect marketplace listings must be objects."
+                )
+            items.append(item)
+        return {
+            "provider_ref": payload.get("provider_ref") or payload.get("sync_id"),
+            "items": items,
+            "metadata": payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {},
+        }
+
     def create_team_invite(
         self,
         *,
@@ -1012,6 +1044,210 @@ class CommercialService:
                 "Account Connect health check record was not saved."
             )
         return row
+
+    def list_marketplace_pack_listings(
+        self,
+        connection: Connection,
+        project_id: str,
+        *,
+        include_inactive: bool = False,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        rows = connection.execute(
+            text(
+                """
+                SELECT id, project_id, account_connect_org_id, hosted_org_id,
+                       listing_id, pack_id, version, display_name, publisher,
+                       category, description, status, price_model,
+                       price_usd_micros, required_entitlements, capabilities,
+                       source_url, metadata, last_sync_run_id, created_at, updated_at
+                FROM hosted_marketplace_pack_listings
+                WHERE project_id = :project_id
+                  AND (:include_inactive OR status IN ('active', 'available'))
+                ORDER BY updated_at DESC
+                LIMIT :limit
+                """
+            ),
+            {
+                "project_id": project_id,
+                "include_inactive": include_inactive,
+                "limit": limit,
+            },
+        ).mappings().all()
+        return [self._marketplace_listing_from_row(dict(row)) for row in rows]
+
+    def list_marketplace_sync_runs(
+        self,
+        connection: Connection,
+        project_id: str,
+        *,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        rows = connection.execute(
+            text(
+                """
+                SELECT id, project_id, account_connect_org_id, hosted_org_id,
+                       status, listing_count, provider_ref, error, synced_by,
+                       metadata, created_at
+                FROM hosted_marketplace_sync_runs
+                WHERE project_id = :project_id
+                ORDER BY created_at DESC
+                LIMIT :limit
+                """
+            ),
+            {"project_id": project_id, "limit": limit},
+        ).mappings().all()
+        return [self._marketplace_sync_run_from_row(dict(row)) for row in rows]
+
+    def sync_marketplace_pack_listings(
+        self,
+        connection: Connection,
+        project_id: str,
+        *,
+        actor: str,
+        hosted_org_id: Optional[str] = None,
+        metadata: Optional[dict[str, Any]] = None,
+    ) -> dict[str, Any]:
+        active = self.active_account_connect_org(connection, project_id)
+        if not active:
+            emit_event(
+                connection,
+                project_id,
+                "marketplace.sync_denied",
+                actor,
+                "hosted_marketplace_sync_run",
+                project_id,
+                {"reason": "account_connect_not_linked"},
+            )
+            raise AccountConnectLinkNotFoundError(
+                f"No active Account Connect org is linked for project '{project_id}'."
+            )
+        if hosted_org_id and active["hosted_org_id"] != hosted_org_id:
+            emit_event(
+                connection,
+                project_id,
+                "marketplace.sync_denied",
+                actor,
+                "hosted_marketplace_sync_run",
+                project_id,
+                {
+                    "reason": "account_connect_hosted_org_mismatch",
+                    "requested_hosted_org_id": hosted_org_id,
+                    "active_hosted_org_id": active["hosted_org_id"],
+                },
+            )
+            raise AccountConnectAuthSessionStateError(
+                "Hosted org ID does not match the active Account Connect link."
+            )
+
+        sync_id = make_id("mktsync")
+        status = "synced"
+        provider_ref = None
+        error_payload = None
+        listings: list[dict[str, Any]] = []
+        response_metadata: dict[str, Any] = {}
+        event_type = "marketplace.synced"
+        try:
+            hosted = self.account_connect_adapter.fetch_marketplace_pack_listings(
+                hosted_org_id=active["hosted_org_id"],
+                project_id=project_id,
+            )
+            provider_ref_candidate = hosted.get("provider_ref")
+            provider_ref = (
+                str(provider_ref_candidate).strip()
+                if isinstance(provider_ref_candidate, str)
+                and provider_ref_candidate.strip()
+                else None
+            )
+            response_metadata = hosted.get("metadata") or {}
+            raw_listings = hosted.get("items") or []
+            listings = [
+                self._normalize_marketplace_listing(item)
+                for item in raw_listings
+            ]
+        except AccountConnectConfigurationError as error:
+            status = "blocked_configuration"
+            event_type = "marketplace.sync_blocked"
+            error_payload = {
+                "reason": "account_connect_url_missing",
+                "message": str(error),
+            }
+        except AccountConnectSyncError as error:
+            status = "failed"
+            event_type = "marketplace.sync_failed"
+            error_payload = {
+                "reason": "account_connect_marketplace_sync_failed",
+                "message": str(error),
+            }
+
+        run_metadata = {
+            **(metadata or {}),
+            "hosted_metadata": response_metadata,
+        }
+        connection.execute(
+            text(
+                """
+                INSERT INTO hosted_marketplace_sync_runs (
+                    id, project_id, account_connect_org_id, hosted_org_id,
+                    status, listing_count, provider_ref, error, synced_by, metadata
+                )
+                VALUES (
+                    :id, :project_id, :account_connect_org_id, :hosted_org_id,
+                    :status, :listing_count, :provider_ref, CAST(:error AS JSONB),
+                    :synced_by, CAST(:metadata AS JSONB)
+                )
+                """
+            ),
+            {
+                "id": sync_id,
+                "project_id": project_id,
+                "account_connect_org_id": active["id"],
+                "hosted_org_id": active["hosted_org_id"],
+                "status": status,
+                "listing_count": len(listings),
+                "provider_ref": provider_ref,
+                "error": json.dumps(error_payload) if error_payload else None,
+                "synced_by": actor,
+                "metadata": json.dumps(run_metadata),
+            },
+        )
+
+        if status == "synced":
+            for listing in listings:
+                self._upsert_marketplace_listing(
+                    connection,
+                    project_id,
+                    account_connect_org_id=active["id"],
+                    hosted_org_id=active["hosted_org_id"],
+                    sync_run_id=sync_id,
+                    listing=listing,
+                )
+
+        emit_event(
+            connection,
+            project_id,
+            event_type,
+            actor,
+            "hosted_marketplace_sync_run",
+            sync_id,
+            {
+                "hosted_org_id": active["hosted_org_id"],
+                "status": status,
+                "listing_count": len(listings),
+                "provider_ref": provider_ref,
+                "error_reason": error_payload.get("reason") if error_payload else None,
+            },
+        )
+        run = self._marketplace_sync_run_by_id(connection, sync_id)
+        if not run:
+            raise AccountConnectSyncError(
+                "Hosted marketplace sync run record was not saved."
+            )
+        return {
+            "project_id": project_id,
+            "sync_run": run,
+            "listing_count": len(listings),
+        }
 
     def create_auth_session(
         self,
@@ -1946,6 +2182,159 @@ class CommercialService:
         ).mappings().first()
         return self._health_check_from_row(dict(row)) if row else None
 
+    def _marketplace_sync_run_by_id(
+        self, connection: Connection, sync_id: str
+    ) -> Optional[dict[str, Any]]:
+        row = connection.execute(
+            text(
+                """
+                SELECT id, project_id, account_connect_org_id, hosted_org_id,
+                       status, listing_count, provider_ref, error, synced_by,
+                       metadata, created_at
+                FROM hosted_marketplace_sync_runs
+                WHERE id = :id
+                """
+            ),
+            {"id": sync_id},
+        ).mappings().first()
+        return self._marketplace_sync_run_from_row(dict(row)) if row else None
+
+    def _normalize_marketplace_listing(self, item: dict[str, Any]) -> dict[str, Any]:
+        listing_id = str(item.get("listing_id") or item.get("id") or "").strip()
+        pack_id = str(item.get("pack_id") or item.get("module_id") or "").strip()
+        if not pack_id:
+            raise AccountConnectSyncError(
+                "Hosted marketplace listing is missing pack_id."
+            )
+        if not listing_id:
+            listing_id = pack_id
+        version = str(item.get("version") or "0.0.0").strip() or "0.0.0"
+        display_name = (
+            str(item.get("display_name") or item.get("name") or pack_id)
+            .strip()
+            or pack_id
+        )
+        publisher = str(item.get("publisher") or "Unknown").strip() or "Unknown"
+        category = str(item.get("category") or "general").strip() or "general"
+        status = str(item.get("status") or "active").strip() or "active"
+        price_model = item.get("price_model")
+        if price_model is not None:
+            price_model = str(price_model).strip() or None
+        price_usd_micros = item.get("price_usd_micros")
+        if price_usd_micros is not None:
+            try:
+                price_usd_micros = int(price_usd_micros)
+            except (TypeError, ValueError) as error:
+                raise AccountConnectSyncError(
+                    f"Hosted marketplace listing '{pack_id}' has invalid price_usd_micros."
+                ) from error
+        metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+        return {
+            "listing_id": listing_id,
+            "pack_id": pack_id,
+            "version": version,
+            "display_name": display_name,
+            "publisher": publisher,
+            "category": category,
+            "description": item.get("description")
+            if isinstance(item.get("description"), str)
+            else None,
+            "status": status,
+            "price_model": price_model,
+            "price_usd_micros": price_usd_micros,
+            "required_entitlements": self._string_list(item.get("required_entitlements")),
+            "capabilities": self._string_list(item.get("capabilities")),
+            "source_url": item.get("source_url")
+            if isinstance(item.get("source_url"), str)
+            else None,
+            "metadata": metadata,
+        }
+
+    def _string_list(self, value: Any) -> list[str]:
+        if value is None:
+            return []
+        if isinstance(value, str):
+            return [value.strip()] if value.strip() else []
+        if not isinstance(value, list):
+            raise AccountConnectSyncError("Hosted marketplace list fields must be arrays.")
+        return [
+            str(item).strip()
+            for item in value
+            if isinstance(item, (str, int, float)) and str(item).strip()
+        ]
+
+    def _upsert_marketplace_listing(
+        self,
+        connection: Connection,
+        project_id: str,
+        *,
+        account_connect_org_id: str,
+        hosted_org_id: str,
+        sync_run_id: str,
+        listing: dict[str, Any],
+    ) -> None:
+        listing_id = f"mklisting_{project_id}_{listing['listing_id']}"
+        connection.execute(
+            text(
+                """
+                INSERT INTO hosted_marketplace_pack_listings (
+                    id, project_id, account_connect_org_id, hosted_org_id,
+                    listing_id, pack_id, version, display_name, publisher,
+                    category, description, status, price_model, price_usd_micros,
+                    required_entitlements, capabilities, source_url, metadata,
+                    last_sync_run_id
+                )
+                VALUES (
+                    :id, :project_id, :account_connect_org_id, :hosted_org_id,
+                    :listing_id, :pack_id, :version, :display_name, :publisher,
+                    :category, :description, :status, :price_model,
+                    :price_usd_micros, CAST(:required_entitlements AS JSONB),
+                    CAST(:capabilities AS JSONB), :source_url,
+                    CAST(:metadata AS JSONB), :last_sync_run_id
+                )
+                ON CONFLICT (project_id, listing_id) DO UPDATE
+                SET account_connect_org_id = EXCLUDED.account_connect_org_id,
+                    hosted_org_id = EXCLUDED.hosted_org_id,
+                    pack_id = EXCLUDED.pack_id,
+                    version = EXCLUDED.version,
+                    display_name = EXCLUDED.display_name,
+                    publisher = EXCLUDED.publisher,
+                    category = EXCLUDED.category,
+                    description = EXCLUDED.description,
+                    status = EXCLUDED.status,
+                    price_model = EXCLUDED.price_model,
+                    price_usd_micros = EXCLUDED.price_usd_micros,
+                    required_entitlements = EXCLUDED.required_entitlements,
+                    capabilities = EXCLUDED.capabilities,
+                    source_url = EXCLUDED.source_url,
+                    metadata = EXCLUDED.metadata,
+                    last_sync_run_id = EXCLUDED.last_sync_run_id,
+                    updated_at = now()
+                """
+            ),
+            {
+                "id": listing_id,
+                "project_id": project_id,
+                "account_connect_org_id": account_connect_org_id,
+                "hosted_org_id": hosted_org_id,
+                "listing_id": listing["listing_id"],
+                "pack_id": listing["pack_id"],
+                "version": listing["version"],
+                "display_name": listing["display_name"],
+                "publisher": listing["publisher"],
+                "category": listing["category"],
+                "description": listing["description"],
+                "status": listing["status"],
+                "price_model": listing["price_model"],
+                "price_usd_micros": listing["price_usd_micros"],
+                "required_entitlements": json.dumps(listing["required_entitlements"]),
+                "capabilities": json.dumps(listing["capabilities"]),
+                "source_url": listing["source_url"],
+                "metadata": json.dumps(listing["metadata"]),
+                "last_sync_run_id": sync_run_id,
+            },
+        )
+
     def _emit_sync_denied(
         self,
         connection: Connection,
@@ -2037,4 +2426,20 @@ class CommercialService:
         return {
             **row,
             "created_at": row["created_at"].isoformat(),
+        }
+
+    def _marketplace_sync_run_from_row(self, row: dict[str, Any]) -> dict[str, Any]:
+        return {
+            **row,
+            "created_at": row["created_at"].isoformat(),
+        }
+
+    def _marketplace_listing_from_row(self, row: dict[str, Any]) -> dict[str, Any]:
+        return {
+            **row,
+            "price_usd_micros": int(row["price_usd_micros"])
+            if row.get("price_usd_micros") is not None
+            else None,
+            "created_at": row["created_at"].isoformat(),
+            "updated_at": row["updated_at"].isoformat(),
         }

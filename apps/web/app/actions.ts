@@ -322,6 +322,21 @@ export async function installAgentModuleAction(formData: FormData): Promise<void
   revalidatePath("/");
 }
 
+export async function syncHostedMarketplaceAction(
+  formData: FormData,
+): Promise<void> {
+  await client.syncHostedMarketplace({
+    project_id: getProjectId(formData),
+    hosted_org_id: getOptionalString(formData, "hosted_org_id"),
+    metadata: parseOptionalJsonObjectField(
+      formData.get("metadata_json"),
+      "metadata_json",
+    ),
+    actor: getActor(formData),
+  });
+  revalidatePath("/");
+}
+
 export async function uninstallAgentModuleAction(
   formData: FormData,
 ): Promise<void> {

@@ -149,6 +149,12 @@ from .schemas import (
     HealthSnapshotListResponse,
     HealthSnapshotRefreshRequest,
     HealthSnapshotSummary,
+    HostedMarketplaceListingListResponse,
+    HostedMarketplaceListingSummary,
+    HostedMarketplaceSyncRequest,
+    HostedMarketplaceSyncResponse,
+    HostedMarketplaceSyncRunListResponse,
+    HostedMarketplaceSyncRunSummary,
     InfraJanitorRunRequest,
     InfraJanitorRunResponse,
     InfraProvisionJobRequest,
@@ -1380,6 +1386,18 @@ def account_connect_billing_session_from_service(
     payload,
 ) -> AccountConnectBillingPortalSessionSummary:
     return AccountConnectBillingPortalSessionSummary(**payload)
+
+
+def hosted_marketplace_listing_from_service(
+    payload,
+) -> HostedMarketplaceListingSummary:
+    return HostedMarketplaceListingSummary(**payload)
+
+
+def hosted_marketplace_sync_run_from_service(
+    payload,
+) -> HostedMarketplaceSyncRunSummary:
+    return HostedMarketplaceSyncRunSummary(**payload)
 
 
 def enterprise_cluster_summary_from_service(payload) -> EnterpriseClusterSummary:
@@ -3908,6 +3926,88 @@ def list_agent_modules(project_id: str) -> AgentModuleListResponse:
         return AgentModuleListResponse(
             project_id=project_id,
             items=[agent_module_summary_from_service(module) for module in modules],
+        )
+
+
+@app.get(
+    "/v1/marketplace/listings",
+    response_model=HostedMarketplaceListingListResponse,
+)
+def list_hosted_marketplace_listings(
+    project_id: str,
+    include_inactive: bool = False,
+    limit: int = 50,
+) -> HostedMarketplaceListingListResponse:
+    with begin(engine) as connection:
+        listings = commercial.list_marketplace_pack_listings(
+            connection,
+            project_id,
+            include_inactive=include_inactive,
+            limit=limit,
+        )
+        return HostedMarketplaceListingListResponse(
+            project_id=project_id,
+            items=[
+                hosted_marketplace_listing_from_service(listing)
+                for listing in listings
+            ],
+        )
+
+
+@app.get(
+    "/v1/marketplace/sync-runs",
+    response_model=HostedMarketplaceSyncRunListResponse,
+)
+def list_hosted_marketplace_sync_runs(
+    project_id: str,
+    limit: int = 50,
+) -> HostedMarketplaceSyncRunListResponse:
+    with begin(engine) as connection:
+        runs = commercial.list_marketplace_sync_runs(
+            connection,
+            project_id,
+            limit=limit,
+        )
+        return HostedMarketplaceSyncRunListResponse(
+            project_id=project_id,
+            items=[
+                hosted_marketplace_sync_run_from_service(run)
+                for run in runs
+            ],
+        )
+
+
+@app.post(
+    "/v1/marketplace/sync",
+    response_model=HostedMarketplaceSyncResponse,
+    status_code=201,
+)
+def sync_hosted_marketplace(
+    payload: HostedMarketplaceSyncRequest,
+) -> HostedMarketplaceSyncResponse:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection,
+            payload.project_id,
+            payload.actor,
+            "module_manage",
+        )
+        try:
+            result = commercial.sync_marketplace_pack_listings(
+                connection,
+                payload.project_id,
+                actor=payload.actor,
+                hosted_org_id=payload.hosted_org_id,
+                metadata=payload.metadata,
+            )
+        except AccountConnectLinkNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except AccountConnectAuthSessionStateError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        return HostedMarketplaceSyncResponse(
+            project_id=result["project_id"],
+            sync_run=hosted_marketplace_sync_run_from_service(result["sync_run"]),
+            listing_count=result["listing_count"],
         )
 
 

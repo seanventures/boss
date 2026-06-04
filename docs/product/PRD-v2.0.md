@@ -89,7 +89,7 @@ Model/capacity objects: `ProviderAccount`, `ProviderAdapter`, `EntitlementPool`,
 
 ProviderOps objects: `ExternalResource`, `Capability`, `DeploymentTarget`, `DeploymentEnvironmentPolicy`, `DeploymentRun`, `ChangeSet`, `ResourceReceipt`, `DriftReport`, `ProviderHealth`, `SecretRef`, `ResourcePolicy`, `ScalePlan`, `ResourceInventorySnapshot`.
 
-Commercial objects: `Edition`, `LicenseEntitlement`, `AccountConnectOrg`, `AccountConnectHealthCheck`, `PackListing`, `PackInstall`, `MarketplacePublisher`, `EnterpriseCluster`, `EnterpriseIdentityProvider`.
+Commercial objects: `Edition`, `LicenseEntitlement`, `AccountConnectOrg`, `AccountConnectHealthCheck`, `HostedMarketplaceListing`, `HostedMarketplaceSyncRun`, `PackListing`, `PackInstall`, `MarketplacePublisher`, `EnterpriseCluster`, `EnterpriseIdentityProvider`.
 
 ### YAML Examples
 
@@ -544,6 +544,7 @@ Rules:
 - Account Connect is valuable but optional for self-host Community.
 - Hosted login must be represented in the local control plane by durable auth-session records, receipts, state validation, visible blocked/failed states, and an auditable Account Connect org link only after the hosted adapter returns a verified hosted organization.
 - Hosted readiness checks must be represented by durable `AccountConnectHealthCheck` records. Missing hosted configuration must create a blocked health-check record; BOSS must not invent a healthy state.
+- Hosted marketplace catalog sync must be represented by durable sync-run and listing records. Missing hosted configuration or invalid hosted responses create blocked/failed sync runs; BOSS must not invent hosted marketplace listings.
 
 ### Clustering and Scaling Monetization
 

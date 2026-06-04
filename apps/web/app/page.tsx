@@ -39,6 +39,7 @@ import {
   submitOutboxDraftAction,
   submitCommandAction,
   syncAccountConnectAction,
+  syncHostedMarketplaceAction,
   syncProviderResourcesAction,
   testProviderAccountAction,
   unlinkAccountConnectAction,
@@ -4777,6 +4778,121 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               runtime job kinds, and configuration defaults.
             </p>
           </div>
+
+          <article className="stack-card">
+            <h3>Hosted marketplace catalog</h3>
+            {!agentModules.apiReachable ? (
+              <p className="detail">
+                {agentModules.blockedReason ?? "Agent module API is unavailable."}
+              </p>
+            ) : (
+              <>
+                <form action={syncHostedMarketplaceAction} className="composer">
+                  <input type="hidden" name="project_id" value={activeProjectId} />
+                  <input type="hidden" name="actor" value={activeActorId} />
+                  <label className="field">
+                    <span>Hosted org ID</span>
+                    <input
+                      className="input"
+                      name="hosted_org_id"
+                      defaultValue={
+                        commercial.edition?.accountConnectOrg?.hostedOrgId ?? ""
+                      }
+                      placeholder="acct_org_..."
+                    />
+                  </label>
+                  <label className="field">
+                    <span>Metadata JSON</span>
+                    <textarea
+                      className="input"
+                      name="metadata_json"
+                      defaultValue={`{"source":"mission_control"}`}
+                    />
+                  </label>
+                  <button className="button secondary" type="submit">
+                    Sync hosted catalog
+                  </button>
+                </form>
+
+                {agentModules.marketplaceSyncRuns.length === 0 ? (
+                  <p className="detail">
+                    No hosted marketplace sync runs have been recorded.
+                  </p>
+                ) : (
+                  <div className="feed-list">
+                    {agentModules.marketplaceSyncRuns.slice(0, 3).map((run) => (
+                      <div className="feed-row" key={run.id}>
+                        <div>
+                          <h4>{titleCaseToken(run.status)}</h4>
+                          <p className="detail">
+                            {run.listingCount} listing(s) / hosted org{" "}
+                            {run.hostedOrgId ?? "not linked"} /{" "}
+                            {formatDateTime(run.createdAt)}
+                          </p>
+                          {run.error ? (
+                            <p className="detail">
+                              Error {String(run.error.reason ?? "unknown")}:{" "}
+                              {String(run.error.message ?? "no message")}
+                            </p>
+                          ) : null}
+                        </div>
+                        <span className={`pill${run.status === "synced" ? "" : " warn"}`}>
+                          {titleCaseToken(run.status)}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {agentModules.hostedListings.length === 0 ? (
+                  <p className="detail">
+                    No hosted marketplace listings have been synced. Local modules
+                    remain available below.
+                  </p>
+                ) : (
+                  <div className="feed-list">
+                    {agentModules.hostedListings.slice(0, 6).map((listing) => (
+                      <div className="feed-row" key={listing.id}>
+                        <div>
+                          <h4>{listing.displayName}</h4>
+                          <p className="detail">
+                            {listing.packId} v{listing.version} /{" "}
+                            {listing.publisher} / {listing.category}
+                          </p>
+                          <p className="detail">
+                            {listing.description ?? "No hosted description provided."}
+                          </p>
+                          <p className="detail">
+                            {listing.priceModel ?? "custom pricing"}
+                            {listing.priceUsdMicros
+                              ? ` / ${formatMicros(listing.priceUsdMicros)}`
+                              : ""}{" "}
+                            / {titleCaseToken(listing.status)}
+                          </p>
+                          <p className="detail">
+                            Required entitlements{" "}
+                            {listing.requiredEntitlements.length > 0
+                              ? listing.requiredEntitlements.join(", ")
+                              : "none"}
+                          </p>
+                        </div>
+                        <span
+                          className={`pill${
+                            listing.status === "active" ||
+                            listing.status === "available"
+                              ? ""
+                              : " warn"
+                          }`}
+                        >
+                          Hosted
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </>
+            )}
+          </article>
 
           <article className="stack-card">
             <h3>Available agent modules</h3>

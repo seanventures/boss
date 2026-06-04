@@ -434,6 +434,8 @@ Acceptance criteria:
 - Given a team invite or billing portal session requires a hosted write, when the hosted adapter is configured, then BOSS opens a `Receipt`, calls the configured Account Connect endpoint, records the hosted reference, and emits an audit event.
 - Given a team invite or billing portal session requires a hosted write and `BOSS_ACCOUNT_CONNECT_URL` is missing, when the request runs, then BOSS creates a blocked record with a failed receipt and emits a visible event.
 - Given a Cloud user installs a marketplace pack, when the install starts, then publisher identity and entitlement checks are resolved through Account Connect.
+- Given hosted marketplace sync is requested without `BOSS_ACCOUNT_CONNECT_URL`, when `POST /v1/marketplace/sync` runs, then BOSS records a blocked sync run and does not invent hosted listings.
+- Given hosted marketplace sync is configured, when Account Connect returns a valid catalog, then BOSS upserts hosted listing records with publisher, pricing, capability, and entitlement metadata.
 - Given Enterprise is detached, when Account Connect is unavailable, then private license and identity flows remain explicitly supported.
 
 ### Story ADM-007: Operate Commercial State From Mission Control
@@ -445,6 +447,7 @@ Acceptance criteria:
 - Given the commercial API is available, when Mission Control loads, then it shows edition status, Account Connect requirement/status, local-vs-hosted auth posture, license candidate, and active license entitlements.
 - Given Account Connect auth sessions exist, when Mission Control loads, then it shows hosted login URLs, blocked states, receipt IDs, hosted org linkage, and completion controls from API data.
 - Given Account Connect health checks exist, when Mission Control loads, then it shows the latest hosted readiness statuses, latency, hosted org, provider reference, and blocked/failure reasons from API data.
+- Given hosted marketplace listing or sync-run records exist, when Mission Control loads, then it shows hosted catalog entries, required entitlements, sync status, and blocked/failure reasons from API data.
 - Given Account Connect is not linked, when an authorized actor submits a hosted org ID, then Mission Control calls the Account Connect link API and refreshes the panel from the control plane.
 - Given Account Connect is linked, when an authorized actor requests entitlement sync or unlink, then Mission Control calls the corresponding API and relies on audit events from the backend.
 - Given Enterprise cluster posture exists, when Mission Control loads, then it shows deployment mode, Account Connect mode, worker strategy, HA/data residency, support tier, compliance packs, and blocking gaps.

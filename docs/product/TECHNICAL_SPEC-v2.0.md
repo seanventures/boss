@@ -202,6 +202,7 @@ Rules:
 - Enterprise can run attached or detached.
 - Account Connect must not become a hard dependency for open-source Community operation.
 - Hosted service readiness is recorded through `AccountConnectHealthCheck` rows. Checks call only the configured Account Connect endpoint; missing configuration records a blocked check instead of a fake healthy result.
+- Hosted marketplace catalogs are recorded through `HostedMarketplaceSyncRun` and `HostedMarketplaceListing` rows. Sync calls only the configured Account Connect endpoint; missing configuration or invalid hosted responses record blocked/failed sync runs instead of synthetic listings.
 - Hosted login handshakes are represented locally as `AccountConnectAuthSession` records with receipts, callback-state validation, visible blocked states when `BOSS_ACCOUNT_CONNECT_URL` is missing, and link creation only from a successful hosted adapter response.
 
 ## Edition and Entitlement Checks
@@ -346,6 +347,9 @@ Commercial:
 - `POST /v1/account-connect/team-invites/{id}/revoke`
 - `GET /v1/account-connect/billing-portal-sessions`
 - `POST /v1/account-connect/billing-portal-sessions`
+- `GET /v1/marketplace/listings`
+- `GET /v1/marketplace/sync-runs`
+- `POST /v1/marketplace/sync`
 - `GET /v1/enterprise/identity-providers`
 - `POST /v1/enterprise/identity-providers`
 - `GET /v1/enterprise/cluster-validation-runs`

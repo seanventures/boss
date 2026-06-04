@@ -820,6 +820,49 @@ CREATE TABLE IF NOT EXISTS account_connect_health_checks (
 CREATE INDEX IF NOT EXISTS idx_account_connect_health_checks_project
   ON account_connect_health_checks(project_id, status, created_at DESC);
 
+CREATE TABLE IF NOT EXISTS hosted_marketplace_sync_runs (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  account_connect_org_id TEXT REFERENCES account_connect_orgs(id) ON DELETE SET NULL,
+  hosted_org_id TEXT,
+  status TEXT NOT NULL,
+  listing_count INTEGER NOT NULL DEFAULT 0,
+  provider_ref TEXT,
+  error JSONB,
+  synced_by TEXT NOT NULL DEFAULT 'system',
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_hosted_marketplace_sync_runs_project
+  ON hosted_marketplace_sync_runs(project_id, status, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS hosted_marketplace_pack_listings (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  account_connect_org_id TEXT REFERENCES account_connect_orgs(id) ON DELETE SET NULL,
+  hosted_org_id TEXT,
+  listing_id TEXT NOT NULL,
+  pack_id TEXT NOT NULL,
+  version TEXT NOT NULL,
+  display_name TEXT NOT NULL,
+  publisher TEXT NOT NULL,
+  category TEXT NOT NULL DEFAULT 'general',
+  description TEXT,
+  status TEXT NOT NULL DEFAULT 'active',
+  price_model TEXT,
+  price_usd_micros BIGINT,
+  required_entitlements JSONB NOT NULL DEFAULT '[]'::jsonb,
+  capabilities JSONB NOT NULL DEFAULT '[]'::jsonb,
+  source_url TEXT,
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+  last_sync_run_id TEXT REFERENCES hosted_marketplace_sync_runs(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(project_id, listing_id)
+);
+CREATE INDEX IF NOT EXISTS idx_hosted_marketplace_pack_listings_project
+  ON hosted_marketplace_pack_listings(project_id, status, updated_at DESC);
+
 CREATE TABLE IF NOT EXISTS deployment_rollouts (
   id TEXT PRIMARY KEY,
   project_id TEXT NOT NULL REFERENCES projects(id),

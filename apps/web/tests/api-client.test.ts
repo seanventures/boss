@@ -832,6 +832,95 @@ describe("createBossApiClient", () => {
     );
   });
 
+  it("uses hosted marketplace listing and sync API contracts", async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const listing = {
+      id: "mklisting_1",
+      project_id: "boss-dogfood",
+      account_connect_org_id: "acctconn_1",
+      hosted_org_id: "acct_org_123",
+      listing_id: "listing_private_agent",
+      pack_id: "private_enterprise_agent_v1",
+      version: "1.0.0",
+      display_name: "Private Enterprise Agent",
+      publisher: "BOSS",
+      category: "enterprise",
+      description: "Enterprise-only hosted module.",
+      status: "active",
+      price_model: "enterprise_contract",
+      price_usd_micros: 0,
+      required_entitlements: ["private_agent_marketplace"],
+      capabilities: ["agent_module.install"],
+      source_url: "https://accounts.example/marketplace/private",
+      metadata: {},
+      last_sync_run_id: "mktsync_1",
+      created_at: "2026-06-04T00:00:00Z",
+      updated_at: "2026-06-04T00:00:00Z",
+    };
+    const syncRun = {
+      id: "mktsync_1",
+      project_id: "boss-dogfood",
+      account_connect_org_id: "acctconn_1",
+      hosted_org_id: "acct_org_123",
+      status: "synced",
+      listing_count: 1,
+      provider_ref: "marketplace-sync-1",
+      synced_by: "ceo",
+      metadata: {},
+      created_at: "2026-06-04T00:00:00Z",
+    };
+    const responses = [
+      { status: 200, body: { project_id: "boss-dogfood", items: [listing] } },
+      { status: 200, body: { project_id: "boss-dogfood", items: [syncRun] } },
+      {
+        status: 201,
+        body: {
+          project_id: "boss-dogfood",
+          sync_run: syncRun,
+          listing_count: 1,
+        },
+      },
+    ];
+    const fetchImpl = async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({ url: String(input), init });
+      const response = responses.shift();
+      return new Response(JSON.stringify(response?.body ?? {}), {
+        status: response?.status ?? 500,
+        headers: { "Content-Type": "application/json" },
+      });
+    };
+    const client = createBossApiClient({
+      baseUrl: "http://127.0.0.1:8000",
+      fetchImpl,
+    });
+
+    const listings = await client.listHostedMarketplaceListings(
+      "boss-dogfood",
+      true,
+      25,
+    );
+    const runs = await client.listHostedMarketplaceSyncRuns("boss-dogfood", 10);
+    const synced = await client.syncHostedMarketplace({
+      project_id: "boss-dogfood",
+      hosted_org_id: "acct_org_123",
+      actor: "ceo",
+    });
+
+    expect(listings.items[0].pack_id).toBe("private_enterprise_agent_v1");
+    expect(runs.items[0].provider_ref).toBe("marketplace-sync-1");
+    expect(synced.listing_count).toBe(1);
+    expect(calls[0].url).toContain("/v1/marketplace/listings?");
+    expect(calls[0].url).toContain("include_inactive=true");
+    expect(calls[0].url).toContain("limit=25");
+    expect(calls[1].url).toBe(
+      "http://127.0.0.1:8000/v1/marketplace/sync-runs?project_id=boss-dogfood&limit=10",
+    );
+    expect(calls[2].url).toBe(
+      "http://127.0.0.1:8000/v1/marketplace/sync",
+    );
+    expect(calls[2].init?.method).toBe("POST");
+  });
+
   it("uses agent module entitlement and install-record API contracts", async () => {
     const calls: Array<{ url: string; init?: RequestInit }> = [];
     const module = {

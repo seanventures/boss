@@ -1738,6 +1738,58 @@ paths:
           schema: { type: string }
       responses:
         '200': { description: Agent module list }
+  /v1/marketplace/listings:
+    get:
+      summary: List hosted Account Connect marketplace listings synced into the local control plane
+      parameters:
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+        - name: include_inactive
+          in: query
+          required: false
+          schema: { type: boolean, default: false }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, default: 50 }
+      responses:
+        '200': { description: Hosted marketplace listings from prior real Account Connect syncs }
+  /v1/marketplace/sync-runs:
+    get:
+      summary: List hosted marketplace catalog sync attempts and blocked/failed states
+      parameters:
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, default: 50 }
+      responses:
+        '200': { description: Hosted marketplace sync-run history }
+  /v1/marketplace/sync:
+    post:
+      summary: Sync hosted marketplace catalog through the configured real Account Connect adapter
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id]
+              properties:
+                project_id: { type: string }
+                hosted_org_id: { type: string }
+                metadata: { type: object }
+                actor: { type: string, default: system }
+      responses:
+        '201': { description: Sync run recorded as synced, blocked_configuration, or failed }
+        '403': { description: Actor lacks module management permission }
+        '404': { description: Account Connect is not linked }
+        '409': { description: Requested hosted org conflicts with active Account Connect link }
   /v1/agent-modules/{module_id}:
     get:
       summary: Get packaged agent-module detail for a project
