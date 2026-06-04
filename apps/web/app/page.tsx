@@ -10,6 +10,7 @@ import {
   createComplianceEvidenceBundleAction,
   createDeadletterIncidentAction,
   createDecisionDigestAction,
+  createOpsDigestAction,
   createDeploymentRunAction,
   createAccountConnectBillingPortalSessionAction,
   createAccountConnectTeamInviteAction,
@@ -65,6 +66,7 @@ import { fetchInfrastructureResourceFeed } from "../lib/infrastructure";
 import { fetchMemberFeed, fetchOrgMemberFeed } from "../lib/members";
 import { fetchMeetingFeed } from "../lib/meetings";
 import { fetchMetatronQuery } from "../lib/metatron";
+import { fetchOpsQueueFeed } from "../lib/ops";
 import { fetchPackFeed } from "../lib/packs";
 import { fetchProviderOpsFeed } from "../lib/providerops";
 import { fetchProjectFeed } from "../lib/projects";
@@ -284,6 +286,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
     artifacts,
     events,
     healthSnapshots,
+    opsQueue,
     deadletters,
     packs,
     roles,
@@ -317,6 +320,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
       fetchArtifactFeed(activeProjectId),
       fetchActivityFeed(activeProjectId),
       fetchHealthSnapshotFeed(activeProjectId),
+      fetchOpsQueueFeed(activeProjectId),
       fetchDeadletterFeed(activeProjectId),
       fetchPackFeed(activeProjectId),
       fetchRoleFeed(activeProjectId),
@@ -2269,6 +2273,69 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                   ))
                 )}
               </div>
+            </article>
+
+            <article className="stack-card">
+              <h3>COO queue inspection</h3>
+              {!opsQueue.apiReachable ? (
+                <p className="detail">
+                  {opsQueue.blockedReason ?? "Ops queue API is unavailable."}
+                </p>
+              ) : (
+                <>
+                  <p className="detail">
+                    Budget {opsQueue.budgetState} / blockers{" "}
+                    {opsQueue.blockerCount} / ready jobs{" "}
+                    {opsQueue.readyJobIds.length} / stale leases{" "}
+                    {opsQueue.staleLeaseJobIds.length}
+                  </p>
+                  <form action={createOpsDigestAction}>
+                    <input type="hidden" name="project_id" value={activeProjectId} />
+                    <input type="hidden" name="actor" value={activeActorId} />
+                    <input type="hidden" name="limit" value={25} />
+                    <button className="button secondary" type="submit">
+                      Create ops digest
+                    </button>
+                  </form>
+                  <div className="feed-list">
+                    {opsQueue.recommendedActions.length === 0 ? (
+                      <p className="detail">
+                        No deterministic queue actions are currently recommended.
+                      </p>
+                    ) : (
+                      opsQueue.recommendedActions.slice(0, 4).map((action, index) => (
+                        <div className="feed-row" key={`ops-action-${index}`}>
+                          <div>
+                            <h4>{action}</h4>
+                            <p className="detail">
+                              Queue {Number(opsQueue.queueState.queued_jobs ?? 0)} /
+                              retryable{" "}
+                              {Number(opsQueue.queueState.retryable_jobs ?? 0)} /
+                              active {Number(opsQueue.queueState.leased_jobs ?? 0)}
+                            </p>
+                          </div>
+                          <span className="pill">COO</span>
+                        </div>
+                      ))
+                    )}
+                    {opsQueue.jobs.slice(0, 3).map((job) => (
+                      <div className="feed-row" key={job.id}>
+                        <div>
+                          <h4>{job.kind}</h4>
+                          <p className="detail">
+                            {job.status} / attempt {job.attempt}/{job.max_attempts} /
+                            run {formatDateTime(job.run_after)}
+                          </p>
+                          {job.task_title ? (
+                            <p className="detail">{job.task_title}</p>
+                          ) : null}
+                        </div>
+                        <code className="mono">{job.id}</code>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              )}
             </article>
 
             <article className="stack-card">

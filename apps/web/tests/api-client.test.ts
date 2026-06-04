@@ -2031,4 +2031,122 @@ describe("createBossApiClient", () => {
     expect(incident.incident_artifact_id).toBe("art_incident");
     expect(requeued.requeued_job_id).toBe("job_requeued");
   });
+
+  it("uses ops queue inspection and digest API contracts", async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const inspection = {
+      project_id: "boss-dogfood",
+      generated_at: "2026-06-03T00:00:00Z",
+      budget_state: "green",
+      queue_state: { queued_jobs: 1, retryable_jobs: 1, leased_jobs: 1 },
+      workload_state: { active_workers: 1 },
+      incident_state: { open_deadletters: 1 },
+      job_status_counts: { queued: 1, failed_retryable: 1, leased: 1 },
+      job_kind_counts: { "agent.coo.ops_digest": 1 },
+      stale_lease_job_ids: ["job_stale"],
+      ready_job_ids: ["job_ready"],
+      jobs: [
+        {
+          id: "job_ready",
+          project_id: "boss-dogfood",
+          kind: "agent.coo.ops_digest",
+          status: "queued",
+          priority: 100,
+          attempt: 0,
+          max_attempts: 3,
+          data_boundary: "internal",
+          run_after: "2026-06-03T00:00:00Z",
+          last_error: {},
+          created_at: "2026-06-03T00:00:00Z",
+          updated_at: "2026-06-03T00:00:00Z",
+        },
+      ],
+      deadletters: [
+        {
+          id: "dlq_1",
+          project_id: "boss-dogfood",
+          source_kind: "job",
+          source_id: "job_failed",
+          reason: "terminal failure",
+          payload: { message: "terminal failure" },
+          status: "open",
+          created_at: "2026-06-03T00:00:00Z",
+          updated_at: "2026-06-03T00:00:00Z",
+        },
+      ],
+      pending_decisions: [
+        {
+          id: "dec_1",
+          question: "Approve queue remediation?",
+          status: "pending",
+          risk_tier: 2,
+          default_action: "hold",
+          created_at: "2026-06-03T00:00:00Z",
+          updated_at: "2026-06-03T00:00:00Z",
+        },
+      ],
+      blockers: [
+        {
+          severity: "high",
+          category: "deadletters",
+          title: "Open deadletters require remediation",
+          object_ids: ["dlq_1"],
+          next_action: "Create incident packets.",
+        },
+      ],
+      recommended_actions: ["Create incident packets."],
+    };
+    const digest = {
+      status: "created",
+      project_id: "boss-dogfood",
+      artifact_id: "art_ops_digest",
+      artifact_type: "ops_digest",
+      created_at: "2026-06-03T00:00:00Z",
+      counts: { jobs: 1, deadletters: 1, pending_decisions: 1, blockers: 1 },
+      queue_state: inspection.queue_state,
+      blockers: inspection.blockers,
+      recommended_actions: inspection.recommended_actions,
+    };
+    const responses = [
+      { status: 200, body: inspection },
+      { status: 201, body: digest },
+    ];
+    const fetchImpl = async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({ url: String(input), init });
+      const next = responses.shift();
+      return new Response(JSON.stringify(next?.body ?? {}), {
+        status: next?.status ?? 500,
+        headers: { "Content-Type": "application/json" },
+      });
+    };
+    const client = createBossApiClient({
+      baseUrl: "http://127.0.0.1:8000",
+      fetchImpl,
+    });
+
+    const queue = await client.inspectOpsQueue("boss-dogfood", 10, true);
+    const createdDigest = await client.createOpsDigest({
+      project_id: "boss-dogfood",
+      actor: "coo",
+      limit: 10,
+      include_terminal: true,
+    });
+
+    expect(calls[0].url).toBe(
+      "http://127.0.0.1:8000/v1/ops/queue?project_id=boss-dogfood&limit=10&include_terminal=true",
+    );
+    expect(calls[1].url).toBe(
+      "http://127.0.0.1:8000/v1/ops/digests",
+    );
+    expect(calls[1].init?.method).toBe("POST");
+    expect(JSON.parse(String(calls[1].init?.body))).toMatchObject({
+      project_id: "boss-dogfood",
+      actor: "coo",
+      limit: 10,
+      include_terminal: true,
+    });
+    expect(queue.deadletters[0].id).toBe("dlq_1");
+    expect(queue.pending_decisions[0].risk_tier).toBe(2);
+    expect(createdDigest.artifact_type).toBe("ops_digest");
+  });
 });

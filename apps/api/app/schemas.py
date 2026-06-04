@@ -1155,6 +1155,75 @@ class JobCreateRequest(BaseModel):
     run_after_seconds: int = Field(default=0, ge=0, le=86_400)
 
 
+class OpsQueueJobItem(BaseModel):
+    id: str
+    project_id: str
+    task_id: Optional[str] = None
+    task_title: Optional[str] = None
+    kind: str
+    status: str
+    priority: int
+    attempt: int
+    max_attempts: int
+    data_boundary: DataBoundary = "internal"
+    run_after: str
+    lease_owner: Optional[str] = None
+    lease_expires_at: Optional[str] = None
+    heartbeat_at: Optional[str] = None
+    last_error: dict[str, Any] = Field(default_factory=dict)
+    created_at: str
+    updated_at: str
+
+
+class OpsQueueDecisionItem(BaseModel):
+    id: str
+    task_id: Optional[str] = None
+    question: str
+    status: str
+    risk_tier: int
+    default_action: Optional[str] = None
+    deadline_at: Optional[str] = None
+    created_at: str
+    updated_at: str
+
+
+class OpsQueueInspectionResponse(BaseModel):
+    project_id: str
+    generated_at: str
+    budget_state: str
+    queue_state: dict[str, Any] = Field(default_factory=dict)
+    workload_state: dict[str, Any] = Field(default_factory=dict)
+    incident_state: dict[str, Any] = Field(default_factory=dict)
+    job_status_counts: dict[str, int] = Field(default_factory=dict)
+    job_kind_counts: dict[str, int] = Field(default_factory=dict)
+    stale_lease_job_ids: list[str] = Field(default_factory=list)
+    ready_job_ids: list[str] = Field(default_factory=list)
+    jobs: list[OpsQueueJobItem] = Field(default_factory=list)
+    deadletters: list["DeadletterItem"] = Field(default_factory=list)
+    pending_decisions: list[OpsQueueDecisionItem] = Field(default_factory=list)
+    blockers: list[dict[str, Any]] = Field(default_factory=list)
+    recommended_actions: list[str] = Field(default_factory=list)
+
+
+class OpsDigestRequest(BaseModel):
+    project_id: str
+    actor: str = "coo"
+    limit: int = Field(default=25, ge=1, le=100)
+    include_terminal: bool = False
+
+
+class OpsDigestResponse(BaseModel):
+    status: str
+    project_id: str
+    artifact_id: str
+    artifact_type: str
+    created_at: str
+    counts: dict[str, int] = Field(default_factory=dict)
+    queue_state: dict[str, Any] = Field(default_factory=dict)
+    blockers: list[dict[str, Any]] = Field(default_factory=list)
+    recommended_actions: list[str] = Field(default_factory=list)
+
+
 class LeasedJob(BaseModel):
     id: str
     project_id: str
@@ -3141,4 +3210,5 @@ class ChangeSetApplyResponse(BaseModel):
 
 
 AuditExportResponse.model_rebuild()
+OpsQueueInspectionResponse.model_rebuild()
 ProviderConnectionTestResponse.model_rebuild()

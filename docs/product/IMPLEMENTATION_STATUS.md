@@ -37,6 +37,7 @@ This document summarizes the currently implemented BOSS runtime surfaces in this
   - CEO command intake
   - canonical department, policy, plan, and meeting CRUD/list/run surfaces
   - task and job inspection
+  - deterministic COO queue inspection and durable ops digest artifacts
   - deadletter remediation APIs for incident packet creation and terminal job requeue
   - change journal list/detail for diff, review, deployment, self-improvement, infrastructure, and role-governance artifacts
   - budget quote, reserve, release, and status
@@ -67,7 +68,8 @@ This document summarizes the currently implemented BOSS runtime surfaces in this
   - heartbeat and TTL enforcement
   - completion, failure, retry, reclaim, and deadletter handling
   - deadletter remediation that creates linked replacement jobs instead of mutating terminal job history
-  - generic initial-agent job completion into durable `agent_brief` artifacts with audit events
+  - queue inspection/digest support that summarizes ready jobs, stale leases, retry pressure, deadletters, pending decisions, blockers, and recommended actions
+  - role-specific initial-agent worker strategies for every advertised `agent.*` capability, including output contracts, required sections, evidence requirements, safety gates, decision triggers, grounding status, and durable `agent_brief` artifacts with audit events
   - leased infrastructure create/delete job kinds
   - budget-state claim-time controls
 - Budget governor behavior:

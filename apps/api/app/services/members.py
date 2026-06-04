@@ -114,6 +114,17 @@ class MemberDirectoryService:
                 "permissions": ["command_submit", "health_refresh", "audit_export"],
             },
             {
+                "member_id": "coo",
+                "display_name": "COO Operator",
+                "member_type": "system",
+                "role_keys": ["coo"],
+                "permissions": [
+                    "health_refresh",
+                    "audit_export",
+                    "task_create",
+                ],
+            },
+            {
                 "member_id": "executive_console",
                 "display_name": "Executive Console Operator",
                 "member_type": "system",

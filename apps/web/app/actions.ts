@@ -28,6 +28,14 @@ function parseLines(value: FormDataEntryValue | null): string[] {
     .filter(Boolean);
 }
 
+function parseInteger(value: FormDataEntryValue | null, fallback: number): number {
+  if (typeof value !== "string" || !value.trim()) {
+    return fallback;
+  }
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
 function parseRequiredMetrics(
   value: FormDataEntryValue | null,
 ): Record<string, unknown> {
@@ -615,6 +623,15 @@ export async function createReplayBundleAction(formData: FormData): Promise<void
   await client.createReplayBundle({
     project_id: getProjectId(formData),
     actor: getActor(formData),
+  });
+  revalidatePath("/");
+}
+
+export async function createOpsDigestAction(formData: FormData): Promise<void> {
+  await client.createOpsDigest({
+    project_id: getProjectId(formData),
+    actor: getActor(formData),
+    limit: parseInteger(formData.get("limit"), 25),
   });
   revalidatePath("/");
 }

@@ -34,6 +34,7 @@ objects:
     - meeting
     - receipt
     - deadletter
+    - ops_digest
   resource_plane:
     - provider_account
     - provider_adapter

@@ -849,6 +849,75 @@ export type JobCreateRequest = {
   run_after_seconds?: number;
 };
 
+export type OpsQueueJobItem = {
+  id: string;
+  project_id: string;
+  task_id?: string;
+  task_title?: string;
+  kind: string;
+  status: string;
+  priority: number;
+  attempt: number;
+  max_attempts: number;
+  data_boundary: DataBoundary;
+  run_after: string;
+  lease_owner?: string;
+  lease_expires_at?: string;
+  heartbeat_at?: string;
+  last_error: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+};
+
+export type OpsQueueDecisionItem = {
+  id: string;
+  task_id?: string;
+  question: string;
+  status: string;
+  risk_tier: number;
+  default_action?: string;
+  deadline_at?: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type OpsQueueInspectionResponse = {
+  project_id: string;
+  generated_at: string;
+  budget_state: string;
+  queue_state: Record<string, unknown>;
+  workload_state: Record<string, unknown>;
+  incident_state: Record<string, unknown>;
+  job_status_counts: Record<string, number>;
+  job_kind_counts: Record<string, number>;
+  stale_lease_job_ids: string[];
+  ready_job_ids: string[];
+  jobs: OpsQueueJobItem[];
+  deadletters: DeadletterItem[];
+  pending_decisions: OpsQueueDecisionItem[];
+  blockers: Array<Record<string, unknown>>;
+  recommended_actions: string[];
+};
+
+export type OpsDigestRequest = {
+  project_id: string;
+  actor?: string;
+  limit?: number;
+  include_terminal?: boolean;
+};
+
+export type OpsDigestResponse = {
+  status: string;
+  project_id: string;
+  artifact_id: string;
+  artifact_type: string;
+  created_at: string;
+  counts: Record<string, number>;
+  queue_state: Record<string, unknown>;
+  blockers: Array<Record<string, unknown>>;
+  recommended_actions: string[];
+};
+
 export type LeasedJob = {
   id: string;
   project_id: string;
@@ -3141,6 +3210,20 @@ export function createBossApiClient(config: BossApiClientConfig) {
     },
     createJob(payload: JobCreateRequest) {
       return request<JobSummary>("POST", "/v1/jobs", {
+        body: payload,
+      });
+    },
+    inspectOpsQueue(projectId: string, limit = 25, includeTerminal = false) {
+      return request<OpsQueueInspectionResponse>("GET", "/v1/ops/queue", {
+        query: {
+          project_id: projectId,
+          limit,
+          include_terminal: includeTerminal,
+        },
+      });
+    },
+    createOpsDigest(payload: OpsDigestRequest) {
+      return request<OpsDigestResponse>("POST", "/v1/ops/digests", {
         body: payload,
       });
     },

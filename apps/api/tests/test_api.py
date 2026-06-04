@@ -9351,6 +9351,14 @@ def test_agent_job_lease_attaches_runtime_and_completion_creates_artifact(client
                 "required_decisions": ["Confirm alert threshold defaults."],
                 "agent_module": leased["payload"]["agent_module"],
                 "agent_runtime": leased["payload"]["agent_runtime"],
+                "strategy_id": "agent.pm.scope_brief",
+                "grounding_status": "needs_control_plane_context",
+                "work_product": {
+                    "contract": "FeatureBrief",
+                    "sections": ["problem_statement", "acceptance_criteria"],
+                    "evidence_requirements": ["prd", "task", "decision", "user_story"],
+                    "safety_gates": ["explicit_non_goals"],
+                },
                 "prompt_excerpt": leased["payload"]["agent_runtime"][
                     "compiled_prompt"
                 ]["job"][:400],
@@ -9369,6 +9377,9 @@ def test_agent_job_lease_attaches_runtime_and_completion_creates_artifact(client
     assert content["agent_module"]["id"] == "pm_product_planner_v1"
     assert content["agent_runtime"]["role"]["role_key"] == "pm"
     assert content["required_decisions"] == ["Confirm alert threshold defaults."]
+    assert content["strategy_id"] == "agent.pm.scope_brief"
+    assert content["grounding_status"] == "needs_control_plane_context"
+    assert content["work_product"]["contract"] == "FeatureBrief"
 
     events = client.get("/v1/events", params={"project_id": "boss-dogfood"})
     assert "agent.brief_created" in [
@@ -9728,6 +9739,163 @@ def test_deadletter_requeue_rejects_non_job_sources(client, engine):
     )
     assert response.status_code == 400
     assert response.json()["detail"] == "only job deadletters can be requeued"
+
+
+def test_ops_queue_inspection_and_digest_use_live_control_plane_state(client, engine):
+    queued_job = client.post(
+        "/v1/jobs",
+        json={
+            "project_id": "boss-dogfood",
+            "kind": "plan.generate",
+            "payload": {"command": "Queued work for ops inspection."},
+        },
+    )
+    assert queued_job.status_code == 201
+    queued_job_id = queued_job.json()["id"]
+
+    stale_job = client.post(
+        "/v1/jobs",
+        json={
+            "project_id": "boss-dogfood",
+            "kind": "agent.coo.ops_digest",
+            "payload": {"command": "Lease me then become stale."},
+        },
+    )
+    assert stale_job.status_code == 201
+    stale_job_id = stale_job.json()["id"]
+    leased = client.post(
+        "/v1/worker/poll",
+        json={
+            "worker_id": "worker-stale-lease",
+            "capabilities": ["agent.coo.ops_digest"],
+            "lease_ttl_seconds": 60,
+        },
+    )
+    assert leased.status_code == 200
+    assert leased.json()["job"]["id"] == stale_job_id
+
+    deadlettered = client.post(
+        "/v1/jobs",
+        json={
+            "project_id": "boss-dogfood",
+            "kind": "plan.generate",
+            "payload": {"command": "Deadletter me for ops inspection."},
+            "max_attempts": 1,
+        },
+    )
+    assert deadlettered.status_code == 201
+    deadlettered_job_id = deadlettered.json()["id"]
+    deadletter_lease = client.post(
+        "/v1/worker/poll",
+        json={
+            "worker_id": "worker-ops-deadletter",
+            "capabilities": ["plan.generate"],
+            "lease_ttl_seconds": 60,
+        },
+    ).json()["job"]
+    assert deadletter_lease["id"] == queued_job_id
+
+    # Fail a different leased job by moving the intended deadletter job to the front.
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+            """
+            UPDATE jobs
+            SET status = 'failed_retryable',
+                run_after = now() - interval '1 minute',
+                last_error = '{"message":"retryable ops failure"}'::jsonb
+            WHERE id = :queued_job_id
+            """
+            ),
+            {"queued_job_id": queued_job_id},
+        )
+        connection.execute(
+            text(
+                """
+                UPDATE jobs
+                SET lease_expires_at = now() - interval '5 minutes'
+                WHERE id = :stale_job_id
+                """
+            ),
+            {"stale_job_id": stale_job_id},
+        )
+        connection.execute(
+            text(
+                """
+                INSERT INTO deadletters (
+                    id, project_id, source_kind, source_id, reason, payload
+                )
+                VALUES (
+                    'dlq_ops_inspect', 'boss-dogfood', 'job', :deadlettered_job_id,
+                    'manual terminal ops failure', '{"message":"terminal"}'::jsonb
+                )
+                """
+            ),
+            {"deadlettered_job_id": deadlettered_job_id},
+        )
+        connection.execute(
+            text(
+                """
+                UPDATE jobs
+                SET status = 'deadlettered'
+                WHERE id = :deadlettered_job_id
+                """
+            ),
+            {"deadlettered_job_id": deadlettered_job_id},
+        )
+        connection.execute(
+            text(
+                """
+                INSERT INTO decisions (
+                    id, project_id, question, recommendation, options, risk_tier,
+                    cost_summary, default_action, status
+                )
+                VALUES (
+                    'dec_ops_inspect', 'boss-dogfood', 'Approve ops remediation?',
+                    '{"summary":"Review queue blockers"}'::jsonb,
+                    '[]'::jsonb, 2, '{}'::jsonb, 'hold', 'pending'
+                )
+                """
+            )
+        )
+
+    queue = client.get(
+        "/v1/ops/queue",
+        params={"project_id": "boss-dogfood", "limit": 20},
+    )
+    assert queue.status_code == 200
+    payload = queue.json()
+    assert payload["project_id"] == "boss-dogfood"
+    assert payload["job_status_counts"]["failed_retryable"] >= 1
+    assert payload["job_status_counts"]["deadlettered"] >= 1
+    assert queued_job_id in payload["ready_job_ids"]
+    assert stale_job_id in payload["stale_lease_job_ids"]
+    assert any(item["id"] == "dlq_ops_inspect" for item in payload["deadletters"])
+    assert any(item["id"] == "dec_ops_inspect" for item in payload["pending_decisions"])
+    blocker_categories = {item["category"] for item in payload["blockers"]}
+    assert {"deadletters", "leases", "retry", "decisions"}.issubset(
+        blocker_categories
+    )
+
+    digest = client.post(
+        "/v1/ops/digests",
+        json={"project_id": "boss-dogfood", "actor": "coo", "limit": 20},
+    )
+    assert digest.status_code == 201
+    digest_payload = digest.json()
+    assert digest_payload["artifact_type"] == "ops_digest"
+    assert digest_payload["counts"]["blockers"] >= 4
+
+    artifact = client.get(f"/v1/artifacts/{digest_payload['artifact_id']}")
+    assert artifact.status_code == 200
+    artifact_payload = artifact.json()
+    assert artifact_payload["artifact_type"] == "ops_digest"
+    inspection = artifact_payload["content"]["inspection"]
+    assert inspection["ready_job_ids"]
+    assert "No silent drops." in artifact_payload["content"]["boss_invariants"]
+
+    events = client.get("/v1/events", params={"project_id": "boss-dogfood"})
+    assert "ops.digest_created" in [item["event_type"] for item in events.json()["items"]]
 
 
 def test_worker_complete_creates_plan_artifact_and_decision(client):

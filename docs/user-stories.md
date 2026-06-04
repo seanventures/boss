@@ -73,6 +73,18 @@ Acceptance criteria:
 - Given a non-job deadletter, when requeue is requested, then BOSS rejects it and leaves the deadletter visible for manual remediation.
 - Given Mission Control renders deadletters, when remediation links exist, then it shows incident packet/task and requeued job state from the API.
 
+### Story OPS-002: Inspect Queue Health
+
+As a COO/operator, I want a deterministic queue inspection and operations digest, so that queue pressure, stale leases, deadletters, retryable jobs, and blocking decisions are visible as durable evidence.
+
+Acceptance criteria:
+
+- Given queued, retryable, leased, deadlettered, and pending-decision state, when the queue inspection API is called, then BOSS returns job status counts, job kind counts, ready job IDs, stale lease IDs, deadletters, pending decisions, blockers, and recommended actions.
+- Given the COO creates an ops digest, when the request is authorized, then BOSS stores an `ops_digest` artifact with queue, incident, job, deadletter, decision, blocker, and recommended-action evidence.
+- Given the digest is created, when events are inspected, then `ops.digest_created` links to the artifact and includes job, deadletter, decision, and blocker counts.
+- Given Mission Control renders the operations panel, when queue inspection data exists, then it shows blocker count, ready jobs, stale leases, recommended actions, and representative jobs from the API.
+- Given an unauthorized actor requests digest creation, when the actor lacks health refresh permission, then BOSS rejects the request before creating an artifact.
+
 ## Product / Engineering
 
 ### Story ENG-001: Produce Reviewable Software Work
@@ -101,7 +113,8 @@ Acceptance criteria:
 - Given a governed job kind, when runtime behavior is resolved, then BOSS uses installed module configuration instead of hidden service defaults.
 - Given a default dogfood project is seeded, when BOSS installs initial agent modules, then Metatron, COO, CAO, CTO, PM, QA, Release Manager, Program Manager, VP Agents, ProviderOps Manager, FinOps Sentinel, Resource Janitor, Infra Steward, Deployment Manager, Secrets Steward, Model Spend Analyst, and Software Engineer modules are active.
 - Given a worker leases an `agent.*` job, when the job kind maps to an installed module, then the payload includes the resolved module, role, prompt checklist, BOSS invariants, skill defaults, and runtime configuration before execution.
-- Given an `agent.*` job completes, when the worker returns a brief, then BOSS stores an `agent_brief` artifact and emits `agent.brief_created`.
+- Given an initial `agent.*` job kind is advertised as a worker capability, when the worker executes it, then BOSS applies a role-specific work-product strategy with output contract, sections, evidence requirements, safety gates, and decision triggers.
+- Given an `agent.*` job completes, when the worker returns a brief, then BOSS stores an `agent_brief` artifact with strategy, grounding, work-product, module, prompt, and runtime context, and emits `agent.brief_created`.
 - Given an unauthorized actor, when module installation is attempted, then BOSS rejects it and emits a policy denial.
 
 ### Story ENG-003: Run Structured Operating Meetings

@@ -149,6 +149,9 @@ from .schemas import (
     MeetingListResponse,
     MeetingRunRequest,
     MeetingSummary,
+    OpsDigestRequest,
+    OpsDigestResponse,
+    OpsQueueInspectionResponse,
     OrgMemberListResponse,
     OrgMemberSummary,
     OrgMemberUpsertRequest,
@@ -307,6 +310,7 @@ from .services.oidc import (
     OidcAuthenticator,
     OidcConfigurationError,
 )
+from .services.ops import OpsQueueService
 from .services.receipts import ReceiptService
 from .services.resource_plane import (
     ChangeSetNotFoundError,
@@ -352,6 +356,7 @@ role_governance = RoleGovernanceService(settings)
 members = MemberDirectoryService(settings)
 canonical = CanonicalObjectService()
 deadletter_remediation = DeadletterRemediationService(settings)
+ops_queue = OpsQueueService(settings)
 break_glass = BreakGlassService()
 resource_plane = ResourcePlaneService(settings)
 oidc_auth = OidcAuthenticator(settings)
@@ -2688,6 +2693,43 @@ def refresh_health_snapshot(
             connection, payload.project_id, payload.actor
         )
         return health_snapshot_summary_from_row(row)
+
+
+@app.get("/v1/ops/queue", response_model=OpsQueueInspectionResponse)
+def inspect_ops_queue(
+    project_id: str,
+    limit: int = 25,
+    include_terminal: bool = False,
+) -> OpsQueueInspectionResponse:
+    if limit < 1 or limit > 100:
+        raise HTTPException(status_code=400, detail="limit must be between 1 and 100.")
+    with begin(engine) as connection:
+        result = ops_queue.inspect_queue(
+            connection,
+            project_id,
+            limit=limit,
+            include_terminal=include_terminal,
+        )
+        return OpsQueueInspectionResponse(**result)
+
+
+@app.post("/v1/ops/digests", response_model=OpsDigestResponse, status_code=201)
+def create_ops_digest(payload: OpsDigestRequest) -> OpsDigestResponse:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection,
+            payload.project_id,
+            payload.actor,
+            "health_refresh",
+        )
+        result = ops_queue.create_ops_digest(
+            connection,
+            payload.project_id,
+            actor=payload.actor,
+            limit=payload.limit,
+            include_terminal=payload.include_terminal,
+        )
+        return OpsDigestResponse(**result)
 
 
 @app.get("/v1/artifacts", response_model=ArtifactListResponse)

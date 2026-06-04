@@ -10,6 +10,240 @@ from .control_plane import ControlPlaneClient, LeasedJob
 LOGGER = logging.getLogger("boss.worker")
 
 
+AGENT_WORK_PRODUCT_STRATEGIES: dict[str, dict[str, Any]] = {
+    "agent.metatron.status_brief": {
+        "contract": "StatusBrief",
+        "role_logic": "Summarize current state, stale data, decisions, risks, and next CEO actions.",
+        "sections": [
+            "freshness_and_scope",
+            "what_changed",
+            "top_risks",
+            "decisions_needed",
+            "next_actions",
+        ],
+        "evidence": ["task", "decision", "event", "budget", "queue"],
+        "safety_gates": ["do_not_invent_state", "cite_references", "escalate_missing_data"],
+        "required_decision_when": ["high_risk_action", "budget_change", "merge_or_deploy"],
+    },
+    "agent.coo.ops_digest": {
+        "contract": "OpsDigest",
+        "role_logic": "Inspect queue, leases, retries, deadletters, decisions, and visible incidents.",
+        "sections": [
+            "queue_state",
+            "lease_health",
+            "deadletters",
+            "blockers",
+            "recommended_remediation",
+        ],
+        "evidence": ["job", "deadletter", "decision", "event", "health_snapshot"],
+        "safety_gates": ["no_silent_drops", "do_not_override_budget", "requeue_only_safe_jobs"],
+        "required_decision_when": ["break_glass", "budget_change", "policy_override"],
+    },
+    "agent.cao.architecture_review": {
+        "contract": "InvariantReport",
+        "role_logic": "Review architecture changes against BOSS safety invariants and simplicity.",
+        "sections": [
+            "affected_invariants",
+            "canonical_objects",
+            "policy_and_budget_gates",
+            "failure_modes",
+            "simplification_options",
+        ],
+        "evidence": ["artifact", "schema", "policy", "decision", "event"],
+        "safety_gates": ["preserve_receipts", "preserve_leases", "preserve_budget_gates"],
+        "required_decision_when": ["schema_breaking_change", "safety_invariant_change"],
+    },
+    "agent.cto.implementation_plan": {
+        "contract": "ImplementationPlan",
+        "role_logic": "Convert approved scope into small slices with test, risk, and rollback gates.",
+        "sections": [
+            "implementation_slices",
+            "affected_surfaces",
+            "test_plan",
+            "risk_hotspots",
+            "sequencing_and_rollback",
+        ],
+        "evidence": ["task", "artifact", "test_report", "pull_request"],
+        "safety_gates": ["small_reviewable_slices", "tests_required", "approval_for_scope_growth"],
+        "required_decision_when": ["merge", "deploy", "budget_increase", "scope_expansion"],
+    },
+    "agent.pm.scope_brief": {
+        "contract": "FeatureBrief",
+        "role_logic": "Turn ambiguous product intent into scope, non-goals, acceptance criteria, and risks.",
+        "sections": [
+            "problem_statement",
+            "in_scope",
+            "non_goals",
+            "acceptance_criteria",
+            "open_questions",
+        ],
+        "evidence": ["prd", "task", "decision", "user_story"],
+        "safety_gates": ["explicit_non_goals", "approval_for_scope_expansion"],
+        "required_decision_when": ["material_scope_tradeoff", "high_risk_requirement"],
+    },
+    "agent.qa.validation_report": {
+        "contract": "ValidationReport",
+        "role_logic": "Validate acceptance criteria, test evidence, regressions, and release risk.",
+        "sections": [
+            "acceptance_coverage",
+            "tests_run",
+            "missing_tests",
+            "regression_risks",
+            "qa_verdict",
+        ],
+        "evidence": ["test_report", "artifact", "pull_request", "ci_check"],
+        "safety_gates": ["block_without_evidence", "name_test_gaps"],
+        "required_decision_when": ["waive_failed_tests", "accept_known_gap"],
+    },
+    "agent.release_manager.release_packet": {
+        "contract": "ReleasePacket",
+        "role_logic": "Prepare release evidence, rollout stages, rollback plan, and approval cards.",
+        "sections": [
+            "release_summary",
+            "validation_evidence",
+            "rollout_stages",
+            "rollback_plan",
+            "approval_requirements",
+        ],
+        "evidence": ["pull_request", "test_report", "decision", "receipt", "deployment_run"],
+        "safety_gates": ["rollback_required", "approval_required_for_deploy"],
+        "required_decision_when": ["staging_deploy", "production_deploy", "failed_check_waiver"],
+    },
+    "agent.program_manager.delivery_plan": {
+        "contract": "DependencyMap",
+        "role_logic": "Track milestones, owners, dependencies, blockers, and follow-up work.",
+        "sections": [
+            "milestones",
+            "dependencies",
+            "owners_and_dates",
+            "blockers",
+            "meeting_or_decision_needs",
+        ],
+        "evidence": ["task", "meeting", "decision", "artifact"],
+        "safety_gates": ["owners_required", "durable_followups_required"],
+        "required_decision_when": ["priority_change", "blocked_dependency", "cross_role_conflict"],
+    },
+    "agent.vp_agents.role_review": {
+        "contract": "RoleReview",
+        "role_logic": "Review role quality, drift signals, eval evidence, trust, and autonomy changes.",
+        "sections": [
+            "rolespec_quality",
+            "drift_signals",
+            "eval_evidence",
+            "trust_and_autonomy",
+            "recommended_changes",
+        ],
+        "evidence": ["role", "eval", "decision", "artifact", "event"],
+        "safety_gates": ["no_silent_autonomy_upgrade", "evidence_required"],
+        "required_decision_when": ["autonomy_upgrade", "high_risk_skill_install"],
+    },
+    "agent.providerops_manager.providerops_brief": {
+        "contract": "ProviderOpsBrief",
+        "role_logic": "Review provider connections, resource inventory, ChangeSets, and provider risk.",
+        "sections": [
+            "provider_health",
+            "permission_gaps",
+            "unmanaged_resources",
+            "open_changesets",
+            "risk_escalations",
+        ],
+        "evidence": [
+            "provider_account",
+            "external_resource",
+            "changeset",
+            "resource_receipt",
+            "cost_event",
+        ],
+        "safety_gates": ["changeset_required", "resource_receipt_required", "no_raw_secrets"],
+        "required_decision_when": ["provider_write", "destructive_action", "production_dns"],
+    },
+    "agent.finops_sentinel.cost_brief": {
+        "contract": "BudgetPressureBrief",
+        "role_logic": "Inspect spend, confidence labels, anomalies, commitments, and budget pressure.",
+        "sections": [
+            "spend_posture",
+            "confidence_labels",
+            "anomalies",
+            "commitments",
+            "budget_safe_actions",
+        ],
+        "evidence": ["cost_event", "budget_reservation", "commitment", "provider_account"],
+        "safety_gates": ["never_present_estimate_as_exact", "budget_governor_wins"],
+        "required_decision_when": ["budget_increase", "spend_freeze_override"],
+    },
+    "agent.infra_steward.infra_review": {
+        "contract": "InfraReadinessReview",
+        "role_logic": "Evaluate provider boundaries, local/cloud placement, worker pools, and rollback posture.",
+        "sections": [
+            "resource_readiness",
+            "provider_boundaries",
+            "local_cloud_placement",
+            "worker_pool_implications",
+            "cost_and_reliability_tradeoffs",
+        ],
+        "evidence": ["changeset", "external_resource", "worker_pool", "provider_health"],
+        "safety_gates": ["no_direct_provider_write", "prefer_local_first", "rollback_ready"],
+        "required_decision_when": ["provisioning", "destructive_change", "production_boundary_change"],
+    },
+    "agent.deployment_manager.deployment_review": {
+        "contract": "DeploymentPlan",
+        "role_logic": "Assess deployment target readiness, evidence gaps, health checks, and rollback points.",
+        "sections": [
+            "target_readiness",
+            "release_evidence_gaps",
+            "health_check_plan",
+            "rollback_points",
+            "receipt_expectations",
+        ],
+        "evidence": ["deployment_run", "deployment_target", "changeset", "resource_receipt"],
+        "safety_gates": ["deployment_changeset_required", "health_check_required"],
+        "required_decision_when": ["staging_deploy", "production_deploy", "rollback_execution"],
+    },
+    "agent.resource_janitor.cleanup_brief": {
+        "contract": "CleanupChangeSetProposal",
+        "role_logic": "Find orphaned resources and waste, estimate savings, and propose cleanup ChangeSets.",
+        "sections": [
+            "orphan_candidates",
+            "ttl_findings",
+            "estimated_savings",
+            "cleanup_changeset_candidates",
+            "rollback_or_recovery_notes",
+        ],
+        "evidence": ["external_resource", "drift_report", "cost_event", "changeset"],
+        "safety_gates": ["no_auto_delete_production", "approval_for_destructive_cleanup"],
+        "required_decision_when": ["destructive_cleanup", "production_impacting_cleanup"],
+    },
+    "agent.secrets_steward.secret_boundary_review": {
+        "contract": "SecretBoundaryReview",
+        "role_logic": "Review SecretRefs, provider scopes, rotation posture, and local-runner secret boundaries.",
+        "sections": [
+            "secretref_inventory",
+            "over_permission_risks",
+            "rotation_needs",
+            "local_runner_boundaries",
+            "least_privilege_recommendations",
+        ],
+        "evidence": ["secret_ref", "provider_account", "capability", "policy"],
+        "safety_gates": ["never_expose_raw_secret", "secretref_only"],
+        "required_decision_when": ["break_glass_secret_access", "provider_scope_expansion"],
+    },
+    "agent.model_spend_analyst.model_spend_brief": {
+        "contract": "ModelSpendBrief",
+        "role_logic": "Review model capacity, route decisions, cooldowns, cost receipts, and policy limits.",
+        "sections": [
+            "capacity_posture",
+            "route_decision_quality",
+            "cooldowns_and_limits",
+            "cost_receipt_linkage",
+            "authorized_optimization",
+        ],
+        "evidence": ["routing_decision", "capacity_receipt", "cost_receipt", "budget_policy"],
+        "safety_gates": ["do_not_bypass_limits", "no_paid_api_without_budget"],
+        "required_decision_when": ["paid_fallback", "subscription_policy_conflict"],
+    },
+}
+
+
 def capabilities() -> list[str]:
     return [
         "agent.cao.architecture_review",
@@ -52,8 +286,32 @@ def build_agent_brief_result(job: LeasedJob) -> dict[str, Any]:
     role_name = role.get("display_name") or agent_module.get("display_name") or job.kind
     prompt_job = str(compiled_prompt.get("job") or "").strip()
     payload_summary = job.payload.get("summary") or job.payload.get("command") or job.kind
+    strategy = AGENT_WORK_PRODUCT_STRATEGIES.get(job.kind) or {
+        "contract": "AgentBrief",
+        "role_logic": "Produce a bounded role brief from supplied context.",
+        "sections": ["summary", "findings", "recommendations", "required_decisions"],
+        "evidence": ["task", "artifact", "event"],
+        "safety_gates": ["respect_role_boundaries", "escalate_missing_data"],
+        "required_decision_when": ["scope_expansion", "policy_override"],
+    }
+    grounding_context = _agent_grounding_context(job)
+    grounding_status = "grounded_in_payload_context" if grounding_context else "needs_control_plane_context"
+    findings = [
+        f"{role_name} executed {strategy['contract']} logic for {job.kind}.",
+        str(strategy["role_logic"]),
+        f"Grounding status: {grounding_status}.",
+    ]
+    recommendations = [
+        f"Populate sections: {', '.join(strategy['sections'])}.",
+        "Attach required evidence references before using this brief for approval.",
+        "Escalate any action matching decision triggers: "
+        + ", ".join(strategy["required_decision_when"]),
+    ]
+    required_decisions = _agent_required_decisions(job, strategy)
     return {
         "summary": f"{role_name}: {payload_summary}",
+        "strategy_id": job.kind,
+        "grounding_status": grounding_status,
         "agent_module": agent_module,
         "agent_runtime": {
             "job_kind": agent_runtime.get("job_kind"),
@@ -61,18 +319,69 @@ def build_agent_brief_result(job: LeasedJob) -> dict[str, Any]:
             "role_key": role.get("role_key"),
             "checklist": compiled_prompt.get("checklist") or [],
         },
-        "findings": [
-            f"Reviewed assigned job kind {job.kind}.",
-            "Applied BOSS invariants, role boundaries, and output contracts.",
-        ],
-        "recommendations": [
-            "Create or update durable artifacts for any material output.",
-            "Escalate budget, approval, provider-write, or scope-expansion blockers.",
-        ],
-        "required_decisions": [],
+        "work_product": {
+            "contract": strategy["contract"],
+            "role_logic": strategy["role_logic"],
+            "sections": strategy["sections"],
+            "evidence_requirements": strategy["evidence"],
+            "safety_gates": strategy["safety_gates"],
+            "decision_triggers": strategy["required_decision_when"],
+            "grounding_context": grounding_context,
+        },
+        "findings": findings,
+        "recommendations": recommendations,
+        "required_decisions": required_decisions,
         "evidence_refs": job.payload.get("evidence_refs") or [],
         "prompt_excerpt": prompt_job[:1200],
     }
+
+
+def _agent_grounding_context(job: LeasedJob) -> dict[str, Any]:
+    context = job.payload.get("context")
+    if isinstance(context, dict):
+        return context
+    grounded_keys = {
+        "task_id",
+        "artifact_ids",
+        "decision_ids",
+        "receipt_ids",
+        "resource_ids",
+        "changeset_ids",
+        "routing_decision_ids",
+        "cost_event_ids",
+        "evidence_refs",
+    }
+    return {key: job.payload[key] for key in grounded_keys if key in job.payload}
+
+
+def _agent_required_decisions(
+    job: LeasedJob, strategy: dict[str, Any]
+) -> list[dict[str, Any]]:
+    required: list[dict[str, Any]] = []
+    risk_tier = job.payload.get("risk_tier")
+    if isinstance(risk_tier, int) and risk_tier >= 2:
+        required.append(
+            {
+                "reason": "risk_tier_requires_approval",
+                "risk_tier": risk_tier,
+                "default_action": "hold",
+            }
+        )
+    requested_actions = job.payload.get("requested_actions") or job.payload.get("actions")
+    if not isinstance(requested_actions, list):
+        requested_actions = []
+    triggers = [str(item) for item in strategy.get("required_decision_when") or []]
+    for action in requested_actions:
+        action_text = str(action)
+        if any(trigger.replace("_", " ") in action_text.replace("_", " ") for trigger in triggers):
+            required.append(
+                {
+                    "reason": "strategy_trigger_requires_decision",
+                    "triggered_by": action_text,
+                    "default_action": "hold",
+                }
+            )
+    return required
 
 
 def build_plan_result(job: LeasedJob) -> dict[str, Any]:

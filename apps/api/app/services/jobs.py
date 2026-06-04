@@ -636,6 +636,9 @@ class JobLeaseService:
                     "recommendations": result.get("recommendations") or [],
                     "required_decisions": result.get("required_decisions") or [],
                     "evidence_refs": result.get("evidence_refs") or [],
+                    "strategy_id": result.get("strategy_id"),
+                    "grounding_status": result.get("grounding_status"),
+                    "work_product": result.get("work_product") or {},
                     "agent_module": agent_module,
                     "agent_runtime": result.get("agent_runtime")
                     or payload.get("agent_runtime")

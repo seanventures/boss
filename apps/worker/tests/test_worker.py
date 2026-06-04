@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 from apps.worker.boss_worker.control_plane import ControlPlaneClient, LeasedJob
 from apps.worker.boss_worker.runner import (
+    AGENT_WORK_PRODUCT_STRATEGIES,
     agent_module_id_from_payload,
     build_agent_brief_result,
     build_plan_result,
@@ -162,6 +163,19 @@ def test_worker_capabilities_include_infra_job_kinds():
     assert "agent.model_spend_analyst.model_spend_brief" in supported
 
 
+def test_agent_work_product_strategies_cover_initial_agent_capabilities():
+    agent_capabilities = [item for item in capabilities() if item.startswith("agent.")]
+
+    assert sorted(AGENT_WORK_PRODUCT_STRATEGIES) == sorted(agent_capabilities)
+    for job_kind, strategy in AGENT_WORK_PRODUCT_STRATEGIES.items():
+        assert strategy["contract"]
+        assert strategy["role_logic"]
+        assert strategy["sections"]
+        assert strategy["evidence"]
+        assert strategy["safety_gates"]
+        assert strategy["required_decision_when"]
+
+
 def test_build_plan_result_contains_command_context():
     leased_job = LeasedJob(
         id="job_test",
@@ -216,7 +230,62 @@ def test_build_agent_brief_result_uses_resolved_runtime_prompt_context():
     assert result["summary"] == "Product Manager: Scope ProviderOps alerts."
     assert result["agent_module"]["id"] == "pm_product_planner_v1"
     assert result["agent_runtime"]["role_key"] == "pm"
+    assert result["strategy_id"] == "agent.pm.scope_brief"
+    assert result["grounding_status"] == "needs_control_plane_context"
+    assert result["work_product"]["contract"] == "FeatureBrief"
+    assert "acceptance_criteria" in result["work_product"]["sections"]
     assert "acceptance criteria" in result["prompt_excerpt"]
+
+
+def test_build_agent_brief_result_uses_role_specific_decision_triggers():
+    leased_job = LeasedJob(
+        id="job_agent",
+        project_id="boss-dogfood",
+        task_id="tsk_test",
+        kind="agent.model_spend_analyst.model_spend_brief",
+        payload={
+            "command": "Review whether paid fallback is safe.",
+            "risk_tier": 2,
+            "requested_actions": ["paid_fallback"],
+            "context": {"routing_decision_ids": ["route_1"], "cost_receipt_ids": []},
+            "agent_module": {
+                "id": "model_spend_analyst_v1",
+                "display_name": "Model Spend Analyst",
+                "role_key": "model_spend_analyst",
+            },
+            "agent_runtime": {
+                "job_kind": "agent.model_spend_analyst.model_spend_brief",
+                "matched": True,
+                "role": {
+                    "role_key": "model_spend_analyst",
+                    "display_name": "Model Spend Analyst",
+                },
+                "compiled_prompt": {
+                    "job": "Return route decisions, cooldowns, costs, and limits.",
+                    "checklist": ["Optimize authorized capacity; do not bypass limits."],
+                },
+            },
+        },
+        attempt=1,
+        max_attempts=3,
+        lease_token="lease_token",
+        lease_expires_at="future",
+    )
+
+    result = build_agent_brief_result(leased_job)
+
+    assert result["work_product"]["contract"] == "ModelSpendBrief"
+    assert result["grounding_status"] == "grounded_in_payload_context"
+    assert "do_not_bypass_limits" in result["work_product"]["safety_gates"]
+    assert {
+        "reason": "risk_tier_requires_approval",
+        "risk_tier": 2,
+        "default_action": "hold",
+    } in result["required_decisions"]
+    assert any(
+        decision["reason"] == "strategy_trigger_requires_decision"
+        for decision in result["required_decisions"]
+    )
 
 
 def test_agent_module_id_from_payload_prefers_resolved_module_context():
@@ -295,6 +364,7 @@ def test_run_worker_cycle_completes_generic_agent_job():
     complete_result = client.calls[-1][-1]
     assert complete_result["agent_module"]["id"] == "pm_product_planner_v1"
     assert complete_result["agent_runtime"]["role_key"] == "pm"
+    assert complete_result["work_product"]["contract"] == "FeatureBrief"
 
 
 def test_run_worker_cycle_deadletters_unsupported_job():
