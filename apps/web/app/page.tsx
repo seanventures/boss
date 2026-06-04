@@ -14,6 +14,7 @@ import {
   createDeploymentRunAction,
   createAccountConnectBillingPortalSessionAction,
   createAccountConnectTeamInviteAction,
+  createEnterpriseSupportCaseAction,
   installAgentModuleAction,
   installPackAction,
   linkAccountConnectAction,
@@ -43,6 +44,7 @@ import {
   upsertEnterpriseIdentityProviderAction,
   upsertEnterpriseScimGroupAction,
   upsertEnterpriseScimUserAction,
+  updateEnterpriseSupportCaseAction,
   upsertOrgMemberAction,
   upsertWorkerPoolAction,
 } from "./actions";
@@ -3517,6 +3519,14 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                       {enterprise.summary.activeScimUsers} active SCIM user
                       {enterprise.summary.activeScimUsers === 1 ? "" : "s"}
                     </span>
+                    <span
+                      className={`pill${
+                        enterprise.summary.blockedSupportCases > 0 ? " warn" : ""
+                      }`}
+                    >
+                      {enterprise.summary.openSupportCases} open support case
+                      {enterprise.summary.openSupportCases === 1 ? "" : "s"}
+                    </span>
                   </div>
                   {enterprise.clusters.length === 0 ? (
                     <p className="detail">No enterprise cluster record exists yet.</p>
@@ -3643,6 +3653,188 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                     </label>
                     <button className="button secondary" type="submit">
                       Save enterprise record
+                    </button>
+                  </form>
+                </>
+              )}
+            </article>
+
+            <article className="stack-card">
+              <h3>Enterprise support and SLA</h3>
+              {!enterprise.apiReachable ? (
+                <p className="detail">
+                  {enterprise.blockedReason ?? "Enterprise API is unavailable."}
+                </p>
+              ) : (
+                <>
+                  {enterprise.supportCases.length === 0 ? (
+                    <p className="detail">
+                      No enterprise support cases have been recorded.
+                    </p>
+                  ) : (
+                    <div className="feed-list">
+                      {enterprise.supportCases.slice(0, 6).map((supportCase) => (
+                        <div className="feed-row" key={supportCase.id}>
+                          <div>
+                            <h4>{supportCase.title}</h4>
+                            <p className="detail">
+                              {titleCaseToken(supportCase.severity)} /{" "}
+                              {supportCase.category} / due{" "}
+                              {formatDateTime(supportCase.slaDueAt)}
+                            </p>
+                            <p className="detail">
+                              Assigned {supportCase.assignedTo ?? "unassigned"} / receipt{" "}
+                              {supportCase.receiptId ?? "local case"} / hosted{" "}
+                              {supportCase.hostedCaseRef ?? "not escalated"}
+                            </p>
+                            {supportCase.enterpriseClusterId ? (
+                              <p className="detail">
+                                Cluster {supportCase.enterpriseClusterId} / Account Connect{" "}
+                                {supportCase.accountConnectOrgId ?? "not linked"}
+                              </p>
+                            ) : null}
+                            {supportCase.metadata.blocked_reason ? (
+                              <p className="detail">
+                                Blocked reason:{" "}
+                                {String(supportCase.metadata.blocked_reason)}
+                              </p>
+                            ) : null}
+                            <form
+                              action={updateEnterpriseSupportCaseAction}
+                              className="inline-actions"
+                            >
+                              <input
+                                type="hidden"
+                                name="project_id"
+                                value={activeProjectId}
+                              />
+                              <input
+                                type="hidden"
+                                name="actor"
+                                value={activeActorId}
+                              />
+                              <input
+                                type="hidden"
+                                name="case_id"
+                                value={supportCase.id}
+                              />
+                              <label className="field compact">
+                                <span>Status</span>
+                                <select
+                                  className="input"
+                                  name="status"
+                                  defaultValue={supportCase.status}
+                                >
+                                  <option value="open">Open</option>
+                                  <option value="in_progress">In progress</option>
+                                  <option value="resolved">Resolved</option>
+                                  <option value="closed">Closed</option>
+                                  <option value="failed">Failed</option>
+                                </select>
+                              </label>
+                              <label className="field compact">
+                                <span>Assigned to</span>
+                                <input
+                                  className="input"
+                                  name="assigned_to"
+                                  defaultValue={supportCase.assignedTo ?? ""}
+                                  placeholder="cto"
+                                />
+                              </label>
+                              <label className="field compact">
+                                <span>Metadata JSON</span>
+                                <textarea
+                                  className="input"
+                                  name="metadata_json"
+                                  defaultValue={`{"updated_from":"mission_control"}`}
+                                />
+                              </label>
+                              <button className="button ghost" type="submit">
+                                Update support case
+                              </button>
+                            </form>
+                          </div>
+                          <span
+                            className={`pill${
+                              supportCase.status === "open" ||
+                              supportCase.status === "in_progress"
+                                ? " warn"
+                                : ""
+                            }`}
+                          >
+                            {titleCaseToken(supportCase.status)}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  <form
+                    action={createEnterpriseSupportCaseAction}
+                    className="composer"
+                  >
+                    <input type="hidden" name="project_id" value={activeProjectId} />
+                    <input type="hidden" name="actor" value={activeActorId} />
+                    <label className="field">
+                      <span>Title</span>
+                      <input
+                        className="input"
+                        name="title"
+                        required
+                        placeholder="Review production readiness blockers"
+                      />
+                    </label>
+                    <label className="field">
+                      <span>Description</span>
+                      <textarea
+                        className="input"
+                        name="description"
+                        required
+                        placeholder="Describe the enterprise support issue or SLA request."
+                      />
+                    </label>
+                    <label className="field">
+                      <span>Severity</span>
+                      <select className="input" name="severity" defaultValue="normal">
+                        <option value="critical">Critical</option>
+                        <option value="high">High</option>
+                        <option value="normal">Normal</option>
+                        <option value="low">Low</option>
+                      </select>
+                    </label>
+                    <label className="field">
+                      <span>Category</span>
+                      <input
+                        className="input"
+                        name="category"
+                        defaultValue="operational_trust"
+                      />
+                    </label>
+                    <label className="field">
+                      <span>Enterprise cluster ID</span>
+                      <input
+                        className="input"
+                        name="enterprise_cluster_id"
+                        placeholder="optional cluster id"
+                      />
+                    </label>
+                    <label className="field">
+                      <span>Metadata JSON</span>
+                      <textarea
+                        className="input"
+                        name="metadata_json"
+                        defaultValue={`{"source":"mission_control"}`}
+                      />
+                    </label>
+                    <label className="check-row">
+                      <input type="hidden" name="escalate_to_hosted" value="false" />
+                      <input type="checkbox" name="escalate_to_hosted" value="true" />
+                      <span>
+                        Escalate to hosted Account Connect support when configured
+                      </span>
+                    </label>
+                    <button className="button secondary" type="submit">
+                      Create support case
                     </button>
                   </form>
                 </>

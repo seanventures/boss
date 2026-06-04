@@ -425,6 +425,7 @@ Acceptance criteria:
 - Given Account Connect is not linked, when an authorized actor submits a hosted org ID, then Mission Control calls the Account Connect link API and refreshes the panel from the control plane.
 - Given Account Connect is linked, when an authorized actor requests entitlement sync or unlink, then Mission Control calls the corresponding API and relies on audit events from the backend.
 - Given Enterprise cluster posture exists, when Mission Control loads, then it shows deployment mode, Account Connect mode, worker strategy, HA/data residency, support tier, compliance packs, and blocking gaps.
+- Given enterprise support cases exist, when Mission Control loads, then it shows open and blocked cases, SLA due dates, hosted escalation refs, receipt IDs, assignments, and blocked reasons.
 - Given enterprise identity-provider records exist, when Mission Control loads, then it shows OIDC, SAML, and SCIM provider status, SecretRefs, and blocking gaps.
 - Given an authorized actor upserts SCIM groups or users, when the form is submitted, then Mission Control calls the enterprise SCIM API and active users are represented through the same org-member RBAC directory.
 
@@ -449,6 +450,7 @@ Acceptance criteria:
 - Given an external IdP creates, replaces, lists, filters, or deletes SCIM users/groups with a valid bearer token and active SCIM provider record, when the request runs, then BOSS maps it through the same audited SCIM group/user and org-member provisioning path used by the internal API.
 - Given an enterprise operator creates a local support case, when BOSS records it, then the case has severity, category, support tier, SLA due date, status, and audit event without requiring hosted BOSS auth.
 - Given hosted support escalation is requested, when Account Connect or hosted support endpoint configuration is missing, then BOSS creates a blocked support case, writes a failed Receipt, and emits a visible blocked event instead of inventing a hosted ticket.
+- Given enterprise support cases exist, when Mission Control loads, then BOSS renders the case list with status, severity, SLA due date, hosted reference, receipt, assignment, and blocked reason.
 - Given an enterprise operator updates support case status or assignment, when the update succeeds, then BOSS persists the lifecycle change and emits `enterprise.support_case_updated`.
 
 ### Story ADM-002: Control Project Actors

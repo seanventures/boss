@@ -481,6 +481,58 @@ export async function upsertEnterpriseClusterAction(
   revalidatePath("/");
 }
 
+export async function createEnterpriseSupportCaseAction(
+  formData: FormData,
+): Promise<void> {
+  const title = formData.get("title");
+  const description = formData.get("description");
+  if (typeof title !== "string" || !title.trim()) {
+    throw new Error("title is required");
+  }
+  if (typeof description !== "string" || !description.trim()) {
+    throw new Error("description is required");
+  }
+  await client.createEnterpriseSupportCase({
+    project_id: getProjectId(formData),
+    title: title.trim(),
+    description: description.trim(),
+    severity: getOptionalString(formData, "severity") ?? "normal",
+    category: getOptionalString(formData, "category") ?? "operational_trust",
+    enterprise_cluster_id: getOptionalString(formData, "enterprise_cluster_id"),
+    escalate_to_hosted: parseProviderOpsCheckbox(
+      formData,
+      "escalate_to_hosted",
+      false,
+    ),
+    metadata: parseOptionalJsonObjectField(
+      formData.get("metadata_json"),
+      "metadata_json",
+    ),
+    actor: getActor(formData),
+  });
+  revalidatePath("/");
+}
+
+export async function updateEnterpriseSupportCaseAction(
+  formData: FormData,
+): Promise<void> {
+  const caseId = formData.get("case_id");
+  if (typeof caseId !== "string" || !caseId.trim()) {
+    throw new Error("case_id is required");
+  }
+  await client.updateEnterpriseSupportCase(caseId.trim(), {
+    project_id: getProjectId(formData),
+    status: getOptionalString(formData, "status") ?? "in_progress",
+    assigned_to: getOptionalString(formData, "assigned_to"),
+    metadata: parseOptionalJsonObjectField(
+      formData.get("metadata_json"),
+      "metadata_json",
+    ),
+    actor: getActor(formData),
+  });
+  revalidatePath("/");
+}
+
 export async function upsertEnterpriseIdentityProviderAction(
   formData: FormData,
 ): Promise<void> {

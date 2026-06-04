@@ -3,6 +3,7 @@ import {
   type EnterpriseClusterSummary,
   type EnterpriseIdentityProviderSummary,
   type EnterpriseScimGroupSummary,
+  type EnterpriseSupportCaseSummary,
   type EnterpriseScimUserSummary,
 } from "@boss/api-client";
 
@@ -71,6 +72,26 @@ export type EnterpriseScimUserItem = {
   updatedAt: string;
 };
 
+export type EnterpriseSupportCaseItem = {
+  id: string;
+  title: string;
+  severity: string;
+  category: string;
+  description: string;
+  status: string;
+  slaDueAt?: string;
+  responseTimeHours: number;
+  enterpriseClusterId?: string;
+  accountConnectOrgId?: string;
+  hostedOrgId?: string;
+  hostedCaseRef?: string;
+  receiptId?: string;
+  assignedTo?: string;
+  createdBy: string;
+  metadata: Record<string, unknown>;
+  updatedAt: string;
+};
+
 export type EnterpriseFeed = {
   projectId: string;
   apiReachable: boolean;
@@ -79,12 +100,16 @@ export type EnterpriseFeed = {
   identityProviders: EnterpriseIdentityProviderItem[];
   scimGroups: EnterpriseScimGroupItem[];
   scimUsers: EnterpriseScimUserItem[];
+  supportCases: EnterpriseSupportCaseItem[];
   summary: {
     clusterCount: number;
     identityProviderCount: number;
     activeIdentityProviders: number;
     activeScimUsers: number;
     blockingGapCount: number;
+    supportCaseCount: number;
+    openSupportCases: number;
+    blockedSupportCases: number;
   };
 };
 
@@ -163,6 +188,30 @@ function mapScimUser(payload: EnterpriseScimUserSummary): EnterpriseScimUserItem
   };
 }
 
+function mapSupportCase(
+  payload: EnterpriseSupportCaseSummary,
+): EnterpriseSupportCaseItem {
+  return {
+    id: payload.id,
+    title: payload.title,
+    severity: payload.severity,
+    category: payload.category,
+    description: payload.description,
+    status: payload.status,
+    slaDueAt: payload.sla_due_at,
+    responseTimeHours: payload.response_time_hours,
+    enterpriseClusterId: payload.enterprise_cluster_id,
+    accountConnectOrgId: payload.account_connect_org_id,
+    hostedOrgId: payload.hosted_org_id,
+    hostedCaseRef: payload.hosted_case_ref,
+    receiptId: payload.receipt_id,
+    assignedTo: payload.assigned_to,
+    createdBy: payload.created_by,
+    metadata: payload.metadata,
+    updatedAt: payload.updated_at,
+  };
+}
+
 export function emptyEnterpriseFeed(
   reason?: string,
   projectId = PROJECT_ID,
@@ -175,12 +224,16 @@ export function emptyEnterpriseFeed(
     identityProviders: [],
     scimGroups: [],
     scimUsers: [],
+    supportCases: [],
     summary: {
       clusterCount: 0,
       identityProviderCount: 0,
       activeIdentityProviders: 0,
       activeScimUsers: 0,
       blockingGapCount: 0,
+      supportCaseCount: 0,
+      openSupportCases: 0,
+      blockedSupportCases: 0,
     },
   };
 }
@@ -190,15 +243,23 @@ export async function fetchEnterpriseFeed(
 ): Promise<EnterpriseFeed> {
   const resolvedProjectId = resolveProjectId(projectId);
   try {
-    const [clusters, identityProviders, scimGroups, scimUsers] = await Promise.all([
+    const [
+      clusters,
+      identityProviders,
+      scimGroups,
+      scimUsers,
+      supportCases,
+    ] = await Promise.all([
       client.listEnterpriseClusters(resolvedProjectId),
       client.listEnterpriseIdentityProviders(resolvedProjectId),
       client.listEnterpriseScimGroups(resolvedProjectId),
       client.listEnterpriseScimUsers(resolvedProjectId),
+      client.listEnterpriseSupportCases(resolvedProjectId),
     ]);
     const clusterItems = clusters.items.map(mapCluster);
     const providerItems = identityProviders.items.map(mapIdentityProvider);
     const userItems = scimUsers.items.map(mapScimUser);
+    const supportItems = supportCases.items.map(mapSupportCase);
     return {
       projectId: resolvedProjectId,
       apiReachable: true,
@@ -206,6 +267,7 @@ export async function fetchEnterpriseFeed(
       identityProviders: providerItems,
       scimGroups: scimGroups.items.map(mapScimGroup),
       scimUsers: userItems,
+      supportCases: supportItems,
       summary: {
         clusterCount: clusterItems.length,
         identityProviderCount: providerItems.length,
@@ -213,6 +275,15 @@ export async function fetchEnterpriseFeed(
           (provider) => provider.status === "active",
         ).length,
         activeScimUsers: userItems.filter((user) => user.active).length,
+        supportCaseCount: supportItems.length,
+        openSupportCases: supportItems.filter((item) =>
+          ["open", "in_progress", "failed", "blocked_configuration"].includes(
+            item.status,
+          ),
+        ).length,
+        blockedSupportCases: supportItems.filter((item) =>
+          item.status.startsWith("blocked") || item.status === "failed",
+        ).length,
         blockingGapCount:
           clusterItems.reduce(
             (total, cluster) => total + cluster.blockingGaps.length,

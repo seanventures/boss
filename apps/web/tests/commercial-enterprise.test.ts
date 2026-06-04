@@ -12,6 +12,7 @@ vi.mock("../lib/client", () => ({
     listEnterpriseIdentityProviders: vi.fn(),
     listEnterpriseScimGroups: vi.fn(),
     listEnterpriseScimUsers: vi.fn(),
+    listEnterpriseSupportCases: vi.fn(),
     listAgentModules: vi.fn(),
     listAgentModuleInstallRecords: vi.fn(),
   },
@@ -145,7 +146,7 @@ describe("commercial, enterprise, and marketplace feeds", async () => {
     });
   });
 
-  it("maps enterprise cluster and SCIM provisioning state", async () => {
+  it("maps enterprise cluster, SCIM, and support/SLA state", async () => {
     vi.mocked(client.listEnterpriseClusters).mockResolvedValueOnce({
       project_id: "boss-dogfood",
       items: [
@@ -254,6 +255,51 @@ describe("commercial, enterprise, and marketplace feeds", async () => {
         },
       ],
     });
+    vi.mocked(client.listEnterpriseSupportCases).mockResolvedValueOnce({
+      project_id: "boss-dogfood",
+      items: [
+        {
+          id: "entsup_1",
+          org_id: "org_boss",
+          project_id: "boss-dogfood",
+          enterprise_cluster_id: "cluster_1",
+          account_connect_org_id: "acctconn_1",
+          hosted_org_id: "hosted_org_1",
+          title: "Hosted escalation blocked",
+          severity: "high",
+          category: "support_sla",
+          description: "Account Connect URL is not configured.",
+          status: "blocked_configuration",
+          sla_due_at: "2026-06-03T05:00:00Z",
+          response_time_hours: 4,
+          hosted_case_ref: undefined,
+          receipt_id: "rcpt_support_1",
+          assigned_to: undefined,
+          created_by: "ceo",
+          metadata: { blocked_reason: "account_connect_url_missing" },
+          created_at: "2026-06-03T01:00:00Z",
+          updated_at: "2026-06-03T01:00:00Z",
+        },
+        {
+          id: "entsup_2",
+          org_id: "org_boss",
+          project_id: "boss-dogfood",
+          title: "Local SLA review",
+          severity: "normal",
+          category: "operational_trust",
+          description: "Track local enterprise support readiness.",
+          status: "resolved",
+          sla_due_at: "2026-06-04T01:00:00Z",
+          response_time_hours: 24,
+          receipt_id: undefined,
+          assigned_to: "cto",
+          created_by: "ceo",
+          metadata: {},
+          created_at: "2026-06-03T01:00:00Z",
+          updated_at: "2026-06-03T02:00:00Z",
+        },
+      ],
+    });
 
     const feed = await fetchEnterpriseFeed("boss-dogfood");
 
@@ -262,8 +308,16 @@ describe("commercial, enterprise, and marketplace feeds", async () => {
     expect(feed.summary.activeIdentityProviders).toBe(1);
     expect(feed.summary.activeScimUsers).toBe(1);
     expect(feed.summary.blockingGapCount).toBe(2);
+    expect(feed.summary.supportCaseCount).toBe(2);
+    expect(feed.summary.openSupportCases).toBe(1);
+    expect(feed.summary.blockedSupportCases).toBe(1);
     expect(feed.identityProviders[0].providerKey).toBe("okta_oidc");
     expect(feed.scimUsers[0].memberId).toBe("scim_ops_example_com");
+    expect(feed.supportCases[0]).toMatchObject({
+      title: "Hosted escalation blocked",
+      receiptId: "rcpt_support_1",
+      hostedOrgId: "hosted_org_1",
+    });
   });
 
   it("maps agent module entitlement gates and install records", async () => {
