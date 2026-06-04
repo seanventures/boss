@@ -83,6 +83,9 @@ Acceptance criteria:
 - Given a module declares required marketplace entitlements, when the project lacks those entitlements, then BOSS denies installation, emits `agent_module.install_denied`, and records the entitlement result.
 - Given the project has the required entitlement, when the module is installed, then BOSS records an install governance record with entitlement result and rollback snapshot.
 - Given a governed job kind, when runtime behavior is resolved, then BOSS uses installed module configuration instead of hidden service defaults.
+- Given a default dogfood project is seeded, when BOSS installs initial agent modules, then Metatron, COO, CAO, CTO, PM, QA, Release Manager, Program Manager, VP Agents, ProviderOps Manager, FinOps Sentinel, Resource Janitor, Infra Steward, Deployment Manager, Secrets Steward, Model Spend Analyst, and Software Engineer modules are active.
+- Given a worker leases an `agent.*` job, when the job kind maps to an installed module, then the payload includes the resolved module, role, prompt checklist, BOSS invariants, skill defaults, and runtime configuration before execution.
+- Given an `agent.*` job completes, when the worker returns a brief, then BOSS stores an `agent_brief` artifact and emits `agent.brief_created`.
 - Given an unauthorized actor, when module installation is attempted, then BOSS rejects it and emits a policy denial.
 
 ## Finance / Governance
@@ -252,11 +255,12 @@ Acceptance criteria:
 
 ### Story RPL-007: Install ProviderOps Operating Roles
 
-As a founder/operator, I want the core company pack to install ProviderOps Manager, FinOps Sentinel, and Resource Janitor roles, so that provider inventory, cost control, and cleanup proposals have accountable owners from workspace bootstrap.
+As a founder/operator, I want the core company pack to install ProviderOps Manager, FinOps Sentinel, Infra Steward, Deployment Manager, Resource Janitor, Secrets Steward, and Model Spend Analyst roles, so that provider inventory, cost control, deployment safety, secret boundaries, and cleanup proposals have accountable owners from workspace bootstrap.
 
 Acceptance criteria:
 
-- Given the `core_v1` company pack is installed, when BOSS seeds or installs the pack into a project, then ProviderOps Manager, FinOps Sentinel, and Resource Janitor roles are created with complete RoleSpec contracts.
+- Given the `core_v1` company pack is installed, when BOSS seeds or installs the pack into a project, then ProviderOps Manager, FinOps Sentinel, Infra Steward, Deployment Manager, Resource Janitor, Secrets Steward, and Model Spend Analyst roles are created with complete RoleSpec contracts.
+- Given the default agent-module installer runs, when those ProviderOps roles have matching modules, then each module exposes contained prompts, job kinds, skill defaults, and worker runtime configuration.
 - Given a ProviderOps role performs work, when it needs provider evidence, then it must use typed Resource Plane skills and references instead of raw provider secrets or direct provider API calls.
 - Given provider writes, destructive cleanup, budget increases, or production DNS/deploy changes are proposed, when a ProviderOps role reviews them, then the role must escalate through ChangeSets, approvals, BudgetReservations, and ResourceReceipts instead of executing directly.
 

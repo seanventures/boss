@@ -79,6 +79,12 @@ runtime:
     - plan.command
     - plan.generate
     - openai.plan
+    - agent.metatron.status_brief
+  prompt_key_by_job_kind:
+    plan.command: command_intake
+    plan.generate: command_intake
+    openai.plan: command_intake
+    agent.metatron.status_brief: status_query
   default_skill_ids:
     - model.generate_text
   preferred_capabilities:

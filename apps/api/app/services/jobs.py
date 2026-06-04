@@ -10,6 +10,7 @@ from sqlalchemy import bindparam, text
 from sqlalchemy.engine import Connection
 
 from ..config import Settings
+from .agent_runtime import AgentRuntimeService
 from .budget import BudgetGovernor
 from .comms import CommsService
 from .core import (
@@ -31,6 +32,7 @@ class JobLeaseService:
         self.settings = settings
         self.budget = BudgetGovernor(settings)
         self.comms = CommsService(settings)
+        self.agent_runtime = AgentRuntimeService(settings)
 
     def create_job(
         self,
@@ -251,12 +253,18 @@ class JobLeaseService:
                 row["id"],
                 {"attempt": row["attempt"], "kind": row["kind"]},
             )
+            leased_payload = self.agent_runtime.attach_to_payload(
+                connection,
+                row["project_id"],
+                job_kind=row["kind"],
+                payload=row["payload"] or {},
+            )
             return {
                 "id": row["id"],
                 "project_id": row["project_id"],
                 "task_id": row["task_id"],
                 "kind": row["kind"],
-                "payload": row["payload"] or {},
+                "payload": leased_payload,
                 "data_boundary": row["data_boundary"],
                 "attempt": row["attempt"],
                 "max_attempts": row["max_attempts"],
@@ -606,6 +614,50 @@ class JobLeaseService:
                 "resource_id": result.get("resource_id"),
                 "provider_ref": result.get("provider_ref"),
             }
+
+        if str(job_row["kind"]).startswith("agent."):
+            payload = job_row["payload"] or {}
+            agent_module = result.get("agent_module") or payload.get("agent_module") or {}
+            role_key = (
+                ((agent_module or {}).get("role_key"))
+                or str(job_row["kind"]).split(".")[1]
+            )
+            artifact_id = create_artifact(
+                connection,
+                self.settings,
+                job_row["project_id"],
+                job_row["task_id"],
+                "agent_brief",
+                f"{role_key} brief for {job_row['kind']}",
+                {
+                    "job_kind": job_row["kind"],
+                    "summary": result.get("summary"),
+                    "findings": result.get("findings") or [],
+                    "recommendations": result.get("recommendations") or [],
+                    "required_decisions": result.get("required_decisions") or [],
+                    "evidence_refs": result.get("evidence_refs") or [],
+                    "agent_module": agent_module,
+                    "agent_runtime": result.get("agent_runtime")
+                    or payload.get("agent_runtime")
+                    or {},
+                    "prompt_excerpt": result.get("prompt_excerpt"),
+                },
+                created_by_job_id=job_row["id"],
+            )
+            emit_event(
+                connection,
+                job_row["project_id"],
+                "agent.brief_created",
+                "worker",
+                "artifact",
+                artifact_id,
+                {
+                    "job_id": job_row["id"],
+                    "job_kind": job_row["kind"],
+                    "role_key": role_key,
+                },
+            )
+            return {"artifact_id": artifact_id}
 
         if job_row["kind"] not in {"plan.command", "plan.generate"}:
             return {}

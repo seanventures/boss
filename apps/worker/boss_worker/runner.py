@@ -12,6 +12,22 @@ LOGGER = logging.getLogger("boss.worker")
 
 def capabilities() -> list[str]:
     return [
+        "agent.cao.architecture_review",
+        "agent.coo.ops_digest",
+        "agent.cto.implementation_plan",
+        "agent.deployment_manager.deployment_review",
+        "agent.finops_sentinel.cost_brief",
+        "agent.infra_steward.infra_review",
+        "agent.metatron.status_brief",
+        "agent.model_spend_analyst.model_spend_brief",
+        "agent.pm.scope_brief",
+        "agent.program_manager.delivery_plan",
+        "agent.providerops_manager.providerops_brief",
+        "agent.qa.validation_report",
+        "agent.release_manager.release_packet",
+        "agent.resource_janitor.cleanup_brief",
+        "agent.secrets_steward.secret_boundary_review",
+        "agent.vp_agents.role_review",
         "plan.command",
         "plan.generate",
         "openai.plan",
@@ -24,10 +40,46 @@ def capabilities() -> list[str]:
     ]
 
 
+def build_agent_brief_result(job: LeasedJob) -> dict[str, Any]:
+    agent_runtime = job.payload.get("agent_runtime") or {}
+    agent_module = job.payload.get("agent_module") or {}
+    role = agent_runtime.get("role") if isinstance(agent_runtime.get("role"), dict) else {}
+    compiled_prompt = (
+        agent_runtime.get("compiled_prompt")
+        if isinstance(agent_runtime.get("compiled_prompt"), dict)
+        else {}
+    )
+    role_name = role.get("display_name") or agent_module.get("display_name") or job.kind
+    prompt_job = str(compiled_prompt.get("job") or "").strip()
+    payload_summary = job.payload.get("summary") or job.payload.get("command") or job.kind
+    return {
+        "summary": f"{role_name}: {payload_summary}",
+        "agent_module": agent_module,
+        "agent_runtime": {
+            "job_kind": agent_runtime.get("job_kind"),
+            "matched": agent_runtime.get("matched"),
+            "role_key": role.get("role_key"),
+            "checklist": compiled_prompt.get("checklist") or [],
+        },
+        "findings": [
+            f"Reviewed assigned job kind {job.kind}.",
+            "Applied BOSS invariants, role boundaries, and output contracts.",
+        ],
+        "recommendations": [
+            "Create or update durable artifacts for any material output.",
+            "Escalate budget, approval, provider-write, or scope-expansion blockers.",
+        ],
+        "required_decisions": [],
+        "evidence_refs": job.payload.get("evidence_refs") or [],
+        "prompt_excerpt": prompt_job[:1200],
+    }
+
+
 def build_plan_result(job: LeasedJob) -> dict[str, Any]:
     command = str(job.payload.get("command") or "Plan the requested task.")
     constraints = job.payload.get("constraints") or {}
     deadline = constraints.get("deadline")
+    agent_runtime = job.payload.get("agent_runtime") or {}
     agent_module = job.payload.get("agent_module") or {}
     module_name = (
         agent_module.get("display_name")
@@ -39,7 +91,16 @@ def build_plan_result(job: LeasedJob) -> dict[str, Any]:
         if isinstance(agent_module.get("prompt_bundle"), dict)
         else {}
     )
-    planning_guidance = prompt_bundle.get("planning")
+    compiled_prompt = (
+        agent_runtime.get("compiled_prompt")
+        if isinstance(agent_runtime.get("compiled_prompt"), dict)
+        else {}
+    )
+    planning_guidance = (
+        compiled_prompt.get("job")
+        if isinstance(compiled_prompt.get("job"), str)
+        else prompt_bundle.get("planning")
+    )
 
     steps = [
         "Clarify task scope and acceptance criteria.",
@@ -73,10 +134,28 @@ def build_plan_result(job: LeasedJob) -> dict[str, Any]:
         }
         if agent_module
         else {},
+        "agent_runtime": {
+            "job_kind": agent_runtime.get("job_kind"),
+            "matched": agent_runtime.get("matched"),
+            "checklist": compiled_prompt.get("checklist") or [],
+        }
+        if agent_runtime
+        else {},
     }
 
 
+def agent_module_id_from_payload(payload: dict[str, Any]) -> Any:
+    if payload.get("agent_module_id"):
+        return payload.get("agent_module_id")
+    agent_module = payload.get("agent_module")
+    if isinstance(agent_module, dict):
+        return agent_module.get("id")
+    return None
+
+
 def execute_job(job: LeasedJob, client: ControlPlaneClient) -> dict[str, Any]:
+    if job.kind.startswith("agent."):
+        return build_agent_brief_result(job)
     if job.kind in {"plan.command", "plan.generate"}:
         return build_plan_result(job)
     if job.kind == "openai.plan":
@@ -87,7 +166,7 @@ def execute_job(job: LeasedJob, client: ControlPlaneClient) -> dict[str, Any]:
                 "dedupe_key": job.payload["dedupe_key"],
                 "prompt": job.payload["prompt"],
                 "system_prompt": job.payload.get("system_prompt"),
-                "agent_module_id": job.payload.get("agent_module_id"),
+                "agent_module_id": agent_module_id_from_payload(job.payload),
                 "created_by_job_id": job.id,
             }
         )
@@ -105,7 +184,7 @@ def execute_job(job: LeasedJob, client: ControlPlaneClient) -> dict[str, Any]:
                 "branch_name": job.payload["branch_name"],
                 "summary": job.payload["summary"],
                 "files": job.payload["files"],
-                "agent_module_id": job.payload.get("agent_module_id"),
+                "agent_module_id": agent_module_id_from_payload(job.payload),
                 "created_by_job_id": job.id,
             }
         )

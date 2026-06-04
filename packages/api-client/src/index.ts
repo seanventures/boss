@@ -1842,6 +1842,25 @@ export type AgentModuleInstallRecordListResponse = {
   items: AgentModuleInstallRecordSummary[];
 };
 
+export type AgentRuntimeResolveRequest = {
+  project_id: string;
+  job_kind: string;
+  agent_module_id?: string;
+  task_payload?: Record<string, unknown>;
+  actor?: string;
+};
+
+export type AgentRuntimeResolveResponse = {
+  project_id: string;
+  job_kind: string;
+  matched: boolean;
+  agent_module?: Record<string, unknown> | null;
+  compiled_prompt: Record<string, unknown>;
+  runtime: Record<string, unknown>;
+  role: Record<string, unknown>;
+  config: Record<string, unknown>;
+};
+
 export type SkillSummary = {
   id: string;
   kind: string;
@@ -3193,6 +3212,13 @@ export function createBossApiClient(config: BossApiClientConfig) {
       return request<AgentModuleDetail>("POST", "/v1/agent-modules/install", {
         body: payload,
       });
+    },
+    resolveAgentRuntime(payload: AgentRuntimeResolveRequest) {
+      return request<AgentRuntimeResolveResponse>(
+        "POST",
+        "/v1/agent-runtime/resolve",
+        { body: payload },
+      );
     },
     listAgentModuleInstallRecords(
       projectId: string,

@@ -2127,6 +2127,37 @@ class AgentModuleInstallRecordListResponse(BaseModel):
     items: list[AgentModuleInstallRecordSummary]
 
 
+class AgentRuntimeResolveRequest(BaseModel):
+    project_id: str
+    job_kind: str
+    agent_module_id: Optional[str] = None
+    task_payload: dict[str, Any] = Field(default_factory=dict)
+    actor: str = "system"
+
+    @model_validator(mode="after")
+    def validate_agent_runtime(self) -> "AgentRuntimeResolveRequest":
+        self.project_id = _require_text(self.project_id, "project_id")
+        self.job_kind = _require_text(self.job_kind, "job_kind")
+        if self.agent_module_id is not None:
+            self.agent_module_id = _require_text(
+                self.agent_module_id,
+                "agent_module_id",
+            )
+        self.actor = _require_text(self.actor, "actor")
+        return self
+
+
+class AgentRuntimeResolveResponse(BaseModel):
+    project_id: str
+    job_kind: str
+    matched: bool
+    agent_module: Optional[dict[str, Any]] = None
+    compiled_prompt: dict[str, Any] = Field(default_factory=dict)
+    runtime: dict[str, Any] = Field(default_factory=dict)
+    role: dict[str, Any] = Field(default_factory=dict)
+    config: dict[str, Any] = Field(default_factory=dict)
+
+
 class SkillSummary(BaseModel):
     id: str
     kind: str

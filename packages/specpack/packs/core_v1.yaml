@@ -19,6 +19,10 @@ installs:
     - providerops_manager
     - finops_sentinel
     - resource_janitor
+    - infra_steward
+    - deployment_manager
+    - secrets_steward
+    - model_spend_analyst
   workflows:
     - ceo_command_to_pr
     - decision_inbox
@@ -39,5 +43,7 @@ installs:
     - digitalocean
     - supabase
     - model_providers
+    - providerops
+    - deployment
   canaries: []
 status: active

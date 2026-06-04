@@ -51,19 +51,21 @@ This document summarizes the currently implemented BOSS runtime surfaces in this
   - self-improvement proposal workflow
   - role and pack discovery/install
   - RoleSpec scope checks with drift events, trust changes, and automatic autonomy downgrade
-  - agent-module catalog and install flow with marketplace metadata, required-entitlement gates, denied-install records, and rollback snapshots
+  - agent-module catalog and install flow with marketplace metadata, required-entitlement gates, denied-install records, rollback snapshots, default initial-agent installation, and runtime prompt resolution
   - entitlement source and routing-log visibility, including API-key and official OAuth/CLI session connection lifecycle, capacity-state visibility, and structured route rejection explanations for OpenAI Codex, Anthropic Claude Code, and xAI Grok Build subscription sources
   - Model Entitlement Broker v2 APIs for model adapter inventory, entitlement pool inventory, idempotent capacity probes with durable `CapacityReceipt` rows, and canonical `ModelRouteDecision` simulate/list surfaces
   - ProviderOps provider accounts, connection tests, resource inventory sync, read-only DigitalOcean/OpenAI/Anthropic billing sync, cost ledger reads, duplicate-safe BillingAccount/CostEvent records, spendy ChangeSet-to-CostEvent recording, cost anomalies with read-only provider kill switches, ChangeSet planning/approval/apply attempts, real Cloudflare DNS record upsert actuation, real Cloudflare Worker deployment actuation, real Git-connected Cloudflare Pages deployment actuation, real DigitalOcean droplet create/destroy actuation, real DigitalOcean App Platform deployment actuation, real Supabase project create/pause actuation, real Supabase migration apply actuation, ResourceReceipts, deployment targets, provider health, drift reports, and reconciliation-run visibility
   - DeploymentRun planning with release-packet artifacts, provider deployment ChangeSet linkage, BudgetReservation enforcement for spendy deploys, real Cloudflare Worker, Cloudflare Pages, DigitalOcean App Platform, and Supabase migration execution, real health-check execution, rollback artifacts, and health-failure decisions
   - Resource Janitor report generation and approval-required cleanup ChangeSet proposals for orphaned/expired non-production resources
-  - ProviderOps Manager, FinOps Sentinel, and Resource Janitor roles installed by Core Pack v1 with complete RoleSpec contracts and provider-boundary permissions
+  - ProviderOps Manager, FinOps Sentinel, Infra Steward, Deployment Manager, Resource Janitor, Secrets Steward, and Model Spend Analyst roles installed by Core Pack v1 with complete RoleSpec contracts, provider-boundary permissions, and contained agent-module prompt bundles
   - Budget-Aware Autoscaler worker-pool registry and ScalePlan runs that apply local desired capacity, enter degraded mode under red budget, and turn cloud spillover into BudgetReservation-backed ChangeSets instead of direct provider calls
   - project member directory and actor-scoped write authorization
 - Worker runtime:
   - pull-based Postgres leasing
+  - resolved agent module, role, prompt, and invariant context attached to leased `agent.*` jobs before execution
   - heartbeat and TTL enforcement
   - completion, failure, retry, reclaim, and deadletter handling
+  - generic initial-agent job completion into durable `agent_brief` artifacts with audit events
   - leased infrastructure create/delete job kinds
   - budget-state claim-time controls
 - Budget governor behavior:

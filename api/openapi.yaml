@@ -1211,6 +1211,29 @@ paths:
         '201': { description: Agent module installed }
         '403': { description: Actor lacks module management permission or required module entitlement }
         '404': { description: Agent module not found }
+  /v1/agent-runtime/resolve:
+    post:
+      summary: Resolve the installed agent module, role prompt, skills, and runtime contract for a job kind
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id, job_kind]
+              properties:
+                project_id: { type: string }
+                job_kind: { type: string }
+                agent_module_id: { type: string }
+                actor: { type: string, default: system }
+                task_payload:
+                  type: object
+                  additionalProperties: true
+      responses:
+        '200': { description: Resolved module prompt and runtime context }
+        '403': { description: Actor lacks module management permission }
+        '404': { description: No installed module governs that job kind }
+        '422': { description: Invalid runtime resolution request }
   /v1/skills:
     get:
       summary: List registered control-plane skills from specpack

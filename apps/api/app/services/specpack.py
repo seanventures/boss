@@ -31,6 +31,26 @@ class AgentModuleEntitlementError(Exception):
 
 
 class SpecPackService:
+    DEFAULT_AGENT_MODULE_IDS = [
+        "metatron_operator_v1",
+        "coo_operator_v1",
+        "cao_architect_v1",
+        "cto_planner_v1",
+        "pm_product_planner_v1",
+        "qa_gatekeeper_v1",
+        "release_manager_v1",
+        "program_manager_v1",
+        "vp_agents_governor_v1",
+        "providerops_manager_v1",
+        "finops_sentinel_v1",
+        "resource_janitor_v1",
+        "infra_steward_v1",
+        "deployment_manager_v1",
+        "secrets_steward_v1",
+        "model_spend_analyst_v1",
+        "codex_software_engineer_v1",
+    ]
+
     def __init__(self, settings: Settings):
         self.settings = settings
         self.commercial = CommercialService(settings)
@@ -822,6 +842,17 @@ class SpecPackService:
         module["role_result"] = role_result
         module["entitlement_result"] = entitlement_result
         return module
+
+    def install_default_agent_modules(
+        self,
+        connection: Connection,
+        project_id: str,
+        actor: str,
+    ) -> list[dict[str, Any]]:
+        return [
+            self.install_agent_module(connection, project_id, module_id, actor)
+            for module_id in self.DEFAULT_AGENT_MODULE_IDS
+        ]
 
     def list_agent_module_install_records(
         self,

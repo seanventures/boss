@@ -100,16 +100,9 @@ def clean_tables(engine):
             settings.core_pack_id,
             "test-reset",
         )
-        specpack.install_agent_module(
+        specpack.install_default_agent_modules(
             connection,
             settings.default_project_id,
-            "metatron_operator_v1",
-            "test-reset",
-        )
-        specpack.install_agent_module(
-            connection,
-            settings.default_project_id,
-            "codex_software_engineer_v1",
             "test-reset",
         )
         members.seed_default_members(

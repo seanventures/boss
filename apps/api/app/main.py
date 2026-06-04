@@ -16,6 +16,8 @@ from .schemas import (
     AgentModuleInstallRecordSummary,
     AgentModuleInstallRequest,
     AgentModuleListResponse,
+    AgentRuntimeResolveRequest,
+    AgentRuntimeResolveResponse,
     AgentModuleSummary,
     ArtifactDetail,
     ArtifactListResponse,
@@ -251,6 +253,7 @@ from .schemas import (
     WorkerPollResponse,
 )
 from .services.audit import AuditTrailService
+from .services.agent_runtime import AgentRuntimeService
 from .services.budget import BudgetGovernor
 from .services.break_glass import BreakGlassGrantNotFoundError, BreakGlassService
 from .services.canonical import CanonicalObjectService
@@ -327,6 +330,7 @@ receipts = ReceiptService()
 software_factory = SoftwareFactoryService(settings)
 decisions = DecisionService(settings)
 specpack = SpecPackService(settings)
+agent_runtime = AgentRuntimeService(settings)
 entitlements = EntitlementBrokerService(settings)
 commercial = CommercialService(settings)
 enterprise = EnterpriseService(settings)
@@ -2917,6 +2921,33 @@ def install_agent_module(payload: AgentModuleInstallRequest) -> AgentModuleDetai
     if module is None:
         raise HTTPException(status_code=500, detail="Agent module install failed.")
     return agent_module_detail_from_service(module)
+
+
+@app.post("/v1/agent-runtime/resolve", response_model=AgentRuntimeResolveResponse)
+def resolve_agent_runtime(
+    payload: AgentRuntimeResolveRequest,
+) -> AgentRuntimeResolveResponse:
+    with begin(engine) as connection:
+        try:
+            require_project_actor(
+                connection,
+                payload.project_id,
+                payload.actor,
+                "module_manage",
+            )
+            result = agent_runtime.resolve(
+                connection,
+                payload.project_id,
+                job_kind=payload.job_kind,
+                agent_module_id=payload.agent_module_id,
+                task_payload=payload.task_payload,
+                required=True,
+            )
+        except AgentModuleNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        return AgentRuntimeResolveResponse(**result)
 
 
 @app.get("/v1/skills", response_model=SkillListResponse)

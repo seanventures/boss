@@ -575,10 +575,24 @@ describe("createBossApiClient", () => {
       metadata: { role_key: "private_enterprise_agent" },
       created_at: "2026-06-03T00:00:00Z",
     };
+    const runtime = {
+      project_id: "boss-dogfood",
+      job_kind: "agent.pm.scope_brief",
+      matched: true,
+      agent_module: { id: "pm_product_planner_v1", role_key: "pm" },
+      compiled_prompt: {
+        system: "No spendy action without a BudgetReservation.",
+        job: "Return scope brief.",
+      },
+      runtime: { default_skill_ids: ["artifact.create"] },
+      role: { role_key: "pm" },
+      config: {},
+    };
     const responses = [
       { status: 200, body: { project_id: "boss-dogfood", items: [module] } },
       { status: 201, body: module },
       { status: 200, body: { project_id: "boss-dogfood", items: [record] } },
+      { status: 200, body: runtime },
     ];
     const fetchImpl = async (input: RequestInfo | URL, init?: RequestInit) => {
       calls.push({ url: String(input), init });
@@ -604,12 +618,19 @@ describe("createBossApiClient", () => {
       "private_enterprise_agent_v1",
       10,
     );
+    const resolved = await client.resolveAgentRuntime({
+      project_id: "boss-dogfood",
+      job_kind: "agent.pm.scope_brief",
+      task_payload: { command: "Scope Decision Inbox defaults." },
+      actor: "ceo",
+    });
 
     expect(listed.items[0].required_entitlements).toEqual([
       "private_agent_marketplace",
     ]);
     expect(installed.entitlement_result.status).toBe("allowed");
     expect(records.items[0].action).toBe("install");
+    expect(resolved.agent_module?.id).toBe("pm_product_planner_v1");
     expect(calls[0].url).toBe(
       "http://127.0.0.1:8000/v1/agent-modules?project_id=boss-dogfood",
     );
@@ -622,6 +643,10 @@ describe("createBossApiClient", () => {
     );
     expect(calls[2].url).toContain("module_id=private_enterprise_agent_v1");
     expect(calls[2].url).toContain("limit=10");
+    expect(calls[3].url).toBe(
+      "http://127.0.0.1:8000/v1/agent-runtime/resolve",
+    );
+    expect(calls[3].init?.method).toBe("POST");
   });
 
   it("manages org members through the API contract", async () => {

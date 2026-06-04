@@ -2034,19 +2034,71 @@ def test_seed_installs_default_agent_modules(client):
     assert response.status_code == 200
     payload = response.json()
     modules = {item["module_id"]: item for item in payload["items"]}
-    assert modules["metatron_operator_v1"]["installed"] is True
-    assert modules["codex_software_engineer_v1"]["installed"] is True
+    for module_id in api_main.specpack.DEFAULT_AGENT_MODULE_IDS:
+        assert modules[module_id]["installed"] is True
     assert modules["metatron_operator_v1"]["required_entitlements"] == [
         "basic_metatron"
     ]
     assert modules["codex_software_engineer_v1"]["entitlement_status"] == "allowed"
+    assert modules["finops_sentinel_v1"]["entitlement_status"] == "allowed"
+    assert modules["secrets_steward_v1"]["entitlement_status"] == "allowed"
     assert modules["private_enterprise_agent_v1"]["entitlement_status"] == (
         "missing_required_entitlement"
     )
     assert "plan.command" in modules["metatron_operator_v1"]["job_kinds"]
+    assert "agent.metatron.status_brief" in modules["metatron_operator_v1"][
+        "job_kinds"
+    ]
+    assert "agent.infra_steward.infra_review" in modules["infra_steward_v1"][
+        "job_kinds"
+    ]
     assert "software_factory.propose_pr" in modules["codex_software_engineer_v1"][
         "job_kinds"
     ]
+
+
+def test_agent_runtime_resolves_default_module_prompt_contract(client):
+    response = client.post(
+        "/v1/agent-runtime/resolve",
+        json={
+            "project_id": "boss-dogfood",
+            "job_kind": "agent.pm.scope_brief",
+            "task_payload": {
+                "command": "Shape the Decision Inbox default-action system.",
+                "risk_tier": 2,
+            },
+            "actor": "ceo",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["matched"] is True
+    assert payload["agent_module"]["id"] == "pm_product_planner_v1"
+    assert payload["role"]["role_key"] == "pm"
+    assert "No spendy action without a BudgetReservation." in payload[
+        "compiled_prompt"
+    ]["system"]
+    assert "Decision Inbox" in payload["compiled_prompt"]["job"]
+    assert "artifact.create" in payload["runtime"]["default_skill_ids"]
+    assert any(
+        "Produce or update output contract" in item
+        for item in payload["compiled_prompt"]["checklist"]
+    )
+
+
+def test_agent_runtime_resolution_requires_module_manage_permission(client):
+    response = client.post(
+        "/v1/agent-runtime/resolve",
+        json={
+            "project_id": "boss-dogfood",
+            "job_kind": "agent.pm.scope_brief",
+            "actor": "release_manager",
+        },
+    )
+
+    assert response.status_code == 403
+    assert "module_manage" in response.json()["detail"]
 
 
 def test_agent_module_install_requires_declared_marketplace_entitlement(client, engine):
@@ -2415,7 +2467,7 @@ def test_pack_install_is_idempotent_for_new_project(client, engine):
     first_payload = first.json()
     assert first_payload["pack_id"] == "core_v1"
     assert first_payload["install_status"] == "installed"
-    assert first_payload["role_count"] == 12
+    assert first_payload["role_count"] == 16
 
     second = client.post(
         "/v1/packs/install",
@@ -2432,14 +2484,18 @@ def test_pack_install_is_idempotent_for_new_project(client, engine):
         "cao",
         "coo",
         "cto",
+        "deployment_manager",
         "finops_sentinel",
+        "infra_steward",
         "metatron",
+        "model_spend_analyst",
         "pm",
         "program_manager",
         "providerops_manager",
         "qa",
         "release_manager",
         "resource_janitor",
+        "secrets_steward",
         "vp_agents",
     ]
 
@@ -8967,6 +9023,76 @@ def test_get_job_returns_created_job(client):
     assert payload["id"] == job_id
     assert payload["kind"] == "plan.generate"
     assert payload["status"] == "queued"
+
+
+def test_agent_job_lease_attaches_runtime_and_completion_creates_artifact(client):
+    created = client.post(
+        "/v1/jobs",
+        json={
+            "project_id": "boss-dogfood",
+            "kind": "agent.pm.scope_brief",
+            "payload": {
+                "command": "Draft scope for ProviderOps dashboard alerts.",
+                "risk_tier": 1,
+            },
+        },
+    )
+    assert created.status_code == 201
+    job_id = created.json()["id"]
+
+    poll = client.post(
+        "/v1/worker/poll",
+        json={
+            "worker_id": "worker-agent-pm",
+            "capabilities": ["agent.pm.scope_brief"],
+            "lease_ttl_seconds": 60,
+        },
+    )
+    assert poll.status_code == 200
+    leased = poll.json()["job"]
+    assert leased["id"] == job_id
+    assert leased["payload"]["agent_module"]["id"] == "pm_product_planner_v1"
+    assert leased["payload"]["agent_runtime"]["role"]["role_key"] == "pm"
+    assert "No worker execution without a lease." in leased["payload"][
+        "agent_runtime"
+    ]["compiled_prompt"]["system"]
+
+    complete = client.post(
+        "/v1/worker/complete",
+        json={
+            "worker_id": "worker-agent-pm",
+            "job_id": job_id,
+            "lease_token": leased["lease_token"],
+            "result": {
+                "summary": "PM scope brief for ProviderOps dashboard alerts.",
+                "findings": ["The request is UI and API visible."],
+                "recommendations": ["Create acceptance criteria before build."],
+                "required_decisions": ["Confirm alert threshold defaults."],
+                "agent_module": leased["payload"]["agent_module"],
+                "agent_runtime": leased["payload"]["agent_runtime"],
+                "prompt_excerpt": leased["payload"]["agent_runtime"][
+                    "compiled_prompt"
+                ]["job"][:400],
+            },
+        },
+    )
+    assert complete.status_code == 200
+    payload = complete.json()
+    assert payload["status"] == "succeeded"
+    assert payload["artifact_id"]
+
+    artifact = client.get(f"/v1/artifacts/{payload['artifact_id']}")
+    assert artifact.status_code == 200
+    content = artifact.json()["content"]
+    assert artifact.json()["artifact_type"] == "agent_brief"
+    assert content["agent_module"]["id"] == "pm_product_planner_v1"
+    assert content["agent_runtime"]["role"]["role_key"] == "pm"
+    assert content["required_decisions"] == ["Confirm alert threshold defaults."]
+
+    events = client.get("/v1/events", params={"project_id": "boss-dogfood"})
+    assert "agent.brief_created" in [
+        item["event_type"] for item in events.json()["items"]
+    ]
 
 
 def test_expired_lease_can_be_reclaimed(client, engine):

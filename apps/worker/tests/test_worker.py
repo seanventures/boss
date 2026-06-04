@@ -3,7 +3,13 @@ import sys
 from types import SimpleNamespace
 
 from apps.worker.boss_worker.control_plane import ControlPlaneClient, LeasedJob
-from apps.worker.boss_worker.runner import build_plan_result, capabilities, run_worker_cycle
+from apps.worker.boss_worker.runner import (
+    agent_module_id_from_payload,
+    build_agent_brief_result,
+    build_plan_result,
+    capabilities,
+    run_worker_cycle,
+)
 
 
 class FakeControlPlaneClient:
@@ -151,6 +157,9 @@ def test_worker_capabilities_include_infra_job_kinds():
     supported = capabilities()
     assert "infra.droplet.create" in supported
     assert "infra.droplet.delete" in supported
+    assert "agent.pm.scope_brief" in supported
+    assert "agent.infra_steward.infra_review" in supported
+    assert "agent.model_spend_analyst.model_spend_brief" in supported
 
 
 def test_build_plan_result_contains_command_context():
@@ -171,6 +180,52 @@ def test_build_plan_result_contains_command_context():
     assert result["summary"] == "Ship the lease worker."
     assert "Ship the lease worker." in result["objectives"]
     assert any("today" in step for step in result["steps"])
+
+
+def test_build_agent_brief_result_uses_resolved_runtime_prompt_context():
+    leased_job = LeasedJob(
+        id="job_agent",
+        project_id="boss-dogfood",
+        task_id="tsk_test",
+        kind="agent.pm.scope_brief",
+        payload={
+            "command": "Scope ProviderOps alerts.",
+            "agent_module": {
+                "id": "pm_product_planner_v1",
+                "display_name": "PM Product Planner",
+                "role_key": "pm",
+            },
+            "agent_runtime": {
+                "job_kind": "agent.pm.scope_brief",
+                "matched": True,
+                "role": {"role_key": "pm", "display_name": "Product Manager"},
+                "compiled_prompt": {
+                    "job": "Return problem statement, scope, non-goals, acceptance criteria.",
+                    "checklist": ["Produce or update output contract: FeatureBrief."],
+                },
+            },
+        },
+        attempt=1,
+        max_attempts=3,
+        lease_token="lease_token",
+        lease_expires_at="future",
+    )
+
+    result = build_agent_brief_result(leased_job)
+
+    assert result["summary"] == "Product Manager: Scope ProviderOps alerts."
+    assert result["agent_module"]["id"] == "pm_product_planner_v1"
+    assert result["agent_runtime"]["role_key"] == "pm"
+    assert "acceptance criteria" in result["prompt_excerpt"]
+
+
+def test_agent_module_id_from_payload_prefers_resolved_module_context():
+    assert agent_module_id_from_payload({"agent_module_id": "explicit"}) == "explicit"
+    assert (
+        agent_module_id_from_payload({"agent_module": {"id": "pm_product_planner_v1"}})
+        == "pm_product_planner_v1"
+    )
+    assert agent_module_id_from_payload({}) is None
 
 
 def test_run_worker_cycle_completes_leased_job():
@@ -196,6 +251,50 @@ def test_run_worker_cycle_completes_leased_job():
 
     assert ran_job is True
     assert [call[0] for call in client.calls] == ["poll", "heartbeat", "complete"]
+
+
+def test_run_worker_cycle_completes_generic_agent_job():
+    leased_job = LeasedJob(
+        id="job_agent",
+        project_id="boss-dogfood",
+        task_id="tsk_test",
+        kind="agent.pm.scope_brief",
+        payload={
+            "command": "Scope the packaged agent runtime.",
+            "agent_module": {
+                "id": "pm_product_planner_v1",
+                "display_name": "PM Product Planner",
+                "role_key": "pm",
+            },
+            "agent_runtime": {
+                "job_kind": "agent.pm.scope_brief",
+                "matched": True,
+                "role": {"role_key": "pm", "display_name": "Product Manager"},
+                "compiled_prompt": {
+                    "job": "Return scope, risks, decisions, and evidence.",
+                    "checklist": ["Produce or update output contract: FeatureBrief."],
+                },
+            },
+        },
+        attempt=1,
+        max_attempts=3,
+        lease_token="lease_token",
+        lease_expires_at="future",
+    )
+    client = FakeControlPlaneClient(leased_job)
+    settings = SimpleNamespace(
+        worker_id="worker-test",
+        lease_ttl_seconds=60,
+        poll_interval_seconds=1,
+    )
+
+    ran_job = run_worker_cycle(client, settings)
+
+    assert ran_job is True
+    assert [call[0] for call in client.calls] == ["poll", "heartbeat", "complete"]
+    complete_result = client.calls[-1][-1]
+    assert complete_result["agent_module"]["id"] == "pm_product_planner_v1"
+    assert complete_result["agent_runtime"]["role_key"] == "pm"
 
 
 def test_run_worker_cycle_deadletters_unsupported_job():
@@ -234,6 +333,7 @@ def test_run_worker_cycle_executes_queued_openai_plan_job():
             "dedupe_key": "plan-test",
             "prompt": "Create a plan.",
             "system_prompt": "Return markdown.",
+            "agent_module": {"id": "pm_product_planner_v1"},
         },
         attempt=1,
         max_attempts=3,
@@ -256,6 +356,7 @@ def test_run_worker_cycle_executes_queued_openai_plan_job():
         "create_openai_plan",
         "complete",
     ]
+    assert client.calls[2][1]["agent_module_id"] == "pm_product_planner_v1"
 
 
 def test_run_worker_cycle_executes_queued_pr_proposal_job():

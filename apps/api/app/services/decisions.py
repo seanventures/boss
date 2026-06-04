@@ -14,7 +14,7 @@ from .jobs import JobLeaseService
 from .members import MemberDirectoryService
 from .role_governance import RoleGovernanceService
 from .self_improvement import SelfImprovementService
-from .specpack import SpecPackService
+from .specpack import AgentModuleNotFoundError, SpecPackService
 
 
 class DecisionNotFoundError(Exception):
@@ -718,6 +718,21 @@ class DecisionService:
         artifact_content = artifact["content"] or {}
         module_descriptor = artifact_content.get("agent_module") or {}
         agent_module_id = module_descriptor.get("id")
+        if isinstance(agent_module_id, str) and agent_module_id:
+            try:
+                module_spec = self.specpack.resolve_installed_agent_module(
+                    connection,
+                    row["project_id"],
+                    agent_module_id,
+                )
+            except AgentModuleNotFoundError:
+                agent_module_id = None
+            else:
+                runtime = module_spec.get("runtime") or {}
+                if "software_factory.propose_pr" not in (
+                    runtime.get("job_kinds") or []
+                ):
+                    agent_module_id = None
         if not isinstance(agent_module_id, str) or not agent_module_id:
             default_module = self.specpack.find_default_agent_module_for_job_kind(
                 connection,
