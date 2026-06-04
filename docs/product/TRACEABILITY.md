@@ -92,7 +92,8 @@ These rows map new v2.0 product requirements to planning artifacts and the runti
 
 1. Live OIDC/SAML/SCIM rollout requires provider configuration, secrets, and explicit production rollout choices; durable identity rollout policies now gate SAML ACS, SCIM provisioning, and enterprise cluster readiness.
 2. Live Slack/email rollout still requires real provider credentials and operator rollout choices; the runtime now enforces explicit per-project channel policy before any provider send and fails closed otherwise.
-3. Live production promotion and non-sandbox infrastructure actuation remain intentionally disabled until credentials, deployment targets, environment rollout policies, approvals, and reviewed Kubernetes overlays are configured; the Resource Plane now blocks provider-backed non-sandbox DeploymentRuns until an explicit environment policy and required BudgetReservation exist.
+3. Live hosted Account Connect service operation, hosted marketplace distribution, hosted billing/team management, and external support-provider routing require hosted service deployment/configuration; local BOSS now records auth sessions, hosted writes, support escalations, receipts, and blocked states rather than fake success.
+4. Live production promotion and non-sandbox infrastructure actuation remain intentionally disabled until credentials, deployment targets, environment rollout policies, approvals, and reviewed Kubernetes overlays are configured; the Resource Plane now blocks provider-backed non-sandbox DeploymentRuns until an explicit environment policy and required BudgetReservation exist. Cluster validation runs record readiness evidence but do not claim a live rollout occurred.
 
 ## Assumptions and Decisions
 
