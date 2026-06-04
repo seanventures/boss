@@ -20,7 +20,7 @@ Scope:
 - Mission Control shell.
 - Metatron status API.
 - Simple budget governor.
-- Basic software factory mock.
+- Basic Software Factory sandbox-real PR proposal and evidence path.
 - PRD/spec export.
 
 Exit criteria:
