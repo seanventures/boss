@@ -57,6 +57,7 @@ def clean_tables(engine):
         connection.execute(text("DELETE FROM deployment_runs"))
         connection.execute(text("DELETE FROM changeset_operations"))
         connection.execute(text("DELETE FROM changesets"))
+        connection.execute(text("DELETE FROM deployment_environment_policies"))
         connection.execute(text("DELETE FROM cost_anomalies"))
         connection.execute(text("DELETE FROM cost_events"))
         connection.execute(text("DELETE FROM commitments"))

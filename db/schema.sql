@@ -1017,6 +1017,28 @@ CREATE TABLE IF NOT EXISTS deployment_targets (
 CREATE INDEX IF NOT EXISTS idx_deployment_targets_project
   ON deployment_targets(project_id, app_name, environment, status);
 
+CREATE TABLE IF NOT EXISTS deployment_environment_policies (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id),
+  environment TEXT NOT NULL,
+  runtime_mode TEXT NOT NULL DEFAULT 'metadata_only',
+  allowed_target_kinds JSONB NOT NULL DEFAULT '[]'::jsonb,
+  requires_change_set BOOLEAN NOT NULL DEFAULT true,
+  requires_budget_reservation BOOLEAN NOT NULL DEFAULT true,
+  requires_approval BOOLEAN NOT NULL DEFAULT true,
+  requires_health_check BOOLEAN NOT NULL DEFAULT true,
+  requires_rollback_plan BOOLEAN NOT NULL DEFAULT true,
+  rollout_notes TEXT,
+  status TEXT NOT NULL DEFAULT 'active',
+  created_by TEXT NOT NULL,
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(project_id, environment)
+);
+CREATE INDEX IF NOT EXISTS idx_deployment_environment_policies_project
+  ON deployment_environment_policies(project_id, environment, status);
+
 CREATE TABLE IF NOT EXISTS changesets (
   id TEXT PRIMARY KEY,
   project_id TEXT NOT NULL REFERENCES projects(id),

@@ -2395,6 +2395,47 @@ paths:
       responses:
         '201': { description: Deployment target registered }
         '403': { description: Actor is not allowed to manage ProviderOps }
+  /v1/deployment-environment-policies:
+    get:
+      summary: List Deployment Registry environment rollout policies
+      parameters:
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Active and historical environment policies that gate provider-backed deployment runs }
+    post:
+      summary: Upsert a Deployment Registry environment rollout policy
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id, environment]
+              properties:
+                project_id: { type: string }
+                environment: { type: string }
+                runtime_mode:
+                  type: string
+                  enum: [disabled, metadata_only, preview_allowed, staging_allowed, production_allowed]
+                  default: metadata_only
+                allowed_target_kinds:
+                  type: array
+                  items: { type: string }
+                requires_change_set: { type: boolean, default: true }
+                requires_budget_reservation: { type: boolean, default: true }
+                requires_approval: { type: boolean, default: true }
+                requires_health_check: { type: boolean, default: true }
+                requires_rollback_plan: { type: boolean, default: true }
+                rollout_notes: { type: string }
+                metadata: { type: object }
+                actor: { type: string, default: ceo }
+      responses:
+        '201': { description: Environment policy saved and audit event emitted }
+        '403': { description: Actor is not allowed to manage ProviderOps }
+        '422': { description: Unsupported runtime mode or invalid payload }
   /v1/deployment-runs:
     get:
       summary: List Deployment Registry runs

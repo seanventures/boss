@@ -83,6 +83,9 @@ from .schemas import (
     DepartmentSummary,
     DeploymentRolloutListResponse,
     DeploymentRolloutSummary,
+    DeploymentEnvironmentPolicyListResponse,
+    DeploymentEnvironmentPolicySummary,
+    DeploymentEnvironmentPolicyUpsertRequest,
     DeploymentRunCreateRequest,
     DeploymentRunHealthCheckRequest,
     DeploymentRunHealthCheckResponse,
@@ -4530,6 +4533,60 @@ def create_deployment_target(
         except (ProviderAccountNotFoundError, ValueError) as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
         return DeploymentTargetSummary(**item)
+
+
+@app.get(
+    "/v1/deployment-environment-policies",
+    response_model=DeploymentEnvironmentPolicyListResponse,
+)
+def list_deployment_environment_policies(
+    project_id: str,
+) -> DeploymentEnvironmentPolicyListResponse:
+    with begin(engine) as connection:
+        items = resource_plane.list_deployment_environment_policies(
+            connection,
+            project_id,
+        )
+        return DeploymentEnvironmentPolicyListResponse(
+            project_id=project_id,
+            items=[DeploymentEnvironmentPolicySummary(**item) for item in items],
+        )
+
+
+@app.post(
+    "/v1/deployment-environment-policies",
+    response_model=DeploymentEnvironmentPolicySummary,
+    status_code=201,
+)
+def upsert_deployment_environment_policy(
+    payload: DeploymentEnvironmentPolicyUpsertRequest,
+) -> DeploymentEnvironmentPolicySummary:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection,
+            payload.project_id,
+            payload.actor,
+            "providerops_manage",
+        )
+        try:
+            item = resource_plane.upsert_deployment_environment_policy(
+                connection,
+                project_id=payload.project_id,
+                environment=payload.environment,
+                runtime_mode=payload.runtime_mode,
+                allowed_target_kinds=payload.allowed_target_kinds,
+                requires_change_set=payload.requires_change_set,
+                requires_budget_reservation=payload.requires_budget_reservation,
+                requires_approval=payload.requires_approval,
+                requires_health_check=payload.requires_health_check,
+                requires_rollback_plan=payload.requires_rollback_plan,
+                rollout_notes=payload.rollout_notes,
+                metadata=payload.metadata,
+                actor=payload.actor,
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        return DeploymentEnvironmentPolicySummary(**item)
 
 
 @app.get("/v1/deployment-runs", response_model=DeploymentRunListResponse)

@@ -6,6 +6,9 @@ phases:
   - id: release_packet
     actor: release_manager
     outputs: [ReviewPacket, RollbackPlan]
+  - id: verify_environment_policy
+    actor: resource_plane_kernel
+    outputs: [DeploymentEnvironmentPolicy, Decision]
   - id: plan_deployment
     actor: deployment_manager
     outputs: [DeploymentTarget, ChangeSet]
@@ -23,6 +26,9 @@ phases:
     outputs: [ResourceReceipt]
     optional: true
 rules:
+  provider_backed_non_sandbox_requires_environment_policy: true
+  policy_can_block_with_visible_failed_deployment_run: true
+  policy_required_budget_reservation_must_be_active: true
   staging_or_production_requires_approval: true
   production_dns_requires_rollback_plan: true
   health_failure_creates_decision_or_rollback: true

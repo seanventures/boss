@@ -40,6 +40,7 @@ import {
   unlinkAccountConnectAction,
   uninstallAgentModuleAction,
   revokeAccountConnectTeamInviteAction,
+  upsertDeploymentEnvironmentPolicyAction,
   upsertEnterpriseClusterAction,
   upsertEnterpriseIdentityProviderAction,
   upsertEnterpriseIdentityRolloutPolicyAction,
@@ -1804,6 +1805,143 @@ export default async function HomePage({ searchParams }: HomePageProps) {
 
                 <article className="stack-card">
                   <h3>Deployment Registry</h3>
+                  <form
+                    action={upsertDeploymentEnvironmentPolicyAction}
+                    className="composer compact"
+                  >
+                    <input type="hidden" name="project_id" value={activeProjectId} />
+                    <input type="hidden" name="actor" value={activeActorId} />
+                    <div className="input-grid">
+                      <label className="field">
+                        <span>Environment policy</span>
+                        <select className="input" name="environment" required>
+                          <option value="staging">Staging</option>
+                          <option value="production">Production</option>
+                          <option value="preview">Preview</option>
+                        </select>
+                      </label>
+                      <label className="field">
+                        <span>Runtime mode</span>
+                        <select className="input" name="runtime_mode" required>
+                          <option value="metadata_only">Metadata only</option>
+                          <option value="preview_allowed">Preview allowed</option>
+                          <option value="staging_allowed">Staging allowed</option>
+                          <option value="production_allowed">
+                            Production allowed
+                          </option>
+                          <option value="disabled">Disabled</option>
+                        </select>
+                      </label>
+                    </div>
+                    <label className="field">
+                      <span>Allowed target kinds</span>
+                      <textarea
+                        className="textarea"
+                        name="allowed_target_kinds"
+                        rows={2}
+                        placeholder={"One target kind per line\ndigitalocean_app"}
+                      />
+                    </label>
+                    <div className="metric-row">
+                      <label>
+                        <input
+                          type="checkbox"
+                          name="requires_change_set"
+                          defaultChecked
+                        />{" "}
+                        ChangeSet
+                      </label>
+                      <label>
+                        <input
+                          type="checkbox"
+                          name="requires_budget_reservation"
+                          defaultChecked
+                        />{" "}
+                        BudgetReservation
+                      </label>
+                      <label>
+                        <input
+                          type="checkbox"
+                          name="requires_approval"
+                          defaultChecked
+                        />{" "}
+                        Approval
+                      </label>
+                      <label>
+                        <input
+                          type="checkbox"
+                          name="requires_health_check"
+                          defaultChecked
+                        />{" "}
+                        Health check
+                      </label>
+                      <label>
+                        <input
+                          type="checkbox"
+                          name="requires_rollback_plan"
+                          defaultChecked
+                        />{" "}
+                        Rollback plan
+                      </label>
+                    </div>
+                    <label className="field">
+                      <span>Rollout notes</span>
+                      <textarea
+                        className="textarea"
+                        name="rollout_notes"
+                        rows={2}
+                        placeholder="Why this environment is allowed to perform provider-backed rollouts."
+                      />
+                    </label>
+                    <button className="button secondary" type="submit">
+                      Save environment policy
+                    </button>
+                    <p className="detail">
+                      Provider-backed staging and production runs stay blocked
+                      until an active environment policy allows the runtime mode
+                      and required gates.
+                    </p>
+                  </form>
+
+                  {providerOps.deploymentPolicies.length > 0 ? (
+                    <div className="feed-list">
+                      {providerOps.deploymentPolicies.map((policy) => (
+                        <div className="feed-row" key={policy.id}>
+                          <div>
+                            <h4>
+                              {policy.environment} / {policy.runtimeMode}
+                            </h4>
+                            <p className="detail">
+                              Target kinds:{" "}
+                              {policy.allowedTargetKinds.length > 0
+                                ? policy.allowedTargetKinds.join(", ")
+                                : "all"}
+                            </p>
+                            <p className="detail">
+                              Gates:{" "}
+                              {[
+                                policy.requiresChangeSet ? "ChangeSet" : null,
+                                policy.requiresBudgetReservation
+                                  ? "BudgetReservation"
+                                  : null,
+                                policy.requiresApproval ? "approval" : null,
+                                policy.requiresHealthCheck ? "health" : null,
+                                policy.requiresRollbackPlan ? "rollback" : null,
+                              ]
+                                .filter(Boolean)
+                                .join(", ") || "none"}
+                            </p>
+                          </div>
+                          <code className="mono">{policy.status}</code>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="detail">
+                      No deployment environment policies configured yet.
+                    </p>
+                  )}
+
                   <form
                     action={createDeploymentTargetAction}
                     className="composer compact"

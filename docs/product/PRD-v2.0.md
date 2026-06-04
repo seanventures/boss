@@ -87,7 +87,7 @@ Budget/finance objects: `BudgetPolicy`, `BudgetAllocation`, `BudgetReservation`,
 
 Model/capacity objects: `ProviderAccount`, `ProviderAdapter`, `EntitlementPool`, `ModelRouteDecision`, `CapacityReceipt`, `ModelProviderHealth`, `LocalRunner`, `ExecutionNode`, `WorkerPool`.
 
-ProviderOps objects: `ExternalResource`, `Capability`, `DeploymentTarget`, `DeploymentRun`, `ChangeSet`, `ResourceReceipt`, `DriftReport`, `ProviderHealth`, `SecretRef`, `ResourcePolicy`, `ScalePlan`, `ResourceInventorySnapshot`.
+ProviderOps objects: `ExternalResource`, `Capability`, `DeploymentTarget`, `DeploymentEnvironmentPolicy`, `DeploymentRun`, `ChangeSet`, `ResourceReceipt`, `DriftReport`, `ProviderHealth`, `SecretRef`, `ResourcePolicy`, `ScalePlan`, `ResourceInventorySnapshot`.
 
 Commercial objects: `Edition`, `LicenseEntitlement`, `AccountConnectOrg`, `PackListing`, `PackInstall`, `MarketplacePublisher`, `EnterpriseCluster`, `EnterpriseIdentityProvider`.
 
@@ -282,6 +282,9 @@ Cost and Billing Ledger requirements:
 Deployment Registry requirements:
 
 - Each app has repo, environments, deployment targets, required resources, domains, environment variables/secret refs, deployment history, rollback points, health checks, and release receipts.
+- Provider-backed non-sandbox deployment runs require an active `DeploymentEnvironmentPolicy` before BOSS can plan a provider ChangeSet.
+- Production environment policies must explicitly use `production_allowed`; metadata-only target registration must never imply production rollout permission.
+- Environment policies declare required gates: ChangeSet, BudgetReservation, approval, health check, rollback plan, and optional allowed target kinds.
 
 ChangeSet Planner requirements:
 
@@ -664,7 +667,8 @@ Trust/autonomy: trust score trends, autonomy upgrades/downgrades, policy violati
 
 - Every implemented requirement maps to tests and traceability records.
 - Every spendy action has quote/reserve/execute/receipt/reconcile coverage.
-- Every provider write has ChangeSet, approval when required, BudgetReservation, ResourceReceipt, and rollback plan.
+- Every provider write has ChangeSet, BudgetReservation, approval when required, ResourceReceipt, and rollback plan.
+- Every provider-backed non-sandbox deployment run has an explicit environment rollout policy before any provider ChangeSet is planned.
 - Every critical message has Outbox/Inbox ACK, retry/deadletter, and escalation path.
 - Every model route decision records selected/rejected sources, capacity, budget state, data boundary, and provider-policy result.
 - Community runs locally without BOSS Account Connect.

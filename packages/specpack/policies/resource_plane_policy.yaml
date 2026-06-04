@@ -16,6 +16,7 @@ rules:
     require_policy_check: true
     require_approval_for_destructive: true
     require_rollback_for_production_dns_or_deploy: true
+    require_environment_policy_for_non_sandbox_deploy: true
   secrets:
     agents_receive_raw_provider_secrets: false
     use_secret_ref_only: true

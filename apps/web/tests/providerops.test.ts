@@ -13,6 +13,7 @@ vi.mock("../lib/client", () => ({
     listChangeSets: vi.fn(),
     listResourceReceipts: vi.fn(),
     listDeploymentTargets: vi.fn(),
+    listDeploymentEnvironmentPolicies: vi.fn(),
     listDeploymentRuns: vi.fn(),
     listProviderHealth: vi.fn(),
     listDriftReports: vi.fn(),
@@ -143,6 +144,29 @@ describe("ProviderOps feed", async () => {
     vi.mocked(client.listDeploymentTargets).mockResolvedValueOnce({
       project_id: "boss-dogfood",
       items: [],
+    });
+    vi.mocked(client.listDeploymentEnvironmentPolicies).mockResolvedValueOnce({
+      project_id: "boss-dogfood",
+      items: [
+        {
+          id: "deppol_boss-dogfood_staging",
+          project_id: "boss-dogfood",
+          environment: "staging",
+          runtime_mode: "staging_allowed",
+          allowed_target_kinds: ["digitalocean_app"],
+          requires_change_set: true,
+          requires_budget_reservation: true,
+          requires_approval: true,
+          requires_health_check: false,
+          requires_rollback_plan: true,
+          rollout_notes: "Staging provider deployments enabled.",
+          status: "active",
+          created_by: "ceo",
+          metadata: {},
+          created_at: "2026-06-03T12:00:00Z",
+          updated_at: "2026-06-03T12:00:00Z",
+        },
+      ],
     });
     vi.mocked(client.listDeploymentRuns).mockResolvedValueOnce({
       project_id: "boss-dogfood",
@@ -298,6 +322,11 @@ describe("ProviderOps feed", async () => {
     expect(feed.deploymentRuns[0]).toMatchObject({
       appName: "BOSS",
       changesetId: "chg_1",
+    });
+    expect(feed.deploymentPolicies[0]).toMatchObject({
+      environment: "staging",
+      runtimeMode: "staging_allowed",
+      requiresBudgetReservation: true,
     });
   });
 

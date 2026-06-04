@@ -102,6 +102,8 @@ Execution rules:
 - No other spendy action without BudgetReservation.
 - No destructive action without explicit approval.
 - No production DNS/deploy change without approval and rollback plan.
+- Provider-backed non-sandbox DeploymentRuns require an active DeploymentEnvironmentPolicy before ChangeSet planning.
+- Production DeploymentEnvironmentPolicy records must use `production_allowed` runtime mode and may narrow allowed target kinds.
 - Every provider write creates ResourceReceipt.
 - Failed provider calls become visible events, deadletters, or decision escalations.
 
@@ -299,6 +301,10 @@ ProviderOps:
 - `POST /v1/changesets/{id}/apply`
 - `GET /v1/deployments`
 - `POST /v1/deployments`
+- `GET /v1/deployment-environment-policies`
+- `POST /v1/deployment-environment-policies`
+- `GET /v1/deployment-runs`
+- `POST /v1/deployment-runs`
 - `GET /v1/provider-health`
 - `GET /v1/drift-reports`
 

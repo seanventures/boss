@@ -3042,6 +3042,55 @@ class DeploymentTargetCreateRequest(BaseModel):
     actor: str = "ceo"
 
 
+class DeploymentEnvironmentPolicySummary(BaseModel):
+    id: str
+    project_id: str
+    environment: str
+    runtime_mode: str
+    allowed_target_kinds: list[str]
+    requires_change_set: bool
+    requires_budget_reservation: bool
+    requires_approval: bool
+    requires_health_check: bool
+    requires_rollback_plan: bool
+    rollout_notes: Optional[str] = None
+    status: str
+    created_by: str
+    metadata: dict[str, Any]
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
+class DeploymentEnvironmentPolicyListResponse(BaseModel):
+    project_id: str
+    items: list[DeploymentEnvironmentPolicySummary]
+
+
+class DeploymentEnvironmentPolicyUpsertRequest(BaseModel):
+    project_id: str
+    environment: str
+    runtime_mode: str = "metadata_only"
+    allowed_target_kinds: list[str] = Field(default_factory=list)
+    requires_change_set: bool = True
+    requires_budget_reservation: bool = True
+    requires_approval: bool = True
+    requires_health_check: bool = True
+    requires_rollback_plan: bool = True
+    rollout_notes: Optional[str] = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    actor: str = "ceo"
+
+    @model_validator(mode="after")
+    def validate_deployment_environment_policy(
+        self,
+    ) -> "DeploymentEnvironmentPolicyUpsertRequest":
+        self.project_id = _require_text(self.project_id, "project_id")
+        self.environment = _require_text(self.environment, "environment")
+        self.runtime_mode = _require_text(self.runtime_mode, "runtime_mode")
+        self.actor = _require_text(self.actor, "actor")
+        return self
+
+
 class DeploymentRunSummary(BaseModel):
     id: str
     project_id: str

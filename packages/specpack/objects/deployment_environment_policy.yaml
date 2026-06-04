@@ -1,0 +1,36 @@
+kind: ObjectSpec
+id: DeploymentEnvironmentPolicy
+version: 0.1.0
+description: ProviderOps policy that explicitly gates provider-backed deployment runs by environment.
+fields:
+  - name: id
+    type: string
+  - name: project_id
+    type: string
+  - name: environment
+    type: enum
+    values: [preview, staging, production]
+  - name: runtime_mode
+    type: enum
+    values: [disabled, metadata_only, preview_allowed, staging_allowed, production_allowed]
+  - name: allowed_target_kinds
+    type: array
+  - name: requires_change_set
+    type: boolean
+  - name: requires_budget_reservation
+    type: boolean
+  - name: requires_approval
+    type: boolean
+  - name: requires_health_check
+    type: boolean
+  - name: requires_rollback_plan
+    type: boolean
+  - name: rollout_notes
+    type: string
+  - name: status
+    type: enum
+    values: [active, disabled]
+invariants:
+  - Provider-backed non-sandbox deployment runs must have an active policy before planning.
+  - Production deployment policies must use production_allowed runtime mode.
+  - Policies may narrow allowed target kinds but may not bypass ChangeSet, approval, receipt, or rollback gates.

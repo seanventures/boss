@@ -3,6 +3,7 @@ import {
   type ChangeSetSummary,
   type CostAnomalySummary,
   type CostEventSummary,
+  type DeploymentEnvironmentPolicySummary,
   type DeploymentRunSummary,
   type DeploymentTargetSummary,
   type DriftReportSummary,
@@ -144,6 +145,21 @@ export type DeploymentRunFeedItem = {
   createdAt: string;
 };
 
+export type DeploymentEnvironmentPolicyFeedItem = {
+  id: string;
+  environment: string;
+  runtimeMode: string;
+  allowedTargetKinds: string[];
+  requiresChangeSet: boolean;
+  requiresBudgetReservation: boolean;
+  requiresApproval: boolean;
+  requiresHealthCheck: boolean;
+  requiresRollbackPlan: boolean;
+  rolloutNotes?: string;
+  status: string;
+  createdAt?: string;
+};
+
 export type ProviderHealthFeedItem = {
   id: string;
   providerAccountId?: string;
@@ -242,6 +258,7 @@ export type ProviderOpsFeed = {
   changeSets: ChangeSetFeedItem[];
   resourceReceipts: ResourceReceiptFeedItem[];
   deploymentTargets: DeploymentTargetFeedItem[];
+  deploymentPolicies: DeploymentEnvironmentPolicyFeedItem[];
   deploymentRuns: DeploymentRunFeedItem[];
   providerHealth: ProviderHealthFeedItem[];
   driftReports: DriftReportFeedItem[];
@@ -400,6 +417,25 @@ function mapDeploymentRun(payload: DeploymentRunSummary): DeploymentRunFeedItem 
   };
 }
 
+function mapDeploymentEnvironmentPolicy(
+  payload: DeploymentEnvironmentPolicySummary,
+): DeploymentEnvironmentPolicyFeedItem {
+  return {
+    id: payload.id,
+    environment: payload.environment,
+    runtimeMode: payload.runtime_mode,
+    allowedTargetKinds: payload.allowed_target_kinds,
+    requiresChangeSet: payload.requires_change_set,
+    requiresBudgetReservation: payload.requires_budget_reservation,
+    requiresApproval: payload.requires_approval,
+    requiresHealthCheck: payload.requires_health_check,
+    requiresRollbackPlan: payload.requires_rollback_plan,
+    rolloutNotes: payload.rollout_notes,
+    status: payload.status,
+    createdAt: payload.created_at,
+  };
+}
+
 function mapProviderHealth(payload: ProviderHealthSummary): ProviderHealthFeedItem {
   return {
     id: payload.id,
@@ -544,6 +580,7 @@ export function emptyProviderOpsFeed(
     changeSets: [],
     resourceReceipts: [],
     deploymentTargets: [],
+    deploymentPolicies: [],
     deploymentRuns: [],
     providerHealth: [],
     driftReports: [],
@@ -579,6 +616,7 @@ export async function fetchProviderOpsFeed(
       changeSets,
       resourceReceipts,
       deploymentTargets,
+      deploymentPolicies,
       deploymentRuns,
       providerHealth,
       driftReports,
@@ -593,6 +631,7 @@ export async function fetchProviderOpsFeed(
       client.listChangeSets(resolvedProjectId, undefined, 25),
       client.listResourceReceipts(resolvedProjectId, 25),
       client.listDeploymentTargets(resolvedProjectId),
+      client.listDeploymentEnvironmentPolicies(resolvedProjectId),
       client.listDeploymentRuns(resolvedProjectId, 25),
       client.listProviderHealth(resolvedProjectId, { limit: 25 }),
       client.listDriftReports(resolvedProjectId, 25),
@@ -609,6 +648,9 @@ export async function fetchProviderOpsFeed(
       changeSets: changeSets.items.map(mapChangeSet),
       resourceReceipts: resourceReceipts.items.map(mapResourceReceipt),
       deploymentTargets: deploymentTargets.items.map(mapDeploymentTarget),
+      deploymentPolicies: deploymentPolicies.items.map(
+        mapDeploymentEnvironmentPolicy,
+      ),
       deploymentRuns: deploymentRuns.items.map(mapDeploymentRun),
       providerHealth: providerHealth.items.map(mapProviderHealth),
       driftReports: driftReports.items.map(mapDriftReport),

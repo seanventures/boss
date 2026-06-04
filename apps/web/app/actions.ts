@@ -1154,6 +1154,35 @@ export async function createDeploymentRunAction(formData: FormData): Promise<voi
   revalidatePath("/");
 }
 
+export async function upsertDeploymentEnvironmentPolicyAction(
+  formData: FormData,
+): Promise<void> {
+  const environment = formData.get("environment");
+  const runtimeMode = formData.get("runtime_mode");
+  if (typeof environment !== "string" || !environment.trim()) {
+    throw new Error("environment is required");
+  }
+  if (typeof runtimeMode !== "string" || !runtimeMode.trim()) {
+    throw new Error("runtime_mode is required");
+  }
+  await client.upsertDeploymentEnvironmentPolicy({
+    project_id: getProjectId(formData),
+    environment: environment.trim(),
+    runtime_mode: runtimeMode.trim(),
+    allowed_target_kinds: parseLines(formData.get("allowed_target_kinds")),
+    requires_change_set: formData.get("requires_change_set") === "on",
+    requires_budget_reservation:
+      formData.get("requires_budget_reservation") === "on",
+    requires_approval: formData.get("requires_approval") === "on",
+    requires_health_check: formData.get("requires_health_check") === "on",
+    requires_rollback_plan: formData.get("requires_rollback_plan") === "on",
+    rollout_notes: getOptionalString(formData, "rollout_notes"),
+    metadata: parseOptionalJsonObject(formData.get("metadata_json")),
+    actor: getActor(formData),
+  });
+  revalidatePath("/");
+}
+
 export async function runDeploymentHealthCheckAction(
   formData: FormData,
 ): Promise<void> {

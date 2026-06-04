@@ -2630,6 +2630,45 @@ export type DeploymentTargetCreateRequest = {
   actor?: string;
 };
 
+export type DeploymentEnvironmentPolicySummary = {
+  id: string;
+  project_id: string;
+  environment: string;
+  runtime_mode: string;
+  allowed_target_kinds: string[];
+  requires_change_set: boolean;
+  requires_budget_reservation: boolean;
+  requires_approval: boolean;
+  requires_health_check: boolean;
+  requires_rollback_plan: boolean;
+  rollout_notes?: string;
+  status: string;
+  created_by: string;
+  metadata: Record<string, unknown>;
+  created_at?: string;
+  updated_at?: string;
+};
+
+export type DeploymentEnvironmentPolicyListResponse = {
+  project_id: string;
+  items: DeploymentEnvironmentPolicySummary[];
+};
+
+export type DeploymentEnvironmentPolicyUpsertRequest = {
+  project_id: string;
+  environment: string;
+  runtime_mode?: string;
+  allowed_target_kinds?: string[];
+  requires_change_set?: boolean;
+  requires_budget_reservation?: boolean;
+  requires_approval?: boolean;
+  requires_health_check?: boolean;
+  requires_rollback_plan?: boolean;
+  rollout_notes?: string;
+  metadata?: Record<string, unknown>;
+  actor?: string;
+};
+
 export type DeploymentRunSummary = {
   id: string;
   project_id: string;
@@ -3794,6 +3833,26 @@ export function createBossApiClient(config: BossApiClientConfig) {
       return request<DeploymentTargetSummary>("POST", "/v1/deployments", {
         body: payload,
       });
+    },
+    listDeploymentEnvironmentPolicies(projectId: string) {
+      return request<DeploymentEnvironmentPolicyListResponse>(
+        "GET",
+        "/v1/deployment-environment-policies",
+        {
+          query: { project_id: projectId },
+        },
+      );
+    },
+    upsertDeploymentEnvironmentPolicy(
+      payload: DeploymentEnvironmentPolicyUpsertRequest,
+    ) {
+      return request<DeploymentEnvironmentPolicySummary>(
+        "POST",
+        "/v1/deployment-environment-policies",
+        {
+          body: payload,
+        },
+      );
     },
     listDeploymentRuns(projectId: string, limit = 50) {
       return request<DeploymentRunListResponse>("GET", "/v1/deployment-runs", {

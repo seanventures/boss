@@ -1831,6 +1831,51 @@ describe("createBossApiClient", () => {
         },
       },
       { status: 200, body: { project_id: "boss-dogfood", items: [] } },
+      {
+        status: 200,
+        body: {
+          project_id: "boss-dogfood",
+          items: [
+            {
+              id: "deppol_boss-dogfood_staging",
+              project_id: "boss-dogfood",
+              environment: "staging",
+              runtime_mode: "staging_allowed",
+              allowed_target_kinds: ["digitalocean_app"],
+              requires_change_set: true,
+              requires_budget_reservation: true,
+              requires_approval: true,
+              requires_health_check: false,
+              requires_rollback_plan: true,
+              status: "active",
+              created_by: "ceo",
+              metadata: {},
+              created_at: "2026-06-03T00:00:00Z",
+              updated_at: "2026-06-03T00:00:00Z",
+            },
+          ],
+        },
+      },
+      {
+        status: 201,
+        body: {
+          id: "deppol_boss-dogfood_staging",
+          project_id: "boss-dogfood",
+          environment: "staging",
+          runtime_mode: "staging_allowed",
+          allowed_target_kinds: ["digitalocean_app"],
+          requires_change_set: true,
+          requires_budget_reservation: true,
+          requires_approval: true,
+          requires_health_check: false,
+          requires_rollback_plan: true,
+          status: "active",
+          created_by: "ceo",
+          metadata: {},
+          created_at: "2026-06-03T00:00:00Z",
+          updated_at: "2026-06-03T00:00:00Z",
+        },
+      },
       { status: 200, body: { project_id: "boss-dogfood", items: [deploymentRun] } },
       { status: 201, body: deploymentRun },
       {
@@ -1930,6 +1975,14 @@ describe("createBossApiClient", () => {
       actor: "ceo",
     });
     await client.listDeploymentTargets("boss-dogfood");
+    await client.listDeploymentEnvironmentPolicies("boss-dogfood");
+    await client.upsertDeploymentEnvironmentPolicy({
+      project_id: "boss-dogfood",
+      environment: "staging",
+      runtime_mode: "staging_allowed",
+      allowed_target_kinds: ["digitalocean_app"],
+      actor: "ceo",
+    });
     await client.listDeploymentRuns("boss-dogfood", 5);
     await client.createDeploymentRun({
       project_id: "boss-dogfood",
@@ -1961,6 +2014,8 @@ describe("createBossApiClient", () => {
       "http://127.0.0.1:8000/v1/resource-janitor/run",
       "http://127.0.0.1:8000/v1/deployments",
       "http://127.0.0.1:8000/v1/deployments?project_id=boss-dogfood",
+      "http://127.0.0.1:8000/v1/deployment-environment-policies?project_id=boss-dogfood",
+      "http://127.0.0.1:8000/v1/deployment-environment-policies",
       "http://127.0.0.1:8000/v1/deployment-runs?project_id=boss-dogfood&limit=5",
       "http://127.0.0.1:8000/v1/deployment-runs",
       "http://127.0.0.1:8000/v1/deployment-runs/deprun_1/health-check",

@@ -91,6 +91,22 @@ SUPPORTED_PROVIDERS = {
     },
 }
 
+DEPLOYMENT_ROLLOUT_MODES = {
+    "disabled",
+    "metadata_only",
+    "preview_allowed",
+    "staging_allowed",
+    "production_allowed",
+}
+DEPLOYMENT_SANDBOX_ENVIRONMENTS = {
+    "local",
+    "dev",
+    "development",
+    "test",
+    "sandbox",
+    "preview",
+}
+
 
 @dataclass
 class InventoryResource:
@@ -695,6 +711,7 @@ class ResourcePlaneService:
     ) -> dict[str, Any]:
         if provider_account_id:
             self.get_provider_account(connection, project_id, provider_account_id)
+        normalized_environment = self._normalize_deployment_environment(environment)
         target_id = make_id("deptgt")
         connection.execute(
             text(
@@ -730,7 +747,7 @@ class ResourcePlaneService:
                 "project_id": project_id,
                 "app_name": self._require_text(app_name, "app_name"),
                 "repo": self._require_text(repo, "repo"),
-                "environment": self._require_text(environment, "environment"),
+                "environment": normalized_environment,
                 "provider_account_id": provider_account_id,
                 "target_kind": self._require_text(target_kind, "target_kind"),
                 "target_ref": self._require_text(target_ref, "target_ref"),
@@ -755,7 +772,7 @@ class ResourcePlaneService:
             {
                 "project_id": project_id,
                 "app_name": app_name.strip(),
-                "environment": environment.strip(),
+                "environment": normalized_environment,
             },
         ).mappings().one()
         emit_event(
@@ -792,6 +809,123 @@ class ResourcePlaneService:
             {"project_id": project_id},
         ).mappings().all()
         return [self._serialize_deployment_target(row) for row in rows]
+
+    def list_deployment_environment_policies(
+        self,
+        connection: Connection,
+        project_id: str,
+    ) -> list[dict[str, Any]]:
+        rows = connection.execute(
+            text(
+                """
+                SELECT id, project_id, environment, runtime_mode,
+                       allowed_target_kinds, requires_change_set,
+                       requires_budget_reservation, requires_approval,
+                       requires_health_check, requires_rollback_plan,
+                       rollout_notes, status, created_by, metadata,
+                       created_at, updated_at
+                FROM deployment_environment_policies
+                WHERE project_id = :project_id
+                ORDER BY environment ASC
+                """
+            ),
+            {"project_id": project_id},
+        ).mappings().all()
+        return [self._serialize_deployment_environment_policy(row) for row in rows]
+
+    def upsert_deployment_environment_policy(
+        self,
+        connection: Connection,
+        *,
+        project_id: str,
+        environment: str,
+        runtime_mode: str,
+        actor: str,
+        allowed_target_kinds: Optional[list[str]] = None,
+        requires_change_set: bool = True,
+        requires_budget_reservation: bool = True,
+        requires_approval: bool = True,
+        requires_health_check: bool = True,
+        requires_rollback_plan: bool = True,
+        rollout_notes: Optional[str] = None,
+        metadata: Optional[dict[str, Any]] = None,
+    ) -> dict[str, Any]:
+        normalized_environment = self._normalize_deployment_environment(environment)
+        normalized_mode = runtime_mode.strip().lower()
+        if normalized_mode not in DEPLOYMENT_ROLLOUT_MODES:
+            raise ValueError(f"Unsupported deployment rollout runtime mode: {runtime_mode}")
+        target_kinds = self._normalize_string_list(allowed_target_kinds or [])
+        policy_id = f"deppol_{project_id}_{normalized_environment}"
+        connection.execute(
+            text(
+                """
+                INSERT INTO deployment_environment_policies (
+                    id, project_id, environment, runtime_mode,
+                    allowed_target_kinds, requires_change_set,
+                    requires_budget_reservation, requires_approval,
+                    requires_health_check, requires_rollback_plan,
+                    rollout_notes, status, created_by, metadata
+                )
+                VALUES (
+                    :id, :project_id, :environment, :runtime_mode,
+                    CAST(:allowed_target_kinds AS JSONB), :requires_change_set,
+                    :requires_budget_reservation, :requires_approval,
+                    :requires_health_check, :requires_rollback_plan,
+                    :rollout_notes, 'active', :actor, CAST(:metadata AS JSONB)
+                )
+                ON CONFLICT (project_id, environment) DO UPDATE
+                SET runtime_mode = EXCLUDED.runtime_mode,
+                    allowed_target_kinds = EXCLUDED.allowed_target_kinds,
+                    requires_change_set = EXCLUDED.requires_change_set,
+                    requires_budget_reservation = EXCLUDED.requires_budget_reservation,
+                    requires_approval = EXCLUDED.requires_approval,
+                    requires_health_check = EXCLUDED.requires_health_check,
+                    requires_rollback_plan = EXCLUDED.requires_rollback_plan,
+                    rollout_notes = EXCLUDED.rollout_notes,
+                    status = 'active',
+                    created_by = EXCLUDED.created_by,
+                    metadata = EXCLUDED.metadata,
+                    updated_at = now()
+                """
+            ),
+            {
+                "id": policy_id,
+                "project_id": project_id,
+                "environment": normalized_environment,
+                "runtime_mode": normalized_mode,
+                "allowed_target_kinds": json.dumps(target_kinds),
+                "requires_change_set": requires_change_set,
+                "requires_budget_reservation": requires_budget_reservation,
+                "requires_approval": requires_approval,
+                "requires_health_check": requires_health_check,
+                "requires_rollback_plan": requires_rollback_plan,
+                "rollout_notes": rollout_notes.strip() if rollout_notes else None,
+                "actor": actor,
+                "metadata": json.dumps(metadata or {}),
+            },
+        )
+        row = self._get_deployment_environment_policy(
+            connection,
+            project_id,
+            normalized_environment,
+            active_only=False,
+        )
+        assert row is not None
+        emit_event(
+            connection,
+            project_id,
+            "deployment_environment_policy.upserted",
+            actor,
+            "deployment_environment_policy",
+            row["id"],
+            {
+                "environment": normalized_environment,
+                "runtime_mode": normalized_mode,
+                "requires_budget_reservation": requires_budget_reservation,
+                "requires_approval": requires_approval,
+            },
+        )
+        return row
 
     def list_deployment_runs(
         self,
@@ -912,6 +1046,60 @@ class ResourcePlaneService:
             return self._get_deployment_run(connection, project_id, deployment_run_id)
 
         rollback_plan = self._deployment_rollback_plan(target)
+        rollout_policy = self._deployment_rollout_policy_for_target(
+            connection,
+            project_id,
+            target,
+        )
+        if rollout_policy:
+            policy_block_reason = self._deployment_rollout_policy_block_reason(
+                target,
+                rollout_policy,
+                rollback_plan,
+                reservation_id,
+            )
+            if policy_block_reason:
+                return self._record_blocked_deployment_run(
+                    connection,
+                    project_id=project_id,
+                    target=target,
+                    commit_ref=commit_ref,
+                    release_packet=release_packet or {},
+                    rollback_plan=rollback_plan,
+                    actor=actor,
+                    title="Deployment run blocked by environment rollout policy",
+                    recommendation={
+                        "action": "update_deployment_environment_policy",
+                        "deployment_target_id": deployment_target_id,
+                        "environment": target["environment"],
+                        "policy_id": rollout_policy.get("id"),
+                    },
+                    evidence={
+                        "reason": policy_block_reason,
+                        "policy": {
+                            "id": rollout_policy.get("id"),
+                            "runtime_mode": rollout_policy.get("runtime_mode"),
+                            "allowed_target_kinds": rollout_policy.get(
+                                "allowed_target_kinds",
+                            ),
+                            "requires_budget_reservation": rollout_policy.get(
+                                "requires_budget_reservation",
+                            ),
+                            "requires_health_check": rollout_policy.get(
+                                "requires_health_check",
+                            ),
+                            "requires_rollback_plan": rollout_policy.get(
+                                "requires_rollback_plan",
+                            ),
+                        },
+                    },
+                    reason_code="deployment_rollout_policy_blocked",
+                    failure_reason=(
+                        "Deployment run blocked by environment rollout policy: "
+                        f"{policy_block_reason}."
+                    ),
+                    event_reason=policy_block_reason,
+                )
         release_content = {
             "deployment_target_id": target["id"],
             "app_name": target["app_name"],
@@ -959,7 +1147,13 @@ class ResourcePlaneService:
                 reservation_id=reservation_id,
                 rollback_plan=rollback_plan,
                 risk_tier=risk_tier,
-                approval_required=target["environment"] in {"staging", "production"},
+                approval_required=(
+                    target["environment"] in {"staging", "production"}
+                    or bool(
+                        rollout_policy
+                        and rollout_policy.get("requires_approval", True)
+                    )
+                ),
                 actor=actor,
             )
 
@@ -2848,6 +3042,36 @@ class ResourcePlaneService:
             raise ValueError("Deployment target not found.")
         return self._serialize_deployment_target(row)
 
+    def _get_deployment_environment_policy(
+        self,
+        connection: Connection,
+        project_id: str,
+        environment: str,
+        *,
+        active_only: bool = True,
+    ) -> Optional[dict[str, Any]]:
+        query = """
+            SELECT id, project_id, environment, runtime_mode,
+                   allowed_target_kinds, requires_change_set,
+                   requires_budget_reservation, requires_approval,
+                   requires_health_check, requires_rollback_plan,
+                   rollout_notes, status, created_by, metadata,
+                   created_at, updated_at
+            FROM deployment_environment_policies
+            WHERE project_id = :project_id
+              AND environment = :environment
+        """
+        if active_only:
+            query += " AND status = 'active'"
+        row = connection.execute(
+            text(query),
+            {
+                "project_id": project_id,
+                "environment": self._normalize_deployment_environment(environment),
+            },
+        ).mappings().first()
+        return self._serialize_deployment_environment_policy(row) if row else None
+
     def _get_deployment_run(
         self,
         connection: Connection,
@@ -2875,6 +3099,165 @@ class ResourcePlaneService:
         if not row:
             raise ValueError("Deployment run not found.")
         return self._serialize_deployment_run(row)
+
+    def _normalize_deployment_environment(self, environment: str) -> str:
+        return self._require_text(environment, "environment").lower().replace(" ", "_")
+
+    def _deployment_rollout_policy_for_target(
+        self,
+        connection: Connection,
+        project_id: str,
+        target: dict[str, Any],
+    ) -> Optional[dict[str, Any]]:
+        environment = self._normalize_deployment_environment(target["environment"])
+        if (
+            not target.get("provider_account_id")
+            or environment in DEPLOYMENT_SANDBOX_ENVIRONMENTS
+        ):
+            return None
+        policy = self._get_deployment_environment_policy(
+            connection,
+            project_id,
+            environment,
+        )
+        if policy:
+            return policy
+        return {
+            "id": None,
+            "project_id": project_id,
+            "environment": environment,
+            "runtime_mode": "metadata_only",
+            "allowed_target_kinds": [],
+            "requires_change_set": True,
+            "requires_budget_reservation": True,
+            "requires_approval": True,
+            "requires_health_check": environment == "production",
+            "requires_rollback_plan": True,
+            "rollout_notes": None,
+            "status": "missing",
+            "created_by": "system",
+            "metadata": {"reason": "missing_explicit_environment_policy"},
+            "created_at": None,
+            "updated_at": None,
+        }
+
+    def _deployment_rollout_policy_block_reason(
+        self,
+        target: dict[str, Any],
+        policy: dict[str, Any],
+        rollback_plan: list[str],
+        reservation_id: Optional[str],
+    ) -> Optional[str]:
+        environment = self._normalize_deployment_environment(target["environment"])
+        mode = str(policy.get("runtime_mode") or "metadata_only")
+        if policy.get("status") != "active":
+            return "missing_active_environment_policy"
+        if mode in {"disabled", "metadata_only"}:
+            return f"environment_{environment}_not_enabled_for_provider_rollout"
+        if environment == "production" and mode != "production_allowed":
+            return "production_rollout_requires_production_allowed_policy"
+        if environment == "staging" and mode not in {
+            "staging_allowed",
+            "production_allowed",
+        }:
+            return "staging_rollout_requires_staging_allowed_policy"
+        if environment not in {"staging", "production"} and mode not in {
+            "preview_allowed",
+            "staging_allowed",
+            "production_allowed",
+        }:
+            return f"environment_{environment}_not_allowed_by_policy"
+        allowed_target_kinds = set(policy.get("allowed_target_kinds") or [])
+        if allowed_target_kinds and target["target_kind"] not in allowed_target_kinds:
+            return "target_kind_not_allowed_by_environment_policy"
+        if policy.get("requires_change_set", True) and not target.get("provider_account_id"):
+            return "provider_change_set_required"
+        if policy.get("requires_budget_reservation", True) and not reservation_id:
+            return "budget_reservation_required_by_environment_policy"
+        if policy.get("requires_health_check", True) and not target.get("health_checks"):
+            return "health_check_required_by_environment_policy"
+        if policy.get("requires_rollback_plan", True) and not rollback_plan:
+            return "rollback_plan_required_by_environment_policy"
+        return None
+
+    def _record_blocked_deployment_run(
+        self,
+        connection: Connection,
+        *,
+        project_id: str,
+        target: dict[str, Any],
+        commit_ref: Optional[str],
+        release_packet: dict[str, Any],
+        rollback_plan: list[str],
+        actor: str,
+        title: str,
+        recommendation: dict[str, Any],
+        evidence: dict[str, Any],
+        reason_code: str,
+        failure_reason: str,
+        event_reason: str,
+    ) -> dict[str, Any]:
+        decision_id = create_blocking_decision(
+            connection,
+            project_id,
+            None,
+            title,
+            recommendation,
+            evidence,
+            reason_code,
+            risk_tier=3 if target["environment"] == "production" else 2,
+        )
+        emit_event(
+            connection,
+            project_id,
+            "deployment_run.blocked",
+            actor,
+            "decision",
+            decision_id,
+            {
+                "deployment_target_id": target["id"],
+                "environment": target["environment"],
+                "reason": event_reason,
+            },
+        )
+        deployment_run_id = make_id("deprun")
+        connection.execute(
+            text(
+                """
+                INSERT INTO deployment_runs (
+                    id, project_id, deployment_target_id, decision_id,
+                    app_name, environment, repo, target_kind, target_ref,
+                    commit_ref, status, release_packet, rollback_plan,
+                    release_receipt_ids, created_by, started_at,
+                    failure_reason
+                )
+                VALUES (
+                    :id, :project_id, :deployment_target_id, :decision_id,
+                    :app_name, :environment, :repo, :target_kind,
+                    :target_ref, :commit_ref, 'failed',
+                    CAST(:release_packet AS JSONB), CAST(:rollback_plan AS JSONB),
+                    '[]'::jsonb, :actor, now(), :failure_reason
+                )
+                """
+            ),
+            {
+                "id": deployment_run_id,
+                "project_id": project_id,
+                "deployment_target_id": target["id"],
+                "decision_id": decision_id,
+                "app_name": target["app_name"],
+                "environment": target["environment"],
+                "repo": target["repo"],
+                "target_kind": target["target_kind"],
+                "target_ref": target["target_ref"],
+                "commit_ref": commit_ref,
+                "release_packet": json.dumps(release_packet),
+                "rollback_plan": json.dumps(rollback_plan),
+                "actor": actor,
+                "failure_reason": failure_reason,
+            },
+        )
+        return self._get_deployment_run(connection, project_id, deployment_run_id)
 
     def _deployment_rollback_plan(self, target: dict[str, Any]) -> list[str]:
         steps: list[str] = []
@@ -5780,6 +6163,14 @@ class ResourcePlaneService:
             "rollback_points",
         ):
             payload[key] = payload.get(key) or []
+        return payload
+
+    def _serialize_deployment_environment_policy(self, row) -> dict[str, Any]:
+        payload = dict(row)
+        for key in ("created_at", "updated_at"):
+            payload[key] = payload[key].isoformat() if payload.get(key) else None
+        payload["allowed_target_kinds"] = payload.get("allowed_target_kinds") or []
+        payload["metadata"] = payload.get("metadata") or {}
         return payload
 
     def _serialize_deployment_run(self, row) -> dict[str, Any]:

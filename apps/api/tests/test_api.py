@@ -163,6 +163,36 @@ def upsert_identity_rollout_policy(
     return response.json()
 
 
+def upsert_deployment_environment_policy(
+    client,
+    project_id: str,
+    environment: str = "staging",
+    runtime_mode: str = "staging_allowed",
+    allowed_target_kinds: Optional[list[str]] = None,
+    requires_budget_reservation: bool = True,
+    requires_health_check: bool = False,
+):
+    response = client.post(
+        "/v1/deployment-environment-policies",
+        json={
+            "project_id": project_id,
+            "environment": environment,
+            "runtime_mode": runtime_mode,
+            "allowed_target_kinds": allowed_target_kinds or [],
+            "requires_change_set": True,
+            "requires_budget_reservation": requires_budget_reservation,
+            "requires_approval": True,
+            "requires_health_check": requires_health_check,
+            "requires_rollback_plan": True,
+            "rollout_notes": "test deployment rollout policy",
+            "metadata": {"source": "test"},
+            "actor": "ceo",
+        },
+    )
+    assert response.status_code == 201
+    return response.json()
+
+
 def _canonicalize_xml(element: ET.Element) -> bytes:
     xml = ET.tostring(element, encoding="unicode")
     return ET.canonicalize(xml_data=xml, with_comments=False).encode("utf-8")
@@ -5591,6 +5621,15 @@ def test_deployment_run_plans_changeset_and_release_packet(client):
             "actor": "ceo",
         },
     ).json()
+    upsert_deployment_environment_policy(
+        client,
+        "boss-dogfood",
+        allowed_target_kinds=["digitalocean_app"],
+    )
+    reservation_id = reserve_for_infra_provision(
+        client,
+        "Reserve deployment planning budget.",
+    )
 
     planned = client.post(
         "/v1/deployment-runs",
@@ -5599,6 +5638,8 @@ def test_deployment_run_plans_changeset_and_release_packet(client):
             "deployment_target_id": target["id"],
             "commit_ref": "abc123",
             "release_packet": {"review_packet_id": "art_review"},
+            "expected_cost_usd_micros": 100_000,
+            "reservation_id": reservation_id,
             "actor": "ceo",
         },
     )
@@ -5634,6 +5675,117 @@ def test_deployment_run_plans_changeset_and_release_packet(client):
     )
     assert receipts.status_code == 200
     assert receipts.json()["items"] == []
+
+
+def test_deployment_environment_policy_gates_production_provider_runs(client):
+    provider = client.post(
+        "/v1/providers",
+        json={
+            "project_id": "boss-dogfood",
+            "provider": "cloudflare",
+            "account_label": "production-cloudflare",
+            "scopes": ["read", "write", "deploy"],
+            "read_only": False,
+            "deploy_capable": True,
+            "destructive_actions_disabled": True,
+            "actor": "ceo",
+        },
+    ).json()
+    target = client.post(
+        "/v1/deployments",
+        json={
+            "project_id": "boss-dogfood",
+            "app_name": "boss-web",
+            "repo": "seanheiney/boss",
+            "environment": "production",
+            "provider_account_id": provider["id"],
+            "target_kind": "cloudflare_worker",
+            "target_ref": "boss-web-prod",
+            "health_checks": [
+                {
+                    "name": "production health",
+                    "url": "https://boss.example.com/health",
+                    "expected_status": 200,
+                }
+            ],
+            "rollback_points": [{"ref": "previous-production-worker"}],
+            "actor": "ceo",
+        },
+    ).json()
+
+    blocked = client.post(
+        "/v1/deployment-runs",
+        json={
+            "project_id": "boss-dogfood",
+            "deployment_target_id": target["id"],
+            "commit_ref": "prod-sha",
+            "actor": "ceo",
+        },
+    )
+    assert blocked.status_code == 201
+    blocked_payload = blocked.json()
+    assert blocked_payload["status"] == "failed"
+    assert "environment rollout policy" in blocked_payload["failure_reason"]
+    assert blocked_payload["decision_id"]
+
+    inbox = client.get("/v1/decisions/inbox", params={"project_id": "boss-dogfood"})
+    assert inbox.status_code == 200
+    assert any(
+        item["id"] == blocked_payload["decision_id"]
+        and item["recommendation"]["action"] == "update_deployment_environment_policy"
+        for item in inbox.json()["items"]
+    )
+    events = client.get("/v1/events", params={"project_id": "boss-dogfood"})
+    assert events.status_code == 200
+    assert any(
+        item["event_type"] == "deployment_run.blocked"
+        and item["data"]["reason"] == "missing_active_environment_policy"
+        for item in events.json()["items"]
+    )
+
+    policy = upsert_deployment_environment_policy(
+        client,
+        "boss-dogfood",
+        environment="production",
+        runtime_mode="production_allowed",
+        allowed_target_kinds=["cloudflare_worker"],
+        requires_health_check=True,
+    )
+    assert policy["runtime_mode"] == "production_allowed"
+    policies = client.get(
+        "/v1/deployment-environment-policies",
+        params={"project_id": "boss-dogfood"},
+    )
+    assert policies.status_code == 200
+    assert policies.json()["items"][0]["environment"] == "production"
+    reservation_id = reserve_for_infra_provision(
+        client,
+        "Reserve production deployment planning budget.",
+    )
+
+    planned = client.post(
+        "/v1/deployment-runs",
+        json={
+            "project_id": "boss-dogfood",
+            "deployment_target_id": target["id"],
+            "commit_ref": "prod-sha",
+            "expected_cost_usd_micros": 100_000,
+            "reservation_id": reservation_id,
+            "actor": "ceo",
+        },
+    )
+    assert planned.status_code == 201
+    planned_payload = planned.json()
+    assert planned_payload["status"] == "created"
+    assert planned_payload["changeset_id"]
+    changeset = client.get(
+        "/v1/changesets",
+        params={"project_id": "boss-dogfood"},
+    ).json()["items"][0]
+    assert changeset["id"] == planned_payload["changeset_id"]
+    assert changeset["status"] == "pending_approval"
+    assert changeset["reservation_id"] == reservation_id
+    assert changeset["operations"][0]["production_affecting"] is True
 
 
 def test_deployment_run_digitalocean_app_apply_marks_deployed(
@@ -5699,6 +5851,11 @@ def test_deployment_run_digitalocean_app_apply_marks_deployed(
                 "actor": "ceo",
             },
         ).json()
+        upsert_deployment_environment_policy(
+            client,
+            "boss-dogfood",
+            allowed_target_kinds=["digitalocean_app"],
+        )
         reservation_id = reserve_for_infra_provision(
             client,
             "Reserve DigitalOcean app deployment budget.",
@@ -5863,6 +6020,11 @@ def test_deployment_run_cloudflare_worker_apply_marks_deployed(
                 "actor": "ceo",
             },
         ).json()
+        upsert_deployment_environment_policy(
+            client,
+            "boss-dogfood",
+            allowed_target_kinds=["cloudflare_worker"],
+        )
         reservation_id = reserve_for_infra_provision(
             client,
             "Reserve Cloudflare worker deployment budget.",
@@ -6028,6 +6190,11 @@ def test_deployment_run_cloudflare_pages_apply_marks_deployed(
                 "actor": "ceo",
             },
         ).json()
+        upsert_deployment_environment_policy(
+            client,
+            "boss-dogfood",
+            allowed_target_kinds=["cloudflare_pages"],
+        )
         reservation_id = reserve_for_infra_provision(
             client,
             "Reserve Cloudflare Pages deployment budget.",
@@ -6200,6 +6367,11 @@ def test_deployment_run_supabase_migration_apply_marks_deployed(
                 "actor": "ceo",
             },
         ).json()
+        upsert_deployment_environment_policy(
+            client,
+            "boss-dogfood",
+            allowed_target_kinds=["supabase_migration"],
+        )
         reservation_id = reserve_for_infra_provision(
             client,
             "Reserve Supabase migration budget.",
