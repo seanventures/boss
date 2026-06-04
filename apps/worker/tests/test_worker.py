@@ -7,6 +7,7 @@ from apps.worker.boss_worker.runner import (
     AGENT_WORK_PRODUCT_STRATEGIES,
     agent_module_id_from_payload,
     build_agent_brief_result,
+    build_marketplace_validation_result,
     build_plan_result,
     capabilities,
     run_worker_cycle,
@@ -161,6 +162,7 @@ def test_worker_capabilities_include_infra_job_kinds():
     assert "agent.pm.scope_brief" in supported
     assert "agent.infra_steward.infra_review" in supported
     assert "agent.model_spend_analyst.model_spend_brief" in supported
+    assert "enterprise.marketplace.validate" in supported
 
 
 def test_agent_work_product_strategies_cover_initial_agent_capabilities():
@@ -286,6 +288,48 @@ def test_build_agent_brief_result_uses_role_specific_decision_triggers():
         decision["reason"] == "strategy_trigger_requires_decision"
         for decision in result["required_decisions"]
     )
+
+
+def test_build_marketplace_validation_result_blocks_missing_entitlement():
+    leased_job = LeasedJob(
+        id="job_marketplace",
+        project_id="boss-dogfood",
+        task_id=None,
+        kind="enterprise.marketplace.validate",
+        payload={
+            "module_id": "private_enterprise_agent_v1",
+            "required_entitlement": "private_agent_marketplace",
+            "entitlement_status": "missing",
+            "agent_module": {
+                "id": "private_enterprise_agent_v1",
+                "display_name": "Private Enterprise Agent",
+                "role_key": "private_enterprise_agent",
+            },
+            "agent_runtime": {
+                "job_kind": "enterprise.marketplace.validate",
+                "matched": True,
+                "compiled_prompt": {
+                    "checklist": ["Produce or update output contract: EntitlementGateReport."]
+                },
+            },
+        },
+        attempt=1,
+        max_attempts=3,
+        lease_token="lease_token",
+        lease_expires_at="future",
+    )
+
+    result = build_marketplace_validation_result(leased_job)
+
+    assert result["status"] == "blocked"
+    assert result["work_product"]["contract"] == "EntitlementGateReport"
+    assert result["required_decisions"] == [
+        {
+            "reason": "missing_marketplace_entitlement",
+            "required_entitlement": "private_agent_marketplace",
+            "default_action": "hold",
+        }
+    ]
 
 
 def test_agent_module_id_from_payload_prefers_resolved_module_context():

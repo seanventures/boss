@@ -70,6 +70,7 @@ This document summarizes the currently implemented BOSS runtime surfaces in this
   - deadletter remediation that creates linked replacement jobs instead of mutating terminal job history
   - queue inspection/digest support that summarizes ready jobs, stale leases, retry pressure, deadletters, pending decisions, blockers, and recommended actions
   - role-specific initial-agent worker strategies for every advertised `agent.*` capability, including output contracts, required sections, evidence requirements, safety gates, decision triggers, grounding status, and durable `agent_brief` artifacts with audit events
+  - private enterprise marketplace validation jobs that produce durable `entitlement_gate_report` artifacts instead of inert module job declarations
   - leased infrastructure create/delete job kinds
   - budget-state claim-time controls
 - Budget governor behavior:

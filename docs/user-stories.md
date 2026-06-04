@@ -114,6 +114,7 @@ Acceptance criteria:
 - Given a default dogfood project is seeded, when BOSS installs initial agent modules, then Metatron, COO, CAO, CTO, PM, QA, Release Manager, Program Manager, VP Agents, ProviderOps Manager, FinOps Sentinel, Resource Janitor, Infra Steward, Deployment Manager, Secrets Steward, Model Spend Analyst, and Software Engineer modules are active.
 - Given a worker leases an `agent.*` job, when the job kind maps to an installed module, then the payload includes the resolved module, role, prompt checklist, BOSS invariants, skill defaults, and runtime configuration before execution.
 - Given an initial `agent.*` job kind is advertised as a worker capability, when the worker executes it, then BOSS applies a role-specific work-product strategy with output contract, sections, evidence requirements, safety gates, and decision triggers.
+- Given a module declares a non-agent runtime job kind such as `enterprise.marketplace.validate`, when that job is leased and completed, then BOSS creates the declared durable work product instead of completing with no artifact.
 - Given an `agent.*` job completes, when the worker returns a brief, then BOSS stores an `agent_brief` artifact with strategy, grounding, work-product, module, prompt, and runtime context, and emits `agent.brief_created`.
 - Given an unauthorized actor, when module installation is attempted, then BOSS rejects it and emits a policy denial.
 

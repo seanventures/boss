@@ -9387,6 +9387,82 @@ def test_agent_job_lease_attaches_runtime_and_completion_creates_artifact(client
     ]
 
 
+def test_enterprise_marketplace_validate_job_creates_entitlement_gate_report(client):
+    created = client.post(
+        "/v1/jobs",
+        json={
+            "project_id": "boss-dogfood",
+            "kind": "enterprise.marketplace.validate",
+            "payload": {
+                "module_id": "private_enterprise_agent_v1",
+                "required_entitlement": "private_agent_marketplace",
+                "entitlement_status": "missing",
+            },
+        },
+    )
+    assert created.status_code == 201
+    job_id = created.json()["id"]
+
+    poll = client.post(
+        "/v1/worker/poll",
+        json={
+            "worker_id": "worker-marketplace-validator",
+            "capabilities": ["enterprise.marketplace.validate"],
+            "lease_ttl_seconds": 60,
+        },
+    )
+    assert poll.status_code == 200
+    leased = poll.json()["job"]
+    assert leased["id"] == job_id
+
+    complete = client.post(
+        "/v1/worker/complete",
+        json={
+            "worker_id": "worker-marketplace-validator",
+            "job_id": job_id,
+            "lease_token": leased["lease_token"],
+            "result": {
+                "status": "blocked",
+                "summary": "Marketplace validation blocked missing entitlement.",
+                "module_id": "private_enterprise_agent_v1",
+                "required_entitlement": "private_agent_marketplace",
+                "entitlement_status": "missing",
+                "findings": ["Module requires private_agent_marketplace."],
+                "recommendations": ["Keep install blocked until entitlement exists."],
+                "required_decisions": [
+                    {
+                        "reason": "missing_marketplace_entitlement",
+                        "required_entitlement": "private_agent_marketplace",
+                        "default_action": "hold",
+                    }
+                ],
+                "work_product": {
+                    "contract": "EntitlementGateReport",
+                    "sections": ["module_identity", "entitlement_status"],
+                    "safety_gates": ["do_not_install_without_entitlement"],
+                },
+            },
+        },
+    )
+    assert complete.status_code == 200
+    payload = complete.json()
+    assert payload["status"] == "succeeded"
+    assert payload["artifact_id"]
+
+    artifact = client.get(f"/v1/artifacts/{payload['artifact_id']}")
+    assert artifact.status_code == 200
+    content = artifact.json()["content"]
+    assert artifact.json()["artifact_type"] == "entitlement_gate_report"
+    assert content["module_id"] == "private_enterprise_agent_v1"
+    assert content["status"] == "blocked"
+    assert content["work_product"]["contract"] == "EntitlementGateReport"
+
+    events = client.get("/v1/events", params={"project_id": "boss-dogfood"})
+    assert "enterprise.marketplace_validated" in [
+        item["event_type"] for item in events.json()["items"]
+    ]
+
+
 def test_expired_lease_can_be_reclaimed(client, engine):
     created = client.post(
         "/v1/jobs",

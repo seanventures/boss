@@ -35,6 +35,7 @@ objects:
     - receipt
     - deadletter
     - ops_digest
+    - entitlement_gate_report
   resource_plane:
     - provider_account
     - provider_adapter

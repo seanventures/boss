@@ -662,6 +662,52 @@ class JobLeaseService:
             )
             return {"artifact_id": artifact_id}
 
+        if job_row["kind"] == "enterprise.marketplace.validate":
+            payload = job_row["payload"] or {}
+            module_id = result.get("module_id") or payload.get("module_id")
+            artifact_id = create_artifact(
+                connection,
+                self.settings,
+                job_row["project_id"],
+                job_row["task_id"],
+                "entitlement_gate_report",
+                f"Marketplace entitlement validation for {module_id or 'module'}",
+                {
+                    "job_kind": job_row["kind"],
+                    "summary": result.get("summary"),
+                    "status": result.get("status"),
+                    "module_id": module_id,
+                    "required_entitlement": result.get("required_entitlement"),
+                    "entitlement_status": result.get("entitlement_status"),
+                    "findings": result.get("findings") or [],
+                    "recommendations": result.get("recommendations") or [],
+                    "required_decisions": result.get("required_decisions") or [],
+                    "evidence_refs": result.get("evidence_refs") or [],
+                    "work_product": result.get("work_product") or {},
+                    "agent_module": result.get("agent_module")
+                    or payload.get("agent_module")
+                    or {},
+                    "agent_runtime": result.get("agent_runtime")
+                    or payload.get("agent_runtime")
+                    or {},
+                },
+                created_by_job_id=job_row["id"],
+            )
+            emit_event(
+                connection,
+                job_row["project_id"],
+                "enterprise.marketplace_validated",
+                "worker",
+                "artifact",
+                artifact_id,
+                {
+                    "job_id": job_row["id"],
+                    "module_id": module_id,
+                    "status": result.get("status"),
+                },
+            )
+            return {"artifact_id": artifact_id}
+
         if job_row["kind"] not in {"plan.command", "plan.generate"}:
             return {}
 

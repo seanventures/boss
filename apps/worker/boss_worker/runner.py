@@ -262,6 +262,7 @@ def capabilities() -> list[str]:
         "agent.resource_janitor.cleanup_brief",
         "agent.secrets_steward.secret_boundary_review",
         "agent.vp_agents.role_review",
+        "enterprise.marketplace.validate",
         "plan.command",
         "plan.generate",
         "openai.plan",
@@ -453,6 +454,76 @@ def build_plan_result(job: LeasedJob) -> dict[str, Any]:
     }
 
 
+def build_marketplace_validation_result(job: LeasedJob) -> dict[str, Any]:
+    agent_runtime = job.payload.get("agent_runtime") or {}
+    agent_module = job.payload.get("agent_module") or {}
+    module_id = str(job.payload.get("module_id") or agent_module.get("id") or "unknown")
+    required_entitlement = str(
+        job.payload.get("required_entitlement")
+        or job.payload.get("capability_key")
+        or "private_agent_marketplace"
+    )
+    entitlement_status = str(job.payload.get("entitlement_status") or "unknown")
+    allowed = entitlement_status in {"allowed", "active", "present", "granted"}
+    status = "validated" if allowed else "blocked"
+    return {
+        "status": status,
+        "summary": (
+            f"Marketplace validation for {module_id}: {required_entitlement} "
+            f"is {entitlement_status}."
+        ),
+        "module_id": module_id,
+        "required_entitlement": required_entitlement,
+        "entitlement_status": entitlement_status,
+        "agent_module": agent_module,
+        "agent_runtime": {
+            "job_kind": agent_runtime.get("job_kind"),
+            "matched": agent_runtime.get("matched"),
+            "checklist": (
+                (agent_runtime.get("compiled_prompt") or {}).get("checklist")
+                if isinstance(agent_runtime.get("compiled_prompt"), dict)
+                else []
+            )
+            or [],
+        },
+        "work_product": {
+            "contract": "EntitlementGateReport",
+            "sections": [
+                "module_identity",
+                "required_entitlement",
+                "entitlement_status",
+                "decision",
+                "audit_references",
+            ],
+            "safety_gates": [
+                "do_not_install_without_entitlement",
+                "no_external_effects",
+                "emit_audit_record",
+            ],
+            "decision_triggers": ["missing_entitlement", "private_registry_access"],
+        },
+        "findings": [
+            f"Module {module_id} requires {required_entitlement}.",
+            f"Entitlement status is {entitlement_status}.",
+            "Private enterprise marketplace validation performs no external effects.",
+        ],
+        "recommendations": [
+            "Allow installation only when the required entitlement is active.",
+            "Preserve install-denial or install-success records for audit.",
+        ],
+        "required_decisions": []
+        if allowed
+        else [
+            {
+                "reason": "missing_marketplace_entitlement",
+                "required_entitlement": required_entitlement,
+                "default_action": "hold",
+            }
+        ],
+        "evidence_refs": job.payload.get("evidence_refs") or [],
+    }
+
+
 def agent_module_id_from_payload(payload: dict[str, Any]) -> Any:
     if payload.get("agent_module_id"):
         return payload.get("agent_module_id")
@@ -465,6 +536,8 @@ def agent_module_id_from_payload(payload: dict[str, Any]) -> Any:
 def execute_job(job: LeasedJob, client: ControlPlaneClient) -> dict[str, Any]:
     if job.kind.startswith("agent."):
         return build_agent_brief_result(job)
+    if job.kind == "enterprise.marketplace.validate":
+        return build_marketplace_validation_result(job)
     if job.kind in {"plan.command", "plan.generate"}:
         return build_plan_result(job)
     if job.kind == "openai.plan":
