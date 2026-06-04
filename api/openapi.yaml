@@ -2453,7 +2453,7 @@ paths:
                 provider_account_id: { type: string }
                 actor: { type: string, default: system }
       responses:
-        '201': { description: Reconciliation runs with resources seen, costs seen, and drift/deadletter status }
+        '201': { description: Reconciliation runs with resources seen, costs seen, inventory_snapshot_artifact_id, and drift/deadletter status }
         '403': { description: Actor is not allowed to run ProviderOps sync }
   /v1/costs:
     get:

@@ -2689,6 +2689,7 @@ export type ResourceSyncRunSummary = {
   provider_health_id?: string;
   drift_report_id?: string;
   deadletter_id?: string;
+  inventory_snapshot_artifact_id?: string;
   error?: Record<string, unknown>;
 };
 

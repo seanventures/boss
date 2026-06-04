@@ -194,6 +194,7 @@ export type ReconciliationRunFeedItem = {
   startedBy: string;
   startedAt: string;
   finishedAt?: string;
+  inventorySnapshotArtifactId?: string;
 };
 
 export type WorkerPoolFeedItem = {
@@ -477,6 +478,10 @@ function mapReconciliationRun(
     startedBy: payload.started_by,
     startedAt: payload.started_at,
     finishedAt: payload.finished_at,
+    inventorySnapshotArtifactId:
+      typeof payload.metadata.inventory_snapshot_artifact_id === "string"
+        ? payload.metadata.inventory_snapshot_artifact_id
+        : undefined,
   };
 }
 

@@ -239,6 +239,7 @@ As a founder or operator, I want BOSS to discover and normalize external resourc
 Acceptance criteria:
 
 - Given connected DigitalOcean, Cloudflare, Supabase, OpenAI, or Anthropic providers, when read-only sync runs, then BOSS records normalized `ExternalResource`, `BillingAccount`, `CostEvent`, `ProviderHealth`, and `ReconciliationRun` objects.
+- Given read-only sync runs, when each provider reconciliation finishes or fails, then BOSS creates a durable `providerops_inventory_snapshot` artifact and stores its artifact ID in the `ReconciliationRun` metadata.
 - Given `providerops.sync.readonly` is queued as a worker job, when a worker leases it, then BOSS calls the same Resource Plane sync API, records reconciliation evidence, and deadletters visibly if any provider sync run fails.
 - Given a discovered resource, when the Resource Explorer renders, then it shows ownership classification, project/task/deployment links, health, last seen timestamp, estimated or actual cost, provider, environment, and owner role where known.
 - Given a resource is not linked to BOSS desired state, when reconciliation completes, then it is classified as discovered unmanaged, orphaned, external/manual, or managed by BOSS.

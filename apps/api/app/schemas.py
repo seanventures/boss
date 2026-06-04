@@ -3119,6 +3119,7 @@ class ResourceSyncRunSummary(BaseModel):
     provider_health_id: Optional[str] = None
     drift_report_id: Optional[str] = None
     deadletter_id: Optional[str] = None
+    inventory_snapshot_artifact_id: Optional[str] = None
     error: Optional[dict[str, Any]] = None
 
 

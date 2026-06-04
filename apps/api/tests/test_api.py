@@ -4342,7 +4342,20 @@ def test_provider_sync_missing_credentials_creates_deadletter(client):
     payload = synced.json()
     assert payload["runs"][0]["status"] == "failed"
     assert payload["runs"][0]["deadletter_id"]
+    assert payload["runs"][0]["inventory_snapshot_artifact_id"].startswith("art_")
     assert payload["resources_seen"] == 0
+
+    snapshot = client.get(
+        f"/v1/artifacts/{payload['runs'][0]['inventory_snapshot_artifact_id']}"
+    )
+    assert snapshot.status_code == 200
+    snapshot_payload = snapshot.json()
+    assert snapshot_payload["artifact_type"] == "providerops_inventory_snapshot"
+    assert snapshot_payload["content"]["status"] == "failed"
+    assert snapshot_payload["content"]["deadletter_id"] == payload["runs"][0][
+        "deadletter_id"
+    ]
+    assert "Missing credential" in snapshot_payload["content"]["error"]["message"]
 
     deadletters = client.get("/v1/deadletters", params={"project_id": "boss-dogfood"})
     assert deadletters.status_code == 200
@@ -4398,8 +4411,11 @@ def test_provider_sync_records_real_inventory_from_adapter_boundary(client, monk
         api_main.resource_plane.settings.digitalocean_token = previous
 
     assert synced.status_code == 200
-    assert synced.json()["resources_seen"] == 1
-    assert synced.json()["resources_changed"] == 1
+    sync_payload = synced.json()
+    assert sync_payload["resources_seen"] == 1
+    assert sync_payload["resources_changed"] == 1
+    run = sync_payload["runs"][0]
+    assert run["inventory_snapshot_artifact_id"].startswith("art_")
 
     resources = client.get(
         "/v1/resources",
@@ -4413,6 +4429,27 @@ def test_provider_sync_records_real_inventory_from_adapter_boundary(client, monk
     drift = client.get("/v1/drift-reports", params={"project_id": "boss-dogfood"})
     assert drift.status_code == 200
     assert drift.json()["items"][0]["classification"] == "cost-impacting"
+
+    snapshot = client.get(f"/v1/artifacts/{run['inventory_snapshot_artifact_id']}")
+    assert snapshot.status_code == 200
+    snapshot_payload = snapshot.json()
+    assert snapshot_payload["artifact_type"] == "providerops_inventory_snapshot"
+    assert snapshot_payload["content"]["reconciliation_run_id"] == run["id"]
+    assert snapshot_payload["content"]["resources_seen"] == 1
+    assert snapshot_payload["content"]["resources"][0]["name"] == "manual-preview-droplet"
+    assert snapshot_payload["content"]["drift_report_id"] == run["drift_report_id"]
+
+    reconciliation_runs = client.get(
+        "/v1/reconciliation-runs", params={"project_id": "boss-dogfood"}
+    )
+    assert reconciliation_runs.status_code == 200
+    listed_run = next(
+        item for item in reconciliation_runs.json()["items"] if item["id"] == run["id"]
+    )
+    assert (
+        listed_run["metadata"]["inventory_snapshot_artifact_id"]
+        == run["inventory_snapshot_artifact_id"]
+    )
 
 
 def test_provider_sync_records_billing_cost_events_idempotently(client, monkeypatch):

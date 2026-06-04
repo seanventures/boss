@@ -440,6 +440,31 @@ class ResourcePlaneService:
                     project_id,
                     account["id"],
                 )
+                inventory_snapshot_artifact_id = (
+                    self._create_reconciliation_snapshot_artifact(
+                        connection,
+                        project_id=project_id,
+                        run_id=run_id,
+                        account=account,
+                        status="succeeded",
+                        inventory=inventory,
+                        cost_records=cost_records,
+                        costs_recorded=costs_recorded,
+                        provider_health_id=health["id"],
+                        drift_report_id=drift["id"],
+                        deadletter_id=None,
+                        error=None,
+                    )
+                )
+                self._attach_reconciliation_metadata(
+                    connection,
+                    run_id,
+                    {
+                        "inventory_snapshot_artifact_id": inventory_snapshot_artifact_id,
+                        "provider_health_id": health["id"],
+                        "drift_report_id": drift["id"],
+                    },
+                )
                 resources_seen += len(inventory)
                 resources_changed += changed
                 costs_seen += costs_recorded
@@ -454,6 +479,7 @@ class ResourcePlaneService:
                         "costs_seen": costs_recorded,
                         "provider_health_id": health["id"],
                         "drift_report_id": drift["id"],
+                        "inventory_snapshot_artifact_id": inventory_snapshot_artifact_id,
                     }
                 )
             except Exception as error:
@@ -488,6 +514,31 @@ class ResourcePlaneService:
                         "provider_health_id": health["id"],
                     },
                 )
+                inventory_snapshot_artifact_id = (
+                    self._create_reconciliation_snapshot_artifact(
+                        connection,
+                        project_id=project_id,
+                        run_id=run_id,
+                        account=account,
+                        status="failed",
+                        inventory=[],
+                        cost_records=[],
+                        costs_recorded=0,
+                        provider_health_id=health["id"],
+                        drift_report_id=None,
+                        deadletter_id=deadletter_id,
+                        error=error_payload,
+                    )
+                )
+                self._attach_reconciliation_metadata(
+                    connection,
+                    run_id,
+                    {
+                        "inventory_snapshot_artifact_id": inventory_snapshot_artifact_id,
+                        "provider_health_id": health["id"],
+                        "deadletter_id": deadletter_id,
+                    },
+                )
                 emit_event(
                     connection,
                     project_id,
@@ -513,6 +564,7 @@ class ResourcePlaneService:
                         "costs_seen": 0,
                         "provider_health_id": health["id"],
                         "deadletter_id": deadletter_id,
+                        "inventory_snapshot_artifact_id": inventory_snapshot_artifact_id,
                         "error": error_payload,
                     }
                 )
@@ -5377,6 +5429,124 @@ class ResourcePlaneService:
                 "error": json.dumps(error),
             },
         )
+
+    def _attach_reconciliation_metadata(
+        self,
+        connection: Connection,
+        run_id: str,
+        metadata: dict[str, Any],
+    ) -> None:
+        connection.execute(
+            text(
+                """
+                UPDATE reconciliation_runs
+                SET metadata = metadata || CAST(:metadata AS JSONB)
+                WHERE id = :run_id
+                """
+            ),
+            {
+                "run_id": run_id,
+                "metadata": json.dumps(metadata),
+            },
+        )
+
+    def _create_reconciliation_snapshot_artifact(
+        self,
+        connection: Connection,
+        *,
+        project_id: str,
+        run_id: str,
+        account: dict[str, Any],
+        status: str,
+        inventory: list[InventoryResource],
+        cost_records: list[ProviderCostRecord],
+        costs_recorded: int,
+        provider_health_id: Optional[str],
+        drift_report_id: Optional[str],
+        deadletter_id: Optional[str],
+        error: Optional[dict[str, Any]],
+    ) -> str:
+        content = {
+            "object_type": "providerops_inventory_snapshot",
+            "reconciliation_run_id": run_id,
+            "project_id": project_id,
+            "provider_account_id": account["id"],
+            "provider": account["provider"],
+            "status": status,
+            "resources_seen": len(inventory),
+            "cost_records_seen": len(cost_records),
+            "costs_recorded": costs_recorded,
+            "provider_health_id": provider_health_id,
+            "drift_report_id": drift_report_id,
+            "deadletter_id": deadletter_id,
+            "resources": [
+                self._inventory_resource_snapshot(resource)
+                for resource in sorted(
+                    inventory,
+                    key=lambda item: (
+                        item.provider,
+                        item.resource_type,
+                        item.external_id,
+                    ),
+                )
+            ],
+            "cost_records": [
+                self._cost_record_snapshot(record)
+                for record in sorted(cost_records, key=lambda item: item.source_ref)
+            ],
+            "error": error,
+            "data_boundary": "internal",
+        }
+        return create_artifact(
+            connection,
+            self.settings,
+            project_id,
+            None,
+            "providerops_inventory_snapshot",
+            f"ProviderOps inventory snapshot: {account['provider']} {run_id}",
+            content,
+            data_boundary="internal",
+        )
+
+    def _inventory_resource_snapshot(
+        self,
+        resource: InventoryResource,
+    ) -> dict[str, Any]:
+        return {
+            "provider": resource.provider,
+            "resource_type": resource.resource_type,
+            "external_id": resource.external_id,
+            "name": resource.name,
+            "state": resource.state,
+            "ownership": resource.ownership,
+            "environment": resource.environment,
+            "health_status": resource.health_status,
+            "tags": sorted(resource.tags),
+            "cost_confidence": resource.cost_confidence,
+            "estimated_monthly_usd_micros": resource.estimated_monthly_usd_micros,
+            "actual_monthly_usd_micros": resource.actual_monthly_usd_micros,
+            "metadata": resource.metadata,
+        }
+
+    def _cost_record_snapshot(self, record: ProviderCostRecord) -> dict[str, Any]:
+        return {
+            "provider": record.provider,
+            "category": record.category,
+            "amount_usd_micros": record.amount_usd_micros,
+            "cost_layer": record.cost_layer,
+            "confidence": record.confidence,
+            "source_ref": record.source_ref,
+            "period_start": (
+                record.period_start.isoformat() if record.period_start else None
+            ),
+            "period_end": record.period_end.isoformat()
+            if record.period_end
+            else None,
+            "billing_account_external_id": record.billing_account_external_id,
+            "billing_account_label": record.billing_account_label,
+            "external_resource_external_id": record.external_resource_external_id,
+            "metadata": record.metadata,
+        }
 
     def _upsert_external_resource(
         self,

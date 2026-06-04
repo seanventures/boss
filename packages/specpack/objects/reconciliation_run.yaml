@@ -22,3 +22,9 @@ fields:
     type: datetime
   - name: error
     type: object
+  - name: metadata
+    type: object
+rules:
+  every_sync_run_creates_inventory_snapshot_artifact: true
+  inventory_snapshot_artifact_id_stored_in_metadata: true
+  failed_syncs_keep_deadletter_and_snapshot_links: true

@@ -2325,6 +2325,11 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                             Started by {run.startedBy} at{" "}
                             {formatDateTime(run.startedAt)}
                           </p>
+                          {run.inventorySnapshotArtifactId ? (
+                            <p className="detail">
+                              Inventory snapshot: {run.inventorySnapshotArtifactId}
+                            </p>
+                          ) : null}
                         </div>
                         <code className="mono">{run.id}</code>
                       </div>

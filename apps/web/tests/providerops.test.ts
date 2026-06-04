@@ -232,7 +232,24 @@ describe("ProviderOps feed", async () => {
     });
     vi.mocked(client.listReconciliationRuns).mockResolvedValueOnce({
       project_id: "boss-dogfood",
-      items: [],
+      items: [
+        {
+          id: "recon_1",
+          project_id: "boss-dogfood",
+          provider_account_id: "pa_1",
+          provider: "cloudflare",
+          status: "succeeded",
+          resources_seen: 3,
+          resources_changed: 1,
+          costs_seen: 0,
+          started_by: "ceo",
+          started_at: "2026-06-03T12:00:00Z",
+          finished_at: "2026-06-03T12:01:00Z",
+          metadata: {
+            inventory_snapshot_artifact_id: "art_providerops_snapshot_1",
+          },
+        },
+      ],
     });
     vi.mocked(client.listWorkerPools).mockResolvedValueOnce({
       project_id: "boss-dogfood",
@@ -318,6 +335,10 @@ describe("ProviderOps feed", async () => {
     expect(feed.scalePlans[0]).toMatchObject({
       triggerReason: "queue_pressure",
       queueDepth: 7,
+    });
+    expect(feed.reconciliationRuns[0]).toMatchObject({
+      provider: "cloudflare",
+      inventorySnapshotArtifactId: "art_providerops_snapshot_1",
     });
     expect(feed.deploymentRuns[0]).toMatchObject({
       appName: "BOSS",
