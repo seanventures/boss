@@ -65,5 +65,6 @@ describe("executive console accessibility baseline", () => {
     expect(pageSource).toContain('aria-labelledby="boss-console-title"');
     expect(pageSource).toContain('id="decision-inbox"');
     expect(pageSource).toContain("tabIndex={-1}");
+    expect(pageSource).toContain("Software Factory evidence");
   });
 });

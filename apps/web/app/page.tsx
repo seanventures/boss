@@ -86,6 +86,10 @@ import { fetchReceiptFeed } from "../lib/receipts";
 import { fetchRoleFeed } from "../lib/roles";
 import { fetchRoutingLogFeed } from "../lib/routing";
 import { fetchSelfImprovementFeed } from "../lib/self-improvement";
+import {
+  extractSoftwareFactoryArtifactEvidence,
+  extractSoftwareFactoryDecisionEvidence,
+} from "../lib/software-factory";
 import { fetchSkillFeed } from "../lib/skills";
 import { fetchStatus } from "../lib/status";
 import { fetchTaskFeed } from "../lib/tasks";
@@ -418,6 +422,12 @@ export default async function HomePage({ searchParams }: HomePageProps) {
         : actorOptions[0]?.memberId ?? "executive_console";
   const activeActor = actorOptions.find(
     (member) => member.memberId === activeActorId,
+  );
+  const softwareFactoryDecisionEvidence = extractSoftwareFactoryDecisionEvidence(
+    decisions.items,
+  );
+  const softwareFactoryArtifactEvidence = extractSoftwareFactoryArtifactEvidence(
+    artifacts.items,
   );
 
   return (
@@ -5601,6 +5611,69 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                 <div className="feed-list">
                   {artifacts.items.map((artifact) => (
                     <div className="feed-row" key={artifact.id}>
+                      <div>
+                        <h4>{artifact.title}</h4>
+                        <p className="detail">
+                          {titleCaseToken(artifact.artifactType)} /{" "}
+                          {formatDateTime(artifact.createdAt)}
+                        </p>
+                      </div>
+                      <code className="mono">{artifact.id}</code>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </article>
+
+            <article className="stack-card">
+              <h3>Software Factory evidence</h3>
+              {!decisions.apiReachable || !artifacts.apiReachable ? (
+                <p className="detail">
+                  {decisions.blockedReason ??
+                    artifacts.blockedReason ??
+                    "Decision or artifact evidence is unavailable."}
+                </p>
+              ) : softwareFactoryDecisionEvidence.length === 0 &&
+                softwareFactoryArtifactEvidence.length === 0 ? (
+                <p className="detail">
+                  No Software Factory release evidence has been recorded yet.
+                </p>
+              ) : (
+                <div className="feed-list">
+                  {softwareFactoryDecisionEvidence.map((evidence) => (
+                    <div className="feed-row" key={`decision:${evidence.decisionId}`}>
+                      <div>
+                        <h4>{evidence.title}</h4>
+                        <p className="detail">
+                          Release gate{" "}
+                          {titleCaseToken(evidence.releaseGoNoGoStatus ?? "unknown")}{" "}
+                          / validation{" "}
+                          {titleCaseToken(evidence.validationStatus ?? "unknown")}
+                        </p>
+                        <p className="detail">
+                          Review {evidence.reviewPacketArtifactId ?? "not linked"} / test{" "}
+                          {evidence.testReportArtifactId ?? "not linked"}
+                        </p>
+                        <p className="detail">
+                          Security {evidence.securityReviewArtifactId ?? "not linked"} /{" "}
+                          go-no-go {evidence.releaseGoNoGoArtifactId ?? "not linked"}
+                        </p>
+                        {evidence.localValidationReceiptId ? (
+                          <p className="detail">
+                            Local validation receipt {evidence.localValidationReceiptId}
+                          </p>
+                        ) : null}
+                        {evidence.pullRequestUrl ? (
+                          <a href={evidence.pullRequestUrl} rel="noreferrer" target="_blank">
+                            Open sandbox PR
+                          </a>
+                        ) : null}
+                      </div>
+                      <code className="mono">{evidence.decisionId}</code>
+                    </div>
+                  ))}
+                  {softwareFactoryArtifactEvidence.map((artifact) => (
+                    <div className="feed-row" key={`artifact:${artifact.id}`}>
                       <div>
                         <h4>{artifact.title}</h4>
                         <p className="detail">

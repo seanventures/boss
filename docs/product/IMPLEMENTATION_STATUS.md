@@ -90,6 +90,7 @@ This document summarizes the currently implemented BOSS runtime surfaces in this
   - PR proposal -> receipt-backed GitHub draft PR
   - GitHub validation evidence captured into `test_report` and `review_packet`
   - deterministic security/dependency review and release go/no-go artifacts linked to sandbox PR decisions
+  - Mission Control Software Factory evidence panel sourced from real merge-decision recommendations and artifact records
   - optional receipt-backed local sandbox validation commands captured into `test_report` and `review_packet`
   - PR review approval -> merge gate or merge job, depending on policy
   - merge -> deployment review decision
