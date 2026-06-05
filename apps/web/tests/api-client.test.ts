@@ -1980,6 +1980,120 @@ describe("createBossApiClient", () => {
     expect(created.current_value).toBe(3);
   });
 
+  it("uses self-improvement proposal/canary/rollout/rollback API contracts (P2 e2e + SIM states)", async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const responses = [
+      {
+        status: 200,
+        body: {
+          project_id: "boss-dogfood",
+          items: [
+            {
+              id: "imp_1",
+              project_id: "boss-dogfood",
+              task_id: "task_imp",
+              title: "Test self imp",
+              summary: "e2e",
+              change_ref: "pr://1",
+              diff_summary: "diff",
+              status: "proposed",
+              risk_tier: 2,
+              expected_impact: ["a"],
+              test_plan: ["t"],
+              canary_scope: ["c"],
+              rollback_plan: ["r"],
+              success_metrics: ["m"],
+              created_by: "vp_agents",
+              created_at: "2026-06-05T00:00:00Z",
+              updated_at: "2026-06-05T00:00:00Z",
+            },
+          ],
+        },
+      },
+      {
+        status: 201,
+        body: {
+          id: "imp_1",
+          project_id: "boss-dogfood",
+          task_id: "task_imp",
+          title: "Test self imp",
+          summary: "e2e",
+          change_ref: "pr://1",
+          diff_summary: "diff",
+          status: "proposed",
+          risk_tier: 2,
+          expected_impact: ["a"],
+          test_plan: ["t"],
+          canary_scope: ["c"],
+          rollback_plan: ["r"],
+          success_metrics: ["m"],
+          created_by: "vp_agents",
+          created_at: "2026-06-05T00:00:00Z",
+          updated_at: "2026-06-05T00:00:00Z",
+        },
+      },
+      { status: 200, body: { id: "imp_1", status: "canary_succeeded" } },
+      { status: 200, body: { id: "imp_1", status: "rolled_out" } },
+      { status: 200, body: { id: "imp_1", status: "rolled_back" } },
+    ];
+    const fetchImpl = async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({ url: String(input), init });
+      const response = responses.shift();
+      return new Response(JSON.stringify(response?.body), {
+        status: response?.status ?? 500,
+        headers: { "Content-Type": "application/json" },
+      });
+    };
+    const client = createBossApiClient({
+      baseUrl: "http://127.0.0.1:8000",
+      fetchImpl,
+    });
+
+    const listed = await client.listSelfImprovementProposals("boss-dogfood");
+    const created = await client.createSelfImprovementProposal({
+      project_id: "boss-dogfood",
+      title: "Test self imp",
+      summary: "e2e",
+      change_ref: "pr://1",
+      diff_summary: "diff",
+      expected_impact: ["a"],
+      test_plan: ["t"],
+      canary_scope: ["c"],
+      rollback_plan: ["r"],
+      success_metrics: ["m"],
+      actor: "vp_agents",
+    });
+    await client.recordSelfImprovementCanary("imp_1", {
+      actor: "release_manager",
+      outcome: "succeeded",
+      summary: "canary ok",
+      metrics: { ok: true },
+      evidence_refs: ["e1"],
+    });
+    await client.recordSelfImprovementRollout("imp_1", {
+      actor: "release_manager",
+      summary: "rolled",
+      metrics: { ok: true },
+      evidence_refs: ["e2"],
+    });
+    await client.rollbackSelfImprovementProposal("imp_1", {
+      actor: "release_manager",
+      reason: "rolled back",
+      metrics: { ok: true },
+      evidence_refs: ["e3"],
+    });
+
+    expect(calls[0].url).toBe(
+      "http://127.0.0.1:8000/v1/self-improvement/proposals?project_id=boss-dogfood&limit=25",
+    );
+    expect(calls[1].url).toBe("http://127.0.0.1:8000/v1/self-improvement/proposals");
+    expect(calls[2].url).toContain("/v1/self-improvement/proposals/imp_1/canary");
+    expect(calls[3].url).toContain("/v1/self-improvement/proposals/imp_1/rollout");
+    expect(calls[4].url).toContain("/v1/self-improvement/proposals/imp_1/rollback");
+    expect(listed.items[0].id).toBe("imp_1");
+    expect(created.status).toBe("proposed");
+  });
+
   it("exercises permission denied (403) response path for KPI and budget via client (GAP-AUTO-002 perm failure)", async () => {
     const calls: Array<{ url: string; init?: RequestInit }> = [];
     const fetchImpl = async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -2579,7 +2693,7 @@ describe("createBossApiClient", () => {
       "http://127.0.0.1:8000/v1/resources/sync",
       "http://127.0.0.1:8000/v1/resources?project_id=boss-dogfood&provider=digitalocean&ownership=discovered_unmanaged&limit=25",
       "http://127.0.0.1:8000/v1/costs?project_id=boss-dogfood&limit=10&offset=0",
-      "http://127.0.0.1:8000/v1/cost-anomalies?project_id=boss-dogfood&limit=10",
+      "http://127.0.0.1:8000/v1/cost-anomalies?project_id=boss-dogfood&limit=10&offset=0",
       "http://127.0.0.1:8000/v1/changesets",
       "http://127.0.0.1:8000/v1/changesets/chg_1/approve",
       "http://127.0.0.1:8000/v1/changesets/chg_1/apply",
@@ -2590,15 +2704,15 @@ describe("createBossApiClient", () => {
       "http://127.0.0.1:8000/v1/autoscaler/plans",
       "http://127.0.0.1:8000/v1/resource-janitor/run",
       "http://127.0.0.1:8000/v1/deployments",
-      "http://127.0.0.1:8000/v1/deployments?project_id=boss-dogfood",
-      "http://127.0.0.1:8000/v1/deployment-environment-policies?project_id=boss-dogfood",
-      "http://127.0.0.1:8000/v1/deployment-environment-policies",
-      "http://127.0.0.1:8000/v1/deployment-runs?project_id=boss-dogfood&limit=5",
+      "http://127.0.0.1:8000/v1/deployments?project_id=boss-dogfood&limit=50&offset=0",
+      "http://127.0.0.1:8000/v1/deployment-environment-policies?project_id=boss-dogfood&limit=50&offset=0",
+      "http://127.0.0.1:8000/v1/deployment-environment-policies?project_id=boss-dogfood&limit=50&offset=0",
+      "http://127.0.0.1:8000/v1/deployment-runs?project_id=boss-dogfood&limit=5&offset=0",
       "http://127.0.0.1:8000/v1/deployment-runs",
       "http://127.0.0.1:8000/v1/deployment-runs/deprun_1/health-check",
       "http://127.0.0.1:8000/v1/provider-health?project_id=boss-dogfood&provider_account_id=pa_1&limit=5",
-      "http://127.0.0.1:8000/v1/drift-reports?project_id=boss-dogfood&limit=5",
-      "http://127.0.0.1:8000/v1/reconciliation-runs?project_id=boss-dogfood&limit=5",
+      "http://127.0.0.1:8000/v1/drift-reports?project_id=boss-dogfood&limit=5&offset=0",
+      "http://127.0.0.1:8000/v1/reconciliation-runs?project_id=boss-dogfood&limit=5&offset=0",
     ]);
     expect(JSON.parse(String(calls[7].init?.body))).toMatchObject({
       provider_account_id: "pa_1",

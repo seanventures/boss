@@ -3440,14 +3440,19 @@ def create_task(payload: TaskCreateRequest) -> TaskSummary:
 
 
 @app.get("/v1/departments", response_model=DepartmentListResponse)
-def list_departments(project_id: str) -> DepartmentListResponse:
+def list_departments(project_id: str, limit: int = 50, offset: int = 0) -> DepartmentListResponse:
+    if limit < 1 or limit > 200:
+        raise HTTPException(status_code=400, detail="limit must be between 1 and 200.")
+    if offset < 0:
+        raise HTTPException(status_code=400, detail="offset must be >= 0.")
+
     with begin(engine) as connection:
+        items = canonical.list_departments(connection, project_id, limit=limit, offset=offset)
         return DepartmentListResponse(
             project_id=project_id,
-            items=[
-                DepartmentSummary(**item)
-                for item in canonical.list_departments(connection, project_id)
-            ],
+            items=[DepartmentSummary(**item) for item in items],
+            limit=limit,
+            offset=offset,
         )
 
 
@@ -3511,14 +3516,19 @@ def create_kpi(payload: KpiCreateRequest) -> KpiSummary:
 
 
 @app.get("/v1/policies", response_model=PolicyRecordListResponse)
-def list_policy_records(project_id: str) -> PolicyRecordListResponse:
+def list_policy_records(project_id: str, limit: int = 50, offset: int = 0) -> PolicyRecordListResponse:
+    if limit < 1 or limit > 200:
+        raise HTTPException(status_code=400, detail="limit must be between 1 and 200.")
+    if offset < 0:
+        raise HTTPException(status_code=400, detail="offset must be >= 0.")
+
     with begin(engine) as connection:
+        items = canonical.list_policy_records(connection, project_id, limit=limit, offset=offset)
         return PolicyRecordListResponse(
             project_id=project_id,
-            items=[
-                PolicyRecordSummary(**item)
-                for item in canonical.list_policy_records(connection, project_id)
-            ],
+            items=[PolicyRecordSummary(**item) for item in items],
+            limit=limit,
+            offset=offset,
         )
 
 
@@ -3546,14 +3556,19 @@ def create_policy_record(
 
 
 @app.get("/v1/plans", response_model=PlanListResponse)
-def list_plans(project_id: str) -> PlanListResponse:
+def list_plans(project_id: str, limit: int = 50, offset: int = 0) -> PlanListResponse:
+    if limit < 1 or limit > 200:
+        raise HTTPException(status_code=400, detail="limit must be between 1 and 200.")
+    if offset < 0:
+        raise HTTPException(status_code=400, detail="offset must be >= 0.")
+
     with begin(engine) as connection:
+        items = canonical.list_plans(connection, project_id, limit=limit, offset=offset)
         return PlanListResponse(
             project_id=project_id,
-            items=[
-                PlanSummary(**item)
-                for item in canonical.list_plans(connection, project_id)
-            ],
+            items=[PlanSummary(**item) for item in items],
+            limit=limit,
+            offset=offset,
         )
 
 
@@ -3582,14 +3597,19 @@ def create_plan(payload: PlanCreateRequest) -> PlanSummary:
 
 
 @app.get("/v1/meetings", response_model=MeetingListResponse)
-def list_meetings(project_id: str) -> MeetingListResponse:
+def list_meetings(project_id: str, limit: int = 50, offset: int = 0) -> MeetingListResponse:
+    if limit < 1 or limit > 200:
+        raise HTTPException(status_code=400, detail="limit must be between 1 and 200.")
+    if offset < 0:
+        raise HTTPException(status_code=400, detail="offset must be >= 0.")
+
     with begin(engine) as connection:
+        items = canonical.list_meetings(connection, project_id, limit=limit, offset=offset)
         return MeetingListResponse(
             project_id=project_id,
-            items=[
-                MeetingSummary(**item)
-                for item in canonical.list_meetings(connection, project_id)
-            ],
+            items=[MeetingSummary(**item) for item in items],
+            limit=limit,
+            offset=offset,
         )
 
 
@@ -3696,15 +3716,19 @@ def get_task(task_id: str) -> TaskSummary:
     response_model=SelfImprovementProposalListResponse,
 )
 def list_self_improvement_proposals(
-    project_id: str, limit: int = 25
+    project_id: str, limit: int = 25, offset: int = 0
 ) -> SelfImprovementProposalListResponse:
     if limit < 1 or limit > 200:
         raise HTTPException(status_code=400, detail="limit must be between 1 and 200.")
+    if offset < 0:
+        raise HTTPException(status_code=400, detail="offset must be >= 0.")
     with begin(engine) as connection:
-        rows = self_improvement.list_proposals(connection, project_id, limit)
+        rows = self_improvement.list_proposals(connection, project_id, limit, offset)
         return SelfImprovementProposalListResponse(
             project_id=project_id,
             items=[self_improvement_summary_from_row(row) for row in rows],
+            limit=limit,
+            offset=offset,
         )
 
 
@@ -4941,14 +4965,19 @@ def list_provider_costs(project_id: str, limit: int = 100, offset: int = 0) -> C
 def list_provider_cost_anomalies(
     project_id: str,
     limit: int = 100,
+    offset: int = 0,
 ) -> CostAnomalyListResponse:
     if limit < 1 or limit > 500:
         raise HTTPException(status_code=400, detail="limit must be between 1 and 500.")
+    if offset < 0:
+        raise HTTPException(status_code=400, detail="offset must be >= 0.")
     with begin(engine) as connection:
-        items = resource_plane.list_cost_anomalies(connection, project_id, limit=limit)
+        items = resource_plane.list_cost_anomalies(connection, project_id, limit=limit, offset=offset)
         return CostAnomalyListResponse(
             project_id=project_id,
             items=[CostAnomalySummary(**item) for item in items],
+            limit=limit,
+            offset=offset,
         )
 
 
@@ -5067,18 +5096,24 @@ def apply_changeset(
 def list_resource_receipts(
     project_id: str,
     limit: int = 100,
+    offset: int = 0,
 ) -> ResourceReceiptListResponse:
     if limit < 1 or limit > 500:
         raise HTTPException(status_code=400, detail="limit must be between 1 and 500.")
+    if offset < 0:
+        raise HTTPException(status_code=400, detail="offset must be >= 0.")
     with begin(engine) as connection:
         items = resource_plane.list_resource_receipts(
             connection,
             project_id,
             limit=limit,
+            offset=offset,
         )
         return ResourceReceiptListResponse(
             project_id=project_id,
             items=[ResourceReceiptSummary(**item) for item in items],
+            limit=limit,
+            offset=offset,
         )
 
 
@@ -5215,12 +5250,18 @@ def run_resource_janitor(payload: ResourceJanitorRunRequest) -> ResourceJanitorR
 
 
 @app.get("/v1/deployments", response_model=DeploymentTargetListResponse)
-def list_deployment_targets(project_id: str) -> DeploymentTargetListResponse:
+def list_deployment_targets(project_id: str, limit: int = 50, offset: int = 0) -> DeploymentTargetListResponse:
+    if limit < 1 or limit > 200:
+        raise HTTPException(status_code=400, detail="limit must be between 1 and 200.")
+    if offset < 0:
+        raise HTTPException(status_code=400, detail="offset must be >= 0.")
     with begin(engine) as connection:
-        items = resource_plane.list_deployment_targets(connection, project_id)
+        items = resource_plane.list_deployment_targets(connection, project_id, limit=limit, offset=offset)
         return DeploymentTargetListResponse(
             project_id=project_id,
             items=[DeploymentTargetSummary(**item) for item in items],
+            limit=limit,
+            offset=offset,
         )
 
 
@@ -5263,15 +5304,25 @@ def create_deployment_target(
 )
 def list_deployment_environment_policies(
     project_id: str,
+    limit: int = 50,
+    offset: int = 0,
 ) -> DeploymentEnvironmentPolicyListResponse:
+    if limit < 1 or limit > 200:
+        raise HTTPException(status_code=400, detail="limit must be between 1 and 200.")
+    if offset < 0:
+        raise HTTPException(status_code=400, detail="offset must be >= 0.")
     with begin(engine) as connection:
         items = resource_plane.list_deployment_environment_policies(
             connection,
             project_id,
+            limit=limit,
+            offset=offset,
         )
         return DeploymentEnvironmentPolicyListResponse(
             project_id=project_id,
             items=[DeploymentEnvironmentPolicySummary(**item) for item in items],
+            limit=limit,
+            offset=offset,
         )
 
 
@@ -5395,19 +5446,25 @@ def list_provider_health(
     project_id: str,
     provider_account_id: Optional[str] = None,
     limit: int = 100,
+    offset: int = 0,
 ) -> ProviderHealthListResponse:
     if limit < 1 or limit > 500:
         raise HTTPException(status_code=400, detail="limit must be between 1 and 500.")
+    if offset < 0:
+        raise HTTPException(status_code=400, detail="offset must be >= 0.")
     with begin(engine) as connection:
         items = resource_plane.list_provider_health(
             connection,
             project_id,
             provider_account_id=provider_account_id,
             limit=limit,
+            offset=offset,
         )
         return ProviderHealthListResponse(
             project_id=project_id,
             items=[ProviderHealthSummary(**item) for item in items],
+            limit=limit,
+            offset=offset,
         )
 
 
@@ -5415,18 +5472,24 @@ def list_provider_health(
 def list_drift_reports(
     project_id: str,
     limit: int = 100,
+    offset: int = 0,
 ) -> DriftReportListResponse:
     if limit < 1 or limit > 500:
         raise HTTPException(status_code=400, detail="limit must be between 1 and 500.")
+    if offset < 0:
+        raise HTTPException(status_code=400, detail="offset must be >= 0.")
     with begin(engine) as connection:
         items = resource_plane.list_drift_reports(
             connection,
             project_id,
             limit=limit,
+            offset=offset,
         )
         return DriftReportListResponse(
             project_id=project_id,
             items=[DriftReportSummary(**item) for item in items],
+            limit=limit,
+            offset=offset,
         )
 
 
@@ -5434,18 +5497,24 @@ def list_drift_reports(
 def list_reconciliation_runs(
     project_id: str,
     limit: int = 100,
+    offset: int = 0,
 ) -> ReconciliationRunListResponse:
     if limit < 1 or limit > 500:
         raise HTTPException(status_code=400, detail="limit must be between 1 and 500.")
+    if offset < 0:
+        raise HTTPException(status_code=400, detail="offset must be >= 0.")
     with begin(engine) as connection:
         items = resource_plane.list_reconciliation_runs(
             connection,
             project_id,
             limit=limit,
+            offset=offset,
         )
         return ReconciliationRunListResponse(
             project_id=project_id,
             items=[ReconciliationRunSummary(**item) for item in items],
+            limit=limit,
+            offset=offset,
         )
 
 

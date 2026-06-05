@@ -58,6 +58,18 @@ import {
   upsertOrgMemberAction,
   upsertWorkerPoolAction,
 } from "./actions";
+import {
+  KpiCreateForm,
+  CommandSubmitForm,
+  ProviderCreateForm,
+  SelfImprovementProposalForm,
+  BudgetReserveQueueForm,
+  ProviderTestForm,
+  ProviderSyncForm,
+  SelfImpCanaryForm,
+  SelfImpRolloutForm,
+  ChangeSetApplyForm,
+} from "./client-forms";
 import type { DataBoundary } from "@boss/api-client";
 import { fetchAuditSummary } from "../lib/audit";
 import { fetchArtifactFeed } from "../lib/artifacts";
@@ -524,7 +536,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               </p>
             </div>
 
-            <form action={submitCommandAction} className="composer">
+            <CommandSubmitForm className="composer">
               <input type="hidden" name="project_id" value={activeProjectId} />
               <input type="hidden" name="actor" value={activeActorId} />
               <div>
@@ -562,7 +574,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                     "The control plane is not ready to accept commands."
                   : "Creates a task, command brief, and queued planning job through the API."}
               </p>
-            </form>
+            </CommandSubmitForm>
           </div>
         </section>
 
@@ -783,7 +795,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
           <div className="stack-grid">
             <article className="stack-card">
               <h3>Add or update KPI</h3>
-              <form action={createKpiAction} className="composer compact">
+              <KpiCreateForm className="composer compact">
                 <input type="hidden" name="project_id" value={activeProjectId} />
                 <input type="hidden" name="actor" value={activeActorId} />
                 <div className="input-grid">
@@ -856,7 +868,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                 <button className="button secondary" type="submit">
                   Save KPI
                 </button>
-              </form>
+              </KpiCreateForm>
             </article>
             <article className="stack-card">
               <h3>KPI registry</h3>
@@ -1388,7 +1400,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               <div className="stack-grid">
                 <article className="stack-card">
                   <h3>Provider Connection Center</h3>
-                  <form action={createProviderAccountAction} className="composer compact">
+                  <ProviderCreateForm className="composer compact">
                     <input type="hidden" name="project_id" value={activeProjectId} />
                     <input type="hidden" name="actor" value={activeActorId} />
                     <div className="input-grid">
@@ -1460,7 +1472,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                     <button className="button secondary" type="submit">
                       Register provider account
                     </button>
-                  </form>
+                  </ProviderCreateForm>
 
                   <div className="feed-list">
                     {providerOps.providerAccounts.length === 0 ? (
@@ -1492,7 +1504,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                             ) : null}
                           </div>
                           <div className="button-stack">
-                            <form action={testProviderAccountAction}>
+                            <ProviderTestForm>
                               <input
                                 type="hidden"
                                 name="provider_account_id"
@@ -1511,8 +1523,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                               <button className="button secondary" type="submit">
                                 Test
                               </button>
-                            </form>
-                            <form action={syncProviderResourcesAction}>
+                            </ProviderTestForm>
+                            <ProviderSyncForm>
                               <input
                                 type="hidden"
                                 name="provider_account_id"
@@ -1531,7 +1543,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                               <button className="button secondary" type="submit">
                                 Sync
                               </button>
-                            </form>
+                            </ProviderSyncForm>
                           </div>
                         </div>
                       ))
@@ -1542,13 +1554,13 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                 <article className="stack-card">
                   <h3>Resource Explorer</h3>
                   <div className="button-stack">
-                    <form action={syncProviderResourcesAction}>
+                    <ProviderSyncForm>
                       <input type="hidden" name="project_id" value={activeProjectId} />
                       <input type="hidden" name="actor" value={activeActorId} />
                       <button className="button secondary" type="submit">
                         Sync all providers
                       </button>
-                    </form>
+                    </ProviderSyncForm>
                     <form action={runResourceJanitorAction} className="composer compact">
                       <input type="hidden" name="project_id" value={activeProjectId} />
                       <input type="hidden" name="actor" value={activeActorId} />
@@ -2843,7 +2855,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
           <div className="stack-grid">
             <article className="stack-card">
               <h3>Propose an improvement</h3>
-              <form action={submitSelfImprovementProposalAction} className="composer compact">
+              <SelfImprovementProposalForm className="composer compact">
                 <input type="hidden" name="project_id" value={activeProjectId} />
                 <input type="hidden" name="actor" value={activeActorId} />
                 <label className="field">
@@ -2932,7 +2944,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                 <button className="button secondary" type="submit">
                   Submit improvement proposal
                 </button>
-              </form>
+              </SelfImprovementProposalForm>
             </article>
 
             <article className="stack-card">
@@ -2961,7 +2973,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                       </div>
                       {proposal.status === "canary_approved" ? (
                         <div className="button-stack">
-                          <form action={recordSelfImprovementCanaryAction} className="composer compact">
+                          <SelfImpCanaryForm className="composer compact">
                             <input type="hidden" name="proposal_id" value={proposal.id} />
                             <input type="hidden" name="project_id" value={activeProjectId} />
                             <input type="hidden" name="actor" value={activeActorId} />
@@ -2993,8 +3005,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                             <button className="button secondary" type="submit">
                               Record canary success
                             </button>
-                          </form>
-                          <form action={recordSelfImprovementCanaryAction} className="composer compact">
+                          </SelfImpCanaryForm>
+                          <SelfImpCanaryForm className="composer compact">
                             <input type="hidden" name="proposal_id" value={proposal.id} />
                             <input type="hidden" name="project_id" value={activeProjectId} />
                             <input type="hidden" name="actor" value={activeActorId} />
@@ -3026,10 +3038,10 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                             <button className="button secondary" type="submit">
                               Record canary failure
                             </button>
-                          </form>
+                          </SelfImpCanaryForm>
                         </div>
                       ) : proposal.status === "rollout_approved" ? (
-                        <form action={recordSelfImprovementRolloutAction} className="composer compact">
+                        <SelfImpRolloutForm className="composer compact">
                           <input type="hidden" name="proposal_id" value={proposal.id} />
                           <input type="hidden" name="project_id" value={activeProjectId} />
                           <input type="hidden" name="actor" value={activeActorId} />
@@ -3066,7 +3078,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                           <button className="button secondary" type="submit">
                             Record rollout
                           </button>
-                        </form>
+                        </SelfImpRolloutForm>
                       ) : proposal.status === "rolled_out" ? (
                         <form action={rollbackSelfImprovementProposalAction} className="composer compact">
                           <input type="hidden" name="proposal_id" value={proposal.id} />
@@ -3291,7 +3303,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                         </p>
                       </div>
                       {message.status === "draft" ? (
-                        <form action={queueOutboxMessageAction}>
+                        <BudgetReserveQueueForm>
                           <input type="hidden" name="message_id" value={message.id} />
                           <input type="hidden" name="project_id" value={activeProjectId} />
                           <input type="hidden" name="actor" value={activeActorId} />
@@ -3311,7 +3323,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                           <button className="button secondary" type="submit">
                             Queue send
                           </button>
-                        </form>
+                        </BudgetReserveQueueForm>
                       ) : (
                         <code className="mono">{message.id}</code>
                       )}
@@ -3504,10 +3516,12 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                           : ""}
                       </p>
                       {commercial.edition.blockedReason ? (
-                        <p className="detail">
-                          Blocked: {commercial.edition.blockedReason}
+                        <p className="detail warn">
+                          Blocked: {commercial.edition.blockedReason}. Local auth {commercial.edition.localAuthAllowed ? "allowed (Community/Self-hosted)" : "not allowed"}.
                         </p>
-                      ) : null}
+                      ) : (
+                        <p className="detail">Status: active with entitlements from edition pack + any Account Connect syncs.</p>
+                      )}
                     </div>
                     <span
                       className={`pill${

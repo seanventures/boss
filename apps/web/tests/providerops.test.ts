@@ -117,6 +117,8 @@ describe("ProviderOps feed", async () => {
           created_at: "2026-06-03T12:00:00Z",
         },
       ],
+      limit: 50,
+      offset: 0,
     });
     vi.mocked(client.listChangeSets).mockResolvedValueOnce({
       project_id: "boss-dogfood",
@@ -144,11 +146,15 @@ describe("ProviderOps feed", async () => {
     vi.mocked(client.listResourceReceipts).mockResolvedValueOnce({
       project_id: "boss-dogfood",
       items: [],
-    });
+      limit: 50,
+      offset: 0,
+    } as any);
     vi.mocked(client.listDeploymentTargets).mockResolvedValueOnce({
       project_id: "boss-dogfood",
       items: [],
-    });
+      limit: 50,
+      offset: 0,
+    } as any);
     vi.mocked(client.listDeploymentEnvironmentPolicies).mockResolvedValueOnce({
       project_id: "boss-dogfood",
       items: [
@@ -171,6 +177,8 @@ describe("ProviderOps feed", async () => {
           updated_at: "2026-06-03T12:00:00Z",
         },
       ],
+      limit: 50,
+      offset: 0,
     });
     vi.mocked(client.listDeploymentRuns).mockResolvedValueOnce({
       project_id: "boss-dogfood",

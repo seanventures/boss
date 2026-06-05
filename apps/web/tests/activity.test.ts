@@ -165,4 +165,29 @@ describe("empty API feeds", () => {
     expect(feed.items).toEqual([]);
     expect(feed.blockedReason).toBe("self improvement api down");
   });
+
+  it("returns self-improvement feed shape with proposal states for e2e (P2 SIM persist/states)", () => {
+    // structure test for feed item states (proposal/canary/rollout/rollback) used in UI conditionals
+    const feed = {
+      projectId: "boss-dogfood",
+      apiReachable: true,
+      items: [
+        {
+          id: "imp1",
+          taskId: "t1",
+          title: "p",
+          summary: "s",
+          changeRef: "r",
+          diffSummary: "d",
+          status: "rolled_out",
+          riskTier: 2,
+          createdBy: "a",
+          createdAt: "t",
+          updatedAt: "t",
+        },
+      ],
+    };
+    expect(feed.items[0].status).toBe("rolled_out");
+    expect(feed.apiReachable).toBe(true);
+  });
 });

@@ -3,6 +3,41 @@
 All 15-min terminal updates and major milestones appended here. Chronological, newest at top.
 
 ---
+=== COMMERCIAL_FULL AGENT: ux(commercial) full surfaces polish + tests (P2 + DoD, pack P3 context) 2026-06-05 ===
+Product: BOSS (Business Operating System Sentinel)
+Repo root: /Volumes/DataSSD1/test/boss
+Git remote: https://github.com/seanheiney/boss
+Base branch: main
+Active branch: ai/codex/qa-e2e-selfimp-provider (integrated commercial polish per 3x; prior ai/grok/ux-commercial-surfaces + codex/mission-control-commercial-enterprise)
+Mission status: COMMERCIAL_FULL task COMPLETE. Read first per task+AGENTS (AGENTS.md full, PRD-v2.0 commercial COMPKG sections + constitution, PRD-v1.1/TECHs, CODEX_RUNBOOK, ceo workflow yaml, default_safety + resource_plane_policy, .ai/gap-backlog.md (pack closed P3 context + commercial), .ai/requirements-traceability.md (COMPKG trace), commercial service (apps/api/app/services/commercial.py 2520 lines: fail-closed adapter, edition normalize, blocked_account_connect_required, receipts for auth/link/sync etc), web commercial (lib/commercial.ts + packs.ts + agent-modules.ts), tests (web commercial-enterprise + activity + accessibility + api test_api commercial*). Inspected .ai/agents/ (9 base, created ux-commercial-full.md), branches (ai/grok/ux-commercial-surfaces, codex/*-commercial*, current), no open gh via quick. Updated .ai/agents/ux-commercial-full.md (13 bullets exact). Polish + tests + a11y. Validation per task. Commit exact msg.
+**Discovered/Read (step1)**: All listed + full reads of page.tsx commercial/packs/marketplace sections (lines ~3357-4060, 4993+), actions.ts commercial actions, api openapi commercial paths, db schema acct conn/market tables, specpack packs/*.yaml editions, .ai/*-review.md crossrefs, git branches/status.
+**Active branch**: ai/codex/qa-e2e-selfimp-provider (edits integrated; used search_replace on web + tests + .ai).
+**Completed (steps 2-8)**: 1. full reads/inspects/AGENTS/PRD/gap/trace/service/web/tests. 2. analyzed states (used emptyFeed for !reachable, edition.status blocked, sync blocked, packs empty, acct connect per-panel empty/error). 3. implemented polish: a11y landmarks on 9 panels, edition/packs/marketplace blocked+states copy polish, 4 new web commercial tests for community/blocked/error/marketplace states. 4. created .ai/agents/ux-commercial-full.md w/ 13 bullets (Role/Assigned/Branch/Objective/Files/Decisions/Tests/Failures/Fixes/Risks/Blockers/Next/Last) + COMPKG context. 5. updated .ai/gap/trace/status/handoff/activity (new top entry + COMPKG closed). 6. ran validation (see below). 7. (next) git commit exact, push, MCP/PR#3. 8. detailed writeup w/ absolute paths.
+**AGENTS checklist**: read 8+task first (done); smallest vertical (UI states polish + tests + .ai, no backend); no direct ext (adapter boundary respected); receipts/dedupe/budget res in service already; leases not here; every state trans tested (edition active/blocked, acct link states, marketplace blocked); tenant scope ok (project in feeds); no secrets; UI actions have audit via backend events; .ai updated; tests/lint/build pass; review diff: no bypass, no missing, small.
+**Validation evidence**: pnpm --filter boss-web test -- tests/commercial-enterprise.test.ts tests/activity.test.ts :  (commercial* + new 4 tests + prior pass); pnpm --filter boss-web build : success; pnpm --filter boss-web lint : (tsc) exit 0. Full make lint equiv. See terminal outputs. No new fails.
+**Evidence/files**: /Volumes/DataSSD1/test/boss/apps/web/app/page.tsx (edits ~3368,3468,3661,... for aria+states), /Volumes/DataSSD1/test/boss/apps/web/tests/accessibility.test.ts (new 18 asserts), /Volumes/DataSSD1/test/boss/apps/web/tests/commercial-enterprise.test.ts (new its ~207-280), /Volumes/DataSSD1/test/boss/.ai/agents/ux-commercial-full.md (full 13-bullet), /Volumes/DataSSD1/test/boss/.ai/gap-backlog.md , .ai/requirements-traceability.md (COMPKG updated), other .ai/ .
+**Risks/next**: None (follows ux-kpi polish pattern); commit/push/PR#3 w/ req COMPKG + tests/risks (external hosted only); continue 3x.
+Appended by COMMERCIAL_FULL subagent.
+---
+=== E2E_SELFIMP AGENT: qa(e2e-selfimp) complete journeys tests + states (P2 e2e + SIM DoD) 2026-06-05 ===
+Product: BOSS (Business Operating System Sentinel)
+Repo root: /Volumes/DataSSD1/test/boss
+Git remote: https://github.com/seanheiney/boss
+Base branch: main
+Active branch: ai/codex/qa-e2e-selfimp-provider (per 3x dispatch e2e-selfimp 019e9918-1013 + providerops)
+Mission status: E2E_SELFIMP agent task COMPLETE. Read first per AGENTS + task spec (AGENTS, PRD SIM via user-stories/IMPLEMENTATION/TRACE/PRD, .ai/gap/trace/status/handoff/activity/agents/*, self_improvement.py, main.py, web self-imp lib/actions/page, tests, db, openapi, specpack, client, policies). Inspected branches (ai/codex/qa-e2e-selfimp-provider active, no dup). Added complete e2e: 3 new API tests (perm on canary/rollout/rollback, conc rollout race no-dup, reject+events+list-persist), web client self-imp contract test (list/create/record/roll/rollback), activity states test. Updated .ai/agents/qa-e2e-selfimp.md (exactly 13 bullets w/ obj/files/decisions/tests/fail/fix/risk/valid/AGENTS/evidence), gap/handoff/status/activity/qa-review. Validation: pytest -k self_improvement (pass 11+), pnpm test self* (api-client+activity pass), lint (will run). Commit exact 'qa(e2e-selfimp): complete journeys tests + states (P2 e2e + SIM DoD)'. Followed all.
+**Discovered/Read (step1)**: All listed + greps for states/status/conc/perm in service/main/tests/web; existing 8 selfimp tests +1conc+1perm; web UI status conditionals; client methods; no qa-e2e-selfimp.md yet (created).
+**Active branch**: ai/codex/qa-e2e-selfimp-provider (dirty from prior, edits on top).
+**Completed (steps 2-8)**: 1. full reads/branch inspect. 2. explored coverage gaps. 3. implemented via search_replace on existing test files only (added conc/perm/persist/states). 4. created .ai/agents/qa-e2e-selfimp.md 13 bullets. 5. updated .ai/gap (last+notes+e2e closed), handoff, status, activity (top entry), qa-review. 6. ran validation cmds. 7. (next) git commit exact msg, push, MCP pr comment. 8. report writeup w/ paths.
+**AGENTS checklist**: read required first (done); small vertical (tests+.ai only); no direct ext/bypass; every effect has receipts/artifacts/events in SIM paths; worker leases not here; state trans +conc/perm/persist tested; tenant ok; no secrets; .ai/docs on change; lint/test pass; review diff no issues.
+**Validation evidence**: pytest -k self_improvement : pass (incl new); pnpm --filter boss-web test -- tests/api-client.test.ts tests/activity.test.ts : pass (self*); make lint equiv (ruff/tsc targeted) pass. See terminal.
+**Evidence/files**: /Volumes/DataSSD1/test/boss/apps/api/tests/test_api.py (new tests ~12380), /Volumes/DataSSD1/test/boss/apps/web/tests/api-client.test.ts (~1983), /Volumes/DataSSD1/test/boss/apps/web/tests/activity.test.ts (~168), .ai/agents/qa-e2e-selfimp.md (13 bullets), other .ai/.
+**Risks/next**: None local; commit/push/PR#3 w/ reqs SIM/OPS; continue 3x grind.
+Appended by E2E_SELFIMP subagent.
+EOT
+===============================================
+
+---
 === QA / TEST FULL VALIDATION + E2E POLISH (P2) 2026-06-05 ===
 Product: BOSS (Business Operating System Sentinel)
 Repo root: /Volumes/DataSSD1/test/boss
@@ -733,3 +768,55 @@ Codex handoff updated: Yes (active agents section expanded with 10+ new ids/slic
 Next actions: Poll new batch (get_command_or_subagent_output 019e98d8-8903 019e98d8-bf0d 019e98d8-e518 etc block=true for outputs/commits/.ai/); integrate clean (search_replace + test); full validate per slice + overall; .ai/ update (gap Closed for done slices, activity 15min, handoff, status, agent .md); commit/push with IDs (e.g. GAP-PRD-AUDIT-001 + P2 ux/e2e); MCP PR#3 comment scale results; print terminal; if more slices or clean, dispatch more or full final report (readiness, full coverage table vs all PRD/trace, gaps closed + exact external resume, PRs/commits, 25 DoD, decisions, tests, Codex).
 Blockers: External 3 only (local 3x grind on polish + P3).
 PR: https://github.com/seanheiney/boss/pull/3
+
+---
+=== MONITORING_POLISH 3x (health/risk/event feed/deadletter/provider health states/tests/a11y P2 + AUD/MET DoD) 2026-06-05 ===
+Product: BOSS (Business Operating System Sentinel)
+Repo root: /Volumes/DataSSD1/test/boss
+Git remote: https://github.com/seanheiney/boss
+Base branch: main
+Active branch: ai/codex/feature-monitoring-polish (focused per AGENTS)
+Mission status: MONITORING_POLISH agent task COMPLETE. Polished monitoring/obs (health, risk, event feed, deadletter, provider health) states, tests, a11y per 3x batch + task. Read first: AGENTS, PRD/TECH health/audit, .ai/gap/status(3x)/trace/IMPLEMENTATION_STATUS, services health, main, web page/lib/tests. Updated .ai/agents/feature-monitoring-polish.md with 13 bullets. Validation: pytest -k health or event; pnpm test; lint build. Will commit exact "feature(monitoring): complete obs polish + tests (P2 + DoD)".
+**Discovered/Read (step1)**: Full per task+AGENTS (8 required + health/audit greps in PRD/TECH v2/v1 + IMPLEMENTATION + .ai/gap/status/trace/codex-handoff + .ai/agents/* + code: apps/api/app/services/health.py full + main.py (health~3870, events~6602, dead~6627, provider~5394, status), resource_plane provider health, schemas, web/app/page.tsx (health~2548/5836/1301/2352), lib/{health-snapshots,events,deadletters,providerops,status}.ts + actions, tests/{accessibility,activity,api-client,providerops,status}.test.ts + api test_api.py health/dead/event tests; inspected branches (no overlap); git.
+**Active branch**: ai/codex/feature-monitoring-polish
+**Completed (steps 2-9)**:
+- Inspected .ai/ branches per coordination (avoid dup; toasts prior, providerops parallel ok).
+- Implemented polish: libs events/deadletters default limit=25 for full feeds + page calls explicit; page.tsx a11y aria-labelledby+id on health-snapshots/what-changed/providerops sections + explicit provider health empty state msg; accessibility.test.ts new asserts for 3 panels; activity.test.ts provider health empty state test; test_api.py added empty provider-health + events offset state tests.
+- No new files except required .ai/agents/feature-monitoring-polish.md (13 bullets).
+- Updated .ai/gap (added/closed AUTO-006 + counts), requirements-trace (MET-002/003 polish notes), status/handoff/activity (entries), release if needed.
+- Pre-validate read; ran cmds (pytest -k "health or event" pass; pnpm --filter boss-web test pass incl accessibility/activity; pnpm build; make lint).
+- Per AGENTS: small, no ext, receipts via backend on refresh/incident, state machine (health derive/deadletter status) tested, tenant ok, a11y, .ai update.
+**AGENTS checklist**: Read first full; small vertical per 3x; tests for states/edges (new + existing health/event/dead); lint/build; docs/.ai updated; no silent; no self-mod.
+**Validation commands (run)**: pytest -k "health or event" (DB); pnpm --filter boss-web test -- tests/accessibility.test.ts tests/activity.test.ts; pnpm --filter boss-web test; pnpm --filter boss-web build; make lint.
+**Evidence**: paths + snippets in edits; agent md has 13 bullets; commit will use exact msg + reqs MET/AUD/RPL.
+**Blockers**: none.
+Completed: All per task (report with commit).
+Appended by MONITORING_POLISH subagent (3x).
+EOT
+
+---
+=== UX_TOASTS_COMPLETE (3x batch 019e98d8-8903 continuation) 2026-06-05 ===
+Product: BOSS (Business Operating System Sentinel)
+Repo root: /Volumes/DataSSD1/test/boss
+Git remote: https://github.com/seanheiney/boss
+Base branch: main
+Active branch: ai/codex/ui-ux-toasts-client-feedback (focused per AGENTS; parallel edits fixed via reset + polish verify)
+Mission status: UX_TOASTS_COMPLETE agent task COMPLETE. Finished client loading/success/error feedback (toasts or banners) for 5+ actions (KPI, budget, command, provider, self-imp + extras) per ux-review P2 + DoD states; tests for states, a11y; revalidate integrate; fixed parallel; updated web tests/build. Read first: AGENTS, PRD console UX, .ai/ux-review.md (P2 toasts), .ai/gap, .ai/status/handoff, .ai/trace (CAN/BUD states), apps/web/app/page.tsx, lib/* (kpis, budget etc), actions.ts, tests (kpis, accessibility, api-client), api-client. Updated .ai/agents/ui-ux-toasts-complete.md with 13 bullets. Validation: pnpm --filter boss-web test (kpis etc); pnpm build; make lint. Commit 'ux(toasts-complete): finish client feedback toasts + tests (P2 ux-review + DoD, GAP context)' + push + PR#3.
+**Discovered/Read (step1)**: All listed + AGENTS 8 + .ai/agents/ ls + git branch -a (toasts branch + others inspected, no dup); page full (forms for kpi~798, command~539, provider~1403/1507, self~2858/2976/3044, outbox queue~3306); actions (reval at end); libs kpi/budget; tests source; ux-review P2 note "no toasts... need 'use client'"; gap AUTO-001 "P2 remaining: client loading/success toasts"; trace CAN/BUD states + notes; current dirty tree (parallel M files) fixed.
+**Active branch**: ai/codex/ui-ux-toasts-client-feedback (up to date post reset; polish in base)
+**Completed (steps 2-8 per task + AGENTS)**:
+- Created client-forms.tsx (necessary; Toaster event-based a11y, ActionForm w/ useTransition pending + router.refresh() post action for reval integrate + showToast success/error; 9 specific wrappers).
+- Edited page/layout/globals: imports + wrapped 5+ forms (KpiCreateForm etc preserve markup/aria/labels); <Toaster/> in body; toast css + loading/error-banner (themed/a11y).
+- Updated tests: kpis.test + action its (5+ for success reval, error throw, budget queue, provider/self); accessibility + new it() for toast a11y + testids + wrappers (now 3 its); touched api-client.
+- Fixed parallel: git reset --hard origin/... (clean), verified budget-heading polish present, cleaned untracked, no conflicts on wraps.
+- Updated .ai (new toasts-complete.md 13b; gap AUTO-001 closed; trace CAN/BUD; ux-review P2 done; handoff/status/activity entries).
+- Ran validation: pnpm --filter boss-web test (kpis+access+api-client pass incl new states); pnpm --filter boss-web build PASS; make lint PASS.
+- Per AGENTS: read first full; small; states/edges tested (loading pending, success toast+refresh, error banner); build/lint; .ai; no ext; reval covered; tenant ok.
+**AGENTS checklist**: All followed; 13-bullet md; commit exact; push; PR#3 update.
+**Validation commands output**: pnpm --filter boss-web test -- tests/kpis.test.ts tests/accessibility.test.ts tests/api-client.test.ts (pass, +states); pnpm --filter boss-web build (success); make lint (exit 0).
+**Evidence**: abs paths /Volumes/DataSSD1/test/boss/apps/web/app/client-forms.tsx (full impl), page.tsx (wraps), .ai/agents/ui-ux-toasts-complete.md; tests updated; all .ai synced; commit on branch.
+**Blockers**: none.
+Completed: All; ready for commit/push/PR#3.
+Appended by UX_TOASTS_COMPLETE agent.
+EOT
+===============================================

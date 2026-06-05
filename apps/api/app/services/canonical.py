@@ -13,7 +13,7 @@ from .core import create_artifact, emit_event, make_id, now_utc
 
 class CanonicalObjectService:
     def list_departments(
-        self, connection: Connection, project_id: str
+        self, connection: Connection, project_id: str, limit: int = 50, offset: int = 0
     ) -> list[dict[str, Any]]:
         rows = connection.execute(
             text(
@@ -23,9 +23,10 @@ class CanonicalObjectService:
                 FROM departments
                 WHERE project_id = :project_id
                 ORDER BY department_key ASC
+                LIMIT :limit OFFSET :offset
                 """
             ),
-            {"project_id": project_id},
+            {"project_id": project_id, "limit": limit, "offset": offset},
         ).mappings().all()
         return [self._serialize_temporal(row) for row in rows]
 
@@ -83,7 +84,7 @@ class CanonicalObjectService:
         return self._serialize_temporal(row)
 
     def list_kpis(
-        self, connection: Connection, project_id: str
+        self, connection: Connection, project_id: str, limit: int = 50, offset: int = 0
     ) -> list[dict[str, Any]]:
         rows = connection.execute(
             text(
@@ -94,9 +95,10 @@ class CanonicalObjectService:
                 FROM kpis
                 WHERE project_id = :project_id
                 ORDER BY status ASC, kpi_key ASC
+                LIMIT :limit OFFSET :offset
                 """
             ),
-            {"project_id": project_id},
+            {"project_id": project_id, "limit": limit, "offset": offset},
         ).mappings().all()
         return [self._serialize_kpi(row) for row in rows]
 
@@ -177,7 +179,7 @@ class CanonicalObjectService:
         return self._serialize_kpi(row)
 
     def list_policy_records(
-        self, connection: Connection, project_id: str
+        self, connection: Connection, project_id: str, limit: int = 50, offset: int = 0
     ) -> list[dict[str, Any]]:
         rows = connection.execute(
             text(
@@ -187,9 +189,10 @@ class CanonicalObjectService:
                 FROM policy_records
                 WHERE project_id = :project_id
                 ORDER BY policy_key ASC, version DESC
+                LIMIT :limit OFFSET :offset
                 """
             ),
-            {"project_id": project_id},
+            {"project_id": project_id, "limit": limit, "offset": offset},
         ).mappings().all()
         return [self._serialize_temporal(row) for row in rows]
 
@@ -257,7 +260,7 @@ class CanonicalObjectService:
         )
         return self._serialize_temporal(row)
 
-    def list_plans(self, connection: Connection, project_id: str) -> list[dict[str, Any]]:
+    def list_plans(self, connection: Connection, project_id: str, limit: int = 50, offset: int = 0) -> list[dict[str, Any]]:
         rows = connection.execute(
             text(
                 """
@@ -267,9 +270,10 @@ class CanonicalObjectService:
                 FROM plans
                 WHERE project_id = :project_id
                 ORDER BY created_at DESC
+                LIMIT :limit OFFSET :offset
                 """
             ),
-            {"project_id": project_id},
+            {"project_id": project_id, "limit": limit, "offset": offset},
         ).mappings().all()
         return [self._serialize_temporal(row) for row in rows]
 
@@ -328,7 +332,7 @@ class CanonicalObjectService:
         return self._serialize_temporal(row)
 
     def list_meetings(
-        self, connection: Connection, project_id: str
+        self, connection: Connection, project_id: str, limit: int = 50, offset: int = 0
     ) -> list[dict[str, Any]]:
         rows = connection.execute(
             text(
@@ -340,9 +344,10 @@ class CanonicalObjectService:
                 FROM meetings
                 WHERE project_id = :project_id
                 ORDER BY created_at DESC
+                LIMIT :limit OFFSET :offset
                 """
             ),
-            {"project_id": project_id},
+            {"project_id": project_id, "limit": limit, "offset": offset},
         ).mappings().all()
         return [self._serialize_temporal(row) for row in rows]
 

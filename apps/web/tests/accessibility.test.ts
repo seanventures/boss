@@ -73,5 +73,61 @@ describe("executive console accessibility baseline", () => {
     expect(pageSource).toContain('id="budget-control-heading"');
     expect(pageSource).toContain('aria-labelledby="budget-allocations-heading"');
     expect(pageSource).toContain('id="budget-allocations-heading"');
+    // Commercial local surfaces polish (edition, packs manager, marketplace blocked, account connect panels) + a11y per COMPKG P2 + DoD
+    expect(pageSource).toContain('aria-labelledby="installed-packs-heading"');
+    expect(pageSource).toContain('id="installed-packs-heading"');
+    expect(pageSource).toContain('aria-labelledby="installed-roles-heading"');
+    expect(pageSource).toContain('id="installed-roles-heading"');
+    expect(pageSource).toContain('aria-labelledby="edition-account-connect-heading"');
+    expect(pageSource).toContain('id="edition-account-connect-heading"');
+    expect(pageSource).toContain('aria-labelledby="account-connect-health-heading"');
+    expect(pageSource).toContain('id="account-connect-health-heading"');
+    expect(pageSource).toContain('aria-labelledby="hosted-auth-sessions-heading"');
+    expect(pageSource).toContain('id="hosted-auth-sessions-heading"');
+    expect(pageSource).toContain('aria-labelledby="license-entitlements-heading"');
+    expect(pageSource).toContain('id="license-entitlements-heading"');
+    expect(pageSource).toContain('aria-labelledby="team-invites-heading"');
+    expect(pageSource).toContain('id="team-invites-heading"');
+    expect(pageSource).toContain('aria-labelledby="billing-portal-sessions-heading"');
+    expect(pageSource).toContain('id="billing-portal-sessions-heading"');
+    expect(pageSource).toContain('aria-labelledby="hosted-marketplace-catalog-heading"');
+    expect(pageSource).toContain('id="hosted-marketplace-catalog-heading"');
+  });
+
+  it("client toasts + action forms have a11y (aria-live, role, labelled, testids for P2 states per ux-review + GAP-AUTO-001 + CAN/BUD)", () => {
+    const clientSource = readFileSync(
+      resolve(__dirname, "../app/client-forms.tsx"),
+      "utf8",
+    );
+    const pageSource = readFileSync(
+      resolve(__dirname, "../app/page.tsx"),
+      "utf8",
+    );
+
+    // Toast container + live regions + dismiss for a11y (no silent feedback)
+    expect(clientSource).toContain('role="region"');
+    expect(clientSource).toContain('aria-label="Status notifications"');
+    expect(clientSource).toContain('aria-live="polite"');
+    expect(clientSource).toContain('assertive');
+    expect(clientSource).toContain('role="status"');
+    expect(clientSource).toContain('aria-label="Dismiss notification"');
+    expect(clientSource).toContain('className="toast-container"');
+
+    // ActionForm wrappers integrate loading/error states + revalidate refresh (5+ actions)
+    expect(clientSource).toContain('aria-busy={isPending}');
+    expect(clientSource).toContain('role="status"');
+    expect(clientSource).toContain('role="alert"');
+    expect(clientSource).toContain('data-testid="kpi-create-form"');
+    expect(clientSource).toContain('data-testid="command-submit-form"');
+    expect(clientSource).toContain('data-testid="provider-create-form"');
+    expect(clientSource).toContain('data-testid="self-imp-proposal-form"');
+    expect(clientSource).toContain('data-testid="budget-reserve-queue-form"');
+
+    // Page now uses the wrapped forms (client feedback on key actions)
+    expect(pageSource).toContain('KpiCreateForm');
+    expect(pageSource).toContain('CommandSubmitForm');
+    expect(pageSource).toContain('ProviderCreateForm');
+    expect(pageSource).toContain('BudgetReserveQueueForm');
+    expect(pageSource).toContain('SelfImprovementProposalForm');
   });
 });

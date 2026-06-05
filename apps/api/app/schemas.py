@@ -1760,6 +1760,8 @@ class DepartmentCreateRequest(BaseModel):
 class DepartmentListResponse(BaseModel):
     project_id: str
     items: list[DepartmentSummary]
+    limit: int
+    offset: int
 
 
 class KpiSummary(BaseModel):
@@ -1820,6 +1822,8 @@ class PolicyRecordCreateRequest(BaseModel):
 class PolicyRecordListResponse(BaseModel):
     project_id: str
     items: list[PolicyRecordSummary]
+    limit: int
+    offset: int
 
 
 class PlanSummary(BaseModel):
@@ -1853,6 +1857,8 @@ class PlanCreateRequest(BaseModel):
 class PlanListResponse(BaseModel):
     project_id: str
     items: list[PlanSummary]
+    limit: int
+    offset: int
 
 
 class MeetingSummary(BaseModel):
@@ -1942,6 +1948,8 @@ class MeetingRunRequest(BaseModel):
 class MeetingListResponse(BaseModel):
     project_id: str
     items: list[MeetingSummary]
+    limit: int
+    offset: int
 
 
 class SelfImprovementProposalCreateRequest(BaseModel):
@@ -2014,6 +2022,8 @@ class SelfImprovementProposalDetail(SelfImprovementProposalSummary):
 class SelfImprovementProposalListResponse(BaseModel):
     project_id: str
     items: list[SelfImprovementProposalSummary]
+    limit: int
+    offset: int
 
 
 class SelfImprovementCanaryRequest(BaseModel):
@@ -3293,6 +3303,8 @@ class CostAnomalySummary(BaseModel):
 class CostAnomalyListResponse(BaseModel):
     project_id: str
     items: list[CostAnomalySummary]
+    limit: int
+    offset: int
 
 
 class ProviderHealthSummary(BaseModel):
@@ -3312,6 +3324,8 @@ class ProviderHealthSummary(BaseModel):
 class ProviderHealthListResponse(BaseModel):
     project_id: str
     items: list[ProviderHealthSummary]
+    limit: int
+    offset: int
 
 
 class DriftReportSummary(BaseModel):
@@ -3331,6 +3345,8 @@ class DriftReportSummary(BaseModel):
 class DriftReportListResponse(BaseModel):
     project_id: str
     items: list[DriftReportSummary]
+    limit: int
+    offset: int
 
 
 class ReconciliationRunSummary(BaseModel):
@@ -3352,6 +3368,8 @@ class ReconciliationRunSummary(BaseModel):
 class ReconciliationRunListResponse(BaseModel):
     project_id: str
     items: list[ReconciliationRunSummary]
+    limit: int
+    offset: int
 
 
 class DeploymentTargetSummary(BaseModel):
@@ -3377,6 +3395,8 @@ class DeploymentTargetSummary(BaseModel):
 class DeploymentTargetListResponse(BaseModel):
     project_id: str
     items: list[DeploymentTargetSummary]
+    limit: int
+    offset: int
 
 
 class DeploymentTargetCreateRequest(BaseModel):
@@ -3417,6 +3437,8 @@ class DeploymentEnvironmentPolicySummary(BaseModel):
 class DeploymentEnvironmentPolicyListResponse(BaseModel):
     project_id: str
     items: list[DeploymentEnvironmentPolicySummary]
+    limit: int
+    offset: int
 
 
 class DeploymentEnvironmentPolicyUpsertRequest(BaseModel):
@@ -3606,6 +3628,8 @@ class ResourceReceiptSummary(BaseModel):
 class ResourceReceiptListResponse(BaseModel):
     project_id: str
     items: list[ResourceReceiptSummary]
+    limit: int
+    offset: int
 
 
 class WorkerPoolSummary(BaseModel):

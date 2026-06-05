@@ -11826,6 +11826,398 @@ def test_self_improvement_revision_request_updates_proposal_status(client):
     assert payload["current_decision_id"] is None
 
 
+def test_self_improvement_proposal_perm_enforced(client):
+    """Covers P2 e2e perm: create proposal requires self_improvement_manage (operator lacks it)."""
+    denied = client.post(
+        "/v1/self-improvement/proposals",
+        json={
+            "project_id": "boss-dogfood",
+            "title": "Perm test proposal",
+            "summary": "Should be denied for lack of perm.",
+            "change_ref": "https://example.com/ref",
+            "diff_summary": "Test perm enforcement.",
+            "expected_impact": ["perm visible"],
+            "test_plan": ["test perm path"],
+            "canary_scope": ["test only"],
+            "rollback_plan": ["no change"],
+            "success_metrics": ["403 on bad actor"],
+            "actor": "coo",
+            "risk_tier": 2,
+        },
+    )
+    assert denied.status_code == 403
+    detail = denied.json().get("detail", "")
+    assert "lacks permission 'self_improvement_manage'" in detail
+
+
+def test_self_improvement_canary_only_from_canary_approved_state(client):
+    """Covers P2 e2e state machine: canary record only allowed from canary_approved (not proposed). 409 on invalid transition."""
+    created = client.post(
+        "/v1/self-improvement/proposals",
+        json={
+            "project_id": "boss-dogfood",
+            "title": "Canary state test",
+            "summary": "Test canary gate.",
+            "change_ref": "ref-state",
+            "diff_summary": "State only.",
+            "expected_impact": ["state safety"],
+            "test_plan": ["state tests"],
+            "canary_scope": ["unit"],
+            "rollback_plan": ["revert"],
+            "success_metrics": ["no bad trans"],
+            "actor": "vp_agents",
+            "risk_tier": 2,
+        },
+    )
+    assert created.status_code == 201
+    proposal_id = created.json()["id"]
+    # do not approve decision; status remains proposed
+    canary = client.post(
+        f"/v1/self-improvement/proposals/{proposal_id}/canary",
+        json={
+            "actor": "release_manager",
+            "outcome": "succeeded",
+            "summary": "Premature canary.",
+            "metrics": {"foo": 1},
+            "evidence_refs": ["e1"],
+        },
+    )
+    assert canary.status_code == 409
+    assert "cannot record a canary result" in canary.json().get("detail", "")
+
+
+def test_self_improvement_rollback_only_from_rolled_out_state(client):
+    """Covers P2 e2e: rollback only from rolled_out state; 409 otherwise."""
+    created = client.post(
+        "/v1/self-improvement/proposals",
+        json={
+            "project_id": "boss-dogfood",
+            "title": "Rollback state test",
+            "summary": "Test rollback gate.",
+            "change_ref": "ref-rollback",
+            "diff_summary": "Only rolled_out.",
+            "expected_impact": ["safety"],
+            "test_plan": ["trans tests"],
+            "canary_scope": ["test"],
+            "rollback_plan": ["revert"],
+            "success_metrics": ["no early rollback"],
+            "actor": "vp_agents",
+        },
+    )
+    assert created.status_code == 201
+    proposal_id = created.json()["id"]
+    # attempt rollback from proposed
+    rb = client.post(
+        f"/v1/self-improvement/proposals/{proposal_id}/rollback",
+        json={
+            "actor": "release_manager",
+            "reason": "Early rollback attempt.",
+            "metrics": {"bar": 2},
+            "evidence_refs": ["e2"],
+        },
+    )
+    assert rb.status_code == 409
+    assert "cannot be rolled back" in rb.json().get("detail", "")
+
+
+def test_self_improvement_concurrent_canary_attempts(client):
+    """Covers P2 e2e conc + no duplicate effects: after canary_approved, concurrent record attempts; one wins, other 409; single artifact + status final."""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    created = client.post(
+        "/v1/self-improvement/proposals",
+        json={
+            "project_id": "boss-dogfood",
+            "title": "Conc canary test",
+            "summary": "Race on canary record.",
+            "change_ref": "ref-conc",
+            "diff_summary": "Concurrent safe.",
+            "expected_impact": ["idempotent trans"],
+            "test_plan": ["conc test"],
+            "canary_scope": ["dogfood"],
+            "rollback_plan": ["revert"],
+            "success_metrics": ["one effect"],
+            "actor": "vp_agents",
+        },
+    )
+    assert created.status_code == 201
+    proposal_id = created.json()["id"]
+    dec_id = created.json()["current_decision_id"]
+    # approve to canary_approved
+    app = client.post(
+        f"/v1/decisions/{dec_id}/approve",
+        json={"actor": "ceo", "note": "ok"},
+    )
+    assert app.status_code == 200
+
+    def do_canary():
+        return client.post(
+            f"/v1/self-improvement/proposals/{proposal_id}/canary",
+            json={
+                "actor": "release_manager",
+                "outcome": "succeeded",
+                "summary": "Concurrent canary.",
+                "metrics": {"conc": 1},
+                "evidence_refs": ["conc-evt"],
+            },
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futs = [executor.submit(do_canary), executor.submit(do_canary)]
+        results = [f.result() for f in as_completed(futs)]
+
+    codes = sorted([r.status_code for r in results])
+    assert codes == [200, 409] or codes == [409, 200]
+    final = client.get(f"/v1/self-improvement/proposals/{proposal_id}")
+    assert final.status_code == 200
+    assert final.json()["status"] == "canary_succeeded"
+    assert final.json()["canary_artifact_id"]
+
+
+def test_self_improvement_perm_on_canary_rollout_rollback(client):
+    """Covers P2 e2e perm + states: self_improvement_manage required for canary/record/rollout/rollback (not just create)."""
+    created = client.post(
+        "/v1/self-improvement/proposals",
+        json={
+            "project_id": "boss-dogfood",
+            "title": "Perm on actions test",
+            "summary": "Operator cannot record canary/rollout/rollback.",
+            "change_ref": "ref-perm-actions",
+            "diff_summary": "Perm everywhere.",
+            "expected_impact": ["perm safety"],
+            "test_plan": ["perm tests"],
+            "canary_scope": ["test"],
+            "rollback_plan": ["revert"],
+            "success_metrics": ["403s"],
+            "actor": "vp_agents",
+        },
+    )
+    assert created.status_code == 201
+    proposal_id = created.json()["id"]
+    dec_id = created.json()["current_decision_id"]
+
+    # approve to canary_approved
+    assert (
+        client.post(
+            f"/v1/decisions/{dec_id}/approve",
+            json={"actor": "ceo", "note": "ok"},
+        ).status_code
+        == 200
+    )
+
+    # operator cannot record canary
+    denied_canary = client.post(
+        f"/v1/self-improvement/proposals/{proposal_id}/canary",
+        json={
+            "actor": "coo",
+            "outcome": "succeeded",
+            "summary": "no",
+            "metrics": {"x": 1},
+            "evidence_refs": ["e"],
+        },
+    )
+    assert denied_canary.status_code == 403
+    assert "self_improvement_manage" in denied_canary.json().get("detail", "")
+
+    # vp can record canary success
+    canary_ok = client.post(
+        f"/v1/self-improvement/proposals/{proposal_id}/canary",
+        json={
+            "actor": "release_manager",
+            "outcome": "succeeded",
+            "summary": "ok",
+            "metrics": {"x": 1},
+            "evidence_refs": ["e"],
+        },
+    )
+    assert canary_ok.status_code == 200
+    rollout_dec = canary_ok.json()["current_decision_id"]
+
+    # approve rollout
+    assert (
+        client.post(
+            f"/v1/decisions/{rollout_dec}/approve",
+            json={"actor": "ceo", "note": "ok"},
+        ).status_code
+        == 200
+    )
+
+    # operator denied on rollout
+    denied_roll = client.post(
+        f"/v1/self-improvement/proposals/{proposal_id}/rollout",
+        json={
+            "actor": "coo",
+            "summary": "no",
+            "metrics": {"y": 1},
+            "evidence_refs": ["e2"],
+        },
+    )
+    assert denied_roll.status_code == 403
+
+    # vp rollout
+    roll_ok = client.post(
+        f"/v1/self-improvement/proposals/{proposal_id}/rollout",
+        json={
+            "actor": "release_manager",
+            "summary": "rolled",
+            "metrics": {"y": 1},
+            "evidence_refs": ["e2"],
+        },
+    )
+    assert roll_ok.status_code == 200
+
+    # operator denied rollback
+    denied_rb = client.post(
+        f"/v1/self-improvement/proposals/{proposal_id}/rollback",
+        json={
+            "actor": "coo",
+            "reason": "no",
+            "metrics": {"z": 1},
+            "evidence_refs": ["e3"],
+        },
+    )
+    assert denied_rb.status_code == 403
+
+
+def test_self_improvement_concurrent_rollout_attempts(client):
+    """Covers P2 e2e conc + no dup effects: concurrent rollout after approved; exactly one succeeds, final rolled_out + single artifact."""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    created = client.post(
+        "/v1/self-improvement/proposals",
+        json={
+            "project_id": "boss-dogfood",
+            "title": "Conc rollout test",
+            "summary": "Race on rollout record.",
+            "change_ref": "ref-conc-roll",
+            "diff_summary": "Concurrent rollout safe.",
+            "expected_impact": ["single effect"],
+            "test_plan": ["conc rollout"],
+            "canary_scope": ["dogfood"],
+            "rollback_plan": ["revert"],
+            "success_metrics": ["one rollout"],
+            "actor": "vp_agents",
+        },
+    )
+    assert created.status_code == 201
+    proposal_id = created.json()["id"]
+    canary_dec = created.json()["current_decision_id"]
+
+    assert (
+        client.post(
+            f"/v1/decisions/{canary_dec}/approve",
+            json={"actor": "ceo", "note": "canary ok"},
+        ).status_code
+        == 200
+    )
+    canary_res = client.post(
+        f"/v1/self-improvement/proposals/{proposal_id}/canary",
+        json={
+            "actor": "release_manager",
+            "outcome": "succeeded",
+            "summary": "canary good",
+            "metrics": {"c": 1},
+            "evidence_refs": ["c1"],
+        },
+    )
+    assert canary_res.status_code == 200
+    rollout_dec = canary_res.json()["current_decision_id"]
+
+    assert (
+        client.post(
+            f"/v1/decisions/{rollout_dec}/approve",
+            json={"actor": "ceo", "note": "roll ok"},
+        ).status_code
+        == 200
+    )
+
+    def do_rollout():
+        return client.post(
+            f"/v1/self-improvement/proposals/{proposal_id}/rollout",
+            json={
+                "actor": "release_manager",
+                "summary": "Concurrent rollout.",
+                "metrics": {"roll": 1},
+                "evidence_refs": ["roll-evt"],
+            },
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futs = [executor.submit(do_rollout), executor.submit(do_rollout)]
+        results = [f.result() for f in as_completed(futs)]
+
+    codes = sorted([r.status_code for r in results])
+    assert codes == [200, 409] or codes == [409, 200]
+    final = client.get(f"/v1/self-improvement/proposals/{proposal_id}")
+    assert final.status_code == 200
+    assert final.json()["status"] == "rolled_out"
+    assert final.json()["rollout_artifact_id"]
+
+
+def test_self_improvement_reject_path_and_events(client, engine):
+    """Covers P2 e2e states + events + persist: reject from proposed leads to rejected, no further canary, decision cleared, events + list persist."""
+    created = client.post(
+        "/v1/self-improvement/proposals",
+        json={
+            "project_id": "boss-dogfood",
+            "title": "Reject path test",
+            "summary": "Test reject.",
+            "change_ref": "ref-reject",
+            "diff_summary": "Reject state.",
+            "expected_impact": ["safety"],
+            "test_plan": ["reject test"],
+            "canary_scope": ["unit"],
+            "rollback_plan": ["revert"],
+            "success_metrics": ["no proceed"],
+            "actor": "vp_agents",
+        },
+    )
+    assert created.status_code == 201
+    proposal_id = created.json()["id"]
+    dec_id = created.json()["current_decision_id"]
+    assert created.json()["status"] == "proposed"
+
+    # reject via decision
+    rej = client.post(
+        f"/v1/decisions/{dec_id}/reject",
+        json={"actor": "ceo", "note": "Not ready."},
+    )
+    assert rej.status_code == 200
+
+    prop = client.get(f"/v1/self-improvement/proposals/{proposal_id}")
+    assert prop.status_code == 200
+    p = prop.json()
+    assert p["status"] == "rejected"
+    assert p["status_note"] == "Not ready."
+    assert p["current_decision_id"] is None
+
+    # cannot canary from rejected
+    bad_can = client.post(
+        f"/v1/self-improvement/proposals/{proposal_id}/canary",
+        json={
+            "actor": "release_manager",
+            "outcome": "succeeded",
+            "summary": "no",
+            "metrics": {"bad": 1},
+            "evidence_refs": ["bad"],
+        },
+    )
+    assert bad_can.status_code == 409
+
+    # list persists the state
+    lst = client.get("/v1/self-improvement/proposals", params={"project_id": "boss-dogfood"})
+    assert lst.status_code == 200
+    items = lst.json()["items"]
+    matching = [i for i in items if i["id"] == proposal_id]
+    assert matching and matching[0]["status"] == "rejected"
+
+    # events include reject
+    evs = client.get("/v1/events", params={"project_id": "boss-dogfood"})
+    etypes = [e["event_type"] for e in evs.json()["items"]]
+    assert "self_improvement.rejected" in etypes
+    assert "decision.rejected" in etypes  # from decision path
+
+
 def test_approved_decision_can_be_manually_executed_with_evidence(client, engine):
     with engine.begin() as connection:
         connection.execute(

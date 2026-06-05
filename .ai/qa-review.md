@@ -39,7 +39,7 @@
 6. If docker: full make test
 7. Fix any fail, re-run. (conftest.py minimally extended for tolerant clean to support ephemeral schema-only postgres; test-only file)
 
-**Status**: Good coverage for closed gaps + GAP-AUTO-002 now has explicit race/perm/persist tests (all GREEN). Remaining P2: full browser e2e, more UX states (see GAP-AUTO-001). No blocking test holes.
+**Status**: Good coverage for closed gaps + GAP-AUTO-002 + now E2E_SELFIMP (qa-e2e-selfimp) complete: SIM proposal/canary/rollout/rollback journeys + states/trans + conc (canary+rollout) + perm (create+actions) + persist (list+refresh) tests (all GREEN). Remaining P2: full browser e2e, more UX states (see GAP-AUTO-001). No blocking test holes.
 **Files**: test files + Makefile + .ai/ (qa-test, qa-review, etc).
 
 ## Full P2 Validation Run (2026-06-05, this QA task)
@@ -64,4 +64,5 @@
 No prod behavior change; all per AGENTS (edges/state tests added, build pass, no silent, receipts/res in paths covered by prior).
 **.ai updates**: qa-test.md (full), qa-review (this), gap-backlog (note extensions), codex-handoff.md, status.md, activity-log.md (append).
 **Evidence**: All cmds output captured above + in terminal logs; 27+ core targeted green incl new rate; smoke/lint/build/vals PASS; web 84; rate 4/4. Commit/push/PR per task.
+**E2E_SELFIMP addition (this task)**: pytest -k self_improvement pass (11 targeted incl 3 new for conc/perm/reject/persist); pnpm test self* (api-client+activity) pass; added client contract for SIM full + states. .ai/agents/qa-e2e-selfimp.md (13 bullets) + syncs.
 **Remaining**: P2 e2e browser, rate in prod (redis note already), pagination etc as in reviews. Full local matrix validated for P2.

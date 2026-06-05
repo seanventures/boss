@@ -43,9 +43,9 @@
 - More: manual mobile viewport + axe/lighthouse; visual states in e2e (playwright? not present); link success KPI to event/artifact.
 - Copy: may add tooltips for budget terms later.
 - Nav: consider in-page <nav> anchors to #budget-control etc for long console.
-- "fixed" for this audit's scope (explicit states confirmed + minimal a11y/landmark/copy polish); remaining as P2 open in GAP.
+- "fixed" for this audit's scope (explicit states confirmed + minimal a11y/landmark/copy polish); P2 client toasts completed by UX_TOASTS_COMPLETE agent (client-forms + wrappers on 5+ actions + tests + a11y + reval; see .ai/agents/ui-ux-toasts-complete.md + gap).
 
 **Severity**: P2 polish (GAP-AUTO-001); core states were present, no P0 UX issues (reachability good, no dead ends, consistent patterns).
-**Status**: Acceptable + polished in review. "fixed" the audit/gap item for states reachability/empty/error/a11y in KPI/budget; "P2 remaining" for client enhancements.
+**Status**: Acceptable + polished in review. "fixed" the audit/gap for states + client toasts complete (P2 ux-review + DoD); GAP-AUTO-001 closed.
 **Files Touched in Review + Fix**: apps/web/app/page.tsx, apps/web/tests/accessibility.test.ts, .ai/ux-review.md, .ai/agents/ui-ux-design.md, .ai/activity-log.md, .ai/codex-handoff.md. (grep/read confirmed libs had states already).
 **Validation**: Tests+build green; commit small; AGENTS review checklist (no external bypass, no missing receipts here as UI, states tested, tenant via projectId).

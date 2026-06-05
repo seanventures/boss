@@ -1,12 +1,25 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi, beforeEach } from "vitest";
 
 import { BossApiError } from "@boss/api-client";
+
+// Mock next/cache revalidate for action tests (integrates with client toasts + router.refresh in forms)
+vi.mock("next/cache", () => ({
+  revalidatePath: vi.fn(),
+}));
 
 vi.mock("../lib/client", () => ({
   PROJECT_ID: "boss-dogfood",
   resolveProjectId: (projectId?: string) => projectId?.trim() || "boss-dogfood",
   client: {
     listKpis: vi.fn(),
+    createKpi: vi.fn(),
+    proposeCommand: vi.fn(),
+    createProviderAccount: vi.fn(),
+    createSelfImprovementProposal: vi.fn(),
+    listSelfImprovementProposals: vi.fn(),
+    queueOutboxDelivery: vi.fn(),
+    reserveBudget: vi.fn(),
+    // ensure all used in action tests
   },
 }));
 
@@ -117,5 +130,111 @@ describe("KPI feed", async () => {
     // also empty for alternate project context (e.g. switched then refreshed)
     const feedOther = emptyKpiFeed("after refresh on switched project", "other-proj-123");
     expect(feedOther.blockedReason).toBe("after refresh on switched project");
+  });
+});
+
+// Action tests for client feedback toasts (loading/success/error states + revalidate integration)
+// Covers 5+ key actions per ux-review P2 + DoD + CAN-006 / BUD states + GAP-AUTO-001
+describe("client action feedback (toasts + revalidate)", async () => {
+  const { revalidatePath } = await import("next/cache");
+  const { client } = await import("../lib/client");
+  const {
+    createKpiAction,
+    submitCommandAction,
+    createProviderAccountAction,
+    submitSelfImprovementProposalAction,
+    queueOutboxMessageAction,
+  } = await import("../app/actions");
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("createKpiAction succeeds, calls revalidatePath, no throw (success toast path in client form)", async () => {
+    vi.mocked(client.createKpi).mockResolvedValueOnce({
+      id: "kpi_new",
+      project_id: "boss-dogfood",
+      kpi_key: "test_kpi",
+      name: "Test",
+      target_value: 5,
+      current_value: 1,
+      unit: "x",
+      status: "active",
+      created_by: "exec",
+      created_at: "2026-06-05T00:00:00Z",
+      updated_at: "2026-06-05T00:00:00Z",
+    });
+
+    const fd = new FormData();
+    fd.set("project_id", "boss-dogfood");
+    fd.set("actor", "exec");
+    fd.set("kpi_key", "test_kpi");
+    fd.set("name", "Test");
+    fd.set("target_value", "5");
+    fd.set("current_value", "1");
+    fd.set("unit", "x");
+
+    await expect(createKpiAction(fd)).resolves.toBeUndefined();
+    expect(client.createKpi).toHaveBeenCalledTimes(1);
+    expect(revalidatePath).toHaveBeenCalledWith("/");
+  });
+
+  it("createKpiAction throws on invalid (error banner + toast path)", async () => {
+    const fd = new FormData();
+    fd.set("project_id", "boss-dogfood");
+    fd.set("actor", "exec");
+    fd.set("kpi_key", "bad");
+    fd.set("name", "");
+    fd.set("target_value", "0"); // triggers <=0 validation
+    fd.set("current_value", "0");
+    fd.set("unit", "x");
+
+    await expect(createKpiAction(fd)).rejects.toThrow("target_value must be greater than zero");
+    expect(revalidatePath).not.toHaveBeenCalled();
+  });
+
+  it("submitCommandAction + queueOutbox (budget) call revalidate (command + budget feedback states)", async () => {
+    vi.mocked(client.proposeCommand).mockResolvedValueOnce({ status: "proposed", task_id: "t1", job_id: "j_cmd", artifact_id: "a_cmd" } as any);
+    vi.mocked(client.reserveBudget).mockResolvedValueOnce({ status: "reserved", reservation_id: "br1", budget_state: "green", message: "" } as any);
+    vi.mocked(client.queueOutboxDelivery).mockResolvedValueOnce({ id: "j1", project_id: "boss-dogfood", kind: "outbox_delivery", status: "queued", data_boundary: "internal", priority: 0, max_attempts: 3, attempts: 0, created_at: "2026-06-05T00:00:00Z" } as any);
+
+    const cmdFd = new FormData();
+    cmdFd.set("project_id", "boss-dogfood");
+    cmdFd.set("actor", "exec");
+    cmdFd.set("command", "Do the thing");
+    await submitCommandAction(cmdFd);
+    expect(revalidatePath).toHaveBeenCalledWith("/");
+
+    const qFd = new FormData();
+    qFd.set("message_id", "m1");
+    qFd.set("project_id", "boss-dogfood");
+    qFd.set("actor", "exec");
+    qFd.set("urgency", "normal");
+    await queueOutboxMessageAction(qFd);
+    expect(client.reserveBudget).toHaveBeenCalled();
+    expect(revalidatePath).toHaveBeenCalledWith("/");
+  });
+
+  it("provider and self-imp actions succeed with revalidate (covers provider/self-imp toast states)", async () => {
+    vi.mocked(client.createProviderAccount).mockResolvedValueOnce({ id: "pa1", project_id: "boss-dogfood", provider: "digitalocean", account_label: "sandbox", credential_ref: "env:DO", scopes: [], status: "active", read_only: true, deploy_capable: false, billing_readable: true, destructive_actions_disabled: true, capabilities: [], missing_permissions: [], created_by: "ceo", created_at: "2026-06-05T00:00:00Z", updated_at: "2026-06-05T00:00:00Z" } as any);
+    vi.mocked(client.createSelfImprovementProposal).mockResolvedValueOnce({ id: "sip1", project_id: "boss-dogfood", task_id: "t_sip", title: "Improve", summary: "s", change_ref: "https://ex", diff_summary: "d", expected_impact: [], test_plan: [], canary_scope: [], rollback_plan: [], success_metrics: [], status: "proposed", risk_tier: 2, created_at: "2026-06-05T00:00:00Z", updated_at: "2026-06-05T00:00:00Z" } as any);
+
+    const provFd = new FormData();
+    provFd.set("project_id", "boss-dogfood");
+    provFd.set("actor", "exec");
+    provFd.set("provider", "digitalocean");
+    provFd.set("account_label", "sandbox");
+    await createProviderAccountAction(provFd);
+    expect(revalidatePath).toHaveBeenCalledWith("/");
+
+    const impFd = new FormData();
+    impFd.set("project_id", "boss-dogfood");
+    impFd.set("actor", "exec");
+    impFd.set("title", "Improve");
+    impFd.set("summary", "s");
+    impFd.set("change_ref", "https://ex");
+    impFd.set("diff_summary", "d");
+    await submitSelfImprovementProposalAction(impFd);
+    expect(revalidatePath).toHaveBeenCalledWith("/");
   });
 });

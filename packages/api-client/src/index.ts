@@ -1936,6 +1936,8 @@ export type OutboxMessageSummary = {
 export type OutboxMessageListResponse = {
   project_id: string;
   items: OutboxMessageSummary[];
+  limit: number;
+  offset: number;
 };
 
 export type CommsChannelPolicySummary = {
@@ -2015,6 +2017,8 @@ export type InboxMessageSummary = {
 export type InboxMessageListResponse = {
   project_id: string;
   items: InboxMessageSummary[];
+  limit: number;
+  offset: number;
 };
 
 export type RoleSummary = {
@@ -2864,6 +2868,8 @@ export type CostAnomalySummary = {
 export type CostAnomalyListResponse = {
   project_id: string;
   items: CostAnomalySummary[];
+  limit: number;
+  offset: number;
 };
 
 export type DriftReportSummary = {
@@ -2929,6 +2935,8 @@ export type DeploymentTargetSummary = {
 export type DeploymentTargetListResponse = {
   project_id: string;
   items: DeploymentTargetSummary[];
+  limit: number;
+  offset: number;
 };
 
 export type DeploymentTargetCreateRequest = {
@@ -2969,6 +2977,8 @@ export type DeploymentEnvironmentPolicySummary = {
 export type DeploymentEnvironmentPolicyListResponse = {
   project_id: string;
   items: DeploymentEnvironmentPolicySummary[];
+  limit: number;
+  offset: number;
 };
 
 export type DeploymentEnvironmentPolicyUpsertRequest = {
@@ -3131,6 +3141,8 @@ export type ResourceReceiptSummary = {
 export type ResourceReceiptListResponse = {
   project_id: string;
   items: ResourceReceiptSummary[];
+  limit: number;
+  offset: number;
 };
 
 export type WorkerPoolSummary = {
@@ -3296,6 +3308,8 @@ export type DeadletterItem = {
 export type DeadletterListResponse = {
   project_id: string;
   items: DeadletterItem[];
+  limit: number;
+  offset: number;
 };
 
 export type DeadletterIncidentRequest = {
@@ -3748,9 +3762,9 @@ export function createBossApiClient(config: BossApiClientConfig) {
         body: payload,
       });
     },
-    listTasks(projectId: string) {
+    listTasks(projectId: string, limit = 50, offset = 0) {
       return request<TaskListResponse>("GET", "/v1/tasks", {
-        query: { project_id: projectId },
+        query: { project_id: projectId, limit, offset },
       });
     },
     createTask(payload: TaskCreateRequest) {
@@ -3768,9 +3782,9 @@ export function createBossApiClient(config: BossApiClientConfig) {
         body: payload,
       });
     },
-    listKpis(projectId: string) {
+    listKpis(projectId: string, limit = 50, offset = 0) {
       return request<KpiListResponse>("GET", "/v1/kpis", {
-        query: { project_id: projectId },
+        query: { project_id: projectId, limit, offset },
       });
     },
     createKpi(payload: KpiCreateRequest) {
@@ -3890,9 +3904,9 @@ export function createBossApiClient(config: BossApiClientConfig) {
         { body: payload },
       );
     },
-    listArtifacts(projectId: string, limit = 25) {
+    listArtifacts(projectId: string, limit = 25, offset = 0) {
       return request<ArtifactListResponse>("GET", "/v1/artifacts", {
-        query: { project_id: projectId, limit },
+        query: { project_id: projectId, limit, offset },
       });
     },
     getArtifact(artifactId: string) {
@@ -4257,14 +4271,14 @@ export function createBossApiClient(config: BossApiClientConfig) {
         query: { project_id: projectId, limit, offset },
       });
     },
-    listProviderCostAnomalies(projectId: string, limit = 100) {
+    listProviderCostAnomalies(projectId: string, limit = 100, offset = 0) {
       return request<CostAnomalyListResponse>("GET", "/v1/cost-anomalies", {
-        query: { project_id: projectId, limit },
+        query: { project_id: projectId, limit, offset },
       });
     },
-    listChangeSets(projectId: string, status?: string, limit = 100) {
+    listChangeSets(projectId: string, status?: string, limit = 100, offset = 0) {
       return request<ChangeSetListResponse>("GET", "/v1/changesets", {
-        query: { project_id: projectId, status, limit },
+        query: { project_id: projectId, status, limit, offset },
       });
     },
     createChangeSet(payload: ChangeSetCreateRequest) {
@@ -4286,9 +4300,9 @@ export function createBossApiClient(config: BossApiClientConfig) {
         { body: payload },
       );
     },
-    listResourceReceipts(projectId: string, limit = 100) {
+    listResourceReceipts(projectId: string, limit = 100, offset = 0) {
       return request<ResourceReceiptListResponse>("GET", "/v1/resource-receipts", {
-        query: { project_id: projectId, limit },
+        query: { project_id: projectId, limit, offset },
       });
     },
     listWorkerPools(projectId: string) {
@@ -4318,9 +4332,9 @@ export function createBossApiClient(config: BossApiClientConfig) {
         { body: payload },
       );
     },
-    listDeploymentTargets(projectId: string) {
+    listDeploymentTargets(projectId: string, limit = 50, offset = 0) {
       return request<DeploymentTargetListResponse>("GET", "/v1/deployments", {
-        query: { project_id: projectId },
+        query: { project_id: projectId, limit, offset },
       });
     },
     createDeploymentTarget(payload: DeploymentTargetCreateRequest) {
@@ -4328,12 +4342,12 @@ export function createBossApiClient(config: BossApiClientConfig) {
         body: payload,
       });
     },
-    listDeploymentEnvironmentPolicies(projectId: string) {
+    listDeploymentEnvironmentPolicies(projectId: string, limit = 50, offset = 0) {
       return request<DeploymentEnvironmentPolicyListResponse>(
         "GET",
         "/v1/deployment-environment-policies",
         {
-          query: { project_id: projectId },
+          query: { project_id: projectId, limit, offset },
         },
       );
     },
@@ -4348,9 +4362,9 @@ export function createBossApiClient(config: BossApiClientConfig) {
         },
       );
     },
-    listDeploymentRuns(projectId: string, limit = 50) {
+    listDeploymentRuns(projectId: string, limit = 50, offset = 0) {
       return request<DeploymentRunListResponse>("GET", "/v1/deployment-runs", {
-        query: { project_id: projectId, limit },
+        query: { project_id: projectId, limit, offset },
       });
     },
     createDeploymentRun(payload: DeploymentRunCreateRequest) {
@@ -4372,31 +4386,32 @@ export function createBossApiClient(config: BossApiClientConfig) {
     },
     listProviderHealth(
       projectId: string,
-      options?: { providerAccountId?: string; limit?: number },
+      options?: { providerAccountId?: string; limit?: number; offset?: number },
     ) {
       return request<ProviderHealthListResponse>("GET", "/v1/provider-health", {
         query: {
           project_id: projectId,
           provider_account_id: options?.providerAccountId,
           limit: options?.limit,
+          offset: options?.offset,
         },
       });
     },
-    listDriftReports(projectId: string, limit = 100) {
+    listDriftReports(projectId: string, limit = 100, offset = 0) {
       return request<DriftReportListResponse>("GET", "/v1/drift-reports", {
-        query: { project_id: projectId, limit },
+        query: { project_id: projectId, limit, offset },
       });
     },
-    listReconciliationRuns(projectId: string, limit = 100) {
+    listReconciliationRuns(projectId: string, limit = 100, offset = 0) {
       return request<ReconciliationRunListResponse>(
         "GET",
         "/v1/reconciliation-runs",
-        { query: { project_id: projectId, limit } },
+        { query: { project_id: projectId, limit, offset } },
       );
     },
-    listOutboxMessages(projectId: string, limit = 50) {
+    listOutboxMessages(projectId: string, limit = 50, offset = 0) {
       return request<OutboxMessageListResponse>("GET", "/v1/comms/outbox", {
-        query: { project_id: projectId, limit },
+        query: { project_id: projectId, limit, offset },
       });
     },
     listCommsChannelPolicies(projectId: string) {
@@ -4428,9 +4443,9 @@ export function createBossApiClient(config: BossApiClientConfig) {
         { body: payload },
       );
     },
-    listInboxMessages(projectId: string, limit = 50) {
+    listInboxMessages(projectId: string, limit = 50, offset = 0) {
       return request<InboxMessageListResponse>("GET", "/v1/comms/inbox", {
-        query: { project_id: projectId, limit },
+        query: { project_id: projectId, limit, offset },
       });
     },
     ingestInboxMessage(payload: InboxMessageIngestRequest) {
@@ -4657,9 +4672,9 @@ export function createBossApiClient(config: BossApiClientConfig) {
         `/v1/receipts/${encodeURIComponent(dedupeKey)}`,
       );
     },
-    listReceipts(projectId: string, limit = 50) {
+    listReceipts(projectId: string, limit = 50, offset = 0) {
       return request<ReceiptListResponse>("GET", "/v1/receipts", {
-        query: { project_id: projectId, limit },
+        query: { project_id: projectId, limit, offset },
       });
     },
     exportAuditTrail(
@@ -4693,9 +4708,9 @@ export function createBossApiClient(config: BossApiClientConfig) {
         query: { project_id: projectId, limit, offset },
       });
     },
-    listDeadletters(projectId: string, limit = 50) {
+    listDeadletters(projectId: string, limit = 50, offset = 0) {
       return request<DeadletterListResponse>("GET", "/v1/deadletters", {
-        query: { project_id: projectId, limit },
+        query: { project_id: projectId, limit, offset },
       });
     },
     createDeadletterIncident(

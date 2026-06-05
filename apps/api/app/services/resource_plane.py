@@ -700,6 +700,7 @@ class ResourcePlaneService:
         project_id: str,
         *,
         limit: int = 100,
+        offset: int = 0,
     ) -> list[dict[str, Any]]:
         rows = connection.execute(
             text(
@@ -711,10 +712,10 @@ class ResourcePlaneService:
                 FROM cost_anomalies
                 WHERE project_id = :project_id
                 ORDER BY created_at DESC
-                LIMIT :limit
+                LIMIT :limit OFFSET :offset
                 """
             ),
-            {"project_id": project_id, "limit": limit},
+            {"project_id": project_id, "limit": limit, "offset": offset},
         ).mappings().all()
         return [self._serialize_cost_anomaly(row) for row in rows]
 
@@ -725,9 +726,10 @@ class ResourcePlaneService:
         *,
         provider_account_id: Optional[str] = None,
         limit: int = 100,
+        offset: int = 0,
     ) -> list[dict[str, Any]]:
         clauses = ["project_id = :project_id"]
-        params: dict[str, Any] = {"project_id": project_id, "limit": limit}
+        params: dict[str, Any] = {"project_id": project_id, "limit": limit, "offset": offset}
         if provider_account_id:
             clauses.append("provider_account_id = :provider_account_id")
             params["provider_account_id"] = provider_account_id
@@ -740,7 +742,7 @@ class ResourcePlaneService:
                 FROM provider_health
                 WHERE {' AND '.join(clauses)}
                 ORDER BY last_checked_at DESC
-                LIMIT :limit
+                LIMIT :limit OFFSET :offset
                 """
             ),
             params,
@@ -753,6 +755,7 @@ class ResourcePlaneService:
         project_id: str,
         *,
         limit: int = 100,
+        offset: int = 0,
     ) -> list[dict[str, Any]]:
         rows = connection.execute(
             text(
@@ -763,10 +766,10 @@ class ResourcePlaneService:
                 FROM drift_reports
                 WHERE project_id = :project_id
                 ORDER BY created_at DESC
-                LIMIT :limit
+                LIMIT :limit OFFSET :offset
                 """
             ),
-            {"project_id": project_id, "limit": limit},
+            {"project_id": project_id, "limit": limit, "offset": offset},
         ).mappings().all()
         return [self._serialize_drift_report(row) for row in rows]
 
@@ -776,6 +779,7 @@ class ResourcePlaneService:
         project_id: str,
         *,
         limit: int = 100,
+        offset: int = 0,
     ) -> list[dict[str, Any]]:
         rows = connection.execute(
             text(
@@ -786,10 +790,10 @@ class ResourcePlaneService:
                 FROM reconciliation_runs
                 WHERE project_id = :project_id
                 ORDER BY started_at DESC
-                LIMIT :limit
+                LIMIT :limit OFFSET :offset
                 """
             ),
-            {"project_id": project_id, "limit": limit},
+            {"project_id": project_id, "limit": limit, "offset": offset},
         ).mappings().all()
         return [self._serialize_reconciliation_run(row) for row in rows]
 
@@ -896,6 +900,8 @@ class ResourcePlaneService:
         self,
         connection: Connection,
         project_id: str,
+        limit: int = 50,
+        offset: int = 0,
     ) -> list[dict[str, Any]]:
         rows = connection.execute(
             text(
@@ -906,9 +912,10 @@ class ResourcePlaneService:
                 FROM deployment_targets
                 WHERE project_id = :project_id
                 ORDER BY app_name ASC, environment ASC
+                LIMIT :limit OFFSET :offset
                 """
             ),
-            {"project_id": project_id},
+            {"project_id": project_id, "limit": limit, "offset": offset},
         ).mappings().all()
         return [self._serialize_deployment_target(row) for row in rows]
 
@@ -916,6 +923,8 @@ class ResourcePlaneService:
         self,
         connection: Connection,
         project_id: str,
+        limit: int = 50,
+        offset: int = 0,
     ) -> list[dict[str, Any]]:
         rows = connection.execute(
             text(
@@ -929,9 +938,10 @@ class ResourcePlaneService:
                 FROM deployment_environment_policies
                 WHERE project_id = :project_id
                 ORDER BY environment ASC
+                LIMIT :limit OFFSET :offset
                 """
             ),
-            {"project_id": project_id},
+            {"project_id": project_id, "limit": limit, "offset": offset},
         ).mappings().all()
         return [self._serialize_deployment_environment_policy(row) for row in rows]
 
@@ -1035,6 +1045,7 @@ class ResourcePlaneService:
         project_id: str,
         *,
         limit: int = 50,
+        offset: int = 0,
     ) -> list[dict[str, Any]]:
         rows = connection.execute(
             text(
@@ -1048,10 +1059,10 @@ class ResourcePlaneService:
                 FROM deployment_runs
                 WHERE project_id = :project_id
                 ORDER BY created_at DESC
-                LIMIT :limit
+                LIMIT :limit OFFSET :offset
                 """
             ),
-            {"project_id": project_id, "limit": limit},
+            {"project_id": project_id, "limit": limit, "offset": offset},
         ).mappings().all()
         return [self._serialize_deployment_run(row) for row in rows]
 
@@ -1695,9 +1706,10 @@ class ResourcePlaneService:
         *,
         status: Optional[str] = None,
         limit: int = 100,
+        offset: int = 0,
     ) -> list[dict[str, Any]]:
         clauses = ["project_id = :project_id"]
-        params: dict[str, Any] = {"project_id": project_id, "limit": limit}
+        params: dict[str, Any] = {"project_id": project_id, "limit": limit, "offset": offset}
         if status:
             clauses.append("status = :status")
             params["status"] = status
@@ -1713,7 +1725,7 @@ class ResourcePlaneService:
                 FROM changesets
                 WHERE {' AND '.join(clauses)}
                 ORDER BY created_at DESC
-                LIMIT :limit
+                LIMIT :limit OFFSET :offset
                 """
             ),
             params,
@@ -1988,6 +2000,7 @@ class ResourcePlaneService:
         project_id: str,
         *,
         limit: int = 100,
+        offset: int = 0,
     ) -> list[dict[str, Any]]:
         rows = connection.execute(
             text(
@@ -1999,10 +2012,10 @@ class ResourcePlaneService:
                 FROM resource_receipts
                 WHERE project_id = :project_id
                 ORDER BY created_at DESC
-                LIMIT :limit
+                LIMIT :limit OFFSET :offset
                 """
             ),
-            {"project_id": project_id, "limit": limit},
+            {"project_id": project_id, "limit": limit, "offset": offset},
         ).mappings().all()
         return [self._serialize_resource_receipt(row) for row in rows]
 

@@ -1,6 +1,6 @@
 # Codex Handoff
 
-Last updated: 2026-06-05T17:30Z (5 agents managed + integrated + validate green: DevOps AUTO-004 Closed 990d00e + .env full + full-validate target + release script; Security rate 013 Closed 5083391 in-mem + tests; Arch pag 014 Closed 4dd031c; PM audit dcd5fc8 + GAP-PRD-AUDIT-001 P3; QA e2e tests a374f4a (killed long run); .ai/ + commit/push/PR#3; only 1 P3 local + external blocked)
+Last updated: 2026-06-05T23:10Z (E2E_SELFIMP agent qa-e2e-selfimp closed w/ tests+states+13b md; prior 5+ managed + 3x; only 1 P3 local + external blocked)
 
 ## Current Overall Product Status
 BOSS v0.4.1 target is in advanced local-dogfood state. Most PRD-v2.0 / TECH-SPEC-v2.0 requirements for core control plane, worker leases, budget governor (now full quote/reserve/consume/release/forecast), audit/no-silent-drops (with recent logging fixes), canonical objects (incl. recent KPI), roles/packs/agent-modules, Model Entitlement Broker, ProviderOps (local sync + real sandbox writes for CF/DO/Supabase), Software Factory (command->plan->PR->evidence->decision), Metatron/Mission Control console are Implemented and traced.
@@ -25,15 +25,15 @@ Validation now confirms: tests pass, build passes, no regressions. Subagent vali
 
 ## Active Grok Agents
 - Primary ORCHESTRATOR (this; prior 5+1 pack managed; DOUBLED FOR 3X SPEED: launched 10+ new specialists in parallel batch on 12+ full DoD polish slices across product; total ~20 agents; .ai/ prepped/updated for scale; will poll/integrate new batch + push/PR#3).
-- 9 base + 10+ new .md (existing updated for doubling; new created by specialists: ui-ux-design-toasts.md, qa-e2e-comms.md, feature-packs-2.md, qa-e2e-selfimp-provider.md, feature-providerops-polish.md, ux-commercial-surfaces.md, arch-pagination-expand.md, feature-monitoring-obs.md, feature-comms-ui.md + attempted others).
+- 9 base + 10+ new .md (existing updated for doubling; new created by specialists: ui-ux-design-toasts.md, qa-e2e-comms.md, feature-packs-2.md, qa-e2e-selfimp-provider.md (e2e-selfimp closed), feature-providerops-polish.md, ux-commercial-surfaces.md, arch-pagination-expand.md, feature-monitoring-obs.md, feature-comms-ui.md + attempted others).
 - 4 prior + 5+ managed complete (DevOps 019e98b0-63da AUTO-004 Closed 990d00e .env/full-validate; Security-rate 019e98b0-7e99 GAP-013 rate Closed 5083391; Arch 019e98b0-b226 GAP-014 pag Closed 4dd031c; PM 019e98b0-c77a audit + P3 note dcd5fc8; QA 019e98b0-9657 e2e a374f4a killed long).
 - New 3x batch launched (bg ids 019e98d8-* / d9-*):
-  - ui-ux-toasts 019e98d8-8903: P2 client loading/success feedback toasts for 5+ actions (KPI/budget/command/provider/self-imp) per ux-review P2 + DoD 9-12 states.
+  - ui-ux-toasts 019e98d8-8903: P2 client loading/success feedback toasts for 5+ actions (KPI/budget/command/provider/self-imp) per ux-review P2 + DoD 9-12 states. (COMPLETE by UX_TOASTS_COMPLETE: client-forms + wrappers + tests states/a11y + reval; .ai/agents/ui-ux-toasts-complete.md 13 bullets; gap closed; branch ai/codex/ui-ux-toasts-client-feedback; validated pnpm test/build/lint; parallel edits fixed).
   - qa-e2e-comms 019e98d8-bf0d: full e2e journeys/tests/states for comms (policy/outbox/inbox/deadletter/ACK/quiet/throttle) P2 e2e + COM DoD.
   - feature-packs-2 019e98d8-bf0d: 2nd on GAP-PRD-AUDIT-001 P3 pack import/export (yaml validate/store/loader/export + tests/receipts) for Community ecosystem.
-  - qa-e2e-selfimp-provider 019e98d8-e518: e2e + states/conc/perm for self-imp (proposal/canary/rollout/rollback) + providerops (janitor/autoscaler/drift/deploy/health) P2 e2e + SIM/RPL DoD.
+  - qa-e2e-selfimp-provider 019e98d8-e518: e2e + states/conc/perm for self-imp (proposal/canary/rollout/rollback) + providerops (janitor/autoscaler/drift/deploy/health) P2 e2e + SIM/RPL DoD. (E2E_SELFIMP slice closed: journeys+tests+conc+perm+persist + .ai/agents/qa-e2e-selfimp.md 13 bullets).
   - feature-providerops-polish 019e98d8-e519: ProviderOps full DoD polish (janitor/autoscaler/drift/deployments/health/recon/explorer states/tests/a11y).
-  - ux-commercial-surfaces 019e98d9-1d45: Commercial local surfaces polish (edition/packs/marketplace/account-connect blocked + states/tests) COMPKG P2 + DoD.
+  - ux-commercial-surfaces 019e98d9-1d45 / commercial-full 019e9918-1012: Commercial local surfaces polish (edition/packs/marketplace/account-connect blocked + states/tests/a11y) COMPKG P2 + DoD complete (13-bullet .ai/agents/ux-commercial-full.md, new tests for community/blocked/marketplace/error, a11y landmarks, states polish in page).
   - arch-pag-expand 019e98d9-1d46: Pagination expand to remaining lists (tasks/decisions/receipts/kpis/inbox etc) P2 arch + perf DoD.
   - feature-monitoring-obs 019e98d9-5bd1: Monitoring/obs polish (health/risk/event/deadletter/provider health states/tests) P2 + AUD/MET DoD.
   - feature-comms-ui 019e98d9-5bd1: Comms UI interactions polish (policy form/outbox/inbox/ACK/compose/deadletter UI states/tests) COM P2 + DoD.
