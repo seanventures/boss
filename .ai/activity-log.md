@@ -28,6 +28,36 @@ EOT
 All 15-min terminal updates and major milestones appended here. Chronological, newest at top.
 
 ---
+=== CODEX FINAL LOCAL VALIDATION + CI BLOCKER UPDATE 2026-06-05 ===
+Product: BOSS (Business Operating System Sentinel)
+Repo root: /Volumes/DataSSD1/test/boss
+Active branch: codex/spec-closure-audit
+Head: 644c3d3
+Status: Local validation is green; GitHub Actions PR check remains blocked before any workflow step executes.
+Completed:
+- Fast-forwarded PR #3 branch to include A11Y_FULL commit 76007c1 and later integrated worker/provider polish through 7f86b7f/644c3d3.
+- Tightened Resource Plane unsupported provider wording from placeholder-style "not implemented" to explicit fail-closed unsupported ProviderAdapter messages and added regression coverage.
+- Fixed web API-client regression expectation for provider-health pagination (`offset=0`).
+- Confirmed AGENTS.md already contains the Agent Coordination section requested by the user.
+Validation:
+- `make lint`: PASS.
+- `pnpm --filter boss-web build`: PASS.
+- `DATABASE_URL=... pytest ...provider_adapter... ...provider_sync_unsupported...`: 2 PASS.
+- `pytest apps/worker/tests/test_worker.py -q`: 23 PASS.
+- Focused API worker/provider suite: 27 PASS.
+- `pnpm --filter boss-web test -- tests/accessibility.test.ts tests/api-client.test.ts tests/kpis.test.ts tests/activity.test.ts`: 65 PASS.
+- Full `make test`: 97 web tests PASS + 276 API/worker tests PASS.
+- `make smoke`: PASS.
+- `make release-blockers`: expected external blockers only (hosted Account Connect, hosted marketplace/team/billing/support, enterprise SCIM/identity, live cluster verification, ProviderOps live write credentials/approval).
+GitHub CI:
+- PR #3 check `test-and-lint` for head 644c3d3 failed before steps started: jobs array has zero steps, runner_name is empty, and `gh run view --log-failed` returns `log not found`.
+- Local tests reproduce no code failure; this is tracked as GitHub runner/pre-start external blocker.
+Next:
+- Do not claim hosted/cloud/enterprise/live-provider production readiness until external configuration and approvals exist.
+- Merge/review PR #3 when the GitHub runner issue is resolved or when maintainers accept local validation evidence.
+---
+
+---
 === E2E_REGRESSION AGENT (3x final): qa(e2e-regression) cross-slice tests for pack+selfimp+toasts+commercial+budget (P2 e2e + DoD) 2026-06-05 ===
 Product: BOSS (Business Operating System Sentinel)
 Repo root: /Volumes/DataSSD1/test/boss

@@ -1,6 +1,6 @@
 # BOSS Autonomous Delivery Status
 
-**Last updated**: 2026-06-05T23:59Z (E2E_REGRESSION 3x final + PR_PREP: cross-slice e2e regression tests (pack import+selfimp+toasts+commercial+budget happy/error/perm/persist) added/expanded in test_api + web tests; .ai/agents/e2e-regression.md 13b new + gap/trace/etc synced; pytest -k "pack or self_improvement or commercial or toasts" + pnpm test GREEN; commit 'qa(e2e-regression): ...' on ai/codex/e2e-regression + push + PR#3; prior PR_PREP_FINAL PR#3 body updated w/ full 3x + .ai/agents/pr-prep-final 13b + updates; all local closed/verified; 3x complete. PR#3 merge-ready.)
+**Last updated**: 2026-06-05T23:59Z (LOCAL FINAL VALIDATION UPDATE on PR #3 head `644c3d3`: `make lint` PASS, `pnpm --filter boss-web build` PASS, full `make test` PASS with 97 web + 276 API/worker tests, focused ProviderAdapter/worker regressions PASS, targeted web regression 65 PASS, `make smoke` PASS, `make release-blockers` reports only expected external blockers. GitHub Actions CI is still UNSTABLE because job `test-and-lint` fails before steps start: zero steps, no runner name, and `log not found`; treat as external GitHub runner/pre-start blocker. E2E_REGRESSION 3x final + PR_PREP remain complete; all local closed/verified.)
 **Repo root**: /Volumes/DataSSD1/test/boss
 **Git remote**: https://github.com/seanheiney/boss
 **Current branch**: codex/spec-closure-audit (clean; PR#3 prepped by PR_PREP_FINAL for merge/final)
