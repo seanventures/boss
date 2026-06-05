@@ -63,13 +63,15 @@ export function Toaster(): React.ReactElement | null {
       role="region"
       aria-label="Status notifications"
       aria-live="polite"
+      aria-atomic="true"
     >
       {toasts.map((t) => (
         <div
           key={t.id}
           className={`toast toast-${t.type}`}
-          role="status"
+          role={t.type === 'error' ? 'alert' : 'status'}
           aria-live={t.type === 'error' ? 'assertive' : 'polite'}
+          aria-atomic="true"
         >
           <span>{t.message}</span>
           <button
@@ -134,12 +136,12 @@ export function ActionForm({
     >
       {children}
       {isPending && (
-        <p className="loading" role="status" aria-live="polite">
+        <p className="loading" role="status" aria-live="polite" aria-atomic="true">
           Processing… (validating budget reservation, policy, and lease)
         </p>
       )}
       {localError && (
-        <p className="error-banner" role="alert">
+        <p className="error-banner" role="alert" aria-atomic="true">
           {localError}
         </p>
       )}

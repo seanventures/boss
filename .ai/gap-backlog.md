@@ -32,7 +32,7 @@
 **Immediate Action Plan**:
 - P0 local: All closed.
 - External P0s (002-004): Blocked; local fail-closed complete.
-- Full product grind for DoD 25 on ALL surfaces (even 'implemented'): 12+ parallel slices launched with doubled agents (~20+ total, 10+ new specialists in 3x batch): pack import/export P3 (2 agents), ux-toasts P2 client feedback, e2e-comms full, e2e-selfimp+providerops (e2e-selfimp closed), providerops polish, commercial local surfaces, pagination expand remaining lists, monitoring/obs, comms-ui interactions, worker/lease/infra, pm docs AC expand, security more tests, rate expand, a11y full (closed by A11Y_FULL 3x) etc.
+- Full product grind for DoD 25 on ALL surfaces (even 'implemented'): 12+ parallel slices launched with doubled agents (~20+ total, 10+ new specialists in 3x batch): pack import/export P3 (2 agents), ux-toasts P2 client feedback, e2e-comms full, e2e-selfimp+providerops (e2e-selfimp closed), providerops polish, commercial local surfaces, pagination expand remaining lists, monitoring/obs, comms-ui interactions, worker/lease/infra, pm docs AC expand, security more tests, rate expand, a11y full closed by A11Y_FULL 3x etc.
 - Agents will implement small verticals + tests + states + .ai/ + commit/push/PR#3.
 - Rebuild .ai/ after batch (prepped now for scale).
 - No core TODOs; PRD coverage good per PM but DoD polish across board for complete product.
