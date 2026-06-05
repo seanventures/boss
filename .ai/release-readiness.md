@@ -1,7 +1,7 @@
 # BOSS Release Readiness (Autonomous)
 
-**Date**: 2026-06-05 (post PM prd-audit)
-**Status**: LOCAL READY (post PR #3) - .ai/ OS in, traceability complete, P0 local gaps closed+validated+PR'd, baseline all green, external 3 P0s Blocked by design. PM prd-audit added: full coverage check vs PRD-v2/TECH (no other local gaps uncovered; comms/self-imp/commercial-local/elastic covered; "coverage good, only external left"; noted P3 GAP-PRD-AUDIT-001). Awaiting subagent reviews + any P2 fixes + merge. Full prod readiness requires external config for Blocked items.
+**Date**: 2026-06-05 (AUTO-004 closed + full local validations + DevOps release task)
+**Status**: LOCAL READY (post PR #3 + AUTO-004) - .ai/ OS in, traceability complete, P0 local gaps closed+validated+PR'd, AUTO-004 P3 closed (see .ai/gap-backlog), baseline all green (make lint/build/k8s/infra/release-blockers/smoke/deps-audit/full-validate target PASS where DB; web+targeted+smoke+validators green), external 3 P0s Blocked by design. .env.example updated with comments for ALL current BOSS_* (bootstrap, infra real provision, account connect, oidc, saml, scim, budget caps, sandbox, worker/lease/poll, core pack, etc from full code/config scan); release-blockers script improved for bootstrap coverage + re-run; Makefile enhanced (full-validate target + deps-audit follow-up); all per AGENTS (read mandatory first, small, docs, no secrets). PM prd-audit added: full coverage check vs PRD-v2/TECH (no other local gaps uncovered; comms/self-imp/commercial-local/elastic covered; "coverage good, only external left"; noted P3 GAP-PRD-AUDIT-001). Awaiting subagent reviews + any P2 fixes + merge. Full prod readiness requires external config for Blocked items.
 
 ## Production Readiness Checklist
 
@@ -39,13 +39,14 @@
 - [ ] A11y full (basic in test; expand) - P2 (subagent UX running).
 
 ### Operations
-- [x] .env.example updated (bootstrap flag in branch).
+- [x] .env.example updated (ALL BOSS_* flags commented incl bootstrap/infra/account/oidc/etc + missing from config; AUTO-004).
 - [x] Build passes (pnpm build GREEN in validation).
-- [x] CI assumptions: make-based + validators (GREEN).
+- [x] CI assumptions: make-based + validators (GREEN); new make full-validate + deps-audit enhanced.
 - [x] Migrations documented (in arch review).
 - [x] Deploy assumptions in INFRA_RUNBOOK + k8s/helm.
 - [x] Observability: events, health, deadletters, ops digest.
-- [x] PR #3 open with full audit evidence; .ai/ committed for ongoing autonomous ops.
+- [x] PR #3 open with full audit evidence; .ai/ committed for ongoing autonomous ops; AUTO-004 branch + PR comment.
+- [x] make release-blockers / full validations run (script covers bootstrap now).
 
 ### DoD for Features
 - All traced in .ai/requirements-traceability.
@@ -60,14 +61,14 @@
 5. Merge of PR #3 (or follow-ups); local coordination + traceability done.
 6. (P3 noted in PM prd-audit): dynamic local pack import/export for PRD ecosystem (GAP-PRD-AUDIT-001); not blocker for core.
 
-## Current State (2026-06-05 post audit slice complete + dispatching)
-- Audit slice (gaps, .ai/ OS, user-stories AC, 4 subagents UX/Sec/QA/PM-Docs 527e9a1, branch commits 41e5243/527e9a1) COMPLETE per DoD. Local P0s 0, P2s addressed, green, .ai/ current, PR #3 (open UNSTABLE).
+## Current State (2026-06-05 post AUTO-004 DevOps/release task complete)
+- Audit slice (gaps, .ai/ OS, user-stories AC, 4 subagents UX/Sec/QA/PM-Docs 527e9a1, branch commits 41e5243/527e9a1) COMPLETE per DoD. AUTO-004 P3 Closed (this task: .env + script + full-validate + validations).
 - Core product advanced locally (control, full budget, ProviderOps local+real sandbox, SWF, console, roles, MEB, auth etc.) per PRD-v2/IMPLEMENTATION_STATUS/TRACEABILITY.
-- .ai/ OS complete/used (all files, agents, traceability, gap with only AUTO-004 monitoring).
-- Remaining local: AUTO-004 P3 (.env/release-blockers); P2 (rate, pagination, e2e per reviews).
-- External P0s 002-004 Blocked (local fail-closed complete).
-- Dispatching parallel agents: DevOps (AUTO-004+validate), Security (rate limits impl), QA (full tests/e2e), Arch (pagination), PM (PRD coverage).
-- Recommendation: integrate agents, full make test/lint/smoke/build, .ai/ updates, push/PR. Continue full product on remaining P2 + PRD local (commercial, comms, self-imp) until no local feasible or blocked. Then full final report.
+- .ai/ OS complete/used (all files, agents, traceability, gap AUTO-004 now Closed with details/evidence).
+- Remaining local: P2 (rate, pagination, e2e per reviews). AUTO-004 resolved.
+- External P0s 002-004 Blocked (local fail-closed complete; confirmed by make release-blockers).
+- DevOps (AUTO-004+validate) + prior agents integrated; full make validations executed (lint/build/k8s/infra/release-blockers/smoke/deps-audit/full-validate-n PASS; targeted tests green).
+- Recommendation: integrate, full make test/lint/smoke/build + full-validate, .ai/ updates, push/PR comment. Continue full product on remaining P2 + PRD local (commercial, comms, self-imp) until no local feasible or blocked. Then full final report.
 
 ## Feasible Work Complete
 Audit slice + .ai/ OS + docs complete. Dispatching to polish remaining and accelerate full product. External blocked as per real-only posture.

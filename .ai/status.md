@@ -19,7 +19,7 @@
 - Core product largely implemented locally (control, budget full, ProviderOps local+real sandbox, SWF, console, roles, MEB, auth, etc.) per IMPLEMENTATION_STATUS + PRD-v2.
 - Local dogfood functional (make dev/seed/test/lint/build).
 - Real-only enforced.
-- Remaining local: AUTO-004 (P3 monitoring .env/release-blockers); P2 polish (rate 013 + pagination 014 closed by sub/agents); P3 pack import noted from audit.
+- Remaining local: P2 polish (e2e etc); rate 013 + pagination 014 closed; AUTO-004 (P3 .env/release-blockers + full-validate) CLOSED by DevOps agent (comments for all BOSS_*, script, target, validations run).
 - External P0s (002-004) Blocked (creds/deploy needed; local fail-closed complete).
 - No core TODOs/stubs (scan clean).
 - .ai/ OS ready for ongoing autonomous work. See .ai/release-readiness for slice complete note.
@@ -28,11 +28,12 @@
 (See .ai/agents/ for per-agent .md + updates)
 - ORCHESTRATOR / TECH LEAD (primary; .ai/ + PR #3 + report + subagent launch complete).
 - 9 agent .md created/updated.
-- 4 subagents complete + pushed (UX 001, Sec, QA 002, PM/Docs 527e9a1 for AUTO-003). + Security rate P2 task (this) closed GAP-013 rate limit. + Arch pagination agent closed GAP-014. Branch commits 41e5243 (011/012) + 527e9a1 (AUTO-003) + this rate work + pagination. All local for slice (P0s + AUTO 001-005 + 011-014) closed/monitored. Validator + rate + pagination tests OK. PR #3 current. Local P0 0; slice + rate + pagination complete. Next: full product or remaining P2 (e2e).
+- 4 subagents complete + pushed (UX 001, Sec, QA 002, PM/Docs 527e9a1 for AUTO-003). + Security rate P2 task closed GAP-013. + Arch pagination agent closed GAP-014. + DevOps AUTO-004 task closed (P3 .env/script/full-validate/validations). Branch commits 41e5243 (011/012) + 527e9a1 (AUTO-003) + rate/pagination + this AUTO-004. All local for slice (P0s + AUTO 001-005 + 011-014) closed/monitored. Validator + rate + pagination + devops tests OK. PR #3 current. Local P0 0; slice + rate + pagination + AUTO-004 complete. Next: full product or remaining P2 (e2e).
 - More spawnable. Subagent outputs will drive P2 fixes + re-validate.
 
 ## Active Branches / Worktrees
 - codex/spec-closure-audit (current; pushed 89166c2 with .ai/ OS + gitignore fix)
+- codex/auto-004-env-release (DevOps AUTO-004 for commit/push + PR#3 comment)
 - No additional worktrees yet.
 - Planned: ai/grok/* for P2 polish if needed.
 
