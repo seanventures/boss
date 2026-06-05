@@ -4357,6 +4357,206 @@ def test_pack_install_is_idempotent_for_new_project(client, engine):
     assert pack.json()["installed"] is True
 
 
+def test_cross_slice_pack_import_budget_edition_and_self_improvement_regression(
+    client, engine
+):
+    """Covers GAP-E2E-REGRESSION-001 across pack, commercial, budget, and SIM.
+
+    This intentionally uses the local PackSpec service import because this branch's
+    runtime import flow is service-backed while public pack APIs expose list/get/install.
+    """
+    project_id = "boss-dogfood"
+    pack_id = "test_e2e_reg_pack_v1"
+    pack_yaml = """
+id: test_e2e_reg_pack_v1
+version: 0.1.0
+description: Cross-slice regression pack for local Community import.
+status: active
+installs:
+  roles:
+    - metatron
+requires: []
+workflows: []
+policies: []
+skills: []
+"""
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                """
+                DELETE FROM events
+                WHERE project_id = :project_id
+                  AND (
+                    event_type = 'pack.imported'
+                    OR event_type = 'self_improvement.proposed'
+                    OR event_type = 'budget.reserved'
+                  )
+                """
+            ),
+            {"project_id": project_id},
+        )
+        connection.execute(
+            text(
+                """
+                DELETE FROM receipts
+                WHERE project_id = :project_id
+                  AND dedupe_key = :dedupe_key
+                """
+            ),
+            {
+                "project_id": project_id,
+                "dedupe_key": f"pack.import:{project_id}:{pack_id}",
+            },
+        )
+        connection.execute(
+            text(
+                """
+                DELETE FROM pack_installs
+                WHERE project_id = :project_id AND pack_id = :pack_id
+                """
+            ),
+            {"project_id": project_id, "pack_id": pack_id},
+        )
+
+    edition = client.get("/v1/edition", params={"project_id": project_id})
+    assert edition.status_code == 200
+    assert edition.json()["edition_id"] == "community"
+    assert edition.json()["local_auth_allowed"] is True
+
+    budget_reservation = client.post(
+        "/v1/budget/reserve",
+        json={
+            "project_id": project_id,
+            "category": "cross_slice_e2e",
+            "amount_usd_micros": 1_000,
+            "reason": "Cross-slice regression pack import and self-improvement path.",
+        },
+    )
+    assert budget_reservation.status_code == 201
+    assert budget_reservation.json()["status"] == "reserved"
+
+    with engine.begin() as connection:
+        imported = api_main.specpack.import_pack(
+            connection,
+            project_id=project_id,
+            yaml_str=pack_yaml,
+            actor="ceo",
+        )
+    assert imported["pack_id"] == pack_id
+    assert imported["installed"] is True
+    assert imported["install_status"] == "imported"
+    assert imported["role_results"][0]["role_key"] == "metatron"
+
+    with pytest.raises(ValueError, match="invalid yaml|mapping/object"):
+        with engine.begin() as connection:
+            api_main.specpack.import_pack(
+                connection,
+                project_id=project_id,
+                yaml_str=": not valid: yaml:",
+                actor="ceo",
+            )
+
+    with pytest.raises(ValueError, match="clashes with core baked pack"):
+        with engine.begin() as connection:
+            api_main.specpack.import_pack(
+                connection,
+                project_id=project_id,
+                yaml_str=pack_yaml.replace(pack_id, "core_v1"),
+                actor="ceo",
+            )
+
+    packs = client.get("/v1/packs", params={"project_id": project_id})
+    assert packs.status_code == 200
+    custom_pack = [
+        item for item in packs.json()["items"] if item["pack_id"] == pack_id
+    ]
+    assert custom_pack
+    assert custom_pack[0]["installed"] is True
+    assert custom_pack[0]["installed_version"] == "0.1.0"
+
+    proposal = client.post(
+        "/v1/self-improvement/proposals",
+        json={
+            "project_id": project_id,
+            "title": f"Improve {pack_id} install evidence",
+            "summary": "Use the imported local pack as the subject of a governed improvement.",
+            "change_ref": "local-pack://test_e2e_reg_pack_v1",
+            "diff_summary": "Add acceptance evidence around local pack import.",
+            "expected_impact": ["Imported pack remains traceable"],
+            "test_plan": ["Run cross-slice regression test"],
+            "canary_scope": ["dogfood project only"],
+            "rollback_plan": ["Delete local pack install row"],
+            "success_metrics": ["pack.imported event and proposal persist"],
+            "actor": "vp_agents",
+            "risk_tier": 2,
+        },
+    )
+    assert proposal.status_code == 201
+    proposal_payload = proposal.json()
+    assert proposal_payload["status"] == "proposed"
+    assert proposal_payload["title"].endswith("install evidence")
+    assert proposal_payload["proposal_artifact_id"]
+    assert proposal_payload["current_decision_id"]
+
+    proposals = client.get(
+        "/v1/self-improvement/proposals",
+        params={"project_id": project_id},
+    )
+    assert proposals.status_code == 200
+    assert any(item["id"] == proposal_payload["id"] for item in proposals.json()["items"])
+
+    denied_budget = client.post(
+        "/v1/budget/consume",
+        json={
+            "project_id": project_id,
+            "reservation_id": budget_reservation.json()["reservation_id"],
+            "receipt_id": "missing_receipt_for_perm_path",
+            "category": "cross_slice_e2e",
+            "skill_or_model_id": "test:e2e",
+            "estimated_usd_micros": 1_000,
+            "actual_usd_micros": 1_000,
+            "actor": "coo",
+        },
+    )
+    assert denied_budget.status_code == 403
+    assert "budget_manage" in denied_budget.json()["detail"]
+
+    with engine.begin() as connection:
+        imported_row = connection.execute(
+            text(
+                """
+                SELECT source, yaml_blob
+                FROM pack_installs
+                WHERE project_id = :project_id AND pack_id = :pack_id
+                """
+            ),
+            {"project_id": project_id, "pack_id": pack_id},
+        ).mappings().one()
+        receipt = connection.execute(
+            text(
+                """
+                SELECT id, status, effect_kind
+                FROM receipts
+                WHERE project_id = :project_id AND dedupe_key = :dedupe_key
+                """
+            ),
+            {
+                "project_id": project_id,
+                "dedupe_key": f"pack.import:{project_id}:{pack_id}",
+            },
+        ).mappings().one()
+    assert imported_row["source"] == "local_upload"
+    assert pack_id in imported_row["yaml_blob"]
+    assert receipt["status"] == "succeeded"
+    assert receipt["effect_kind"] == "pack.import"
+
+    events = client.get("/v1/events", params={"project_id": project_id, "limit": 50})
+    assert events.status_code == 200
+    event_types = [item["event_type"] for item in events.json()["items"]]
+    assert "pack.imported" in event_types
+    assert "self_improvement.proposed" in event_types
+
+
 def test_agent_module_install_is_idempotent_and_updates_role_lineage(client, engine):
     with engine.begin() as connection:
         connection.execute(text("DELETE FROM events WHERE project_id = 'boss-lab'"))

@@ -109,6 +109,13 @@ import { fetchStatus } from "../lib/status";
 import { fetchTaskFeed } from "../lib/tasks";
 import { PROJECT_ID } from "../lib/client";
 
+// Force dynamic rendering (no static page generation at build). This app's Mission Control is fully
+// data-driven from live fetches (empty states on unreachable), searchParams, and client actions.
+// Avoids "Collecting page data" phase which was surfacing internal Next manifest ENOENTs in this
+// build env (despite all fetch* catching network errs to empty feeds, and tsc/lint green).
+// Per 3x validation: make build must be green; dynamic is correct for console (no pre-renderable static content).
+export const dynamic = 'force-dynamic';
+
 function formatMicros(amount: unknown): string {
   if (typeof amount !== "number") {
     return "n/a";
