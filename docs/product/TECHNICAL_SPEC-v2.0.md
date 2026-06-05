@@ -207,6 +207,10 @@ Rules:
 - Hosted login handshakes are represented locally as `AccountConnectAuthSession` records with receipts, callback-state validation, visible blocked states when `BOSS_ACCOUNT_CONNECT_URL` is missing, and link creation only from a successful hosted adapter response.
 - ProviderOps read-only sync can run manually through `POST /v1/resources/sync` or as a leased worker job kind, `providerops.sync.readonly`. The worker calls the same Resource Plane Kernel API; failed provider sync runs fail the job so the failure is visible as both reconciliation evidence and a job deadletter.
 
+## Audit Failure Observability
+
+Policy-denial, Account Connect denial, and budget-denial helpers should write durable audit events when possible. If the audit write fails, the API must not convert the original user-facing denial into success or hide the failure. It should preserve the fail-closed response and emit a structured server log with actor, project, permission or event type, target object, and failure reason so operators can investigate the missing audit event.
+
 ## Edition and Entitlement Checks
 
 Edition checks should be capability-based, not hard-coded into UI branches.
