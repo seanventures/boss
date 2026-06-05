@@ -1,6 +1,6 @@
 # Codex Handoff
 
-Last updated: 2026-06-05T15:56:00Z (docs subagent 527e9a1 complete + pushed; AUTO-003 closed + 011/012 synced; 4 subagents total; all slice local gaps closed/monitored; PR #3 has all comments; .ai/ + handoff current; slice + OS complete for audit scope; full product grind continues per PRD)
+Last updated: 2026-06-05T16:00:00Z (audit slice + .ai/ OS + docs COMPLETE; dispatched 5 more agents for rate/pagination/validate/PRD-coverage/DevOps to accelerate full product; only AUTO-004 monitoring local; PR #3 current)
 
 ## Current Overall Product Status
 BOSS v0.4.1 target is in advanced local-dogfood state. Most PRD-v2.0 / TECH-SPEC-v2.0 requirements for core control plane, worker leases, budget governor (now full quote/reserve/consume/release/forecast), audit/no-silent-drops (with recent logging fixes), canonical objects (incl. recent KPI), roles/packs/agent-modules, Model Entitlement Broker, ProviderOps (local sync + real sandbox writes for CF/DO/Supabase), Software Factory (command->plan->PR->evidence->decision), Metatron/Mission Control console are Implemented and traced.
@@ -24,10 +24,11 @@ See .ai/requirements-traceability.md (MET-*, DEC-*, CAN-* incl KPI (CAN-006), ne
 Validation now confirms: tests pass, build passes, no regressions. Subagent validator 285 GWT + specific AC present OK. New commits on branch (41e5243, 527e9a1) advance reliability + docs.
 
 ## Active Grok Agents
-- Primary ORCHESTRATOR session (this handoff; .ai/ + PR #3 + 4 subagents (3 prior + docs) complete, slice gaps closed).
-- Agent .md files created + updated for all 9 required + product-manager (for docs subagent).
-- 4 subagents completed: UX (001), Security (review), QA (002), PM/Docs 527e9a1 (003 + 011/012 sync). All pushed + PR comments.
-- Will apply any fixes they produce, update reviews, re-validate, push/PR amend if needed.
+- Primary ORCHESTRATOR session (this handoff; audit slice complete, dispatching more for full product).
+- 9+ agent .md.
+- 4 prior subagents complete (UX/Sec/QA/PM-Docs 527e9a1).
+- Dispatching now: DevOps (AUTO-004 + validate), Security (rate limits), QA (full tests/e2e), Arch/Feature (pagination), PM (PRD coverage audit).
+- Will integrate outputs, commit/push/PR update, terminal updates.
 
 ## Active Grok Branches / PRs
 - codex/spec-closure-audit (current; includes 41e5243 "fix: preserve provider inventory when billing is unavailable" closing GAP-2026-06-05-011 P1 + GAP-2026-06-05-012 P0 fresh bootstrap; also QA 5a81c8e, UX commits, .ai/ series; PR #3 open https://github.com/seanheiney/boss/pull/3). 41e5243 advances ProviderOps (graceful billing unavailable: inventory preserved, status/message exposed in artifacts/health/recon, event, no fake costs) + bootstrap reliability (text ref for receipt_id to allow clean schema). Touched .ai/orchestrator (text aligned to latest). Good self/parallel work on branch.
@@ -128,13 +129,14 @@ Recent gap work (KPI, budget, bootstrap, audit logging, route parity) now has pa
 - No destructive prod actions performed.
 
 ## Recommended Next Autonomous Actions (for Codex or continuing Grok)
-1. Read .ai/spec-index.md, .ai/status.md, .ai/requirements-traceability.md, .ai/gap-backlog.md, .ai/*-review.md, .ai/agents/.
-2. Audit slice + .ai/ OS + docs complete (local P0 0; AUTO 001-003/005 + 011/012 closed by 4 subagents + 41e5243 + 527e9a1; validator 285 GWT OK; pushed; PR #3 current). Open local ~1 (004 monitoring).
-3. For full product: pick next from .ai/gap-backlog or PRD-v2 (e.g. Sec P2 rate limits - implement simple middleware for high-cost like metatron/command; arch P2 pagination on lists; qa e2e; commercial local surfaces; more from roadmap phase 1+).
-4. If small vertical (e.g. rate), implement + tests + .ai/ + commit/push/PR.
-5. Rebuild .ai/gap/trace/release post any.
-6. Continue 15min updates + logs + handoff.
-7. If no more local feasible (or external only), update release + produce final report for product (or slice) + stop per blocked rules.
-8. Monitor PR #3; coordinate with any other on branch.
+1. Read .ai/ files (gap shows only AUTO-004 monitoring local).
+2. Audit slice + .ai/ OS complete (4 subagents + commits closed most gaps; pushed to PR #3).
+3. Dispatching agents now for remaining P2/polish and full PRD (rate limits, pagination, full validate, PRD coverage, DevOps for AUTO-004).
+4. Integrate agent outputs: code/tests/docs, commit with req IDs, push, PR comment/update.
+5. Full validation (make test/lint/smoke/build, release-blockers).
+6. Update .ai/ (gap, status, handoff, release, activity).
+7. 15min terminal + append log.
+8. Continue until no more local feasible or blocked; then full final report.
+9. Monitor PR #3 (UNSTABLE - check failures?); new focused branches if needed.
 
-Assume this handoff is read by Codex for coordination without duplication. Update after every meaningful change. Slice for audit scope complete; full product grind continues.
+Slice complete; accelerating full product with parallel agents.

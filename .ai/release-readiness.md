@@ -59,18 +59,17 @@
 4. Full agent reviews (subagents spawned for QA/UX/Sec) + fix any P2 findings + re-validate.
 5. Merge of PR #3 (or follow-ups); local coordination + traceability done.
 
-## Current State (2026-06-05 post PR #3 + subagents)
-- Local dogfood + sandbox + core control + budget + audit + roles + provider read/write (sandbox) + console: production-grade per DoD, traced, tested, reviewed in .ai/, PR #3 open + commented.
-- .ai/ OS live and committed for future autonomous/Codex work (spec-index, traceability, gap-backlog, reviews, agents, handoff, status, activity).
-- No local P0 gaps; all closed in branch history + validated GREEN + PR #3.
-- P2 polish (UX states, race tests, sec scans) in flight via 3 parallel bg subagents (launched, 5min+ 69+ tools, no errors, productive).
-- 3 P0 external Blocked by design (release-blockers confirmed; local fail-closed complete).
-- Recommendation: merge #3 after subagent outputs integrated + re-validate (or as-is for OS + traceability); continue autonomous on .ai/ for remaining P2 or next PRD slices. External blocks require creds/deploy/approval (documented exact resume in blockers).
+## Current State (2026-06-05 post audit slice complete + dispatching)
+- Audit slice (gaps, .ai/ OS, user-stories AC, 4 subagents UX/Sec/QA/PM-Docs 527e9a1, branch commits 41e5243/527e9a1) COMPLETE per DoD. Local P0s 0, P2s addressed, green, .ai/ current, PR #3 (open UNSTABLE).
+- Core product advanced locally (control, full budget, ProviderOps local+real sandbox, SWF, console, roles, MEB, auth etc.) per PRD-v2/IMPLEMENTATION_STATUS/TRACEABILITY.
+- .ai/ OS complete/used (all files, agents, traceability, gap with only AUTO-004 monitoring).
+- Remaining local: AUTO-004 P3 (.env/release-blockers); P2 (rate, pagination, e2e per reviews).
+- External P0s 002-004 Blocked (local fail-closed complete).
+- Dispatching parallel agents: DevOps (AUTO-004+validate), Security (rate limits impl), QA (full tests/e2e), Arch (pagination), PM (PRD coverage).
+- Recommendation: integrate agents, full make test/lint/smoke/build, .ai/ updates, push/PR. Continue full product on remaining P2 + PRD local (commercial, comms, self-imp) until no local feasible or blocked. Then full final report.
 
 ## Feasible Work Complete
-All discovered local PRD/spec work for the "spec closure audit" slice + mandatory .ai/ coordination + validation + PR + parallel agents is complete or in final subagent review. Product is ready for real dogfood/sandbox users per current scope; full commercial/enterprise requires external.
-
-If subagents produce no P0/P1, this slice + OS is world-class per DoD.
+Audit slice + .ai/ OS + docs complete. Dispatching to polish remaining and accelerate full product. External blocked as per real-only posture.
 
 ## Recommendation
 - Complete local validation + commit + PR for spec-closure-audit.

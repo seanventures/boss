@@ -1,6 +1,6 @@
 # BOSS Gap Backlog (.ai Autonomous Version)
 
-**Last rebuilt**: 2026-06-05T18:30:00Z (post docs closure: GAP-AUTO-003 Closed with AC for KPI CAN-006 / full budget / bootstrap / GAP-011 provider billing graceful / GAP-012 schema bootstrap; synced user-stories + traceability + handoff; AUTO-001/002/003 closed)
+**Last rebuilt**: 2026-06-05T19:30:00Z (post Security agent rate limit P2 impl + GAP-013 close; rate P2 addressed with in-mem + tests + updates; AUTO-004 still monitoring; other P2 follow-ups)
 **Source**: Rebuilt from PRD-v2.0.md + TECHNICAL_SPEC-v2.0.md + REQUIREMENT_INVENTORY + TRACEABILITY + current code scan (rg for TODO/FIXME/stub/placeholder/mock/fake/not implemented + skipped tests + broad except + fake-success) + git diff + make targets + GitHub issues (0).
 **Process**: P0 first (blocks core use, data loss, auth/sec, prod readiness), then P1, P2, P3. Immediately action P0/P1 local-code. External blocked documented but not "code gaps" to fix here.
 **Status**: Closed (impl+tested+traced+reviewed), In-Progress, Open, Blocked (external per PRD real-only/fail-closed), Monitoring.
@@ -23,14 +23,16 @@
 | GAP-AUTO-003 | P3 | Docs: refresh user-stories.md + acceptance-criteria for recently closed gaps (KPI, budget full, bootstrap) + sync GAP-011/012 | PM/Operator | DoD: docs/user-stories/acceptance updated when behavior changes | docs/user-stories.md, .ai/requirements-traceability.md, .ai/gap-backlog.md | Add/expand Given-When-Then for KPI create/list/upsert/empty/error (CAN-006), budget quote/reserve/consume (active res, receipt, perm, overrun), bootstrap disabled 403+denial+enabled+member_manage+seed event, provider sync billing unavailable (inventory preserved, status/msg in artifacts/health, event, no fake), clean schema bootstrap no FK block (GAP-011/012) | N/A (manual review) | PM | All | grep for KPI|budget consume|bootstrap|billing_unavailable|schema bootstrap in user-stories; diff vs PRD + 41e5243 | codex/spec-closure-audit | Closed (AC expanded in user-stories.md covering happy/error/perm/empty/persistence; .ai/trace + backlog enhanced; refs GAP-AUTO-003 + 011/012) |
 | GAP-AUTO-004 | P3 | Ops: ensure .env.example documents all new flags from closures (BOSS_BOOTSTRAP_SEED_API_ENABLED) + release-blockers covers | DevOps | Safe self-host, no hidden config | .env.example, scripts/check_external_rollout_readiness.py | Verify + add comments for new envs | make release-blockers (no net) | DevOps | Security | cat .env.example | grep BOOTSTRAP ; make release-blockers | current | Monitoring |
 | GAP-AUTO-005 | P1/P2 | Full agent reviews + fix findings (product, UX, arch, sec, QA, devops) before claiming complete | All | DoD requires reviews by expert agents, findings fixed | all .ai/*-review.md + code | Spawn agents, run reviews, fix P0/P1 from them, re-validate | All review tests + new from findings | Orchestrator | N/A | make lint test smoke ; review output | codex/spec-closure-audit (3 subagents + 41e5243 work) | Closed (3/3 subagents UX/Sec/QA completed with .ai/ updates + reviews expanded; additional branch commit 41e5243 provided implicit ProviderOps/bootstrap review; findings fixed or documented as P2; re-validate green) |
+| GAP-2026-06-05-013 | P2 | SEC: basic rate limiting on high-cost API paths (metatron/query, commands/propose, provider sync) | Operator/CEO (abuse protection for costly LLM/intake/sync) | Per .ai/security-review.md P2 finding + dispatch: no explicit rate on public-ish high-cost (model, command, provider) paths; abuse vector even with budget/perm gates. | apps/api/app/main.py (enforcer + record + 3 endpoints), config.py (flags), tests/test_api.py (429+event test), conftest.py (test helper), api/openapi.yaml (429 docs), .ai/* (updates) | Simple stdlib in-memory sliding window (deque+time, 10rpm per IP+proj+actor key); 429 + "rate_limit.exceeded" event on exceed (no silent); configurable BOSS_RATE_LIMIT_* ; test helpers for suite isolation; note in code: local/test only, prod needs redis/edge. | New pytest test_high_cost_endpoints_rate_limited_429_and_emits_event ; also covers metatron path; full make lint + pytest -k rate ; no new deps. | Security | QA, Architect | DATABASE_URL=... .venv/bin/python -m pytest apps/api/tests/test_api.py::test_high_cost_endpoints_rate_limited_429_and_emits_event ; make lint | codex/spec-closure-audit (this sec agent work) | Closed (basic in-mem implemented+tested+event+config+openapi+.ai updates; addresses prior P2 risk from security-review; per AGENTS small vertical, events for failures, test-only note for prod redis; no direct ext, etc.) |
 
 **Immediate Action Plan**:
-- P0 local: All closed (prior + 012 fresh bootstrap by 41e5243).
-- External P0s (002-004): Document as Blocked; local fail-closed complete.
-- P2/P3: AUTO-001/002/003 closed (UX + QA tests + this PM docs AC refresh for KPI/budget/bootstrap + 011/012); AUTO-005 reviews resolved by 3 agents + branch work; new 011/012 closed by 41e5243. Remaining: AUTO-004 monitoring.
-- Rebuild this + traceability after new work (done here for AUTO-003 + 011/012 AC).
-- No new core TODO/FIXME/stub (scans clean).
+- P0 local: All closed (incl 012 by 41e5243).
+- External P0s (002-004): Blocked; local fail-closed complete.
+- P2/P3: AUTO-001/002/003/005 + 011/012 + 013 (rate limit P2) closed by subagents + this Security agent work + branch commits. Remaining: AUTO-004 (monitoring, .env/release-blockers polish).
+- Dispatch more agents (pagination, full validate, PRD coverage) to accelerate full product.
+- Rebuild .ai/ after agents.
+- No core TODOs (scan clean).
 
-**P0 Count Open (local)**: 0 (all including 012 fresh bootstrap closed by 41e5243 + prior).
+**P0 Count Open (local)**: 0.
 **P0 Count Blocked (external)**: 3.
-**Total Open Gaps**: ~1 (AUTO-001/002/003/005 + 011/012 closed; 004 monitoring).
+**Total Open Gaps**: 1 (AUTO-004 monitoring only local; other P2 like pagination remain for follow-up agents).
