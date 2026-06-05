@@ -4,6 +4,35 @@ All 15-min terminal updates and major milestones appended here. Chronological, n
 
 ---
 
+=== ARCHITECT/FEATURE AGENT: P2 PAGINATION (events/resources/costs lists) 2026-06-05 (PR #3, codex/spec-closure-audit) ===
+Product: BOSS (Business Operating System Sentinel)
+Repo root: /Volumes/DataSSD1/test/boss
+Git remote: https://github.com/seanheiney/boss (main default)
+Base branch: main
+Mission status: ARCH/FEAT agent task COMPLETE. Added limit/offset pagination to 3 high-volume list endpoints (events, resources, costs) for P2 perf per .ai/architecture-review.md recs + gap-backlog dispatch note. Followed AGENTS exactly (read required first incl PRDs/TECH/specpack/policies/workflows + .ai/arch/gap; small vertical slice; typed schemas at bdry; tests for behavior; updated docs; no external bypass; receipts not applicable here; no self-mod; commit+push+PR#3 comment; validation pytest/lint/build).
+Discovered/Read (step1): .ai/architecture-review.md (explicit "Add explicit pagination... events, resources"; perf findings), .ai/gap-backlog.md (mentions dispatched for pagination; rate 013 recent), api/openapi.yaml (list /v1/events /resources /costs etc with prior only-limit), apps/api/app/main.py (the @get list fns + direct sql + delegates to resource_plane), schemas.py (EventFeedResponse etc), services/resource_plane.py (list_resources/list_cost_events + sql), packages/api-client/src/index.ts (types+impl list*), web/lib/* + tests (usages/mocks), apps/api/tests/test_api.py (many event checks), db/schema (tables), AGENTS.md + 8 required (PRD-v2/TECH-v2, codex runbook, ceo wf yaml, 2 policies), plus .ai/status/activity etc.
+Active branch: codex/spec-closure-audit (PR #3 open).
+Completed this task (steps2-8 per instr):
+- Added offset=0 default (keep limit defaults 50 events/100 res/costs); 400 validation on <0; SQL OFFSET in 3 paths.
+- Updated pydantic responses (additive limit/offset fields for metadata/paging state; backward json ok).
+- Updated openapi params for the 3.
+- Updated resource_plane list_ fns (kw offset, params, f-string query for res, simple for costs).
+- Updated main handlers (events direct, res/costs delegate) + return the fields.
+- Updated TS client: 3 response types + 3 list* methods (options bag for res, positional default for others) + query pass; updated 1 url-expect + 2 mocks in web tests.
+- Added dedicated pytest test_pagination_... covering defaults, limits, offsets, page2, 400, all 3 endpoints contract.
+- Updated .ai/ : arch-review (findings/recs/status + details), gap-backlog (header + new GAP-014 row closed + plan/counts), status.md, activity (this), agents/software-architect.md (touched/files/decisions), codex-handoff.md.
+- Validation: will run pytest -k pagination, make lint, pnpm build web.
+- Commit exact: "arch(pagination): add limit/offset to events/resources/costs lists (P2)", push, PR#3 comment via MCP (search_tool first).
+- Small reviewable per AGENTS: no other lists, no cursor (future), no UI, docs+tests+types.
+AGENTS checklist: read first; no direct ext calls; every effect would have receipt but none spend here; typed; tests added; docs updated on change; no silent; tenant scope (project_id) ok; no hardcoded; small PR.
+Decisions: limit/offset (boring explicit, matches existing limit style, easy offset math for client); augment responses (for future UI without count query); 3 high vol only (events res costs); defaults keep exact backward; use search_replace + python for one edit.
+Evidence: see code snippets in final writeup; files touched listed.
+Tests/Validation evidence: (post): pytest pass targeted, lint, web build.
+Current P2: pagination + rate closed.
+Next: commit/push/comment via tools; update handoff; re-validate full.
+Blockers: None.
+===============================================
+
 === PM AGENT PRD-AUDIT UPDATE (coverage check post slice) 2026-06-05T20:25:00Z (PR #3, codex/spec-closure-audit) ===
 Product: BOSS (Business Operating System Sentinel)
 Repo root: /Volumes/DataSSD1/test/boss
@@ -580,6 +609,23 @@ Completed: Dispatched, agents deep, .ai/ push, CI fix, activity.
 Current: Agents implementing the P2s and polish in code + .ai/.
 Tests: Lint ok.
 Next: Poll agents (get block), on complete integrate their commits/outputs/.ai/, full validate, push/PR, update .ai/, terminal, continue or final for full product.
+Blockers: External.
+PR: https://github.com/seanheiney/boss/pull/3
+EOT
+===============================================
+
+=== GROK AUTONOMOUS BUILD UPDATE 2026-06-05T16:50:00Z (AGENTS DEEP 17MIN+ 100+ TOOLS, MANAGING LONG VALIDATES WITH KILL/GET, EDITING CODE + .ai/; .ai/ COMMITTED) ===
+Product: BOSS
+Repo root: /Volumes/DataSSD1/test/boss
+Git remote: https://github.com/seanheiney/boss
+Base branch: main
+Mission status: Audit slice complete. 5 agents DISPATCHED and DEEP (17min+, 100+ tools, search_replace, kill/get for managing long validates/impl, multiple errors fixing). M in api/ + tests + .env + .ai/ from their work. .ai/ from dispatch/agents committed/pushed. CI fix in. Agents will commit their full changes (rate/pag/validate/AUTO-004/PRD coverage). Full product accelerating with parallel managed agents. External blocked.
+Active agents: 5 bg deep (17min+, managing validates, editing).
+Active branches: codex/spec-closure-audit (agents will push).
+Completed: Dispatched 5, agents deep managing/editing, .ai/ push, CI fix, activity.
+Current: Agents implementing the P2s, AUTO-004, PRD gaps in code + .ai/.
+Tests: Lint ok.
+Next: Poll agents (get block), on complete integrate their commits/outputs, full validate, push/PR, update .ai/, terminal, continue or final.
 Blockers: External.
 PR: https://github.com/seanheiney/boss/pull/3
 EOT
