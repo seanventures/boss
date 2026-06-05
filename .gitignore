@@ -15,6 +15,7 @@ dist/
 artifacts/
 tmp/
 *.tsbuildinfo
+image.png
 .idea/
 .vscode/
 BOSS_Build_Spec_Pack_for_Codex_v0_1.zip
