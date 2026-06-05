@@ -400,11 +400,36 @@ class ResourcePlaneService:
                         resource,
                     ):
                         changed += 1
-                cost_records = (
-                    self._sync_billing(account["provider"], credential)
-                    if bool(account["billing_readable"])
-                    else []
-                )
+                billing_status = "not_requested"
+                billing_message: Optional[str] = None
+                if bool(account["billing_readable"]):
+                    if self._provider_supports_billing(account["provider"]):
+                        cost_records = self._sync_billing(
+                            account["provider"], credential
+                        )
+                        billing_status = "synced"
+                    else:
+                        cost_records = []
+                        billing_status = "unavailable"
+                        billing_message = (
+                            f"Exact billing sync is not available for {account['provider']}; "
+                            "resource costs remain unknown until provider billing support or invoice reconciliation is configured."
+                        )
+                        emit_event(
+                            connection,
+                            project_id,
+                            "provider.billing_unavailable",
+                            actor,
+                            "provider_account",
+                            account["id"],
+                            {
+                                "provider": account["provider"],
+                                "cost_confidence": "unknown",
+                                "message": billing_message,
+                            },
+                        )
+                else:
+                    cost_records = []
                 costs_recorded = 0
                 for cost_record in cost_records:
                     if self._record_provider_billing_cost_event(
@@ -433,6 +458,15 @@ class ResourcePlaneService:
                     detail={
                         "resources_seen": len(inventory),
                         "costs_seen": costs_recorded,
+                        "billing_status": billing_status,
+                        "billing_confidence": (
+                            "unknown"
+                            if billing_status == "unavailable"
+                            else "provider_reported"
+                            if costs_recorded
+                            else "unknown"
+                        ),
+                        "billing_message": billing_message,
                     },
                 )
                 drift = self._create_drift_report(
@@ -454,6 +488,8 @@ class ResourcePlaneService:
                         drift_report_id=drift["id"],
                         deadletter_id=None,
                         error=None,
+                        billing_status=billing_status,
+                        billing_message=billing_message,
                     )
                 )
                 self._attach_reconciliation_metadata(
@@ -463,6 +499,8 @@ class ResourcePlaneService:
                         "inventory_snapshot_artifact_id": inventory_snapshot_artifact_id,
                         "provider_health_id": health["id"],
                         "drift_report_id": drift["id"],
+                        "billing_status": billing_status,
+                        "billing_message": billing_message,
                     },
                 )
                 resources_seen += len(inventory)
@@ -480,6 +518,8 @@ class ResourcePlaneService:
                         "provider_health_id": health["id"],
                         "drift_report_id": drift["id"],
                         "inventory_snapshot_artifact_id": inventory_snapshot_artifact_id,
+                        "billing_status": billing_status,
+                        "billing_message": billing_message,
                     }
                 )
             except Exception as error:
@@ -528,6 +568,8 @@ class ResourcePlaneService:
                         drift_report_id=None,
                         deadletter_id=deadletter_id,
                         error=error_payload,
+                        billing_status="failed",
+                        billing_message=str(error),
                     )
                 )
                 self._attach_reconciliation_metadata(
@@ -5465,6 +5507,8 @@ class ResourcePlaneService:
         drift_report_id: Optional[str],
         deadletter_id: Optional[str],
         error: Optional[dict[str, Any]],
+        billing_status: str = "not_requested",
+        billing_message: Optional[str] = None,
     ) -> str:
         content = {
             "object_type": "providerops_inventory_snapshot",
@@ -5476,6 +5520,15 @@ class ResourcePlaneService:
             "resources_seen": len(inventory),
             "cost_records_seen": len(cost_records),
             "costs_recorded": costs_recorded,
+            "billing_status": billing_status,
+            "billing_confidence": (
+                "unknown"
+                if billing_status in {"unavailable", "failed", "not_requested"}
+                else "provider_reported"
+                if costs_recorded
+                else "unknown"
+            ),
+            "billing_message": billing_message,
             "provider_health_id": provider_health_id,
             "drift_report_id": drift_report_id,
             "deadletter_id": deadletter_id,
@@ -5864,6 +5917,9 @@ class ResourcePlaneService:
         raise ProviderAdapterError(
             f"Billing sync is not implemented for provider '{provider}'."
         )
+
+    def _provider_supports_billing(self, provider: str) -> bool:
+        return provider in {"digitalocean", "openai", "anthropic"}
 
     def _provider_headers(self, provider: str, credential: str) -> dict[str, str]:
         if provider == "anthropic":

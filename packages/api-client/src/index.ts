@@ -2764,6 +2764,8 @@ export type ResourceSyncRunSummary = {
   resources_seen: number;
   resources_changed: number;
   costs_seen: number;
+  billing_status?: string;
+  billing_message?: string;
   provider_health_id?: string;
   drift_report_id?: string;
   deadletter_id?: string;

@@ -2474,6 +2474,11 @@ paths:
   /v1/resources/sync:
     post:
       summary: Run read-only provider inventory and billing reconciliation
+      description: >
+        Exact provider billing is synced only where a real provider billing API
+        is supported. Providers without direct billing support keep inventory
+        sync successful and return billing_status=unavailable with unknown cost
+        confidence instead of fabricating costs or failing the inventory run.
       requestBody:
         required: true
         content:
@@ -2486,7 +2491,7 @@ paths:
                 provider_account_id: { type: string }
                 actor: { type: string, default: system }
       responses:
-        '201': { description: Reconciliation runs with resources seen, costs seen, inventory_snapshot_artifact_id, and drift/deadletter status }
+        '200': { description: Reconciliation runs with resources seen, costs seen, billing status, inventory_snapshot_artifact_id, and drift/deadletter status }
         '403': { description: Actor is not allowed to run ProviderOps sync }
   /v1/costs:
     get:

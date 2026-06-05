@@ -187,7 +187,10 @@ CREATE TABLE IF NOT EXISTS account_connect_auth_sessions (
   provider_ref TEXT,
   state TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'requested',
-  receipt_id TEXT REFERENCES receipts(id),
+  -- Receipts are declared after jobs to preserve the core job->receipt FK order.
+  -- Account Connect stores this audit reference without a forward FK so clean
+  -- databases can bootstrap deterministically.
+  receipt_id TEXT,
   created_by TEXT NOT NULL DEFAULT 'system',
   expires_at TIMESTAMPTZ,
   completed_at TIMESTAMPTZ,

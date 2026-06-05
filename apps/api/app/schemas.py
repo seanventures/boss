@@ -3191,6 +3191,8 @@ class ResourceSyncRunSummary(BaseModel):
     resources_seen: int
     resources_changed: int
     costs_seen: int = 0
+    billing_status: Optional[str] = None
+    billing_message: Optional[str] = None
     provider_health_id: Optional[str] = None
     drift_report_id: Optional[str] = None
     deadletter_id: Optional[str] = None
