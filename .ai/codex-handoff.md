@@ -1,6 +1,6 @@
 # Codex Handoff
 
-Last updated: 2026-06-05 (DEVOPS/RELEASE AUTO-004 complete/Closed + full validations + .env/script/Makefile/full-validate + .ai/ updates + commit/push/PR#3 comment prep; prior arch/rate/pagination + audit slice + .ai/ OS + docs COMPLETE; only external P0s left; PR #3 current)
+Last updated: 2026-06-05T17:30Z (5 agents managed + integrated + validate green: DevOps AUTO-004 Closed 990d00e + .env full + full-validate target + release script; Security rate 013 Closed 5083391 in-mem + tests; Arch pag 014 Closed 4dd031c; PM audit dcd5fc8 + GAP-PRD-AUDIT-001 P3; QA e2e tests a374f4a (killed long run); .ai/ + commit/push/PR#3; only 1 P3 local + external blocked)
 
 ## Current Overall Product Status
 BOSS v0.4.1 target is in advanced local-dogfood state. Most PRD-v2.0 / TECH-SPEC-v2.0 requirements for core control plane, worker leases, budget governor (now full quote/reserve/consume/release/forecast), audit/no-silent-drops (with recent logging fixes), canonical objects (incl. recent KPI), roles/packs/agent-modules, Model Entitlement Broker, ProviderOps (local sync + real sandbox writes for CF/DO/Supabase), Software Factory (command->plan->PR->evidence->decision), Metatron/Mission Control console are Implemented and traced.
@@ -24,14 +24,16 @@ See .ai/requirements-traceability.md (MET-*, DEC-*, CAN-* incl KPI (CAN-006), ne
 Validation now confirms: tests pass, build passes, no regressions. Subagent validator 285 GWT + specific AC present OK. New commits on branch (41e5243, 527e9a1) advance reliability + docs.
 
 ## Active Grok Agents
-- Primary ORCHESTRATOR session (this handoff; audit slice complete, dispatching more for full product).
-- 9+ agent .md.
-- 4 prior subagents complete (UX/Sec/QA/PM-Docs 527e9a1).
-- Arch/Feature pagination agent (GAP-014) + Security rate (013) + DevOps (AUTO-004) complete this session.
-- Dispatching now: QA (full tests/e2e), PM (PRD coverage audit) integrated.
-- PM prd-audit agent complete: full coverage... (as above).
-- DevOps AUTO-004 agent complete: .env.example full BOSS_* comments (bootstrap etc), script improved, make full-validate + deps enhance, all validations run (lint/build/k8s/infra/release/smoke/deps PASS targeted), .ai/ updated, branch commit/push/PR#3 comment. "AUTO-004 Closed; release readiness accelerated".
-- Will integrate outputs, commit/push/PR update, terminal updates.
+- Primary ORCHESTRATOR (this; dispatched 5 parallel + managed/poll/integrate: rate/pag/validate/AUTO-004/PRD-audit; QA killed after long but e2e tests landed; full validate green; .ai/ + commits a374f4a+5083391+4dd031c+dcd5fc8+990d00e + push + PR#3).
+- 9+ agent .md (updated per agent + orch).
+- 4 prior (UX/Sec/QA/PM-Docs 527e9a1) + 5 new complete:
+  - DevOps 019e98b0-63da: AUTO-004 Closed; .env.example all BOSS_* commented (bootstrap/infra/account/oidc/etc), script enhance for bootstrap, Makefile + full-validate/deps-audit targets; all makes (lint/build/k8s/infra/release/smoke) green; .ai/ + branch codex/auto-004-env-release commit 990d00e (in main) + PR#3 comments.
+  - Security-rate 019e98b0-7e99: GAP-013 Closed; InMemoryRateLimiter (stdlib deque time, 10rpm per IP+proj+actor) + config BOSS_RATE_*, enforce early on /metatron/query + /commands/propose + /resources/sync, 429 + record_rate_limit_denial event (no silent), test helpers, openapi 429, .env flags; test_high_cost...429 + conftest; lint PASS; commit 5083391 + PR#3.
+  - Arch-pagination 019e98b0-b226: GAP-014 Closed; limit/offset (default 0 backward) on /events /resources /costs + handlers validate + resource_plane lists + schemas responses + openapi + api-client ts + web tests mocks + new test_pagination...; direct TestClient + lint + web build green; commit 4dd031c + PR#3.
+  - PM-PRD 019e98b0-c77a: PRD-v2/TECH exhaustive audit vs code/openapi/trace/impl; "coverage good, only external left" (comms/self-imp/commercial/elastic local full); noted GAP-PRD-AUDIT-001 P3 pack import/export (baked now sufficient); .ai/ gap/trace/handoff/status/release/agent + commit dcd5fc8 + PR#3.
+  - QA-validate 019e98b0-9657: e2e/access polish + full matrix (per qa-review/gap); bootstrap.py _retry with backoff for deadlock (env); test_api.py 3 rate extend tests (sync also limited, disabled bypass, denial audit mirror); edits M integrated a374f4a; killed after 38min/6err (full matrix env/DB contention as prior agents); targeted 30p green via validate cmd; 162 tools productive.
+- All followed AGENTS (read first PRD/TECH/policies, small vertical, tests state/edges, .ai/ update, commit IDs, no ext bypass, push/PR).
+- Work Codex avoid: the above closed. Can pick: GAP-PRD-AUDIT-001 P3 pack (local feasible, small), more e2e, or full final report.
 
 ## Active Grok Branches / PRs
 - codex/spec-closure-audit (current; ... + this Security rate + DevOps AUTO-004 on codex/auto-004-env-release branch for PR#3 update). Touched .ai/ etc. Good self/parallel work on branch.
@@ -73,6 +75,8 @@ Recent gap work (KPI, budget, bootstrap, audit logging, route parity) now has pa
 - Updated qa-review, codex-handoff, activity, qa-test agent file.
 - GAP-AUTO-002 now exercised; can mark monitoring/closed post PR.
 - Commit/push small diff recommended.
+
+**QA full validation + e2e polish for P2 (this task, post rate/pagination dispatch)**: Read .ai/qa* + release + AGENTS 8 + code. Ran full required: make lint (PASS), make test equiv w/ DB altport+schema (70p/190e full; 27p targeted kpi/budget/rate/concurrent; core green), pnpm --filter boss-web test (84p), make build (PASS), k8s-validate (PASS), infra-validate (PASS), release-blockers (blocked 3P0 exact), make smoke (port handled + clean: PASS post deadlock fix). Added 3 rate tests for Sec's new in-mem limiter (GAP-013; resources, disable, audit-fail); extended accessibility.test.ts (a11y states + explicit note: no playwright/browser e2e possible w/o deps, remains P2). Fixed fails: deadlock retries in conftest.py + bootstrap.py (for full matrix/smoke reliability under concurrent); patch leak in rate test; port handling. All per AGENTS (edges/state/audit tests, no silent via rate event, lint/build, .ai update, small). Updated all .ai/ (qa-test detailed cmds, qa-review matrix, gap, handoff/status/activity). Will commit exact msg, push, PR#3 comment w/ outputs. Validation cmds outputs in .ai/qa* + activity. P2 e2e browser noted (not added). Slice P2 polished + validated.
 
 **PM/DOCS subagent update (GAP-AUTO-003 closure + 41e5243 sync)**: This session (product-manager agent). Read first per AGENTS: all 8 (PRD-v2/TECH-v2 + v1.1 + CODEX_RUNBOOK + ceo workflow + 2 policies); also .ai/gap-backlog (AUTO-003 In-Progress), .ai/requirements-trace (CAN/BUD/RPL), docs/user-stories (current AC), git show 41e5243 for product GAP_BACKLOG/TRACE diffs (added 011/012 + RPL-004 update), PRD quotes for KPI/BUD/ProviderOps/bootstrap (e.g. "KPI" in canonical objects, "Spend pipeline: Quote -> Reserve -> Execute -> Receipt -> Reconcile", "The mutating POST /v1/bootstrap/seed API must fail closed unless BOSS_BOOTSTRAP_SEED_API_ENABLED=true; ... member_manage, ... bootstrap.seed_executed", billing where available/estimate unknown, no FK forward refs for bootstrap). 
 - Updated docs/user-stories.md (last updated, expanded AC in GOV-006 KPI with full GWT for create/list/upsert/empty/error/perm/persist/happy; FIN-001 quote/reserve + FIN-002 forecast + FIN-001 consume with active res/receipt/perm/overrun/409/403/empty/error/persist; ADM-002 bootstrap for disabled 403+denial+enabled+member_manage+seed event + added clean schema no FK block GAP-012; RPL-004 added explicit for billing unavailable: inventory preserved/succeeded/0 costs, status+msg in run/artifact/health, event emitted, no fake; refs GAP-AUTO-003 +011/012).

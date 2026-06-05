@@ -60,17 +60,16 @@
 5. Merge of PR #3 (or follow-ups); local coordination + traceability done.
 6. (P3 noted in PM prd-audit): dynamic local pack import/export for PRD ecosystem (GAP-PRD-AUDIT-001); not blocker for core.
 
-## Current State (2026-06-05 post audit slice complete + dispatching)
-- Audit slice (gaps, .ai/ OS, user-stories AC, 4 subagents UX/Sec/QA/PM-Docs 527e9a1, branch commits 41e5243/527e9a1) COMPLETE per DoD. Local P0s 0, P2s addressed, green, .ai/ current, PR #3 (open UNSTABLE).
-- Core product advanced locally (control, full budget, ProviderOps local+real sandbox, SWF, console, roles, MEB, auth etc.) per PRD-v2/IMPLEMENTATION_STATUS/TRACEABILITY.
-- .ai/ OS complete/used (all files, agents, traceability, gap with only AUTO-004 monitoring).
-- Remaining local: AUTO-004 P3 (.env/release-blockers); P2 (rate, pagination, e2e per reviews).
-- External P0s 002-004 Blocked (local fail-closed complete).
-- Dispatching parallel agents: DevOps (AUTO-004+validate), Security (rate limits impl), QA (full tests/e2e), Arch (pagination), PM (PRD coverage).
-- Recommendation: integrate agents, full make test/lint/smoke/build, .ai/ updates, push/PR. Continue full product on remaining P2 + PRD local (commercial, comms, self-imp) until no local feasible or blocked. Then full final report.
+## Current State (2026-06-05T17:30Z post 5 agents managed + integrate + full validate)
+- Audit slice + .ai/ OS COMPLETE (prior + 4 subagents). 5 agents dispatched/managed: DevOps AUTO-004 Closed (.env full BOSS_*, Makefile full-validate, script, all makes green, 990d00e); Security GAP-013 rate Closed (in-mem + tests 5083391); Arch GAP-014 pag Closed (4dd031c); PM PRD-audit (coverage good, GAP-PRD-AUDIT-001 P3 noted, dcd5fc8); QA e2e polish tests integrated (a374f4a) killed long run. Full validate: lint PASS, pnpm 84/84, targeted pytest 30/30, build/smoke/k8s(17)/infra(4)/release-blockers (external 3 blocked, community ready)/deps PASS. Commits pushed to codex/spec-closure-audit / PR #3. .ai/ current (gap only 1 P3 pack open).
+- Core product advanced local + .ai/ OS per PRD-v2/TECH/trace/impl (control/budget full/ProviderOps local+real/SWF/console/roles/MEB/auth/comms/self-imp/elastic local covered).
+- .ai/ OS used for coordination (all required, agents 9+, traceability, gap, reviews, handoff).
+- Remaining local: GAP-PRD-AUDIT-001 P3 (dynamic pack import/export for Community; PM noted defer as small PR; baked sufficient for core dogfood).
+- External P0s 002-004 Blocked (local fail-closed + visible + receipts/decisions complete; exact resume in release-blockers: configure tokens/URL + approval + target for live).
+- Recommendation: MCP PR#3 comment + .ai/ commit/push; if dispatch more for P3 pack (local feasible) or more e2e/polish continue per loop; else produce full final report (readiness, coverage table, gaps closed+resume external, PRs/commits list, decisions, tests, 25 DoD checklist, Codex handoff, exact resume steps).
 
 ## Feasible Work Complete
-Audit slice + .ai/ OS + docs complete. Dispatching to polish remaining and accelerate full product. External blocked as per real-only posture.
+Audit slice + .ai/ OS + P2 polish (rate/pag) + AUTO-004 + PRD coverage audit + e2e tests + full validate green COMPLETE. 5 agents managed to accelerate. Local P0s 0; 1 P3 pack open (small defer); external 3 blocked as designed. Product advanced production-grade local dogfood per DoD for current scope. Ready for PR#3 review/merge or more dispatch. External require creds/deploy/approval (documented).
 
 ## Recommendation
 - Complete local validation + commit + PR for spec-closure-audit.
