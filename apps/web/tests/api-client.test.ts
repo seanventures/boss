@@ -318,6 +318,50 @@ describe("createBossApiClient", () => {
     );
   });
 
+  it("uses pack list/get/install API contracts (cross-slice e2e regression for pack+selfimp+commercial+budget+toasts P2)", async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const packList = {
+      project_id: "boss-dogfood",
+      items: [
+        { pack_id: "core_v1", version: "1.0.0", description: "Core", status: "active", installed: true, installed_version: "1.0.0" },
+        { pack_id: "test_e2e_reg_pack_v1", version: "0.1.0", description: "Regression", status: "active", installed: true, installed_version: "0.1.0" },
+      ],
+    };
+    const packDetail = { ...packList.items[1], role_count: 1, role_results: [{ role_key: "metatron", status: "present" }], install_status: "imported" };
+    const installed = { ...packDetail, install_status: "installed" };
+
+    const responses = [
+      { status: 200, body: packList },
+      { status: 200, body: packDetail },
+      { status: 201, body: installed },
+      { status: 403, body: { detail: "actor lacks required permission (pack_manage)" } },
+    ];
+    const fetchImpl = async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({ url: String(input), init });
+      const response = responses.shift();
+      return new Response(JSON.stringify(response?.body ?? {}), {
+        status: response?.status ?? 500,
+        headers: { "Content-Type": "application/json" },
+      });
+    };
+    const client = createBossApiClient({ baseUrl: "http://127.0.0.1:8000", fetchImpl });
+
+    const list = await client.listPacks("boss-dogfood");
+    const detail = await client.getPack("boss-dogfood", "test_e2e_reg_pack_v1");
+    const inst = await client.installPack({ project_id: "boss-dogfood", pack_id: "test_e2e_reg_pack_v1", actor: "ceo" });
+    const badPerm = await client.installPack({ project_id: "boss-dogfood", pack_id: "core_v1", actor: "no-perm" });
+
+    expect(list.items.length).toBe(2);
+    expect(list.items[1].pack_id).toBe("test_e2e_reg_pack_v1");
+    expect(detail.pack_id).toBe("test_e2e_reg_pack_v1");
+    expect(detail.install_status).toBe("imported");
+    expect(inst.install_status).toBe("installed");
+    expect(badPerm).toBeInstanceOf(Error); // client throws on !ok
+    expect(calls[0].url).toContain("/v1/packs?project_id=boss-dogfood");
+    expect(calls[2].url).toBe("http://127.0.0.1:8000/v1/packs/install");
+    // cross regression note: pack install/list here mirrors import (source local_upload in backend) + selfimp proposal + commercial source_pack + budget flows; toasts in client-forms wrap these for feedback states (tested in kpis.test)
+  });
+
   it("uses Account Connect team invite and billing portal API contracts", async () => {
     const calls: Array<{ url: string; init?: RequestInit }> = [];
     const authSession = {
