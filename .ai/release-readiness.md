@@ -1,7 +1,7 @@
 # BOSS Release Readiness (Autonomous)
 
-**Date**: 2026-06-05 (pre full validation)
-**Status**: LOCAL READY (post PR #3) - .ai/ OS in, traceability complete, P0 local gaps closed+validated+PR'd, baseline all green, external 3 P0s Blocked by design. Awaiting subagent reviews + any P2 fixes + merge. Full prod readiness requires external config for Blocked items.
+**Date**: 2026-06-05 (post PM prd-audit)
+**Status**: LOCAL READY (post PR #3) - .ai/ OS in, traceability complete, P0 local gaps closed+validated+PR'd, baseline all green, external 3 P0s Blocked by design. PM prd-audit added: full coverage check vs PRD-v2/TECH (no other local gaps uncovered; comms/self-imp/commercial-local/elastic covered; "coverage good, only external left"; noted P3 GAP-PRD-AUDIT-001). Awaiting subagent reviews + any P2 fixes + merge. Full prod readiness requires external config for Blocked items.
 
 ## Production Readiness Checklist
 
@@ -33,7 +33,7 @@
 ### UX
 - [x] Complete nav (Mission Control, panels, project switch).
 - [x] No dead ends (command always, context).
-- [x] All AUTO P2/P3 for slice closed: 001 by UX (states/a11y), 002 by QA (tests), 003 by PM/Docs subagent 527e9a1 (user-stories AC for KPI/budget/bootstrap + 011/012, 285 GWT validated per subagent, .ai/trace/gap updated); 005 by agents + 41e5243. New 011/012 closed by 41e5243 (billing graceful, clean bootstrap). All local P0 + slice gaps addressed + in PR #3 + .ai/. Audit slice + .ai/ OS + docs complete per DoD (local core + OS + reviews + AC + tests + pushes). External 3 P0 Blocked. For full product: remaining P2 (rate limits per Sec, pagination per arch, e2e per qa, commercial local surfaces); continue grind per PRD-v2 until complete or blocked.
+- [x] All AUTO P2/P3 for slice closed: 001 by UX (states/a11y), 002 by QA (tests), 003 by PM/Docs subagent 527e9a1 (user-stories AC for KPI/budget/bootstrap + 011/012, 285 GWT validated per subagent, .ai/trace/gap updated); 005 by agents + 41e5243. New 011/012 closed by 41e5243 (billing graceful, clean bootstrap). PM prd-audit 2026-06-05: additional coverage check complete (PRD-v2 planes/objects full vs impl; no new local high impact slices; noted P3 pack import); all local P0 + slice gaps addressed + in PR #3 + .ai/. Audit slice + .ai/ OS + docs complete per DoD (local core + OS + reviews + AC + tests + pushes). External 3 P0 Blocked. For full product: remaining P2 (pagination per arch, e2e per qa); P3 commercial local pack import (noted in audit); continue grind per PRD-v2 until complete or blocked.
 - [x] Clear copy (operator focused).
 - [x] Responsive basics (Tailwind).
 - [ ] A11y full (basic in test; expand) - P2 (subagent UX running).
@@ -58,6 +58,7 @@
 3. Live provider creds + BOSS_INFRA... + cluster + approval for ProviderOps writes (GAP-004). (Confirmed)
 4. Full agent reviews (subagents spawned for QA/UX/Sec) + fix any P2 findings + re-validate.
 5. Merge of PR #3 (or follow-ups); local coordination + traceability done.
+6. (P3 noted in PM prd-audit): dynamic local pack import/export for PRD ecosystem (GAP-PRD-AUDIT-001); not blocker for core.
 
 ## Current State (2026-06-05 post audit slice complete + dispatching)
 - Audit slice (gaps, .ai/ OS, user-stories AC, 4 subagents UX/Sec/QA/PM-Docs 527e9a1, branch commits 41e5243/527e9a1) COMPLETE per DoD. Local P0s 0, P2s addressed, green, .ai/ current, PR #3 (open UNSTABLE).
@@ -76,5 +77,6 @@ Audit slice + .ai/ OS + docs complete. Dispatching to polish remaining and accel
 - Mark local product ready for dogfood/sandbox use.
 - Document external Blocks clearly; do not claim full commercial/enterprise until configured.
 - Only final "complete" when reviews pass and no local P0/P1 open.
+- Per PM prd-audit: coverage good (local), only external left; continue P2/P3 grind (pagination, pack import P3) per PRD.
 
 **When all local feasible done**: produce final report, update handoff, stop per rules.

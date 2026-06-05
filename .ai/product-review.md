@@ -17,6 +17,7 @@ Core product thesis (accountable autonomous OS with durable state, receipts, bud
 - User stories.md touched but needs explicit AC expansion for new KPI/budget flows (see GAP-AUTO-003).
 - No major missing core features in local dogfood; commercial/enterprise are intentionally partial (local surfaces + gates).
 - Roadmap Phase 0/1 largely achieved locally; Phase 2+ depend on external rollout.
+- PM prd-audit (2026-06-05): post prior, no other local implementable gaps in planes/objects/journeys (comms/self-imp/commercial-local/elastic covered); only noted P3 pack import/export for full ecosystem (GAP-PRD-AUDIT-001); "coverage good, only external left".
 
 **Recommendations**:
 - Treat current branch changes as "spec closure" PR with full traceability.
