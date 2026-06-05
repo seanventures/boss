@@ -1968,7 +1968,7 @@ describe("createBossApiClient", () => {
     });
 
     expect(calls[0].url).toBe(
-      "http://127.0.0.1:8000/v1/kpis?project_id=boss-dogfood",
+      "http://127.0.0.1:8000/v1/kpis?project_id=boss-dogfood&limit=50&offset=0",
     );
     expect(calls[1].url).toBe("http://127.0.0.1:8000/v1/kpis");
     expect(JSON.parse(String(calls[1].init?.body))).toMatchObject({
@@ -2665,8 +2665,8 @@ describe("createBossApiClient", () => {
       secret_refs: ["sec_db"],
       actor: "ceo",
     });
-    await client.listDeploymentTargets("boss-dogfood");
-    await client.listDeploymentEnvironmentPolicies("boss-dogfood");
+    await client.listDeploymentTargets("boss-dogfood", 50, 0);
+    await client.listDeploymentEnvironmentPolicies("boss-dogfood", 50, 0);
     await client.upsertDeploymentEnvironmentPolicy({
       project_id: "boss-dogfood",
       environment: "staging",
@@ -2674,7 +2674,7 @@ describe("createBossApiClient", () => {
       allowed_target_kinds: ["digitalocean_app"],
       actor: "ceo",
     });
-    await client.listDeploymentRuns("boss-dogfood", 5);
+    await client.listDeploymentRuns("boss-dogfood", 5, 0);
     await client.createDeploymentRun({
       project_id: "boss-dogfood",
       deployment_target_id: "dt_1",
@@ -2682,9 +2682,9 @@ describe("createBossApiClient", () => {
       actor: "ceo",
     });
     await client.runDeploymentHealthCheck("deprun_1", { actor: "ceo" });
-    await client.listProviderHealth("boss-dogfood", { providerAccountId: "pa_1", limit: 5 });
-    await client.listDriftReports("boss-dogfood", 5);
-    await client.listReconciliationRuns("boss-dogfood", 5);
+    await client.listProviderHealth("boss-dogfood", { providerAccountId: "pa_1", limit: 5, offset: 0 });
+    await client.listDriftReports("boss-dogfood", 5, 0);
+    await client.listReconciliationRuns("boss-dogfood", 5, 0);
 
     expect(calls.map((call) => call.url)).toEqual([
       "http://127.0.0.1:8000/v1/providers?project_id=boss-dogfood",
@@ -2697,7 +2697,7 @@ describe("createBossApiClient", () => {
       "http://127.0.0.1:8000/v1/changesets",
       "http://127.0.0.1:8000/v1/changesets/chg_1/approve",
       "http://127.0.0.1:8000/v1/changesets/chg_1/apply",
-      "http://127.0.0.1:8000/v1/resource-receipts?project_id=boss-dogfood&limit=10",
+      "http://127.0.0.1:8000/v1/resource-receipts?project_id=boss-dogfood&limit=10&offset=0",
       "http://127.0.0.1:8000/v1/worker-pools?project_id=boss-dogfood",
       "http://127.0.0.1:8000/v1/worker-pools",
       "http://127.0.0.1:8000/v1/autoscaler/plans?project_id=boss-dogfood&limit=5",
@@ -2706,7 +2706,7 @@ describe("createBossApiClient", () => {
       "http://127.0.0.1:8000/v1/deployments",
       "http://127.0.0.1:8000/v1/deployments?project_id=boss-dogfood&limit=50&offset=0",
       "http://127.0.0.1:8000/v1/deployment-environment-policies?project_id=boss-dogfood&limit=50&offset=0",
-      "http://127.0.0.1:8000/v1/deployment-environment-policies?project_id=boss-dogfood&limit=50&offset=0",
+      "http://127.0.0.1:8000/v1/deployment-environment-policies",
       "http://127.0.0.1:8000/v1/deployment-runs?project_id=boss-dogfood&limit=5&offset=0",
       "http://127.0.0.1:8000/v1/deployment-runs",
       "http://127.0.0.1:8000/v1/deployment-runs/deprun_1/health-check",

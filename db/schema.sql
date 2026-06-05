@@ -108,6 +108,8 @@ CREATE TABLE IF NOT EXISTS pack_installs (
   spec JSONB NOT NULL DEFAULT '{}'::jsonb,
   installed_by TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'active',
+  source TEXT,
+  yaml_blob TEXT,
   installed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE(project_id, pack_id)

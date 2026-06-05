@@ -1598,6 +1598,10 @@ paths:
           in: query
           required: false
           schema: { type: integer, default: 25 }
+        - name: offset
+          in: query
+          required: false
+          schema: { type: integer, default: 0 }
       responses:
         '200': { description: Artifact list including data_boundary classifications }
   /v1/artifacts/{artifact_id}:
@@ -2688,6 +2692,10 @@ paths:
           in: query
           required: false
           schema: { type: integer, default: 100 }
+        - name: offset
+          in: query
+          required: false
+          schema: { type: integer, default: 0 }
       responses:
         '200': { description: Resource receipts linked to ChangeSets, providers, and general receipts }
   /v1/worker-pools:
@@ -2786,6 +2794,14 @@ paths:
           in: query
           required: true
           schema: { type: string }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, default: 50 }
+        - name: offset
+          in: query
+          required: false
+          schema: { type: integer, default: 0 }
       responses:
         '200': { description: Deployment targets with environments, resource refs, secrets, and rollback points }
     post:
@@ -2832,6 +2848,14 @@ paths:
           in: query
           required: true
           schema: { type: string }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, default: 50 }
+        - name: offset
+          in: query
+          required: false
+          schema: { type: integer, default: 0 }
       responses:
         '200': { description: Active and historical environment policies that gate provider-backed deployment runs }
     post:
@@ -2877,6 +2901,10 @@ paths:
           in: query
           required: false
           schema: { type: integer, default: 50, minimum: 1, maximum: 200 }
+        - name: offset
+          in: query
+          required: false
+          schema: { type: integer, default: 0 }
       responses:
         '200': { description: Deployment runs with release packet, ChangeSet, health, rollback, and decision links }
     post:
@@ -2937,6 +2965,10 @@ paths:
           in: query
           required: false
           schema: { type: integer, default: 100 }
+        - name: offset
+          in: query
+          required: false
+          schema: { type: integer, default: 0 }
       responses:
         '200': { description: Provider health, API availability, quota, and rate-limit status }
   /v1/drift-reports:
@@ -2951,6 +2983,10 @@ paths:
           in: query
           required: false
           schema: { type: integer, default: 100 }
+        - name: offset
+          in: query
+          required: false
+          schema: { type: integer, default: 0 }
       responses:
         '200': { description: Drift reports classifying unmanaged, orphaned, security, and production impact }
   /v1/reconciliation-runs:
@@ -2965,6 +3001,10 @@ paths:
           in: query
           required: false
           schema: { type: integer, default: 100 }
+        - name: offset
+          in: query
+          required: false
+          schema: { type: integer, default: 0 }
       responses:
         '200': { description: Provider inventory and cost reconciliation run history }
   /v1/comms/policies:
