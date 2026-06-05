@@ -272,7 +272,7 @@ class EnterpriseService:
                 "groups": requested_groups,
                 "role_keys": effective_roles,
                 "permissions": effective_permissions,
-                "mapped_to_org_member": active,
+                "mapped_to_project_member": active,
             },
         )
         return self._get_scim_user_by_name(connection, project_id, normalized_user_name)
