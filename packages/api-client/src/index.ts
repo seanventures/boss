@@ -2811,6 +2811,8 @@ export type ExternalResourceSummary = {
 export type ExternalResourceListResponse = {
   project_id: string;
   items: ExternalResourceSummary[];
+  limit: number;
+  offset: number;
 };
 
 export type CostEventSummary = {
@@ -2837,6 +2839,8 @@ export type CostEventSummary = {
 export type CostEventListResponse = {
   project_id: string;
   items: CostEventSummary[];
+  limit: number;
+  offset: number;
 };
 
 export type CostAnomalySummary = {
@@ -3332,6 +3336,8 @@ export type EventItem = {
 export type EventFeedResponse = {
   project_id: string;
   items: EventItem[];
+  limit: number;
+  offset: number;
 };
 
 export class BossApiError extends Error {
@@ -4229,7 +4235,7 @@ export function createBossApiClient(config: BossApiClientConfig) {
     },
     listExternalResources(
       projectId: string,
-      options?: { provider?: string; ownership?: string; limit?: number },
+      options?: { provider?: string; ownership?: string; limit?: number; offset?: number },
     ) {
       return request<ExternalResourceListResponse>("GET", "/v1/resources", {
         query: {
@@ -4237,6 +4243,7 @@ export function createBossApiClient(config: BossApiClientConfig) {
           provider: options?.provider,
           ownership: options?.ownership,
           limit: options?.limit,
+          offset: options?.offset,
         },
       });
     },
@@ -4245,9 +4252,9 @@ export function createBossApiClient(config: BossApiClientConfig) {
         body: payload,
       });
     },
-    listProviderCosts(projectId: string, limit = 100) {
+    listProviderCosts(projectId: string, limit = 100, offset = 0) {
       return request<CostEventListResponse>("GET", "/v1/costs", {
-        query: { project_id: projectId, limit },
+        query: { project_id: projectId, limit, offset },
       });
     },
     listProviderCostAnomalies(projectId: string, limit = 100) {
@@ -4681,9 +4688,9 @@ export function createBossApiClient(config: BossApiClientConfig) {
         { body: payload },
       );
     },
-    listEvents(projectId: string, limit = 50) {
+    listEvents(projectId: string, limit = 50, offset = 0) {
       return request<EventFeedResponse>("GET", "/v1/events", {
-        query: { project_id: projectId, limit },
+        query: { project_id: projectId, limit, offset },
       });
     },
     listDeadletters(projectId: string, limit = 50) {

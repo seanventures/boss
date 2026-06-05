@@ -640,9 +640,10 @@ class ResourcePlaneService:
         provider: Optional[str] = None,
         ownership: Optional[str] = None,
         limit: int = 100,
+        offset: int = 0,
     ) -> list[dict[str, Any]]:
         clauses = ["project_id = :project_id"]
-        params: dict[str, Any] = {"project_id": project_id, "limit": limit}
+        params: dict[str, Any] = {"project_id": project_id, "limit": limit, "offset": offset}
         if provider:
             clauses.append("provider = :provider")
             params["provider"] = provider.strip().lower()
@@ -661,7 +662,7 @@ class ResourcePlaneService:
                 FROM external_resources
                 WHERE {' AND '.join(clauses)}
                 ORDER BY last_seen_at DESC, provider ASC, name ASC
-                LIMIT :limit
+                LIMIT :limit OFFSET :offset
                 """
             ),
             params,
@@ -674,6 +675,7 @@ class ResourcePlaneService:
         project_id: str,
         *,
         limit: int = 100,
+        offset: int = 0,
     ) -> list[dict[str, Any]]:
         rows = connection.execute(
             text(
@@ -685,10 +687,10 @@ class ResourcePlaneService:
                 FROM cost_events
                 WHERE project_id = :project_id
                 ORDER BY created_at DESC, provider ASC
-                LIMIT :limit
+                LIMIT :limit OFFSET :offset
                 """
             ),
-            {"project_id": project_id, "limit": limit},
+            {"project_id": project_id, "limit": limit, "offset": offset},
         ).mappings().all()
         return [self._serialize_cost_event(row) for row in rows]
 

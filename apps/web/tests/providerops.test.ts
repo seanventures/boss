@@ -76,6 +76,8 @@ describe("ProviderOps feed", async () => {
           updated_at: "2026-06-03T12:00:00Z",
         },
       ],
+      limit: 50,
+      offset: 0,
     });
     vi.mocked(client.listProviderCosts).mockResolvedValueOnce({
       project_id: "boss-dogfood",
@@ -92,6 +94,8 @@ describe("ProviderOps feed", async () => {
           created_at: "2026-06-03T12:00:00Z",
         },
       ],
+      limit: 50,
+      offset: 0,
     });
     vi.mocked(client.listProviderCostAnomalies).mockResolvedValueOnce({
       project_id: "boss-dogfood",

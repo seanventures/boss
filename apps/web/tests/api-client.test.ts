@@ -2578,7 +2578,7 @@ describe("createBossApiClient", () => {
       "http://127.0.0.1:8000/v1/providers/pa_1/test?project_id=boss-dogfood&actor=ceo",
       "http://127.0.0.1:8000/v1/resources/sync",
       "http://127.0.0.1:8000/v1/resources?project_id=boss-dogfood&provider=digitalocean&ownership=discovered_unmanaged&limit=25",
-      "http://127.0.0.1:8000/v1/costs?project_id=boss-dogfood&limit=10",
+      "http://127.0.0.1:8000/v1/costs?project_id=boss-dogfood&limit=10&offset=0",
       "http://127.0.0.1:8000/v1/cost-anomalies?project_id=boss-dogfood&limit=10",
       "http://127.0.0.1:8000/v1/changesets",
       "http://127.0.0.1:8000/v1/changesets/chg_1/approve",

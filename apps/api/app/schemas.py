@@ -2147,6 +2147,8 @@ class EventItem(BaseModel):
 class EventFeedResponse(BaseModel):
     project_id: str
     items: list[EventItem]
+    limit: int
+    offset: int
 
 
 class ArtifactSummary(BaseModel):
@@ -3238,6 +3240,8 @@ class ExternalResourceSummary(BaseModel):
 class ExternalResourceListResponse(BaseModel):
     project_id: str
     items: list[ExternalResourceSummary]
+    limit: int
+    offset: int
 
 
 class CostEventSummary(BaseModel):
@@ -3264,6 +3268,8 @@ class CostEventSummary(BaseModel):
 class CostEventListResponse(BaseModel):
     project_id: str
     items: list[CostEventSummary]
+    limit: int
+    offset: int
 
 
 class CostAnomalySummary(BaseModel):

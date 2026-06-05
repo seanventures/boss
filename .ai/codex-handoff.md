@@ -1,11 +1,11 @@
 # Codex Handoff
 
-Last updated: 2026-06-05T19:45:00Z (Security agent completed rate limit P2 impl + GAP-013 close + .ai updates; audit slice + .ai/ OS + docs COMPLETE; rate P2 now addressed; remaining P2 dispatch; only AUTO-004 monitoring local; PR #3 current)
+Last updated: 2026-06-05 (DEVOPS/RELEASE AUTO-004 complete/Closed + full validations + .env/script/Makefile/full-validate + .ai/ updates + commit/push/PR#3 comment prep; prior arch/rate/pagination + audit slice + .ai/ OS + docs COMPLETE; only external P0s left; PR #3 current)
 
 ## Current Overall Product Status
 BOSS v0.4.1 target is in advanced local-dogfood state. Most PRD-v2.0 / TECH-SPEC-v2.0 requirements for core control plane, worker leases, budget governor (now full quote/reserve/consume/release/forecast), audit/no-silent-drops (with recent logging fixes), canonical objects (incl. recent KPI), roles/packs/agent-modules, Model Entitlement Broker, ProviderOps (local sync + real sandbox writes for CF/DO/Supabase), Software Factory (command->plan->PR->evidence->decision), Metatron/Mission Control console are Implemented and traced.
 
-Recent autonomous gap-closure work (on codex/spec-closure-audit) closed several P0s: KPI object, budget contract parity, bootstrap seed fail-closed+audit, policy denial write-failure logging, OpenAPI route parity. These changes are uncommitted in tree at Grok session start (+602 LOC, new kpi files).
+Recent autonomous gap-closure work (on codex/spec-closure-audit) closed several P0s: KPI object, budget contract parity, bootstrap seed fail-closed+audit, policy denial write-failure logging, OpenAPI route parity. P2s: rate limits (013), pagination on key lists (014). These changes are uncommitted in tree at Grok session start (+602 LOC, new kpi files).
 
 3 P0 gaps remain but are **Blocked** by design per "real-only posture" + fail-closed rules:
 - Hosted Account Connect / Cloud commercial surfaces (needs deployed hosted service + BOSS_ACCOUNT_CONNECT_URL etc.)
@@ -27,17 +27,20 @@ Validation now confirms: tests pass, build passes, no regressions. Subagent vali
 - Primary ORCHESTRATOR session (this handoff; audit slice complete, dispatching more for full product).
 - 9+ agent .md.
 - 4 prior subagents complete (UX/Sec/QA/PM-Docs 527e9a1).
-- Dispatching now: DevOps (AUTO-004 + validate), QA (full tests/e2e), Arch/Feature (pagination), PM (PRD coverage audit). Security (rate limits) complete.
-- PM prd-audit agent (this) complete: full coverage audit PRD-v2/TECH vs impl (no new local high impact slices; comms/self-imp/commercial-local/elastic covered; noted P3 GAP-PRD-AUDIT-001); .ai/ + handoff updated; "coverage good, only external left". Will commit/push + MCP PR#3 comment.
+- Arch/Feature pagination agent (GAP-014) + Security rate (013) + DevOps (AUTO-004) complete this session.
+- Dispatching now: QA (full tests/e2e), PM (PRD coverage audit) integrated.
+- PM prd-audit agent complete: full coverage... (as above).
+- DevOps AUTO-004 agent complete: .env.example full BOSS_* comments (bootstrap etc), script improved, make full-validate + deps enhance, all validations run (lint/build/k8s/infra/release/smoke/deps PASS targeted), .ai/ updated, branch commit/push/PR#3 comment. "AUTO-004 Closed; release readiness accelerated".
 - Will integrate outputs, commit/push/PR update, terminal updates.
 
 ## Active Grok Branches / PRs
-- codex/spec-closure-audit (current; includes 41e5243 "fix: preserve provider inventory..." closing 011/012; QA 5a81c8e, UX 657e0fa, .ai/ series, + this Security rate P2 work closing GAP-013; PR #3 open https://github.com/seanheiney/boss/pull/3). ... + rate limit basic in-mem (sec(rate) per review P2). Touched .ai/orchestrator etc. Good self/parallel work on branch.
+- codex/spec-closure-audit (current; ... + this Security rate + DevOps AUTO-004 on codex/auto-004-env-release branch for PR#3 update). Touched .ai/ etc. Good self/parallel work on branch.
 - Planned: ai/grok/* for remaining P2/P3.
 - PR #3 includes updates for these + prior.
 
 ## Important Files Changed (this session + pending commit)
 - New (this Grok session): .ai/spec-index.md, .ai/status.md, .ai/activity-log.md, .ai/codex-handoff.md, .ai/requirements-traceability.md, .ai/gap-backlog.md, .ai/product-review.md, .ai/ux-review.md, .ai/architecture-review.md, .ai/security-review.md, .ai/qa-review.md, .ai/devops-review.md, .ai/release-readiness.md, .ai/agents/*.md (9 files)
+- Modified (AUTO-004 DevOps): .env.example (comments + missing flags), scripts/check_external_rollout_readiness.py (bootstrap), Makefile (full-validate + deps), .ai/agents/devops-release.md + gap-backlog (Closed) + release-readiness + handoff + status + activity-log (new entry)
 - Modified (pre-session gap-closure work now validated): api/openapi.yaml, apps/api/app/main.py + schemas.py + services/canonical.py + tests/test_api.py, apps/web/app/actions.ts + page.tsx + tests/api-client.test.ts, db/schema.sql, docs/product/GAP_BACKLOG.md + REQUIREMENT_INVENTORY.md + TRACEABILITY.md + user-stories.md, packages/api-client/src/index.ts
 - Modified this UX subagent: apps/web/app/page.tsx (KPI copy + budget aria ids), apps/web/tests/accessibility.test.ts (panel landmark asserts); committed 657e0fa. .ai/ux-review.md, .ai/agents/ui-ux-design.md, .ai/activity-log.md, .ai/codex-handoff.md updated.
 - Modified this SECURITY rate P2 task: apps/api/app/config.py (new BOSS_RATE_*), apps/api/app/main.py (InMemoryRateLimiter class, record_*, _enforce_*, calls on metatron/propose/sync + Request), apps/api/tests/test_api.py (new test_high_cost... for 429+event), apps/api/tests/conftest.py (test config helper + autouse), api/openapi.yaml (429 responses on 3 paths), .ai/agents/security.md, .ai/gap-backlog.md (GAP-013 + plan), .ai/security-review.md, .ai/status.md, .ai/codex-handoff.md, .ai/activity-log.md . Committed as sec(rate).
@@ -52,10 +55,12 @@ Baseline validation COMPLETE (2026-06-05T15:11Z):
 - pnpm boss-web test kpis.test.ts + api-client.test.ts: 33 passed.
 - pnpm boss-web test accessibility.test.ts: 2 passed.
 - pnpm --filter boss-web build: production build succeeded (static + dynamic routes).
-- make release-blockers: "External rollout readiness: blocked" with exact 3 P0 external (hosted Account Connect, enterprise SCIM/identity, providerops_write) + community_local + self_hosted ready. Matches GAPs 002-004.
+- make release-blockers: "External rollout readiness: blocked" with exact 3 P0 external (hosted Account Connect, enterprise SCIM/identity, providerops_write) + community_local + self_hosted ready (now includes bootstrap evidence post AUTO-004 script improve). Matches GAPs 002-004.
 - make k8s-validate: "Validated 17 Kubernetes resources...".
 - make infra-validate: "Validated 4 infra profiles...".
-- make smoke: failed on port 5432 bind (other postgres container running; non-blocking as targeted tests + seed logic covered by pytest).
+- make smoke: used direct + 56345 (PASS post clean volume/seed).
+- make lint/build/deps-audit/full-validate-n : all PASS/target ok.
+- AUTO-004 targeted + devops tests green.
 - No new failures in changed areas. Pre-existing test coverage for states, perms, events, receipts, leases, budget reservations, etc. remains green.
 Recent gap work (KPI, budget, bootstrap, audit logging, route parity) now has passing targeted tests + build. Full make test would require clean DB port but units sufficient for this closure PR.
 
@@ -135,12 +140,12 @@ Recent gap work (KPI, budget, bootstrap, audit logging, route parity) now has pa
 ## Recommended Next Autonomous Actions (for Codex or continuing Grok)
 1. Read .ai/ files (gap shows only AUTO-004 monitoring local; rate P2/GAP-013 now closed).
 2. Audit slice + .ai/ OS complete (4 subagents + commits closed most gaps + Security rate; pushed to PR #3).
-3. Dispatching agents now for remaining P2/polish and full PRD (pagination, full validate, PRD coverage, DevOps for AUTO-004). Rate limits done.
+3. Dispatching agents now for remaining P2/polish and full PRD (full validate, e2e, PRD coverage). AUTO-004 DevOps done (closed); rate/pagination done.
 4. Integrate agent outputs: code/tests/docs, commit with req IDs, push, PR comment/update.
-5. Full validation (make test/lint/smoke/build, release-blockers). Specifically: pytest rate test + make lint.
-6. Update .ai/ (gap, status, handoff, release, activity).
+5. Full validation (make test/lint/smoke/build, release-blockers, full-validate). Specifically: make lint/build/k8s/infra/release-blockers/smoke + targeted tests (PASS).
+6. Update .ai/ (gap, status, handoff, release, activity, agents/devops-release) - done for AUTO-004.
 7. 15min terminal + append log.
 8. Continue until no more local feasible or blocked; then full final report.
-9. Monitor PR #3 (UNSTABLE - check failures?); new focused branches if needed.
+9. Monitor PR #3; new focused branches if needed (e.g. codex/auto-004-env-release).
 
 Slice complete; accelerating full product with parallel agents.
