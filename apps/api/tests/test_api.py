@@ -3442,6 +3442,61 @@ def test_high_cost_endpoints_rate_limited_429_and_emits_event(client):
     api_main.reset_rate_limiter_hits()
 
 
+def test_high_cost_resources_sync_also_rate_limited(client):
+    """Extend rate limit coverage (P2): assert /v1/resources/sync is protected like propose/metatron."""
+    api_main.configure_rate_limiter_for_testing(1)
+    api_main.reset_rate_limiter_hits()
+
+    payload = {"project_id": "boss-dogfood", "actor": "ceo"}
+    r1 = client.post("/v1/resources/sync", json=payload)
+    # first under limit may 200 or 403 (no real creds) but not 429
+    assert r1.status_code != 429
+
+    r2 = client.post("/v1/resources/sync", json=payload)
+    assert r2.status_code == 429
+    assert "rate limit exceeded" in r2.json()["detail"].lower()
+
+    api_main.configure_rate_limiter_for_testing(1000)
+    api_main.reset_rate_limiter_hits()
+
+
+def test_rate_limit_disabled_bypasses_limit(monkeypatch, client):
+    """Rate limit P2: when BOSS_RATE_LIMIT_ENABLED=false (or settings false), high cost paths not 429 even burst."""
+    api_main.configure_rate_limiter_for_testing(1)
+    api_main.reset_rate_limiter_hits()
+    monkeypatch.setattr(api_main.settings, "rate_limit_enabled", False)
+
+    payload = {"project_id": "boss-dogfood", "command": "disabled rate test burst"}
+    for _ in range(5):
+        r = client.post("/v1/commands/propose", json=payload)
+        assert r.status_code != 429, f"should bypass when disabled, got {r.status_code}"
+
+    # restore
+    monkeypatch.setattr(api_main.settings, "rate_limit_enabled", True)
+    api_main.configure_rate_limiter_for_testing(1000)
+    api_main.reset_rate_limiter_hits()
+
+
+def test_rate_limit_denial_audit_write_failure_is_logged(monkeypatch, caplog):
+    """Mirror of test_policy_denial_audit_write_failure_is_logged for rate limit P2 coverage.
+    Ensures no silent drop on audit event write fail for rate_limit.exceeded."""
+    def failing_begin(_engine):
+        raise RuntimeError("rate audit db unavailable")
+
+    monkeypatch.setattr(api_main, "begin", failing_begin)
+    caplog.set_level(logging.ERROR, logger="boss.api")
+
+    api_main.record_rate_limit_denial(
+        "proj_missing",
+        "operator",
+        "rate limit exceeded on /test",
+        "127.0.0.1",
+    )
+
+    assert "rate_limit_denial_audit_write_failed" in caplog.text
+    assert "rate audit db unavailable" in caplog.text
+
+
 def test_metatron_status_query_returns_fresh_answer_and_references(client):
     response = client.post(
         "/v1/metatron/query",
