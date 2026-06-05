@@ -20,8 +20,8 @@ Local dev: make dev/seed/test/smoke/lint/build work (postgres/docker required fo
 See .ai/spec-index.md (primary: PRD-v2.0.md + TECHNICAL_SPEC-v2.0.md + current docs/product/* inventory/trace/gap/impl + AGENTS.md + README + specpack contracts + openapi + schema + user-stories).
 
 ## Completed Requirements
-See .ai/requirements-traceability.md (MET-*, DEC-*, CAN-* incl KPI (CAN-006 closed this audit), BUD-* full (consume/forecast added), RUN-*, AUD-* (logging closed), RPL-*, MEB-*, SWF-*, AGT-*, COM-*, SEC-* (bootstrap+denial logging closed), NFR-*). Most "Implemented" with tests, states, events, receipts, reservations where applicable. Recent closures traced to GAP-2026-06-05-001,006,007,008,009 + PRD sections.
-Validation now confirms: tests pass, build passes, no regressions in key paths.
+See .ai/requirements-traceability.md (MET-*, DEC-*, CAN-* incl KPI (CAN-006), new CAN-000 fresh bootstrap (GAP-012 by 41e5243), BUD-* full, RUN-*, AUD-*, RPL-* (RPL-004 enhanced for billing unavailable by 41e5243 GAP-011), ...). Recent: 41e5243 closed GAP-011 P1 ProviderOps billing confidence + GAP-012 P0 fresh bootstrap; subagents closed AUTO-001/002. All local feasible traced + validated.
+Validation now confirms: tests pass, build passes, no regressions. New commit 41e5243 on branch advances reliability.
 
 ## Active Grok Agents
 - Primary ORCHESTRATOR session (this handoff; .ai/ + PR #3 complete, subagents monitoring).
@@ -30,9 +30,9 @@ Validation now confirms: tests pass, build passes, no regressions in key paths.
 - Will apply any fixes they produce, update reviews, re-validate, push/PR amend if needed.
 
 ## Active Grok Branches / PRs
-- codex/spec-closure-audit (current; pushed 89166c2 with .ai/ + gitignore; PR #3 open https://github.com/seanheiney/boss/pull/3)
-- Planned: ai/grok/* for P2 polish.
-- PR #3 body includes: req IDs (GAP-2026-06-05-00* + PRD CAN/BUD/SEC/AUD), user-facing (KPI durable, full budget, secure bootstrap/audit), files (.ai/ + prior), decisions (from .ai/reviews), tests (lint+24API+35web+build+validators all PASS), Codex notes (handoff, avoid dup on closures), risks (cursor PRs, externals).
+- codex/spec-closure-audit (current; includes 41e5243 "fix: preserve provider inventory when billing is unavailable" closing GAP-2026-06-05-011 P1 + GAP-2026-06-05-012 P0 fresh bootstrap; also QA 5a81c8e, UX commits, .ai/ series; PR #3 open https://github.com/seanheiney/boss/pull/3). 41e5243 advances ProviderOps (graceful billing unavailable: inventory preserved, status/message exposed in artifacts/health/recon, event, no fake costs) + bootstrap reliability (text ref for receipt_id to allow clean schema). Touched .ai/orchestrator (text aligned to latest). Good self/parallel work on branch.
+- Planned: ai/grok/* for remaining P2/P3.
+- PR #3 includes updates for these + prior.
 
 ## Important Files Changed (this session + pending commit)
 - New (this Grok session): .ai/spec-index.md, .ai/status.md, .ai/activity-log.md, .ai/codex-handoff.md, .ai/requirements-traceability.md, .ai/gap-backlog.md, .ai/product-review.md, .ai/ux-review.md, .ai/architecture-review.md, .ai/security-review.md, .ai/qa-review.md, .ai/devops-review.md, .ai/release-readiness.md, .ai/agents/*.md (9 files)
