@@ -1,6 +1,6 @@
 # BOSS Autonomous Delivery Status
 
-**Last updated**: 2026-06-05T21:45Z (ui-ux-toasts specialist closed P2 client loading/success/feedback toasts for KPI create/upsert, budget q/r/c/r (demo), command propose, provider apply/approve, self-imp submit/canary/rollback, packs install (5+); DoD 9-12 + a11y; GAP-AUTO-001 closed; boring no-dep; tests/build prep; on ai/codex/ui-ux-toasts-client-feedback; doubled agents 3x ongoing + pack P3; .ai/ updates; next full validate/commit/push/PR#3 comment)
+**Last updated**: 2026-06-05T17:40Z (DOUBLED AGENTS FOR 3X SPEED: 5 prior +1 pack +10+ new specialists launched parallel (ui-ux-toasts, qa-e2e-comms, packs-2, qa-e2e-selfimp-provider, feature-providerops, ux-commercial, arch-pag-expand, feature-monitoring, feature-comms-ui + more); total ~20 agents on 12+ full DoD polish slices (pack P3 + ux-toasts + e2e comms/selfimp/provider + commercial + pag expand + monitoring + comms-ui + worker/infra + docs + security/rate); .ai/ prepped for scale; prior validate green; PR#3; 1 P3 + P2 polish in flight 3x, external 3 blocked)
 **Repo root**: /Volumes/DataSSD1/test/boss
 **Git remote**: https://github.com/seanheiney/boss
 **Current branch**: codex/spec-closure-audit (dirty at start: uncommitted gap-closure changes)
@@ -27,7 +27,7 @@
 - ORCHESTRATOR / TECH LEAD (primary; .ai/ + PR #3 + report + subagent launch complete).
 - 9 agent .md created/updated.
 - 4 subagents complete + pushed (UX 001, Sec, QA 002, PM/Docs 527e9a1 for AUTO-003). + Security rate P2 task (this) closed GAP-013 rate limit. + Arch pagination agent closed GAP-014. Branch commits 41e5243 (011/012) + 527e9a1 (AUTO-003) + this rate work + pagination. All local for slice (P0s + AUTO 001-005 + 011-014) closed/monitored. Validator + rate + pagination tests OK. PR #3 current. Local P0 0; slice + rate + pagination complete. Next: full product or remaining P2 (e2e).
-- More spawnable. Subagent outputs will drive P2 fixes + re-validate. FEATURE_MONITORING_OBS closed its P2 (health/risk/event full/deadletter/provider health/cost anom a11y+states+tests + 13b md + .ai/).
+- More spawnable. Subagent outputs will drive P2 fixes + re-validate.
 
 ## Active Branches / Worktrees
 - codex/spec-closure-audit (current; pushed 89166c2 with .ai/ OS + gitignore fix)
@@ -51,7 +51,7 @@ See .ai/requirements-traceability.md for full matrix + status "Yes" for local.
 - P0 closed recently: 4 (audit log, bootstrap, budget contract, KPI, route parity)
 - P0 remaining: 3 (all externally Blocked: Account Connect, Enterprise, ProviderOps live rollout)
 - P1: 1 monitoring (placeholders - ok), some potential polish
-- P2/P3: UX polish, more e2e coverage, docs refresh, mobile/accessibility edges per reviews. Rate P2 closed (GAP-013); last P3 GAP-PRD-AUDIT-001 pack import/export closed by FEATURE-ENG. All local P3s done.
+- P2/P3: UX polish, more e2e coverage, docs refresh, mobile/accessibility edges per reviews. Rate P2 now closed (GAP-013).
 - New gaps may surface from full validation + agent reviews.
 
 ## Tests and Validation Results (baseline to be run)

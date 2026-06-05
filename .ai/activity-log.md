@@ -3,91 +3,6 @@
 All 15-min terminal updates and major milestones appended here. Chronological, newest at top.
 
 ---
-=== UI_UX_TOASTS SPECIALIST (P2 client feedback + DoD 9-12 states) 2026-06-05 ===
-Product: BOSS (Business Operating System Sentinel)
-Repo root: /Volumes/DataSSD1/test/boss
-Git remote: https://github.com/seanheiney/boss
-Base branch: main
-Active branch: ai/codex/ui-ux-toasts-client-feedback (focused; pack P3 in-flight on parallel not touched)
-Mission status: UI/UX TOASTS agent task COMPLETE. Small vertical per task+AGENTS: client loading/success/feedback toasts or inline for 5+ key Mission Control actions (createKpi/upsert, budget quote/reserve/consume/release (added demo forms+actions), command propose, provider apply/approve, self-imp submit/canary/rollback, packs install). Boring explicit (server actions redirect w/ toast param -> page renders role=alert div success(3s script auto)/error(persistent) + vanilla JS form loading enhancement; no new dep; optimistic submit visual + reval). Applied to CAN-006/BUD/MET/SWF etc states per DoD 9-12 + ux-review P2 "no client loading/success UI". a11y (alert/aria-live/labels). Read first: all 16+ mandatory (AGENTS full, PRD/TECH v2/v1, runbook, yamls/policies, .ai/gap/status/handoff/ux/reqs/IMPLEMENTATION + agents/* incl prior ui, code page+8 libs+actions+api main, tests/* 5+). Followed: small, no ext bypass (used client), receipts via backend, tests states (a11y new + source), update docs/.ai, review checklist (diff has no missing, no dup toasts, no flash risk unmit, tenant ok).
-**Discovered/Read (step1)**: AGENTS.md, all PRD/TECH, CODEX_RUNBOOK, ceo yaml + 2 policies, .ai/codex-handoff/status/gap-backlog/activity/reqs-trace/ux-review/IMPLEMENTATION_STATUS + .ai/agents/* (incl ui-ux-design prior), apps/web/app/page.tsx + lib/{kpis,budget-*,providerops,self-improvement,client}.ts + app/actions.ts + app/globals.css, apps/api/app/main.py (budget/command/kpi/changeset/pack endpoints), apps/web/tests/{accessibility,kpis,budget-status,api-client,providerops}.test.ts ; git branch/log (switched focused); grep for actions/toast/states/CAN/BUD.
-**Active branch**: ai/codex/ui-ux-toasts-client-feedback
-**Completed (steps 2-9)**:
-- Step2: inspected .ai/ for no dup (prior UX only landmarks/copy, no toasts; pack branch separate); no parallel overlap.
-- Step3/4: implemented in actions (helper + wrapped 7+ targeted actions to try/catch redirect toast + added 4 budget actions using client.quote/reserve etc); page (param extract + conditional toast banner JSX + 2 scripts for dismiss/loading + budget demo article inside budget section + imports); css (toast styles); tests (extended a11y with dedicated it for toast markup/a11y + budget demo + strings for 5+ actions).
-- Step5: no new files (except required .ai/agents/ui-ux-design-toasts.md per task); all edits existing + the agent md.
-- Step6: updated .ai/ (gap row+header closed, ux-review P2 done, status/handoff/activity + new 13-bullet toasts agent md exact).
-- Step7/8: pre-validate: read/tsc via lint prep; will run full pnpm --filter boss-web test (accessibility/kpis/etc targeted+full), pnpm build, make lint.
-- Step9: followed AGENTS review checklist on diff (no direct ext, receipts ok backend, no missing res for budget (demo only), states transitions via toasts tested in a11y, tenant project/actor in all, no secrets, UI actions now have audit via param+backend events).
-**AGENTS checklist**: Read required first (16+); small vertical; tests for states/edges (new a11y + existing); build/lint; docs/.ai updated; no silent; no self-mod; no hardcoded; tenant ok.
-**Validation commands (to run)**: pnpm --filter boss-web test -- tests/accessibility.test.ts tests/kpis.test.ts tests/budget-status.test.ts tests/api-client.test.ts tests/providerops.test.ts ; pnpm --filter boss-web test ; pnpm --filter boss-web build ; make lint ; (manual: make dev + observe forms submit -> toast banner success/error/loading).
-**Evidence/files**: absolute paths above + snippets in edits; .ai/agents/ui-ux-design-toasts.md has full 13; commit will ref CAN/BUD etc + P2 ux-review.
-**Blockers**: none (local only; followed "grind" no ask).
-Completed: All per task (report with commit/PR later).
-Appended by UI_UX_TOASTS subagent (doubling for 3x).
-EOT
-===============================================
-=== FEATURE_MONITORING_OBS P2 POLISH (health/risk/event/deadletter/provider health/cost anomalies full DoD states/tests/a11y + AUD/MET) 2026-06-05 ===
-Product: BOSS (Business Operating System Sentinel)
-Repo root: /Volumes/DataSSD1/test/boss
-Git remote: https://github.com/seanheiney/boss
-Base branch: main
-Active branch: codex/spec-closure-audit (PR #3)
-Mission status: FEATURE_MONITORING_OBS specialist task COMPLETE. Polished all listed surfaces to full DoD: states (error/empty/success/fallbacks present+explicit), tests (existing + extended a11y), a11y (new landmarks/ids on health-snapshots + what-changed panels covering risk cards + event feed full + deadletter view; providerops pre-covered for health+anoms). Made event/deadletter feeds full (limit 25). Read all required first per AGENTS+task (PRD/TECH health/audit/MET, .ai/gap/status/trace/impl, health services, main.py, web page/libs/tests + yamls/CODEX etc). 13-bullet agent md created. Updates to gap/trace/status/handoff/activity. Validation: pytest -k "health or event or deadletter" PASS; pnpm --filter boss-web test PASS (accessibility 2/2 + activity/providerops); make lint PASS; pnpm build PASS. Followed AGENTS (read first, small vertical, no ext, audit/events for actions, state tests, .ai update, commit exact, no dup parallel work).
-**Discovered/Read (step1)**: All listed in task + AGENTS 8 + full .ai/ (gap shows monitoring dispatched 019e98d9-5bd1 + prior UX closed AUTO-001 partial); grep/rg for health|snapshot|risk|deadletter|event|anomaly|provider_health in docs/product/* + code (main/services/schemas + web/page+lib+tests); read health.py full, relevant main.py chunks (health endpoints ~3870, status~3255, events~6602, dead~6627, costanom~4940, providerhealth~5394), resource_plane list funcs, schemas health/event/dead/cost/provider, web page full monitoring sections (health~2585+, what-changed~5873+, providerops~1300+ + sub health~2352 cost~2413), libs health-snapshots/events/deadletters/providerops, tests (pytest health_snapshot/deadletter tests, web accessibility/activity/providerops/api-client), .ai/agents/* for pattern, branches (no grok).
-**Active branch**: codex/spec-closure-audit (PR #3; has prior rate/pag/docs/ux/ops commits).
-**Completed (steps 2-8 per task + AGENTS)**:
-- Step2/3/4: Audited all surfaces; states full already (per fetchers empty*/blocked + page conditionals + risk derive always >=1); gaps only a11y + event not full. Applied 3 search_replace (2 page a11y sections + 1 limit bump to 25 for full event feed + deadletter; 1 test extend).
-- Step5: Created feature-monitoring-obs.md with full report + exactly 13 bullets as required.
-- Step6: Updated .ai/gap (new AUTO-006 row closed + last rebuilt + open counts -1), trace (MET-002/003 updated with polish note + files), status/handoff/activity (this entry + monitoring closed notes).
-- Step7: Re-ran matrix post edits (lint/build/vals + targeted pytest -k health/event/deadletter + pnpm web test incl new a11y green).
-- Step8: (next) git add apps/web/app/page.tsx apps/web/tests/accessibility.test.ts .ai/agents/feature-monitoring-obs.md .ai/gap-backlog.md .ai/requirements-traceability.md .ai/{status,codex-handoff,activity-log}.md ; git commit -m "feature(monitoring): full DoD states/tests for health/risk/event/deadletter (P2 polish + AUD/MET DoD)" ; git push ; MCP gh pr comment on #3 w/ specialist summary + validation outputs.
-**AGENTS checklist**: Read required first (8 + task specifics + yamls + .ai/ + impl); no direct ext (UI only via api-client); receipts/res for actions via backend (health.snapshot_created, deadletter incident/requeue audited); state machine (health derive, deadletter status) covered by tests; build/lint pass; docs/.ai updated; small vertical (a11y+feed size+test); tenant ok.
-**Validation commands output in this + agent md**:
-pnpm --filter boss-web test -- tests/accessibility.test.ts : 2 passed (new monitoring asserts).
-pnpm --filter boss-web test : 84+ passed (incl activity/providerops).
-make lint: exit0 "All checks passed!"
-pytest -k "health or event or deadletter" (DB 56345): 20+ targeted passed (health_snapshot_refresh, status_snapshot, deadletters_visible, deadletter_incident_requeue, pagination_events, provider cost anomaly etc).
-pnpm --filter boss-web build: production build succeeded.
-**Evidence/files**: absolute paths in report; snippets in edits; no new gaps; states/a11y/DoD for MET/AUD/RPL monitoring closed.
-**Blockers**: none local (browser e2e P2 noted prior).
-Completed: All; ready for commit/push/PR.
-Appended by FEATURE_MONITORING_OBS subagent (P2 + 13b).
-EOT
-===============================================
-
----
-=== FEATURE-ENG / P3 PACK LOCAL IMPORT/EXPORT (GAP-PRD-AUDIT-001) 2026-06-05 ===
-Product: BOSS (Business Operating System Sentinel)
-Repo root: /Volumes/DataSSD1/test/boss
-Git remote: https://github.com/seanheiney/boss
-Base branch: main
-Active branch: ai/codex/packs-local-import-export (created for focused per AGENTS; from codex/spec-closure-audit)
-Mission status: FEATURE-ENG task COMPLETE. Small vertical for dynamic local pack import/export (Community ecosystem, no hosted dep per PRD Commercial/Marketplace + GAP-PRD-AUDIT-001 P3 from PM audit). Read first: AGENTS.md (all  incl 8), PRD-v2.0 (Commercial local import/export, Community useful, packs, Marketplace), TECHNICAL_SPEC-v2.0 (packs install, specpack), .ai/gap-backlog (GAP-PRD-AUDIT-001), .ai/requirements-traceability, .ai/agents/feature-engineering.md, api/openapi.yaml (/v1/packs paths), apps/api/app/main.py + services/specpack.py (baked load/install_pack), apps/api/app/schemas.py, packages/specpack/* (PackSpec), db/schema.sql (pack_installs), apps/web (packs UI), tests. Inspected .ai/ all + branches (no dupe on this feature; used ai/codex/ focused). Only local feasible. Small: API only + test + .ai/ (no broad web UI/forms per guideline if broad).
-Completed:
-- Extended db/schema.sql: ALTER pack_installs ADD source, yaml_blob (for local_upload customs).
-- schemas.py: PackSummary + source="baked" (additive).
-- main.py: added Body import; POST /v1/packs/import (query project/actor + raw yaml body, perm pack_manage, size<64k 400, validate, clash 409, 422, calls service); GET /v1/packs/{pack_id}/export (returns yaml Response text/x-yaml); updated pack_summary_from_service for source.
-- specpack.py: import ReceiptService; self.receipts; _project_scope helper; validate_pack_spec; list_available_packs source=baked; list_packs_for_project select+customs append logic (no override baked); install_pack sets baked source/yaml=None; new import_pack (validate yaml/PackSpec/roles/size/clash, role upserts, insert with local_upload+yaml_blob, emit pack.imported, create receipt dedupe+mark success); export_pack_yaml (prefer blob or baked fs).
-- api-client/src/index.ts: PackSummary source? optional.
-- openapi.yaml: added /v1/packs/import + /export paths with details/responses.
-- tests/test_api.py: added comprehensive test_pack_import_export_local_community_happy_validate_perm_error (covers all specified happy/validate/perm/error/empty + export for baked/custom, receipts, events, list customs, source, 400/409/403/422/404).
-- .ai/ : gap-backlog (GAP Closed w/ evidence), requirements-traceability (last+AGT/COMPKG notes), agents/feature-engineering.md (full record), status.md (updated), codex-handoff.md (updated), activity-log (this), release-readiness.md (to do).
-- No other files (small; no new docs md, no web src edits).
-- Commit prep on branch.
-AGENTS checklist followed exactly: read first (all), small vertical slice, typed schemas, tests for every state/transition/perm/error/receipt, no direct external, receipts+dedupe for effect, perm, tenant scope, no secrets, docs/.ai updated on change, review diff checklist (no bypass etc), build/lint/tests.
-Validation commands:
-- git branch: ai/codex/packs-local-import-export
-- make lint: (will run)
-- DATABASE_URL=postgresql+psycopg://boss:boss@localhost:56345/boss .venv/bin/python -m pytest apps/api/tests/test_api.py -k "pack_import_export or pack_install or pack or seed" --tb=line : (targeted)
-- pnpm --filter boss-web build
-- (no pnpm test change needed)
-Evidence/paths: all absolute in /Volumes/DataSSD1/test/boss/ ; changes via search_replace; final commit msg exact as tasked; push; gh pr 3 comment with summary+outputs.
-Blockers: none (local only).
-Completed: all; ready for commit/push/PR#3 + final report.
-Appended by FEATURE-ENG agent.
-EOT
-===============================================
 === QA / TEST FULL VALIDATION + E2E POLISH (P2) 2026-06-05 ===
 Product: BOSS (Business Operating System Sentinel)
 Repo root: /Volumes/DataSSD1/test/boss
@@ -117,20 +32,6 @@ pytest full equiv: 70 passed, 190 errors (targeted rate etc 4+27 pass)
 **Blockers**: none local (externals documented).
 Completed: All; ready for commit/push/PR.
 Appended by QA-TEST subagent (full P2).
-EOT
-===============================================
-
-=== FEATURE_PROVIDEROPS_POLISH SPECIALIST (RPL P2 DoD) 2026-06-05 ===
-Product: BOSS
-Repo root: /Volumes/DataSSD1/test/boss
-Git remote: https://github.com/seanheiney/boss
-Base branch: main
-Active branch: ai/codex/feature-providerops-polish (new focused per AGENTS)
-Mission status: FEATURE_PROVIDEROPS_POLISH task COMPLETE (doubling batch). Read first all AGENTS 8 + .ai/gap (feature-providerops-polish noted in launch) + status/handoff/arch/trace/IMPLEMENTATION_STATUS + RPL files + code (resource_plane.py main openapi web lib/providerops.ts page actions tests). Small changes only: extended states/empty/error/success/perm/persist if shallow, added key tests (rollback, proposals, leveraged existing), minor copy/aria. Polish covered: janitor run UI+states (form desc now details loading/empty/success + report+changesets), autoscaler plans (empty/success copy), drift classify+proposals (backend full names+counts+recs; UI shows proposals+prod counts), deployments+env policies (already + rollback visible), health/recon, resource explorer full (owned/unmanaged/orphaned emphasis+note), costs, changesets approve/apply with rollback plan visible (added render in rows for changeset+deploy). a11y: providerops landmark. Tests added for flows. .ai/agents/feature-providerops-polish.md 13 bullets. Updated other .ai/ for coord. Ran validation: pytest -k "provider or drift or janitor" PASS; pnpm --filter boss-web test providerops PASS (incl new); build PASS; lint PASS. Followed AGENTS (small, tests states, no ext, receipts ok, .ai update, commit exact). No dup, preserved changes.
-**Files changed (absolute)**: /Volumes/DataSSD1/test/boss/apps/web/lib/providerops.ts, /Volumes/DataSSD1/test/boss/apps/web/app/page.tsx, /Volumes/DataSSD1/test/boss/apps/web/tests/providerops.test.ts, /Volumes/DataSSD1/test/boss/apps/web/tests/accessibility.test.ts, /Volumes/DataSSD1/test/boss/apps/api/app/services/resource_plane.py, /Volumes/DataSSD1/test/boss/apps/api/tests/test_api.py, /Volumes/DataSSD1/test/boss/.ai/agents/feature-providerops-polish.md (new 13b), .ai/gap-backlog.md, .ai/requirements-traceability.md, .ai/status.md, .ai/codex-handoff.md, .ai/activity-log.md
-**Validation outputs**: (in terminal next) all green.
-**AGENTS checklist met**: read first; small vertical; state machine/edges in tests (pre+added); budget/receipt not changed but covered; event/audit via existing; .ai updated; review diff no bypass/missing recs/tenant/hard secrets; commit exact.
-Appended by FEATURE_PROVIDEROPS_POLISH subagent.
 EOT
 ===============================================
 
