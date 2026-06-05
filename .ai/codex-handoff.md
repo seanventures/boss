@@ -1,9 +1,9 @@
 # Codex Handoff
 
-Last updated: 2026-06-05T15:11:39Z (post baseline validation GREEN)
+Last updated: 2026-06-05T15:26:00Z (PR #3; UX/UI-UX-DESIGN subagent completed audit+minimal fixes for KPI/budget states/reach/a11y/copy (GAP-AUTO-001); commit 657e0fa + .ai updates; tests/build green)
 
 ## Current Overall Product Status
-BOSS v0.4.1 target is in advanced local-dogfood state. Most PRD-v2.0 / TECH-SPEC-v2.0 requirements for core control plane, worker leases, budget governor (now full quote/reserve/consume/release/forecast), audit/no-silent-drops (with recent logging fixes), canonical objects (incl. recent KPI), roles/packs/agent-modules, Model Entitlement Broker, ProviderOps (local sync + real sandbox writes for CF/DO/Supabase), Software Factory (command->plan->PR->evidence->decision), Metatron/Mission Control console are Implemented and traced. 
+BOSS v0.4.1 target is in advanced local-dogfood state. Most PRD-v2.0 / TECH-SPEC-v2.0 requirements for core control plane, worker leases, budget governor (now full quote/reserve/consume/release/forecast), audit/no-silent-drops (with recent logging fixes), canonical objects (incl. recent KPI), roles/packs/agent-modules, Model Entitlement Broker, ProviderOps (local sync + real sandbox writes for CF/DO/Supabase), Software Factory (command->plan->PR->evidence->decision), Metatron/Mission Control console are Implemented and traced.
 
 Recent autonomous gap-closure work (on codex/spec-closure-audit) closed several P0s: KPI object, budget contract parity, bootstrap seed fail-closed+audit, policy denial write-failure logging, OpenAPI route parity. These changes are uncommitted in tree at Grok session start (+602 LOC, new kpi files).
 
@@ -24,18 +24,20 @@ See .ai/requirements-traceability.md (MET-*, DEC-*, CAN-* incl KPI (CAN-006 clos
 Validation now confirms: tests pass, build passes, no regressions in key paths.
 
 ## Active Grok Agents
-- Primary ORCHESTRATOR session (this handoff, running validation, will commit/push/PR).
-- Agent .md files created for all required: orchestrator, product-manager, ui-ux-design, software-architect, feature-engineering, qa-test, security, devops-release, codex-coordination (in .ai/agents/).
-- Parallel spawn_subagent calls planned for deeper review work (e.g. QA race tests, UX state audit).
+- Primary ORCHESTRATOR session (this handoff; .ai/ + PR #3 complete, subagents monitoring).
+- Agent .md files created + updated for all 9 required.
+- 3 parallel subagents spawned (bg): QA (id 019e9859-5a07... , 62+ tools, adding race/perm/persist tests GAP-AUTO-002, still running after 4min), UX (id 019e9859-6e7b..., auditing KPI/budget states a11y GAP-AUTO-001), Security (id 019e985a-199b..., dep scans + recent surface review).
+- Will apply any fixes they produce, update reviews, re-validate, push/PR amend if needed.
 
 ## Active Grok Branches / PRs
-- codex/spec-closure-audit (current; contains recent gap closures; dirty with uncommitted at session start).
-- Planned: create focused ai/grok/* branches for any new work; commit/push/PR from them.
-- Will push current branch + open PR documenting the audit closures + validation.
+- codex/spec-closure-audit (current; pushed 89166c2 with .ai/ + gitignore; PR #3 open https://github.com/seanheiney/boss/pull/3)
+- Planned: ai/grok/* for P2 polish.
+- PR #3 body includes: req IDs (GAP-2026-06-05-00* + PRD CAN/BUD/SEC/AUD), user-facing (KPI durable, full budget, secure bootstrap/audit), files (.ai/ + prior), decisions (from .ai/reviews), tests (lint+24API+35web+build+validators all PASS), Codex notes (handoff, avoid dup on closures), risks (cursor PRs, externals).
 
 ## Important Files Changed (this session + pending commit)
 - New (this Grok session): .ai/spec-index.md, .ai/status.md, .ai/activity-log.md, .ai/codex-handoff.md, .ai/requirements-traceability.md, .ai/gap-backlog.md, .ai/product-review.md, .ai/ux-review.md, .ai/architecture-review.md, .ai/security-review.md, .ai/qa-review.md, .ai/devops-review.md, .ai/release-readiness.md, .ai/agents/*.md (9 files)
 - Modified (pre-session gap-closure work now validated): api/openapi.yaml, apps/api/app/main.py + schemas.py + services/canonical.py + tests/test_api.py, apps/web/app/actions.ts + page.tsx + tests/api-client.test.ts, db/schema.sql, docs/product/GAP_BACKLOG.md + REQUIREMENT_INVENTORY.md + TRACEABILITY.md + user-stories.md, packages/api-client/src/index.ts
+- Modified this UX subagent: apps/web/app/page.tsx (KPI copy + budget aria ids), apps/web/tests/accessibility.test.ts (panel landmark asserts); committed 657e0fa. .ai/ux-review.md, .ai/agents/ui-ux-design.md, .ai/activity-log.md, .ai/codex-handoff.md updated.
 - Untracked (pre + session): apps/web/lib/kpis.ts, apps/web/tests/kpis.test.ts, packages/specpack/objects/kpi.yaml
 - All .ai/ are part of the autonomous OS per user query; included in commit/PR.
 
@@ -62,7 +64,8 @@ Recent gap work (KPI, budget, bootstrap, audit logging, route parity) now has pa
 ## UX Decisions
 - Mission Control (apps/web) is executive console for CEO/operator/Metatron; project-scoped, actor-scoped.
 - All surfaces must have real nav, loading/empty/error/success, permission reflection, mobile/responsive basics.
-- Pending full UX agent review of current console (page.tsx, lib/*) for dead-ends, polish, a11y.
+- UX agent review (this session, subagent): KPI (CAN-006) + budget (BUD) panels audited for reachability (in main console always), explicit empty ("No KPIs defined...", "No budget allocations..."), error (apiReachable + blockedReason), success (revalidate), responsive (css media), a11y (labels + new aria ids). States mostly present pre; minimal polish applied (copy, aria landmarks on budget panels, test coverage). P2 remaining per GAP-AUTO-001 (client toasts, Suspense loading boundaries). See .ai/ux-review.md + .ai/agents/ui-ux-design.md for full findings/fixes.
+- Fixes committed on branch: 657e0fa; tests+build green. No dead-ends found.
 
 ## Architecture Decisions
 - Planes per TECH SPEC v2: Control (durable), Execution (leased workers), Comms (outbox/policy), Elastic Resource/ProviderOps (kernel + adapters), Model Entitlement Broker, Skills.

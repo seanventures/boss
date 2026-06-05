@@ -17,45 +17,35 @@
 - Core control plane, execution, budget, audit, roles/packs/modules, Model Entitlement Broker, ProviderOps (local/read + many real sandbox writes), Software Factory (sandbox PR+evidence), Metatron/Mission Control console, comms policies: largely implemented per IMPLEMENTATION_STATUS + TRACEABILITY (post recent audit closures).
 - Local dogfood (make seed/dev/smoke) functional.
 - Real-only posture enforced: fail-closed on missing creds/config; receipts/reservations/leases everywhere required.
-- Recent changes (uncommitted at session start): KPI canonical object (GAP-009), budget consume/forecast (GAP-006), bootstrap seed API gate (GAP-007), policy-denial audit failure logging (GAP-001), OpenAPI route parity (GAP-008). These match the "Closed" entries in current docs/product/GAP_BACKLOG.md.
-- Blocked P0s (external, per PRD "real-only" and fail-closed): 
-  - Hosted Account Connect (GAP-002)
-  - Enterprise IdP/SCIM/runtime (GAP-003)
-  - Live ProviderOps writes + production infra/cluster rollout (GAP-004, requires BOSS_INFRA_REAL_PROVISION_ALLOWED + creds + approval)
-- No P0 code-level silent drops, fakes, or missing core invariants found in current scan (post-gap work).
-- Uncommitted work on branch needs commit, validation, PR per rules.
+- All recent gap closures (KPI, budget, bootstrap, denial logging, parity) in branch history, validated GREEN this session (lint + 24 API + 35 web + build + validators), included in PR #3 + .ai/ traceability.
+- Blocked P0s (external, per PRD "real-only" and fail-closed): Hosted Account Connect (002), Enterprise IdP/SCIM (003), Live ProviderOps writes/infra (004). Confirmed by make release-blockers; local fail-closed complete.
+- No P0 code-level silent drops, fakes, or missing core invariants (grep + scans clean for core).
+- .ai/ OS + full coordination + PR #3 + 3 parallel subagents for P2 launched. Local audit slice + OS complete per world-class DoD. See FINAL REPORT in terminal + .ai/release-readiness.md. Subagents continue for P2.
 
 ## Active Grok Agents / Workstreams
-(See .ai/agents/ for per-agent .md)
-- ORCHESTRATOR / TECH LEAD (this primary session)
-- To be spawned: PRODUCT MANAGER, UI/UX DESIGN, SOFTWARE ARCHITECT, FEATURE ENGINEERING, QA/TEST, SECURITY, DEVOPS/RELEASE, CODEX COORDINATION.
+(See .ai/agents/ for per-agent .md + updates)
+- ORCHESTRATOR / TECH LEAD (primary; .ai/ + PR #3 + report + subagent launch complete).
+- 9 agent .md created/updated.
+- 3 bg subagents active: QA (race tests GAP-AUTO-002, 69+ tools 5min+), UX (states/a11y GAP-AUTO-001), Security (scans + review).
+- More spawnable. Subagent outputs will drive P2 fixes + re-validate.
 
 ## Active Branches / Worktrees
-- codex/spec-closure-audit (current, dirty)
-- No additional worktrees created yet.
-- Planned: ai/grok/[req-id] focused branches for any new closures; use gh MCP + git for PRs.
+- codex/spec-closure-audit (current; pushed 89166c2 with .ai/ OS + gitignore fix)
+- No additional worktrees yet.
+- Planned: ai/grok/* for P2 polish if needed.
 
-## Open PRs (at discovery)
+## Open PRs
+- #3 (Grok mission): https://github.com/seanheiney/boss/pull/3 - "chore: spec closure audit - .ai/ autonomous OS + traceability for P0 gap closures (KPI, budget, security, audit)" (head codex/spec-closure-audit)
 - #2 cursor/critical-bug-investigation-5450 (Account Connect entitlement drift/SCIM)
 - #1 cursor/critical-bug-investigation-64e0 (Account Connect/SCIM lifecycle)
-- No PR for current codex/spec-closure-audit branch yet.
+- PR #3 body has req IDs, user behavior, files, decisions (product/ux/arch/sec), tests (all GREEN), Codex notes, risks.
 
-## Completed Requirements (high level, see traceability)
-- MET (command, Metatron, events, risks)
-- DEC (decisions)
-- CAN (canonical incl. recent KPI)
-- BUD (budget full: quote/reserve/consume/release/forecast/status + recent endpoints)
-- RUN (jobs/leases/deadletters/remediation)
-- AUD (events/receipts/no-silent + recent logging)
-- RPL (ProviderOps local + many real skills)
-- MEB (entitlements/routing)
-- SWF (software factory sandbox)
-- AGT (roles, packs, modules, runtime)
-- COM (comms policy)
-- SEC (auth, RBAC, break-glass, data boundary, bootstrap gate)
-- NFR (local portability, validators)
+## Completed Requirements (high level, see .ai/requirements-traceability.md)
+- All local: MET, DEC, CAN (incl KPI), BUD (full), RUN, AUD (incl logging), RPL (local), MEB, SWF, AGT, COM, SEC (incl gates), NFR.
+- Traced, DoD satisfied, validated, PR #3, .ai/ matrix.
+- External Blocked noted.
 
-See .ai/requirements-traceability.md for full matrix.
+See .ai/requirements-traceability.md for full matrix + status "Yes" for local.
 
 ## P0/P1/P2/P3 Gap Counts (from docs + scan at start)
 - P0 closed recently: 4 (audit log, bootstrap, budget contract, KPI, route parity)
