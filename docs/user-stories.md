@@ -513,6 +513,9 @@ Acceptance criteria:
 - Given a write request, when the actor lacks the required permission, then BOSS returns `403` and records `policy.denied`.
 - Given the audit event write itself fails while denying access, when BOSS returns the denial, then the API logs the audit-write failure with actor, project, permission, and reason context instead of silently swallowing it.
 - Given a member-management request, when the actor has `member_manage`, then BOSS creates or updates the member and emits an event.
+- Given the bootstrap seed API is not explicitly enabled, when any caller posts to `/v1/bootstrap/seed`, then BOSS returns `403`, records policy-denial evidence, and does not report a fake success.
+- Given the bootstrap seed API is explicitly enabled and the dogfood project exists, when an actor without `member_manage` posts to `/v1/bootstrap/seed`, then BOSS rejects the request with `403` and records the denial.
+- Given the bootstrap seed API is explicitly enabled and an actor with `member_manage` posts to `/v1/bootstrap/seed`, then BOSS reseeds idempotently, preserves unique role records, and emits `bootstrap.seed_executed`.
 
 ### Story ADM-003: Use Break-Glass Access Safely
 

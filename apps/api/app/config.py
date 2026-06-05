@@ -73,6 +73,10 @@ class Settings(BaseSettings):
         default=None, alias="BOSS_EMAIL_FROM_NAME"
     )
     require_api_auth: bool = Field(default=False, alias="BOSS_REQUIRE_API_AUTH")
+    bootstrap_seed_api_enabled: bool = Field(
+        default=False,
+        alias="BOSS_BOOTSTRAP_SEED_API_ENABLED",
+    )
     api_keys: str = Field(default="", alias="BOSS_API_KEYS")
     api_key_principals: str = Field(
         default="",

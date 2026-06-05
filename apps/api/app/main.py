@@ -5530,9 +5530,42 @@ def create_job(payload: JobCreateRequest) -> JobSummary:
 
 
 @app.post("/v1/bootstrap/seed")
-def bootstrap_seed() -> dict[str, str]:
+def bootstrap_seed(actor: str = "ceo") -> dict[str, str]:
+    if not settings.bootstrap_seed_api_enabled:
+        record_policy_denial(
+            settings.default_project_id,
+            actor,
+            "member_manage",
+            "BOSS_BOOTSTRAP_SEED_API_ENABLED is false.",
+        )
+        raise HTTPException(
+            status_code=403,
+            detail="Bootstrap seed API is disabled. Use the local make seed command or explicitly enable BOSS_BOOTSTRAP_SEED_API_ENABLED.",
+        )
+    with begin(engine) as connection:
+        project_exists = connection.execute(
+            text("SELECT 1 FROM projects WHERE id = :project_id"),
+            {"project_id": settings.default_project_id},
+        ).first()
+        if project_exists:
+            require_project_actor(
+                connection,
+                settings.default_project_id,
+                actor,
+                "member_manage",
+            )
     seed()
-    return {"status": "ok"}
+    with begin(engine) as connection:
+        emit_event(
+            connection,
+            settings.default_project_id,
+            "bootstrap.seed_executed",
+            actor,
+            "project",
+            settings.default_project_id,
+            {"source": "api"},
+        )
+    return {"status": "seeded", "actor": actor}
 
 
 @app.get("/v1/budget/allocations", response_model=BudgetAllocationListResponse)

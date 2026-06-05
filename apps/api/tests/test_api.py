@@ -3499,9 +3499,25 @@ def test_metatron_task_scope_returns_task_lineage(client):
     assert "artifact" in {reference["object_type"] for reference in payload["references"]}
 
 
-def test_bootstrap_seed_keeps_roles_unique(client):
+def test_bootstrap_seed_api_fails_closed_by_default(client):
     reseed = client.post("/v1/bootstrap/seed")
+    assert reseed.status_code == 403
+    assert "Bootstrap seed API is disabled" in reseed.json()["detail"]
+
+
+def test_bootstrap_seed_api_requires_member_manage_when_enabled(client, monkeypatch):
+    monkeypatch.setattr(api_main.settings, "bootstrap_seed_api_enabled", True)
+
+    reseed = client.post("/v1/bootstrap/seed", params={"actor": "release_manager"})
+    assert reseed.status_code == 403
+
+
+def test_bootstrap_seed_keeps_roles_unique_when_explicitly_enabled(client, monkeypatch):
+    monkeypatch.setattr(api_main.settings, "bootstrap_seed_api_enabled", True)
+
+    reseed = client.post("/v1/bootstrap/seed", params={"actor": "ceo"})
     assert reseed.status_code == 200
+    assert reseed.json()["status"] == "seeded"
     response = client.get("/v1/roles", params={"project_id": "boss-dogfood"})
 
     assert response.status_code == 200
@@ -3509,6 +3525,10 @@ def test_bootstrap_seed_keeps_roles_unique(client):
     role_keys = [role["role_key"] for role in payload["items"]]
     assert len(role_keys) == len(set(role_keys))
     assert "metatron" in role_keys
+    events = client.get("/v1/events", params={"project_id": "boss-dogfood"})
+    assert "bootstrap.seed_executed" in {
+        item["event_type"] for item in events.json()["items"]
+    }
 
 
 def test_health_snapshot_refresh_persists_summary_and_risks(client, engine):

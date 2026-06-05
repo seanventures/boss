@@ -3204,6 +3204,20 @@ paths:
                 run_after_seconds: { type: integer, default: 0 }
       responses:
         '201': { description: Created }
+  /v1/bootstrap/seed:
+    post:
+      summary: Explicitly reseed local bootstrap data when API seeding is enabled
+      description: >
+        Fails closed unless BOSS_BOOTSTRAP_SEED_API_ENABLED is true. If the
+        default project already exists, the actor must have member_manage.
+      parameters:
+        - name: actor
+          in: query
+          required: false
+          schema: { type: string, default: ceo }
+      responses:
+        '200': { description: Seed completed and audit event recorded }
+        '403': { description: Seed API disabled or actor lacks member_manage }
   /v1/worker/poll:
     post:
       summary: Worker polls for leased job
