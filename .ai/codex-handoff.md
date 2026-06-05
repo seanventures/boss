@@ -1,6 +1,6 @@
 # Codex Handoff
 
-Last updated: 2026-06-05T18:45:00Z (PM/DOCS subagent complete for GAP-AUTO-003 + sync 41e5243 GAP-011/012; 3/3 subagents + PM; docs/user-stories AC expanded; .ai/trace/gap updated; ready commit/push + PR#3 comment)
+Last updated: 2026-06-05T15:56:00Z (docs subagent 527e9a1 complete + pushed; AUTO-003 closed + 011/012 synced; 4 subagents total; all slice local gaps closed/monitored; PR #3 has all comments; .ai/ + handoff current; slice + OS complete for audit scope; full product grind continues per PRD)
 
 ## Current Overall Product Status
 BOSS v0.4.1 target is in advanced local-dogfood state. Most PRD-v2.0 / TECH-SPEC-v2.0 requirements for core control plane, worker leases, budget governor (now full quote/reserve/consume/release/forecast), audit/no-silent-drops (with recent logging fixes), canonical objects (incl. recent KPI), roles/packs/agent-modules, Model Entitlement Broker, ProviderOps (local sync + real sandbox writes for CF/DO/Supabase), Software Factory (command->plan->PR->evidence->decision), Metatron/Mission Control console are Implemented and traced.
@@ -20,13 +20,13 @@ Local dev: make dev/seed/test/smoke/lint/build work (postgres/docker required fo
 See .ai/spec-index.md (primary: PRD-v2.0.md + TECHNICAL_SPEC-v2.0.md + current docs/product/* inventory/trace/gap/impl + AGENTS.md + README + specpack contracts + openapi + schema + user-stories).
 
 ## Completed Requirements
-See .ai/requirements-traceability.md (MET-*, DEC-*, CAN-* incl KPI (CAN-006), new CAN-000 fresh bootstrap (GAP-012 by 41e5243), BUD-* full, RUN-*, AUD-*, RPL-* (RPL-004 enhanced for billing unavailable by 41e5243 GAP-011), ...). Recent: 41e5243 closed GAP-011 P1 ProviderOps billing confidence + GAP-012 P0 fresh bootstrap; subagents closed AUTO-001/002. All local feasible traced + validated.
-Validation now confirms: tests pass, build passes, no regressions. New commit 41e5243 on branch advances reliability.
+See .ai/requirements-traceability.md (MET-*, DEC-*, CAN-* incl KPI (CAN-006), new CAN-000 fresh bootstrap (GAP-012 by 41e5243), BUD-* full, RUN-*, AUD-*, RPL-* (RPL-004 enhanced for billing unavailable by 41e5243 GAP-011), ...). Recent: 41e5243 closed GAP-011 P1 + GAP-012 P0; subagents closed AUTO-001/002; PM/Docs subagent 527e9a1 closed AUTO-003 (user-stories AC expanded for all incl 011/012 + .ai/ sync). All local feasible traced + validated + docs updated.
+Validation now confirms: tests pass, build passes, no regressions. Subagent validator 285 GWT + specific AC present OK. New commits on branch (41e5243, 527e9a1) advance reliability + docs.
 
 ## Active Grok Agents
-- Primary ORCHESTRATOR session (this handoff; .ai/ + PR #3 complete, subagents monitoring).
-- Agent .md files created + updated for all 9 required.
-- 3 parallel subagents spawned (bg): QA (id 019e9859-5a07... , 62+ tools, adding race/perm/persist tests GAP-AUTO-002, still running after 4min), UX (id 019e9859-6e7b..., auditing KPI/budget states a11y GAP-AUTO-001), Security (id 019e985a-199b..., dep scans + recent surface review).
+- Primary ORCHESTRATOR session (this handoff; .ai/ + PR #3 + 4 subagents (3 prior + docs) complete, slice gaps closed).
+- Agent .md files created + updated for all 9 required + product-manager (for docs subagent).
+- 4 subagents completed: UX (001), Security (review), QA (002), PM/Docs 527e9a1 (003 + 011/012 sync). All pushed + PR comments.
 - Will apply any fixes they produce, update reviews, re-validate, push/PR amend if needed.
 
 ## Active Grok Branches / PRs
@@ -129,15 +129,12 @@ Recent gap work (KPI, budget, bootstrap, audit logging, route parity) now has pa
 
 ## Recommended Next Autonomous Actions (for Codex or continuing Grok)
 1. Read .ai/spec-index.md, .ai/status.md, .ai/requirements-traceability.md, .ai/gap-backlog.md, .ai/*-review.md, .ai/agents/.
-2. If on this branch: git status (expect dirty with .ai + gap closures), run targeted tests (already GREEN), make lint (GREEN).
-3. Commit the current diff + .ai creations with messages tracing req IDs e.g. "chore(audit): close GAP-2026-06-05-009 canonical KPI object (PRD-v2 CAN, CAN-006); add durable kpis table, API, client, UI panel, events, tests".
-   Similar for budget (006), bootstrap(007), denial-log(001), route-parity(008).
-4. git push origin codex/spec-closure-audit (frequent push per rules).
-5. Open PR via gh pr create or MCP grok_com_github__create_pull_request: base=main, head=codex/spec-closure-audit, title including "spec closure audit - close P0 gaps (KPI, budget, security, audit, parity)", body with: req IDs, user-facing (durable KPIs, full budget API+UI, secure bootstrap/audit), files, product/UX/arch/sec decisions (from .ai/reviews), tests+results (24+33+build+validators PASS), screenshots n/a, Codex notes (handoff updated, avoid dup on KPI/budget), risks (cursor PRs on unrelated, external blocks).
-6. If conflicts with cursor #1/#2, resolve locally (Account Connect areas are Blocked anyway).
-7. Update .ai/codex-handoff.md + activity-log after push/PR.
-8. Spawn parallel subagents (use spawn_subagent tool) for PM/UX/Arch/Sec/QA/DevOps deep reviews; fix any P0/P1 local findings.
-9. If reviews clean, update release-readiness, consider local complete for this scope.
-10. Print terminal update every 15min or milestone; continue grinding per mission until all feasible (local) complete or truly blocked.
+2. Audit slice + .ai/ OS + docs complete (local P0 0; AUTO 001-003/005 + 011/012 closed by 4 subagents + 41e5243 + 527e9a1; validator 285 GWT OK; pushed; PR #3 current). Open local ~1 (004 monitoring).
+3. For full product: pick next from .ai/gap-backlog or PRD-v2 (e.g. Sec P2 rate limits - implement simple middleware for high-cost like metatron/command; arch P2 pagination on lists; qa e2e; commercial local surfaces; more from roadmap phase 1+).
+4. If small vertical (e.g. rate), implement + tests + .ai/ + commit/push/PR.
+5. Rebuild .ai/gap/trace/release post any.
+6. Continue 15min updates + logs + handoff.
+7. If no more local feasible (or external only), update release + produce final report for product (or slice) + stop per blocked rules.
+8. Monitor PR #3; coordinate with any other on branch.
 
-Assume this handoff is read by Codex for coordination without duplication. Update after every meaningful change.
+Assume this handoff is read by Codex for coordination without duplication. Update after every meaningful change. Slice for audit scope complete; full product grind continues.
