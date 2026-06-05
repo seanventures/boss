@@ -1,7 +1,7 @@
 # BOSS Release Readiness (Autonomous)
 
 **Date**: 2026-06-05 (local final validation update: `make test` full pass, `make smoke` pass, release-blockers expected external blocks, GitHub CI billing/spending-limit blocker documented)
-**Status**: LOCAL READY + FINAL DOCS + PR_PREP_COMPLETE (post PR #3) - .ai/ OS in, traceability complete, P0 local gaps closed+validated+PR'd, P3 GAP-PRD-AUDIT-001 pack local import/export closed by FEATURE-ENG (small vertical impl+tests+receipts+events + 3x batch), all P2 polish closed (commercial/selfimp/worker/pm/pag/monitoring/toasts/verify +), baseline all green (make lint/build/validators), external 3 P0s Blocked by design. PR_PREP_FINAL: PR#3 body updated w/ full 3x summary (agents/commits/closed slices/validate green/.ai/final-report); .ai/agents/pr-prep-final.md 13b created + .ai/ updates; local validation on PR head `644c3d3` passed `make lint`, `pnpm --filter boss-web build`, full `make test` (97 web + 276 API/worker), focused ProviderAdapter/worker regressions, targeted web regression (65), `make smoke`, and `make release-blockers` with only expected external blocks. GitHub Actions CI for PR #3 currently fails before executing any workflow steps. The check-run annotation for head `e7aed1d` states: "The job was not started because recent account payments have failed or your spending limit needs to be increased. Please check the 'Billing & plans' section in your settings." This is an account billing/spending-limit blocker, not a reproduced code failure. Full prod readiness requires external config for Blocked items.
+**Status**: LOCAL READY + FINAL DOCS + PR_PREP_COMPLETE (post PR #3) - .ai/ OS in, traceability complete, P0 local gaps closed+validated+PR'd, P3 GAP-PRD-AUDIT-001 pack local import/export closed by FEATURE-ENG (small vertical impl+tests+receipts+events + 3x batch), all P2 polish closed (commercial/selfimp/worker/pm/pag/monitoring/toasts/a11y/verify +), baseline all green (make lint/build/validators), external 3 P0s Blocked by design. PR_PREP_FINAL: PR#3 body updated w/ full 3x summary (agents/commits/closed slices/validate green/.ai/final-report); .ai/agents/pr-prep-final.md 13b created + .ai/ updates; local validation on PR head `644c3d3` passed `make lint`, `pnpm --filter boss-web build`, full `make test` (97 web + 276 API/worker), focused ProviderAdapter/worker regressions, targeted web regression (65), `make smoke`, and `make release-blockers` with only expected external blocks. GitHub Actions CI for PR #3 currently fails before executing any workflow steps. The check-run annotation for head `d0073d6` states: "The job was not started because recent account payments have failed or your spending limit needs to be increased. Please check the 'Billing & plans' section in your settings." This is an account billing/spending-limit blocker, not a reproduced code failure. Full prod readiness requires external config for Blocked items.
 
 ## Production Readiness Checklist
 
@@ -27,7 +27,7 @@
 - [x] Retries: worker lease reclaim, job retry.
 
 ### Performance
-- [ ] Pagination on large lists (events, resources, costs) - P2 note.
+- [x] Pagination on large lists (events, resources, costs, provider health, drift/reconciliation, and other high-volume feeds) completed and tested.
 - [x] No obvious hot paths repeated queries.
 - [x] Client render acceptable.
 
@@ -37,7 +37,7 @@
 - [x] All AUTO P2/P3 for slice closed: 001 by UX (states/a11y + toasts client feedback P2), 002 by QA (tests), 003 by PM/Docs subagent 527e9a1 (user-stories AC for KPI/budget/bootstrap + 011/012, 285 GWT validated per subagent, .ai/trace/gap updated); 005 by agents + 41e5243. New 011/012 closed by 41e5243 (billing graceful, clean bootstrap). PM prd-audit 2026-06-05: additional coverage check complete (PRD-v2 planes/objects full vs impl; no new local high impact slices; noted P3 pack import); RELEASE_FINAL_DOCS expanded AC for pack/comms/toasts + 3x; pack P3 closed by FEATURE-ENG + final docs; all local P0 + slice gaps addressed + in PR #3 + .ai/. Audit slice + .ai/ OS + docs complete per DoD (local core + OS + reviews + AC + tests + pushes + 3x). External 3 P0 Blocked. For full product: remaining P2 (e2e per qa); continue grind per PRD-v2 until complete or blocked.
 - [x] Clear copy (operator focused).
 - [x] Responsive basics (Tailwind).
-- [ ] A11y full (basic in test; expand) - P2 (subagent UX running).
+- [x] A11y full expansion completed for pack/self-improvement/toasts/commercial/monitoring/paginated lists/worker notes; accessibility tests pass.
 
 ### Operations
 - [x] .env.example updated (bootstrap flag in branch).
@@ -58,7 +58,7 @@
 1. Hosted Account Connect config/deploy (GAP-002) - Cloud edition. (Confirmed by make release-blockers)
 2. Enterprise IdP + SCIM + rollout policies (GAP-003). (Confirmed)
 3. Live provider creds + BOSS_INFRA... + cluster + approval for ProviderOps writes (GAP-004). (Confirmed)
-4. Full agent reviews (subagents spawned for QA/UX/Sec) + fix any P2 findings + re-validate.
+4. GitHub Actions account billing/spending-limit fix, then rerun PR #3 CI.
 5. Merge of PR #3 (or follow-ups); local coordination + traceability done.
 6. (P3 closed in 3x FEATURE-ENG + RELEASE_FINAL_DOCS): dynamic local pack import/export for PRD ecosystem (GAP-PRD-AUDIT-001) now implemented+tested+AC+traced; not blocker.
 
@@ -90,13 +90,13 @@ Audit slice + .ai/ OS + P2 polish (rate/pag + toasts + monitoring + providerops 
 - 3 P0 external Blocked by design (release-blockers confirmed; local fail-closed complete; exact resume: configure BOSS_ACCOUNT_CONNECT_URL + tokens + BOSS_INFRA_REAL_PROVISION_ALLOWED=true + explicit approval + target + recorded live validation run in BOSS for 002/003/004).
 - Recommendation: merge #3 (or as-is for OS + traceability + 3x complete); external blocks require creds/deploy/approval (documented exact resume in blockers/release-readiness/handoff); full final report in .ai/ (readiness/coverage/gaps+resume/PRs/25 DoD/Codex). FINAL_VALIDATE suite green + fix + commit done; clean + ready for final report or merge.
 
-## Credits / CI Billing Close Note (2026-06-05)
-Graceful close of all agents (credits low, no new spawns). All code from worker-tests (8bef6a0 + integrate), a11y-full, final-val, e2e-reg, pr-prep + prior 3x checked in to audit (clean). 
+## GitHub Actions Billing Close Note (2026-06-05)
+Graceful close of all local agents and feature slices. All code from worker-tests (8bef6a0 + integrate), a11y-full, final-val, e2e-reg, pr-prep + prior 3x is checked in to the audit branch (clean).
 
 **New blockers from agent/release work**:
-- GH Actions billing blocker (commit 0349140): Identified in release docs; impacts CI for tests/validates/subagent bg runs.
-- CI runner blocker (commit e7aed1d): Final local validation and CI runner issues recorded; likely credit/billing exhaustion for runners used in 3x parallel/final agents.
+- GH Actions billing blocker (commit 0349140): The GitHub check-run annotation says the Actions job was not started because recent account payments failed or the spending limit needs to be increased.
+- CI runner/pre-step blocker (commit e7aed1d): Final local validation and CI runner issues recorded; reruns still fail before any workflow step until the GitHub account-level issue is resolved.
 
-These compound external 3. On resume (credits replenished or manual): add billing budget/credits for Actions + CI, re-run full CI/validators in env with credits, update evidence in release-readiness. Local only mode (make lint/test/build without Actions) available for dev.
+These compound the external 3. On resume: resolve GitHub billing/spending-limit in account settings, rerun PR #3 CI, and update evidence in release-readiness. Local only mode (`make lint`, `make test`, `make build`, `make smoke`) remains available for development and has passed.
 
 Local product complete per 25 DoD; pause subagents.

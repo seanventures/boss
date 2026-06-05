@@ -176,14 +176,14 @@ Recent gap work (KPI, budget, bootstrap, audit logging, route parity) now has pa
 - FINAL_VALIDATE: full cmds + build fix (page.tsx dynamic) + re-runs green + .ai/agents/final-validate.md 13b + updates + chore commit + PR#3 comment.
 All with read-first, 13-bullet .ai/agents/*.md, commit/push/PR#3, validate per AGENTS. 3x complete; PR#3 prepped; local exhausted. Poll/integrate if external unblock. FINAL_VALIDATE green; ready.
 
-## Graceful Close Note (2026-06-05, credits low)
+## Graceful Close Note (2026-06-05, GitHub Actions account blocker)
 All subagents (launched per "launch more... 3x" + final batch + worker-tests 019e9918-23a9-7df0-9b73-673f9525c8e9 per reminder) have completed (worker 8bef6a0 + 7f86b7f integrate; a11y-full 76007c1 + 4634932728; final-val 946e049 + 4634912798; e2e-reg 2c0521c + 4634904018; pr-prep f6b7d7e + 4634872760; prior 20+). Their deliverables (code changes e.g. worker e2e tests in test_api.py/test_worker.py, a11y expands in page.tsx/client-forms.tsx/accessibility.test.ts, .ai/agents/*-*.md 13b reports for all, .ai/ updates) checked in to codex/spec-closure-audit via cherry/integrate/batch (audit clean wc 0). 
 
 **No further subagent launches** (spawn_subagent avoided to conserve credits). 
 
 **Side branches** (ai/codex/a11y-full, devops-worker-tests, e2e-regression, feature-*, etc.) and **stashes** (multiple temp from prior parallel coord e.g. stash@{0} on e2e-regression etc.) left as-is (historical record of 3x parallel; their final tips/commits like 76007c1, 8bef6a0, 2c0521c already integrated to audit; cleaning would require checkouts/pops costing ops/credits).
 
-**Recent findings from agent/release work** (commits 0349140 "docs(release): identify GitHub Actions billing blocker", e7aed1d "docs(release): record final local validation and CI runner blocker"): These appear tied to credits exhaustion (GH Actions for CI/tests, CI runners for subagent bg? or related billing). Expanded in release-readiness.md, status, activity as additional blockers alongside external 3.
+**Recent findings from agent/release work** (commits 0349140 "docs(release): identify GitHub Actions billing blocker", e7aed1d "docs(release): record final local validation and CI runner blocker"): GitHub Actions check-run annotations report that jobs are not starting because recent account payments failed or the spending limit needs to be increased. Expanded in release-readiness.md, status, activity as an additional account-level blocker alongside the external 3.
 
 **Local complete**: 3x + all slices (pack P3, commercial, selfimp e2e, worker/lease, a11y, toasts, monitoring, pag, release docs, rate, prior AUTO) + finals (pr-prep, final-val full suite green, e2e-reg cross, a11y expand) + worker per 25 DoD, tests, lint/build/validators green, .ai/ OS, PR#3 prepped.
 
