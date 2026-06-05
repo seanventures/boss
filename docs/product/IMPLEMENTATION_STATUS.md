@@ -29,9 +29,9 @@ This document summarizes the currently implemented BOSS runtime surfaces in this
   - health snapshots
 - API-first control plane:
   - project discovery for runtime-scoped clients
-  - edition, license-entitlement, and Account Connect link/unlink/sync APIs; Community runs without hosted auth, while Cloud and Enterprise Cloud editions fail closed until linked, and hosted entitlement sync uses a configured real HTTP adapter or fails closed
+  - edition, license-entitlement, and Account Connect link/unlink/sync APIs; Community runs without hosted auth, while Cloud and Enterprise Cloud editions fail closed until linked, and hosted entitlement sync uses a configured real HTTP adapter, detaches stale hosted capabilities, or fails closed
   - enterprise cluster/trust records for attached/detached enterprise posture, identity/audit/governance/private-worker controls, support/SLA metadata, and blocking-gap visibility
-  - Enterprise SCIM group/user provisioning APIs that map active users to BOSS org members with explicit merged roles and permissions
+  - Enterprise SCIM group/user provisioning APIs that map active users to project-scoped BOSS members with explicit merged roles and permissions
   - CEO command intake
   - canonical department, policy, plan, and meeting CRUD/list surfaces
   - task and job inspection
@@ -102,7 +102,7 @@ This document summarizes the currently implemented BOSS runtime surfaces in this
   - auth-session introspection through `GET /v1/auth/session`
   - break-glass access grants with requester identity, project or org target member, reason, scope, TTL, temporary permissions, event logs, revocation, expiry, and mandatory postmortem task creation
   - enterprise cluster/trust writes gated by explicit `enterprise_manage` permission and audited with `enterprise.cluster_upserted` events
-  - enterprise SCIM provisioning writes gated by `enterprise_manage`, with group/user audit events and active-user mapping into the same org-member RBAC directory used by the rest of BOSS
+  - enterprise SCIM provisioning writes gated by `enterprise_manage`, with group/user audit events and active-user mapping into the project-member RBAC directory used by the rest of BOSS
   - Core Pack install for dogfood
   - packaged agent-module catalog, entitlement-aware install flow, install governance records, and role lineage
   - deterministic RoleSpec validation for pack roles and module-provided roles
