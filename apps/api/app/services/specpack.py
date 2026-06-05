@@ -461,7 +461,7 @@ class SpecPackService:
             text(
                 """
                 SELECT pack_id, pack_version, description, spec, installed_by, status,
-                       installed_at, updated_at
+                       installed_at, updated_at, source, yaml_blob
                 FROM pack_installs
                 WHERE project_id = :project_id
                 ORDER BY installed_at DESC
@@ -472,7 +472,9 @@ class SpecPackService:
         installed_by_pack = {row["pack_id"]: dict(row) for row in installed_rows}
 
         items: list[dict[str, Any]] = []
+        baked_pack_ids: set[str] = set()
         for pack in self.list_available_packs():
+            baked_pack_ids.add(pack["pack_id"])
             installed = installed_by_pack.get(pack["pack_id"])
             items.append(
                 {
@@ -488,6 +490,41 @@ class SpecPackService:
                     "installed_version": (
                         installed["pack_version"] if installed else None
                     ),
+                }
+            )
+        for pack_id, installed in installed_by_pack.items():
+            if pack_id in baked_pack_ids:
+                continue
+            spec = installed.get("spec") or {}
+            installs = spec.get("installs") or {}
+            items.append(
+                {
+                    "pack_id": pack_id,
+                    "version": installed["pack_version"]
+                    or spec.get("version")
+                    or "0.0.0",
+                    "description": installed["description"]
+                    or spec.get("description")
+                    or "",
+                    "status": installed["status"] or spec.get("status") or "active",
+                    "requires": spec.get("requires") or [],
+                    "roles": installs.get("roles") or [],
+                    "workflows": installs.get("workflows") or [],
+                    "policies": installs.get("policies") or [],
+                    "skills": installs.get("skills") or [],
+                    "installed": True,
+                    "installed_by": installed["installed_by"],
+                    "installed_at": (
+                        installed["installed_at"].isoformat()
+                        if installed.get("installed_at")
+                        else None
+                    ),
+                    "updated_at": (
+                        installed["updated_at"].isoformat()
+                        if installed.get("updated_at")
+                        else None
+                    ),
+                    "installed_version": installed["pack_version"],
                 }
             )
         return items
