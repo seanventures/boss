@@ -1,6 +1,6 @@
 # Codex Handoff
 
-Last updated: 2026-06-05T15:28:00Z (UX subagent complete + pushed 657e0fa code + b98468c .ai/; GAP-AUTO-001 closed in backlog + ux-review; QA (races/concurrency/perm tests) + Sec (scans) still bg running with edits; PR #3 has UX comment)
+Last updated: 2026-06-05T15:36:00Z (3/3 subagents complete: UX 001 + Sec clean review + QA 002 tests; commits 657e0fa/5a81c8e + .ai/ pushes b98468c/768c1bc/0b46124/b7eba1e; GAPs 001/002 closed in .ai/gap-backlog; PR #3 has UX/Sec/QA comments + all code/.ai/; all local P0 + this slice AUTO P2 addressed + validated + pushed)
 
 ## Current Overall Product Status
 BOSS v0.4.1 target is in advanced local-dogfood state. Most PRD-v2.0 / TECH-SPEC-v2.0 requirements for core control plane, worker leases, budget governor (now full quote/reserve/consume/release/forecast), audit/no-silent-drops (with recent logging fixes), canonical objects (incl. recent KPI), roles/packs/agent-modules, Model Entitlement Broker, ProviderOps (local sync + real sandbox writes for CF/DO/Supabase), Software Factory (command->plan->PR->evidence->decision), Metatron/Mission Control console are Implemented and traced.

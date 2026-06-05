@@ -33,7 +33,7 @@
 ### UX
 - [x] Complete nav (Mission Control, panels, project switch).
 - [x] No dead ends (command always, context).
-- [ ] Polished states for all new panels (KPI/budget) - subagent + manual review in progress (P2 GAP-AUTO-001); initial grep shows empty/error handling present.
+- [x] Polished states for KPI/budget panels (P2 GAP-AUTO-001 closed by UX subagent 657e0fa + b98468c: explicit empty/error/success/aria confirmed + minimal polish (copy, budget landmarks/ids, test asserts); 39/39 web + build green. GAP-AUTO-002 closed by QA (5a81c8e): race/concurrency/perm/persist tests added + passing. 3/3 subagents complete + Sec clean review (no new P0s). All local P0 + this slice AUTO P2s addressed in PR #3 + .ai/.
 - [x] Clear copy (operator focused).
 - [x] Responsive basics (Tailwind).
 - [ ] A11y full (basic in test; expand) - P2 (subagent UX running).

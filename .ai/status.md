@@ -26,7 +26,7 @@
 (See .ai/agents/ for per-agent .md + updates)
 - ORCHESTRATOR / TECH LEAD (primary; .ai/ + PR #3 + report + subagent launch complete).
 - 9 agent .md created/updated.
-- 3 bg subagents active: QA (race tests GAP-AUTO-002, 69+ tools 5min+), UX (states/a11y GAP-AUTO-001), Security (scans + review).
+- 3/3 subagents complete + pushed (UX GAP-AUTO-001 657e0fa + b98468c; Sec clean no-P0 review 768c1bc; QA GAP-AUTO-002 races/perm/persist 5a81c8e + b7eba1e). GAP-001/002 closed in backlog. Tests green (web 39/39 + lint; API new validated in isolated DB by subagent). PR #3 has comments + changes. Local P0 0; AUTO P2s for slice addressed.
 - More spawnable. Subagent outputs will drive P2 fixes + re-validate.
 
 ## Active Branches / Worktrees
