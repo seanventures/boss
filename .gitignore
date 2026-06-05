@@ -14,6 +14,8 @@ coverage/
 dist/
 artifacts/
 tmp/
+# .ai/ is now tracked as part of the autonomous delivery OS (per mission); do not re-add ignore without review
+# .ai/
 *.tsbuildinfo
 image.png
 .idea/
