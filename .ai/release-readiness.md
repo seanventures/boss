@@ -33,7 +33,7 @@
 ### UX
 - [x] Complete nav (Mission Control, panels, project switch).
 - [x] No dead ends (command always, context).
-- [x] Polished states (P2 GAP-AUTO-001 closed by UX); GAP-AUTO-002 closed by QA tests. 3/3 subagents + branch commit 41e5243 closed additional GAP-011 P1 billing confidence + GAP-012 P0 fresh bootstrap (graceful inventory, status exposed, schema fix for clean bootstrap). All local P0 + AUTO P2s + new gaps addressed in PR #3 + .ai/. PM/Docs subagent spawned for AUTO-003 docs refresh. Local + .ai/ OS production-grade per DoD for scope. External 3 P0 Blocked.
+- [x] All AUTO P2/P3 for slice closed: 001 by UX (states/a11y), 002 by QA (tests), 003 by PM/Docs subagent 527e9a1 (user-stories AC for KPI/budget/bootstrap + 011/012, 285 GWT validated per subagent, .ai/trace/gap updated); 005 by agents + 41e5243. New 011/012 closed by 41e5243 (billing graceful, clean bootstrap). All local P0 + slice gaps addressed + in PR #3 + .ai/. Local + .ai/ OS production-grade per DoD. External 3 P0 Blocked.
 - [x] Clear copy (operator focused).
 - [x] Responsive basics (Tailwind).
 - [ ] A11y full (basic in test; expand) - P2 (subagent UX running).
