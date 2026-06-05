@@ -14,21 +14,21 @@
 - GitHub: 0 open issues; 2 open cursor PRs (on main); no open grok/codex PRs visible.
 
 ## Overall Product Status
-- Audit slice (spec closure, .ai/ OS, docs AC, recent gaps 001-003/005/011/012) COMPLETE per DoD: local P0s closed, P2s addressed by 4 subagents + branch commits (41e5243, 527e9a1), validations green, pushed to PR #3, .ai/ current.
+- Audit slice (spec closure, .ai/ OS, docs AC, recent gaps 001-003/005/011/012) COMPLETE per DoD: local P0s closed, P2s addressed by 4 subagents + branch commits (41e5243, 527e9a1). Additional: Security agent closed rate P2 (GAP-013) with in-mem limiter for high-cost paths + tests + updates. Validations green, pushed to PR #3, .ai/ current.
 - Core product largely implemented locally (control, budget full, ProviderOps local+real sandbox, SWF, console, roles, MEB, auth, etc.) per IMPLEMENTATION_STATUS + PRD-v2.
 - Local dogfood functional (make dev/seed/test/lint/build).
 - Real-only enforced.
 - Remaining local: AUTO-004 (P3 monitoring .env/release-blockers); P2 polish (rate limits, pagination, more e2e per reviews).
 - External P0s (002-004) Blocked (creds/deploy needed; local fail-closed complete).
 - No core TODOs/stubs (scan clean).
-- Dispatching more agents (DevOps, Security-rate, QA-validate, Arch-pagination, PM-PRD-coverage) to accelerate remaining polish and full PRD coverage.
+- Dispatching more agents (DevOps, QA-validate, Arch-pagination, PM-PRD-coverage) ; Security-rate completed (rate P2 closed).
 - .ai/ OS ready for ongoing autonomous work. See .ai/release-readiness for slice complete note.
 
 ## Active Grok Agents / Workstreams
 (See .ai/agents/ for per-agent .md + updates)
 - ORCHESTRATOR / TECH LEAD (primary; .ai/ + PR #3 + report + subagent launch complete).
 - 9 agent .md created/updated.
-- 4 subagents complete + pushed (UX 001, Sec, QA 002, PM/Docs 527e9a1 for AUTO-003). Branch commits 41e5243 (011/012 closed) + 527e9a1 (AUTO-003 + AC + .ai/ sync). All local for slice (P0s + AUTO 001-005 + 011/012) closed/monitored. Validator 285 GWT + AC OK. PR #3 current. Local P0 0; slice complete (core + OS + docs + reviews + tests + pushes). Next: full product or remaining P2 (rate etc).
+- 4 subagents complete + pushed (UX 001, Sec, QA 002, PM/Docs 527e9a1 for AUTO-003). + Security rate P2 task (this) closed GAP-013 rate limit. Branch commits 41e5243 (011/012) + 527e9a1 (AUTO-003) + this rate work. All local for slice (P0s + AUTO 001-005 + 011-013) closed/monitored. Validator + rate tests OK. PR #3 current. Local P0 0; slice + rate complete. Next: full product or remaining P2 (pagination).
 - More spawnable. Subagent outputs will drive P2 fixes + re-validate.
 
 ## Active Branches / Worktrees
@@ -53,7 +53,7 @@ See .ai/requirements-traceability.md for full matrix + status "Yes" for local.
 - P0 closed recently: 4 (audit log, bootstrap, budget contract, KPI, route parity)
 - P0 remaining: 3 (all externally Blocked: Account Connect, Enterprise, ProviderOps live rollout)
 - P1: 1 monitoring (placeholders - ok), some potential polish
-- P2/P3: UX polish, more e2e coverage, docs refresh, mobile/accessibility edges per reviews.
+- P2/P3: UX polish, more e2e coverage, docs refresh, mobile/accessibility edges per reviews. Rate P2 now closed (GAP-013).
 - New gaps may surface from full validation + agent reviews.
 
 ## Tests and Validation Results (baseline to be run)
