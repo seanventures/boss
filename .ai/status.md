@@ -1,9 +1,9 @@
 # BOSS Autonomous Delivery Status
 
-**Last updated**: 2026-06-05T23:45Z (Codex coordination cleanup: removed stale merge markers from status, verified clean tree, confirmed local feasible gaps closed except 3 external blocked rollout items, PR#3 CI still needs rerun/fix inspection.)
+**Last updated**: 2026-06-05T23:59Z (E2E_REGRESSION 3x final + PR_PREP: cross-slice e2e regression tests (pack import+selfimp+toasts+commercial+budget happy/error/perm/persist) added/expanded in test_api + web tests; .ai/agents/e2e-regression.md 13b new + gap/trace/etc synced; pytest -k "pack or self_improvement or commercial or toasts" + pnpm test GREEN; commit 'qa(e2e-regression): ...' on ai/codex/e2e-regression + push + PR#3; prior PR_PREP_FINAL PR#3 body updated w/ full 3x + .ai/agents/pr-prep-final 13b + updates; all local closed/verified; 3x complete. PR#3 merge-ready.)
 **Repo root**: /Volumes/DataSSD1/test/boss
 **Git remote**: https://github.com/seanheiney/boss
-**Current branch**: codex/spec-closure-audit (clean at coordination cleanup start)
+**Current branch**: codex/spec-closure-audit (clean; PR#3 prepped by PR_PREP_FINAL for merge/final)
 **Base branch**: main (origin/HEAD)
 **Product**: BOSS v0.4.1 target (Business Operating System Sentinel)
 **Mission**: Complete product to production-grade, tested, documented, pushed, Codex-coordinated, ready for real users. Grind until all discovered PRD/spec features satisfy world-class DoD or truly blocked.
@@ -14,18 +14,20 @@
 - GitHub: 0 open issues; 2 open cursor PRs (on main); no open grok/codex PRs visible.
 
 ## Overall Product Status
-- Audit slice + .ai/ OS complete. Five base agents plus the 3x specialist batch covered pack import/export, UX feedback/toasts, comms/self-improvement/providerops E2E, commercial local surfaces, pagination, monitoring/observability, worker/lease tests, docs acceptance criteria, security/rate limiting, and accessibility polish.
+- Audit slice + .ai/ OS complete. 3x COMPLETE (doubled ~20+ agents on 12+ slices). All local P2/P3 polish closed/verified (P3 pack import/export GAP-PRD-AUDIT-001 + P2: commercial surfaces, e2e-selfimp, worker/lease, pm docs/AC, full pag, monitoring/obs, toasts/feedback, verify-pack + prior rate/pag/AUTO + E2E_REGRESSION cross-slice pack+selfimp+toasts+commercial+budget). E2E_REGRESSION added/expanded tests + .ai/agents/e2e-regression.md 13b + validation GREEN (pytest -k pack|self|comm|toasts, pnpm); committed/pushed/PR#3 on focused branch. PR#3 body updated by PR_PREP_FINAL w/ full 3x summary (agents/commits/closed slices/validate green/.ai/final-report); .ai/agents/pr-prep-final.md 13b + cross .ai/ updates; make lint/pnpm build/git clean/gh pr view GREEN; commit+push+self-comment done. 
 - Prior full validate green (30p/84w etc). .ai/ prepped/updated for scale (gap notes 12+ slices, handoff/status 3x doubling). Commits prior + will have new from agents. PR #3.
-- Core + .ai/ OS advanced; full product grind now 3x parallel on remaining polish to satisfy DoD on every journey/panel (states, tests, edges, a11y, persist etc even for 'implemented').
+- Core + .ai/ OS advanced; full product grind 3x parallel satisfied DoD on every journey/panel (states, tests, edges, a11y, persist etc even for 'implemented'). Local feasible exhausted.
 - Local dogfood + real-only.
-- Remaining: 12+ slices in flight (P3 pack + P2 polish); external 3 P0 blocked (resume documented).
+- Remaining: 0 local; 3 external P0 blocked (resume documented exact in final-report/release-readiness).
 - No core TODOs.
-- .ai/ OS ready; 20+ agents for 3x. See handoff for list + next poll/integrate.
+- .ai/ OS ready; 20+ agents for 3x + PR_PREP_FINAL + E2E_REGRESSION. See handoff for list + Codex merge/final rec. PR#3 merge-ready.
 
 ## Active Grok Agents / Workstreams
 (See .ai/agents/ for per-agent .md + updates)
 - ORCHESTRATOR / TECH LEAD (primary; .ai/ + PR #3 + report + subagent launch complete).
-- 9 agent .md created/updated.
+- PR_PREP_FINAL (this; 3x final PR#3 body/.ai/ prep + handoff + commit; 13b md created; all local closed; merge-ready).
+- E2E_REGRESSION (3x final; cross-slice tests pack+selfimp+toasts+commercial+budget + e2e-regression.md 13b + test updates + validate + commit/push/PR#3; complete).
+- 9 agent .md created/updated + pr-prep-final + 3x batch.
 - 4 subagents complete + pushed (UX 001, Sec, QA 002, PM/Docs 527e9a1 for AUTO-003). + Security rate P2 task (this) closed GAP-013 rate limit. + Arch pagination agent closed GAP-014. Branch commits 41e5243 (011/012) + 527e9a1 (AUTO-003) + this rate work + pagination. All local for slice (P0s + AUTO 001-005 + 011-014) closed/monitored. Validator + rate + pagination tests OK. PR #3 current. Local P0 0; slice + rate + pagination complete. Next: full product or remaining P2 (e2e).
 - More spawnable. Subagent outputs will drive P2 fixes + re-validate. UX_TOASTS_COMPLETE completed client toasts for 5+ (KPI etc) + tests + a11y + reval on ai/codex/ui-ux-toasts-client-feedback (parallel fixed); .ai/agents/ui-ux-toasts-complete.md 13b; web tests/build green.
 
@@ -35,10 +37,10 @@
 - Planned: ai/grok/* for P2 polish if needed.
 
 ## Open PRs
-- #3 (Grok mission): https://github.com/seanheiney/boss/pull/3 - "chore: spec closure audit - .ai/ autonomous OS + traceability for P0 gap closures (KPI, budget, security, audit)" (head codex/spec-closure-audit)
+- #3 (Grok mission, 3x final prepped): https://github.com/seanheiney/boss/pull/3 - "chore: spec closure audit - .ai/ autonomous OS + traceability for P0 gap closures (KPI, budget, security, audit)" (head codex/spec-closure-audit; body updated by PR_PREP_FINAL w/ full 3x summary + final-report + closed slices + handoff for Codex merge or final; clean green; mergeable)
 - #2 cursor/critical-bug-investigation-5450 (Account Connect entitlement drift/SCIM)
 - #1 cursor/critical-bug-investigation-64e0 (Account Connect/SCIM lifecycle)
-- PR #3 body has req IDs, user behavior, files, decisions (product/ux/arch/sec), tests (all GREEN), Codex notes, risks.
+- PR #3 body has req IDs, user behavior, files, decisions (product/ux/arch/sec), tests (all GREEN), Codex notes, risks, 3x agents/commits/slices/final-report.
 
 ## Completed Requirements (high level, see .ai/requirements-traceability.md)
 - All local: MET, DEC, CAN (incl KPI), BUD (full), RUN, AUD (incl logging), RPL (local), MEB, SWF, AGT, COM, SEC (incl gates), NFR.

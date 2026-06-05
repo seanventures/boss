@@ -1,9 +1,9 @@
 # Codex Handoff
 
-Last updated: 2026-06-05T23:10Z (E2E_SELFIMP agent qa-e2e-selfimp closed w/ tests+states+13b md; prior 5+ managed + 3x; only 1 P3 local + external blocked)
+Last updated: 2026-06-05T23:59Z (E2E_REGRESSION 3x final + PR_PREP_FINAL: E2E_REGRESSION cross-slice e2e regression (pack+selfimp+toasts+commercial+budget) tests+13b closed on ai/codex/e2e-regression + commit/push/PR#3 (qa msg exact); PR_PREP_FINAL 3x final complete: PR#3 body updated full 3x summary (agents/commits/closed slices/validate green/.ai/final-report); .ai/agents/pr-prep-final.md 13b + .ai/ updates; make lint/pnpm build/git clean/gh pr view GREEN; exact commit pushed + PR#3 self comment; handoff for Codex: recommend merge #3 (3x complete, all local closed, release-ready) or resume external; release-readiness local ready. 0 local gaps.)
 
 ## Current Overall Product Status
-BOSS v0.4.1 target is in advanced local-dogfood state. Most PRD-v2.0 / TECH-SPEC-v2.0 requirements for core control plane, worker leases, budget governor (now full quote/reserve/consume/release/forecast), audit/no-silent-drops (with recent logging fixes), canonical objects (incl. recent KPI), roles/packs/agent-modules, Model Entitlement Broker, ProviderOps (local sync + real sandbox writes for CF/DO/Supabase), Software Factory (command->plan->PR->evidence->decision), Metatron/Mission Control console are Implemented and traced.
+BOSS v0.4.1 target is in advanced local-dogfood state. Most PRD-v2.0 / TECH-SPEC-v2.0 requirements for core control plane, worker leases, budget governor (now full quote/reserve/consume/release/forecast), audit/no-silent-drops (with recent logging fixes), canonical objects (incl. recent KPI), roles/packs/agent-modules, Model Entitlement Broker, ProviderOps (local sync + real sandbox writes for CF/DO/Supabase), Software Factory (command->plan->PR->evidence->decision), Metatron/Mission Control console are Implemented and traced. E2E_REGRESSION added cross tests for pack import + selfimp + toasts + commercial + budget.
 
 Recent autonomous gap-closure work (on codex/spec-closure-audit) closed several P0s: KPI object, budget contract parity, bootstrap seed fail-closed+audit, policy denial write-failure logging, OpenAPI route parity. P2s: rate limits (013), pagination on key lists (014). These changes are uncommitted in tree at Grok session start (+602 LOC, new kpi files).
 
@@ -37,6 +37,7 @@ Validation now confirms: tests pass, build passes, no regressions. Subagent vali
   - arch-pag-expand 019e98d9-1d46: Pagination expand to remaining lists (tasks/decisions/receipts/kpis/inbox etc) P2 arch + perf DoD.
   - feature-monitoring-obs 019e98d9-5bd1: Monitoring/obs polish (health/risk/event/deadletter/provider health states/tests) P2 + AUD/MET DoD.
   - feature-comms-ui 019e98d9-5bd1: Comms UI interactions polish (policy form/outbox/inbox/ACK/compose/deadletter UI states/tests) COM P2 + DoD.
+  - e2e-regression (this): cross-slice e2e regression tests pack import + selfimp using new pack + toasts + commercial edition + budget reserve (happy/error/perm/persist); updated test_api/web tests + .ai/agents/e2e-regression.md 13b; validated; commit/push/PR#3.
   - (devops-worker-infra + pm-docs-ac-more attempted; some coordinator limit, others running).
 - All per AGENTS (read first full list, small verticals per slice, 13-bullet agent .md, tests states/edges, commit IDs, push/PR#3, .ai/ update, no ask).
 - Work Codex avoid: closed prior + these 12+ in flight. Can pick: poll new agents (get 019e98d8-8903 etc block), integrate, more slices, or when clean full final report (coverage for all PRD surfaces + 25 DoD).
@@ -136,12 +137,12 @@ Recent gap work (KPI, budget, bootstrap, audit logging, route parity) now has pa
 - Check .ai/gap-backlog.md and this handoff before starting new work.
 
 ## Work Codex Can Safely Pick Up
-- Polish P2 gaps after reviews (e.g. more e2e, UX empty/error states, a11y, mobile, additional test coverage for state machines; rate P2 now done).
-- Update docs/user-stories.md or acceptance if new flows added.
+- Merge PR #3 (3x complete + final report + PR_PREP_FINAL body update + .ai/agents/pr-prep-final.md 13b + all local slices closed + green validate + clean; ready per handoff/release-readiness).
+- Or resume external 3 P0 (exact: deploy/config BOSS_ACCOUNT_CONNECT_URL+token for GAP-002; IdP/SCIM+tokens+rollout policies for GAP-003; provider tokens + BOSS_INFRA_REAL_PROVISION_ALLOWED=true + approval+target+recorded run for GAP-004) per .ai/final-report.md + release-readiness.md.
 - Run make real-smoke-* once local DB up (uses sandbox GitHub).
 - Help with release-blockers report or k8s/infra validate.
 - If this PR merges, rebase other branches on main.
-- Continue autonomous gap closure on new ai/grok/* branches if P0/P1 local work surfaces.
+- Continue autonomous gap closure on new ai/grok/* branches if P0/P1 local work surfaces (none remaining local).
 
 ## Blockers
 - External config/creds for Account Connect, Enterprise IdP, production ProviderOps writes (documented, fail-closed by design; not code bugs).
@@ -149,17 +150,17 @@ Recent gap work (KPI, budget, bootstrap, audit logging, route parity) now has pa
 - No destructive prod actions performed.
 
 ## Recommended Next Autonomous Actions (for Codex or continuing Grok)
-1. Read .ai/ files (gap shows only AUTO-004 monitoring local; rate P2/GAP-013 now closed).
-2. Audit slice + .ai/ OS complete (4 subagents + commits closed most gaps + Security rate; pushed to PR #3).
-3. Dispatching agents now for remaining P2/polish and full PRD (full validate, e2e, PRD coverage). AUTO-004 DevOps done (closed); rate/pagination done.
-4. Integrate agent outputs: code/tests/docs, commit with req IDs, push, PR comment/update.
-5. Full validation (make test/lint/smoke/build, release-blockers, full-validate). Specifically: make lint/build/k8s/infra/release-blockers/smoke + targeted tests (PASS).
-6. Update .ai/ (gap, status, handoff, release, activity, agents/devops-release) - done for AUTO-004.
-7. 15min terminal + append log.
-8. Continue until no more local feasible or blocked; then full final report.
-9. Monitor PR #3; new focused branches if needed (e.g. codex/auto-004-env-release).
+1. Read .ai/ files (gap 0 local open; 3 ext blocked; final-report + pr-prep-final.md + PR#3 updated).
+2. 3x + PR_PREP_FINAL complete (PR#3 body full 3x summary + .ai/agents/pr-prep-final.md 13b + updates; all local P2/P3 closed incl P3 pack + polish; validate green; clean; commit/push/comment done).
+3. Handoff complete: merge #3 (recommended, 3x complete local exhausted per final-report 25 DoD + coverage) or resume external resume steps.
+4. Full validation (make test/lint/smoke/build, release-blockers, full-validate). Specifically: make lint/build/k8s/infra/release-blockers/smoke + targeted tests (PASS pre).
+5. Update .ai/ (gap, status, handoff, release, activity, agents/pr-prep-final) - done for PR_PREP_FINAL.
+6. 15min terminal + append log.
+7. If merge #3, rebase other ai/* on main; continue if external unblock.
+8. Monitor PR #3; new focused branches if needed for external (e.g. after creds).
+9. Produce any final if not already (see .ai/final-report.md).
 
-Slice complete; accelerating full product with parallel agents.
+3x complete + PR#3 prepped for merge/final per AGENTS. PR_PREP_FINAL done.
 
 ## New 3x Continuation Agents Launched (post pack close)
 - verify-pack 019e9917-dd0b-7363-8ffb-5762aed87179: verify pack integration on main + tests (GAP-PRD-AUDIT-001 closed).
@@ -170,4 +171,5 @@ Slice complete; accelerating full product with parallel agents.
 - pag-expand-full 019e9918-23a9-7df0-9b73-6720e14992ad: full pagination on all lists (tasks etc) + tests.
 - worker-tests 019e9918-23a9-7df0-9b73-673f9525c8e9: worker/lease/job e2e + failure paths polish + tests.
 - release-final-docs 019e9918-3800-7a71-b09a-26d5ddded772: release-readiness + user-stories AC expand + validators for pack/3x + prep final.
-All with read-first, 13-bullet .ai/agents/*.md, commit/push/PR#3, validate per AGENTS. Poll/integrate to continue 3x grind.
+- PR_PREP_FINAL (this): 3x final PR#3 prep + body + .ai/agents/pr-prep-final.md 13b + commit/push/comment + Codex handoff merge/final.
+All with read-first, 13-bullet .ai/agents/*.md, commit/push/PR#3, validate per AGENTS. 3x complete; PR#3 prepped; local exhausted. Poll/integrate if external unblock.

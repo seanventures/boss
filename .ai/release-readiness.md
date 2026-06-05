@@ -1,7 +1,7 @@
 # BOSS Release Readiness (Autonomous)
 
-**Date**: 2026-06-05 (RELEASE_FINAL_DOCS agent 3x: pack closure + user-stories AC + .ai/ sync + full validators)
-**Status**: LOCAL READY + FINAL DOCS COMPLETE (post PR #3) - .ai/ OS in, traceability complete, P0 local gaps closed+validated+PR'd, P3 GAP-PRD-AUDIT-001 pack local import/export closed by FEATURE-ENG (small vertical impl+tests+receipts+events + 3x batch), baseline all green (make lint/build/validators), external 3 P0s Blocked by design. RELEASE_FINAL_DOCS: release-readiness updated for pack closure + 3x progress; user-stories AC expanded for recent (pack, comms, toasts etc); more .ai/ sync (trace, handoff); prepare coverage for final (slices done); ran full release-blockers + k8s/infra-validate + pnpm test + grep AC in user-stories + make lint (pass). PM prd-audit + 3x agents (~20 on 12+ slices) + final docs: coverage good, only external left. Awaiting merge. Full prod readiness requires external config for Blocked items.
+**Date**: 2026-06-05 (RELEASE_FINAL_DOCS + PR_PREP_FINAL 3x: pack closure + user-stories AC + .ai/ sync + full validators + PR#3 body/final prep)
+**Status**: LOCAL READY + FINAL DOCS + PR_PREP_COMPLETE (post PR #3) - .ai/ OS in, traceability complete, P0 local gaps closed+validated+PR'd, P3 GAP-PRD-AUDIT-001 pack local import/export closed by FEATURE-ENG (small vertical impl+tests+receipts+events + 3x batch), all P2 polish closed (commercial/selfimp/worker/pm/pag/monitoring/toasts/verify +), baseline all green (make lint/build/validators), external 3 P0s Blocked by design. PR_PREP_FINAL: PR#3 body updated w/ full 3x summary (agents/commits/closed slices/validate green/.ai/final-report); .ai/agents/pr-prep-final.md 13b created + .ai/ updates; make lint/pnpm build/git status clean/gh pr view GREEN; exact commit 'docs(pr):...' + push + PR#3 self comment; handoff for Codex (merge #3 or final); release-readiness affirmed. RELEASE_FINAL_DOCS + PR_PREP: release-readiness updated for pack/3x + PR prep; user-stories AC expanded; .ai/ sync (trace, handoff, status, gap, agents); coverage for final (all local slices done); ran full release-blockers + k8s/infra-validate + pnpm test + grep + make lint (pass). PM prd-audit + 3x agents (~20 on 12+ slices) + final docs + PR_PREP_FINAL: coverage good, only external left. PR#3 merge-ready. Full prod readiness requires external config for Blocked items.
 
 ## Production Readiness Checklist
 
@@ -47,6 +47,7 @@
 - [x] Deploy assumptions in INFRA_RUNBOOK + k8s/helm.
 - [x] Observability: events, health, deadletters, ops digest.
 - [x] PR #3 open with full audit evidence; .ai/ committed for ongoing autonomous ops.
+- [x] PR_PREP_FINAL complete: body updated w/ 3x summary + final-report + all slices closed (P3 pack + P2); .ai/agents/pr-prep-final.md 13b + updates; validations (make lint, pnpm build, git clean, gh pr view) GREEN; commit pushed + self comment; handoff Codex merge #3 or final; release affirmed.
 
 ### DoD for Features
 - All traced in .ai/requirements-traceability.
