@@ -1974,11 +1974,11 @@ paths:
       responses:
         '200':
           description: Entitlement pools normalized from configured sources with capacity and policy state
-  /v1/entitlement-pools/{id}/probe:
+  /v1/entitlement-pools/{pool_id}/probe:
     post:
       summary: Record observed capacity for an entitlement pool with a durable CapacityReceipt
       parameters:
-        - name: id
+        - name: pool_id
           in: path
           required: true
           schema: { type: string }
