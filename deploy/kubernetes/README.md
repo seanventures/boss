@@ -14,9 +14,9 @@ The base is intentionally conservative:
 Build images from the repository root:
 
 ```sh
-docker build -f infra/containers/api.Dockerfile -t ghcr.io/seanheiney/boss-api:0.4.0 .
-docker build -f infra/containers/web.Dockerfile -t ghcr.io/seanheiney/boss-web:0.4.0 .
-docker build -f infra/containers/worker.Dockerfile -t ghcr.io/seanheiney/boss-worker:0.4.0 .
+docker build -f infra/containers/api.Dockerfile -t ghcr.io/seanheiney/boss-api:0.4.1 .
+docker build -f infra/containers/web.Dockerfile -t ghcr.io/seanheiney/boss-web:0.4.1 .
+docker build -f infra/containers/worker.Dockerfile -t ghcr.io/seanheiney/boss-worker:0.4.1 .
 ```
 
 Before applying:

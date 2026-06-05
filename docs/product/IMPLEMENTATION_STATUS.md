@@ -1,7 +1,7 @@
 # BOSS Implementation Status
 
 Last updated: June 4, 2026
-Release target: `v0.4.0`
+Release target: `v0.4.1`
 
 This document summarizes the currently implemented BOSS runtime surfaces in this repository so the codebase, README, and product intent stay aligned.
 

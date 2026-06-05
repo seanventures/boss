@@ -2,6 +2,15 @@
 
 All notable changes to BOSS are documented in this file.
 
+## v0.4.1 - 2026-06-05
+
+Patch release for the validated `main` rollout of the v0.4 commercial, enterprise, ProviderOps, Model Entitlement Broker, and infrastructure readiness work.
+
+### Changed
+
+- Updated release metadata, deployment image tags, Kubernetes examples, Helm chart metadata, and documentation from `v0.4.0` to `v0.4.1` because `v0.4.0` was already published from an earlier commit.
+- Removed an accidental tracked image artifact from the release tree while leaving local developer copies ignored.
+
 ## v0.4.0 - 2026-06-03
 
 This release adds the commercial, Account Connect, enterprise-governance, SCIM, and entitlement-gated agent-module runtime surfaces that make PRD v2.0 executable beyond documentation.
