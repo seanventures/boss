@@ -5,8 +5,8 @@
 **Scope**: unit, integration, e2e/acceptance, regression, error/perm/empty, state machine, build, smoke, coverage of recent changes.
 
 ## Coverage Assessment
-- API: apps/api/tests/test_api.py has broad coverage incl recent: canonical work objects (KPI lifecycle), budget consume (perm + active res + receipt), budget forecast, bootstrap seed (3 cases), policy denial logging. Good state machine tests.
-- Web: apps/web/tests/ has api-client.test.ts (updated for new endpoints), kpis.test.ts (new, mocks client), accessibility.test.ts, budget-status.test.ts, decisions, software-factory, providerops, etc. Commands, metatron, members, routing tests present.
+- API: apps/api/tests/test_api.py has broad coverage incl recent: canonical work objects (KPI lifecycle), budget consume (perm + active res + receipt), budget forecast, bootstrap seed (3 cases), policy denial logging. Good state machine tests. + E2E_REGRESSION cross (pack import/service + selfimp + commercial + budget + perm/persist).
+- Web: apps/web/tests/ has api-client.test.ts (updated for new endpoints + pack contracts), kpis.test.ts (new, mocks client + cross regression), accessibility.test.ts, budget-status.test.ts, decisions, software-factory, providerops, etc. Commands, metatron, members, routing tests present. + cross in activity/commercial.
 - Worker: apps/worker/tests/test_worker.py covers lease, runner strategies, job kinds.
 - Smoke/real-smoke: Makefile targets for local schema/bootstrap, real reservation->plan, PR proposal, merge, deploy (sandbox GitHub + OpenAI).
 - Validators: k8s, infra, release-blockers (no-net).
@@ -65,4 +65,5 @@ No prod behavior change; all per AGENTS (edges/state tests added, build pass, no
 **.ai updates**: qa-test.md (full), qa-review (this), gap-backlog (note extensions), codex-handoff.md, status.md, activity-log.md (append).
 **Evidence**: All cmds output captured above + in terminal logs; 27+ core targeted green incl new rate; smoke/lint/build/vals PASS; web 84; rate 4/4. Commit/push/PR per task.
 **E2E_SELFIMP addition (this task)**: pytest -k self_improvement pass (11 targeted incl 3 new for conc/perm/reject/persist); pnpm test self* (api-client+activity) pass; added client contract for SIM full + states. .ai/agents/qa-e2e-selfimp.md (13 bullets) + syncs.
+**E2E_REGRESSION addition (3x final task)**: pytest -k "pack or self_improvement or commercial or toasts" pass (cross regression + priors); pnpm --filter boss-web test (api-client + kpis + activity + commercial) pass incl new cross its for pack client, toast regression, activity cross shapes. Added 1 API cross test (pack import via service + selfimp pack-ref + commercial + budget res + errors/perm/persist/events/receipts) + 3 web expansions. .ai/agents/e2e-regression.md (13 bullets) + gap/trace/qa etc sync. Per task/AGENTS (cross happy/error/perm/persist for 3x features).
 **Remaining**: P2 e2e browser, rate in prod (redis note already), pagination etc as in reviews. Full local matrix validated for P2.
