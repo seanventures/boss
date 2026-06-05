@@ -114,6 +114,8 @@ CREATE TABLE IF NOT EXISTS pack_installs (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE(project_id, pack_id)
 );
+ALTER TABLE pack_installs ADD COLUMN IF NOT EXISTS source TEXT;
+ALTER TABLE pack_installs ADD COLUMN IF NOT EXISTS yaml_blob TEXT;
 
 CREATE TABLE IF NOT EXISTS agent_module_installs (
   id TEXT PRIMARY KEY,
