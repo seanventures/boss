@@ -31,7 +31,11 @@ from apps.api.app.services.github_adapter import (
     PullRequestValidationResult,
 )
 from apps.api.app.services.oidc import OidcPrincipal
-from apps.api.app.services.resource_plane import InventoryResource, ProviderCostRecord
+from apps.api.app.services.resource_plane import (
+    InventoryResource,
+    ProviderAdapterError,
+    ProviderCostRecord,
+)
 from apps.api.app.schemas import FileChange
 
 
@@ -5236,6 +5240,22 @@ def test_provider_sync_unsupported_billing_keeps_inventory_with_unknown_costs(
         and item["entity_id"] == provider["id"]
         for item in events.json()["items"]
     )
+
+
+def test_provider_adapter_unsupported_capabilities_fail_closed_without_placeholder_language():
+    with pytest.raises(ProviderAdapterError) as inventory_error:
+        api_main.resource_plane._sync_inventory("futurecloud", "token")
+    assert "not supported by the configured ProviderAdapter" in str(
+        inventory_error.value
+    )
+    assert "not implemented" not in str(inventory_error.value).lower()
+
+    with pytest.raises(ProviderAdapterError) as billing_error:
+        api_main.resource_plane._sync_billing("futurecloud", "token")
+    assert "not supported by the configured ProviderAdapter" in str(
+        billing_error.value
+    )
+    assert "not implemented" not in str(billing_error.value).lower()
 
 
 def test_provider_cost_parsers_preserve_confidence_and_units():

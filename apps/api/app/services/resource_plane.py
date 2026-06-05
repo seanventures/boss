@@ -5882,7 +5882,9 @@ class ResourcePlaneService:
             if provider in {"openai", "anthropic"}:
                 self._test_connection(provider, credential)
                 return []
-        raise ProviderAdapterError(f"Inventory sync is not implemented for {provider}.")
+        raise ProviderAdapterError(
+            f"Inventory sync is not supported by the configured ProviderAdapter for '{provider}'."
+        )
 
     def _sync_billing(
         self,
@@ -5930,7 +5932,7 @@ class ResourcePlaneService:
                 response.raise_for_status()
                 return self._anthropic_cost_records(response.json())
         raise ProviderAdapterError(
-            f"Billing sync is not implemented for provider '{provider}'."
+            f"Billing sync is not supported by the configured ProviderAdapter for '{provider}'."
         )
 
     def _provider_supports_billing(self, provider: str) -> bool:
