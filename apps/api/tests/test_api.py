@@ -1917,6 +1917,16 @@ def test_agent_module_install_requires_declared_marketplace_entitlement(client, 
         "missing_required_entitlement"
     )
 
+    linked = client.post(
+        "/v1/account-connect/link",
+        json={
+            "project_id": "boss-dogfood",
+            "hosted_org_id": "acct_org_test",
+            "actor": "ceo",
+        },
+    )
+    assert linked.status_code == 200
+
     with engine.begin() as connection:
         connection.execute(
             text(
