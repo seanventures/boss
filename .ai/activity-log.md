@@ -222,3 +222,31 @@ Next: (done for this task) report complete. If spawn more or PR update needed, l
 Blockers: none local.
 Appended by SECURITY subagent.
 ===============================================
+
+=== QA / TEST ENGINEERING SUBAGENT UPDATE 2026-06-05 (GAP-AUTO-002: race/perm/persist tests) ===
+Product: BOSS
+Repo root: /Volumes/DataSSD1/test/boss
+Base branch: main (active: codex/spec-closure-audit, PR #3 open)
+Mission status: QA task COMPLETE. GAP-AUTO-002 addressed with 7+ new minimal tests in existing files; all runs GREEN (27 API +39 web); lint/type PASS; only .ai/ + test/ edits (small).
+**Key files read (as tasked)**: .ai/qa-review.md, .ai/gap-backlog.md (GAP-AUTO-002), apps/api/tests/test_api.py (budget/kpi sections + helpers), apps/web/tests/kpis.test.ts, apps/web/tests/api-client.test.ts, apps/api/app/services/budget.py, apps/api/app/services/canonical.py (plus exploration of .ai/* , test dirs, conftest).
+**Missing identified (per GAP/trace/qa-review)**: no concurrent/race tests for budget res/consume or double KPI upsert; no 403 perm failure cases in new KPI/budget UI feeds; no refresh-persist for project context + KPI list.
+**Implemented (minimal, extend existing)**:
+- apps/api/tests/test_api.py: 3 new pytest using real DB + concurrent.futures.ThreadPool: kpi double upsert (idempotent), concurrent budget reserves, concurrent consume on res (double submit path).
+- apps/web/tests/kpis.test.ts: 2 new vitest: 403 perm -> blocked UI, project+KPI refresh via re-fetch same ctx + empty other.
+- apps/web/tests/budget-status.test.ts: 1 new: 403 perm.
+- apps/web/tests/api-client.test.ts: 1 new + import: exercises 403 for kpi list + budget forecast (covers client perm path).
+- apps/api/tests/conftest.py: 1 minimal tolerant clean (original list + try/except; + events safe) - ONLY to make tests runnable vs partial schema in ephemeral test postgres (no prod effect).
+**Tests run (new+existing)**:
+- API: used docker postgres:16-alpine :56344 + schema.sql + tolerant clean; pytest -k "kpi or budget or ... or concurrent..." : 27 passed (0 fail, 82s). New races included+pass.
+- Web: pnpm --filter boss-web test -- ...kpis...api-client...budget-status... --run : 39 passed (kpis now5, budget-status3, api-client31; 1.16s).
+- Lint/type: ruff (py tests) PASS; web tsc PASS.
+- Prior coverage (consume, forecast, canonical lifecycle, status, denial, bootstrap) re-validated in matrix.
+**Failures found/fixed**: 0 in final runs. Initial setup fails (undefined tables from partial schema) fixed by test-only conftest tolerance (no behavior change).
+**No prod code changed** (per directive; only if bug found - none surfaced, races passed without dup effects violating asserts).
+**.ai/ updates**: qa-test.md (full report: files, counts, risks, next), qa-review.md (noted GAP-AUTO-002 addressed), codex-handoff.md (added QA results), activity-log.md (this append).
+**Risks/next**: Ephemeral db partial (commercial tables absent) - tolerance ok. Thread races may not always hit window (but coverage + idempotence exercised). Prefer commit small on current branch, push, PR comment. Rebuild gap/trace post. Other P2 remain (e.g. GAP-AUTO-001 UX states).
+**Commands**: as in qa-test.md + docker for db + pnpm/pytest direct.
+All per AGENTS (tests, state, no silent, receipts where, small PRs). GAP-AUTO-002 can close.
+Appended by QA-TEST subagent.
+EOT
+===============================================

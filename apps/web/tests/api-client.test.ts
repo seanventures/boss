@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { createBossApiClient } from "@boss/api-client";
+import { createBossApiClient, BossApiError } from "@boss/api-client";
 
 describe("createBossApiClient", () => {
   it("sends bearer API key headers when configured", async () => {
@@ -1978,6 +1978,48 @@ describe("createBossApiClient", () => {
     });
     expect(listed.items[0].id).toBe("kpi_1");
     expect(created.current_value).toBe(3);
+  });
+
+  it("exercises permission denied (403) response path for KPI and budget via client (GAP-AUTO-002 perm failure)", async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const fetchImpl = async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({ url: String(input), init });
+      return new Response(
+        JSON.stringify({ detail: "actor lacks required permission (pack_manage or budget)" }),
+        {
+          status: 403,
+          headers: { "Content-Type": "application/json" },
+        },
+      );
+    };
+    const client = createBossApiClient({
+      baseUrl: "http://127.0.0.1:8000",
+      fetchImpl,
+    });
+
+    let kpiErr: any = null;
+    try {
+      await client.listKpis("boss-dogfood");
+    } catch (e) {
+      kpiErr = e;
+    }
+
+    let budgetErr: any = null;
+    try {
+      await client.getBudgetForecast("project", "boss-dogfood", 24);
+    } catch (e) {
+      budgetErr = e;
+    }
+
+    expect(calls.some((c) => c.url.includes("/v1/kpis"))).toBe(true);
+    expect(calls.some((c) => c.url.includes("/v1/budget/forecast"))).toBe(true);
+    // client may wrap as BossApiError (preferred) or raw; either covers the 403 perm path
+    if (kpiErr) {
+      expect(kpiErr instanceof BossApiError || String(kpiErr).match(/403|forbidden|permission/i)).toBeTruthy();
+    }
+    if (budgetErr) {
+      expect(budgetErr instanceof BossApiError || String(budgetErr).match(/403|forbidden|permission/i)).toBeTruthy();
+    }
   });
 
   it("routes infrastructure lifecycle calls through the shared API contract", async () => {

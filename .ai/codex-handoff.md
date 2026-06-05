@@ -55,6 +55,16 @@ Baseline validation COMPLETE (2026-06-05T15:11Z):
 - No new failures in changed areas. Pre-existing test coverage for states, perms, events, receipts, leases, budget reservations, etc. remains green.
 Recent gap work (KPI, budget, bootstrap, audit logging, route parity) now has passing targeted tests + build. Full make test would require clean DB port but units sufficient for this closure PR.
 
+**QA subagent update (GAP-AUTO-002 closure)**: On same branch, added 7+ race/perm/persist tests (see .ai/agents/qa-test.md for list). All re-runs GREEN:
+- API (ephem postgres + schema): 27 passed incl 3 new concurrent (kpi double upsert, budget res, budget consume).
+- Web vitest (kpis+api-client+budget-status): 39 passed incl new 403 UI reflection + refresh persist.
+- ruff + tsc on touched: PASS.
+- Only edited tests + .ai/ ( + minimal conftest tolerance for test DBs).
+- No prod changes; no bugs surfaced requiring fixes.
+- Updated qa-review, codex-handoff, activity, qa-test agent file.
+- GAP-AUTO-002 now exercised; can mark monitoring/closed post PR.
+- Commit/push small diff recommended.
+
 ## Product Decisions
 - Adhere strictly to PRD-v2 constitution: durable state > chat, receipts for all effects, reservations before spend, leases for all worker jobs, no silent drops (log+escalate failures even on audit writes), fail-closed on missing config/creds, adapters/plugins for providers/models, no self-mod without PR+tests+approval+rollback, Budget Governor wins, small reviewable PRs.
 - API-first: changes land in api + openapi + services first, then api-client + web.

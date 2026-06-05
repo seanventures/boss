@@ -14,21 +14,30 @@
 - AC/user-stories: many Given-When-Then in docs/user-stories.md cover states, perms, edges; touched by recent changes.
 
 ## Gaps Found
-- Need more race/concurrency for budget (double reserve/consume), KPI upsert idempotency under load (GAP-AUTO-002).
-- Permission failure reflection in UI for new panels.
-- Persistence after refresh for project context + KPI list.
+- (pre) Need more race/concurrency for budget (double reserve/consume), KPI upsert idempotency under load (GAP-AUTO-002).
+- (pre) Permission failure reflection in UI for new panels.
+- (pre) Persistence after refresh for project context + KPI list.
 - Full e2e browser for new KPI create + budget reserve/consume flows (current uses unit + api-client).
 - Coverage of error states in new UI components.
 - Run full matrix on dirty tree before PR.
 
-## Validation Plan
-1. make lint (ruff + ts)
-2. With DB: pytest apps/api/tests/test_api.py -k "kpi or budget or bootstrap or denial or canonical"
-3. pnpm --filter boss-web test -- tests/kpis.test.ts tests/api-client.test.ts tests/accessibility.test.ts
-4. make smoke (or subset)
-5. make build
-6. If docker: full make test
-7. Fix any fail, re-run.
+**GAP-AUTO-002 addressed this session (P2)**: Added 7+ targeted tests exercising:
+  - concurrent budget reserves (distinct cats, real DB+threads)
+  - concurrent consume on same res (double-submit path)
+  - concurrent/double KPI upsert same key (idempotent via ON CONFLICT + events)
+  - 403 perm failure reflected as apiReachable=false + blockedReason="API returned 403" in kpis + budget-status feeds
+  - project context + KPI list persistence simulated via re-fetch (refresh/reload)
+  - client contract 403 paths for kpi/budget
+- All pass; extended existing files only.
 
-**Status**: Good coverage for closed gaps; P2 additions needed for full DoD (concurrency, e2e states). No blocking test holes for core.
-**Files**: test files + Makefile.
+## Validation Plan
+1. make lint (ruff + ts) - PASS
+2. With DB: pytest apps/api/tests/test_api.py -k "kpi or budget or bootstrap or denial or canonical" (+new concurrent) - 27 passed
+3. pnpm --filter boss-web test -- tests/kpis.test.ts tests/api-client.test.ts tests/budget-status.test.ts - 39 passed (kpis 5, budget-status 3, api-client 31)
+4. make smoke (or subset) - skipped port
+5. make build / tsc - PASS
+6. If docker: full make test
+7. Fix any fail, re-run. (conftest.py minimally extended for tolerant clean to support ephemeral schema-only postgres; test-only file)
+
+**Status**: Good coverage for closed gaps + GAP-AUTO-002 now has explicit race/perm/persist tests (all GREEN). Remaining P2: full browser e2e, more UX states (see GAP-AUTO-001). No blocking test holes.
+**Files**: test files + Makefile + .ai/ (qa-test, qa-review, etc).

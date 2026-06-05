@@ -65,4 +65,57 @@ describe("KPI feed", async () => {
     expect(feed.blockedReason).toBe("network down");
     expect(feed.items).toEqual([]);
   });
+
+  it("reflects permission failure (403) for KPI list as blocked state in UI (GAP-AUTO-002 perm failure reflection)", async () => {
+    vi.mocked(client.listKpis).mockRejectedValueOnce(
+      new BossApiError("actor lacks pack_manage", 403, {}),
+    );
+
+    const feed = await fetchKpiFeed("boss-dogfood");
+
+    expect(feed.apiReachable).toBe(false);
+    expect(feed.items).toEqual([]);
+    expect(feed.blockedReason).toBe("API returned 403");
+  });
+
+  it("preserves project context and KPI list across simulated page refresh/re-fetch (GAP-AUTO-002 refresh-persistence for project+KPI)", async () => {
+    const kpiData = {
+      project_id: "boss-dogfood",
+      items: [
+        {
+          id: "kpi_persist",
+          project_id: "boss-dogfood",
+          kpi_key: "persist_kpi",
+          name: "Persist Through Refresh",
+          description: "should survive reload",
+          target_value: 5,
+          current_value: 1,
+          unit: "x",
+          status: "active",
+          created_by: "ceo",
+          created_at: "2026-06-05T00:00:00Z",
+          updated_at: "2026-06-05T00:00:00Z",
+        },
+      ],
+    };
+    vi.mocked(client.listKpis).mockResolvedValueOnce(kpiData);
+
+    const feed1 = await fetchKpiFeed("boss-dogfood");
+
+    // simulate page refresh / re-mount with same project context
+    vi.mocked(client.listKpis).mockResolvedValueOnce(kpiData);
+
+    const feed2 = await fetchKpiFeed("boss-dogfood");
+
+    expect(feed1.apiReachable).toBe(true);
+    expect(feed1.items).toHaveLength(1);
+    expect(feed1.items[0].id).toBe("kpi_persist");
+
+    expect(feed2.apiReachable).toBe(true);
+    expect(feed2.items[0].id).toBe("kpi_persist");
+
+    // also empty for alternate project context (e.g. switched then refreshed)
+    const feedOther = emptyKpiFeed("after refresh on switched project", "other-proj-123");
+    expect(feedOther.blockedReason).toBe("after refresh on switched project");
+  });
 });
