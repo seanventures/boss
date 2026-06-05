@@ -511,6 +511,7 @@ Acceptance criteria:
 - Given an authorized admin, when an org delegate is created, then the delegate can act across projects in the same org only with explicitly granted permissions.
 - Given the executive console loads, when org delegates are available to the selected actor, then they are visible in the actor switcher and Org Delegation management panel.
 - Given a write request, when the actor lacks the required permission, then BOSS returns `403` and records `policy.denied`.
+- Given the audit event write itself fails while denying access, when BOSS returns the denial, then the API logs the audit-write failure with actor, project, permission, and reason context instead of silently swallowing it.
 - Given a member-management request, when the actor has `member_manage`, then BOSS creates or updates the member and emits an event.
 
 ### Story ADM-003: Use Break-Glass Access Safely

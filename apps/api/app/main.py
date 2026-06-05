@@ -1,5 +1,6 @@
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
+import logging
 import re
 from secrets import compare_digest
 from typing import Any, Optional
@@ -382,6 +383,7 @@ from .services.specpack import (
 
 settings = get_settings()
 engine = get_engine(settings)
+LOGGER = logging.getLogger("boss.api")
 budget = BudgetGovernor(settings)
 intake = CommandIntakeService(settings)
 jobs = JobLeaseService(settings)
@@ -685,8 +687,14 @@ def raise_decision_actor_error(
                         "reason": str(error),
                     },
                 )
-    except Exception:
-        pass
+    except Exception as audit_error:
+        LOGGER.exception(
+            "policy_denial_audit_write_failed decision_id=%s actor=%s reason=%s",
+            decision_id,
+            actor,
+            error,
+            exc_info=audit_error,
+        )
     raise HTTPException(status_code=403, detail=str(error)) from error
 
 
@@ -713,7 +721,15 @@ def record_policy_denial(
                     "reason": reason,
                 },
             )
-    except Exception:
+    except Exception as audit_error:
+        LOGGER.exception(
+            "policy_denial_audit_write_failed project_id=%s actor=%s permission=%s reason=%s",
+            project_id,
+            actor,
+            permission,
+            reason,
+            exc_info=audit_error,
+        )
         return
 
 
@@ -735,7 +751,14 @@ def record_account_connect_sync_denial(project_id: str, actor: str, reason: str)
                 project_id,
                 {"reason": reason},
             )
-    except Exception:
+    except Exception as audit_error:
+        LOGGER.exception(
+            "account_connect_sync_denial_audit_write_failed project_id=%s actor=%s reason=%s",
+            project_id,
+            actor,
+            reason,
+            exc_info=audit_error,
+        )
         return
 
 
@@ -763,7 +786,15 @@ def record_account_connect_denial(
                 project_id,
                 {"reason": reason},
             )
-    except Exception:
+    except Exception as audit_error:
+        LOGGER.exception(
+            "account_connect_denial_audit_write_failed project_id=%s actor=%s event_type=%s reason=%s",
+            project_id,
+            actor,
+            event_type,
+            reason,
+            exc_info=audit_error,
+        )
         return
 
 
@@ -792,7 +823,16 @@ def record_budget_denial_event(
                 entity_id,
                 data,
             )
-    except Exception:
+    except Exception as audit_error:
+        LOGGER.exception(
+            "budget_denial_audit_write_failed project_id=%s actor=%s event_type=%s entity_type=%s entity_id=%s",
+            project_id,
+            actor,
+            event_type,
+            entity_type,
+            entity_id,
+            exc_info=audit_error,
+        )
         return
 
 

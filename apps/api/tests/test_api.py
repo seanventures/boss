@@ -1,4 +1,5 @@
 import json
+import logging
 import subprocess
 import base64
 from datetime import datetime, timedelta, timezone
@@ -32,6 +33,24 @@ from apps.api.app.services.github_adapter import (
 from apps.api.app.services.oidc import OidcPrincipal
 from apps.api.app.services.resource_plane import InventoryResource, ProviderCostRecord
 from apps.api.app.schemas import FileChange
+
+
+def test_policy_denial_audit_write_failure_is_logged(monkeypatch, caplog):
+    def failing_begin(_engine):
+        raise RuntimeError("audit database unavailable")
+
+    monkeypatch.setattr(api_main, "begin", failing_begin)
+    caplog.set_level(logging.ERROR, logger="boss.api")
+
+    api_main.record_policy_denial(
+        "proj_missing",
+        "operator",
+        "decision_resolve",
+        "actor lacks permission",
+    )
+
+    assert "policy_denial_audit_write_failed" in caplog.text
+    assert "audit database unavailable" in caplog.text
 
 
 def create_local_validation_repo(tmp_path, branch_name: str):
