@@ -1019,6 +1019,7 @@ paths:
       responses:
         '200': { description: Metatron answer with references }
         '404': { description: Unknown project, task, or decision scope }
+        '429': { description: Rate limit exceeded for high-cost path (in-memory 10/min per IP+actor for local; prod uses external limiter) }
   /v1/health-snapshots:
     get:
       summary: List recent health snapshots for a project
@@ -1103,6 +1104,7 @@ paths:
       responses:
         '201': { description: Command accepted }
         '403': { description: Actor is not allowed to submit commands }
+        '429': { description: Rate limit exceeded for high-cost path (in-memory 10/min per IP+actor for local; prod uses external limiter) }
   /v1/tasks:
     get:
       summary: List tasks
@@ -2469,6 +2471,10 @@ paths:
           in: query
           required: false
           schema: { type: integer, default: 100 }
+        - name: offset
+          in: query
+          required: false
+          schema: { type: integer, default: 0 }
       responses:
         '200': { description: External resource inventory with ownership, health, cost confidence, and links }
   /v1/resources/sync:
@@ -2493,6 +2499,7 @@ paths:
       responses:
         '200': { description: Reconciliation runs with resources seen, costs seen, billing status, inventory_snapshot_artifact_id, and drift/deadletter status }
         '403': { description: Actor is not allowed to run ProviderOps sync }
+        '429': { description: Rate limit exceeded for high-cost path (in-memory 10/min per IP+actor for local; prod uses external limiter) }
   /v1/costs:
     get:
       summary: List ProviderOps cost ledger events
@@ -2505,6 +2512,10 @@ paths:
           in: query
           required: false
           schema: { type: integer, default: 100 }
+        - name: offset
+          in: query
+          required: false
+          schema: { type: integer, default: 0 }
       responses:
         '200': { description: Cost events with cost layer and confidence labels }
   /v1/cost-anomalies:
@@ -4055,6 +4066,10 @@ paths:
           in: query
           required: false
           schema: { type: integer, default: 50 }
+        - name: offset
+          in: query
+          required: false
+          schema: { type: integer, default: 0 }
       responses:
         '200': { description: Events }
   /v1/deadletters:

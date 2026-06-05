@@ -8,6 +8,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from apps.api.app.bootstrap import seed
 from apps.api.app.config import get_settings
 from apps.api.app.main import app
+from apps.api.app import main as api_main
 from apps.api.app.services.entitlements import EntitlementBrokerService
 from apps.api.app.services.members import MemberDirectoryService
 from apps.api.app.services.specpack import SpecPackService
@@ -180,6 +181,10 @@ def clean_tables(engine):
             connection.execute(text("DELETE FROM events"))
         except Exception:
             pass
+    # Ensure rate limiter (P2 high-cost) uses generous limit + cleared for normal tests.
+    # Specific rate limit test will override to low value temporarily.
+    api_main.configure_rate_limiter_for_testing(1000)
+    api_main.reset_rate_limiter_hits()
     yield
 
 

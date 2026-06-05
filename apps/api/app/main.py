@@ -3,6 +3,8 @@ from contextvars import ContextVar
 import logging
 import re
 from secrets import compare_digest
+import time
+from collections import defaultdict, deque
 from typing import Any, Optional
 from urllib.parse import parse_qs
 
@@ -428,6 +430,129 @@ current_auth_method: ContextVar[Optional[str]] = ContextVar(
     "current_auth_method",
     default=None,
 )
+
+
+# --- Simple in-memory rate limiter for P2 high-cost paths (per .ai/security-review.md) ---
+# Protects e.g. /v1/metatron/query (Metatron), /v1/commands/propose (intake), provider
+# sync /v1/resources/sync (and similar costly like account-connect/marketplace syncs).
+# Implementation: pure stdlib (time + collections.deque), no external deps per task reqs.
+# Key strategy: per-IP+project+actor (allows per-actor or IP scoping).
+# Limit: 10 requests per 60s sliding window (configurable via BOSS_RATE_LIMIT_RPM / _ENABLED).
+# On exceed: raises 429 immediately + emits "rate_limit.exceeded" event (visible in audit/feed,
+# using same pattern as policy.denied / budget.*denied for "every failure visible").
+# NOTE per task + AGENTS: this is local/test sufficient only. Prod deployments MUST front
+# with Redis-backed limiter, rate limit at LB/CDN, or equivalent (in-mem is per-process,
+# lost on restart, not shared across replicas). Set BOSS_RATE_LIMIT_ENABLED=false to bypass
+# if using external. No budget spend here (rate is separate from budget governor).
+# Follows: small vertical, typed, deterministic, events for effects, no direct external.
+class InMemoryRateLimiter:
+    def __init__(self, rpm: int = 10):
+        self.rpm = max(1, int(rpm))
+        self._hits: dict[str, deque[float]] = defaultdict(deque)
+
+    def is_allowed(self, key: str) -> bool:
+        now = time.monotonic()
+        dq = self._hits[key]
+        cutoff = now - 60.0
+        while dq and dq[0] < cutoff:
+            dq.popleft()
+        if len(dq) >= self.rpm:
+            return False
+        dq.append(now)
+        return True
+
+    def clear(self) -> None:
+        self._hits.clear()
+
+
+# Global configured at import (after settings). Tests can reconfig via helpers.
+_rate_limiter = InMemoryRateLimiter(
+    rpm=(
+        settings.rate_limit_requests_per_minute
+        if getattr(settings, "rate_limit_enabled", True)
+        else 1_000_000
+    )
+)
+
+
+def configure_rate_limiter_for_testing(rpm: int) -> None:
+    """Test-only helper: raise/lower RPM and clear state so normal test suite
+    (which makes ~10+ propose/metatron calls) is not impacted by the 10/min
+    production-ish limit. The dedicated rate limit test sets low RPM + asserts 429.
+    """
+    global _rate_limiter
+    _rate_limiter.rpm = max(1, int(rpm))
+    _rate_limiter.clear()
+
+
+def reset_rate_limiter_hits() -> None:
+    """Test helper to clear hit deque (fresh window)."""
+    global _rate_limiter
+    _rate_limiter.clear()
+
+
+def record_rate_limit_denial(
+    project_id: str, actor: str, reason: str, ip: Optional[str] = None
+) -> None:
+    """Record rate limit exceed as auditable event. Mirrors record_policy_denial
+    and record_budget_denial_event exactly (open short conn, check project, emit,
+    log on failure to write -- never silent).
+    """
+    try:
+        with begin(engine) as audit_connection:
+            project_exists = audit_connection.execute(
+                text("SELECT 1 FROM projects WHERE id = :project_id"),
+                {"project_id": project_id},
+            ).first()
+            if not project_exists:
+                return
+            emit_event(
+                audit_connection,
+                project_id,
+                "rate_limit.exceeded",
+                actor,
+                "project",
+                project_id,
+                {
+                    "reason": reason,
+                    "ip": ip or "unknown",
+                },
+            )
+    except Exception as audit_error:
+        LOGGER.exception(
+            "rate_limit_denial_audit_write_failed project_id=%s actor=%s reason=%s ip=%s",
+            project_id,
+            actor,
+            reason,
+            ip,
+            exc_info=audit_error,
+        )
+        return
+
+
+def _enforce_high_cost_rate_limit(
+    request: Request, project_id: str, actor: str, endpoint: str = "high_cost"
+) -> None:
+    """Enforce for the listed P2 paths. Call early in handler (before DB work or
+    require_project_actor) so rate limit is first-class protection.
+    """
+    if not getattr(settings, "rate_limit_enabled", True):
+        return
+    client_ip = "unknown"
+    if request is not None and getattr(request, "client", None) is not None:
+        client_ip = getattr(request.client, "host", None) or "unknown"
+    key = f"{client_ip}:{project_id}:{actor or 'anon'}"
+    if not _rate_limiter.is_allowed(key):
+        record_rate_limit_denial(
+            project_id,
+            actor or "anon",
+            f"rate limit exceeded on {endpoint}",
+            client_ip,
+        )
+        raise HTTPException(
+            status_code=429,
+            detail="Rate limit exceeded (10 req/min for high-cost path). Retry later.",
+        )
 
 
 @asynccontextmanager
@@ -3206,7 +3331,11 @@ def status(project_id: str) -> StatusResponse:
 
 
 @app.post("/v1/metatron/query", response_model=MetatronQueryResponse)
-def metatron_query(payload: MetatronQueryRequest) -> MetatronQueryResponse:
+def metatron_query(payload: MetatronQueryRequest, request: Request) -> MetatronQueryResponse:
+    # Rate limit high-cost Metatron path (P2). Early, before any DB/LLM work.
+    _enforce_high_cost_rate_limit(
+        request, payload.project_id, "metatron", endpoint="/v1/metatron/query"
+    )
     with begin(engine) as connection:
         decisions.expire_overdue(connection, payload.project_id)
         try:
@@ -3224,7 +3353,11 @@ def metatron_query(payload: MetatronQueryRequest) -> MetatronQueryResponse:
 
 
 @app.post("/v1/commands/propose", response_model=CommandProposeResponse, status_code=201)
-def propose_command(payload: CommandProposeRequest) -> CommandProposeResponse:
+def propose_command(payload: CommandProposeRequest, request: Request) -> CommandProposeResponse:
+    # Rate limit high-cost command propose path (P2). Before perm check + work.
+    _enforce_high_cost_rate_limit(
+        request, payload.project_id, payload.actor, endpoint="/v1/commands/propose"
+    )
     with begin(engine) as connection:
         require_project_actor(
             connection,
@@ -4734,9 +4867,12 @@ def list_external_resources(
     provider: Optional[str] = None,
     ownership: Optional[str] = None,
     limit: int = 100,
+    offset: int = 0,
 ) -> ExternalResourceListResponse:
     if limit < 1 or limit > 500:
         raise HTTPException(status_code=400, detail="limit must be between 1 and 500.")
+    if offset < 0:
+        raise HTTPException(status_code=400, detail="offset must be >= 0.")
     with begin(engine) as connection:
         items = resource_plane.list_resources(
             connection,
@@ -4744,15 +4880,22 @@ def list_external_resources(
             provider=provider,
             ownership=ownership,
             limit=limit,
+            offset=offset,
         )
         return ExternalResourceListResponse(
             project_id=project_id,
             items=[ExternalResourceSummary(**item) for item in items],
+            limit=limit,
+            offset=offset,
         )
 
 
 @app.post("/v1/resources/sync", response_model=ResourceSyncResponse)
-def sync_external_resources(payload: ResourceSyncRequest) -> ResourceSyncResponse:
+def sync_external_resources(payload: ResourceSyncRequest, request: Request) -> ResourceSyncResponse:
+    # Rate limit high-cost provider sync path (P2 per review). Early gate.
+    _enforce_high_cost_rate_limit(
+        request, payload.project_id, payload.actor, endpoint="/v1/resources/sync"
+    )
     with begin(engine) as connection:
         require_project_actor(
             connection,
@@ -4779,14 +4922,18 @@ def sync_external_resources(payload: ResourceSyncRequest) -> ResourceSyncRespons
 
 
 @app.get("/v1/costs", response_model=CostEventListResponse)
-def list_provider_costs(project_id: str, limit: int = 100) -> CostEventListResponse:
+def list_provider_costs(project_id: str, limit: int = 100, offset: int = 0) -> CostEventListResponse:
     if limit < 1 or limit > 500:
         raise HTTPException(status_code=400, detail="limit must be between 1 and 500.")
+    if offset < 0:
+        raise HTTPException(status_code=400, detail="offset must be >= 0.")
     with begin(engine) as connection:
-        items = resource_plane.list_cost_events(connection, project_id, limit=limit)
+        items = resource_plane.list_cost_events(connection, project_id, limit=limit, offset=offset)
         return CostEventListResponse(
             project_id=project_id,
             items=[CostEventSummary(**item) for item in items],
+            limit=limit,
+            offset=offset,
         )
 
 
@@ -6453,9 +6600,11 @@ def queue_sandbox_deployment(payload: SandboxDeploymentJobRequest) -> JobSummary
 
 
 @app.get("/v1/events", response_model=EventFeedResponse)
-def event_feed(project_id: str, limit: int = 50) -> EventFeedResponse:
+def event_feed(project_id: str, limit: int = 50, offset: int = 0) -> EventFeedResponse:
     if limit < 1 or limit > 200:
         raise HTTPException(status_code=400, detail="limit must be between 1 and 200.")
+    if offset < 0:
+        raise HTTPException(status_code=400, detail="offset must be >= 0.")
 
     with begin(engine) as connection:
         rows = connection.execute(
@@ -6465,14 +6614,14 @@ def event_feed(project_id: str, limit: int = 50) -> EventFeedResponse:
                 FROM events
                 WHERE project_id = :project_id
                 ORDER BY created_at DESC
-                LIMIT :limit
+                LIMIT :limit OFFSET :offset
                 """
             ),
-            {"project_id": project_id, "limit": limit},
+            {"project_id": project_id, "limit": limit, "offset": offset},
         ).mappings().all()
 
         items = [event_item_from_row(row) for row in rows]
-        return EventFeedResponse(project_id=project_id, items=items)
+        return EventFeedResponse(project_id=project_id, items=items, limit=limit, offset=offset)
 
 
 @app.get("/v1/deadletters", response_model=DeadletterListResponse)

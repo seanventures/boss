@@ -3388,6 +3388,60 @@ def test_command_proposal_requires_known_project_actor(client):
     assert "policy.denied" in event_types
 
 
+def test_high_cost_endpoints_rate_limited_429_and_emits_event(client):
+    """P2 rate limit test per security review: in-mem limiter on metatron/propose/provider-sync.
+    10/min default but use low for test burst; assert 429 + rate_limit.exceeded event.
+    Uses test helpers to not impact other tests. Per-actor/IP key.
+    """
+    # Set low limit + fresh state for this test only.
+    api_main.configure_rate_limiter_for_testing(2)
+    api_main.reset_rate_limiter_hits()
+
+    payload = {
+        "project_id": "boss-dogfood",
+        "command": "Rate limit test command one.",
+    }
+    # First two should succeed (under limit).
+    r1 = client.post("/v1/commands/propose", json=payload)
+    assert r1.status_code == 201, r1.text
+    r2 = client.post("/v1/commands/propose", json={**payload, "command": "Rate limit test command two."})
+    assert r2.status_code == 201, r2.text
+
+    # Third exceeds -> 429
+    r3 = client.post("/v1/commands/propose", json={**payload, "command": "Rate limit test command three."})
+    assert r3.status_code == 429
+    assert "rate limit exceeded" in r3.json()["detail"].lower()
+
+    # Event emitted for audit (visible, no silent)
+    events_resp = client.get("/v1/events", params={"project_id": "boss-dogfood"})
+    assert events_resp.status_code == 200
+    event_types = [item["event_type"] for item in events_resp.json()["items"]]
+    assert "rate_limit.exceeded" in event_types
+
+    # Verify metatron high-cost path also protected under its key (reset for fresh window on metatron actor key).
+    api_main.reset_rate_limiter_hits()
+    m1 = client.post(
+        "/v1/metatron/query",
+        json={"project_id": "boss-dogfood", "question": "Rate limit metatron one?"},
+    )
+    assert m1.status_code == 200, m1.text  # under limit=2
+    m2 = client.post(
+        "/v1/metatron/query",
+        json={"project_id": "boss-dogfood", "question": "Rate limit metatron two?"},
+    )
+    assert m2.status_code == 200, m2.text
+    m3 = client.post(
+        "/v1/metatron/query",
+        json={"project_id": "boss-dogfood", "question": "Rate limit metatron three?"},
+    )
+    assert m3.status_code == 429
+    assert "rate limit exceeded" in m3.json()["detail"].lower()
+
+    # Restore generous limit + clear for remaining test suite (propose/metatron/sync calls elsewhere).
+    api_main.configure_rate_limiter_for_testing(1000)
+    api_main.reset_rate_limiter_hits()
+
+
 def test_metatron_status_query_returns_fresh_answer_and_references(client):
     response = client.post(
         "/v1/metatron/query",
@@ -16126,3 +16180,46 @@ def test_command_to_deploy_flow_completes_task_when_deploy_policy_enabled(
             previous_healthcheck_url
         )
         api_main.software_factory.settings.openai_api_key = previous_openai
+
+
+def test_pagination_limit_offset_on_events_resources_costs_lists(client):
+    """P2 perf: key high-volume lists now support limit/offset; defaults preserved; responses include metadata; invalid offset rejected. (refs arch-review P2 pagination, GAP dispatch)"""
+    # Events (always has seed/activity data)
+    r = client.get("/v1/events", params={"project_id": "boss-dogfood"})
+    assert r.status_code == 200
+    body = r.json()
+    assert "items" in body and isinstance(body["items"], list)
+    assert body["limit"] == 50
+    assert body["offset"] == 0
+    assert len(body["items"]) <= 50
+
+    r_small = client.get("/v1/events", params={"project_id": "boss-dogfood", "limit": 2, "offset": 0})
+    assert r_small.status_code == 200
+    b_small = r_small.json()
+    assert b_small["limit"] == 2
+    assert b_small["offset"] == 0
+    assert len(b_small["items"]) <= 2
+
+    r_page2 = client.get("/v1/events", params={"project_id": "boss-dogfood", "limit": 2, "offset": 2})
+    assert r_page2.status_code == 200
+    assert r_page2.json()["offset"] == 2
+
+    # offset negative rejected (400)
+    r_bad = client.get("/v1/events", params={"project_id": "boss-dogfood", "offset": -5})
+    assert r_bad.status_code == 400
+    assert "offset" in r_bad.json()["detail"].lower()
+
+    # Resources and costs: contract + paging params accepted (may be empty post-seed, but shape + defaults)
+    rr = client.get("/v1/resources", params={"project_id": "boss-dogfood", "limit": 5, "offset": 1})
+    assert rr.status_code == 200
+    rrb = rr.json()
+    assert rrb["limit"] == 5
+    assert rrb["offset"] == 1
+    assert "items" in rrb
+
+    cc = client.get("/v1/costs", params={"project_id": "boss-dogfood", "limit": 3, "offset": 0})
+    assert cc.status_code == 200
+    ccb = cc.json()
+    assert ccb["limit"] == 3
+    assert ccb["offset"] == 0
+    assert "items" in ccb

@@ -264,6 +264,17 @@ class Settings(BaseSettings):
         default=True, alias="BOSS_SANDBOX_VALIDATION_FETCH_REMOTE"
     )
 
+    # Simple rate limiting for high-cost paths (P2 per .ai/security-review.md).
+    # In-memory implementation only (see main.py); production requires Redis or
+    # edge limiter (nginx, CDN, etc). Default protects metatron/query, commands/propose,
+    # resources/sync etc at 10 req/min per (IP+actor) key. Can disable or tune via env.
+    rate_limit_enabled: bool = Field(
+        default=True, alias="BOSS_RATE_LIMIT_ENABLED"
+    )
+    rate_limit_requests_per_minute: int = Field(
+        default=10, alias="BOSS_RATE_LIMIT_RPM"
+    )
+
     @property
     def repo_root(self) -> Path:
         return Path(__file__).resolve().parents[3]

@@ -15,13 +15,13 @@
 
 ## Overall Product Status
 - Audit slice (spec closure, .ai/ OS, docs AC, recent gaps 001-003/005/011/012) COMPLETE per DoD: local P0s closed, P2s addressed by 4 subagents + branch commits (41e5243, 527e9a1). Additional: Security agent closed rate P2 (GAP-013) with in-mem limiter for high-cost paths + tests + updates. Validations green, pushed to PR #3, .ai/ current.
+- PM prd-audit (this) COMPLETE: full PRD-v2.0 + TECH audit vs impl/.ai/ (read thesis/planes/objects/journeys + code+openapi+trace); no other local implementable gaps/vertical slices not covered (comms/self-imp/commercial local/elastic covered fully local); noted GAP-PRD-AUDIT-001 P3; "coverage good, only external left". .ai/ updated + commit pending.
 - Core product largely implemented locally (control, budget full, ProviderOps local+real sandbox, SWF, console, roles, MEB, auth, etc.) per IMPLEMENTATION_STATUS + PRD-v2.
 - Local dogfood functional (make dev/seed/test/lint/build).
 - Real-only enforced.
-- Remaining local: AUTO-004 (P3 monitoring .env/release-blockers); P2 polish (rate limits, pagination, more e2e per reviews).
+- Remaining local: AUTO-004 (P3 monitoring .env/release-blockers); P2 polish (rate limits done, pagination, more e2e per reviews); P3 pack import noted from audit.
 - External P0s (002-004) Blocked (creds/deploy needed; local fail-closed complete).
 - No core TODOs/stubs (scan clean).
-- Dispatching more agents (DevOps, QA-validate, Arch-pagination, PM-PRD-coverage) ; Security-rate completed (rate P2 closed).
 - .ai/ OS ready for ongoing autonomous work. See .ai/release-readiness for slice complete note.
 
 ## Active Grok Agents / Workstreams
