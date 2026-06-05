@@ -3375,8 +3375,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
           </div>
 
           <div className="stack-grid">
-            <article className="stack-card">
-              <h3>Installed packs</h3>
+            <article className="stack-card" aria-labelledby="installed-packs-heading">
+              <h3 id="installed-packs-heading">Installed packs</h3>
               {!packs.apiReachable ? (
                 <p className="detail">
                   {packs.blockedReason ?? "Pack API is unavailable."}
@@ -3416,8 +3416,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               )}
             </article>
 
-            <article className="stack-card">
-              <h3>Installed roles</h3>
+            <article className="stack-card" aria-labelledby="installed-roles-heading">
+              <h3 id="installed-roles-heading">Installed roles</h3>
               {!roles.apiReachable ? (
                 <p className="detail">
                   {roles.blockedReason ?? "Role API is unavailable."}
@@ -3482,8 +3482,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
           </div>
 
           <div className="stack-grid">
-            <article className="stack-card">
-              <h3>Edition and Account Connect</h3>
+            <article className="stack-card" aria-labelledby="edition-account-connect-heading">
+              <h3 id="edition-account-connect-heading">Edition and Account Connect</h3>
               {!commercial.apiReachable ? (
                 <p className="detail">
                   {commercial.blockedReason ?? "Commercial API is unavailable."}
@@ -3672,8 +3672,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               )}
             </article>
 
-            <article className="stack-card">
-              <h3>Account Connect health</h3>
+            <article className="stack-card" aria-labelledby="account-connect-health-heading">
+              <h3 id="account-connect-health-heading">Account Connect health</h3>
               {!commercial.apiReachable ? (
                 <p className="detail">
                   {commercial.blockedReason ?? "Commercial API is unavailable."}
@@ -3766,8 +3766,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               )}
             </article>
 
-            <article className="stack-card">
-              <h3>Hosted auth sessions</h3>
+            <article className="stack-card" aria-labelledby="hosted-auth-sessions-heading">
+              <h3 id="hosted-auth-sessions-heading">Hosted auth sessions</h3>
               {!commercial.apiReachable ? (
                 <p className="detail">
                   {commercial.blockedReason ?? "Commercial API is unavailable."}
@@ -3900,8 +3900,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               )}
             </article>
 
-            <article className="stack-card">
-              <h3>License entitlements</h3>
+            <article className="stack-card" aria-labelledby="license-entitlements-heading">
+              <h3 id="license-entitlements-heading">License entitlements</h3>
               {!commercial.apiReachable ? (
                 <p className="detail">
                   {commercial.blockedReason ?? "Commercial API is unavailable."}
@@ -3944,8 +3944,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               )}
             </article>
 
-            <article className="stack-card">
-              <h3>Team invites</h3>
+            <article className="stack-card" aria-labelledby="team-invites-heading">
+              <h3 id="team-invites-heading">Team invites</h3>
               {!commercial.apiReachable ? (
                 <p className="detail">
                   {commercial.blockedReason ?? "Commercial API is unavailable."}
@@ -4070,8 +4070,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               )}
             </article>
 
-            <article className="stack-card">
-              <h3>Billing portal sessions</h3>
+            <article className="stack-card" aria-labelledby="billing-portal-sessions-heading">
+              <h3 id="billing-portal-sessions-heading">Billing portal sessions</h3>
               {!commercial.apiReachable ? (
                 <p className="detail">
                   {commercial.blockedReason ?? "Commercial API is unavailable."}
@@ -5002,8 +5002,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             </p>
           </div>
 
-          <article className="stack-card">
-            <h3>Hosted marketplace catalog</h3>
+          <article className="stack-card" aria-labelledby="hosted-marketplace-catalog-heading">
+            <h3 id="hosted-marketplace-catalog-heading">Hosted marketplace catalog</h3>
             {!agentModules.apiReachable ? (
               <p className="detail">
                 {agentModules.blockedReason ?? "Agent module API is unavailable."}
