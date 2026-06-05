@@ -94,3 +94,15 @@ See .ai/requirements-traceability.md for full matrix + status "Yes" for local.
 - Modified this Security rate task: apps/api/app/config.py, apps/api/app/main.py, apps/api/tests/test_api.py, apps/api/tests/conftest.py, api/openapi.yaml, .ai/gap-backlog.md, .ai/security-review.md, .ai/agents/security.md, .ai/status.md, .ai/codex-handoff.md, .ai/activity-log.md (plus prior)
 
 See activity-log.md for chronological.
+
+## New Agents Launched (post pack P3 close, 3x continuation)
+Launched 7+ more for remaining slices (total 20+):
+- verify-pack 019e9917-dd0b (GAP-PRD-AUDIT-001 verify on main).
+- toasts-complete 019e9917-f88b (P2 ux toasts finish).
+- monitoring-polish 019e9917-f88b (obs polish).
+- commercial-full 019e9918-1012 (commercial surfaces).
+- e2e-selfimp 019e9918-1013 (selfimp e2e).
+- pag-expand-full 019e9918-23a9 (full lists pag).
+- worker-tests 019e9918-23a9 (worker e2e).
+- release-final-docs 019e9918-3800 (release + docs AC).
+Will poll, integrate, validate, update .ai/, push/PR. Full 3x on complete product.

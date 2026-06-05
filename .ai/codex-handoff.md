@@ -160,3 +160,14 @@ Recent gap work (KPI, budget, bootstrap, audit logging, route parity) now has pa
 9. Monitor PR #3; new focused branches if needed (e.g. codex/auto-004-env-release).
 
 Slice complete; accelerating full product with parallel agents.
+
+## New 3x Continuation Agents Launched (post pack close)
+- verify-pack 019e9917-dd0b-7363-8ffb-5762aed87179: verify pack integration on main + tests (GAP-PRD-AUDIT-001 closed).
+- toasts-complete 019e9917-f88b-7c63-b9e6-645be4cf2e36: finish ux toasts/feedback + tests (P2 ux-review).
+- monitoring-polish 019e9917-f88b-7c63-b9e6-6462f492a217: complete obs/health/risk/event/deadletter polish + tests.
+- commercial-full 019e9918-1012-71d1-91b6-4d1539daa7a4: full commercial local surfaces (edition/packs/marketplace) polish + tests.
+- e2e-selfimp 019e9918-1013-75a1-b782-de82a49f2e72: complete self-imp e2e journeys/tests/states (P2 e2e + SIM).
+- pag-expand-full 019e9918-23a9-7df0-9b73-6720e14992ad: full pagination on all lists (tasks etc) + tests.
+- worker-tests 019e9918-23a9-7df0-9b73-673f9525c8e9: worker/lease/job e2e + failure paths polish + tests.
+- release-final-docs 019e9918-3800-7a71-b09a-26d5ddded772: release-readiness + user-stories AC expand + validators for pack/3x + prep final.
+All with read-first, 13-bullet .ai/agents/*.md, commit/push/PR#3, validate per AGENTS. Poll/integrate to continue 3x grind.
