@@ -109,3 +109,6 @@ Launched 7+ more for remaining slices (total 20+):
 - release-final-docs 019e9918-3800 (release + docs AC).
 - final-validate (full suite lint/pytest62p/web96p/buildfix/smoke/release/k8s/infra green + page dynamic + 13b md + .ai/ + commit).
 Will poll, integrate, validate, update .ai/, push/PR. Full 3x on complete product. FINAL_VALIDATE run complete; all green.
+
+## Credits Low - Graceful Close (2026-06-05)
+All agents (incl. worker-tests per reminder 019e9918-23a9-7df0-9b73-673f9525c8e9 + a11y-full 019e9940-e551 + 4 finals + 20+ 3x) completed and code checked in. No new spawns. Recent: GH Actions billing (0349140) + CI runner (e7aed1d) blockers found (tied to credits). Local 3x complete; .ai/ OS updated; PR#3 prepped. Pause for credits; handoff for external + CI. Only blockers remain.

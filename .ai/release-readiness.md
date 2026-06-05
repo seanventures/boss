@@ -89,3 +89,14 @@ Audit slice + .ai/ OS + P2 polish (rate/pag + toasts + monitoring + providerops 
 - No local P0/P2/P3 gaps; all closed in branch history + validated GREEN + PR #3.
 - 3 P0 external Blocked by design (release-blockers confirmed; local fail-closed complete; exact resume: configure BOSS_ACCOUNT_CONNECT_URL + tokens + BOSS_INFRA_REAL_PROVISION_ALLOWED=true + explicit approval + target + recorded live validation run in BOSS for 002/003/004).
 - Recommendation: merge #3 (or as-is for OS + traceability + 3x complete); external blocks require creds/deploy/approval (documented exact resume in blockers/release-readiness/handoff); full final report in .ai/ (readiness/coverage/gaps+resume/PRs/25 DoD/Codex). FINAL_VALIDATE suite green + fix + commit done; clean + ready for final report or merge.
+
+## Credits / CI Billing Close Note (2026-06-05)
+Graceful close of all agents (credits low, no new spawns). All code from worker-tests (8bef6a0 + integrate), a11y-full, final-val, e2e-reg, pr-prep + prior 3x checked in to audit (clean). 
+
+**New blockers from agent/release work**:
+- GH Actions billing blocker (commit 0349140): Identified in release docs; impacts CI for tests/validates/subagent bg runs.
+- CI runner blocker (commit e7aed1d): Final local validation and CI runner issues recorded; likely credit/billing exhaustion for runners used in 3x parallel/final agents.
+
+These compound external 3. On resume (credits replenished or manual): add billing budget/credits for Actions + CI, re-run full CI/validators in env with credits, update evidence in release-readiness. Local only mode (make lint/test/build without Actions) available for dev.
+
+Local product complete per 25 DoD; pause subagents.
