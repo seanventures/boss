@@ -515,6 +515,25 @@ CREATE TABLE IF NOT EXISTS departments (
   UNIQUE(project_id, department_key)
 );
 
+CREATE TABLE IF NOT EXISTS kpis (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id),
+  kpi_key TEXT NOT NULL,
+  name TEXT NOT NULL,
+  description TEXT,
+  owner_role_id TEXT REFERENCES roles(id),
+  target_value NUMERIC NOT NULL,
+  current_value NUMERIC NOT NULL DEFAULT 0,
+  unit TEXT NOT NULL DEFAULT 'count',
+  status TEXT NOT NULL DEFAULT 'active',
+  created_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(project_id, kpi_key)
+);
+CREATE INDEX IF NOT EXISTS idx_kpis_project_status
+  ON kpis(project_id, status, kpi_key);
+
 CREATE TABLE IF NOT EXISTS policy_records (
   id TEXT PRIMARY KEY,
   project_id TEXT NOT NULL REFERENCES projects(id),

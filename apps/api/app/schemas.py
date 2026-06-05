@@ -1762,6 +1762,39 @@ class DepartmentListResponse(BaseModel):
     items: list[DepartmentSummary]
 
 
+class KpiSummary(BaseModel):
+    id: str
+    project_id: str
+    kpi_key: str
+    name: str
+    description: Optional[str] = None
+    owner_role_id: Optional[str] = None
+    target_value: float
+    current_value: float
+    unit: str
+    status: str
+    created_by: str
+    created_at: str
+    updated_at: str
+
+
+class KpiCreateRequest(BaseModel):
+    project_id: str
+    kpi_key: str
+    name: str
+    description: Optional[str] = None
+    target_value: float = Field(gt=0)
+    current_value: float = Field(default=0, ge=0)
+    unit: str = "count"
+    owner_role_id: Optional[str] = None
+    actor: str = "ceo"
+
+
+class KpiListResponse(BaseModel):
+    project_id: str
+    items: list[KpiSummary]
+
+
 class PolicyRecordSummary(BaseModel):
     id: str
     project_id: str

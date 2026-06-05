@@ -214,7 +214,19 @@ Acceptance criteria:
 - Given a parent or dependency references an unknown task in the same project, when task creation is attempted, then BOSS rejects the request and does not silently create broken lineage.
 - Given an owner role references an unknown role in the same project, when task creation is attempted, then BOSS rejects the request and records no hidden assignment.
 
-### Story GOV-006: Prevent Role Drift
+### Story GOV-006: Track Durable Company KPIs
+
+As a founder or operator, I want company KPIs to be durable canonical objects, so that operating metrics are API-addressable, auditable, and visible after refresh.
+
+Acceptance criteria:
+
+- Given an authorized actor with `pack_manage`, when they create or update a KPI, then BOSS persists the project-scoped KPI with stable `kpi_key`, target value, current value, unit, status, optional owner role, timestamps, and `kpi.upserted` event.
+- Given a KPI target value is not greater than zero or current value is negative, when creation is attempted, then BOSS rejects the request with a validation error and records no KPI.
+- Given `owner_role_id` is present, when it does not reference a role in the same project, then BOSS returns `400` instead of creating an ungrounded metric owner.
+- Given Mission Control loads after a KPI is saved, when the KPI registry is rendered, then the KPI appears with current/target values, unit, status, description, and owner role where present.
+- Given the KPI API is unavailable, when Mission Control loads, then the KPI panel shows an explicit error state instead of fake metric data.
+
+### Story GOV-007: Prevent Role Drift
 
 As VP Agents, I want RoleSpec scope checks to block out-of-scope skills and lower trust automatically, so that roles cannot drift into actions outside their charter.
 

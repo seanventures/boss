@@ -92,6 +92,9 @@ from .schemas import (
     DepartmentCreateRequest,
     DepartmentListResponse,
     DepartmentSummary,
+    KpiCreateRequest,
+    KpiListResponse,
+    KpiSummary,
     DeploymentRolloutListResponse,
     DeploymentRolloutSummary,
     DeploymentEnvironmentPolicyListResponse,
@@ -3333,6 +3336,45 @@ def create_department(payload: DepartmentCreateRequest) -> DepartmentSummary:
             actor=payload.actor,
         )
         return DepartmentSummary(**result)
+
+
+@app.get("/v1/kpis", response_model=KpiListResponse)
+def list_kpis(project_id: str) -> KpiListResponse:
+    with begin(engine) as connection:
+        return KpiListResponse(
+            project_id=project_id,
+            items=[
+                KpiSummary(**item)
+                for item in canonical.list_kpis(connection, project_id)
+            ],
+        )
+
+
+@app.post("/v1/kpis", response_model=KpiSummary, status_code=201)
+def create_kpi(payload: KpiCreateRequest) -> KpiSummary:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection,
+            payload.project_id,
+            payload.actor,
+            "pack_manage",
+        )
+        try:
+            result = canonical.create_kpi(
+                connection,
+                project_id=payload.project_id,
+                kpi_key=payload.kpi_key,
+                name=payload.name,
+                description=payload.description,
+                target_value=payload.target_value,
+                current_value=payload.current_value,
+                unit=payload.unit,
+                owner_role_id=payload.owner_role_id,
+                actor=payload.actor,
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        return KpiSummary(**result)
 
 
 @app.get("/v1/policies", response_model=PolicyRecordListResponse)

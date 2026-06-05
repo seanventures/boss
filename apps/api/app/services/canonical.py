@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from decimal import Decimal
 from typing import Any, Optional
 
 from sqlalchemy import text
@@ -80,6 +81,100 @@ class CanonicalObjectService:
             {"department_key": department_key, "name": name},
         )
         return self._serialize_temporal(row)
+
+    def list_kpis(
+        self, connection: Connection, project_id: str
+    ) -> list[dict[str, Any]]:
+        rows = connection.execute(
+            text(
+                """
+                SELECT id, project_id, kpi_key, name, description, owner_role_id,
+                       target_value, current_value, unit, status, created_by,
+                       created_at, updated_at
+                FROM kpis
+                WHERE project_id = :project_id
+                ORDER BY status ASC, kpi_key ASC
+                """
+            ),
+            {"project_id": project_id},
+        ).mappings().all()
+        return [self._serialize_kpi(row) for row in rows]
+
+    def create_kpi(
+        self,
+        connection: Connection,
+        *,
+        project_id: str,
+        kpi_key: str,
+        name: str,
+        description: Optional[str],
+        target_value: float,
+        current_value: float,
+        unit: str,
+        owner_role_id: Optional[str],
+        actor: str,
+    ) -> dict[str, Any]:
+        kpi_key = self._require_slug(kpi_key, "kpi_key")
+        unit = unit.strip() or "count"
+        if target_value <= 0:
+            raise ValueError("target_value must be greater than zero.")
+        if current_value < 0:
+            raise ValueError("current_value must be greater than or equal to zero.")
+        if owner_role_id:
+            self._require_project_role(connection, project_id, owner_role_id)
+        kpi_id = make_id("kpi")
+        connection.execute(
+            text(
+                """
+                INSERT INTO kpis (
+                    id, project_id, kpi_key, name, description, target_value,
+                    current_value, unit, owner_role_id, created_by
+                )
+                VALUES (
+                    :id, :project_id, :kpi_key, :name, :description, :target_value,
+                    :current_value, :unit, :owner_role_id, :created_by
+                )
+                ON CONFLICT (project_id, kpi_key) DO UPDATE
+                SET name = EXCLUDED.name,
+                    description = EXCLUDED.description,
+                    target_value = EXCLUDED.target_value,
+                    current_value = EXCLUDED.current_value,
+                    unit = EXCLUDED.unit,
+                    owner_role_id = EXCLUDED.owner_role_id,
+                    updated_at = now()
+                """
+            ),
+            {
+                "id": kpi_id,
+                "project_id": project_id,
+                "kpi_key": kpi_key,
+                "name": name.strip(),
+                "description": description.strip() if description else None,
+                "target_value": target_value,
+                "current_value": current_value,
+                "unit": unit,
+                "owner_role_id": owner_role_id,
+                "created_by": actor,
+            },
+        )
+        row = self._get_by_key(connection, "kpis", project_id, "kpi_key", kpi_key)
+        emit_event(
+            connection,
+            project_id,
+            "kpi.upserted",
+            actor,
+            "kpi",
+            row["id"],
+            {
+                "kpi_key": kpi_key,
+                "name": name.strip(),
+                "target_value": target_value,
+                "current_value": current_value,
+                "unit": unit,
+                "owner_role_id": owner_role_id,
+            },
+        )
+        return self._serialize_kpi(row)
 
     def list_policy_records(
         self, connection: Connection, project_id: str
@@ -662,6 +757,45 @@ class CanonicalObjectService:
             {"project_id": project_id, "key_value": key_value},
         ).mappings().one()
         return dict(row)
+
+    def _require_project_role(
+        self,
+        connection: Connection,
+        project_id: str,
+        role_id: str,
+    ) -> None:
+        exists = connection.execute(
+            text(
+                """
+                SELECT 1
+                FROM roles
+                WHERE id = :role_id AND project_id = :project_id
+                """
+            ),
+            {"role_id": role_id, "project_id": project_id},
+        ).first()
+        if not exists:
+            raise ValueError("owner_role_id must reference a role in the project.")
+
+    def _require_slug(self, value: str, field_name: str) -> str:
+        cleaned = value.strip().lower().replace(" ", "_")
+        if not cleaned:
+            raise ValueError(f"{field_name} must not be blank.")
+        if not all(
+            character.isalnum() or character in {"_", "-"} for character in cleaned
+        ):
+            raise ValueError(
+                f"{field_name} may only contain letters, numbers, hyphens, or underscores."
+            )
+        return cleaned
+
+    def _serialize_kpi(self, row) -> dict[str, Any]:
+        payload = self._serialize_temporal(row)
+        for key in ("target_value", "current_value"):
+            value = payload.get(key)
+            if isinstance(value, Decimal):
+                payload[key] = float(value)
+        return payload
 
     def _serialize_temporal(self, row: Any) -> dict[str, Any]:
         payload = dict(row)

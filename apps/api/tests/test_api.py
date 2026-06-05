@@ -8891,6 +8891,42 @@ def test_canonical_work_objects_have_stable_ids_lifecycles_and_events(client):
     assert department.json()["id"].startswith("dept_")
     assert department.json()["status"] == "active"
 
+    roles = client.get("/v1/roles", params={"project_id": "boss-dogfood"})
+    assert roles.status_code == 200
+    owner_role_id = roles.json()["items"][0]["id"]
+    kpi = client.post(
+        "/v1/kpis",
+        json={
+            "project_id": "boss-dogfood",
+            "kpi_key": "verified_work_throughput",
+            "name": "Verified Work Throughput",
+            "description": "Completed artifacts that pass required gates.",
+            "target_value": 10,
+            "current_value": 2,
+            "unit": "artifacts/week",
+            "owner_role_id": owner_role_id,
+            "actor": "ceo",
+        },
+    )
+    assert kpi.status_code == 201
+    assert kpi.json()["id"].startswith("kpi_")
+    assert kpi.json()["status"] == "active"
+    assert kpi.json()["target_value"] == 10
+
+    bad_kpi = client.post(
+        "/v1/kpis",
+        json={
+            "project_id": "boss-dogfood",
+            "kpi_key": "bad_owner",
+            "name": "Bad Owner",
+            "target_value": 1,
+            "owner_role_id": "missing_role",
+            "actor": "ceo",
+        },
+    )
+    assert bad_kpi.status_code == 400
+    assert "owner_role_id" in bad_kpi.json()["detail"]
+
     policy = client.post(
         "/v1/policies",
         json={
@@ -8937,7 +8973,13 @@ def test_canonical_work_objects_have_stable_ids_lifecycles_and_events(client):
     assert meeting.json()["id"].startswith("mtg_")
     assert meeting.json()["status"] == "scheduled"
 
-    for path in ("/v1/departments", "/v1/policies", "/v1/plans", "/v1/meetings"):
+    for path in (
+        "/v1/departments",
+        "/v1/kpis",
+        "/v1/policies",
+        "/v1/plans",
+        "/v1/meetings",
+    ):
         response = client.get(path, params={"project_id": "boss-dogfood"})
         assert response.status_code == 200
         assert response.json()["items"]
@@ -8946,6 +8988,7 @@ def test_canonical_work_objects_have_stable_ids_lifecycles_and_events(client):
     assert events.status_code == 200
     event_types = [item["event_type"] for item in events.json()["items"]]
     assert "department.upserted" in event_types
+    assert "kpi.upserted" in event_types
     assert "policy.upserted" in event_types
     assert "plan.created" in event_types
     assert "meeting.created" in event_types

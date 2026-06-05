@@ -1901,6 +1901,85 @@ describe("createBossApiClient", () => {
     ]);
   });
 
+  it("uses canonical KPI API routes", async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const responses = [
+      {
+        status: 200,
+        body: {
+          project_id: "boss-dogfood",
+          items: [
+            {
+              id: "kpi_1",
+              project_id: "boss-dogfood",
+              kpi_key: "verified_work_throughput",
+              name: "Verified Work Throughput",
+              description: "Completed artifacts that pass required gates.",
+              target_value: 10,
+              current_value: 2,
+              unit: "artifacts/week",
+              status: "active",
+              created_by: "ceo",
+              created_at: "2026-06-05T00:00:00Z",
+              updated_at: "2026-06-05T00:00:00Z",
+            },
+          ],
+        },
+      },
+      {
+        status: 201,
+        body: {
+          id: "kpi_1",
+          project_id: "boss-dogfood",
+          kpi_key: "verified_work_throughput",
+          name: "Verified Work Throughput",
+          target_value: 10,
+          current_value: 3,
+          unit: "artifacts/week",
+          status: "active",
+          created_by: "ceo",
+          created_at: "2026-06-05T00:00:00Z",
+          updated_at: "2026-06-05T00:01:00Z",
+        },
+      },
+    ];
+    const fetchImpl = async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({ url: String(input), init });
+      const response = responses.shift();
+      return new Response(JSON.stringify(response?.body), {
+        status: response?.status ?? 500,
+        headers: { "Content-Type": "application/json" },
+      });
+    };
+    const client = createBossApiClient({
+      baseUrl: "http://127.0.0.1:8000",
+      fetchImpl,
+    });
+
+    const listed = await client.listKpis("boss-dogfood");
+    const created = await client.createKpi({
+      project_id: "boss-dogfood",
+      kpi_key: "verified_work_throughput",
+      name: "Verified Work Throughput",
+      target_value: 10,
+      current_value: 3,
+      unit: "artifacts/week",
+      actor: "ceo",
+    });
+
+    expect(calls[0].url).toBe(
+      "http://127.0.0.1:8000/v1/kpis?project_id=boss-dogfood",
+    );
+    expect(calls[1].url).toBe("http://127.0.0.1:8000/v1/kpis");
+    expect(JSON.parse(String(calls[1].init?.body))).toMatchObject({
+      kpi_key: "verified_work_throughput",
+      target_value: 10,
+      current_value: 3,
+    });
+    expect(listed.items[0].id).toBe("kpi_1");
+    expect(created.current_value).toBe(3);
+  });
+
   it("routes infrastructure lifecycle calls through the shared API contract", async () => {
     const calls: Array<{ url: string; init?: RequestInit }> = [];
     const responses = [

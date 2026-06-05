@@ -19,6 +19,7 @@ import {
   createAccountConnectTeamInviteAction,
   createEnterpriseSupportCaseAction,
   createEnterpriseClusterValidationRunAction,
+  createKpiAction,
   installAgentModuleAction,
   installPackAction,
   linkAccountConnectAction,
@@ -75,6 +76,7 @@ import { fetchEnterpriseFeed } from "../lib/enterprise";
 import { fetchActivityFeed } from "../lib/events";
 import { fetchHealthSnapshotFeed } from "../lib/health-snapshots";
 import { fetchInfrastructureResourceFeed } from "../lib/infrastructure";
+import { fetchKpiFeed } from "../lib/kpis";
 import { fetchMemberFeed, fetchOrgMemberFeed } from "../lib/members";
 import { fetchMeetingFeed } from "../lib/meetings";
 import { fetchMetatronQuery } from "../lib/metatron";
@@ -322,6 +324,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
     decisions,
     tasks,
     meetings,
+    kpis,
     artifacts,
     events,
     healthSnapshots,
@@ -356,6 +359,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
       fetchDecisionFeed(activeProjectId),
       fetchTaskFeed(activeProjectId),
       fetchMeetingFeed(activeProjectId),
+      fetchKpiFeed(activeProjectId),
       fetchArtifactFeed(activeProjectId),
       fetchActivityFeed(activeProjectId),
       fetchHealthSnapshotFeed(activeProjectId),
@@ -763,6 +767,130 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               Incidents must become visible deadletters or blocked states, never silent drops.
             </p>
           </article>
+        </section>
+
+        <section className="panel-stack" aria-labelledby="kpi-heading">
+          <div className="section-head">
+            <div>
+              <span className="eyebrow">Operating metrics</span>
+              <h2 id="kpi-heading">Company KPIs</h2>
+            </div>
+            <p className="status-meta">
+              PRD canonical object coverage: KPIs are durable project-scoped
+              operating metrics, not transient dashboard numbers.
+            </p>
+          </div>
+          <div className="stack-grid">
+            <article className="stack-card">
+              <h3>Add or update KPI</h3>
+              <form action={createKpiAction} className="composer compact">
+                <input type="hidden" name="project_id" value={activeProjectId} />
+                <input type="hidden" name="actor" value={activeActorId} />
+                <div className="input-grid">
+                  <label className="field">
+                    <span>KPI key</span>
+                    <input
+                      className="input"
+                      name="kpi_key"
+                      placeholder="verified_work_throughput"
+                      required
+                    />
+                  </label>
+                  <label className="field">
+                    <span>Name</span>
+                    <input
+                      className="input"
+                      name="name"
+                      placeholder="Verified Work Throughput"
+                      required
+                    />
+                  </label>
+                </div>
+                <div className="input-grid">
+                  <label className="field">
+                    <span>Target</span>
+                    <input
+                      className="input"
+                      name="target_value"
+                      type="number"
+                      min="0.000001"
+                      step="any"
+                      placeholder="10"
+                      required
+                    />
+                  </label>
+                  <label className="field">
+                    <span>Current</span>
+                    <input
+                      className="input"
+                      name="current_value"
+                      type="number"
+                      min="0"
+                      step="any"
+                      defaultValue="0"
+                    />
+                  </label>
+                </div>
+                <div className="input-grid">
+                  <label className="field">
+                    <span>Unit</span>
+                    <input className="input" name="unit" defaultValue="count" />
+                  </label>
+                  <label className="field">
+                    <span>Owner role id</span>
+                    <input
+                      className="input"
+                      name="owner_role_id"
+                      placeholder="role_..."
+                    />
+                  </label>
+                </div>
+                <label className="field">
+                  <span>Description</span>
+                  <textarea
+                    className="input"
+                    name="description"
+                    placeholder="What this KPI proves and how it should be reviewed."
+                  />
+                </label>
+                <button className="button secondary" type="submit">
+                  Save KPI
+                </button>
+              </form>
+            </article>
+            <article className="stack-card">
+              <h3>KPI registry</h3>
+              {!kpis.apiReachable ? (
+                <p className="detail">
+                  {kpis.blockedReason ?? "KPI API unavailable."}
+                </p>
+              ) : kpis.items.length === 0 ? (
+                <p className="detail">
+                  No KPIs recorded yet. Add the first operating metric to make
+                  company health durable.
+                </p>
+              ) : (
+                <div className="feed-list">
+                  {kpis.items.map((kpi) => (
+                    <div key={kpi.id}>
+                      <div className="item-heading">
+                        <strong>{kpi.name}</strong>
+                        <span className="pill">{kpi.status}</span>
+                      </div>
+                      <p className="detail">
+                        {kpi.currentValue} / {kpi.targetValue} {kpi.unit} ·{" "}
+                        {kpi.kpiKey}
+                      </p>
+                      <p className="detail">
+                        {kpi.description ?? "No description."}
+                        {kpi.ownerRoleId ? ` Owner role: ${kpi.ownerRoleId}.` : ""}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </article>
+          </div>
         </section>
 
         <section className="panel-stack">

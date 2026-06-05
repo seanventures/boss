@@ -814,6 +814,39 @@ export type DepartmentListResponse = {
   items: DepartmentSummary[];
 };
 
+export type KpiSummary = {
+  id: string;
+  project_id: string;
+  kpi_key: string;
+  name: string;
+  description?: string;
+  owner_role_id?: string;
+  target_value: number;
+  current_value: number;
+  unit: string;
+  status: string;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type KpiCreateRequest = {
+  project_id: string;
+  kpi_key: string;
+  name: string;
+  description?: string;
+  target_value: number;
+  current_value?: number;
+  unit?: string;
+  owner_role_id?: string;
+  actor?: string;
+};
+
+export type KpiListResponse = {
+  project_id: string;
+  items: KpiSummary[];
+};
+
 export type PolicyRecordSummary = {
   id: string;
   project_id: string;
@@ -3724,6 +3757,16 @@ export function createBossApiClient(config: BossApiClientConfig) {
     },
     createDepartment(payload: DepartmentCreateRequest) {
       return request<DepartmentSummary>("POST", "/v1/departments", {
+        body: payload,
+      });
+    },
+    listKpis(projectId: string) {
+      return request<KpiListResponse>("GET", "/v1/kpis", {
+        query: { project_id: projectId },
+      });
+    },
+    createKpi(payload: KpiCreateRequest) {
+      return request<KpiSummary>("POST", "/v1/kpis", {
         body: payload,
       });
     },

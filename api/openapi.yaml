@@ -1181,6 +1181,39 @@ paths:
                 actor: { type: string, default: ceo }
       responses:
         '201': { description: Department created or updated }
+  /v1/kpis:
+    get:
+      summary: List canonical KPIs for a project
+      parameters:
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: KPI list }
+    post:
+      summary: Create or update a canonical KPI
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id, kpi_key, name, target_value]
+              properties:
+                project_id: { type: string }
+                kpi_key: { type: string }
+                name: { type: string }
+                description: { type: string }
+                target_value: { type: number, exclusiveMinimum: 0 }
+                current_value: { type: number, minimum: 0, default: 0 }
+                unit: { type: string, default: count }
+                owner_role_id: { type: string }
+                actor: { type: string, default: ceo }
+      responses:
+        '201': { description: KPI created or updated }
+        '400': { description: Invalid KPI payload or owner role }
+        '403': { description: Actor is not allowed to manage KPIs }
   /v1/policies:
     get:
       summary: List canonical policy records for a project
