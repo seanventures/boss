@@ -39,5 +39,5 @@
 
 **P0 Count Open (local)**: 0.
 **P0 Count Blocked (external)**: 3.
-**Total Open Gaps**: 3 external blocked; ~3 P2 polish in 3x (toasts, monitoring, pag, release); commercial/selfimp/worker/pm-docs closed per agent commits (9884095 ux(commercial) full, 1bbace1 qa(e2e-selfimp), 6ce9cec devops(worker) e2e, da37ed7 pm(docs) release+AC); P3 pack closed + verified on main by 019e9917-dd0b (c5a5e1c5ca5411ba96a61fe3388d4e4def284e20; 3x integration polish, lint/build/tests green); validate green (lint clean, build success, tests pass); agents doubled ~20 for 3x; grind until complete or blocked.
+**Total Open Gaps**: 3 external blocked only; all local P2/P3 polish closed/verified by 3x agents (commercial 9884095, selfimp 1bbace1, worker 6ce9cec, pm-docs da37ed7, pag 4171995, monitoring, toasts, verify c5a5e1c5ca5411ba96a61fe3388d4e4def284e20 on main + 3x polish, release da37ed7; pack P3 closed + verified; validate green; agents doubled ~20 for 3x; local feasible exhausted; grind complete or blocked.
 - ux-commercial-full closed: commercial local surfaces (edition, packs manager, marketplace blocked, account connect UI states/tests/a11y) per task + 13-bullet .ai/agents/ux-commercial-full.md + pnpm test commercial* + build + lint pass. (P2 + DoD, pack P3 context from GAP-PRD-AUDIT-001).
