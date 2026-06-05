@@ -171,6 +171,7 @@ Recent gap work (KPI, budget, bootstrap, audit logging, route parity) now has pa
 - pag-expand-full 019e9918-23a9-7df0-9b73-6720e14992ad: full pagination on all lists (tasks etc) + tests.
 - worker-tests 019e9918-23a9-7df0-9b73-673f9525c8e9: worker/lease/job e2e + failure paths polish + tests.
 - release-final-docs 019e9918-3800-7a71-b09a-26d5ddded772: release-readiness + user-stories AC expand + validators for pack/3x + prep final.
+- a11y-full 019e9940-e551: full a11y expand test+source for 3x (pack/selfimp/toasts role/alert/commercial/monitoring/pag/worker notes + landmarks/aria/asserts/axe note).
 - PR_PREP_FINAL (this): 3x final PR#3 prep + body + .ai/agents/pr-prep-final.md 13b + commit/push/comment + Codex handoff merge/final.
 - FINAL_VALIDATE: full cmds + build fix (page.tsx dynamic) + re-runs green + .ai/agents/final-validate.md 13b + updates + chore commit + PR#3 comment.
 All with read-first, 13-bullet .ai/agents/*.md, commit/push/PR#3, validate per AGENTS. 3x complete; PR#3 prepped; local exhausted. Poll/integrate if external unblock. FINAL_VALIDATE green; ready.
