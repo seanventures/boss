@@ -66,5 +66,12 @@ describe("executive console accessibility baseline", () => {
     expect(pageSource).toContain('id="decision-inbox"');
     expect(pageSource).toContain("tabIndex={-1}");
     expect(pageSource).toContain("Software Factory evidence");
+    // KPI and budget panels (recent CAN/BUD additions) have labelled regions for a11y + reachability of states UI
+    expect(pageSource).toContain('aria-labelledby="kpi-heading"');
+    expect(pageSource).toContain('id="kpi-heading"');
+    expect(pageSource).toContain('aria-labelledby="budget-control-heading"');
+    expect(pageSource).toContain('id="budget-control-heading"');
+    expect(pageSource).toContain('aria-labelledby="budget-allocations-heading"');
+    expect(pageSource).toContain('id="budget-allocations-heading"');
   });
 });

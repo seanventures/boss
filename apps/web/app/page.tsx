@@ -866,8 +866,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                 </p>
               ) : kpis.items.length === 0 ? (
                 <p className="detail">
-                  No KPIs recorded yet. Add the first operating metric to make
-                  company health durable.
+                  No KPIs defined yet. Use the Add or update KPI form to record
+                  the first operating metric and make company health durable.
                 </p>
               ) : (
                 <div className="feed-list">
@@ -1152,11 +1152,11 @@ export default async function HomePage({ searchParams }: HomePageProps) {
           </div>
         </section>
 
-        <section className="panel-stack">
+        <section className="panel-stack" aria-labelledby="budget-control-heading">
           <div className="section-head">
             <div>
               <span className="eyebrow">Budget Control Center</span>
-              <h2>Live spend, forecast, and cap pressure.</h2>
+              <h2 id="budget-control-heading">Live spend, forecast, and cap pressure.</h2>
             </div>
             <p className="status-meta">
               Source: `/v1/budget/status` for project {activeProjectId}.
@@ -1242,11 +1242,11 @@ export default async function HomePage({ searchParams }: HomePageProps) {
           </article>
         </section>
 
-        <section className="panel-stack">
+        <section className="panel-stack" aria-labelledby="budget-allocations-heading">
           <div className="section-head">
             <div>
               <span className="eyebrow">Budget Allocations</span>
-              <h2>Hierarchical spend envelopes for departments and initiatives.</h2>
+              <h2 id="budget-allocations-heading">Hierarchical spend envelopes for departments and initiatives.</h2>
             </div>
             <p className="status-meta">
               Child allocations and reservations cannot exceed the parent envelope.
