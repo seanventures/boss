@@ -1,0 +1,32 @@
+id: SnapshotHealth
+version: 1
+description: Product-facing health snapshot backed by health_snapshots and Mission Control status APIs.
+backing_runtime:
+  table: health_snapshots
+  api: /v1/health-snapshots
+fields:
+  - name: id
+    type: string
+    required: true
+  - name: project_id
+    type: string
+    required: true
+  - name: budget_state
+    type: string
+    required: true
+  - name: queue_state
+    type: object
+    required: true
+  - name: workload_state
+    type: object
+    required: true
+  - name: incident_state
+    type: object
+    required: true
+  - name: top_risks
+    type: array
+    items: object
+    required: true
+invariants:
+  - Health snapshots summarize live control-plane state and must not invent provider readiness.
+  - Refreshing a snapshot emits health.snapshot_refreshed.
