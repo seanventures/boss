@@ -1,6 +1,6 @@
 # BOSS Autonomous Delivery Status
 
-**Last updated**: 2026-06-05T23:59Z (LOCAL FINAL VALIDATION UPDATE on PR #3 head `644c3d3`: `make lint` PASS, `pnpm --filter boss-web build` PASS, full `make test` PASS with 97 web + 276 API/worker tests, focused ProviderAdapter/worker regressions PASS, targeted web regression 65 PASS, `make smoke` PASS, `make release-blockers` reports only expected external blockers. GitHub Actions CI is still UNSTABLE because job `test-and-lint` fails before steps start: zero steps, no runner name, and `log not found`; treat as external GitHub runner/pre-start blocker. E2E_REGRESSION 3x final + PR_PREP remain complete; all local closed/verified.)
+**Last updated**: 2026-06-05T23:59Z (LOCAL FINAL VALIDATION UPDATE on PR #3 head `644c3d3`: `make lint` PASS, `pnpm --filter boss-web build` PASS, full `make test` PASS with 97 web + 276 API/worker tests, focused ProviderAdapter/worker regressions PASS, targeted web regression 65 PASS, `make smoke` PASS, `make release-blockers` reports only expected external blockers. GitHub Actions CI is UNSTABLE due account billing/spending-limit blocker: the check-run annotation for `test-and-lint` says the job was not started because recent account payments failed or the spending limit needs to be increased. E2E_REGRESSION 3x final + PR_PREP remain complete; all local closed/verified.)
 **Repo root**: /Volumes/DataSSD1/test/boss
 **Git remote**: https://github.com/seanheiney/boss
 **Current branch**: codex/spec-closure-audit (clean; PR#3 prepped by PR_PREP_FINAL for merge/final)

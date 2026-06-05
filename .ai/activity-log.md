@@ -51,7 +51,8 @@ Validation:
 - `make release-blockers`: expected external blockers only (hosted Account Connect, hosted marketplace/team/billing/support, enterprise SCIM/identity, live cluster verification, ProviderOps live write credentials/approval).
 GitHub CI:
 - PR #3 check `test-and-lint` for head 644c3d3 failed before steps started: jobs array has zero steps, runner_name is empty, and `gh run view --log-failed` returns `log not found`.
-- Local tests reproduce no code failure; this is tracked as GitHub runner/pre-start external blocker.
+- Rechecked latest head e7aed1d: same pre-step failure. Check-run annotation says: "The job was not started because recent account payments have failed or your spending limit needs to be increased. Please check the 'Billing & plans' section in your settings."
+- Local tests reproduce no code failure; this is tracked as GitHub account billing/spending-limit external blocker.
 Next:
 - Do not claim hosted/cloud/enterprise/live-provider production readiness until external configuration and approvals exist.
 - Merge/review PR #3 when the GitHub runner issue is resolved or when maintainers accept local validation evidence.
