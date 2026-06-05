@@ -82,3 +82,14 @@ worker-drain-once: install-python
 sandbox-template:
 	mkdir -p tmp
 	rsync -a --delete templates/boss-sandbox/ tmp/boss-sandbox/
+
+# Security/DevOps P2: dep audit (per .ai/security-review). Reports current state; recommends full tools for CI.
+# No auto-fix; dev-only vulns expected in some (vite etc for web dev server).
+deps-audit: install-python
+	@echo "=== Python runtime deps (freeze) ==="
+	$(PYTHON) -m pip list --format=freeze | head -30 || true
+	@echo ""
+	@echo "=== Web pnpm audit (dev deps only; prod build unaffected) ==="
+	cd apps/web && pnpm audit --json 2>/dev/null | python -c 'import sys,json; d=json.load(sys.stdin); print(json.dumps(d.get("advisories", {}) or d, indent=2)[:2000])' || echo "(pnpm audit output or no vulns; run in web/ for details)"
+	@echo ""
+	@echo "For full: pip install pip-audit safety; add to CI. Current dev vulns (if any) noted in .ai/security-review.md; not prod runtime."
