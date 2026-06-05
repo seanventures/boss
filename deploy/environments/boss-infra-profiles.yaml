@@ -1,0 +1,267 @@
+kind: BossInfraEnvironmentProfiles
+version: 0.1.0
+profiles:
+  - id: local_dogfood
+    display_name: Local dogfood
+    environment: local
+    edition: community
+    purpose: Local product development, smoke tests, and owner dogfood.
+    runtime:
+      mode: docker_compose
+      deploy_artifact: infra/docker-compose.yml
+      external_verification_required: false
+    datastore:
+      postgres: local_docker
+      postgres_ha_required: false
+      backup_required: false
+      artifact_store: local_filesystem
+    auth:
+      api_auth_required: false
+      oidc_or_saml_required: false
+      account_connect_required: false
+    scaling:
+      strategy: manual_local
+      budget_governor_wins: true
+      cloud_spillover: disabled
+      api_replicas: { min: 1, max: 1 }
+      web_replicas: { min: 1, max: 1 }
+      worker_pools:
+        - id: local_general
+          job_kinds: [general, metatron.plan, software_factory.proposal]
+          min_replicas: 1
+          max_replicas: 2
+          scale_signal: manual_or_queue_depth
+    providerops:
+      read_only_sync_allowed: true
+      write_rollout_default: disabled
+      require_changeset_for_write: true
+      require_budget_reservation_for_write: true
+      require_approval_for_destructive: true
+      require_resource_receipt: true
+      require_rollback_for_production_dns_or_deploy: true
+      raw_provider_secrets_to_agents: false
+    rollout_gates:
+      required_commands: [make lint, make test, make build, make smoke]
+      required_evidence: [test_report, smoke_result]
+      approval_required: false
+      rollback_required: false
+    kill_switches:
+      freeze_all_provisioning: true
+      freeze_model_api_spend: true
+      freeze_public_cloud_spillover: true
+      enter_local_only_mode: true
+
+  - id: staging_cluster
+    display_name: Staging cluster
+    environment: staging
+    edition: enterprise_self_hosted
+    purpose: Real Kubernetes rollout validation before production.
+    runtime:
+      mode: kubernetes
+      deploy_artifact: deploy/helm/boss
+      alternate_artifact: deploy/kubernetes/base
+      external_verification_required: true
+    datastore:
+      postgres: managed_postgres
+      postgres_ha_required: false
+      backup_required: true
+      artifact_store: rwx_pvc_or_object_storage
+    auth:
+      api_auth_required: true
+      oidc_or_saml_required: false
+      account_connect_required: false
+    scaling:
+      strategy: hpa_plus_boss_worker_pools
+      budget_governor_wins: true
+      cloud_spillover: approval_required
+      api_replicas: { min: 2, max: 5 }
+      web_replicas: { min: 2, max: 5 }
+      worker_pools:
+        - id: staging_general
+          job_kinds: [general, providerops.sync.readonly, software_factory.proposal]
+          min_replicas: 1
+          max_replicas: 10
+          scale_signal: cpu_queue_depth_budget_headroom
+        - id: staging_release
+          job_kinds: [github.deployment.create, deployment.health_check]
+          min_replicas: 0
+          max_replicas: 3
+          scale_signal: approved_release_jobs
+    providerops:
+      read_only_sync_allowed: true
+      write_rollout_default: disabled
+      require_changeset_for_write: true
+      require_budget_reservation_for_write: true
+      require_approval_for_destructive: true
+      require_resource_receipt: true
+      require_rollback_for_production_dns_or_deploy: true
+      raw_provider_secrets_to_agents: false
+    rollout_gates:
+      required_commands:
+        - make lint
+        - make test
+        - make build
+        - make smoke
+        - make k8s-validate
+        - make release-blockers
+      required_evidence:
+        - test_report
+        - k8s_validation
+        - release_blocker_report
+        - staging_health_check
+      approval_required: true
+      rollback_required: true
+    kill_switches:
+      freeze_all_provisioning: true
+      freeze_destructive_actions: true
+      freeze_model_api_spend: true
+      freeze_public_cloud_spillover: true
+      drain_cloud_workers: true
+
+  - id: production_control_plane
+    display_name: Production control plane
+    environment: production
+    edition: cloud_or_enterprise
+    purpose: Customer-facing BOSS control plane with managed reliability controls.
+    runtime:
+      mode: kubernetes
+      deploy_artifact: deploy/helm/boss
+      external_verification_required: true
+    datastore:
+      postgres: managed_ha_postgres
+      postgres_ha_required: true
+      backup_required: true
+      backup_restore_drill_required: true
+      artifact_store: object_storage_preferred
+    auth:
+      api_auth_required: true
+      oidc_or_saml_required: true
+      account_connect_required: true
+    scaling:
+      strategy: hpa_plus_boss_budget_aware_autoscaler
+      budget_governor_wins: true
+      cloud_spillover: approval_required
+      api_replicas: { min: 3, max: 12 }
+      web_replicas: { min: 3, max: 12 }
+      worker_pools:
+        - id: prod_general
+          job_kinds: [general, metatron.plan, providerops.sync.readonly]
+          min_replicas: 2
+          max_replicas: 30
+          scale_signal: queue_depth_latency_budget_provider_health
+        - id: prod_release
+          job_kinds: [deployment.plan, deployment.health_check]
+          min_replicas: 0
+          max_replicas: 8
+          scale_signal: approved_release_jobs
+        - id: prod_providerops
+          job_kinds: [providerops.sync.readonly, providerops.reconcile]
+          min_replicas: 1
+          max_replicas: 8
+          scale_signal: provider_sync_backlog
+    providerops:
+      read_only_sync_allowed: true
+      write_rollout_default: disabled
+      require_changeset_for_write: true
+      require_budget_reservation_for_write: true
+      require_approval_for_destructive: true
+      require_resource_receipt: true
+      require_rollback_for_production_dns_or_deploy: true
+      raw_provider_secrets_to_agents: false
+    rollout_gates:
+      required_commands:
+        - make lint
+        - make test
+        - make build
+        - make smoke
+        - make k8s-validate
+        - make release-blockers
+      required_evidence:
+        - test_report
+        - k8s_validation
+        - release_blocker_report
+        - backup_restore_drill
+        - production_change_decision
+        - rollback_plan
+      approval_required: true
+      rollback_required: true
+    kill_switches:
+      freeze_all_provisioning: true
+      freeze_destructive_actions: true
+      freeze_model_api_spend: true
+      freeze_public_cloud_spillover: true
+      enter_read_only_provider_mode: true
+      drain_cloud_workers: true
+
+  - id: enterprise_private_cluster
+    display_name: Enterprise private cluster
+    environment: enterprise_private
+    edition: enterprise_self_hosted
+    purpose: Customer-owned private or detached enterprise deployment.
+    runtime:
+      mode: kubernetes
+      deploy_artifact: deploy/helm/boss
+      alternate_artifact: deploy/kubernetes/base
+      external_verification_required: true
+    datastore:
+      postgres: customer_managed_ha_postgres
+      postgres_ha_required: true
+      backup_required: true
+      backup_restore_drill_required: true
+      artifact_store: customer_managed_object_storage_or_rwx
+    auth:
+      api_auth_required: true
+      oidc_or_saml_required: true
+      scim_required: true
+      account_connect_required: false
+    scaling:
+      strategy: private_worker_pools
+      budget_governor_wins: true
+      cloud_spillover: disabled_by_default
+      api_replicas: { min: 3, max: 10 }
+      web_replicas: { min: 2, max: 8 }
+      worker_pools:
+        - id: enterprise_private_general
+          job_kinds: [general, providerops.sync.readonly, software_factory.proposal]
+          min_replicas: 2
+          max_replicas: 25
+          scale_signal: queue_depth_private_capacity_budget
+        - id: enterprise_private_local_runner
+          job_kinds: [local_model, local_only_data, restricted_providerops]
+          min_replicas: 1
+          max_replicas: 20
+          scale_signal: local_only_queue_depth
+    providerops:
+      read_only_sync_allowed: true
+      write_rollout_default: disabled
+      require_changeset_for_write: true
+      require_budget_reservation_for_write: true
+      require_approval_for_destructive: true
+      require_resource_receipt: true
+      require_rollback_for_production_dns_or_deploy: true
+      raw_provider_secrets_to_agents: false
+    rollout_gates:
+      required_commands:
+        - make lint
+        - make test
+        - make build
+        - make smoke
+        - make k8s-validate
+        - make release-blockers
+      required_evidence:
+        - test_report
+        - k8s_validation
+        - customer_secret_inventory
+        - backup_restore_drill
+        - live_cluster_validation_run
+        - rollback_plan
+      approval_required: true
+      rollback_required: true
+    kill_switches:
+      freeze_all_provisioning: true
+      freeze_destructive_actions: true
+      freeze_model_api_spend: true
+      freeze_public_cloud_spillover: true
+      enter_local_only_mode: true
+      enter_read_only_provider_mode: true
+      drain_cloud_workers: true

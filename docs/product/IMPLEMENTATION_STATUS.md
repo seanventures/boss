@@ -248,6 +248,7 @@ The current founder-dogfood control loop is:
 - Real Slack/email delivery remains disabled unless policy and provider credentials explicitly permit it.
 - Enterprise SSO rollout remains environment-specific, but the runtime now supports real OIDC verification plus delegated org-wide RBAC in the current member directory.
 - External hosted and enterprise rollout readiness can be checked locally with `make release-blockers`, which runs a no-network prerequisite report for hosted Account Connect, hosted marketplace/team/billing, Enterprise SCIM/SSO, external support routing, self-hosted package artifacts, live cluster rollout evidence, and ProviderOps write enablement. The report intentionally distinguishes local implementation readiness from live external verification and does not print secret values.
+- Infra scale and rollout posture is now captured in `deploy/environments/boss-infra-profiles.yaml` and documented in `docs/operations/INFRA_RUNBOOK.md`. `make infra-validate` enforces the environment matrix for local dogfood, staging, production, and private enterprise: non-local API auth, production/private HA Postgres and restore drills, Budget Governor precedence over autoscaling, provider-write gates, rollout approvals, rollback evidence, and budget kill switches.
 
 ## Local verification baseline
 
@@ -258,6 +259,7 @@ The current local release-grade baseline for this repo is:
 - `make build`
 - `make smoke`
 - `make k8s-validate`
+- `make infra-validate`
 - `make release-blockers`
 
 The latest passing local state at the time of this update was:
@@ -266,6 +268,7 @@ The latest passing local state at the time of this update was:
 - production web build passed
 - smoke passed
 - OpenAPI parsed successfully
+- infra environment profiles validate locally
 - external rollout blockers are reportable locally without calling hosted/provider services
 
 ## Where to look next

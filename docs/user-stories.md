@@ -566,3 +566,16 @@ Acceptance criteria:
 - Given hosted/provider environment variables are configured, when the readiness checker runs, then BOSS marks those paths as requiring live external verification rather than claiming production readiness.
 - Given local Community mode is reviewed, when the readiness checker runs without hosted auth, then BOSS reports Community local mode as ready.
 - Given the checker formats output, when secret-bearing environment variables are present, then BOSS reports only variable names and never prints secret values.
+
+### Story OPS-007: Operate Scalable Infra Environments
+
+As a platform operator, I want BOSS infra environments defined as a validated matrix, so that local, staging, production, and private-enterprise deployments scale without weakening safety gates.
+
+Acceptance criteria:
+
+- Given the infra profile matrix is reviewed, when `make infra-validate` runs, then BOSS validates local dogfood, staging, production, and private-enterprise environment contracts.
+- Given a non-local environment profile, when validation runs, then API auth, rollout approval, rollback evidence, `make k8s-validate`, and `make release-blockers` are required.
+- Given a production or private-enterprise profile, when validation runs, then OIDC/SAML, HA Postgres, backups, and restore-drill evidence are required.
+- Given worker pools are declared, when validation runs, then each pool has job kinds, a scale signal, and an ordered non-negative replica range.
+- Given any environment profile, when ProviderOps writes are described, then ChangeSet, BudgetReservation, destructive approval, ResourceReceipt, rollback, and no-raw-secret gates remain mandatory.
+- Given autoscaling is configured, when validation runs, then Budget Governor precedence over Autoscaler is required.

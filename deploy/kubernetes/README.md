@@ -24,7 +24,9 @@ Before applying:
 1. Create a real Postgres database and set `DATABASE_URL` in a Secret named `boss-secrets`.
 2. Copy `base/secret-template.yaml`, replace every placeholder with real secret refs/values, and apply it yourself.
 3. Confirm the API keys in `BOSS_API_KEYS`, `BOSS_API_KEY`, and `BOSS_WORKER_API_KEY` line up with `BOSS_API_KEY_PRINCIPALS`.
-4. Run `make k8s-validate`.
+4. Run `make k8s-validate` and `make infra-validate`.
 5. Apply with your chosen overlay: `kubectl apply -k deploy/kubernetes/base`.
 
 Do not apply production DNS, cloud provisioning credentials, model credentials, or provider write switches until the relevant BOSS policies, ChangeSets, approvals, BudgetReservations, and rollback plans are configured.
+
+Use `docs/operations/INFRA_RUNBOOK.md` and `deploy/environments/boss-infra-profiles.yaml` to choose the correct local, staging, production, or private-enterprise operating profile before scaling worker pools or enabling provider writes.

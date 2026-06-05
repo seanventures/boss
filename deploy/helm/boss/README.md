@@ -24,4 +24,4 @@ kubectl create secret generic boss-secrets \
 helm upgrade --install boss deploy/helm/boss --namespace boss
 ```
 
-Use `make k8s-validate` from the repository root to validate chart metadata, values, and guardrails. This environment does not assume Helm is installed; run `helm lint deploy/helm/boss` in release CI or on a workstation with Helm available.
+Use `make k8s-validate` from the repository root to validate chart metadata, values, and guardrails. Use `make infra-validate` to validate the local, staging, production, and private-enterprise scaling contracts in `deploy/environments/boss-infra-profiles.yaml`. This environment does not assume Helm is installed; run `helm lint deploy/helm/boss` in release CI or on a workstation with Helm available.

@@ -28,6 +28,7 @@ This release adds the commercial, Account Connect, enterprise-governance, SCIM, 
 - Added per-project communications channel rollout policies so Slack/email real sends require explicit `real_send_allowed` policy, allowed data boundary, BudgetReservation, Receipt, provider credentials, and visible policy-block decisions when not configured.
 - Added per-project Enterprise identity rollout policies so OIDC/SAML/SCIM metadata does not imply live rollout; SAML ACS and SCIM provisioning fail closed until the matching policy explicitly allows authentication or provisioning.
 - Added ProviderOps deployment environment rollout policies so provider-backed staging/production DeploymentRuns and direct deployment-skill ChangeSets fail visibly until an explicit environment policy, required BudgetReservation, approval gate, health-check posture, and rollback plan are present.
+- Added validated infra environment profiles and an operations runbook for local dogfood, staging, production, and private-enterprise scaling, including Budget Governor precedence, provider-write gates, rollout approvals, rollback evidence, HA Postgres requirements, and kill-switch expectations.
 - Added OpenAPI, TypeScript API client, specpack objects, workflows, policies, user stories, and traceability coverage for the new commercial and enterprise runtime surfaces.
 - Changed web lint to generate Next route types before TypeScript checks so clean-checkout validation does not depend on a prior production build.
 

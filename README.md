@@ -37,6 +37,7 @@ If a required credential is missing, the API must fail closed and create visible
 - `docs/product/TECHNICAL_SPEC-v2.0.md`: active technical architecture companion
 - `docs/product/ROADMAP-v2.0.md`: product maturity roadmap
 - `docs/product/IMPLEMENTATION_STATUS.md`: shipped runtime status and current constraints
+- `docs/operations/INFRA_RUNBOOK.md`: scaling, environment, rollout, and rollback runbook
 - `CHANGELOG.md`: release notes
 - `api/openapi.yaml`: active API contract
 - `db/schema.sql`: active starter schema
@@ -76,6 +77,9 @@ If a required credential is missing, the API must fail closed and create visible
 - `make build`: run the production web build
 - `make seed`: apply schema and seed the dogfood org/workspace/project
 - `make smoke`: run a local schema/bootstrap smoke check
+- `make k8s-validate`: validate Kubernetes and Helm deployment guardrails
+- `make infra-validate`: validate the environment scaling and rollout profile matrix
+- `make release-blockers`: report external hosted/provider rollout blockers without making network calls
 - `make real-smoke-plan`: run a real reservation -> OpenAI plan flow against local Postgres
 - `make real-smoke-pr`: run a real reservation -> queued PR job -> leased worker -> sandbox PR proposal flow
 - `make real-smoke-merge`: run the full sandbox PR proposal flow and, when merge policy is enabled, approve and execute the merge job
