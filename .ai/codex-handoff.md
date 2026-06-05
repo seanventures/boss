@@ -1,6 +1,6 @@
 # Codex Handoff
 
-Last updated: 2026-06-05T15:36:00Z (3/3 subagents complete: UX 001 + Sec clean review + QA 002 tests; commits 657e0fa/5a81c8e + .ai/ pushes b98468c/768c1bc/0b46124/b7eba1e; GAPs 001/002 closed in .ai/gap-backlog; PR #3 has UX/Sec/QA comments + all code/.ai/; all local P0 + this slice AUTO P2 addressed + validated + pushed)
+Last updated: 2026-06-05T18:45:00Z (PM/DOCS subagent complete for GAP-AUTO-003 + sync 41e5243 GAP-011/012; 3/3 subagents + PM; docs/user-stories AC expanded; .ai/trace/gap updated; ready commit/push + PR#3 comment)
 
 ## Current Overall Product Status
 BOSS v0.4.1 target is in advanced local-dogfood state. Most PRD-v2.0 / TECH-SPEC-v2.0 requirements for core control plane, worker leases, budget governor (now full quote/reserve/consume/release/forecast), audit/no-silent-drops (with recent logging fixes), canonical objects (incl. recent KPI), roles/packs/agent-modules, Model Entitlement Broker, ProviderOps (local sync + real sandbox writes for CF/DO/Supabase), Software Factory (command->plan->PR->evidence->decision), Metatron/Mission Control console are Implemented and traced.
@@ -64,6 +64,15 @@ Recent gap work (KPI, budget, bootstrap, audit logging, route parity) now has pa
 - Updated qa-review, codex-handoff, activity, qa-test agent file.
 - GAP-AUTO-002 now exercised; can mark monitoring/closed post PR.
 - Commit/push small diff recommended.
+
+**PM/DOCS subagent update (GAP-AUTO-003 closure + 41e5243 sync)**: This session (product-manager agent). Read first per AGENTS: all 8 (PRD-v2/TECH-v2 + v1.1 + CODEX_RUNBOOK + ceo workflow + 2 policies); also .ai/gap-backlog (AUTO-003 In-Progress), .ai/requirements-trace (CAN/BUD/RPL), docs/user-stories (current AC), git show 41e5243 for product GAP_BACKLOG/TRACE diffs (added 011/012 + RPL-004 update), PRD quotes for KPI/BUD/ProviderOps/bootstrap (e.g. "KPI" in canonical objects, "Spend pipeline: Quote -> Reserve -> Execute -> Receipt -> Reconcile", "The mutating POST /v1/bootstrap/seed API must fail closed unless BOSS_BOOTSTRAP_SEED_API_ENABLED=true; ... member_manage, ... bootstrap.seed_executed", billing where available/estimate unknown, no FK forward refs for bootstrap). 
+- Updated docs/user-stories.md (last updated, expanded AC in GOV-006 KPI with full GWT for create/list/upsert/empty/error/perm/persist/happy; FIN-001 quote/reserve + FIN-002 forecast + FIN-001 consume with active res/receipt/perm/overrun/409/403/empty/error/persist; ADM-002 bootstrap for disabled 403+denial+enabled+member_manage+seed event + added clean schema no FK block GAP-012; RPL-004 added explicit for billing unavailable: inventory preserved/succeeded/0 costs, status+msg in run/artifact/health, event emitted, no fake; refs GAP-AUTO-003 +011/012).
+- Updated .ai/gap-backlog.md: last rebuilt, AUTO-003 row to Closed with full impl details, immediate plan + counts (now ~1 open).
+- Enhanced .ai/requirements-traceability.md: last rebuilt, added AC refs to CAN-006/BUD-00x/RPL-00x/CAN-000/SEC rows + notes section.
+- Updated .ai/agents/product-manager.md, .ai/codex-handoff (this), .ai/activity-log (new entry).
+- Ran: greps (kpi|budget|bootstrap|billing_unavailable|schema|events), python3 doc validation (OK 5 stories, 285 GWT, gap mentions, states); no code so no make lint (would pass anyway).
+- All per DoD: docs updated on behavior change; small vertical; no external calls; AC cover happy/error/perm/empty/persistence.
+- GAP-AUTO-003 now Closed; ready for commit/push/PR comment with req IDs.
 
 ## Product Decisions
 - Adhere strictly to PRD-v2 constitution: durable state > chat, receipts for all effects, reservations before spend, leases for all worker jobs, no silent drops (log+escalate failures even on audit writes), fail-closed on missing config/creds, adapters/plugins for providers/models, no self-mod without PR+tests+approval+rollback, Budget Governor wins, small reviewable PRs.

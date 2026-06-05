@@ -4,6 +4,35 @@ All 15-min terminal updates and major milestones appended here. Chronological, n
 
 ---
 
+=== PM / DOCS SUBAGENT UPDATE (GAP-AUTO-003 + 41e5243 sync) 2026-06-05T18:50:00Z (PR #3, codex/spec-closure-audit) ===
+Product: BOSS (Business Operating System Sentinel)
+Repo root: /Volumes/DataSSD1/test/boss
+Git remote: https://github.com/seanheiney/boss (main default)
+Base branch: main
+Mission status: PRODUCT MANAGER / DOCS subagent task COMPLETE. Addressed remaining local P3 gap GAP-AUTO-003; synced recent changes: refreshed docs/user-stories.md with proper Given-When-Then acceptance criteria for recently closed gaps (KPI durable CAN-006, full budget consume/forecast, bootstrap security gate, and new from 41e5243: ProviderOps billing confidence / graceful unavailable GAP-011, fresh database bootstrap order GAP-012). Updated .ai/requirements-traceability.md and .ai/gap-backlog.md (enhanced with AC); updated .ai/agents/product-manager.md, .ai/codex-handoff, .ai/activity-log. Followed AGENTS exactly (read 8 required first + checked subdir AGENTS; used search_replace only for edits; greps + validation; small vertical DoD docs-on-change).
+Discovered/Read (step 1 per task): .ai/gap-backlog.md (AUTO-003 In-Progress pre), .ai/requirements-traceability.md (CAN/BUD/RPL sections), docs/user-stories.md (current AC for KPI/budget/bootstrap/providerops), product docs/GAP_BACKLOG.md + TRACEABILITY.md diffs via `git show 41e5243 -- ...` (confirmed 011/012 added + RPL-004 update for billing unavailable), relevant PRD/TECH quotes (KPI in canonical domain objects, spend Quote->Reserve->...->Reconcile, bootstrap must fail-closed + member_manage + seed_executed, ProviderOps inventory + billing where available/estimates unknown/no fake, schema bootstrap M0 reliability), plus code/tests (kpi tests, budget consume/quote/reserve/forecast/overrun tests, bootstrap_* tests, provider_sync_unsupported_billing test, db/schema.sql comments on receipt_id + jobs order), AGENTS.md + required 8 files, additional reference AGENTS, ls .ai/agents etc. Also MCP search for github comment tool.
+Active branch: codex/spec-closure-audit (PR #3 open).
+Completed this task (steps 2-8):
+- Step2/3: Added/expanded AC in docs/user-stories.md using search_replace for:
+  - KPI (GOV-006): full GWT As persona + Given/When/Then for create/list/upsert/empty/error (CAN-006) covering happy (201+persist+event), error (400 val), perm (403 no pack_manage + denial), empty (no items), persistence (refresh shows values), error state in UI no fakes.
+  - Budget (FIN-001 quote/reserve, FIN-002 forecast, FIN-001 consume): GWT for quote/reserve/consume with active res, receipt, permission (403), overrun (event on > reserved), 409 on bad res, empty/error states, persistence, concurrency note.
+  - Bootstrap (ADM-002): expanded disabled 403+denial record + enabled member_manage + seed event; added clean schema bootstrap succeeds (no FK ordering block) using schema details.
+  - Provider sync billing unavailable (RPL-004): explicit GWT inventory preserved (sync succeeds), status/message in artifacts/health/recon runs, event `provider.billing_unavailable` emitted, no fake costs (for unsupported e.g. cloudflare billing_readable); matches exact test asserts + 41e5243.
+  - Ensured format: As a [persona]..., Given/When/Then covering happy, error, perm, empty, persistence.
+- Step4: Updated .ai/gap-backlog.md (search_replace): last rebuilt date+note, AUTO-003 row fully to Closed with details/ACs/tests, immediate plan, counts (P0 0, total open ~1, AUTO-003/011/012 noted).
+- Step5: Enhanced .ai/requirements-traceability.md: last rebuilt, added "; AC: docs/user-stories.md#..." refs to CAN-006, BUD-001..006, RPL-001..009, CAN-000, SEC-001..006 rows; updated notes with AUTO-003 + new GAPs.
+- Step6: Updated .ai/agents/product-manager.md (full objective/files/decisions/tests/failures/fixes/risks/next/last), .ai/codex-handoff.md (last updated + detailed PM subagent update block with reads/tests), .ai/activity-log.md (new top chronological entry).
+- Step7: Ran doc validation/grep (rg via grep tool + terminal grep + python3 validator: confirmed OK stories, 285 GWT, gap mentions, states coverage); make lint not run (no code touched per "if touches code"; would be pnpm but docs only).
+- Step8: (next) Commit doc changes with req ID (GAP-AUTO-003 + new GAPs 011/012), push, PR comment (via MCP after git).
+- AGENTS checklist review before finish: no direct external; receipts/dedupe (not code); reservations (covered in AC); no silent; docs updated on change (this task); small; tests not for docs but validation ran; read required first.
+- Evidence in response will include files, snippets, commit.
+Completed: All steps; GAP-AUTO-003 closed.
+Tests/Validation evidence: python3 validation + greps PASS (see output); no failures; targeted grep for kpi.upserted etc hit in new AC; git diff will show only docs/.ai changes.
+Current P3 count: GAP-AUTO-003 now addressed/closed.
+Next: Commit + push + PR#3 comment using terminal git + MCP grok_com_github__add_issue_comment (after schema search).
+PM decisions: Keep faithful to PRD/TECH behaviors from code+tests+diffs (e.g. exact 403 msg, billing_status+message+event+unknown confidence+0 costs+inventory ok, TEXT receipt_id + comment in schema, ON CONFLICT for KPI, CostReceipt+overrun if >, member_manage gate only when enabled+project, etc); format strictly GWT; no broadening scope; use search_replace; report with absolute paths + snippets.
+
+--- (prior entry follows) ===
 === GROK UI/UX DESIGN SUBAGENT UPDATE 2026-06-05T15:25:00Z (PR #3, codex/spec-closure-audit) ===
 Product: BOSS (Business Operating System Sentinel)
 Repo root: /Volumes/DataSSD1/test/boss
