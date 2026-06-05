@@ -57,6 +57,9 @@ from .schemas import (
     BudgetAllocationCreateRequest,
     BudgetAllocationListResponse,
     BudgetAllocationSummary,
+    BudgetConsumeRequest,
+    BudgetConsumeResponse,
+    BudgetForecastResponse,
     BudgetQuoteRequest,
     BudgetQuoteResponse,
     BudgetReservationSummary,
@@ -5624,6 +5627,23 @@ def budget_status(scope_type: str, scope_id: str) -> BudgetStatusResponse:
         )
 
 
+@app.get("/v1/budget/forecast", response_model=BudgetForecastResponse)
+def budget_forecast(
+    scope_type: str,
+    scope_id: str,
+    horizon_hours: int = 24,
+) -> BudgetForecastResponse:
+    if scope_type != "project":
+        raise HTTPException(status_code=400, detail="Only project scope is supported.")
+
+    with begin(engine) as connection:
+        try:
+            forecast = budget.forecast(connection, scope_id, horizon_hours)
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        return BudgetForecastResponse(**forecast)
+
+
 @app.post("/v1/budget/quote", response_model=BudgetQuoteResponse)
 def quote_budget(payload: BudgetQuoteRequest) -> BudgetQuoteResponse:
     with begin(engine) as connection:
@@ -5663,6 +5683,51 @@ def release_budget(payload: BudgetReleaseRequest) -> BudgetReleaseResponse:
             payload.reason,
         )
         return BudgetReleaseResponse(**result)
+
+
+@app.post("/v1/budget/consume", response_model=BudgetConsumeResponse)
+def consume_budget(payload: BudgetConsumeRequest) -> BudgetConsumeResponse:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection,
+            payload.project_id,
+            payload.actor,
+            "budget_manage",
+        )
+        try:
+            result = budget.consume(
+                connection,
+                payload.project_id,
+                payload.reservation_id,
+                payload.receipt_id,
+                payload.category,
+                payload.skill_or_model_id,
+                payload.estimated_usd_micros,
+                payload.actual_usd_micros,
+                payload.actor,
+            )
+        except ValueError as error:
+            record_budget_denial_event(
+                payload.project_id,
+                payload.actor,
+                "budget.consume_denied",
+                "budget_reservation",
+                payload.reservation_id,
+                {
+                    "receipt_id": payload.receipt_id,
+                    "category": payload.category,
+                    "skill_or_model_id": payload.skill_or_model_id,
+                    "reason": str(error),
+                },
+            )
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        return BudgetConsumeResponse(
+            status=result["status"],
+            reservation_id=result["reservation_id"],
+            budget_state=result["budget_state"],
+            message=result["message"],
+            cost_receipt=cost_receipt_summary_from_row(result["cost_receipt"]),
+        )
 
 
 @app.post("/v1/worker/poll", response_model=WorkerPollResponse)

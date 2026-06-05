@@ -653,6 +653,118 @@ class BudgetGovernor:
             "message": reason,
         }
 
+    def consume(
+        self,
+        connection: Connection,
+        project_id: str,
+        reservation_id: str,
+        receipt_id: str,
+        category: str,
+        skill_or_model_id: str,
+        estimated_usd_micros: int,
+        actual_usd_micros: Optional[int],
+        actor: str,
+    ) -> dict[str, Any]:
+        if estimated_usd_micros < 0:
+            raise ValueError("estimated_usd_micros must be non-negative.")
+        if actual_usd_micros is not None and actual_usd_micros < 0:
+            raise ValueError("actual_usd_micros must be non-negative.")
+        reservation = self.assert_active_reservation(connection, project_id, reservation_id)
+        if not reservation:
+            raise ValueError("Active budget reservation not found.")
+        receipt = connection.execute(
+            text(
+                """
+                SELECT id, status
+                FROM receipts
+                WHERE id = :receipt_id AND project_id = :project_id
+                """
+            ),
+            {"receipt_id": receipt_id, "project_id": project_id},
+        ).mappings().first()
+        if not receipt:
+            raise ValueError("Receipt not found for project.")
+        cost_receipt_id = self.settle(
+            connection,
+            project_id,
+            reservation_id,
+            receipt_id,
+            category,
+            skill_or_model_id,
+            estimated_usd_micros,
+            actual_usd_micros,
+        )
+        actual_or_estimated = (
+            actual_usd_micros if actual_usd_micros is not None else estimated_usd_micros
+        )
+        reserved_amount = int(reservation["amount_usd_micros"])
+        if actual_or_estimated > reserved_amount:
+            emit_event(
+                connection,
+                project_id,
+                "budget.reservation_overrun",
+                actor,
+                "budget_reservation",
+                reservation_id,
+                {
+                    "receipt_id": receipt_id,
+                    "cost_receipt_id": cost_receipt_id,
+                    "reserved_usd_micros": reserved_amount,
+                    "actual_or_estimated_usd_micros": actual_or_estimated,
+                },
+            )
+        snapshot = self.status_for_project(connection, project_id)
+        row = connection.execute(
+            text(
+                """
+                SELECT id, project_id, reservation_id, receipt_id, category,
+                       skill_or_model_id, estimated_usd_micros, actual_usd_micros,
+                       status, created_at
+                FROM cost_receipts
+                WHERE id = :cost_receipt_id
+                """
+            ),
+            {"cost_receipt_id": cost_receipt_id},
+        ).mappings().one()
+        return {
+            "status": "consumed",
+            "reservation_id": reservation_id,
+            "budget_state": snapshot["budget_state"],
+            "message": "Reservation consumed and cost receipt recorded.",
+            "cost_receipt": dict(row),
+        }
+
+    def forecast(
+        self,
+        connection: Connection,
+        project_id: str,
+        horizon_hours: int = 24,
+    ) -> dict[str, Any]:
+        if horizon_hours < 1 or horizon_hours > 24 * 366:
+            raise ValueError("horizon_hours must be between 1 and 8784.")
+        snapshot = self.status_for_project(connection, project_id)
+        forecasted = (
+            snapshot["burn_rate_usd_micros_per_hour"] * horizon_hours
+            + snapshot["reserved_usd_micros"]
+        )
+        return {
+            "scope_type": "project",
+            "scope_id": project_id,
+            "horizon_hours": horizon_hours,
+            "budget_state": snapshot["budget_state"],
+            "cap_usd_micros": snapshot["cap_usd_micros"],
+            "reserved_usd_micros": snapshot["reserved_usd_micros"],
+            "actual_usd_micros": snapshot["actual_usd_micros"],
+            "available_usd_micros": snapshot["available_usd_micros"],
+            "committed_usd_micros": snapshot["committed_usd_micros"],
+            "burn_rate_usd_micros_per_hour": snapshot[
+                "burn_rate_usd_micros_per_hour"
+            ],
+            "forecasted_usd_micros": forecasted,
+            "time_to_cap_seconds": snapshot["time_to_cap_seconds"],
+            "top_cost_drivers": snapshot["top_cost_drivers"],
+        }
+
     def attach_job(
         self,
         connection: Connection,
@@ -713,7 +825,7 @@ class BudgetGovernor:
         skill_or_model_id: str,
         estimated_usd_micros: int,
         actual_usd_micros: Optional[int],
-    ) -> None:
+    ) -> str:
         cost_receipt_id = make_id("cost")
         connection.execute(
             text(
@@ -759,6 +871,7 @@ class BudgetGovernor:
             reservation_id,
             {"receipt_id": receipt_id, "category": category},
         )
+        return cost_receipt_id
 
     def _state_for_totals(
         self,

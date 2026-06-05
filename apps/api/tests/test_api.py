@@ -369,6 +369,130 @@ def reserve_for_infra_provision(client, reason: str = "Reserve infra budget.") -
     return reserve.json()["reservation_id"]
 
 
+def create_test_receipt(engine, dedupe_key: str = "budget-consume-test") -> str:
+    settings = api_main.settings
+    with engine.begin() as connection:
+        receipt, _created = api_main.receipts.create_or_reuse(
+            connection,
+            settings.default_org_id,
+            settings.default_workspace_id,
+            settings.default_project_id,
+            dedupe_key,
+            "model.call",
+            {"scope": "budget_consume_test"},
+            {"prompt_tokens": 100, "completion_tokens": 20},
+            data_boundary="internal",
+        )
+        api_main.receipts.mark_succeeded(
+            connection,
+            receipt["id"],
+            "provider:budget-consume-test",
+            {"status": "ok"},
+        )
+        return receipt["id"]
+
+
+def test_budget_consume_records_cost_receipt_and_consumes_reservation(client, engine):
+    reservation_id = reserve_for_pr_proposal(client)
+    receipt_id = create_test_receipt(engine)
+
+    response = client.post(
+        "/v1/budget/consume",
+        json={
+            "project_id": "boss-dogfood",
+            "reservation_id": reservation_id,
+            "receipt_id": receipt_id,
+            "category": "model_api",
+            "skill_or_model_id": "openai:gpt-5.2-codex",
+            "estimated_usd_micros": 50_000,
+            "actual_usd_micros": 45_000,
+            "actor": "ceo",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "consumed"
+    assert payload["reservation_id"] == reservation_id
+    assert payload["cost_receipt"]["receipt_id"] == receipt_id
+    assert payload["cost_receipt"]["actual_usd_micros"] == 45_000
+
+    status = client.get(
+        "/v1/budget/status",
+        params={"scope_type": "project", "scope_id": "boss-dogfood"},
+    )
+    assert status.status_code == 200
+    assert status.json()["actual_usd_micros"] >= 45_000
+
+    events = client.get("/v1/events", params={"project_id": "boss-dogfood"})
+    event_types = {item["event_type"] for item in events.json()["items"]}
+    assert "budget.reservation_consumed" in event_types
+
+
+def test_budget_consume_requires_budget_permission_and_active_reservation(client, engine):
+    reservation_id = reserve_for_pr_proposal(client)
+    receipt_id = create_test_receipt(engine, "budget-consume-denied-test")
+
+    denied = client.post(
+        "/v1/budget/consume",
+        json={
+            "project_id": "boss-dogfood",
+            "reservation_id": reservation_id,
+            "receipt_id": receipt_id,
+            "category": "model_api",
+            "skill_or_model_id": "openai:gpt-5.2-codex",
+            "estimated_usd_micros": 50_000,
+            "actor": "cto",
+        },
+    )
+
+    assert denied.status_code == 403
+
+    allowed = client.post(
+        "/v1/budget/consume",
+        json={
+            "project_id": "boss-dogfood",
+            "reservation_id": "res_missing",
+            "receipt_id": receipt_id,
+            "category": "model_api",
+            "skill_or_model_id": "openai:gpt-5.2-codex",
+            "estimated_usd_micros": 50_000,
+            "actor": "ceo",
+        },
+    )
+    assert allowed.status_code == 409
+    assert "Active budget reservation not found" in allowed.json()["detail"]
+
+
+def test_budget_forecast_endpoint_exposes_forecast_contract(client):
+    reservation_id = reserve_for_pr_proposal(client)
+
+    forecast = client.get(
+        "/v1/budget/forecast",
+        params={
+            "scope_type": "project",
+            "scope_id": "boss-dogfood",
+            "horizon_hours": 48,
+        },
+    )
+
+    assert forecast.status_code == 200
+    payload = forecast.json()
+    assert payload["horizon_hours"] == 48
+    assert payload["reserved_usd_micros"] >= 100_000
+    assert payload["forecasted_usd_micros"] >= 100_000
+    assert payload["top_cost_drivers"] == []
+
+    release = client.post(
+        "/v1/budget/release",
+        json={
+            "project_id": "boss-dogfood",
+            "reservation_id": reservation_id,
+            "reason": "Clean up forecast test reservation.",
+        },
+    )
+    assert release.status_code == 200
+
 def insert_approved_infra_decision(
     engine,
     *,

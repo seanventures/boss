@@ -95,6 +95,88 @@ describe("createBossApiClient", () => {
     expect(session.member_id).toBe("ceo");
   });
 
+  it("uses budget forecast and consume API contracts", async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const responses = [
+      {
+        status: 200,
+        body: {
+          scope_type: "project",
+          scope_id: "boss-dogfood",
+          horizon_hours: 48,
+          budget_state: "green",
+          cap_usd_micros: 1_000_000,
+          reserved_usd_micros: 100_000,
+          actual_usd_micros: 25_000,
+          available_usd_micros: 875_000,
+          committed_usd_micros: 125_000,
+          burn_rate_usd_micros_per_hour: 1000,
+          forecasted_usd_micros: 148_000,
+          time_to_cap_seconds: 3600,
+          top_cost_drivers: [],
+        },
+      },
+      {
+        status: 200,
+        body: {
+          status: "consumed",
+          reservation_id: "res_123",
+          budget_state: "green",
+          message: "Reservation consumed and cost receipt recorded.",
+          cost_receipt: {
+            id: "cost_123",
+            project_id: "boss-dogfood",
+            reservation_id: "res_123",
+            receipt_id: "rcpt_123",
+            category: "model_api",
+            skill_or_model_id: "openai:gpt-5.2-codex",
+            estimated_usd_micros: 50_000,
+            actual_usd_micros: 45_000,
+            status: "actual",
+            created_at: "2026-06-05T10:00:00Z",
+          },
+        },
+      },
+    ];
+    const fetchImpl = async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({ url: String(input), init });
+      const response = responses.shift();
+      return new Response(JSON.stringify(response?.body ?? {}), {
+        status: response?.status ?? 500,
+        headers: { "Content-Type": "application/json" },
+      });
+    };
+    const client = createBossApiClient({
+      baseUrl: "http://127.0.0.1:8000",
+      fetchImpl,
+    });
+
+    const forecast = await client.getBudgetForecast("project", "boss-dogfood", 48);
+    const consumed = await client.consumeBudget({
+      project_id: "boss-dogfood",
+      reservation_id: "res_123",
+      receipt_id: "rcpt_123",
+      category: "model_api",
+      skill_or_model_id: "openai:gpt-5.2-codex",
+      estimated_usd_micros: 50_000,
+      actual_usd_micros: 45_000,
+      actor: "ceo",
+    });
+
+    expect(calls[0].url).toBe(
+      "http://127.0.0.1:8000/v1/budget/forecast?scope_type=project&scope_id=boss-dogfood&horizon_hours=48",
+    );
+    expect(calls[1].url).toBe("http://127.0.0.1:8000/v1/budget/consume");
+    expect(calls[1].init?.method).toBe("POST");
+    expect(JSON.parse(String(calls[1].init?.body))).toMatchObject({
+      reservation_id: "res_123",
+      receipt_id: "rcpt_123",
+      actor: "ceo",
+    });
+    expect(forecast.forecasted_usd_micros).toBe(148_000);
+    expect(consumed.cost_receipt.actual_usd_micros).toBe(45_000);
+  });
+
   it("uses edition and Account Connect API contracts", async () => {
     const calls: Array<{ url: string; init?: RequestInit }> = [];
     const edition = {

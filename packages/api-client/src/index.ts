@@ -1306,6 +1306,44 @@ export type BudgetReleaseResponse = {
   message: string;
 };
 
+export type BudgetConsumeRequest = {
+  project_id: string;
+  reservation_id: string;
+  receipt_id: string;
+  category: string;
+  skill_or_model_id: string;
+  estimated_usd_micros: number;
+  actual_usd_micros?: number;
+  actor: string;
+};
+
+export type BudgetConsumeResponse = {
+  status: string;
+  reservation_id: string;
+  budget_state: string;
+  message: string;
+  cost_receipt: CostReceiptSummary;
+};
+
+export type BudgetForecastResponse = {
+  scope_type: string;
+  scope_id: string;
+  horizon_hours: number;
+  budget_state: string;
+  cap_usd_micros: number;
+  reserved_usd_micros: number;
+  actual_usd_micros: number;
+  available_usd_micros: number;
+  committed_usd_micros: number;
+  burn_rate_usd_micros_per_hour: number;
+  forecasted_usd_micros: number;
+  time_to_cap_seconds?: number | null;
+  top_cost_drivers: Array<{
+    skill_or_model_id: string;
+    amount_usd_micros: number;
+  }>;
+};
+
 export type DecisionCard = {
   id: string;
   task_id?: string;
@@ -4373,6 +4411,15 @@ export function createBossApiClient(config: BossApiClientConfig) {
         query: { scope_type: scopeType, scope_id: scopeId },
       });
     },
+    getBudgetForecast(scopeType: string, scopeId: string, horizonHours = 24) {
+      return request<BudgetForecastResponse>("GET", "/v1/budget/forecast", {
+        query: {
+          scope_type: scopeType,
+          scope_id: scopeId,
+          horizon_hours: horizonHours,
+        },
+      });
+    },
     listBudgetAllocations(projectId: string) {
       return request<BudgetAllocationListResponse>("GET", "/v1/budget/allocations", {
         query: { project_id: projectId },
@@ -4395,6 +4442,11 @@ export function createBossApiClient(config: BossApiClientConfig) {
     },
     releaseBudget(payload: BudgetReleaseRequest) {
       return request<BudgetReleaseResponse>("POST", "/v1/budget/release", {
+        body: payload,
+      });
+    },
+    consumeBudget(payload: BudgetConsumeRequest) {
+      return request<BudgetConsumeResponse>("POST", "/v1/budget/consume", {
         body: payload,
       });
     },

@@ -580,3 +580,15 @@ Acceptance criteria:
 - Given worker pools are declared, when validation runs, then each pool has job kinds, a scale signal, and an ordered non-negative replica range.
 - Given any environment profile, when ProviderOps writes are described, then ChangeSet, BudgetReservation, destructive approval, ResourceReceipt, rollback, and no-raw-secret gates remain mandatory.
 - Given autoscaling is configured, when validation runs, then Budget Governor precedence over Autoscaler is required.
+
+### Story FIN-001: Consume Reserved Budget
+
+As a FinOps operator, I want reserved spend to be explicitly consumed only with a receipt, so that actual model/tool/provider costs are auditable and cannot bypass budget controls.
+
+Acceptance criteria:
+
+- Given an active BudgetReservation and existing Receipt, when an authorized budget manager consumes the reservation, then BOSS writes a CostReceipt, marks the reservation consumed, emits `budget.reservation_consumed`, and returns the updated budget state.
+- Given the actor lacks `budget_manage`, when they attempt to consume a reservation, then BOSS returns `403` and records policy-denial evidence.
+- Given the reservation is missing, expired, released, or already consumed, when consume is requested, then BOSS returns a visible `409` error and records `budget.consume_denied`.
+- Given actual or estimated spend exceeds the reserved amount, when consume succeeds, then BOSS records `budget.reservation_overrun` so operators can investigate the variance.
+- Given a project has reserved or actual spend, when a budget forecast is requested, then BOSS returns forecast horizon, burn rate, reserved spend, actual spend, available spend, top cost drivers, and time-to-cap where known.

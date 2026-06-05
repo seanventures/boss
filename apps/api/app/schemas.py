@@ -1113,6 +1113,25 @@ class BudgetReleaseResponse(BaseModel):
     message: str
 
 
+class BudgetConsumeRequest(BaseModel):
+    project_id: str
+    reservation_id: str
+    receipt_id: str
+    category: str
+    skill_or_model_id: str
+    estimated_usd_micros: int = Field(ge=0)
+    actual_usd_micros: Optional[int] = Field(default=None, ge=0)
+    actor: str
+
+
+class BudgetConsumeResponse(BaseModel):
+    status: str
+    reservation_id: str
+    budget_state: str
+    message: str
+    cost_receipt: CostReceiptSummary
+
+
 class BudgetStatusResponse(BaseModel):
     scope_type: str
     scope_id: str
@@ -1129,6 +1148,22 @@ class BudgetStatusResponse(BaseModel):
     time_to_cap_seconds: Optional[int] = None
     utilization_ratio: float
     active_reservations_count: int
+    top_cost_drivers: list[dict[str, Any]]
+
+
+class BudgetForecastResponse(BaseModel):
+    scope_type: str
+    scope_id: str
+    horizon_hours: int
+    budget_state: str
+    cap_usd_micros: int
+    reserved_usd_micros: int
+    actual_usd_micros: int
+    available_usd_micros: int
+    committed_usd_micros: int
+    burn_rate_usd_micros_per_hour: int
+    forecasted_usd_micros: int
+    time_to_cap_seconds: Optional[int] = None
     top_cost_drivers: list[dict[str, Any]]
 
 

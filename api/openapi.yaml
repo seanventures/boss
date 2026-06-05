@@ -3383,6 +3383,65 @@ paths:
                 reason: { type: string }
       responses:
         '200': { description: Quote result }
+  /v1/budget/forecast:
+    get:
+      summary: Forecast project spend over a requested horizon
+      parameters:
+        - name: scope_type
+          in: query
+          required: true
+          schema: { type: string, enum: [project] }
+        - name: scope_id
+          in: query
+          required: true
+          schema: { type: string }
+        - name: horizon_hours
+          in: query
+          required: false
+          schema: { type: integer, default: 24, minimum: 1, maximum: 8784 }
+      responses:
+        '200':
+          description: Budget forecast
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - scope_type
+                  - scope_id
+                  - horizon_hours
+                  - budget_state
+                  - cap_usd_micros
+                  - reserved_usd_micros
+                  - actual_usd_micros
+                  - available_usd_micros
+                  - committed_usd_micros
+                  - burn_rate_usd_micros_per_hour
+                  - forecasted_usd_micros
+                  - top_cost_drivers
+                properties:
+                  scope_type: { type: string }
+                  scope_id: { type: string }
+                  horizon_hours: { type: integer }
+                  budget_state: { type: string }
+                  cap_usd_micros: { type: integer }
+                  reserved_usd_micros: { type: integer }
+                  actual_usd_micros: { type: integer }
+                  available_usd_micros: { type: integer }
+                  committed_usd_micros: { type: integer }
+                  burn_rate_usd_micros_per_hour: { type: integer }
+                  forecasted_usd_micros: { type: integer }
+                  time_to_cap_seconds:
+                    type: integer
+                    nullable: true
+                  top_cost_drivers:
+                    type: array
+                    items:
+                      type: object
+                      required: [skill_or_model_id, amount_usd_micros]
+                      properties:
+                        skill_or_model_id: { type: string }
+                        amount_usd_micros: { type: integer }
   /v1/budget/reserve:
     post:
       summary: Internal budget reservation endpoint
@@ -3419,6 +3478,36 @@ paths:
                 reason: { type: string }
       responses:
         '200': { description: Reservation released or current status returned }
+  /v1/budget/consume:
+    post:
+      summary: Consume an active reservation and record receipt-linked actual or estimated spend
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - project_id
+                - reservation_id
+                - receipt_id
+                - category
+                - skill_or_model_id
+                - estimated_usd_micros
+                - actor
+              properties:
+                project_id: { type: string }
+                reservation_id: { type: string }
+                receipt_id: { type: string }
+                category: { type: string }
+                skill_or_model_id: { type: string }
+                estimated_usd_micros: { type: integer, minimum: 0 }
+                actual_usd_micros: { type: integer, minimum: 0 }
+                actor: { type: string }
+      responses:
+        '200': { description: Reservation consumed and CostReceipt recorded }
+        '403': { description: Actor is not allowed to manage budgets }
+        '409': { description: Active reservation or receipt is missing }
   /v1/openai/plans:
     post:
       summary: Create a real OpenAI-backed plan artifact behind a reservation
