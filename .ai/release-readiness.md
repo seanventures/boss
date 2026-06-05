@@ -33,7 +33,7 @@
 ### UX
 - [x] Complete nav (Mission Control, panels, project switch).
 - [x] No dead ends (command always, context).
-- [x] All AUTO P2/P3 for slice closed: 001 by UX (states/a11y), 002 by QA (tests), 003 by PM/Docs subagent 527e9a1 (user-stories AC for KPI/budget/bootstrap + 011/012, 285 GWT validated per subagent, .ai/trace/gap updated); 005 by agents + 41e5243. New 011/012 closed by 41e5243 (billing graceful, clean bootstrap). All local P0 + slice gaps addressed + in PR #3 + .ai/. Local + .ai/ OS production-grade per DoD. External 3 P0 Blocked.
+- [x] All AUTO P2/P3 for slice closed: 001 by UX (states/a11y), 002 by QA (tests), 003 by PM/Docs subagent 527e9a1 (user-stories AC for KPI/budget/bootstrap + 011/012, 285 GWT validated per subagent, .ai/trace/gap updated); 005 by agents + 41e5243. New 011/012 closed by 41e5243 (billing graceful, clean bootstrap). All local P0 + slice gaps addressed + in PR #3 + .ai/. Audit slice + .ai/ OS + docs complete per DoD (local core + OS + reviews + AC + tests + pushes). External 3 P0 Blocked. For full product: remaining P2 (rate limits per Sec, pagination per arch, e2e per qa, commercial local surfaces); continue grind per PRD-v2 until complete or blocked.
 - [x] Clear copy (operator focused).
 - [x] Responsive basics (Tailwind).
 - [ ] A11y full (basic in test; expand) - P2 (subagent UX running).
