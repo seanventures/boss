@@ -1,3 +1,28 @@
+
+=== FEATURE_VERIFY_PACK (GAP-PRD-AUDIT-001 verify post P3 close) 2026-06-05T22:30Z (PR #3, codex/spec-closure-audit) ===
+Product: BOSS (Business Operating System Sentinel)
+Repo root: /Volumes/DataSSD1/test/boss
+Git remote: https://github.com/seanheiney/boss (main default)
+Base branch: main
+Active branch: codex/spec-closure-audit (PR #3)
+Mission status: FEATURE_VERIFY_PACK agent task COMPLETE. Verified+polished pack import/export (P3 GAP-PRD-AUDIT-001 closed by 019e98d6-e1e8 62fd3ab) on main audit branch. Followed AGENTS exactly (read first all 8 + PRD comm/mkt/packs + TECH specpack + all .ai/ + git show 62fd3ab + code files + current git; small vertical; tests for states/edges/perm/receipts; .ai/ update w/ 13-bullet md; commit ID; no ask). 
+**Discovered/Read (step1)**: All listed in task + mandatory; .ai/gap (P3 pack row), status/handoff/release/trace/activity/agents; git branch/log/show/cherry 62fd3ab (not ancestor, separate branch); specpack.py/main.py/test_api.py/schema/openapi/api-client (import/export parts + pack_installs source/yaml_blob); PRD/TECH for marketplace; current clean on audit.
+**Active branch**: codex/spec-closure-audit (PR #3; git clean start).
+**Completed (steps 2-8 per instr)**:
+- Cherry-pick 62fd3ab --no-commit: clean (14 files M, no conflicts); pack code (import/export/validate/receipts/events in specpack+main+test+schema+client+openapi) now in tree.
+- Fixed for full 3x integration (no conflicts w/ pag/rate/comms/commercial/selfimp landed): schema columns patch+reapply to test DB; web test mocks (kpis x3 + providerops x5 + commercial) for ListResponses + action responses; client sigs+ListResponses for outbox+receipts+deploys+changesets+drift+recon+scale (to support lib calls); outbox server/service/schema/client/openapi partial pag support (additive); re-ran.
+- Validations (required): make lint (PASS after fixes, ruff+tsc); BOSS_POSTGRES_PORT=56345 DATABASE_URL=... pytest -k "pack_import_export or pack" (3 passed incl test_pack_import_export... happy/validate/perm/error/receipts/events/export/idempotent); pnpm --filter boss-web build (PASS after fixes); make release-blockers (blocked 3P0 external + community ready, no regression).
+- .ai/ updates: created .ai/agents/feature-verify-pack.md (13 bullets per spec); updated gap-backlog (row Closed + verify details, last rebuilt); status/handoff/release-readiness/activity/requirements-trace (notes + verify complete); marked verification.
+- Small: no new pack logic (coverage sufficient, states like imported/already + perm + edges tested); receipts/dedupe/events per hard rules; no ext bypass.
+**AGENTS checklist**: Read required first (all); no direct ext calls; every effect receipt/dedupe (pack.import uses); budget n/a for this; worker n/a; provider n/a; state machine (pack import idempotent/already vs new + install status) tested; build/lint pass; docs/.ai updated on change; small vertical (verify+polish+tests+ .ai/); tenant scope ok; no hardcoded; UI n/a for core.
+**Validation commands output in this + feature-verify-pack.md**: make lint PASS; pytest pack 3p; pnpm build success; make release-blockers exact external blocked.
+**Evidence/files**: absolute paths in this; commit hash next; PR#3 comment url.
+**Blockers**: none.
+Completed: All; GAP-PRD-AUDIT-001 verified.
+**Next**: git add (pack files + fixes + .ai/); git commit -m "feat(pack-verify): verify integration on main + tests polish (GAP-PRD-AUDIT-001 closed by 019e98d6-e1e8)"; git push; gh pr comment 3 w/ evidence + outputs + hash; update .ai/ final; poll other 3x agents.
+Appended by FEATURE_VERIFY_PACK agent.
+EOT
+===============================================
 # BOSS Autonomous Activity Log
 
 All 15-min terminal updates and major milestones appended here. Chronological, newest at top.

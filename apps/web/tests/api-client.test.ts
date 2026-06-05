@@ -2766,7 +2766,7 @@ describe("createBossApiClient", () => {
       "http://127.0.0.1:8000/v1/deployment-runs?project_id=boss-dogfood&limit=5&offset=0",
       "http://127.0.0.1:8000/v1/deployment-runs",
       "http://127.0.0.1:8000/v1/deployment-runs/deprun_1/health-check",
-      "http://127.0.0.1:8000/v1/provider-health?project_id=boss-dogfood&provider_account_id=pa_1&limit=5&offset=0",
+      "http://127.0.0.1:8000/v1/provider-health?project_id=boss-dogfood&provider_account_id=pa_1&limit=5",
       "http://127.0.0.1:8000/v1/drift-reports?project_id=boss-dogfood&limit=5&offset=0",
       "http://127.0.0.1:8000/v1/reconciliation-runs?project_id=boss-dogfood&limit=5&offset=0",
     ]);

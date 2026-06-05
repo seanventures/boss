@@ -13450,6 +13450,281 @@ def test_deadletter_requeue_rejects_non_job_sources(client, engine):
     assert response.json()["detail"] == "only job deadletters can be requeued"
 
 
+# === WORKER/LEASE/JOB E2E POLISH (P2 + DoD ops) added tests for leases, heartbeats, failure paths (409s), deadletter, pack/agent related jobs ===
+def test_lease_heartbeat_and_complete_fail_on_invalid_lease_token(client):
+    created = client.post(
+        "/v1/jobs",
+        json={
+            "project_id": "boss-dogfood",
+            "kind": "plan.generate",
+            "payload": {"command": "Lease token validation test."},
+        },
+    )
+    assert created.status_code == 201
+    job_id = created.json()["id"]
+
+    leased = client.post(
+        "/v1/worker/poll",
+        json={
+            "worker_id": "worker-token-test",
+            "capabilities": ["plan.generate"],
+            "lease_ttl_seconds": 60,
+        },
+    ).json()["job"]
+
+    # bad token -> 409 on heartbeat
+    hb_bad = client.post(
+        "/v1/worker/heartbeat",
+        json={
+            "worker_id": "worker-token-test",
+            "job_id": job_id,
+            "lease_token": "bad-token-not-real",
+            "lease_ttl_seconds": 60,
+        },
+    )
+    assert hb_bad.status_code == 409
+    assert "Lease" in hb_bad.json()["detail"] or "invalid" in hb_bad.json().get("detail", "").lower()
+
+    # bad token on complete -> 409
+    comp_bad = client.post(
+        "/v1/worker/complete",
+        json={
+            "worker_id": "worker-token-test",
+            "job_id": job_id,
+            "lease_token": "bad-token-not-real",
+            "result": {"summary": "no"},
+        },
+    )
+    assert comp_bad.status_code == 409
+
+    # bad token on fail -> 409
+    fail_bad = client.post(
+        "/v1/worker/fail",
+        json={
+            "worker_id": "worker-token-test",
+            "job_id": job_id,
+            "lease_token": "bad-token-not-real",
+            "error": {"message": "bad"},
+            "retryable": False,
+            "retry_delay_seconds": 0,
+        },
+    )
+    assert fail_bad.status_code == 409
+
+    # valid complete succeeds after real lease token
+    comp_ok = client.post(
+        "/v1/worker/complete",
+        json={
+            "worker_id": "worker-token-test",
+            "job_id": job_id,
+            "lease_token": leased["lease_token"],
+            "result": {"summary": "lease token paths exercised"},
+        },
+    )
+    assert comp_ok.status_code == 200
+    assert comp_ok.json()["status"] == "succeeded"
+
+
+def test_multiple_heartbeats_extend_lease_and_emit_events(client, engine):
+    created = client.post(
+        "/v1/jobs",
+        json={
+            "project_id": "boss-dogfood",
+            "kind": "plan.generate",
+            "payload": {"command": "Multi heartbeat test."},
+        },
+    )
+    assert created.status_code == 201
+    job_id = created.json()["id"]
+
+    leased = client.post(
+        "/v1/worker/poll",
+        json={
+            "worker_id": "worker-hb-multi",
+            "capabilities": ["plan.generate"],
+            "lease_ttl_seconds": 30,
+        },
+    ).json()["job"]
+    first_expiry = leased["lease_expires_at"]
+
+    hb1 = client.post(
+        "/v1/worker/heartbeat",
+        json={
+            "worker_id": "worker-hb-multi",
+            "job_id": job_id,
+            "lease_token": leased["lease_token"],
+            "lease_ttl_seconds": 30,
+        },
+    )
+    assert hb1.status_code == 200
+
+    hb2 = client.post(
+        "/v1/worker/heartbeat",
+        json={
+            "worker_id": "worker-hb-multi",
+            "job_id": job_id,
+            "lease_token": leased["lease_token"],
+            "lease_ttl_seconds": 45,
+        },
+    )
+    assert hb2.status_code == 200
+    assert hb2.json()["lease_expires_at"] != first_expiry
+
+    # verify DB heartbeat updated and job still leased/running capable
+    with engine.begin() as connection:
+        row = connection.execute(
+            text("SELECT status, heartbeat_at FROM jobs WHERE id = :job_id"),
+            {"job_id": job_id},
+        ).mappings().one()
+        assert row["status"] in ("leased", "running")
+        assert row["heartbeat_at"] is not None
+
+    events = client.get("/v1/events", params={"project_id": "boss-dogfood", "limit": 20})
+    hb_events = [e for e in events.json()["items"] if e["event_type"] == "job.heartbeat"]
+    assert len(hb_events) >= 2
+
+
+def test_deadletter_requeue_then_poll_lease_and_succeed_new_job(client, engine):
+    created = client.post(
+        "/v1/jobs",
+        json={
+            "project_id": "boss-dogfood",
+            "kind": "plan.generate",
+            "payload": {"command": "Requeue then lease e2e."},
+            "max_attempts": 1,
+        },
+    )
+    assert created.status_code == 201
+    job_id = created.json()["id"]
+
+    leased = client.post(
+        "/v1/worker/poll",
+        json={
+            "worker_id": "worker-req",
+            "capabilities": ["plan.generate"],
+            "lease_ttl_seconds": 60,
+        },
+    ).json()["job"]
+    client.post(
+        "/v1/worker/heartbeat",
+        json={
+            "worker_id": "worker-req",
+            "job_id": job_id,
+            "lease_token": leased["lease_token"],
+            "lease_ttl_seconds": 60,
+        },
+    )
+    fail = client.post(
+        "/v1/worker/fail",
+        json={
+            "worker_id": "worker-req",
+            "job_id": job_id,
+            "lease_token": leased["lease_token"],
+            "error": {"message": "pack related sim fail"},
+            "retryable": False,
+            "retry_delay_seconds": 0,
+        },
+    )
+    assert fail.status_code == 200
+    dlq_id = fail.json()["deadletter_id"]
+
+    # requeue via API (pack/job related remediation path)
+    rq = client.post(
+        f"/v1/deadletters/{dlq_id}/requeue",
+        json={"actor": "coo", "reason": "test requeue polish"},
+    )
+    assert rq.status_code == 200
+    assert rq.json()["status"] == "requeued"
+    new_job_id = rq.json()["requeued_job_id"]
+    assert new_job_id
+
+    # the requeued job should be leasable
+    new_leased = client.post(
+        "/v1/worker/poll",
+        json={
+            "worker_id": "worker-req2",
+            "capabilities": ["plan.generate"],
+            "lease_ttl_seconds": 60,
+        },
+    ).json()["job"]
+    assert new_leased["id"] == new_job_id
+    # requeue meta in payload per impl
+    assert "requeue" in (new_leased.get("payload") or {})
+
+    # complete it to close
+    comp = client.post(
+        "/v1/worker/complete",
+        json={
+            "worker_id": "worker-req2",
+            "job_id": new_job_id,
+            "lease_token": new_leased["lease_token"],
+            "result": {"summary": "requeued job succeeded"},
+        },
+    )
+    assert comp.status_code == 200
+    assert comp.json()["status"] == "succeeded"
+
+    # verify events for requeue and new lease
+    events = client.get("/v1/events", params={"project_id": "boss-dogfood"})
+    types = [e["event_type"] for e in events.json()["items"]]
+    assert "deadletter.requeued" in types
+    assert "job.leased" in types
+
+
+def test_poll_and_complete_pack_derived_agent_and_marketplace_jobs(client):
+    # pack related: agent.* and enterprise.marketplace.validate come from role/pack installs
+    for kind, caps in [
+        ("agent.pm.scope_brief", ["agent.pm.scope_brief"]),
+        ("enterprise.marketplace.validate", ["enterprise.marketplace.validate"]),
+    ]:
+        created = client.post(
+            "/v1/jobs",
+            json={
+                "project_id": "boss-dogfood",
+                "kind": kind,
+                "payload": {
+                    "command": f"Pack-derived {kind} e2e polish.",
+                    "module_id": "pm_product_planner_v1" if "agent" in kind else "private_enterprise_agent_v1",
+                    "required_entitlement": "private_agent_marketplace",
+                    "entitlement_status": "missing",
+                },
+            },
+        )
+        assert created.status_code == 201
+        job_id = created.json()["id"]
+
+        poll = client.post(
+            "/v1/worker/poll",
+            json={
+                "worker_id": f"worker-pack-{kind.split('.')[0]}",
+                "capabilities": caps,
+                "lease_ttl_seconds": 60,
+            },
+        )
+        assert poll.status_code == 200
+        assert poll.json()["status"] == "leased"
+        leased = poll.json()["job"]
+        assert leased["id"] == job_id
+        assert leased["kind"] == kind
+
+        # complete with minimal result matching what runner would
+        result = {"summary": f"completed {kind}"} if "agent" not in kind else {
+            "summary": "PM brief", "agent_module": {"id": "pm_product_planner_v1"}, "agent_runtime": {"role_key": "pm"},
+            "work_product": {"contract": "FeatureBrief"}, "strategy_id": kind,
+        }
+        comp = client.post(
+            "/v1/worker/complete",
+            json={
+                "worker_id": f"worker-pack-{kind.split('.')[0]}",
+                "job_id": job_id,
+                "lease_token": leased["lease_token"],
+                "result": result,
+            },
+        )
+        assert comp.status_code == 200
+        assert comp.json()["status"] == "succeeded"
+
+
 def test_ops_queue_inspection_and_digest_use_live_control_plane_state(client, engine):
     project_id = "boss-ops-inspection"
     with engine.begin() as connection:
