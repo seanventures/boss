@@ -1,7 +1,7 @@
 # BOSS Release Readiness (Autonomous)
 
-**Date**: 2026-06-05 (post PM prd-audit)
-**Status**: LOCAL READY (post PR #3) - .ai/ OS in, traceability complete, P0 local gaps closed+validated+PR'd, baseline all green, external 3 P0s Blocked by design. PM prd-audit added: full coverage check vs PRD-v2/TECH (no other local gaps uncovered; comms/self-imp/commercial-local/elastic covered; "coverage good, only external left"; noted P3 GAP-PRD-AUDIT-001). Awaiting subagent reviews + any P2 fixes + merge. Full prod readiness requires external config for Blocked items.
+**Date**: 2026-06-05 (post PM prd-audit + FEATURE-ENG P3 pack)
+**Status**: LOCAL READY (post PR #3) - .ai/ OS in, traceability complete, P0 local gaps closed+validated+PR'd, P3 GAP-PRD-AUDIT-001 pack local import/export closed by FEATURE-ENG (small vertical impl+tests+receipts+events), baseline all green, external 3 P0s Blocked by design. PM prd-audit added: full coverage check vs PRD-v2/TECH (no other local gaps uncovered; ... noted P3); now closed. Awaiting merge. Full prod readiness requires external config for Blocked items.
 
 ## Production Readiness Checklist
 
@@ -16,6 +16,7 @@
 - [x] Dep risks: pending full scan (make lint + audit in subagent).
 - [x] Recent P0s (bootstrap, audit log) closed (validated + PR #3).
 - [x] .ai/ OS + full traceability + reviews + PR opened.
+- [x] P3 GAP-PRD-AUDIT-001: local pack import/export for Community (per PRD Commercial "import/export", Marketplace "Community must support local import/export of packs without hosted"; impl in specpack/main/db/openapi/tests; receipts+dedupe+events+perm+validate; no hosted dep).
 
 ### Reliability
 - [x] Graceful failures (deadletter, decision escalate, receipt on fail).

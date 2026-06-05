@@ -1,6 +1,6 @@
 # Codex Handoff
 
-Last updated: 2026-06-05T17:30Z (5 agents managed + integrated + validate green: DevOps AUTO-004 Closed 990d00e + .env full + full-validate target + release script; Security rate 013 Closed 5083391 in-mem + tests; Arch pag 014 Closed 4dd031c; PM audit dcd5fc8 + GAP-PRD-AUDIT-001 P3; QA e2e tests a374f4a (killed long run); .ai/ + commit/push/PR#3; only 1 P3 local + external blocked)
+Last updated: 2026-06-05T20:50Z (feature-providerops-polish closed RPL P2 polish (janitor states/UI, drift classify+proposals, changeset rollback visible, explorer full, autoscaler, deploy/env, health, costs) + tests/a11y on ai/codex/feature-providerops-polish; .ai/13b + updates; prior pack etc; validate green per task; PR#3)
 
 ## Current Overall Product Status
 BOSS v0.4.1 target is in advanced local-dogfood state. Most PRD-v2.0 / TECH-SPEC-v2.0 requirements for core control plane, worker leases, budget governor (now full quote/reserve/consume/release/forecast), audit/no-silent-drops (with recent logging fixes), canonical objects (incl. recent KPI), roles/packs/agent-modules, Model Entitlement Broker, ProviderOps (local sync + real sandbox writes for CF/DO/Supabase), Software Factory (command->plan->PR->evidence->decision), Metatron/Mission Control console are Implemented and traced.
@@ -28,14 +28,14 @@ Validation now confirms: tests pass, build passes, no regressions. Subagent vali
 - 9 base + 10+ new .md (existing updated for doubling; new created by specialists: ui-ux-design-toasts.md, qa-e2e-comms.md, feature-packs-2.md, qa-e2e-selfimp-provider.md, feature-providerops-polish.md, ux-commercial-surfaces.md, arch-pagination-expand.md, feature-monitoring-obs.md, feature-comms-ui.md + attempted others).
 - 4 prior + 5+ managed complete (DevOps 019e98b0-63da AUTO-004 Closed 990d00e .env/full-validate; Security-rate 019e98b0-7e99 GAP-013 rate Closed 5083391; Arch 019e98b0-b226 GAP-014 pag Closed 4dd031c; PM 019e98b0-c77a audit + P3 note dcd5fc8; QA 019e98b0-9657 e2e a374f4a killed long).
 - New 3x batch launched (bg ids 019e98d8-* / d9-*):
-  - ui-ux-toasts 019e98d8-8903: P2 client loading/success feedback toasts for 5+ actions (KPI/budget/command/provider/self-imp) per ux-review P2 + DoD 9-12 states.
+  - ui-ux-toasts 019e98d8-8903: COMPLETE (this specialist): P2 client loading/success/feedback toasts+inline for 5+ MC actions (KPI/BUD incl new q/r/c/r demo forms, command, provider apply/approve, self-imp full, packs) per ux-review P2 + DoD 9-12 (CAN/BUD/MET etc); boring redirect+div+script; a11y; tests; branch ai/codex/ui-ux-toasts-client-feedback; .ai/agent+gap closed; next integrate/validate.
   - qa-e2e-comms 019e98d8-bf0d: full e2e journeys/tests/states for comms (policy/outbox/inbox/deadletter/ACK/quiet/throttle) P2 e2e + COM DoD.
-  - feature-packs-2 019e98d8-bf0d: 2nd on GAP-PRD-AUDIT-001 P3 pack import/export (yaml validate/store/loader/export + tests/receipts) for Community ecosystem.
+  - feature-packs-2 019e98d8-bf0d: 2nd on GAP-PRD-AUDIT-001 P3 pack import/export (yaml validate/store/loader/export + tests/receipts) for Community ecosystem. (FEATURE-ENG completed primary small vertical impl+tests+ai on ai/codex/packs-local-import-export; closed).
   - qa-e2e-selfimp-provider 019e98d8-e518: e2e + states/conc/perm for self-imp (proposal/canary/rollout/rollback) + providerops (janitor/autoscaler/drift/deploy/health) P2 e2e + SIM/RPL DoD.
   - feature-providerops-polish 019e98d8-e519: ProviderOps full DoD polish (janitor/autoscaler/drift/deployments/health/recon/explorer states/tests/a11y).
   - ux-commercial-surfaces 019e98d9-1d45: Commercial local surfaces polish (edition/packs/marketplace/account-connect blocked + states/tests) COMPKG P2 + DoD.
   - arch-pag-expand 019e98d9-1d46: Pagination expand to remaining lists (tasks/decisions/receipts/kpis/inbox etc) P2 arch + perf DoD.
-  - feature-monitoring-obs 019e98d9-5bd1: Monitoring/obs polish (health/risk/event/deadletter/provider health states/tests) P2 + AUD/MET DoD.
+  - feature-monitoring-obs 019e98d9-5bd1: Monitoring/obs polish (health/risk/event/deadletter/provider health states/tests) P2 + AUD/MET DoD. COMPLETE: a11y landmarks on health/what-changed (risk+snaps+event full+deadletter), 25 limit feeds, accessibility.test extend, 13b agent md created, gap/trace/status/activity updated, full validate pytest -k + pnpm test + lint + build GREEN. Committed.
   - feature-comms-ui 019e98d9-5bd1: Comms UI interactions polish (policy form/outbox/inbox/ACK/compose/deadletter UI states/tests) COM P2 + DoD.
   - (devops-worker-infra + pm-docs-ac-more attempted; some coordinator limit, others running).
 - All per AGENTS (read first full list, small verticals per slice, 13-bullet agent .md, tests states/edges, commit IDs, push/PR#3, .ai/ update, no ask).
@@ -142,6 +142,7 @@ Recent gap work (KPI, budget, bootstrap, audit logging, route parity) now has pa
 - Help with release-blockers report or k8s/infra validate.
 - If this PR merges, rebase other branches on main.
 - Continue autonomous gap closure on new ai/grok/* branches if P0/P1 local work surfaces.
+- (P3 pack import/export closed; no remaining local P3 per GAP-PRD-AUDIT-001).
 
 ## Blockers
 - External config/creds for Account Connect, Enterprise IdP, production ProviderOps writes (documented, fail-closed by design; not code bugs).

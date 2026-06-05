@@ -1485,6 +1485,8 @@ class DeploymentRolloutSummary(BaseModel):
 class DeploymentRolloutListResponse(BaseModel):
     project_id: str
     items: list[DeploymentRolloutSummary]
+    limit: int
+    offset: int
 
 
 class ReceiptResponse(BaseModel):
@@ -1507,6 +1509,8 @@ class ReceiptResponse(BaseModel):
 class ReceiptListResponse(BaseModel):
     project_id: str
     items: list[ReceiptResponse]
+    limit: int
+    offset: int
 
 
 class JobSummary(BaseModel):
@@ -1718,6 +1722,8 @@ class TaskSummary(BaseModel):
 
 class TaskListResponse(BaseModel):
     items: list[TaskSummary]
+    limit: int
+    offset: int
 
 
 class TaskCreateRequest(BaseModel):
@@ -1793,6 +1799,8 @@ class KpiCreateRequest(BaseModel):
 class KpiListResponse(BaseModel):
     project_id: str
     items: list[KpiSummary]
+    limit: int
+    offset: int
 
 
 class PolicyRecordSummary(BaseModel):
@@ -2104,6 +2112,8 @@ class DecisionCard(BaseModel):
 class DecisionInboxResponse(BaseModel):
     project_id: str
     items: list[DecisionCard]
+    limit: int
+    offset: int
 
 
 class DecisionActionRequest(BaseModel):
@@ -2171,6 +2181,8 @@ class ArtifactDetail(ArtifactSummary):
 class ArtifactListResponse(BaseModel):
     project_id: str
     items: list[ArtifactSummary]
+    limit: int
+    offset: int
 
 
 class ChangeJournalItem(BaseModel):
@@ -2196,6 +2208,8 @@ class ChangeJournalDetail(ChangeJournalItem):
 class ChangeJournalResponse(BaseModel):
     project_id: str
     items: list[ChangeJournalItem]
+    limit: int
+    offset: int
 
 
 class DeadletterItem(BaseModel):
@@ -2219,6 +2233,8 @@ class DeadletterItem(BaseModel):
 class DeadletterListResponse(BaseModel):
     project_id: str
     items: list[DeadletterItem]
+    limit: int
+    offset: int
 
 
 class DeadletterIncidentRequest(BaseModel):
@@ -2394,6 +2410,8 @@ class OutboxMessageSummary(BaseModel):
 class OutboxMessageListResponse(BaseModel):
     project_id: str
     items: list[OutboxMessageSummary]
+    limit: int
+    offset: int
 
 
 class CommsChannelPolicySummary(BaseModel):
@@ -2482,6 +2500,8 @@ class InboxMessageSummary(BaseModel):
 class InboxMessageListResponse(BaseModel):
     project_id: str
     items: list[InboxMessageSummary]
+    limit: int
+    offset: int
 
 
 class RoleSummary(BaseModel):
@@ -2654,6 +2674,7 @@ class PackSummary(BaseModel):
     workflows: list[str]
     policies: list[str]
     skills: list[str]
+    source: str = "baked"
     installed: bool
     installed_by: Optional[str] = None
     installed_at: Optional[str] = None
@@ -2676,6 +2697,12 @@ class PackInstallRequest(BaseModel):
     project_id: str
     pack_id: str
     actor: str = "system"
+
+
+class PackImportRequest(BaseModel):
+    project_id: str
+    actor: str = "system"
+    yaml: str
 
 
 class AgentModuleSummary(BaseModel):
@@ -3377,6 +3404,8 @@ class DeploymentTargetSummary(BaseModel):
 class DeploymentTargetListResponse(BaseModel):
     project_id: str
     items: list[DeploymentTargetSummary]
+    limit: int
+    offset: int
 
 
 class DeploymentTargetCreateRequest(BaseModel):
@@ -3475,6 +3504,8 @@ class DeploymentRunSummary(BaseModel):
 class DeploymentRunListResponse(BaseModel):
     project_id: str
     items: list[DeploymentRunSummary]
+    limit: int
+    offset: int
 
 
 class DeploymentRunCreateRequest(BaseModel):
@@ -3555,6 +3586,8 @@ class ChangeSetSummary(BaseModel):
 class ChangeSetListResponse(BaseModel):
     project_id: str
     items: list[ChangeSetSummary]
+    limit: int
+    offset: int
 
 
 class ChangeSetCreateRequest(BaseModel):
@@ -3606,6 +3639,8 @@ class ResourceReceiptSummary(BaseModel):
 class ResourceReceiptListResponse(BaseModel):
     project_id: str
     items: list[ResourceReceiptSummary]
+    limit: int
+    offset: int
 
 
 class WorkerPoolSummary(BaseModel):

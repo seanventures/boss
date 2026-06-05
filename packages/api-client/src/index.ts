@@ -770,6 +770,8 @@ export type TaskSummary = {
 
 export type TaskListResponse = {
   items: TaskSummary[];
+  limit: number;
+  offset: number;
 };
 
 export type TaskCreateRequest = {
@@ -845,6 +847,8 @@ export type KpiCreateRequest = {
 export type KpiListResponse = {
   project_id: string;
   items: KpiSummary[];
+  limit: number;
+  offset: number;
 };
 
 export type PolicyRecordSummary = {
@@ -1406,6 +1410,8 @@ export type DecisionCard = {
 export type DecisionInboxResponse = {
   project_id: string;
   items: DecisionCard[];
+  limit: number;
+  offset: number;
 };
 
 export type DecisionActionRequest = {
@@ -1790,6 +1796,8 @@ export type ReceiptResponse = {
 export type ReceiptListResponse = {
   project_id: string;
   items: ReceiptResponse[];
+  limit: number;
+  offset: number;
 };
 
 export type BudgetReservationSummary = {
@@ -2161,6 +2169,7 @@ export type PackSummary = {
   workflows: string[];
   policies: string[];
   skills: string[];
+  source?: string;
   installed: boolean;
   installed_by?: string;
   installed_at?: string;
@@ -2183,6 +2192,12 @@ export type PackInstallRequest = {
   project_id: string;
   pack_id: string;
   actor?: string;
+};
+
+export type PackImportRequest = {
+  project_id: string;
+  actor?: string;
+  yaml: string;
 };
 
 export type AgentModuleSummary = {
@@ -2929,6 +2944,8 @@ export type DeploymentTargetSummary = {
 export type DeploymentTargetListResponse = {
   project_id: string;
   items: DeploymentTargetSummary[];
+  limit: number;
+  offset: number;
 };
 
 export type DeploymentTargetCreateRequest = {
@@ -3017,6 +3034,8 @@ export type DeploymentRunSummary = {
 export type DeploymentRunListResponse = {
   project_id: string;
   items: DeploymentRunSummary[];
+  limit: number;
+  offset: number;
 };
 
 export type DeploymentRunCreateRequest = {
@@ -3080,6 +3099,8 @@ export type ChangeSetSummary = {
 export type ChangeSetListResponse = {
   project_id: string;
   items: ChangeSetSummary[];
+  limit: number;
+  offset: number;
 };
 
 export type ChangeSetCreateRequest = {
@@ -3966,6 +3987,47 @@ export function createBossApiClient(config: BossApiClientConfig) {
     installPack(payload: PackInstallRequest) {
       return request<PackDetail>("POST", "/v1/packs/install", {
         body: payload,
+      });
+    },
+    importPack(payload: PackImportRequest) {
+      // raw yaml body (not json) to match API x-yaml for import (Community packs)
+      const q = { project_id: payload.project_id, actor: payload.actor || "system" };
+      const url = `${baseUrl}${withQuery("/v1/packs/import", q)}`;
+      return fetchImpl(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/x-yaml",
+          Accept: "application/json",
+          ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
+        },
+        body: payload.yaml,
+      }).then(async (r: any) => {
+        if (!r.ok) {
+          const rawBody = await r.text();
+          let body: unknown = rawBody;
+          try { body = rawBody ? JSON.parse(rawBody) : undefined; } catch {}
+          throw new BossApiError(`BOSS API request failed: ${r.status}`, r.status, body);
+        }
+        return (await r.json()) as PackDetail;
+      });
+    },
+    exportPack(projectId: string, packId: string): Promise<string> {
+      // yaml text, not json
+      const url = `${baseUrl}${withQuery(`/v1/packs/${encodeURIComponent(packId)}/export`, { project_id: projectId })}`;
+      return fetchImpl(url, {
+        method: "GET",
+        headers: {
+          Accept: "application/x-yaml",
+          ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
+        },
+      }).then(async (r: any) => {
+        if (!r.ok) {
+          const rawBody = await r.text();
+          let body: unknown = rawBody;
+          try { body = rawBody ? JSON.parse(rawBody) : undefined; } catch {}
+          throw new BossApiError(`BOSS API request failed: ${r.status}`, r.status, body);
+        }
+        return await r.text();
       });
     },
     listAgentModules(projectId: string) {
