@@ -34,4 +34,4 @@
 
 **P0 Count Open (local)**: 0 (all including 012 fresh bootstrap closed by 41e5243 + prior).
 **P0 Count Blocked (external)**: 3.
-**Total Open Gaps**: ~2-3 (AUTO-001/002/005 + new 011/012 closed; 003 P3 docs in progress via spawned subagent; 004 monitoring; possible Sec P2 local actions like Makefile).
+**Total Open Gaps**: ~2 (AUTO-001/002/005 + new 011/012 closed; 003 P3 docs in progress via spawned subagent 019e98a3; 004 monitoring; Sec P2 dep-audit Makefile target added 59845e1 as local action).
