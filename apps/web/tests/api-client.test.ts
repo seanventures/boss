@@ -2704,24 +2704,10 @@ describe("createBossApiClient", () => {
       "http://127.0.0.1:8000/v1/autoscaler/plans",
       "http://127.0.0.1:8000/v1/resource-janitor/run",
       "http://127.0.0.1:8000/v1/deployments",
-<<<<<<< HEAD
       "http://127.0.0.1:8000/v1/deployments?project_id=boss-dogfood&limit=50&offset=0",
       "http://127.0.0.1:8000/v1/deployment-environment-policies?project_id=boss-dogfood&limit=50&offset=0",
       "http://127.0.0.1:8000/v1/deployment-environment-policies",
       "http://127.0.0.1:8000/v1/deployment-runs?project_id=boss-dogfood&limit=5&offset=0",
-=======
-<<<<<<< HEAD
-      "http://127.0.0.1:8000/v1/deployments?project_id=boss-dogfood",
-      "http://127.0.0.1:8000/v1/deployment-environment-policies?project_id=boss-dogfood",
-      "http://127.0.0.1:8000/v1/deployment-environment-policies",
-      "http://127.0.0.1:8000/v1/deployment-runs?project_id=boss-dogfood&limit=5",
-=======
-      "http://127.0.0.1:8000/v1/deployments?project_id=boss-dogfood&limit=50&offset=0",
-      "http://127.0.0.1:8000/v1/deployment-environment-policies?project_id=boss-dogfood&limit=50&offset=0",
-      "http://127.0.0.1:8000/v1/deployment-environment-policies",
-      "http://127.0.0.1:8000/v1/deployment-runs?project_id=boss-dogfood&limit=5&offset=0",
->>>>>>> 07c8c43 (fix(test): kpis mocks as any for tsc (3x); sync .ai/ gap/status from pack close + 3x; integrate openapi/db schema from pack agent)
->>>>>>> 045c2c8 (fix(test): kpis mocks as any for tsc (3x); sync .ai/ gap/status from pack close + 3x; integrate openapi/db from pack (cherry 07c8c43))
       "http://127.0.0.1:8000/v1/deployment-runs",
       "http://127.0.0.1:8000/v1/deployment-runs/deprun_1/health-check",
       "http://127.0.0.1:8000/v1/provider-health?project_id=boss-dogfood&provider_account_id=pa_1&limit=5",
