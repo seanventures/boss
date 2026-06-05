@@ -88,6 +88,13 @@ describe("executive console accessibility baseline", () => {
     expect(pageSource).toContain('id="license-entitlements-heading"');
     expect(pageSource).toContain('aria-labelledby="team-invites-heading"');
     expect(pageSource).toContain('id="team-invites-heading"');
+    // Monitoring/obs polish (P2 per 3x batch): health/risk/event/deadletter/provider health panels have labelled regions for a11y + reachability of states (empty/error/success)
+    expect(pageSource).toContain('aria-labelledby="health-snapshots-heading"');
+    expect(pageSource).toContain('id="health-snapshots-heading"');
+    expect(pageSource).toContain('aria-labelledby="what-changed-heading"');
+    expect(pageSource).toContain('id="what-changed-heading"');
+    expect(pageSource).toContain('aria-labelledby="providerops-heading"');
+    expect(pageSource).toContain('id="providerops-heading"');
     expect(pageSource).toContain('aria-labelledby="billing-portal-sessions-heading"');
     expect(pageSource).toContain('id="billing-portal-sessions-heading"');
     expect(pageSource).toContain('aria-labelledby="hosted-marketplace-catalog-heading"');

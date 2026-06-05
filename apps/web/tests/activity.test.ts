@@ -102,6 +102,15 @@ describe("empty API feeds", () => {
     expect(feed.blockedReason).toBe("providerops api down");
   });
 
+  it("returns an unavailable provider health subfeed state (empty on error)", () => {
+    const feed = emptyProviderOpsFeed("provider health api down");
+    // polish: explicit providerHealth state for monitoring obs
+    expect(feed.apiReachable).toBe(false);
+    expect(feed.providerHealth).toEqual([]);
+    expect(feed.summary.healthyProviders).toBe(0);
+    expect(feed.blockedReason).toBe("provider health api down");
+  });
+
   it("returns an unavailable health snapshot feed", () => {
     const feed = emptyHealthSnapshotFeed("health snapshot api down");
 

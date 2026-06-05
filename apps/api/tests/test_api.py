@@ -428,6 +428,13 @@ def test_budget_consume_records_cost_receipt_and_consumes_reservation(client, en
     event_types = {item["event_type"] for item in events.json()["items"]}
     assert "budget.reservation_consumed" in event_types
 
+    # monitoring polish: event feed empty state via limit/offset beyond
+    empty_events = client.get(
+        "/v1/events", params={"project_id": "boss-dogfood", "limit": 1, "offset": 999999}
+    )
+    assert empty_events.status_code == 200
+    assert empty_events.json()["items"] == []
+
 
 def test_budget_consume_requires_budget_permission_and_active_reservation(client, engine):
     reservation_id = reserve_for_pr_proposal(client)
@@ -4719,6 +4726,14 @@ def test_provider_account_create_and_test_missing_credentials_are_visible(client
     )
     assert health.status_code == 200
     assert health.json()["items"][0]["provider"] == "digitalocean"
+
+    # monitoring polish: empty state for provider health feed (no filter match)
+    empty_health = client.get(
+        "/v1/provider-health",
+        params={"project_id": "boss-dogfood", "provider_account_id": "nonexistent_pa"},
+    )
+    assert empty_health.status_code == 200
+    assert empty_health.json()["items"] == []
 
     events = client.get("/v1/events", params={"project_id": "boss-dogfood"})
     assert any(

@@ -373,10 +373,10 @@ export default async function HomePage({ searchParams }: HomePageProps) {
       fetchMeetingFeed(activeProjectId),
       fetchKpiFeed(activeProjectId),
       fetchArtifactFeed(activeProjectId),
-      fetchActivityFeed(activeProjectId),
+      fetchActivityFeed(activeProjectId, 25),
       fetchHealthSnapshotFeed(activeProjectId),
       fetchOpsQueueFeed(activeProjectId),
-      fetchDeadletterFeed(activeProjectId),
+      fetchDeadletterFeed(activeProjectId, 25),
       fetchPackFeed(activeProjectId),
       fetchRoleFeed(activeProjectId),
       fetchAgentModuleFeed(activeProjectId),
@@ -1309,11 +1309,11 @@ export default async function HomePage({ searchParams }: HomePageProps) {
           </article>
         </section>
 
-        <section className="panel-stack">
+        <section className="panel-stack" aria-labelledby="providerops-heading">
           <div className="section-head">
             <div>
               <span className="eyebrow">ProviderOps</span>
-              <h2>Elastic Resource Plane for real provider assets.</h2>
+              <h2 id="providerops-heading">Elastic Resource Plane for real provider assets.</h2>
             </div>
             <p className="status-meta">
               Provider APIs stay behind Resource Plane gates: ChangeSet, policy,
@@ -2412,11 +2412,13 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                         </code>
                       </div>
                     ))}
-                    {providerOps.providerHealth.length === 0 &&
-                    providerOps.driftReports.length === 0 &&
+                    {providerOps.providerHealth.length === 0 && (
+                      <p className="detail">No provider health observations yet.</p>
+                    )}
+                    {providerOps.driftReports.length === 0 &&
                     providerOps.resourceReceipts.length === 0 ? (
                       <p className="detail">
-                        No ProviderOps health, drift, or receipt records yet.
+                        No drift or receipt records yet.
                       </p>
                     ) : null}
                   </div>
@@ -2557,11 +2559,11 @@ export default async function HomePage({ searchParams }: HomePageProps) {
           </article>
         </section>
 
-        <section className="panel-stack">
+        <section className="panel-stack" aria-labelledby="health-snapshots-heading">
           <div className="section-head">
             <div>
               <span className="eyebrow">Health Snapshots</span>
-              <h2>Durable system state for what changed and what is risky.</h2>
+              <h2 id="health-snapshots-heading">Durable system state for what changed and what is risky.</h2>
             </div>
             <p className="status-meta">
               Metatron-style visibility now has a canonical snapshot object with queue, budget, workload, and incident state.
@@ -5847,11 +5849,11 @@ export default async function HomePage({ searchParams }: HomePageProps) {
           </div>
         </section>
 
-        <section className="panel-stack">
+        <section className="panel-stack" aria-labelledby="what-changed-heading">
           <div className="section-head">
             <div>
               <span className="eyebrow">What Changed</span>
-              <h2>Recent events and visible failures.</h2>
+              <h2 id="what-changed-heading">Recent events and visible failures.</h2>
             </div>
             <p className="status-meta">
               No silent drops: deadletters remain visible beside the event feed.
