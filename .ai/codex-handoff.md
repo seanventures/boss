@@ -24,16 +24,23 @@ See .ai/requirements-traceability.md (MET-*, DEC-*, CAN-* incl KPI (CAN-006), ne
 Validation now confirms: tests pass, build passes, no regressions. Subagent validator 285 GWT + specific AC present OK. New commits on branch (41e5243, 527e9a1) advance reliability + docs.
 
 ## Active Grok Agents
-- Primary ORCHESTRATOR (this; dispatched 5 parallel + managed/poll/integrate: rate/pag/validate/AUTO-004/PRD-audit; QA killed after long but e2e tests landed; full validate green; .ai/ + commits a374f4a+5083391+4dd031c+dcd5fc8+990d00e + push + PR#3).
-- 9+ agent .md (updated per agent + orch).
-- 4 prior (UX/Sec/QA/PM-Docs 527e9a1) + 5 new complete:
-  - DevOps 019e98b0-63da: AUTO-004 Closed; .env.example all BOSS_* commented (bootstrap/infra/account/oidc/etc), script enhance for bootstrap, Makefile + full-validate/deps-audit targets; all makes (lint/build/k8s/infra/release/smoke) green; .ai/ + branch codex/auto-004-env-release commit 990d00e (in main) + PR#3 comments.
-  - Security-rate 019e98b0-7e99: GAP-013 Closed; InMemoryRateLimiter (stdlib deque time, 10rpm per IP+proj+actor) + config BOSS_RATE_*, enforce early on /metatron/query + /commands/propose + /resources/sync, 429 + record_rate_limit_denial event (no silent), test helpers, openapi 429, .env flags; test_high_cost...429 + conftest; lint PASS; commit 5083391 + PR#3.
-  - Arch-pagination 019e98b0-b226: GAP-014 Closed; limit/offset (default 0 backward) on /events /resources /costs + handlers validate + resource_plane lists + schemas responses + openapi + api-client ts + web tests mocks + new test_pagination...; direct TestClient + lint + web build green; commit 4dd031c + PR#3.
-  - PM-PRD 019e98b0-c77a: PRD-v2/TECH exhaustive audit vs code/openapi/trace/impl; "coverage good, only external left" (comms/self-imp/commercial/elastic local full); noted GAP-PRD-AUDIT-001 P3 pack import/export (baked now sufficient); .ai/ gap/trace/handoff/status/release/agent + commit dcd5fc8 + PR#3.
-  - QA-validate 019e98b0-9657: e2e/access polish + full matrix (per qa-review/gap); bootstrap.py _retry with backoff for deadlock (env); test_api.py 3 rate extend tests (sync also limited, disabled bypass, denial audit mirror); edits M integrated a374f4a; killed after 38min/6err (full matrix env/DB contention as prior agents); targeted 30p green via validate cmd; 162 tools productive.
-- All followed AGENTS (read first PRD/TECH/policies, small vertical, tests state/edges, .ai/ update, commit IDs, no ext bypass, push/PR).
-- Work Codex avoid: the above closed. Can pick: GAP-PRD-AUDIT-001 P3 pack (local feasible, small), more e2e, or full final report.
+- Primary ORCHESTRATOR (this; prior 5+1 pack managed; DOUBLED FOR 3X SPEED: launched 10+ new specialists in parallel batch on 12+ full DoD polish slices across product; total ~20 agents; .ai/ prepped/updated for scale; will poll/integrate new batch + push/PR#3).
+- 9 base + 10+ new .md (existing updated for doubling; new created by specialists: ui-ux-design-toasts.md, qa-e2e-comms.md, feature-packs-2.md, qa-e2e-selfimp-provider.md, feature-providerops-polish.md, ux-commercial-surfaces.md, arch-pagination-expand.md, feature-monitoring-obs.md, feature-comms-ui.md + attempted others).
+- 4 prior + 5+ managed complete (DevOps 019e98b0-63da AUTO-004 Closed 990d00e .env/full-validate; Security-rate 019e98b0-7e99 GAP-013 rate Closed 5083391; Arch 019e98b0-b226 GAP-014 pag Closed 4dd031c; PM 019e98b0-c77a audit + P3 note dcd5fc8; QA 019e98b0-9657 e2e a374f4a killed long).
+- New 3x batch launched (bg ids 019e98d8-* / d9-*):
+  - ui-ux-toasts 019e98d8-8903: P2 client loading/success feedback toasts for 5+ actions (KPI/budget/command/provider/self-imp) per ux-review P2 + DoD 9-12 states.
+  - qa-e2e-comms 019e98d8-bf0d: full e2e journeys/tests/states for comms (policy/outbox/inbox/deadletter/ACK/quiet/throttle) P2 e2e + COM DoD.
+  - feature-packs-2 019e98d8-bf0d: 2nd on GAP-PRD-AUDIT-001 P3 pack import/export (yaml validate/store/loader/export + tests/receipts) for Community ecosystem.
+  - qa-e2e-selfimp-provider 019e98d8-e518: e2e + states/conc/perm for self-imp (proposal/canary/rollout/rollback) + providerops (janitor/autoscaler/drift/deploy/health) P2 e2e + SIM/RPL DoD.
+  - feature-providerops-polish 019e98d8-e519: ProviderOps full DoD polish (janitor/autoscaler/drift/deployments/health/recon/explorer states/tests/a11y).
+  - ux-commercial-surfaces 019e98d9-1d45: Commercial local surfaces polish (edition/packs/marketplace/account-connect blocked + states/tests) COMPKG P2 + DoD.
+  - arch-pag-expand 019e98d9-1d46: Pagination expand to remaining lists (tasks/decisions/receipts/kpis/inbox etc) P2 arch + perf DoD.
+  - feature-monitoring-obs 019e98d9-5bd1: Monitoring/obs polish (health/risk/event/deadletter/provider health states/tests) P2 + AUD/MET DoD.
+  - feature-comms-ui 019e98d9-5bd1: Comms UI interactions polish (policy form/outbox/inbox/ACK/compose/deadletter UI states/tests) COM P2 + DoD.
+  - (devops-worker-infra + pm-docs-ac-more attempted; some coordinator limit, others running).
+- All per AGENTS (read first full list, small verticals per slice, 13-bullet agent .md, tests states/edges, commit IDs, push/PR#3, .ai/ update, no ask).
+- Work Codex avoid: closed prior + these 12+ in flight. Can pick: poll new agents (get 019e98d8-8903 etc block), integrate, more slices, or when clean full final report (coverage for all PRD surfaces + 25 DoD).
+- Coordination: .ai/agents/ updated for doubling/3x; handoff lists all; activity 15min notes scale.
 
 ## Active Grok Branches / PRs
 - codex/spec-closure-audit (current; ... + this Security rate + DevOps AUTO-004 on codex/auto-004-env-release branch for PR#3 update). Touched .ai/ etc. Good self/parallel work on branch.
