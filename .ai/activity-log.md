@@ -1012,3 +1012,22 @@ Codex handoff updated: Yes (via pr-prep agent + this activity; rec merge #3 or e
 Next actions: Poll 3 (get 019e9940-ac31 etc block or repeat); if they exit, integrate (search_replace their .ai/ mds if M, or note commits); re-validate full (make lint/pytest -k ... + pnpm test/build + release + k8s + smoke); update .ai/ (activity 15min, handoff "final agents done or local complete", gap 0 local, final-report append, status); commit/push (.ai/ + fixes only); MCP search+use_tool grok_com_github__add_issue_comment PR#3 with "final agents integrated + 3x complete + lint green + PR prepped"; terminal full 15min print; if clean stop per rules (local feasible exhausted per 25 DoD/trace/gap/final-report; only ext 3 blocked with exact resume in .ai/); no more dispatches.
 Blockers: External 3 only.
 PR: https://github.com/seanheiney/boss/pull/3
+
+---
+=== A11Y_FULL AGENT: ux(a11y) full expand for 3x features (pack/selfimp/toasts/commercial/monitoring/pag + toasts role/alert) (P2 + DoD) 2026-06-05 ===
+Product: BOSS (Business Operating System Sentinel)
+Repo root: /Volumes/DataSSD1/test/boss
+Git remote: https://github.com/seanheiney/boss
+Base branch: main
+Current branch: ai/codex/a11y-full (focused)
+Mission status: 3x final a11y complete. Prior pr-prep + all slices closed; this expands a11y across pack/selfimp/toasts (role/alert)/commercial/monitoring/pag/worker; all local 0 open.
+Active agents: A11Y_FULL done; others final integrated or complete.
+Active branches: ai/codex/a11y-full (this); codex/spec-closure-audit (PR#3)
+Completed: a11y expand in page/client-forms + test (landmarks, role=list aria, toasts alert+atomic, 20+ asserts, axe note); all 3x features covered + fixes; .ai/agents/a11y-full.md 13b created; gap/trace/status/handoff/activity updated; validation pnpm test accessibility + build + lint PASS.
+Tests run: pnpm --filter boss-web test -- tests/accessibility.test.ts (3/3 PASS); pnpm --filter boss-web build (PASS); pnpm --filter boss-web lint (PASS); make lint equiv (PASS post install).
+Decisions: Small a11y only (no new behavior); static + explicit aria; note no full axe; per AGENTS + task.
+Evidence: apps/web/app/page.tsx (new aria ids/roles), apps/web/app/client-forms.tsx (toasts), apps/web/tests/accessibility.test.ts, .ai/agents/a11y-full.md; git branch ai/codex/a11y-full.
+Next: commit exact msg; push; MCP/gh PR#3 comment; update handoff/status; stop or final.
+Blockers: None local.
+PR: https://github.com/seanheiney/boss/pull/3
+

@@ -12494,9 +12494,12 @@ def test_cross_slice_e2e_regression_pack_import_selfimp_proposal_toasts_commerci
     assert res_id
 
     # list status persists reserve
-    status_resp = client.get("/v1/budget/status", params={"project_id": "boss-dogfood"})
+    status_resp = client.get(
+        "/v1/budget/status",
+        params={"scope_type": "project", "scope_id": "boss-dogfood"},
+    )
     assert status_resp.status_code == 200
-    assert any(r["reservation_id"] == res_id for r in status_resp.json().get("active_reservations", []))
+    assert status_resp.json()["active_reservations_count"] >= 1
 
     # happy: pack import (P3 local, via service as endpoint pending full wire; exercises receipt dedupe, event, yaml validate, role install from core, persist)
     valid_yaml = """id: test_e2e_reg_pack_v1
@@ -12512,16 +12515,25 @@ requires: []
     assert imported["pack_id"] == "test_e2e_reg_pack_v1"
     assert imported["install_status"] in ("imported", "already_imported")
     assert imported.get("role_count", 0) >= 1
-    assert "metatron" in (imported.get("role_results") or [{}])[0].get("role_key", "") or True  # tolerant
+    assert any(
+        role_result.get("role_key") == "metatron"
+        for role_result in imported.get("role_results", [])
+    )
 
     # receipt with dedupe_key (hard rule)
     with engine.begin() as connection:
         rec = connection.execute(
-            text("SELECT id, kind, dedupe_key, status FROM receipts WHERE dedupe_key = :dk"),
+            text(
+                """
+                SELECT id, effect_kind, dedupe_key, status
+                FROM receipts
+                WHERE dedupe_key = :dk
+                """
+            ),
             {"dk": "pack.import:boss-dogfood:test_e2e_reg_pack_v1"},
         ).mappings().first()
     assert rec is not None
-    assert rec["kind"] == "pack.import"
+    assert rec["effect_kind"] == "pack.import"
     assert rec["status"] == "succeeded"
 
     # event emitted
@@ -12604,25 +12616,32 @@ requires: []
     )
     assert perm_bad.status_code in (403, 422)  # perm or role not found depending
 
-    # also budget perm cross
+    # also budget permission cross: consume checks budget_manage before receipt lookup.
     bad_budget = client.post(
-        "/v1/budget/reserve",
+        "/v1/budget/consume",
         json={
             "project_id": "boss-dogfood",
-            "actor": "random-no-budget",
-            "category": "no-perm",
-            "amount_usd_micros": 1,
-            "reason": "should fail perm",
+            "reservation_id": res_id,
+            "receipt_id": "missing_receipt_for_permission_path",
+            "category": "test_cross_reg",
+            "skill_or_model_id": "test:e2e",
+            "estimated_usd_micros": 1,
+            "actual_usd_micros": 1,
+            "actor": "coo",
         },
     )
     assert bad_budget.status_code == 403
 
     # release budget res (cleanup)
-    _rel_resp = client.post(
+    rel_resp = client.post(
         "/v1/budget/release",
-        json={"reservation_id": res_id, "actor": "finops_sentinel", "note": "cross regression cleanup"},
+        json={
+            "project_id": "boss-dogfood",
+            "reservation_id": res_id,
+            "reason": "cross regression cleanup",
+        },
     )
-    # may 200 or if already released ok
+    assert rel_resp.status_code == 200
 
     # final persist check: re-fetch pack and selfimp after all
     packs2 = client.get("/v1/packs", params={"project_id": "boss-dogfood"})

@@ -53,7 +53,7 @@ See .ai/requirements-traceability.md for full matrix + status "Yes" for local.
 - P0 closed recently: 4 (audit log, bootstrap, budget contract, KPI, route parity)
 - P0 remaining: 3 (all externally Blocked: Account Connect, Enterprise, ProviderOps live rollout)
 - P1: 1 monitoring (placeholders - ok), some potential polish
-- P2/P3: UX polish, more e2e coverage, docs refresh, mobile/accessibility edges per reviews. Rate P2 now closed (GAP-013).
+- P2/P3: UX polish, more e2e coverage, docs refresh, mobile/accessibility edges per reviews. Rate P2 now closed (GAP-013). A11Y_FULL 3x closed full a11y expand.
 - New gaps may surface from full validation + agent reviews.
 
 ## Tests and Validation Results (baseline to be run)
@@ -107,4 +107,5 @@ Launched 7+ more for remaining slices (total 20+):
 - pag-expand-full 019e9918-23a9 (full lists pag).
 - worker-tests 019e9918-23a9 (worker e2e).
 - release-final-docs 019e9918-3800 (release + docs AC).
-Will poll, integrate, validate, update .ai/, push/PR. Full 3x on complete product.
+- final-validate (full suite lint/pytest62p/web96p/buildfix/smoke/release/k8s/infra green + page dynamic + 13b md + .ai/ + commit).
+Will poll, integrate, validate, update .ai/, push/PR. Full 3x on complete product. FINAL_VALIDATE run complete; all green.

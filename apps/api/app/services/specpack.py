@@ -12,6 +12,7 @@ from sqlalchemy.engine import Connection
 from ..config import Settings
 from .commercial import CommercialService
 from .core import create_artifact, emit_event, json_hash
+from .receipts import ReceiptService
 
 
 class PackNotFoundError(Exception):
@@ -58,6 +59,26 @@ class SpecPackService:
     def __init__(self, settings: Settings):
         self.settings = settings
         self.commercial = CommercialService(settings)
+        self.receipts = ReceiptService()
+
+    def _project_scope(self, connection: Connection, project_id: str) -> dict[str, str]:
+        row = connection.execute(
+            text(
+                """
+                SELECT p.workspace_id, w.org_id
+                FROM projects p
+                JOIN workspaces w ON w.id = p.workspace_id
+                WHERE p.id = :project_id
+                """
+            ),
+            {"project_id": project_id},
+        ).mappings().first()
+        if not row:
+            return {
+                "org_id": self.settings.default_org_id,
+                "workspace_id": self.settings.default_workspace_id,
+            }
+        return {"org_id": row["org_id"], "workspace_id": row["workspace_id"]}
 
     def _load_yaml(self, path: Path) -> dict[str, Any]:
         if not path.exists():

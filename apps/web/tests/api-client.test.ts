@@ -344,19 +344,31 @@ describe("createBossApiClient", () => {
         headers: { "Content-Type": "application/json" },
       });
     };
-    const client = createBossApiClient({ baseUrl: "http://127.0.0.1:8000", fetchImpl });
+    const client = createBossApiClient({
+      baseUrl: "http://127.0.0.1:8000",
+      fetchImpl,
+    });
 
     const list = await client.listPacks("boss-dogfood");
     const detail = await client.getPack("boss-dogfood", "test_e2e_reg_pack_v1");
-    const inst = await client.installPack({ project_id: "boss-dogfood", pack_id: "test_e2e_reg_pack_v1", actor: "ceo" });
-    const badPerm = await client.installPack({ project_id: "boss-dogfood", pack_id: "core_v1", actor: "no-perm" });
+    const inst = await client.installPack({
+      project_id: "boss-dogfood",
+      pack_id: "test_e2e_reg_pack_v1",
+      actor: "ceo",
+    });
+    await expect(
+      client.installPack({
+        project_id: "boss-dogfood",
+        pack_id: "core_v1",
+        actor: "no-perm",
+      }),
+    ).rejects.toBeInstanceOf(BossApiError);
 
     expect(list.items.length).toBe(2);
     expect(list.items[1].pack_id).toBe("test_e2e_reg_pack_v1");
     expect(detail.pack_id).toBe("test_e2e_reg_pack_v1");
     expect(detail.install_status).toBe("imported");
     expect(inst.install_status).toBe("installed");
-    expect(badPerm).toBeInstanceOf(Error); // client throws on !ok
     expect(calls[0].url).toContain("/v1/packs?project_id=boss-dogfood");
     expect(calls[2].url).toBe("http://127.0.0.1:8000/v1/packs/install");
     // cross regression note: pack install/list here mirrors import (source local_upload in backend) + selfimp proposal + commercial source_pack + budget flows; toasts in client-forms wrap these for feedback states (tested in kpis.test)

@@ -38,7 +38,7 @@ Validation now confirms: tests pass, build passes, no regressions. Subagent vali
   - feature-monitoring-obs 019e98d9-5bd1: Monitoring/obs polish (health/risk/event/deadletter/provider health states/tests) P2 + AUD/MET DoD.
   - feature-comms-ui 019e98d9-5bd1: Comms UI interactions polish (policy form/outbox/inbox/ACK/compose/deadletter UI states/tests) COM P2 + DoD.
   - e2e-regression (this): cross-slice e2e regression tests pack import + selfimp using new pack + toasts + commercial edition + budget reserve (happy/error/perm/persist); updated test_api/web tests + .ai/agents/e2e-regression.md 13b; validated; commit/push/PR#3.
-  - (devops-worker-infra + pm-docs-ac-more attempted; some coordinator limit, others running).
+  - (devops-worker-infra + pm-docs-ac-more attempted; some coordinator limit, others running). A11Y_FULL (ai/codex/a11y-full) 3x final closed.
 - All per AGENTS (read first full list, small verticals per slice, 13-bullet agent .md, tests states/edges, commit IDs, push/PR#3, .ai/ update, no ask).
 - Work Codex avoid: closed prior + these 12+ in flight. Can pick: poll new agents (get 019e98d8-8903 etc block), integrate, more slices, or when clean full final report (coverage for all PRD surfaces + 25 DoD).
 - Coordination: .ai/agents/ updated for doubling/3x; handoff lists all; activity 15min notes scale.
@@ -172,4 +172,5 @@ Recent gap work (KPI, budget, bootstrap, audit logging, route parity) now has pa
 - worker-tests 019e9918-23a9-7df0-9b73-673f9525c8e9: worker/lease/job e2e + failure paths polish + tests.
 - release-final-docs 019e9918-3800-7a71-b09a-26d5ddded772: release-readiness + user-stories AC expand + validators for pack/3x + prep final.
 - PR_PREP_FINAL (this): 3x final PR#3 prep + body + .ai/agents/pr-prep-final.md 13b + commit/push/comment + Codex handoff merge/final.
-All with read-first, 13-bullet .ai/agents/*.md, commit/push/PR#3, validate per AGENTS. 3x complete; PR#3 prepped; local exhausted. Poll/integrate if external unblock.
+- FINAL_VALIDATE: full cmds + build fix (page.tsx dynamic) + re-runs green + .ai/agents/final-validate.md 13b + updates + chore commit + PR#3 comment.
+All with read-first, 13-bullet .ai/agents/*.md, commit/push/PR#3, validate per AGENTS. 3x complete; PR#3 prepped; local exhausted. Poll/integrate if external unblock. FINAL_VALIDATE green; ready.
