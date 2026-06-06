@@ -456,6 +456,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(json.dumps(report, indent=2, sort_keys=True))
     else:
         print(format_text(report))
+    if report["status"] == BLOCKED:
+        return 1
     if args.strict and report["status"] != READY:
         return 1
     return 0

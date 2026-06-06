@@ -5,6 +5,7 @@ from scripts.check_external_rollout_readiness import (
     evaluate_readiness,
     format_text,
 )
+from scripts import check_external_rollout_readiness as readiness_cli
 
 
 def _checks_by_id(report):
@@ -46,3 +47,33 @@ def test_external_rollout_readiness_distinguishes_config_from_live_verification(
     assert checks["enterprise_identity_runtime"]["status"] == EXTERNAL_VERIFICATION_REQUIRED
     assert checks["providerops_write_rollout"]["status"] == EXTERNAL_VERIFICATION_REQUIRED
     assert "configured-secret" not in format_text(report)
+
+
+def test_external_rollout_readiness_cli_fails_when_blocked(monkeypatch, capsys):
+    monkeypatch.setattr(
+        readiness_cli,
+        "evaluate_readiness",
+        lambda: {"status": BLOCKED, "summary": "blocked", "checks": []},
+    )
+
+    assert readiness_cli.main([]) == 1
+    assert "External rollout readiness: blocked" in capsys.readouterr().out
+
+
+def test_external_rollout_readiness_cli_allows_non_strict_external_verification(
+    monkeypatch,
+    capsys,
+):
+    monkeypatch.setattr(
+        readiness_cli,
+        "evaluate_readiness",
+        lambda: {
+            "status": EXTERNAL_VERIFICATION_REQUIRED,
+            "summary": "verification required",
+            "checks": [],
+        },
+    )
+
+    assert readiness_cli.main([]) == 0
+    assert readiness_cli.main(["--strict"]) == 1
+    assert "external_verification_required" in capsys.readouterr().out

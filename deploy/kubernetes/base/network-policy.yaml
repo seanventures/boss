@@ -16,10 +16,3 @@ spec:
         - podSelector:
             matchLabels:
               app.kubernetes.io/name: boss
-    - from:
-        - namespaceSelector: {}
-      ports:
-        - protocol: TCP
-          port: 3000
-        - protocol: TCP
-          port: 8000
