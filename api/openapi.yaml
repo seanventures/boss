@@ -1815,6 +1815,43 @@ paths:
         '201': { description: Pack installed }
         '404': { description: Pack not found }
         '422': { description: Invalid pack or role spec }
+  /v1/packs/import:
+    post:
+      summary: Import a local PackSpec YAML into a project
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id, yaml_content]
+              properties:
+                project_id: { type: string }
+                yaml_content: { type: string }
+                actor: { type: string, default: system }
+      responses:
+        '201': { description: Pack imported with receipt and audit event }
+        '403': { description: Actor lacks pack_manage permission }
+        '422': { description: Invalid YAML or PackSpec }
+  /v1/packs/{pack_id}/export:
+    get:
+      summary: Export a pack as YAML for local import or review
+      parameters:
+        - name: pack_id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Pack YAML export
+          content:
+            application/x-yaml:
+              schema: { type: string }
+        '404': { description: Pack not found }
   /v1/agent-modules:
     get:
       summary: List packaged agent modules with install and entitlement status for a project
@@ -2447,6 +2484,116 @@ paths:
           schema: { type: integer, default: 25 }
       responses:
         '200': { description: Routing log list including data_boundary classifications }
+  /v1/secret-refs:
+    get:
+      summary: List SecretRef metadata records for a project
+      parameters:
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+        - name: provider
+          in: query
+          required: false
+          schema: { type: string }
+        - name: status
+          in: query
+          required: false
+          schema: { type: string }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, default: 100 }
+        - name: offset
+          in: query
+          required: false
+          schema: { type: integer, default: 0 }
+      responses:
+        '200': { description: SecretRef list without secret material }
+    post:
+      summary: Create a SecretRef metadata record
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id, ref_kind, ref_key]
+              properties:
+                project_id: { type: string }
+                ref_kind:
+                  type: string
+                  enum: [env, vault, local_runner, platform_secret_store]
+                ref_key: { type: string }
+                provider: { type: string }
+                status:
+                  type: string
+                  enum: [active, disabled, rotation_due, revoked]
+                  default: active
+                metadata: { type: object }
+                actor: { type: string, default: system }
+      responses:
+        '201': { description: SecretRef created }
+        '403': { description: Actor lacks providerops_manage permission }
+        '422': { description: Invalid SecretRef payload }
+  /v1/secret-refs/{secret_ref_id}:
+    get:
+      summary: Get a SecretRef metadata record
+      parameters:
+        - name: secret_ref_id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: SecretRef detail }
+        '404': { description: SecretRef not found }
+    patch:
+      summary: Update SecretRef metadata or status
+      parameters:
+        - name: secret_ref_id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id]
+              properties:
+                project_id: { type: string }
+                provider: { type: string }
+                status:
+                  type: string
+                  enum: [active, disabled, rotation_due, revoked]
+                metadata: { type: object }
+                actor: { type: string, default: system }
+      responses:
+        '200': { description: SecretRef updated }
+        '404': { description: SecretRef not found }
+    delete:
+      summary: Revoke a SecretRef metadata record
+      parameters:
+        - name: secret_ref_id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+        - name: actor
+          in: query
+          required: false
+          schema: { type: string, default: system }
+      responses:
+        '204': { description: SecretRef revoked }
+        '404': { description: SecretRef not found }
   /v1/providers:
     get:
       summary: List ProviderOps provider accounts for a project
@@ -3333,6 +3480,39 @@ paths:
         '409': { description: Invalid transition }
         '422': { description: Validation error }
   /v1/jobs:
+    get:
+      summary: List jobs for a project
+      parameters:
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+        - name: status
+          in: query
+          required: false
+          schema: { type: string }
+        - name: kind
+          in: query
+          required: false
+          schema: { type: string }
+        - name: task_id
+          in: query
+          required: false
+          schema: { type: string }
+        - name: include_terminal
+          in: query
+          required: false
+          schema: { type: boolean, default: true }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, default: 50 }
+        - name: offset
+          in: query
+          required: false
+          schema: { type: integer, default: 0 }
+      responses:
+        '200': { description: Paginated job list with queue metadata }
     post:
       summary: Create job
       requestBody:

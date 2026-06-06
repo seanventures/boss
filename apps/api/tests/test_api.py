@@ -17400,3 +17400,185 @@ def test_pagination_limit_offset_on_events_resources_costs_lists(client):
     assert ccb["limit"] == 3
     assert ccb["offset"] == 0
     assert "items" in ccb
+
+
+def test_pack_import_and_export_http_endpoints(client, engine):
+    project_id = "boss-dogfood"
+    pack_id = "test_api_p0_pack_import_v1"
+    pack_yaml = """
+id: test_api_p0_pack_import_v1
+version: 0.1.0
+description: API P0 pack import/export HTTP slice.
+status: active
+installs:
+  roles:
+    - qa
+requires: []
+workflows: []
+policies: []
+skills: []
+"""
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                """
+                DELETE FROM receipts
+                WHERE project_id = :project_id
+                  AND dedupe_key = :dedupe_key
+                """
+            ),
+            {
+                "project_id": project_id,
+                "dedupe_key": f"pack.import:{project_id}:{pack_id}",
+            },
+        )
+        connection.execute(
+            text(
+                """
+                DELETE FROM pack_installs
+                WHERE project_id = :project_id AND pack_id = :pack_id
+                """
+            ),
+            {"project_id": project_id, "pack_id": pack_id},
+        )
+
+    imported = client.post(
+        "/v1/packs/import",
+        json={
+            "project_id": project_id,
+            "yaml_content": pack_yaml,
+            "actor": "ceo",
+        },
+    )
+    assert imported.status_code == 201
+    body = imported.json()
+    assert body["pack_id"] == pack_id
+    assert body["install_status"] == "imported"
+
+    exported = client.get(
+        f"/v1/packs/{pack_id}/export",
+        params={"project_id": project_id},
+    )
+    assert exported.status_code == 200
+    assert exported.headers["content-type"].startswith("application/x-yaml")
+    assert pack_id in exported.text
+    assert "API P0 pack import/export HTTP slice." in exported.text
+
+    bad_yaml = client.post(
+        "/v1/packs/import",
+        json={
+            "project_id": project_id,
+            "yaml_content": "invalid: [ yaml",
+            "actor": "ceo",
+        },
+    )
+    assert bad_yaml.status_code == 422
+
+
+def test_list_jobs_http_endpoint(client):
+    created = client.post(
+        "/v1/jobs",
+        json={
+            "project_id": "boss-dogfood",
+            "kind": "plan.generate",
+            "payload": {"command": "List jobs slice."},
+        },
+    )
+    assert created.status_code == 201
+    job_id = created.json()["id"]
+
+    listed = client.get(
+        "/v1/jobs",
+        params={
+            "project_id": "boss-dogfood",
+            "kind": "plan.generate",
+            "status": "queued",
+            "include_terminal": False,
+            "limit": 10,
+        },
+    )
+    assert listed.status_code == 200
+    payload = listed.json()
+    assert payload["project_id"] == "boss-dogfood"
+    assert any(item["id"] == job_id for item in payload["items"])
+
+    missing = client.get(
+        "/v1/jobs",
+        params={"project_id": "boss-dogfood", "task_id": "task_missing"},
+    )
+    assert missing.status_code == 200
+    assert missing.json()["items"] == []
+
+
+def test_secret_ref_crud_http_endpoints(client, engine):
+    project_id = "boss-dogfood"
+    ref_key = "BOSS_TEST_SECRET_REF_HTTP"
+
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                """
+                DELETE FROM secret_refs
+                WHERE project_id = :project_id AND ref_key = :ref_key
+                """
+            ),
+            {"project_id": project_id, "ref_key": ref_key},
+        )
+
+    created = client.post(
+        "/v1/secret-refs",
+        json={
+            "project_id": project_id,
+            "ref_kind": "env",
+            "ref_key": ref_key,
+            "provider": "digitalocean",
+            "metadata": {"scope": "api-p0"},
+            "actor": "ceo",
+        },
+    )
+    assert created.status_code == 201
+    secret_ref_id = created.json()["id"]
+    assert created.json()["credential_ref"] == f"env:{ref_key}"
+
+    fetched = client.get(
+        f"/v1/secret-refs/{secret_ref_id}",
+        params={"project_id": project_id},
+    )
+    assert fetched.status_code == 200
+    assert fetched.json()["provider"] == "digitalocean"
+
+    updated = client.patch(
+        f"/v1/secret-refs/{secret_ref_id}",
+        json={
+            "project_id": project_id,
+            "status": "rotation_due",
+            "metadata": {"scope": "api-p0", "rotation": "due"},
+            "actor": "ceo",
+        },
+    )
+    assert updated.status_code == 200
+    assert updated.json()["status"] == "rotation_due"
+
+    listed = client.get(
+        "/v1/secret-refs",
+        params={
+            "project_id": project_id,
+            "provider": "digitalocean",
+            "status": "rotation_due",
+        },
+    )
+    assert listed.status_code == 200
+    assert any(item["id"] == secret_ref_id for item in listed.json()["items"])
+
+    deleted = client.delete(
+        f"/v1/secret-refs/{secret_ref_id}",
+        params={"project_id": project_id, "actor": "ceo"},
+    )
+    assert deleted.status_code == 204
+
+    revoked = client.get(
+        f"/v1/secret-refs/{secret_ref_id}",
+        params={"project_id": project_id},
+    )
+    assert revoked.status_code == 200
+    assert revoked.json()["status"] == "revoked"

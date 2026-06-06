@@ -1063,6 +1063,23 @@ export type JobSummary = {
   run_after: string;
 };
 
+export type JobListItem = JobSummary & {
+  task_title?: string;
+  lease_owner?: string;
+  lease_expires_at?: string;
+  heartbeat_at?: string;
+  last_error?: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+};
+
+export type JobListResponse = {
+  project_id: string;
+  items: JobListItem[];
+  limit: number;
+  offset: number;
+};
+
 export type JobCreateRequest = {
   project_id: string;
   kind: string;
@@ -2186,6 +2203,51 @@ export type PackListResponse = {
 export type PackInstallRequest = {
   project_id: string;
   pack_id: string;
+  actor?: string;
+};
+
+export type PackImportRequest = {
+  project_id: string;
+  yaml_content: string;
+  actor?: string;
+};
+
+export type SecretRefSummary = {
+  id: string;
+  project_id: string;
+  ref_kind: string;
+  ref_key: string;
+  provider?: string;
+  status: string;
+  metadata: Record<string, unknown>;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+  credential_ref: string;
+};
+
+export type SecretRefListResponse = {
+  project_id: string;
+  items: SecretRefSummary[];
+  limit: number;
+  offset: number;
+};
+
+export type SecretRefCreateRequest = {
+  project_id: string;
+  ref_kind: string;
+  ref_key: string;
+  provider?: string;
+  status?: string;
+  metadata?: Record<string, unknown>;
+  actor?: string;
+};
+
+export type SecretRefUpdateRequest = {
+  project_id: string;
+  provider?: string;
+  status?: string;
+  metadata?: Record<string, unknown>;
   actor?: string;
 };
 
@@ -3832,6 +3894,29 @@ export function createBossApiClient(config: BossApiClientConfig) {
         body: payload,
       });
     },
+    listJobs(
+      projectId: string,
+      options: {
+        status?: string;
+        kind?: string;
+        task_id?: string;
+        include_terminal?: boolean;
+        limit?: number;
+        offset?: number;
+      } = {},
+    ) {
+      return request<JobListResponse>("GET", "/v1/jobs", {
+        query: {
+          project_id: projectId,
+          status: options.status,
+          kind: options.kind,
+          task_id: options.task_id,
+          include_terminal: options.include_terminal,
+          limit: options.limit,
+          offset: options.offset,
+        },
+      });
+    },
     inspectOpsQueue(projectId: string, limit = 25, includeTerminal = false) {
       return request<OpsQueueInspectionResponse>("GET", "/v1/ops/queue", {
         query: {
@@ -3981,6 +4066,56 @@ export function createBossApiClient(config: BossApiClientConfig) {
       return request<PackDetail>("POST", "/v1/packs/install", {
         body: payload,
       });
+    },
+    importPack(payload: PackImportRequest) {
+      return request<PackDetail>("POST", "/v1/packs/import", {
+        body: payload,
+      });
+    },
+    exportPack(projectId: string, packId: string) {
+      return request<string>("GET", `/v1/packs/${encodeURIComponent(packId)}/export`, {
+        query: { project_id: projectId },
+      });
+    },
+    listSecretRefs(
+      projectId: string,
+      options: { provider?: string; status?: string; limit?: number; offset?: number } = {},
+    ) {
+      return request<SecretRefListResponse>("GET", "/v1/secret-refs", {
+        query: {
+          project_id: projectId,
+          provider: options.provider,
+          status: options.status,
+          limit: options.limit,
+          offset: options.offset,
+        },
+      });
+    },
+    createSecretRef(payload: SecretRefCreateRequest) {
+      return request<SecretRefSummary>("POST", "/v1/secret-refs", {
+        body: payload,
+      });
+    },
+    getSecretRef(projectId: string, secretRefId: string) {
+      return request<SecretRefSummary>(
+        "GET",
+        `/v1/secret-refs/${encodeURIComponent(secretRefId)}`,
+        { query: { project_id: projectId } },
+      );
+    },
+    updateSecretRef(secretRefId: string, payload: SecretRefUpdateRequest) {
+      return request<SecretRefSummary>(
+        "PATCH",
+        `/v1/secret-refs/${encodeURIComponent(secretRefId)}`,
+        { body: payload },
+      );
+    },
+    deleteSecretRef(projectId: string, secretRefId: string, actor = "system") {
+      return request<void>(
+        "DELETE",
+        `/v1/secret-refs/${encodeURIComponent(secretRefId)}`,
+        { query: { project_id: projectId, actor } },
+      );
     },
     listAgentModules(projectId: string) {
       return request<AgentModuleListResponse>("GET", "/v1/agent-modules", {

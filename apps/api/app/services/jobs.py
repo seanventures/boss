@@ -34,6 +34,73 @@ class JobLeaseService:
         self.comms = CommsService(settings)
         self.agent_runtime = AgentRuntimeService(settings)
 
+    def list_jobs(
+        self,
+        connection: Connection,
+        project_id: str,
+        *,
+        status: Optional[str] = None,
+        kind: Optional[str] = None,
+        task_id: Optional[str] = None,
+        include_terminal: bool = True,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
+        if limit < 1 or limit > 200:
+            raise ValueError("limit must be between 1 and 200.")
+        if offset < 0:
+            raise ValueError("offset must be >= 0.")
+        filters = ["j.project_id = :project_id"]
+        params: dict[str, Any] = {
+            "project_id": project_id,
+            "limit": limit,
+            "offset": offset,
+        }
+        if status:
+            filters.append("j.status = :status")
+            params["status"] = status
+        if kind:
+            filters.append("j.kind = :kind")
+            params["kind"] = kind
+        if task_id:
+            filters.append("j.task_id = :task_id")
+            params["task_id"] = task_id
+        if not include_terminal:
+            filters.append(
+                "j.status NOT IN ('succeeded', 'cancelled', 'deadlettered')"
+            )
+        where_clause = " AND ".join(filters)
+        rows = connection.execute(
+            text(
+                f"""
+                SELECT j.id, j.project_id, j.task_id, t.title AS task_title,
+                       j.kind, j.status, j.priority, j.attempt, j.max_attempts,
+                       j.data_boundary, j.run_after, j.lease_owner,
+                       j.lease_expires_at, j.heartbeat_at, j.last_error,
+                       j.created_at, j.updated_at
+                FROM jobs j
+                LEFT JOIN tasks t ON t.id = j.task_id
+                WHERE {where_clause}
+                ORDER BY
+                  CASE j.status
+                    WHEN 'deadlettered' THEN 0
+                    WHEN 'failed_final' THEN 1
+                    WHEN 'failed_retryable' THEN 2
+                    WHEN 'leased' THEN 3
+                    WHEN 'running' THEN 4
+                    WHEN 'queued' THEN 5
+                    ELSE 6
+                  END,
+                  j.priority ASC,
+                  j.run_after ASC,
+                  j.created_at DESC
+                LIMIT :limit OFFSET :offset
+                """
+            ),
+            params,
+        ).mappings().all()
+        return [self._serialize_job_row(row) for row in rows]
+
     def create_job(
         self,
         connection: Connection,
@@ -768,6 +835,36 @@ class JobLeaseService:
             text("SELECT title FROM tasks WHERE id = :task_id"),
             {"task_id": task_id},
         ).scalar_one_or_none()
+
+    def _serialize_job_row(self, row) -> dict[str, Any]:
+        last_error = row["last_error"] or {}
+        if not isinstance(last_error, dict):
+            last_error = {}
+        return {
+            "id": row["id"],
+            "project_id": row["project_id"],
+            "task_id": row["task_id"],
+            "task_title": row.get("task_title"),
+            "kind": row["kind"],
+            "status": row["status"],
+            "data_boundary": row.get("data_boundary") or "internal",
+            "priority": row["priority"],
+            "max_attempts": row["max_attempts"],
+            "attempt": row["attempt"],
+            "run_after": row["run_after"].isoformat(),
+            "lease_owner": row.get("lease_owner"),
+            "lease_expires_at": (
+                row["lease_expires_at"].isoformat()
+                if row.get("lease_expires_at")
+                else None
+            ),
+            "heartbeat_at": (
+                row["heartbeat_at"].isoformat() if row.get("heartbeat_at") else None
+            ),
+            "last_error": last_error,
+            "created_at": row["created_at"].isoformat(),
+            "updated_at": row["updated_at"].isoformat(),
+        }
 
     def _hash_token(self, token: str) -> str:
         return hashlib.sha256(token.encode("utf-8")).hexdigest()

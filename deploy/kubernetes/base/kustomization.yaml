@@ -13,8 +13,8 @@ resources:
   - network-policy.yaml
 images:
   - name: ghcr.io/seanheiney/boss-api
-    newTag: "0.4.1"
+    newTag: "0.5.0"
   - name: ghcr.io/seanheiney/boss-web
-    newTag: "0.4.1"
+    newTag: "0.5.0"
   - name: ghcr.io/seanheiney/boss-worker
-    newTag: "0.4.1"
+    newTag: "0.5.0"

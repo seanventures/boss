@@ -185,6 +185,8 @@ from .schemas import (
     InboxMessageListResponse,
     InboxMessageSummary,
     JobCreateRequest,
+    JobListItem,
+    JobListResponse,
     JobSummary,
     LeasedJob,
     MetatronQueryRequest,
@@ -207,6 +209,7 @@ from .schemas import (
     OutboxMessageSummary,
     OutboxQueueRequest,
     PackDetail,
+    PackImportRequest,
     PackInstallRequest,
     PackListResponse,
     PackSummary,
@@ -279,6 +282,10 @@ from .schemas import (
     SandboxDeploymentJobRequest,
     SandboxDeploymentRequest,
     SandboxDeploymentResponse,
+    SecretRefCreateRequest,
+    SecretRefListResponse,
+    SecretRefSummary,
+    SecretRefUpdateRequest,
     SelfImprovementCanaryRequest,
     SelfImprovementProposalCreateRequest,
     SelfImprovementProposalDetail,
@@ -374,6 +381,7 @@ from .services.resource_plane import (
     ResourcePlaneService,
 )
 from .services.role_governance import RoleGovernanceService
+from .services.secret_refs import SecretRefNotFoundError, SecretRefService
 from .services.self_improvement import (
     InvalidSelfImprovementTransitionError,
     SelfImprovementProposalNotFoundError,
@@ -395,6 +403,7 @@ LOGGER = logging.getLogger("boss.api")
 budget = BudgetGovernor(settings)
 intake = CommandIntakeService(settings)
 jobs = JobLeaseService(settings)
+secret_refs = SecretRefService()
 receipts = ReceiptService()
 software_factory = SoftwareFactoryService(settings)
 decisions = DecisionService(settings)
@@ -1005,6 +1014,14 @@ def task_summary_from_row(row) -> TaskSummary:
         created_at=row["created_at"].isoformat(),
         updated_at=row["updated_at"].isoformat(),
     )
+
+
+def job_list_item_from_row(row: dict[str, Any]) -> JobListItem:
+    return JobListItem(**row)
+
+
+def secret_ref_summary_from_service(payload: dict[str, Any]) -> SecretRefSummary:
+    return SecretRefSummary(**payload)
 
 
 def job_summary_from_row(row) -> JobSummary:
@@ -3672,6 +3689,42 @@ def run_meeting(meeting_id: str, payload: MeetingRunRequest) -> MeetingSummary:
         return MeetingSummary(**result)
 
 
+@app.get("/v1/jobs", response_model=JobListResponse)
+def list_jobs(
+    project_id: str,
+    status: Optional[str] = None,
+    kind: Optional[str] = None,
+    task_id: Optional[str] = None,
+    include_terminal: bool = True,
+    limit: int = 50,
+    offset: int = 0,
+) -> JobListResponse:
+    if limit < 1 or limit > 200:
+        raise HTTPException(status_code=400, detail="limit must be between 1 and 200.")
+    if offset < 0:
+        raise HTTPException(status_code=400, detail="offset must be >= 0.")
+    with begin(engine) as connection:
+        try:
+            items = jobs.list_jobs(
+                connection,
+                project_id,
+                status=status,
+                kind=kind,
+                task_id=task_id,
+                include_terminal=include_terminal,
+                limit=limit,
+                offset=offset,
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        return JobListResponse(
+            project_id=project_id,
+            items=[job_list_item_from_row(item) for item in items],
+            limit=limit,
+            offset=offset,
+        )
+
+
 @app.get("/v1/jobs/{job_id}", response_model=JobSummary)
 def get_job(job_id: str) -> JobSummary:
     with begin(engine) as connection:
@@ -4173,6 +4226,45 @@ def install_pack(payload: PackInstallRequest) -> PackDetail:
         except (RoleNotFoundError, ValueError) as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
         return pack_detail_from_service(result)
+
+
+@app.post("/v1/packs/import", response_model=PackDetail, status_code=201)
+def import_pack(payload: PackImportRequest) -> PackDetail:
+    with begin(engine) as connection:
+        try:
+            require_project_actor(
+                connection,
+                payload.project_id,
+                payload.actor,
+                "pack_manage",
+            )
+            result = specpack.import_pack(
+                connection,
+                payload.project_id,
+                payload.yaml_content,
+                payload.actor,
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        return pack_detail_from_service(result)
+
+
+@app.get("/v1/packs/{pack_id}/export")
+def export_pack(pack_id: str, project_id: str) -> Response:
+    with begin(engine) as connection:
+        try:
+            yaml_content = specpack.export_pack_yaml(connection, project_id, pack_id)
+        except PackNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        return Response(
+            content=yaml_content,
+            media_type="application/x-yaml",
+            headers={
+                "Content-Disposition": f'attachment; filename="{pack_id}.yaml"',
+            },
+        )
 
 
 @app.get("/v1/agent-modules", response_model=AgentModuleListResponse)
@@ -4818,6 +4910,122 @@ def list_routing_logs(project_id: str, limit: int = 25) -> RoutingLogListRespons
             project_id=project_id,
             items=[routing_log_item_from_service(item) for item in items],
         )
+
+
+@app.get("/v1/secret-refs", response_model=SecretRefListResponse)
+def list_secret_refs(
+    project_id: str,
+    provider: Optional[str] = None,
+    status: Optional[str] = None,
+    limit: int = 100,
+    offset: int = 0,
+) -> SecretRefListResponse:
+    with begin(engine) as connection:
+        try:
+            items = secret_refs.list_secret_refs(
+                connection,
+                project_id,
+                provider=provider,
+                status=status,
+                limit=limit,
+                offset=offset,
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        return SecretRefListResponse(
+            project_id=project_id,
+            items=[secret_ref_summary_from_service(item) for item in items],
+            limit=limit,
+            offset=offset,
+        )
+
+
+@app.post("/v1/secret-refs", response_model=SecretRefSummary, status_code=201)
+def create_secret_ref(payload: SecretRefCreateRequest) -> SecretRefSummary:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection,
+            payload.project_id,
+            payload.actor,
+            "providerops_manage",
+        )
+        try:
+            item = secret_refs.create_secret_ref(
+                connection,
+                project_id=payload.project_id,
+                ref_kind=payload.ref_kind,
+                ref_key=payload.ref_key,
+                provider=payload.provider,
+                status=payload.status,
+                metadata=payload.metadata,
+                actor=payload.actor,
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        return secret_ref_summary_from_service(item)
+
+
+@app.get("/v1/secret-refs/{secret_ref_id}", response_model=SecretRefSummary)
+def get_secret_ref(secret_ref_id: str, project_id: str) -> SecretRefSummary:
+    with begin(engine) as connection:
+        try:
+            item = secret_refs.get_secret_ref(connection, project_id, secret_ref_id)
+        except SecretRefNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        return secret_ref_summary_from_service(item)
+
+
+@app.patch("/v1/secret-refs/{secret_ref_id}", response_model=SecretRefSummary)
+def update_secret_ref(
+    secret_ref_id: str, payload: SecretRefUpdateRequest
+) -> SecretRefSummary:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection,
+            payload.project_id,
+            payload.actor,
+            "providerops_manage",
+        )
+        try:
+            item = secret_refs.update_secret_ref(
+                connection,
+                project_id=payload.project_id,
+                secret_ref_id=secret_ref_id,
+                provider=payload.provider,
+                status=payload.status,
+                metadata=payload.metadata,
+                actor=payload.actor,
+            )
+        except SecretRefNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        return secret_ref_summary_from_service(item)
+
+
+@app.delete("/v1/secret-refs/{secret_ref_id}", status_code=204)
+def delete_secret_ref(
+    secret_ref_id: str,
+    project_id: str,
+    actor: str = "system",
+) -> Response:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection,
+            project_id,
+            actor,
+            "providerops_manage",
+        )
+        try:
+            secret_refs.delete_secret_ref(
+                connection,
+                project_id=project_id,
+                secret_ref_id=secret_ref_id,
+                actor=actor,
+            )
+        except SecretRefNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+    return Response(status_code=204)
 
 
 @app.get("/v1/providers", response_model=ProviderAccountListResponse)

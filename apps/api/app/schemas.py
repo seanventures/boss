@@ -1522,6 +1522,23 @@ class JobSummary(BaseModel):
     run_after: str
 
 
+class JobListItem(JobSummary):
+    task_title: Optional[str] = None
+    lease_owner: Optional[str] = None
+    lease_expires_at: Optional[str] = None
+    heartbeat_at: Optional[str] = None
+    last_error: dict[str, Any] = Field(default_factory=dict)
+    created_at: str
+    updated_at: str
+
+
+class JobListResponse(BaseModel):
+    project_id: str
+    items: list[JobListItem]
+    limit: int
+    offset: int
+
+
 class JobCreateRequest(BaseModel):
     project_id: str
     kind: str
@@ -2685,6 +2702,51 @@ class PackListResponse(BaseModel):
 class PackInstallRequest(BaseModel):
     project_id: str
     pack_id: str
+    actor: str = "system"
+
+
+class PackImportRequest(BaseModel):
+    project_id: str
+    yaml_content: str
+    actor: str = "system"
+
+
+class SecretRefSummary(BaseModel):
+    id: str
+    project_id: str
+    ref_kind: str
+    ref_key: str
+    provider: Optional[str] = None
+    status: str
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    created_by: str
+    created_at: str
+    updated_at: str
+    credential_ref: str
+
+
+class SecretRefListResponse(BaseModel):
+    project_id: str
+    items: list[SecretRefSummary]
+    limit: int
+    offset: int
+
+
+class SecretRefCreateRequest(BaseModel):
+    project_id: str
+    ref_kind: str
+    ref_key: str
+    provider: Optional[str] = None
+    status: str = "active"
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    actor: str = "system"
+
+
+class SecretRefUpdateRequest(BaseModel):
+    project_id: str
+    provider: Optional[str] = None
+    status: Optional[str] = None
+    metadata: Optional[dict[str, Any]] = None
     actor: str = "system"
 
 

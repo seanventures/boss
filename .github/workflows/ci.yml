@@ -47,5 +47,7 @@ jobs:
           .venv/bin/pip install -r apps/api/requirements.txt -r apps/worker/requirements.txt
       - name: Lint
         run: make lint
+      - name: OpenAPI route parity
+        run: make openapi-validate
       - name: Test
         run: make test
