@@ -1507,6 +1507,8 @@ class ReceiptResponse(BaseModel):
 class ReceiptListResponse(BaseModel):
     project_id: str
     items: list[ReceiptResponse]
+    limit: int
+    offset: int
 
 
 class JobSummary(BaseModel):
@@ -1734,7 +1736,10 @@ class TaskSummary(BaseModel):
 
 
 class TaskListResponse(BaseModel):
+    project_id: str
     items: list[TaskSummary]
+    limit: int
+    offset: int
 
 
 class TaskCreateRequest(BaseModel):
@@ -1812,6 +1817,8 @@ class KpiCreateRequest(BaseModel):
 class KpiListResponse(BaseModel):
     project_id: str
     items: list[KpiSummary]
+    limit: int
+    offset: int
 
 
 class PolicyRecordSummary(BaseModel):

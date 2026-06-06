@@ -769,7 +769,10 @@ export type TaskSummary = {
 };
 
 export type TaskListResponse = {
+  project_id: string;
   items: TaskSummary[];
+  limit: number;
+  offset: number;
 };
 
 export type TaskCreateRequest = {
@@ -845,6 +848,8 @@ export type KpiCreateRequest = {
 export type KpiListResponse = {
   project_id: string;
   items: KpiSummary[];
+  limit: number;
+  offset: number;
 };
 
 export type PolicyRecordSummary = {
@@ -1807,6 +1812,8 @@ export type ReceiptResponse = {
 export type ReceiptListResponse = {
   project_id: string;
   items: ReceiptResponse[];
+  limit: number;
+  offset: number;
 };
 
 export type BudgetReservationSummary = {
@@ -3457,7 +3464,7 @@ export function createBossApiClient(config: BossApiClientConfig) {
   const apiKey = config.apiKey?.trim();
 
   async function request<T>(
-    method: "GET" | "POST",
+    method: "GET" | "POST" | "PATCH" | "DELETE",
     path: string,
     options?: {
       query?: Record<string, QueryValue>;

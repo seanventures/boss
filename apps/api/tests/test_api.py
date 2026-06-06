@@ -17401,6 +17401,29 @@ def test_pagination_limit_offset_on_events_resources_costs_lists(client):
     assert ccb["offset"] == 0
     assert "items" in ccb
 
+    tasks = client.get("/v1/tasks", params={"project_id": "boss-dogfood", "limit": 5, "offset": 0})
+    assert tasks.status_code == 200
+    task_body = tasks.json()
+    assert task_body["project_id"] == "boss-dogfood"
+    assert task_body["limit"] == 5
+    assert task_body["offset"] == 0
+    assert "items" in task_body
+
+    kpis = client.get("/v1/kpis", params={"project_id": "boss-dogfood", "limit": 10, "offset": 0})
+    assert kpis.status_code == 200
+    kpi_body = kpis.json()
+    assert kpi_body["limit"] == 10
+    assert kpi_body["offset"] == 0
+
+    receipts = client.get(
+        "/v1/receipts",
+        params={"project_id": "boss-dogfood", "limit": 4, "offset": 0},
+    )
+    assert receipts.status_code == 200
+    receipt_body = receipts.json()
+    assert receipt_body["limit"] == 4
+    assert receipt_body["offset"] == 0
+
 
 def test_pack_import_and_export_http_endpoints(client, engine):
     project_id = "boss-dogfood"

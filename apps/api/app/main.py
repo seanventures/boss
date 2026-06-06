@@ -3395,7 +3395,13 @@ def propose_command(payload: CommandProposeRequest, request: Request) -> Command
 
 
 @app.get("/v1/tasks", response_model=TaskListResponse)
-def list_tasks(project_id: str) -> TaskListResponse:
+def list_tasks(
+    project_id: str, limit: int = 50, offset: int = 0
+) -> TaskListResponse:
+    if limit < 1 or limit > 200:
+        raise HTTPException(status_code=400, detail="limit must be between 1 and 200.")
+    if offset < 0:
+        raise HTTPException(status_code=400, detail="offset must be >= 0.")
     with begin(engine) as connection:
         rows = connection.execute(
             text(
@@ -3406,11 +3412,21 @@ def list_tasks(project_id: str) -> TaskListResponse:
                 FROM tasks
                 WHERE project_id = :project_id
                 ORDER BY created_at DESC
+                LIMIT :limit OFFSET :offset
                 """
             ),
-            {"project_id": project_id},
+            {
+                "project_id": project_id,
+                "limit": limit,
+                "offset": offset,
+            },
         ).mappings().all()
-        return TaskListResponse(items=[task_summary_from_row(row) for row in rows])
+        return TaskListResponse(
+            project_id=project_id,
+            items=[task_summary_from_row(row) for row in rows],
+            limit=limit,
+            offset=offset,
+        )
 
 
 @app.post("/v1/tasks", response_model=TaskSummary, status_code=201)
@@ -3494,14 +3510,24 @@ def create_department(payload: DepartmentCreateRequest) -> DepartmentSummary:
 
 
 @app.get("/v1/kpis", response_model=KpiListResponse)
-def list_kpis(project_id: str) -> KpiListResponse:
+def list_kpis(
+    project_id: str, limit: int = 50, offset: int = 0
+) -> KpiListResponse:
+    if limit < 1 or limit > 200:
+        raise HTTPException(status_code=400, detail="limit must be between 1 and 200.")
+    if offset < 0:
+        raise HTTPException(status_code=400, detail="offset must be >= 0.")
     with begin(engine) as connection:
         return KpiListResponse(
             project_id=project_id,
             items=[
                 KpiSummary(**item)
-                for item in canonical.list_kpis(connection, project_id)
+                for item in canonical.list_kpis(
+                    connection, project_id, limit=limit, offset=offset
+                )
             ],
+            limit=limit,
+            offset=offset,
         )
 
 
@@ -7006,15 +7032,21 @@ def requeue_deadletter_job(
 
 
 @app.get("/v1/receipts", response_model=ReceiptListResponse)
-def list_receipts(project_id: str, limit: int = 50) -> ReceiptListResponse:
+def list_receipts(
+    project_id: str, limit: int = 50, offset: int = 0
+) -> ReceiptListResponse:
     if limit < 1 or limit > 200:
         raise HTTPException(status_code=400, detail="limit must be between 1 and 200.")
+    if offset < 0:
+        raise HTTPException(status_code=400, detail="offset must be >= 0.")
 
     with begin(engine) as connection:
-        items = receipts.list_by_project(connection, project_id, limit)
+        items = receipts.list_by_project(connection, project_id, limit, offset=offset)
         return ReceiptListResponse(
             project_id=project_id,
             items=[receipt_response_from_row(item) for item in items],
+            limit=limit,
+            offset=offset,
         )
 
 

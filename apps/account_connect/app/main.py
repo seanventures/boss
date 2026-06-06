@@ -144,7 +144,7 @@ def startup() -> None:
                     :id, :org_id, NULL, 'cloud_control_plane', 'active', 'cloud',
                     CAST(:capabilities AS JSONB)
                 )
-                ON CONFLICT (org_id, entitlement_key, project_id) DO NOTHING
+                ON CONFLICT (id) DO NOTHING
                 """
             ),
             {
@@ -166,7 +166,7 @@ def startup() -> None:
                     :id, :org_id, 'core_v1', 'Core Pack v1', 'Default BOSS company pack.',
                     'BOSS', 'free', 0, 'cloud_control_plane', 'catalog', 'active'
                 )
-                ON CONFLICT (org_id, pack_id) DO NOTHING
+                ON CONFLICT (id) DO NOTHING
                 """
             ),
             {"id": f"pack_{settings.default_org_id}_core_v1", "org_id": settings.default_org_id},

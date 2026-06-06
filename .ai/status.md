@@ -1,11 +1,11 @@
 # BOSS Autonomous Delivery Status
 
-**Last updated**: 2026-06-05T23:59Z (LOCAL FINAL VALIDATION UPDATE on PR #3 head `d0073d6`: `make lint` PASS, `pnpm --filter boss-web build` PASS, full `make test` PASS with 97 web + 276 API/worker tests, focused ProviderAdapter/worker regressions PASS, targeted web regression 65 PASS, `make smoke` PASS, `make release-blockers` reports only expected external blockers. GitHub Actions CI is UNSTABLE due account billing/spending-limit blocker: the check-run annotation for `test-and-lint` says the job was not started because recent account payments failed or the spending limit needs to be increased. E2E_REGRESSION 3x final + PR_PREP remain complete; all local closed/verified.)
+**Last updated**: 2026-06-06T19:35Z (Codex API hardening on `ai/codex/api-production-hardening`: pagination parity tasks/kpis/receipts, Account Connect HTTP integration tests, release-blockers exit 1, NetworkPolicy guardrails, v0.5.0 on main)
 **Repo root**: /Volumes/DataSSD1/test/boss
 **Git remote**: https://github.com/seanheiney/boss
-**Current branch**: codex/spec-closure-audit (clean; PR#3 prepped by PR_PREP_FINAL for merge/final)
-**Base branch**: main (origin/HEAD)
-**Product**: BOSS v0.4.1 target (Business Operating System Sentinel)
+**Current branch**: ai/codex/api-production-hardening
+**Base branch**: main (v0.5.0 released)
+**Product**: BOSS v0.5.0 API baseline
 **Mission**: Complete product to production-grade, tested, documented, pushed, Codex-coordinated, ready for real users. Grind until all discovered PRD/spec features satisfy world-class DoD or truly blocked.
 
 ## Discovered Spec Sources (see .ai/spec-index.md)

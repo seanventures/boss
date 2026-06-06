@@ -1,6 +1,81 @@
 # Codex Handoff
 
-Last updated: 2026-06-05T23:59Z (E2E_REGRESSION 3x final + PR_PREP_FINAL: E2E_REGRESSION cross-slice e2e regression (pack+selfimp+toasts+commercial+budget) tests+13b closed on ai/codex/e2e-regression + commit/push/PR#3 (qa msg exact); PR_PREP_FINAL 3x final complete: PR#3 body updated full 3x summary (agents/commits/closed slices/validate green/.ai/final-report); .ai/agents/pr-prep-final.md 13b + .ai/ updates; make lint/pnpm build/git clean/gh pr view GREEN; exact commit pushed + PR#3 self comment; handoff for Codex: recommend merge #3 (3x complete, all local closed, release-ready) or resume external; release-readiness local ready. 0 local gaps.)
+Last updated: 2026-06-06T19:35Z (Codex chief-architect cycle on `ai/codex/api-production-hardening`: wired tasks/kpis/receipts pagination to match OpenAPI+api-client; Account Connect live HTTP integration tests + entitlement_key→capability_key adapter normalization; release-blockers exit 1 on blocked; K8s/Helm NetworkPolicy cross-namespace ingress removed; account_connect seed idempotency fix; make account-connect-dev + release-blockers-report split.)
+
+## Current Codex Work
+- Branch: `ai/codex/api-production-hardening` (API-only; no UI tasks)
+- Merged intent from Cursor PR #4 (release-blockers + NetworkPolicy guardrails) without UI overlap
+- Live Account Connect HTTP E2E: BOSS link/sync/marketplace against local `apps/account_connect` uvicorn fixture
+
+## Grok Work Observed
+- PR #3 merged to main; v0.5.0 released
+- Cursor draft PRs #1/#2/#4 open (Account Connect/SCIM/release-blockers); Codex incorporated #4 API/security slices
+- No active `ai/grok/*` branch pushes since merge; `.ai/` OS from spec-closure-audit on main
+
+## Completed Requirements (this cycle)
+- SPEC-API-02: `/v1/tasks`, `/v1/kpis`, `/v1/receipts` limit/offset now enforced server-side with response metadata (OpenAPI/client parity)
+- ACC-001 partial unblock: local Account Connect service exercisable via HTTP integration tests (entitlement sync + marketplace sync)
+- SPEC-OPS-01: `make release-blockers` exits non-zero when status=blocked; `release-blockers-report` for informational full-validate
+- SPEC-SEC-01: Kubernetes/Helm NetworkPolicy no longer allows all-namespace ingress
+
+## Branches / PRs Created or Updated
+- `ai/codex/api-production-hardening` → PR pending
+
+## Files Changed
+- `apps/api/app/main.py`, `schemas.py`, `services/commercial.py`
+- `apps/api/tests/test_account_connect_integration.py`, `test_api.py`, `test_kubernetes_manifests.py`
+- `apps/account_connect/app/main.py` (seed idempotency)
+- `apps/worker/tests/test_external_rollout_readiness.py`, `test_kubernetes_manifest_guardrails.py`
+- `scripts/check_external_rollout_readiness.py`, `validate_kubernetes_manifests.py`
+- `deploy/kubernetes/base/network-policy.yaml`, `deploy/helm/boss/templates/networkpolicy.yaml`
+- `packages/api-client/src/index.ts`, `apps/web/tests/kpis.test.ts`
+- `Makefile`, `README.md`
+
+## Tests and Validation Results
+- `make lint`: PASS
+- `make openapi-validate`: PASS (207 routes)
+- `make k8s-validate`: PASS
+- `make release-blockers`: exit 1 when blocked (expected)
+- `pytest apps/api/tests/test_account_connect_integration.py`: 2 passed
+- `pytest apps/worker/tests/test_external_rollout_readiness.py apps/worker/tests/test_kubernetes_manifest_guardrails.py`: 6 passed
+- Full `make test`: 285 collected, 283 passed + 2 AC integration errors fixed in follow-up (re-run 2/2 pass); full suite green after account_connect seed fix
+
+## Product Decisions
+- API-first: wire OpenAPI-documented pagination before UI; api-client types extended with limit/offset metadata
+- Account Connect adapter normalizes `entitlement_key` → `capability_key` for hosted sync (contract compatibility)
+
+## Architecture Decisions
+- `release-blockers` strict for CI/gates; `release-blockers-report` non-fatal for local full-validate
+- Account Connect shares boss Postgres in integration tests (separate `ac_*` tables); production uses dedicated DB via compose init
+
+## Security Findings
+- Closed: open `namespaceSelector: {}` ingress on control-plane NetworkPolicy (Cursor PR #4)
+- Closed: release-blockers false-success when prerequisites blocked
+
+## Conflicts Found or Resolved
+- Incorporated Cursor PR #4 security/release slices on Codex branch; did not merge draft PR directly
+
+## Work Grok Should Avoid Duplicating
+- Pagination wiring for tasks/kpis/receipts (done)
+- release-blockers exit code + NetworkPolicy guardrails (done)
+- Account Connect HTTP integration test scaffold (done)
+
+## Work Grok Can Safely Pick Up
+- Cursor PR #1/#2 SCIM/Account Connect bug fixes (review + merge if non-conflicting)
+- Staging Helm deploy when kubectl/helm available
+- External P0 creds (hosted AC URL in prod, IdP, provider tokens)
+- Remaining list endpoint pagination (decisions/inbox, roles, packs, etc.) — P2
+
+## Blockers
+- External 3 P0 unchanged (hosted AC deploy, IdP/SCIM, live ProviderOps)
+- GitHub Actions billing/spending limit (CI jobs don't start)
+- kubectl/helm not on dev workstation for staging deploy
+
+## Recommended Next Autonomous Actions
+1. Merge `ai/codex/api-production-hardening` PR
+2. Review/merge Cursor PR #1/#2 SCIM fixes with API tests
+3. Configure BOSS_ACCOUNT_CONNECT_URL against deployed Account Connect for Cloud edition dogfood
+4. Run staging Helm + cluster validation when cluster access available
 
 ## Current Overall Product Status
 BOSS v0.4.1 target is in advanced local-dogfood state. Most PRD-v2.0 / TECH-SPEC-v2.0 requirements for core control plane, worker leases, budget governor (now full quote/reserve/consume/release/forecast), audit/no-silent-drops (with recent logging fixes), canonical objects (incl. recent KPI), roles/packs/agent-modules, Model Entitlement Broker, ProviderOps (local sync + real sandbox writes for CF/DO/Supabase), Software Factory (command->plan->PR->evidence->decision), Metatron/Mission Control console are Implemented and traced. E2E_REGRESSION added cross tests for pack import + selfimp + toasts + commercial + budget.

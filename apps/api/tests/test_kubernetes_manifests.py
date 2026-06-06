@@ -20,6 +20,18 @@ def test_kubernetes_base_contains_enterprise_ha_workloads_and_guardrails():
 
     assert {"boss-api", "boss-web", "boss-worker"} <= deployment_names
     assert {"boss-api", "boss-web", "boss-worker"} <= hpa_names
+    network_policy = next(
+        resource
+        for resource in resources
+        if resource.get("kind") == "NetworkPolicy"
+        and resource["metadata"]["name"] == "boss-control-plane-ingress"
+    )
+    ingress_sources = [
+        source
+        for rule in network_policy["spec"].get("ingress", [])
+        for source in rule.get("from", [])
+    ]
+    assert {"namespaceSelector": {}} not in ingress_sources
 
 
 def test_helm_chart_keeps_enterprise_self_hosted_defaults_fail_closed():

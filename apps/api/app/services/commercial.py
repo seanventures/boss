@@ -95,7 +95,15 @@ class AccountConnectAdapter:
                 raise AccountConnectSyncError(
                     "Account Connect entitlement entries must be objects."
                 )
-            normalized.append(entitlement)
+            entry = dict(entitlement)
+            entitlement_key = str(entry.get("entitlement_key") or "").strip()
+            if not entry.get("capability_key") and entitlement_key:
+                entry["capability_key"] = entitlement_key
+            if not entry.get("id") and entitlement_key:
+                entry["id"] = f"ent_{entitlement_key}"
+            if not entry.get("source"):
+                entry["source"] = "account_connect_hosted"
+            normalized.append(entry)
         return normalized
 
     def check_health(

@@ -30,6 +30,8 @@ describe("KPI feed", async () => {
   it("maps persisted KPI records into Mission Control items", async () => {
     vi.mocked(client.listKpis).mockResolvedValueOnce({
       project_id: "boss-dogfood",
+      limit: 50,
+      offset: 0,
       items: [
         {
           id: "kpi_1",
@@ -94,6 +96,8 @@ describe("KPI feed", async () => {
   it("preserves project context and KPI list across simulated page refresh/re-fetch (GAP-AUTO-002 refresh-persistence for project+KPI)", async () => {
     const kpiData = {
       project_id: "boss-dogfood",
+      limit: 50,
+      offset: 0,
       items: [
         {
           id: "kpi_persist",

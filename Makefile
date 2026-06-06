@@ -5,7 +5,7 @@ PIP := $(VENV)/bin/pip
 BOSS_POSTGRES_PORT ?= 5432
 DATABASE_URL ?= postgresql+psycopg://boss:boss@localhost:$(BOSS_POSTGRES_PORT)/boss
 
-.PHONY: install install-node install-python wait-db dev test lint build seed smoke k8s-validate infra-validate openapi-validate release-blockers real-smoke-plan real-smoke-pr real-smoke-merge real-smoke-deploy worker-drain-once sandbox-template deps-audit full-validate
+.PHONY: install install-node install-python wait-db dev test lint build seed smoke k8s-validate infra-validate openapi-validate release-blockers release-blockers-report real-smoke-plan real-smoke-pr real-smoke-merge real-smoke-deploy worker-drain-once sandbox-template deps-audit full-validate account-connect-dev
 
 install: install-node install-python
 
@@ -56,8 +56,15 @@ infra-validate: install-python
 openapi-validate: install-python
 	$(PYTHON) scripts/validate_openapi_route_parity.py
 
+account-connect-dev: install-python
+	docker compose -f infra/docker-compose.yml up -d db account-connect
+	@echo "Account Connect listening on http://127.0.0.1:$${BOSS_ACCOUNT_CONNECT_PORT:-8010}"
+
 release-blockers: install-python
 	$(PYTHON) scripts/check_external_rollout_readiness.py
+
+release-blockers-report: install-python
+	-$(PYTHON) scripts/check_external_rollout_readiness.py
 
 real-smoke-plan: install-python
 	docker compose -f infra/docker-compose.yml up -d db
@@ -100,5 +107,5 @@ deps-audit: install-python
 # Full local release readiness (per .ai/release-readiness, INFRA_RUNBOOK, AUTO-004).
 # Includes all validators + build/lint/test + deps-audit. DB/docker required for test/smoke paths.
 # Run before k8s deploys or claiming release readiness.
-full-validate: lint openapi-validate deps-audit test build k8s-validate infra-validate release-blockers smoke
+full-validate: lint openapi-validate deps-audit test build k8s-validate infra-validate release-blockers-report smoke
 	@echo "full-validate complete (see individual outputs; external blockers expected from release-blockers)."
