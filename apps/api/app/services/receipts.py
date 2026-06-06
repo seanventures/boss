@@ -28,7 +28,7 @@ class ReceiptService:
         return dict(row) if row else None
 
     def list_by_project(
-        self, connection: Connection, project_id: str, limit: int
+        self, connection: Connection, project_id: str, limit: int, offset: int = 0
     ) -> list[dict]:
         rows = connection.execute(
             text(
@@ -39,10 +39,10 @@ class ReceiptService:
                 FROM receipts
                 WHERE project_id = :project_id
                 ORDER BY created_at DESC
-                LIMIT :limit
+                LIMIT :limit OFFSET :offset
                 """
             ),
-            {"project_id": project_id, "limit": limit},
+            {"project_id": project_id, "limit": limit, "offset": offset},
         ).mappings().all()
         return [dict(row) for row in rows]
 

@@ -1,0 +1,50 @@
+id: KPI
+version: 1
+description: Durable project-scoped operating metric used by Mission Control, health review, and company scorecards.
+fields:
+  - name: id
+    type: string
+    required: true
+  - name: project_id
+    type: string
+    required: true
+  - name: kpi_key
+    type: string
+    required: true
+  - name: name
+    type: string
+    required: true
+  - name: description
+    type: string
+    required: false
+  - name: owner_role_id
+    type: string
+    required: false
+  - name: target_value
+    type: number
+    required: true
+  - name: current_value
+    type: number
+    required: true
+  - name: unit
+    type: string
+    required: true
+  - name: status
+    type: enum
+    values: [active, paused, retired]
+    required: true
+  - name: created_by
+    type: string
+    required: true
+  - name: created_at
+    type: datetime
+    required: true
+  - name: updated_at
+    type: datetime
+    required: true
+invariants:
+  - KPIs are scoped to a project and have stable unique kpi_key values per project.
+  - target_value must be greater than zero.
+  - current_value must be greater than or equal to zero.
+  - owner_role_id, when present, must reference a role in the same project.
+  - Creating or updating a KPI emits kpi.upserted.

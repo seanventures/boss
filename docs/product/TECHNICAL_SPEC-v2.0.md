@@ -206,6 +206,11 @@ Rules:
 - Hosted marketplace catalogs are recorded through `HostedMarketplaceSyncRun` and `HostedMarketplaceListing` rows. Sync calls only the configured Account Connect endpoint; missing configuration or invalid hosted responses record blocked/failed sync runs instead of synthetic listings.
 - Hosted login handshakes are represented locally as `AccountConnectAuthSession` records with receipts, callback-state validation, visible blocked states when `BOSS_ACCOUNT_CONNECT_URL` is missing, and link creation only from a successful hosted adapter response.
 - ProviderOps read-only sync can run manually through `POST /v1/resources/sync` or as a leased worker job kind, `providerops.sync.readonly`. The worker calls the same Resource Plane Kernel API; failed provider sync runs fail the job so the failure is visible as both reconciliation evidence and a job deadletter.
+- Local bootstrap is primarily a CLI/operator action through `make seed`. The mutating `POST /v1/bootstrap/seed` API must fail closed unless `BOSS_BOOTSTRAP_SEED_API_ENABLED=true`; when enabled against an existing project, the actor must have `member_manage`, denied calls must record policy-denial evidence, and successful reseeds must emit `bootstrap.seed_executed`.
+
+## Audit Failure Observability
+
+Policy-denial, Account Connect denial, and budget-denial helpers should write durable audit events when possible. If the audit write fails, the API must not convert the original user-facing denial into success or hide the failure. It should preserve the fail-closed response and emit a structured server log with actor, project, permission or event type, target object, and failure reason so operators can investigate the missing audit event.
 
 ## Edition and Entitlement Checks
 

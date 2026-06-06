@@ -1,0 +1,25 @@
+id: ResourceInventorySnapshot
+version: 1
+description: Point-in-time ProviderOps inventory snapshot backed by reconciliation metadata and inventory snapshot artifacts.
+backing_runtime:
+  primary_tables: [reconciliation_runs, artifacts, external_resources, cost_events]
+  artifact_type: resource_inventory_snapshot
+fields:
+  - name: reconciliation_run_id
+    type: string
+    required: true
+  - name: provider_account_id
+    type: string
+    required: true
+  - name: artifact_id
+    type: string
+    required: true
+  - name: resources_seen
+    type: integer
+    required: true
+  - name: costs_seen
+    type: integer
+    required: true
+invariants:
+  - Failed provider syncs must create failed snapshot artifacts and deadletters.
+  - Snapshots are evidence, not provider write authorization.

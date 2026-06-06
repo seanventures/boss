@@ -108,10 +108,14 @@ CREATE TABLE IF NOT EXISTS pack_installs (
   spec JSONB NOT NULL DEFAULT '{}'::jsonb,
   installed_by TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'active',
+  source TEXT,
+  yaml_blob TEXT,
   installed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE(project_id, pack_id)
 );
+ALTER TABLE pack_installs ADD COLUMN IF NOT EXISTS source TEXT;
+ALTER TABLE pack_installs ADD COLUMN IF NOT EXISTS yaml_blob TEXT;
 
 CREATE TABLE IF NOT EXISTS agent_module_installs (
   id TEXT PRIMARY KEY,
@@ -187,7 +191,10 @@ CREATE TABLE IF NOT EXISTS account_connect_auth_sessions (
   provider_ref TEXT,
   state TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'requested',
-  receipt_id TEXT REFERENCES receipts(id),
+  -- Receipts are declared after jobs to preserve the core job->receipt FK order.
+  -- Account Connect stores this audit reference without a forward FK so clean
+  -- databases can bootstrap deterministically.
+  receipt_id TEXT,
   created_by TEXT NOT NULL DEFAULT 'system',
   expires_at TIMESTAMPTZ,
   completed_at TIMESTAMPTZ,
@@ -514,6 +521,25 @@ CREATE TABLE IF NOT EXISTS departments (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE(project_id, department_key)
 );
+
+CREATE TABLE IF NOT EXISTS kpis (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id),
+  kpi_key TEXT NOT NULL,
+  name TEXT NOT NULL,
+  description TEXT,
+  owner_role_id TEXT REFERENCES roles(id),
+  target_value NUMERIC NOT NULL,
+  current_value NUMERIC NOT NULL DEFAULT 0,
+  unit TEXT NOT NULL DEFAULT 'count',
+  status TEXT NOT NULL DEFAULT 'active',
+  created_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(project_id, kpi_key)
+);
+CREATE INDEX IF NOT EXISTS idx_kpis_project_status
+  ON kpis(project_id, status, kpi_key);
 
 CREATE TABLE IF NOT EXISTS policy_records (
   id TEXT PRIMARY KEY,

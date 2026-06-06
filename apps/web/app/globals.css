@@ -453,3 +453,74 @@ a {
     gap: 8px;
   }
 }
+
+/* Client feedback toasts + loading/error banners (P2 ux-review + DoD for 5+ actions: KPI, command, provider, self-imp, budget) */
+.toast-container {
+  position: fixed;
+  bottom: 16px;
+  right: 16px;
+  z-index: 9999;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: 360px;
+}
+
+.toast {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 16px;
+  border-radius: 10px;
+  font-size: 0.95rem;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+  border: 1px solid rgba(162, 199, 255, 0.2);
+  backdrop-filter: blur(6px);
+}
+
+.toast-success {
+  background: rgba(10, 61, 46, 0.95);
+  color: #7fd7c8;
+  border-color: var(--accent);
+}
+
+.toast-error {
+  background: rgba(61, 26, 26, 0.95);
+  color: #f2b25b;
+  border-color: var(--warning);
+}
+
+.toast-dismiss {
+  background: transparent;
+  border: 0;
+  color: inherit;
+  font-size: 1.2rem;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0.7;
+  padding: 0 4px;
+}
+.toast-dismiss:hover,
+.toast-dismiss:focus {
+  opacity: 1;
+  outline: 2px solid currentColor;
+  outline-offset: 2px;
+}
+
+.loading {
+  margin-top: 8px;
+  color: var(--accent);
+  font-size: 0.9rem;
+  font-style: italic;
+}
+
+.error-banner {
+  margin-top: 8px;
+  padding: 8px 12px;
+  background: rgba(61, 26, 26, 0.6);
+  border: 1px solid var(--warning);
+  border-radius: 8px;
+  color: #f2b25b;
+  font-size: 0.9rem;
+}

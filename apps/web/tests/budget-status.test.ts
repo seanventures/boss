@@ -62,4 +62,16 @@ describe("budget status feed", async () => {
     expect(card.scopeId).toBe("boss-dogfood");
     expect(card.blockedReason).toBe("API returned 503");
   });
+
+  it("reflects permission failure (403) for budget status as blocked state in UI (GAP-AUTO-002 perm)", async () => {
+    vi.mocked(client.getBudgetStatus).mockRejectedValueOnce(
+      new BossApiError("actor lacks budget_manage", 403, {}),
+    );
+
+    const card = await fetchBudgetStatus();
+
+    expect(card.apiReachable).toBe(false);
+    expect(card.scopeId).toBe("boss-dogfood");
+    expect(card.blockedReason).toBe("API returned 403");
+  });
 });

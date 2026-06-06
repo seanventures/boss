@@ -1,6 +1,6 @@
 # BOSS User Stories and Acceptance Criteria
 
-Last updated: June 4, 2026
+Last updated: 2026-06-05 (GAP-AUTO-003 + GAP-011/012 AC expansion for KPI CAN-006, budget full, bootstrap security, provider billing graceful, fresh schema bootstrap)
 
 These stories are derived from `docs/product/PRD-v2.0.md`, `docs/product/TECHNICAL_SPEC-v2.0.md`, `reference/boss_build_spec_pack/docs/CODEX_RUNBOOK.md`, `packages/specpack/workflows/ceo_command_to_pr.yaml`, `packages/specpack/workflows/providerops_readonly_sync.yaml`, `packages/specpack/workflows/changeset_apply_with_receipts.yaml`, `packages/specpack/workflows/deployment_run.yaml`, `packages/specpack/workflows/model_entitlement_routing.yaml`, `packages/specpack/policies/default_safety.yaml`, `packages/specpack/policies/resource_plane_policy.yaml`, `packages/specpack/policies/budget_governor_policy.yaml`, and `packages/specpack/policies/model_entitlement_policy.yaml`.
 
@@ -138,15 +138,21 @@ Acceptance criteria:
 
 ## Finance / Governance
 
-### Story FIN-001: Govern Spend
+### Story FIN-001: Govern Spend (Quote / Reserve)
 
 As a finance operator, I want every spendy action quoted and reserved before execution, so that BOSS cannot run away with model, tool, or infrastructure cost.
 
 Acceptance criteria:
 
-- Given an over-cap reservation request, when it is submitted, then BOSS denies execution and creates a decision card.
-- Given an active reservation, when spend completes, then BOSS records actual cost and releases or consumes budget.
-- Given a spend-gated job without an active reservation, when a worker polls, then BOSS refuses to lease it and creates a visible decision or event.
+- Given a valid project and actor, When POST /v1/budget/quote with category/amount_usd_micros/reason, Then BOSS returns 200 with allowed=true/false, requested amount, current budget_state (green/yellow etc), post_reservation_available (happy quote).
+- Given an amount that would exceed cap, When quote, Then allowed=false or leads to reservation with status=denied + decision_id (over-cap quote/reserve).
+- Given valid request under cap, When POST /v1/budget/reserve, Then BOSS returns 201 with status="reserved", reservation_id, and active_reservations_count increases (happy reserve).
+- Given over-cap reservation request (e.g. model 100M on small cap), When reserve, Then status="denied", creates decision card, emits budget.reservation_denied (error/deny path).
+- Given active reservation, When spend completes via worker or consume, Then BOSS records via receipt (see consume story).
+- Given a spend-gated job without active reservation, When worker polls lease, Then BOSS refuses lease (409 or similar) and creates visible decision/event (no silent lease without res).
+- Given permission check: actor without budget_manage on reserve/mutate, Then 403 + policy.denied (perm).
+- Given list status after reserve, When GET /v1/budget/status, Then reserved_usd_micros reflects it, persistence on refresh (persistence).
+- Given API unavailable, When dashboard renders, explicit unavailable instead of synthetic (empty/error).
 
 ### Story FIN-002: Inspect Budget Forecasts
 
@@ -154,9 +160,12 @@ As a finance operator, I want actual spend, reservations, burn rate, forecast, t
 
 Acceptance criteria:
 
-- Given recorded cost receipts, when budget status is requested, then BOSS returns actual spend, top cost drivers, observed burn rate, forecasted 24-hour spend, and time-to-cap.
-- Given active reservations, when the dashboard renders, then reserved spend and forecasted spend include those reservations.
-- Given the budget API is unavailable, when the console renders, then it shows an explicit unavailable state rather than synthetic budget data.
+- Given recorded cost receipts + reservations, When GET /v1/budget/forecast?scope_type=project&scope_id=...&horizon_hours=48, Then BOSS returns 200 with horizon_hours, reserved_usd_micros, forecasted_usd_micros, top_cost_drivers, burn_rate etc (happy forecast).
+- Given active reservations, When status/forecast, Then reserved and forecasted include the active ones (active res reflected).
+- Given no data, When status/forecast, Then empty arrays for drivers, zeroed values or explicit (empty state).
+- Given the budget API is unavailable, When console renders status/forecast, Then explicit unavailable state / blockedReason rather than synthetic budget data (error).
+- Given after consume or release, When refresh forecast/status, Then values update and persist (persistence).
+- Given permission: non-finops actor, forecast may be read-only but mutate (reserve/consume) requires budget_manage (perm for side effects).
 
 ### Story GOV-001: Prove Effects and Dedupe
 
@@ -214,7 +223,22 @@ Acceptance criteria:
 - Given a parent or dependency references an unknown task in the same project, when task creation is attempted, then BOSS rejects the request and does not silently create broken lineage.
 - Given an owner role references an unknown role in the same project, when task creation is attempted, then BOSS rejects the request and records no hidden assignment.
 
-### Story GOV-006: Prevent Role Drift
+### Story GOV-006: Track Durable Company KPIs
+
+As a founder or operator, I want company KPIs to be durable canonical objects, so that operating metrics are API-addressable, auditable, and visible after refresh.
+
+Acceptance criteria:
+
+- As a founder/operator with `pack_manage`, I want to create a KPI via POST /v1/kpis, Given an authenticated actor with `pack_manage` in an active project and valid payload (kpi_key, name, target_value >0, current_value >=0, unit, optional existing owner_role_id in project), When the create is submitted, Then BOSS returns 201, persists project-scoped record with stable id starting "kpi_", kpi_key, values, status="active", timestamps, and emits `kpi.upserted` event (happy path).
+- Given the same stable `kpi_key` already exists for the project, When POST /v1/kpis with updated current_value (upsert), Then BOSS updates the single record in place (ON CONFLICT), returns 201, list contains exactly one entry, and at least one `kpi.upserted` event is present (idempotent upsert under concurrency).
+- Given a project with no KPIs persisted, When GET /v1/kpis?project_id=..., Then returns 200 with empty "items": [] array (empty state).
+- Given an authenticated actor lacking `pack_manage` (e.g. "release_manager"), When POST /v1/kpis to create, Then BOSS returns 403, records `policy.denied` event, and creates no KPI (permission error).
+- Given invalid payload (target_value <=0, current_value <0, missing required fields, or owner_role_id not in project), When create attempted, Then BOSS returns 400 with validation detail (e.g. "owner_role_id"), records no KPI or event (validation error).
+- Given a KPI was created successfully, When the KPI panel is refreshed or GET /v1/kpis called again (persistence check), Then the exact kpi_key, target/current values, unit, status, owner_role_id (if set) are returned unchanged (persistence after refresh).
+- Given the KPI API or DB is unavailable, When Mission Control loads the KPI panel or fetchKpiFeed runs, Then it returns explicit error state (apiReachable=false, blockedReason e.g. "API returned 500" or message), shows no fake metrics, and UI renders error/empty instead of pretending data (error state + no silent fail).
+- Given recovery from error (API back), When list is requested, Then success state returns real persisted items (success after error).
+
+### Story GOV-007: Prevent Role Drift
 
 As VP Agents, I want RoleSpec scope checks to block out-of-scope skills and lower trust automatically, so that roles cannot drift into actions outside their charter.
 
@@ -275,7 +299,10 @@ Acceptance criteria:
 - Given exact billing is unavailable, when BOSS estimates spend, then the cost event is labeled `estimated_from_price_catalog` or `unknown` and is never displayed as exact.
 - Given billing-readable DigitalOcean, OpenAI, or Anthropic provider accounts have valid env-backed credentials, when read-only ProviderOps sync runs, then BOSS ingests official billing/cost report data into duplicate-safe `CostEvent` records linked to `BillingAccount` records and confidence labels.
 - Given a provider account is not billing-readable, when read-only ProviderOps sync runs, then BOSS skips billing endpoints and records only supported inventory/reconciliation evidence.
-- Given a billing-readable provider has no implemented official billing endpoint, when read-only ProviderOps sync runs, then BOSS marks the reconciliation failed, records provider health degradation, and creates a visible deadletter rather than inventing a cost estimate.
+- Given a billing-readable provider (e.g. cloudflare with billing_readable=true) has no implemented official billing endpoint (or sync_billing unsupported), but inventory sync succeeds (monkey or real returns [] or resources), when read-only ProviderOps sync /v1/resources/sync or worker runs, then BOSS keeps the reconciliation successful (run.status="succeeded", costs_seen=0), records `billing_status=unavailable` + descriptive `billing_message` (e.g. "Exact billing sync is not available for cloudflare...") in the sync run artifact, in ProviderHealth detail (billing_status + billing_confidence="unknown"), and in inventory_snapshot_artifact content, emits `provider.billing_unavailable` event with entity_id=provider_account, and does not invent/fake any CostEvent (inventory preserved; graceful unavailable for unsupported providers; GAP-011).
+- Given the above sync, when health queried /v1/provider-health or artifacts inspected, status/message visible; no deadletter for billing alone (inventory path succeeds independently).
+- Given providers that do support billing (DO/OpenAI/Anthropic), when sync, billing_status="synced", costs recorded with confidence labels (exact/estimated).
+- Given billing unavailable case, cost/forecast still works from other sources or estimates; no silent cost hiding or fabrication.
 - Given a spendy ProviderOps ChangeSet applies successfully before billing reconciliation, when the Resource Plane records the result, then BOSS creates an observed `CostEvent` linked to the Receipt and ResourceReceipt with `estimated_from_price_catalog` confidence.
 - Given observed spend exceeds policy thresholds, when the ledger updates, then BOSS emits an anomaly event and can apply budget kill switches such as read-only provider mode, local-only mode, or freeze provisioning.
 - Given observed provider spend crosses the project freeze threshold, when the CostEvent is recorded, then BOSS creates a `CostAnomaly`, switches the provider account to read-only mode, creates a decision card, and blocks subsequent provider write ChangeSets until reviewed.
@@ -511,7 +538,13 @@ Acceptance criteria:
 - Given an authorized admin, when an org delegate is created, then the delegate can act across projects in the same org only with explicitly granted permissions.
 - Given the executive console loads, when org delegates are available to the selected actor, then they are visible in the actor switcher and Org Delegation management panel.
 - Given a write request, when the actor lacks the required permission, then BOSS returns `403` and records `policy.denied`.
+- Given the audit event write itself fails while denying access, when BOSS returns the denial, then the API logs the audit-write failure with actor, project, permission, and reason context instead of silently swallowing it.
 - Given a member-management request, when the actor has `member_manage`, then BOSS creates or updates the member and emits an event.
+- Given the bootstrap seed API is not explicitly enabled (default BOSS_BOOTSTRAP_SEED_API_ENABLED=false), when any caller posts to `/v1/bootstrap/seed`, then BOSS returns `403` "Bootstrap seed API is disabled", records policy-denial evidence, and does not report a fake success (disabled 403 + denial).
+- Given the bootstrap seed API is explicitly enabled and the dogfood project exists, when an actor without `member_manage` (e.g. "release_manager") posts to `/v1/bootstrap/seed`, then BOSS rejects with `403` and records the denial (perm gate).
+- Given the bootstrap seed API is explicitly enabled and an actor with `member_manage` (e.g. "ceo") posts to `/v1/bootstrap/seed`, then BOSS reseeds idempotently, preserves unique role records (no dup roles), returns status="seeded", and emits `bootstrap.seed_executed` event (enabled happy + audit).
+- Given clean Postgres (no prior data), when schema is applied via db/schema.sql (or make seed / test bootstrap), then creation succeeds without FK ordering errors (receipts table declared after jobs; account_connect_auth_sessions.receipt_id is TEXT reference not forward FK) (clean schema bootstrap succeeds, no FK ordering block; GAP-012).
+- Given bootstrap success or denial, events and state are visible in /v1/events and roles list (audit + persistence).
 
 ### Story ADM-003: Use Break-Glass Access Safely
 
@@ -579,3 +612,18 @@ Acceptance criteria:
 - Given worker pools are declared, when validation runs, then each pool has job kinds, a scale signal, and an ordered non-negative replica range.
 - Given any environment profile, when ProviderOps writes are described, then ChangeSet, BudgetReservation, destructive approval, ResourceReceipt, rollback, and no-raw-secret gates remain mandatory.
 - Given autoscaling is configured, when validation runs, then Budget Governor precedence over Autoscaler is required.
+
+### Story FIN-001: Consume Reserved Budget
+
+As a FinOps operator, I want reserved spend to be explicitly consumed only with a receipt, so that actual model/tool/provider costs are auditable and cannot bypass budget controls.
+
+Acceptance criteria:
+
+- Given an active BudgetReservation (from prior reserve) and existing succeeded Receipt (dedupe_key), when authorized budget manager (with `budget_manage`, e.g. "ceo") POSTs /v1/budget/consume with reservation_id, receipt_id, category, skill_or_model_id, estimated/actual_usd_micros, Then BOSS writes CostReceipt, sets reservation status="consumed", emits `budget.reservation_consumed`, returns updated state with cost_receipt (happy consume + active res + receipt).
+- Given the actor lacks `budget_manage` (e.g. "cto"), when consume attempted, Then BOSS returns 403 and records policy-denial evidence (permission error).
+- Given the reservation_id is missing/expired/released/already consumed, or receipt not found for project, When consume, Then BOSS returns visible 409 "Active budget reservation not found" or similar, records `budget.consume_denied` (error path).
+- Given actual_usd_micros or estimated > reserved amount, when consume succeeds, Then BOSS still succeeds but emits `budget.reservation_overrun` event with reserved vs actual (overrun visible).
+- Given project with reserved/actual, When GET /v1/budget/forecast or status, Then includes the values, top drivers, etc (forecast after consume).
+- Given concurrent double consume on same res (race), Then at least one succeeds (200), other may 409, reservation ends consumed, no duplicate cost effects (idempotency via receipt dedupe + state).
+- Given no active res or invalid, consume never fabricates; always requires real res + receipt (no bypass).
+- Given after successful consume, refresh status/forecast shows updated actual + reduced reserved (persistence).

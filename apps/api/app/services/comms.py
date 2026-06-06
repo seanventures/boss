@@ -201,7 +201,7 @@ class CommsService:
         return self.get_outbox_message(connection, message_id)
 
     def list_outbox_messages(
-        self, connection: Connection, project_id: str, limit: int
+        self, connection: Connection, project_id: str, limit: int, offset: int = 0
     ) -> list[dict]:
         rows = connection.execute(
             text(
@@ -211,10 +211,10 @@ class CommsService:
                 FROM outbox_messages
                 WHERE project_id = :project_id
                 ORDER BY created_at DESC
-                LIMIT :limit
+                LIMIT :limit OFFSET :offset
                 """
             ),
-            {"project_id": project_id, "limit": limit},
+            {"project_id": project_id, "limit": limit, "offset": offset},
         ).mappings().all()
         return [dict(row) for row in rows]
 
@@ -741,7 +741,7 @@ class CommsService:
         raise RuntimeError(f"Unsupported provider key: {provider['key']}")
 
     def list_inbox_messages(
-        self, connection: Connection, project_id: str, limit: int
+        self, connection: Connection, project_id: str, limit: int, offset: int = 0
     ) -> list[dict]:
         rows = connection.execute(
             text(
@@ -751,10 +751,10 @@ class CommsService:
                 FROM inbox_messages
                 WHERE project_id = :project_id
                 ORDER BY created_at DESC
-                LIMIT :limit
+                LIMIT :limit OFFSET :offset
                 """
             ),
-            {"project_id": project_id, "limit": limit},
+            {"project_id": project_id, "limit": limit, "offset": offset},
         ).mappings().all()
         return [dict(row) for row in rows]
 

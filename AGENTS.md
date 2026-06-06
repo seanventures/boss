@@ -17,6 +17,34 @@ Before architecture or feature work, read:
 7. `packages/specpack/policies/default_safety.yaml`
 8. `packages/specpack/policies/resource_plane_policy.yaml`
 
+## Agent Coordination
+
+This repo may have a parallel Grok autonomous build agent running locally and
+pushing GitHub branches.
+
+Before starting work, Codex must inspect:
+
+- `.ai/codex-handoff.md`
+- `.ai/status.md`
+- `.ai/requirements-traceability.md`
+- `.ai/gap-backlog.md`
+- `.ai/activity-log.md`
+- `.ai/agents/`
+- active `ai/grok/*` and `ai/codex/*` branches
+- open GitHub PRs/issues when available
+
+Codex acts as chief architect and product completion lead. It should avoid
+duplicating Grok work, preserve human/Grok/Codex changes, and coordinate
+through `.ai` files, branches, and PR descriptions.
+
+Use focused branches:
+
+- `ai/codex/<requirement-or-feature>`
+- `ai/grok/<requirement-or-feature>`
+
+Every PR should include requirement IDs, relationship to parallel agent work,
+tests run, risks, and handoff notes.
+
 ## Build order
 
 Implement the smallest vertical slice first:

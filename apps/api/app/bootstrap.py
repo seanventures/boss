@@ -1,4 +1,7 @@
+import time
+
 from sqlalchemy import text
+from sqlalchemy.exc import OperationalError
 
 from .config import get_settings
 from .db import ensure_schema, get_engine
@@ -73,23 +76,38 @@ def seed() -> None:
                 "burst_cap": settings.burst_cap_usd_micros_per_min,
             },
         )
-        members.seed_default_members(
+
+        def _retry(fn, *a, **k):
+            for attempt in range(3):
+                try:
+                    return fn(*a, **k)
+                except OperationalError as e:
+                    if "deadlock" in str(e).lower() and attempt < 2:
+                        time.sleep(0.05 * (attempt + 1))
+                        continue
+                    raise
+
+        _retry(
+            members.seed_default_members,
             connection,
             settings.default_project_id,
             "bootstrap",
         )
-        specpack.install_pack(
+        _retry(
+            specpack.install_pack,
             connection,
             settings.default_project_id,
             settings.core_pack_id,
             "bootstrap",
         )
-        specpack.install_default_agent_modules(
+        _retry(
+            specpack.install_default_agent_modules,
             connection,
             settings.default_project_id,
             "bootstrap",
         )
-        entitlements.seed_default_sources(
+        _retry(
+            entitlements.seed_default_sources,
             connection,
             settings.default_project_id,
             "bootstrap",

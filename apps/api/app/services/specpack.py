@@ -12,6 +12,7 @@ from sqlalchemy.engine import Connection
 from ..config import Settings
 from .commercial import CommercialService
 from .core import create_artifact, emit_event, json_hash
+from .receipts import ReceiptService
 
 
 class PackNotFoundError(Exception):
@@ -58,6 +59,26 @@ class SpecPackService:
     def __init__(self, settings: Settings):
         self.settings = settings
         self.commercial = CommercialService(settings)
+        self.receipts = ReceiptService()
+
+    def _project_scope(self, connection: Connection, project_id: str) -> dict[str, str]:
+        row = connection.execute(
+            text(
+                """
+                SELECT p.workspace_id, w.org_id
+                FROM projects p
+                JOIN workspaces w ON w.id = p.workspace_id
+                WHERE p.id = :project_id
+                """
+            ),
+            {"project_id": project_id},
+        ).mappings().first()
+        if not row:
+            return {
+                "org_id": self.settings.default_org_id,
+                "workspace_id": self.settings.default_workspace_id,
+            }
+        return {"org_id": row["org_id"], "workspace_id": row["workspace_id"]}
 
     def _load_yaml(self, path: Path) -> dict[str, Any]:
         if not path.exists():
@@ -152,6 +173,35 @@ class SpecPackService:
             if not isinstance(level, int) or level < 0:
                 errors.append("autonomy.level must be a non-negative integer")
 
+        if errors:
+            raise ValueError(f"{source} is invalid: {'; '.join(errors)}")
+
+    def validate_pack_spec(
+        self, pack_spec: dict[str, Any], source: str = "PackSpec"
+    ) -> None:
+        errors: list[str] = []
+        for key in ("id", "version", "description"):
+            val = pack_spec.get(key)
+            if not isinstance(val, str) or not val.strip():
+                errors.append(f"{key} must be a non-empty string")
+        installs = pack_spec.get("installs")
+        if not isinstance(installs, dict):
+            errors.append("installs must be an object")
+        else:
+            for k in ("roles", "workflows", "policies", "skills", "canaries"):
+                lst = installs.get(k, [])
+                if not isinstance(lst, list):
+                    errors.append(f"installs.{k} must be a list")
+                elif any(not isinstance(x, str) or not x.strip() for x in lst):
+                    errors.append(f"installs.{k} must contain only non-empty strings")
+        requires = pack_spec.get("requires", [])
+        if not isinstance(requires, list) or any(
+            not isinstance(x, str) or not x.strip() for x in requires
+        ):
+            errors.append("requires must be a list of non-empty strings")
+        status = pack_spec.get("status")
+        if status is not None and status not in ("draft", "active", "deprecated"):
+            errors.append("status must be draft/active/deprecated or omitted")
         if errors:
             raise ValueError(f"{source} is invalid: {'; '.join(errors)}")
 
@@ -411,7 +461,7 @@ class SpecPackService:
             text(
                 """
                 SELECT pack_id, pack_version, description, spec, installed_by, status,
-                       installed_at, updated_at
+                       installed_at, updated_at, source, yaml_blob
                 FROM pack_installs
                 WHERE project_id = :project_id
                 ORDER BY installed_at DESC
@@ -422,7 +472,9 @@ class SpecPackService:
         installed_by_pack = {row["pack_id"]: dict(row) for row in installed_rows}
 
         items: list[dict[str, Any]] = []
+        baked_pack_ids: set[str] = set()
         for pack in self.list_available_packs():
+            baked_pack_ids.add(pack["pack_id"])
             installed = installed_by_pack.get(pack["pack_id"])
             items.append(
                 {
@@ -438,6 +490,41 @@ class SpecPackService:
                     "installed_version": (
                         installed["pack_version"] if installed else None
                     ),
+                }
+            )
+        for pack_id, installed in installed_by_pack.items():
+            if pack_id in baked_pack_ids:
+                continue
+            spec = installed.get("spec") or {}
+            installs = spec.get("installs") or {}
+            items.append(
+                {
+                    "pack_id": pack_id,
+                    "version": installed["pack_version"]
+                    or spec.get("version")
+                    or "0.0.0",
+                    "description": installed["description"]
+                    or spec.get("description")
+                    or "",
+                    "status": installed["status"] or spec.get("status") or "active",
+                    "requires": spec.get("requires") or [],
+                    "roles": installs.get("roles") or [],
+                    "workflows": installs.get("workflows") or [],
+                    "policies": installs.get("policies") or [],
+                    "skills": installs.get("skills") or [],
+                    "installed": True,
+                    "installed_by": installed["installed_by"],
+                    "installed_at": (
+                        installed["installed_at"].isoformat()
+                        if installed.get("installed_at")
+                        else None
+                    ),
+                    "updated_at": (
+                        installed["updated_at"].isoformat()
+                        if installed.get("updated_at")
+                        else None
+                    ),
+                    "installed_version": installed["pack_version"],
                 }
             )
         return items
@@ -1469,11 +1556,11 @@ class SpecPackService:
                     """
                     INSERT INTO pack_installs (
                         id, project_id, pack_id, pack_version, description, spec, installed_by,
-                        status
+                        status, source, yaml_blob
                     )
                     VALUES (
                         :id, :project_id, :pack_id, :pack_version, :description,
-                        CAST(:spec AS JSONB), :installed_by, :status
+                        CAST(:spec AS JSONB), :installed_by, :status, :source, :yaml_blob
                     )
                     ON CONFLICT (project_id, pack_id) DO UPDATE
                     SET pack_version = EXCLUDED.pack_version,
@@ -1481,6 +1568,8 @@ class SpecPackService:
                         spec = EXCLUDED.spec,
                         installed_by = EXCLUDED.installed_by,
                         status = EXCLUDED.status,
+                        source = EXCLUDED.source,
+                        yaml_blob = EXCLUDED.yaml_blob,
                         updated_at = now()
                     """
                 ),
@@ -1493,6 +1582,8 @@ class SpecPackService:
                     "spec": json.dumps(pack_spec),
                     "installed_by": actor,
                     "status": pack_spec.get("status", "active"),
+                    "source": "baked",
+                    "yaml_blob": None,
                 },
             )
             emit_event(
@@ -1515,3 +1606,204 @@ class SpecPackService:
         pack["role_results"] = role_results
         pack["install_status"] = status
         return pack
+
+    def import_pack(
+        self,
+        connection: Connection,
+        project_id: str,
+        yaml_str: str,
+        actor: str,
+    ) -> dict[str, Any]:
+        """Import local YAML pack for Community (P3 GAP-PRD-AUDIT-001).
+        Validates PackSpec, no core baked clash, size<64k, stores in pack_installs
+        with source=local_upload + yaml_blob, performs role installs, emits pack.imported,
+        creates receipt with dedupe_key.
+        """
+        if len(yaml_str.encode("utf-8")) > 64 * 1024:
+            raise ValueError("pack yaml exceeds 64k limit")
+        try:
+            payload = yaml.safe_load(yaml_str)
+        except Exception as exc:
+            raise ValueError(f"invalid yaml: {exc}") from exc
+        if not isinstance(payload, dict):
+            raise ValueError("pack yaml must be a mapping/object")
+        pack_id = payload.get("id")
+        if not isinstance(pack_id, str) or not pack_id.strip():
+            raise ValueError("pack id must be a non-empty string")
+        pack_id = pack_id.strip()
+        self.validate_pack_spec(payload, f"import {pack_id}.yaml")
+        # roles from installs (validate they resolve to core for small vertical)
+        roles = (payload.get("installs") or {}).get("roles", []) or []
+        if not isinstance(roles, list):
+            raise ValueError("pack installs.roles must be a list")
+        for role_key in roles:
+            if not isinstance(role_key, str) or not role_key.strip():
+                raise ValueError("pack role entries must be non-empty strings")
+            try:
+                self.load_role_spec(role_key.strip())
+            except (RoleNotFoundError, ValueError) as exc:
+                raise ValueError(
+                    f"pack role '{role_key}' not loadable from core roles: {exc}"
+                ) from exc
+        # no core clash
+        baked_ids = {p["pack_id"] for p in self.list_available_packs()}
+        if pack_id in baked_ids:
+            raise ValueError(
+                f"pack_id '{pack_id}' clashes with core baked pack; choose different id for local upload"
+            )
+        # perform role upserts (may create/update roles)
+        role_results: list[dict[str, Any]] = []
+        changed = False
+        for role_key in [r.strip() for r in roles if r and isinstance(r, str)]:
+            role_result = self._upsert_role_spec(
+                connection,
+                project_id,
+                role_key,
+                self.load_role_spec(role_key),
+                actor,
+            )
+            if role_result["status"] != "present":
+                changed = True
+            role_results.append(role_result)
+        # store pack_install (custom)
+        existing_pack = connection.execute(
+            text(
+                """
+                SELECT id, pack_version, spec
+                FROM pack_installs
+                WHERE project_id = :project_id AND pack_id = :pack_id
+                """
+            ),
+            {"project_id": project_id, "pack_id": pack_id},
+        ).mappings().first()
+        pack_install_id = (
+            existing_pack["id"] if existing_pack else f"pack_{project_id}_{pack_id}"
+        )
+        pack_spec_matches = (
+            existing_pack is not None
+            and existing_pack["pack_version"] == payload.get("version", "0.0.0")
+            and (existing_pack["spec"] or {}) == payload
+        )
+        if existing_pack and pack_spec_matches and not changed:
+            status = "already_imported"
+        else:
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO pack_installs (
+                        id, project_id, pack_id, pack_version, description, spec, installed_by,
+                        status, source, yaml_blob
+                    )
+                    VALUES (
+                        :id, :project_id, :pack_id, :pack_version, :description,
+                        CAST(:spec AS JSONB), :installed_by, :status, :source, :yaml_blob
+                    )
+                    ON CONFLICT (project_id, pack_id) DO UPDATE
+                    SET pack_version = EXCLUDED.pack_version,
+                        description = EXCLUDED.description,
+                        spec = EXCLUDED.spec,
+                        installed_by = EXCLUDED.installed_by,
+                        status = EXCLUDED.status,
+                        source = EXCLUDED.source,
+                        yaml_blob = EXCLUDED.yaml_blob,
+                        updated_at = now()
+                    """
+                ),
+                {
+                    "id": pack_install_id,
+                    "project_id": project_id,
+                    "pack_id": pack_id,
+                    "pack_version": payload.get("version", "0.0.0"),
+                    "description": payload.get("description", ""),
+                    "spec": json.dumps(payload),
+                    "installed_by": actor,
+                    "status": payload.get("status", "active"),
+                    "source": "local_upload",
+                    "yaml_blob": yaml_str,
+                },
+            )
+            emit_event(
+                connection,
+                project_id,
+                "pack.imported",
+                actor,
+                "pack",
+                pack_install_id,
+                {
+                    "pack_id": pack_id,
+                    "version": payload.get("version", "0.0.0"),
+                    "role_count": len(role_results),
+                    "source": "local_upload",
+                },
+            )
+            status = "imported"
+        # receipt for the import effect (dedupe, per hard rules)
+        scope = self._project_scope(connection, project_id)
+        dedupe_key = f"pack.import:{project_id}:{pack_id}"
+        receipt_payload = {
+            "pack_id": pack_id,
+            "source": "local_upload",
+            "yaml_size": len(yaml_str),
+            "role_count": len(role_results),
+        }
+        receipt, _ = self.receipts.create_or_reuse(
+            connection,
+            scope["org_id"],
+            scope["workspace_id"],
+            project_id,
+            dedupe_key,
+            "pack.import",
+            {"pack_id": pack_id, "project_id": project_id, "source": "local_upload"},
+            receipt_payload,
+            data_boundary="internal",
+        )
+        self.receipts.mark_succeeded(
+            connection,
+            receipt["id"],
+            None,
+            {
+                "status": status,
+                "pack_id": pack_id,
+                "role_keys": [r["role_key"] for r in role_results],
+            },
+        )
+        pack = self.get_pack_for_project(connection, project_id, pack_id)
+        pack["role_count"] = len(role_results)
+        pack["role_results"] = role_results
+        pack["install_status"] = status
+        return pack
+
+    def export_pack_yaml(
+        self, connection: Connection, project_id: str, pack_id: str
+    ) -> str:
+        """Return original YAML for export (baked fs or local_upload blob)."""
+        # prefer custom blob if present for this project (supports per-proj customs)
+        row = connection.execute(
+            text(
+                """
+                SELECT yaml_blob, source
+                FROM pack_installs
+                WHERE project_id = :project_id AND pack_id = :pack_id
+                """
+            ),
+            {"project_id": project_id, "pack_id": pack_id},
+        ).mappings().first()
+        if row and row.get("yaml_blob"):
+            return row["yaml_blob"]
+        # fallback to baked source
+        try:
+            path = self._pack_path(pack_id)
+            if path.exists():
+                return path.read_text(encoding="utf-8")
+        except Exception:
+            pass
+        # if installed baked record without blob, still load fs
+        baked = next(
+            (p for p in self.list_available_packs() if p["pack_id"] == pack_id), None
+        )
+        if baked:
+            try:
+                return self._pack_path(pack_id).read_text(encoding="utf-8")
+            except Exception:
+                pass
+        raise PackNotFoundError(f"Pack '{pack_id}' not found for export")

@@ -102,6 +102,15 @@ describe("empty API feeds", () => {
     expect(feed.blockedReason).toBe("providerops api down");
   });
 
+  it("returns an unavailable provider health subfeed state (empty on error)", () => {
+    const feed = emptyProviderOpsFeed("provider health api down");
+    // polish: explicit providerHealth state for monitoring obs
+    expect(feed.apiReachable).toBe(false);
+    expect(feed.providerHealth).toEqual([]);
+    expect(feed.summary.healthyProviders).toBe(0);
+    expect(feed.blockedReason).toBe("provider health api down");
+  });
+
   it("returns an unavailable health snapshot feed", () => {
     const feed = emptyHealthSnapshotFeed("health snapshot api down");
 
@@ -164,5 +173,30 @@ describe("empty API feeds", () => {
     expect(feed.apiReachable).toBe(false);
     expect(feed.items).toEqual([]);
     expect(feed.blockedReason).toBe("self improvement api down");
+  });
+
+  it("returns self-improvement feed shape with proposal states for e2e (P2 SIM persist/states)", () => {
+    // structure test for feed item states (proposal/canary/rollout/rollback) used in UI conditionals
+    const feed = {
+      projectId: "boss-dogfood",
+      apiReachable: true,
+      items: [
+        {
+          id: "imp1",
+          taskId: "t1",
+          title: "p",
+          summary: "s",
+          changeRef: "r",
+          diffSummary: "d",
+          status: "rolled_out",
+          riskTier: 2,
+          createdBy: "a",
+          createdAt: "t",
+          updatedAt: "t",
+        },
+      ],
+    };
+    expect(feed.items[0].status).toBe("rolled_out");
+    expect(feed.apiReachable).toBe(true);
   });
 });

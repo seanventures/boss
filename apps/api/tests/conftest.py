@@ -8,6 +8,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from apps.api.app.bootstrap import seed
 from apps.api.app.config import get_settings
 from apps.api.app.main import app
+from apps.api.app import main as api_main
 from apps.api.app.services.entitlements import EntitlementBrokerService
 from apps.api.app.services.members import MemberDirectoryService
 from apps.api.app.services.specpack import SpecPackService
@@ -42,68 +43,77 @@ def clean_tables(engine):
     members = MemberDirectoryService(settings)
     specpack = SpecPackService(settings)
     with engine.begin() as connection:
-        connection.execute(text("DELETE FROM account_connect_billing_portal_sessions"))
-        connection.execute(text("DELETE FROM account_connect_auth_sessions"))
-        connection.execute(text("DELETE FROM account_connect_health_checks"))
-        connection.execute(text("DELETE FROM account_connect_team_invites"))
-        connection.execute(text("DELETE FROM hosted_marketplace_pack_listings"))
-        connection.execute(text("DELETE FROM hosted_marketplace_sync_runs"))
-        connection.execute(text("DELETE FROM license_entitlements"))
-        connection.execute(text("DELETE FROM account_connect_orgs"))
-        connection.execute(text("DELETE FROM enterprise_scim_users"))
-        connection.execute(text("DELETE FROM enterprise_scim_groups"))
-        connection.execute(text("DELETE FROM enterprise_identity_providers"))
-        connection.execute(text("DELETE FROM enterprise_cluster_validation_runs"))
-        connection.execute(text("DELETE FROM enterprise_clusters"))
-        connection.execute(text("DELETE FROM deployment_rollouts"))
-        connection.execute(text("DELETE FROM resource_receipts"))
-        connection.execute(text("DELETE FROM scale_plans"))
-        connection.execute(text("DELETE FROM worker_pools"))
-        connection.execute(text("DELETE FROM deployment_runs"))
-        connection.execute(text("DELETE FROM changeset_operations"))
-        connection.execute(text("DELETE FROM changesets"))
-        connection.execute(text("DELETE FROM deployment_environment_policies"))
-        connection.execute(text("DELETE FROM cost_anomalies"))
-        connection.execute(text("DELETE FROM cost_events"))
-        connection.execute(text("DELETE FROM commitments"))
-        connection.execute(text("DELETE FROM drift_reports"))
-        connection.execute(text("DELETE FROM provider_health"))
-        connection.execute(text("DELETE FROM reconciliation_runs"))
-        connection.execute(text("DELETE FROM external_resources"))
-        connection.execute(text("DELETE FROM deployment_targets"))
-        connection.execute(text("DELETE FROM billing_accounts"))
-        connection.execute(text("DELETE FROM capabilities"))
-        connection.execute(text("DELETE FROM provider_accounts"))
-        connection.execute(text("DELETE FROM secret_refs"))
-        connection.execute(text("DELETE FROM resource_policies"))
-        connection.execute(text("DELETE FROM capacity_receipts"))
-        connection.execute(text("DELETE FROM entitlement_sources"))
-        connection.execute(text("DELETE FROM cost_receipts"))
-        connection.execute(text("DELETE FROM budget_reservations"))
-        connection.execute(text("DELETE FROM budget_allocations"))
-        connection.execute(text("DELETE FROM health_snapshots"))
-        connection.execute(text("DELETE FROM inbox_messages"))
-        connection.execute(text("DELETE FROM outbox_messages"))
-        connection.execute(text("DELETE FROM self_improvement_proposals"))
-        connection.execute(text("DELETE FROM role_reviews"))
-        connection.execute(text("DELETE FROM autonomy_changes"))
-        connection.execute(text("DELETE FROM agent_module_install_records"))
-        connection.execute(text("DELETE FROM agent_module_installs"))
-        connection.execute(text("DELETE FROM break_glass_grants"))
-        connection.execute(text("DELETE FROM project_members"))
-        connection.execute(text("DELETE FROM org_members"))
-        connection.execute(text("DELETE FROM infra_resources"))
-        connection.execute(text("DELETE FROM receipts"))
-        connection.execute(text("DELETE FROM deadletters"))
-        connection.execute(text("DELETE FROM routing_logs"))
-        connection.execute(text("DELETE FROM meetings"))
-        connection.execute(text("DELETE FROM plans"))
-        connection.execute(text("DELETE FROM policy_records"))
-        connection.execute(text("DELETE FROM departments"))
-        connection.execute(text("DELETE FROM artifacts"))
-        connection.execute(text("DELETE FROM decisions"))
-        connection.execute(text("DELETE FROM jobs"))
-        connection.execute(text("DELETE FROM tasks"))
+        # Tolerant deletes for partial schemas in ad-hoc test DBs (only core tables from db/schema.sql exist).
+        # Original explicit list preserved (in designed child-to-parent delete order to avoid FK violations);
+        # missing tables (commercial/enterprise) are skipped. Enables budget/kpi/concurrent tests + full -k matrix.
+        for tbl in [
+            "account_connect_billing_portal_sessions",
+            "account_connect_auth_sessions",
+            "account_connect_health_checks",
+            "account_connect_team_invites",
+            "hosted_marketplace_pack_listings",
+            "hosted_marketplace_sync_runs",
+            "license_entitlements",
+            "account_connect_orgs",
+            "enterprise_scim_users",
+            "enterprise_scim_groups",
+            "enterprise_identity_providers",
+            "enterprise_cluster_validation_runs",
+            "enterprise_clusters",
+            "deployment_rollouts",
+            "resource_receipts",
+            "scale_plans",
+            "worker_pools",
+            "deployment_runs",
+            "changeset_operations",
+            "changesets",
+            "deployment_environment_policies",
+            "cost_anomalies",
+            "cost_events",
+            "commitments",
+            "drift_reports",
+            "provider_health",
+            "reconciliation_runs",
+            "external_resources",
+            "deployment_targets",
+            "billing_accounts",
+            "capabilities",
+            "provider_accounts",
+            "secret_refs",
+            "resource_policies",
+            "capacity_receipts",
+            "entitlement_sources",
+            "cost_receipts",
+            "budget_reservations",
+            "budget_allocations",
+            "health_snapshots",
+            "inbox_messages",
+            "outbox_messages",
+            "self_improvement_proposals",
+            "role_reviews",
+            "autonomy_changes",
+            "agent_module_install_records",
+            "agent_module_installs",
+            "break_glass_grants",
+            "project_members",
+            "org_members",
+            "infra_resources",
+            "receipts",
+            "deadletters",
+            "routing_logs",
+            "meetings",
+            "plans",
+            "policy_records",
+            "departments",
+            "artifacts",
+            "decisions",
+            "jobs",
+            "tasks",
+        ]:
+            try:
+                connection.execute(text(f"DELETE FROM {tbl}"))
+            except Exception:
+                pass  # table absent in this schema (e.g. no commercial tables)
         specpack.install_pack(
             connection,
             settings.default_project_id,
@@ -167,7 +177,14 @@ def clean_tables(engine):
                 "burst_cap": settings.burst_cap_usd_micros_per_min,
             },
         )
-        connection.execute(text("DELETE FROM events"))
+        try:
+            connection.execute(text("DELETE FROM events"))
+        except Exception:
+            pass
+    # Ensure rate limiter (P2 high-cost) uses generous limit + cleared for normal tests.
+    # Specific rate limit test will override to low value temporarily.
+    api_main.configure_rate_limiter_for_testing(1000)
+    api_main.reset_rate_limiter_hits()
     yield
 
 

@@ -2,6 +2,21 @@
 
 All notable changes to BOSS are documented in this file.
 
+## v0.5.0 - 2026-06-03
+
+API baseline release for the UI team: pack import/export, job list, SecretRef CRUD, OpenAPI parity CI, and a scaffolded BOSS Account Connect service.
+
+### Added
+
+- Added `POST /v1/packs/import` and `GET /v1/packs/{pack_id}/export` HTTP endpoints backed by existing SpecPack service logic.
+- Added `GET /v1/jobs` list endpoint with status/kind/task filters, paging, and terminal-job inclusion controls.
+- Added SecretRef CRUD APIs (`GET/POST/PATCH/DELETE /v1/secret-refs`) with metadata-only storage and providerops actor enforcement.
+- Added OpenAPI route parity validation script and CI/Makefile gate (`make openapi-validate`).
+- Added `apps/account_connect` FastAPI/Postgres service matching the `AccountConnectAdapter` contract in `commercial.py`.
+- Added local Account Connect docker-compose service, postgres init database, and `.env.example` wiring.
+- Added staging Helm deploy and cluster validation recording scripts.
+- Extended `@boss/api-client` with `importPack`, `exportPack`, `listJobs`, and SecretRef CRUD helpers.
+
 ## v0.4.1 - 2026-06-05
 
 Patch release for the validated `main` rollout of the v0.4 commercial, enterprise, ProviderOps, Model Entitlement Broker, and infrastructure readiness work.

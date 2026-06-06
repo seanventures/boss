@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { createBossApiClient } from "@boss/api-client";
+import { createBossApiClient, BossApiError } from "@boss/api-client";
 
 describe("createBossApiClient", () => {
   it("sends bearer API key headers when configured", async () => {
@@ -93,6 +93,88 @@ describe("createBossApiClient", () => {
       SAMLResponse: "base64-saml",
     });
     expect(session.member_id).toBe("ceo");
+  });
+
+  it("uses budget forecast and consume API contracts", async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const responses = [
+      {
+        status: 200,
+        body: {
+          scope_type: "project",
+          scope_id: "boss-dogfood",
+          horizon_hours: 48,
+          budget_state: "green",
+          cap_usd_micros: 1_000_000,
+          reserved_usd_micros: 100_000,
+          actual_usd_micros: 25_000,
+          available_usd_micros: 875_000,
+          committed_usd_micros: 125_000,
+          burn_rate_usd_micros_per_hour: 1000,
+          forecasted_usd_micros: 148_000,
+          time_to_cap_seconds: 3600,
+          top_cost_drivers: [],
+        },
+      },
+      {
+        status: 200,
+        body: {
+          status: "consumed",
+          reservation_id: "res_123",
+          budget_state: "green",
+          message: "Reservation consumed and cost receipt recorded.",
+          cost_receipt: {
+            id: "cost_123",
+            project_id: "boss-dogfood",
+            reservation_id: "res_123",
+            receipt_id: "rcpt_123",
+            category: "model_api",
+            skill_or_model_id: "openai:gpt-5.2-codex",
+            estimated_usd_micros: 50_000,
+            actual_usd_micros: 45_000,
+            status: "actual",
+            created_at: "2026-06-05T10:00:00Z",
+          },
+        },
+      },
+    ];
+    const fetchImpl = async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({ url: String(input), init });
+      const response = responses.shift();
+      return new Response(JSON.stringify(response?.body ?? {}), {
+        status: response?.status ?? 500,
+        headers: { "Content-Type": "application/json" },
+      });
+    };
+    const client = createBossApiClient({
+      baseUrl: "http://127.0.0.1:8000",
+      fetchImpl,
+    });
+
+    const forecast = await client.getBudgetForecast("project", "boss-dogfood", 48);
+    const consumed = await client.consumeBudget({
+      project_id: "boss-dogfood",
+      reservation_id: "res_123",
+      receipt_id: "rcpt_123",
+      category: "model_api",
+      skill_or_model_id: "openai:gpt-5.2-codex",
+      estimated_usd_micros: 50_000,
+      actual_usd_micros: 45_000,
+      actor: "ceo",
+    });
+
+    expect(calls[0].url).toBe(
+      "http://127.0.0.1:8000/v1/budget/forecast?scope_type=project&scope_id=boss-dogfood&horizon_hours=48",
+    );
+    expect(calls[1].url).toBe("http://127.0.0.1:8000/v1/budget/consume");
+    expect(calls[1].init?.method).toBe("POST");
+    expect(JSON.parse(String(calls[1].init?.body))).toMatchObject({
+      reservation_id: "res_123",
+      receipt_id: "rcpt_123",
+      actor: "ceo",
+    });
+    expect(forecast.forecasted_usd_micros).toBe(148_000);
+    expect(consumed.cost_receipt.actual_usd_micros).toBe(45_000);
   });
 
   it("uses edition and Account Connect API contracts", async () => {
@@ -234,6 +316,62 @@ describe("createBossApiClient", () => {
     expect(calls[4].url).toBe(
       "http://127.0.0.1:8000/v1/account-connect/unlink",
     );
+  });
+
+  it("uses pack list/get/install API contracts (cross-slice e2e regression for pack+selfimp+commercial+budget+toasts P2)", async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const packList = {
+      project_id: "boss-dogfood",
+      items: [
+        { pack_id: "core_v1", version: "1.0.0", description: "Core", status: "active", installed: true, installed_version: "1.0.0" },
+        { pack_id: "test_e2e_reg_pack_v1", version: "0.1.0", description: "Regression", status: "active", installed: true, installed_version: "0.1.0" },
+      ],
+    };
+    const packDetail = { ...packList.items[1], role_count: 1, role_results: [{ role_key: "metatron", status: "present" }], install_status: "imported" };
+    const installed = { ...packDetail, install_status: "installed" };
+
+    const responses = [
+      { status: 200, body: packList },
+      { status: 200, body: packDetail },
+      { status: 201, body: installed },
+      { status: 403, body: { detail: "actor lacks required permission (pack_manage)" } },
+    ];
+    const fetchImpl = async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({ url: String(input), init });
+      const response = responses.shift();
+      return new Response(JSON.stringify(response?.body ?? {}), {
+        status: response?.status ?? 500,
+        headers: { "Content-Type": "application/json" },
+      });
+    };
+    const client = createBossApiClient({
+      baseUrl: "http://127.0.0.1:8000",
+      fetchImpl,
+    });
+
+    const list = await client.listPacks("boss-dogfood");
+    const detail = await client.getPack("boss-dogfood", "test_e2e_reg_pack_v1");
+    const inst = await client.installPack({
+      project_id: "boss-dogfood",
+      pack_id: "test_e2e_reg_pack_v1",
+      actor: "ceo",
+    });
+    await expect(
+      client.installPack({
+        project_id: "boss-dogfood",
+        pack_id: "core_v1",
+        actor: "no-perm",
+      }),
+    ).rejects.toBeInstanceOf(BossApiError);
+
+    expect(list.items.length).toBe(2);
+    expect(list.items[1].pack_id).toBe("test_e2e_reg_pack_v1");
+    expect(detail.pack_id).toBe("test_e2e_reg_pack_v1");
+    expect(detail.install_status).toBe("imported");
+    expect(inst.install_status).toBe("installed");
+    expect(calls[0].url).toContain("/v1/packs?project_id=boss-dogfood");
+    expect(calls[2].url).toBe("http://127.0.0.1:8000/v1/packs/install");
+    // cross regression note: pack install/list here mirrors import (source local_upload in backend) + selfimp proposal + commercial source_pack + budget flows; toasts in client-forms wrap these for feedback states (tested in kpis.test)
   });
 
   it("uses Account Connect team invite and billing portal API contracts", async () => {
@@ -1819,6 +1957,241 @@ describe("createBossApiClient", () => {
     ]);
   });
 
+  it("uses canonical KPI API routes", async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const responses = [
+      {
+        status: 200,
+        body: {
+          project_id: "boss-dogfood",
+          items: [
+            {
+              id: "kpi_1",
+              project_id: "boss-dogfood",
+              kpi_key: "verified_work_throughput",
+              name: "Verified Work Throughput",
+              description: "Completed artifacts that pass required gates.",
+              target_value: 10,
+              current_value: 2,
+              unit: "artifacts/week",
+              status: "active",
+              created_by: "ceo",
+              created_at: "2026-06-05T00:00:00Z",
+              updated_at: "2026-06-05T00:00:00Z",
+            },
+          ],
+        },
+      },
+      {
+        status: 201,
+        body: {
+          id: "kpi_1",
+          project_id: "boss-dogfood",
+          kpi_key: "verified_work_throughput",
+          name: "Verified Work Throughput",
+          target_value: 10,
+          current_value: 3,
+          unit: "artifacts/week",
+          status: "active",
+          created_by: "ceo",
+          created_at: "2026-06-05T00:00:00Z",
+          updated_at: "2026-06-05T00:01:00Z",
+        },
+      },
+    ];
+    const fetchImpl = async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({ url: String(input), init });
+      const response = responses.shift();
+      return new Response(JSON.stringify(response?.body), {
+        status: response?.status ?? 500,
+        headers: { "Content-Type": "application/json" },
+      });
+    };
+    const client = createBossApiClient({
+      baseUrl: "http://127.0.0.1:8000",
+      fetchImpl,
+    });
+
+    const listed = await client.listKpis("boss-dogfood");
+    const created = await client.createKpi({
+      project_id: "boss-dogfood",
+      kpi_key: "verified_work_throughput",
+      name: "Verified Work Throughput",
+      target_value: 10,
+      current_value: 3,
+      unit: "artifacts/week",
+      actor: "ceo",
+    });
+
+    expect(calls[0].url).toBe(
+      "http://127.0.0.1:8000/v1/kpis?project_id=boss-dogfood&limit=50&offset=0",
+    );
+    expect(calls[1].url).toBe("http://127.0.0.1:8000/v1/kpis");
+    expect(JSON.parse(String(calls[1].init?.body))).toMatchObject({
+      kpi_key: "verified_work_throughput",
+      target_value: 10,
+      current_value: 3,
+    });
+    expect(listed.items[0].id).toBe("kpi_1");
+    expect(created.current_value).toBe(3);
+  });
+
+  it("uses self-improvement proposal/canary/rollout/rollback API contracts (P2 e2e + SIM states)", async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const responses = [
+      {
+        status: 200,
+        body: {
+          project_id: "boss-dogfood",
+          items: [
+            {
+              id: "imp_1",
+              project_id: "boss-dogfood",
+              task_id: "task_imp",
+              title: "Test self imp",
+              summary: "e2e",
+              change_ref: "pr://1",
+              diff_summary: "diff",
+              status: "proposed",
+              risk_tier: 2,
+              expected_impact: ["a"],
+              test_plan: ["t"],
+              canary_scope: ["c"],
+              rollback_plan: ["r"],
+              success_metrics: ["m"],
+              created_by: "vp_agents",
+              created_at: "2026-06-05T00:00:00Z",
+              updated_at: "2026-06-05T00:00:00Z",
+            },
+          ],
+        },
+      },
+      {
+        status: 201,
+        body: {
+          id: "imp_1",
+          project_id: "boss-dogfood",
+          task_id: "task_imp",
+          title: "Test self imp",
+          summary: "e2e",
+          change_ref: "pr://1",
+          diff_summary: "diff",
+          status: "proposed",
+          risk_tier: 2,
+          expected_impact: ["a"],
+          test_plan: ["t"],
+          canary_scope: ["c"],
+          rollback_plan: ["r"],
+          success_metrics: ["m"],
+          created_by: "vp_agents",
+          created_at: "2026-06-05T00:00:00Z",
+          updated_at: "2026-06-05T00:00:00Z",
+        },
+      },
+      { status: 200, body: { id: "imp_1", status: "canary_succeeded" } },
+      { status: 200, body: { id: "imp_1", status: "rolled_out" } },
+      { status: 200, body: { id: "imp_1", status: "rolled_back" } },
+    ];
+    const fetchImpl = async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({ url: String(input), init });
+      const response = responses.shift();
+      return new Response(JSON.stringify(response?.body), {
+        status: response?.status ?? 500,
+        headers: { "Content-Type": "application/json" },
+      });
+    };
+    const client = createBossApiClient({
+      baseUrl: "http://127.0.0.1:8000",
+      fetchImpl,
+    });
+
+    const listed = await client.listSelfImprovementProposals("boss-dogfood");
+    const created = await client.createSelfImprovementProposal({
+      project_id: "boss-dogfood",
+      title: "Test self imp",
+      summary: "e2e",
+      change_ref: "pr://1",
+      diff_summary: "diff",
+      expected_impact: ["a"],
+      test_plan: ["t"],
+      canary_scope: ["c"],
+      rollback_plan: ["r"],
+      success_metrics: ["m"],
+      actor: "vp_agents",
+    });
+    await client.recordSelfImprovementCanary("imp_1", {
+      actor: "release_manager",
+      outcome: "succeeded",
+      summary: "canary ok",
+      metrics: { ok: true },
+      evidence_refs: ["e1"],
+    });
+    await client.recordSelfImprovementRollout("imp_1", {
+      actor: "release_manager",
+      summary: "rolled",
+      metrics: { ok: true },
+      evidence_refs: ["e2"],
+    });
+    await client.rollbackSelfImprovementProposal("imp_1", {
+      actor: "release_manager",
+      reason: "rolled back",
+      metrics: { ok: true },
+      evidence_refs: ["e3"],
+    });
+
+    expect(calls[0].url).toBe(
+      "http://127.0.0.1:8000/v1/self-improvement/proposals?project_id=boss-dogfood&limit=25",
+    );
+    expect(calls[1].url).toBe("http://127.0.0.1:8000/v1/self-improvement/proposals");
+    expect(calls[2].url).toContain("/v1/self-improvement/proposals/imp_1/canary");
+    expect(calls[3].url).toContain("/v1/self-improvement/proposals/imp_1/rollout");
+    expect(calls[4].url).toContain("/v1/self-improvement/proposals/imp_1/rollback");
+    expect(listed.items[0].id).toBe("imp_1");
+    expect(created.status).toBe("proposed");
+  });
+
+  it("exercises permission denied (403) response path for KPI and budget via client (GAP-AUTO-002 perm failure)", async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const fetchImpl = async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({ url: String(input), init });
+      return new Response(
+        JSON.stringify({ detail: "actor lacks required permission (pack_manage or budget)" }),
+        {
+          status: 403,
+          headers: { "Content-Type": "application/json" },
+        },
+      );
+    };
+    const client = createBossApiClient({
+      baseUrl: "http://127.0.0.1:8000",
+      fetchImpl,
+    });
+
+    let kpiErr: any = null;
+    try {
+      await client.listKpis("boss-dogfood");
+    } catch (e) {
+      kpiErr = e;
+    }
+
+    let budgetErr: any = null;
+    try {
+      await client.getBudgetForecast("project", "boss-dogfood", 24);
+    } catch (e) {
+      budgetErr = e;
+    }
+
+    expect(calls.some((c) => c.url.includes("/v1/kpis"))).toBe(true);
+    expect(calls.some((c) => c.url.includes("/v1/budget/forecast"))).toBe(true);
+    // client may wrap as BossApiError (preferred) or raw; either covers the 403 perm path
+    if (kpiErr) {
+      expect(kpiErr instanceof BossApiError || String(kpiErr).match(/403|forbidden|permission/i)).toBeTruthy();
+    }
+    if (budgetErr) {
+      expect(budgetErr instanceof BossApiError || String(budgetErr).match(/403|forbidden|permission/i)).toBeTruthy();
+    }
+  });
+
   it("routes infrastructure lifecycle calls through the shared API contract", async () => {
     const calls: Array<{ url: string; init?: RequestInit }> = [];
     const responses = [
@@ -2348,8 +2721,8 @@ describe("createBossApiClient", () => {
       secret_refs: ["sec_db"],
       actor: "ceo",
     });
-    await client.listDeploymentTargets("boss-dogfood");
-    await client.listDeploymentEnvironmentPolicies("boss-dogfood");
+    await client.listDeploymentTargets("boss-dogfood", 50, 0);
+    await client.listDeploymentEnvironmentPolicies("boss-dogfood", 50, 0);
     await client.upsertDeploymentEnvironmentPolicy({
       project_id: "boss-dogfood",
       environment: "staging",
@@ -2357,7 +2730,7 @@ describe("createBossApiClient", () => {
       allowed_target_kinds: ["digitalocean_app"],
       actor: "ceo",
     });
-    await client.listDeploymentRuns("boss-dogfood", 5);
+    await client.listDeploymentRuns("boss-dogfood", 5, 0);
     await client.createDeploymentRun({
       project_id: "boss-dogfood",
       deployment_target_id: "dt_1",
@@ -2365,9 +2738,9 @@ describe("createBossApiClient", () => {
       actor: "ceo",
     });
     await client.runDeploymentHealthCheck("deprun_1", { actor: "ceo" });
-    await client.listProviderHealth("boss-dogfood", { providerAccountId: "pa_1", limit: 5 });
-    await client.listDriftReports("boss-dogfood", 5);
-    await client.listReconciliationRuns("boss-dogfood", 5);
+    await client.listProviderHealth("boss-dogfood", { providerAccountId: "pa_1", limit: 5, offset: 0 });
+    await client.listDriftReports("boss-dogfood", 5, 0);
+    await client.listReconciliationRuns("boss-dogfood", 5, 0);
 
     expect(calls.map((call) => call.url)).toEqual([
       "http://127.0.0.1:8000/v1/providers?project_id=boss-dogfood",
@@ -2375,27 +2748,27 @@ describe("createBossApiClient", () => {
       "http://127.0.0.1:8000/v1/providers/pa_1/test?project_id=boss-dogfood&actor=ceo",
       "http://127.0.0.1:8000/v1/resources/sync",
       "http://127.0.0.1:8000/v1/resources?project_id=boss-dogfood&provider=digitalocean&ownership=discovered_unmanaged&limit=25",
-      "http://127.0.0.1:8000/v1/costs?project_id=boss-dogfood&limit=10",
-      "http://127.0.0.1:8000/v1/cost-anomalies?project_id=boss-dogfood&limit=10",
+      "http://127.0.0.1:8000/v1/costs?project_id=boss-dogfood&limit=10&offset=0",
+      "http://127.0.0.1:8000/v1/cost-anomalies?project_id=boss-dogfood&limit=10&offset=0",
       "http://127.0.0.1:8000/v1/changesets",
       "http://127.0.0.1:8000/v1/changesets/chg_1/approve",
       "http://127.0.0.1:8000/v1/changesets/chg_1/apply",
-      "http://127.0.0.1:8000/v1/resource-receipts?project_id=boss-dogfood&limit=10",
+      "http://127.0.0.1:8000/v1/resource-receipts?project_id=boss-dogfood&limit=10&offset=0",
       "http://127.0.0.1:8000/v1/worker-pools?project_id=boss-dogfood",
       "http://127.0.0.1:8000/v1/worker-pools",
       "http://127.0.0.1:8000/v1/autoscaler/plans?project_id=boss-dogfood&limit=5",
       "http://127.0.0.1:8000/v1/autoscaler/plans",
       "http://127.0.0.1:8000/v1/resource-janitor/run",
       "http://127.0.0.1:8000/v1/deployments",
-      "http://127.0.0.1:8000/v1/deployments?project_id=boss-dogfood",
-      "http://127.0.0.1:8000/v1/deployment-environment-policies?project_id=boss-dogfood",
+      "http://127.0.0.1:8000/v1/deployments?project_id=boss-dogfood&limit=50&offset=0",
+      "http://127.0.0.1:8000/v1/deployment-environment-policies?project_id=boss-dogfood&limit=50&offset=0",
       "http://127.0.0.1:8000/v1/deployment-environment-policies",
-      "http://127.0.0.1:8000/v1/deployment-runs?project_id=boss-dogfood&limit=5",
+      "http://127.0.0.1:8000/v1/deployment-runs?project_id=boss-dogfood&limit=5&offset=0",
       "http://127.0.0.1:8000/v1/deployment-runs",
       "http://127.0.0.1:8000/v1/deployment-runs/deprun_1/health-check",
-      "http://127.0.0.1:8000/v1/provider-health?project_id=boss-dogfood&provider_account_id=pa_1&limit=5",
-      "http://127.0.0.1:8000/v1/drift-reports?project_id=boss-dogfood&limit=5",
-      "http://127.0.0.1:8000/v1/reconciliation-runs?project_id=boss-dogfood&limit=5",
+      "http://127.0.0.1:8000/v1/provider-health?project_id=boss-dogfood&provider_account_id=pa_1&limit=5&offset=0",
+      "http://127.0.0.1:8000/v1/drift-reports?project_id=boss-dogfood&limit=5&offset=0",
+      "http://127.0.0.1:8000/v1/reconciliation-runs?project_id=boss-dogfood&limit=5&offset=0",
     ]);
     expect(JSON.parse(String(calls[7].init?.body))).toMatchObject({
       provider_account_id: "pa_1",

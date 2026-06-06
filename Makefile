@@ -1,11 +1,11 @@
-SHELL := /bin/zsh
+SHELL := /bin/bash
 VENV := .venv
 PYTHON := $(VENV)/bin/python
 PIP := $(VENV)/bin/pip
 BOSS_POSTGRES_PORT ?= 5432
 DATABASE_URL ?= postgresql+psycopg://boss:boss@localhost:$(BOSS_POSTGRES_PORT)/boss
 
-.PHONY: install install-node install-python wait-db dev test lint build seed smoke k8s-validate infra-validate release-blockers real-smoke-plan real-smoke-pr real-smoke-merge real-smoke-deploy worker-drain-once sandbox-template
+.PHONY: install install-node install-python wait-db dev test lint build seed smoke k8s-validate infra-validate openapi-validate release-blockers real-smoke-plan real-smoke-pr real-smoke-merge real-smoke-deploy worker-drain-once sandbox-template deps-audit full-validate
 
 install: install-node install-python
 
@@ -53,6 +53,9 @@ k8s-validate: install-python
 infra-validate: install-python
 	$(PYTHON) scripts/validate_infra_profiles.py
 
+openapi-validate: install-python
+	$(PYTHON) scripts/validate_openapi_route_parity.py
+
 release-blockers: install-python
 	$(PYTHON) scripts/check_external_rollout_readiness.py
 
@@ -82,3 +85,20 @@ worker-drain-once: install-python
 sandbox-template:
 	mkdir -p tmp
 	rsync -a --delete templates/boss-sandbox/ tmp/boss-sandbox/
+
+# Security/DevOps P2: dep audit (per .ai/security-review + AUTO-004 follow-up). Reports current state; recommends full tools for CI.
+# No auto-fix; dev-only vulns expected in some (vite etc for web dev server). Invoked by full-validate.
+deps-audit: install-python
+	@echo "=== Python runtime deps (freeze) ==="
+	$(PYTHON) -m pip list --format=freeze | head -30 || true
+	@echo ""
+	@echo "=== Web pnpm audit (dev deps only; prod build unaffected) ==="
+	cd apps/web && pnpm audit --json 2>/dev/null | python -c 'import sys,json; d=json.load(sys.stdin); print(json.dumps(d.get("advisories", {}) or d, indent=2)[:2000])' || echo "(pnpm audit output or no vulns; run in web/ for details)"
+	@echo ""
+	@echo "For full: pip install pip-audit safety; add to CI. Current dev vulns (if any) noted in .ai/security-review.md; not prod runtime."
+
+# Full local release readiness (per .ai/release-readiness, INFRA_RUNBOOK, AUTO-004).
+# Includes all validators + build/lint/test + deps-audit. DB/docker required for test/smoke paths.
+# Run before k8s deploys or claiming release readiness.
+full-validate: lint openapi-validate deps-audit test build k8s-validate infra-validate release-blockers smoke
+	@echo "full-validate complete (see individual outputs; external blockers expected from release-blockers)."

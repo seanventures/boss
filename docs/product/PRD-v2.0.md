@@ -28,7 +28,7 @@ BOSS is an open-core product: BOSS Community must be useful, self-hostable, and 
 3. Every spendy action must have a `BudgetReservation`.
 4. Every provider write must go through a `ChangeSet`, `BudgetReservation`, required approval, and `ResourceReceipt`.
 5. Every external message requiring acknowledgement must go through Outbox/Inbox ACK.
-6. No silent drops: failures retry, deadletter, or escalate visibly.
+6. No silent drops: failures retry, deadletter, or escalate visibly; failures while writing audit/denial evidence must be logged with enough actor, project, permission, and object context to investigate the missing event.
 7. No self-modification without spec, tests/evals, PR/change packet, approval where required, canary, and rollback.
 8. Budget Governor always wins over Autoscaler.
 9. Agents never receive raw provider secrets.
@@ -643,6 +643,8 @@ Phase 6 - Marketplace and sector packs:
 ## Success Metrics
 
 Core operations: time-to-first-value, duplicate effect rate, silent drop rate, evidence-backed completion rate, decision throughput, approval latency, rollback rate, deadletter rate, stuck lease rate.
+
+Audit operations: material-action audit-event coverage, audit-write failure count, policy-denial evidence coverage, failed receipt/event reconciliation time, and operator-visible investigation context for any failed audit write.
 
 Software factory: spec-to-PR time, PR acceptance rate, test pass rate, escaped defect rate, confidence score calibration, time-to-green-CI.
 

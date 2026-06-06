@@ -52,7 +52,7 @@ export function emptyDeadletterFeed(reason?: string, projectId = PROJECT_ID): De
 
 export async function fetchDeadletterFeed(
   projectId = PROJECT_ID,
-  limit = 8,
+  limit = 25,
 ): Promise<DeadletterFeed> {
   try {
     const payload = await client.listDeadletters(resolveProjectId(projectId), limit);
