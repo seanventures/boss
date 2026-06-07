@@ -1,7 +1,7 @@
 # BOSS Implementation Status
 
 Last updated: June 3, 2026
-Release target: `v0.5.0`
+Release target: `v0.4.0`
 
 This document summarizes the currently implemented BOSS runtime surfaces in this repository so the codebase, README, and product intent stay aligned.
 
@@ -18,28 +18,23 @@ This document summarizes the currently implemented BOSS runtime surfaces in this
   - departments
   - policy records
   - plans
-  - meetings with structured run outputs, transcript/minutes artifacts, linked action tasks, decision cards, blocked state, and dissent records
+  - meetings
   - jobs and leases
   - decisions
   - artifacts
   - receipts
   - budget reservations and cost receipts
   - events
-  - deadletters with incident packets, investigation tasks, and safe job requeue links
+  - deadletters
   - health snapshots
 - API-first control plane:
   - project discovery for runtime-scoped clients
-  - edition, license-entitlement, and Account Connect hosted-auth/link/unlink/sync APIs; Community runs without hosted auth, while Cloud and Enterprise Cloud editions fail closed until linked, and hosted auth/entitlement sync use configured real HTTP adapters or fail closed visibly
-  - Account Connect health-check, hosted marketplace catalog sync, auth-session, team-invite, and billing-portal session APIs with read-only hosted readiness/catalog evidence, readiness packet artifacts, receipt-backed hosted writes, visible blocked records when hosted configuration is missing, and Mission Control controls/history
-  - enterprise cluster/trust records for attached/detached enterprise posture, identity/audit/governance/private-worker controls, support/SLA metadata, support case packet artifacts, blocking-gap visibility, durable cluster validation packet artifacts, and safe-HOLD blocking decisions for failed required validation checks
-  - enterprise OIDC/SAML/SCIM identity-provider metadata APIs with SecretRefs, blocking-gap evaluation, cluster identity-control integration, and Mission Control controls
-  - Enterprise SCIM group/user provisioning APIs that map active users to BOSS org members with explicit merged roles and permissions
-  - IdP-facing SCIM 2.0 `/scim/v2/{project_id}/Groups` and `/Users` endpoints with bearer-token fail-closed auth, active-provider gating, list/filter/create/replace/deactivate behavior, and the same org-member RBAC mapping as internal SCIM APIs
+  - edition, license-entitlement, and Account Connect link/unlink/sync APIs; Community runs without hosted auth, while Cloud and Enterprise Cloud editions fail closed until linked, and hosted entitlement sync uses a configured real HTTP adapter, detaches stale hosted capabilities, or fails closed
+  - enterprise cluster/trust records for attached/detached enterprise posture, identity/audit/governance/private-worker controls, support/SLA metadata, and blocking-gap visibility
+  - Enterprise SCIM group/user provisioning APIs that map active users to project-scoped BOSS members with explicit merged roles and permissions
   - CEO command intake
-  - canonical department, policy, plan, and meeting CRUD/list/run surfaces
+  - canonical department, policy, plan, and meeting CRUD/list surfaces
   - task and job inspection
-  - deterministic COO queue inspection and durable ops digest artifacts
-  - deadletter remediation APIs for incident packet creation and terminal job requeue
   - change journal list/detail for diff, review, deployment, self-improvement, infrastructure, and role-governance artifacts
   - budget quote, reserve, release, and status
   - hierarchical budget allocations
@@ -54,24 +49,19 @@ This document summarizes the currently implemented BOSS runtime surfaces in this
   - self-improvement proposal workflow
   - role and pack discovery/install
   - RoleSpec scope checks with drift events, trust changes, and automatic autonomy downgrade
-  - agent-module catalog and install/uninstall/rollback lifecycle with marketplace metadata, required-entitlement gates, denied-install records, module integrity packet artifacts with spec hashes and signing/provenance metadata, rollback snapshots, default initial-agent installation, and runtime prompt resolution
+  - agent-module catalog and install flow with marketplace metadata, required-entitlement gates, denied-install records, and rollback snapshots
   - entitlement source and routing-log visibility, including API-key and official OAuth/CLI session connection lifecycle, capacity-state visibility, and structured route rejection explanations for OpenAI Codex, Anthropic Claude Code, and xAI Grok Build subscription sources
-  - Model Entitlement Broker v2 APIs for model adapter inventory, entitlement pool inventory, official subscription connection-session start/list/complete records, idempotent capacity probes with durable `CapacityReceipt` rows, and canonical filterable `ModelRouteDecision` simulate/list surfaces
-  - ProviderOps provider accounts, connection tests, resource inventory sync through manual API/UI or leased `providerops.sync.readonly` worker jobs, durable provider inventory snapshot artifacts for successful and failed reconciliation runs, read-only DigitalOcean/OpenAI/Anthropic billing sync, cost ledger reads, duplicate-safe BillingAccount/CostEvent records, spendy ChangeSet-to-CostEvent recording, cost anomalies with read-only provider kill switches, ChangeSet planning/approval/apply attempts, real Cloudflare DNS record upsert actuation, real Cloudflare Worker deployment actuation, real Git-connected Cloudflare Pages deployment actuation, real DigitalOcean droplet create/destroy actuation, real DigitalOcean App Platform deployment actuation, real Supabase project create/pause actuation, real Supabase migration apply actuation, ResourceReceipts, deployment targets, provider health, drift reports, and reconciliation-run visibility
+  - Model Entitlement Broker v2 APIs for model adapter inventory, entitlement pool inventory, idempotent capacity probes with durable `CapacityReceipt` rows, and canonical `ModelRouteDecision` simulate/list surfaces
+  - ProviderOps provider accounts, connection tests, resource inventory sync, read-only DigitalOcean/OpenAI/Anthropic billing sync, cost ledger reads, duplicate-safe BillingAccount/CostEvent records, spendy ChangeSet-to-CostEvent recording, cost anomalies with read-only provider kill switches, ChangeSet planning/approval/apply attempts, real Cloudflare DNS record upsert actuation, real Cloudflare Worker deployment actuation, real Git-connected Cloudflare Pages deployment actuation, real DigitalOcean droplet create/destroy actuation, real DigitalOcean App Platform deployment actuation, real Supabase project create/pause actuation, real Supabase migration apply actuation, ResourceReceipts, deployment targets, provider health, drift reports, and reconciliation-run visibility
   - DeploymentRun planning with release-packet artifacts, provider deployment ChangeSet linkage, BudgetReservation enforcement for spendy deploys, real Cloudflare Worker, Cloudflare Pages, DigitalOcean App Platform, and Supabase migration execution, real health-check execution, rollback artifacts, and health-failure decisions
   - Resource Janitor report generation and approval-required cleanup ChangeSet proposals for orphaned/expired non-production resources
-  - ProviderOps Manager, FinOps Sentinel, Infra Steward, Deployment Manager, Resource Janitor, Secrets Steward, and Model Spend Analyst roles installed by Core Pack v1 with complete RoleSpec contracts, provider-boundary permissions, and contained agent-module prompt bundles
+  - ProviderOps Manager, FinOps Sentinel, and Resource Janitor roles installed by Core Pack v1 with complete RoleSpec contracts and provider-boundary permissions
   - Budget-Aware Autoscaler worker-pool registry and ScalePlan runs that apply local desired capacity, enter degraded mode under red budget, and turn cloud spillover into BudgetReservation-backed ChangeSets instead of direct provider calls
   - project member directory and actor-scoped write authorization
 - Worker runtime:
   - pull-based Postgres leasing
-  - resolved agent module, role, prompt, invariant, cadence, eval-rubric, skill allow/deny, escalation, and runtime-contract context attached to leased `agent.*` jobs before execution, with API coverage for every seeded initial module/job kind
   - heartbeat and TTL enforcement
   - completion, failure, retry, reclaim, and deadletter handling
-  - deadletter remediation that creates linked replacement jobs instead of mutating terminal job history
-  - queue inspection/digest support that summarizes ready jobs, stale leases, retry pressure, deadletters, pending decisions, blockers, and recommended actions
-  - role-specific initial-agent worker strategies for every advertised `agent.*` capability, including output contracts, required sections, evidence requirements, safety gates, decision triggers, grounding status, and durable `agent_brief` artifacts with audit events
-  - private enterprise marketplace validation jobs that produce durable `entitlement_gate_report` artifacts instead of inert module job declarations
   - leased infrastructure create/delete job kinds
   - budget-state claim-time controls
 - Budget governor behavior:
@@ -89,8 +79,6 @@ This document summarizes the currently implemented BOSS runtime surfaces in this
   - installed agent module selected into queued proposal work
   - PR proposal -> receipt-backed GitHub draft PR
   - GitHub validation evidence captured into `test_report` and `review_packet`
-  - deterministic security/dependency review and release go/no-go artifacts linked to sandbox PR decisions
-  - Mission Control Software Factory evidence panel sourced from real merge-decision recommendations and artifact records
   - optional receipt-backed local sandbox validation commands captured into `test_report` and `review_packet`
   - PR review approval -> merge gate or merge job, depending on policy
   - merge -> deployment review decision
@@ -114,14 +102,12 @@ This document summarizes the currently implemented BOSS runtime surfaces in this
   - auth-session introspection through `GET /v1/auth/session`
   - break-glass access grants with requester identity, project or org target member, reason, scope, TTL, temporary permissions, event logs, revocation, expiry, and mandatory postmortem task creation
   - enterprise cluster/trust writes gated by explicit `enterprise_manage` permission and audited with `enterprise.cluster_upserted` events
-  - enterprise cluster validation-run writes gated by `enterprise_manage`, with required-check blocking gaps, durable validation packet artifacts, safe-HOLD blocking decisions for failed required checks, and `enterprise.cluster_validation_recorded` events
-  - enterprise identity-provider writes gated by `enterprise_manage`, audited with `enterprise.identity_provider_upserted`, and blocked visibly when required OIDC/SAML/SCIM metadata is incomplete
-  - enterprise SCIM provisioning writes gated by `enterprise_manage`, with group/user audit events and active-user mapping into the same org-member RBAC directory used by the rest of BOSS
+  - enterprise SCIM provisioning writes gated by `enterprise_manage`, with group/user audit events and active-user mapping into the project-member RBAC directory used by the rest of BOSS
   - Core Pack install for dogfood
-  - packaged agent-module catalog, entitlement-aware install flow, install governance records with module integrity packet artifacts, and role lineage
+  - packaged agent-module catalog, entitlement-aware install flow, install governance records, and role lineage
   - deterministic RoleSpec validation for pack roles and module-provided roles
   - deterministic SkillSpec validation for typed IO, cost, retry, permissions, data boundary, policy, and real-only mode
-  - model entitlement broker with routing logs, official subscription connection checks, durable connection sessions, connect/disconnect APIs, capacity-state fail-closed denials, multi-tenant denials for personal/public subscription sources, capacity receipt dedupe, and filterable ModelRouteDecision API/Mission Control audit surfaces
+  - model entitlement broker with routing logs, official subscription connection checks, connect/disconnect APIs, capacity-state fail-closed denials, multi-tenant denials for personal/public subscription sources, capacity receipt dedupe, and ModelRouteDecision API surfaces
   - data-boundary-aware routing that blocks restricted/local-only work from unapproved external model sources and records the boundary in routing decisions
   - data-boundary-aware GitHub effect gates that block restricted/local-only PR, merge, and deployment effects before receipts or external calls are opened
   - data-boundary-aware comms records and Slack/email delivery gates that block restricted/local-only messages before receipts or external calls are opened
@@ -145,13 +131,10 @@ This document summarizes the currently implemented BOSS runtime surfaces in this
   - active actor selection from the project and org member directories, passed through all console write actions
   - auth-session visibility for transport authentication method, principal binding, and OIDC enablement
   - org delegation management for organization-wide actors and permissions
-  - commercial edition and Account Connect panel with edition status, local-vs-hosted auth posture, license capabilities, hosted-org link/sync/unlink controls, hosted readiness checks, readiness packet artifact references, and entitlement rows
-  - enterprise trust panel with cluster posture, blocking gaps, support/SLA/compliance metadata, support packet artifact references, and SCIM group/user provisioning controls that write through the API
   - keyboard skip navigation and explicit accessible names for dynamic action controls
   - Metatron activity queries grounded in live event data
   - self-improvement canary, rollout, and rollback submission with required evidence payloads
   - API-driven agent marketplace visibility and module installation
-  - agent module entitlement requirements, hosted marketplace listing/sync history, and install/denial history with integrity packet references visible from the marketplace panel
   - entitlement readiness labels that distinguish active, credential-gated, adapter-ready, and registry-only sources
   - entitlement auth, connection-state, and capacity-state labels for API keys, official CLI OAuth, device OAuth, and local-host sources, with console actions for official session connect/disconnect
   - ProviderOps dashboard for provider-account registration/testing, inventory sync, Resource Explorer, Resource Janitor cleanup proposals, ChangeSet Review, Deployment Registry, provider health, drift, cost, reconciliation, and ResourceReceipt visibility
@@ -169,7 +152,7 @@ The current founder-dogfood control loop is:
 5. Approval of that decision reserves budget and queues a PR proposal job.
 6. The queued proposal job resolves through the installed software-engineer module so prompt/runtime defaults come from the packaged module.
 7. The proposal job creates a real sandbox PR against `seanheiney/boss-sandbox`.
-8. BOSS captures GitHub check-run evidence, deterministic security/dependency review, browser-validation follow-up, and release go/no-go evidence into the test report, review packet, and merge decision.
+8. BOSS captures GitHub check-run evidence into the test report and review packet.
 9. Approval of the PR review decision only queues merge work if validation passed and merge policy is enabled.
 10. Merge can create a deploy review decision.
 11. Deployment can be recorded through the GitHub Deployments API when deploy policy is enabled, with optional post-deploy health verification when configured.
@@ -205,7 +188,6 @@ The current founder-dogfood control loop is:
 - `BOSS_ACCOUNT_CONNECT_URL`
 - `BOSS_ACCOUNT_CONNECT_TOKEN`
 - `BOSS_ACCOUNT_CONNECT_TIMEOUT_SECONDS`
-- `BOSS_ENTERPRISE_SCIM_BEARER_TOKENS`
 - `BOSS_DAILY_CAP_USD_MICROS`
 - `BOSS_MONTHLY_CAP_USD_MICROS`
 - `BOSS_BURST_CAP_USD_MICROS_PER_MIN`
@@ -240,15 +222,13 @@ The current founder-dogfood control loop is:
 ## What is intentionally still constrained
 
 - Identity is currently project/org-member based with optional API-key principal binding and standards-based OIDC bearer JWT verification. Actor ids must resolve to active project members or delegated org members with the required permission, and bound API/OIDC principals cannot impersonate another actor. Live external IdP rollout requires environment-specific issuer, audience, JWKS URL, and claim/subject mapping configuration.
-- Commercial edition and Account Connect state are persisted locally and API-visible. Community mode remains useful without hosted BOSS auth. Cloud and Enterprise Cloud modes fail closed until a hosted org link exists. Local agent-module marketplace lifecycle now supports entitlement-gated install, rollback from saved snapshots, and uninstall with base-role restoration. Hosted Account Connect health checks create durable readiness packet artifacts whether the configured hosted service passes, degrades, fails, or is missing; hosted marketplace catalog syncs now create durable sync packet artifacts for synced, blocked, and failed runs; auth sessions, entitlement sync, team-invite creation/revoke, and billing portal session creation are available through `BOSS_ACCOUNT_CONNECT_URL` and otherwise create visible blocked records/events rather than fake success, but live hosted Account Connect service deployment, full hosted team/billing service operation, and hosted marketplace distribution still require external service configuration.
-- Enterprise cluster/trust records are implemented as planning and governance state. They normalize SSO/OIDC/SAML/SCIM, RBAC/ABAC, audit retention/export, private worker, compliance-pack, and support/SLA posture and surface blocking gaps. Enterprise identity-provider metadata records now track OIDC, SAML, and SCIM configuration with SecretRefs and can satisfy cluster identity-control gaps when complete and active. SCIM group/user provisioning now supports both internal admin APIs and IdP-facing SCIM 2.0 push endpoints that fail closed unless `BOSS_ENTERPRISE_SCIM_BEARER_TOKENS` and an active SCIM provider record are configured. Enterprise support/SLA cases now create durable support packet artifacts for local and hosted-escalation cases. Baseline Kustomize and Helm self-hosted packages now provide API/web/worker workloads, bootstrap Job, HPA/PDBs, service wiring, shared artifacts PVC, and secret-template guardrails. Cluster validation runs create durable validation packet artifacts and safe-HOLD decisions for failed required checks, but BOSS does not yet provide a verified live multi-node rollout in a target cluster or external support-system integrations without environment-specific credentials and rollout approvals.
+- Commercial edition and Account Connect state are persisted locally and API-visible. Community mode remains useful without hosted BOSS auth. Cloud and Enterprise Cloud modes fail closed until a hosted org link exists. Hosted entitlement sync is available through `BOSS_ACCOUNT_CONNECT_URL` and fails closed with visible events when not configured or when the hosted service fails, but hosted Account Connect login, billing portal workflows, team invites, and full marketplace service still require the future hosted service integration.
+- Enterprise cluster/trust records are implemented as planning and governance state. They normalize SSO/OIDC/SAML/SCIM, RBAC/ABAC, audit retention/export, private worker, compliance-pack, and support/SLA posture and surface blocking gaps. SCIM group/user provisioning is implemented locally and maps active users into BOSS org-member RBAC, but BOSS does not yet provide external IdP push/pull connectors, SAML login runtime, real multi-node HA infrastructure, Kubernetes charts, or external support-system integrations.
 - Local sandbox validation is implemented as allowlisted, no-shell commands in a configured sandbox clone. It is disabled by default and fails closed when enabled without repo path, commands, clean git state, or allowed executables.
 - Deployment rollout tracking now records staged GitHub deployment, post-deploy health, release-readiness, and rollback/health-decision evidence. Real Cloudflare Worker deployment, Git-connected Cloudflare Pages deployment, DigitalOcean provisioning for sandbox droplets and DigitalOcean App Platform deployments, Supabase project creation, and Supabase migration apply remain fail-closed unless official credentials, env-backed SecretRefs, and required policy switches are configured.
-- ProviderOps read-only adapter calls support DigitalOcean, Cloudflare, Supabase, OpenAI, and Anthropic through official APIs. Each reconciliation run now creates a durable `providerops_inventory_snapshot` artifact linked from run metadata, including failed runs with deadletter/error references. Billing-readable provider accounts can ingest DigitalOcean billing history, OpenAI organization costs, and Anthropic organization cost reports into duplicate-safe CostEvents with explicit confidence labels; unsupported billing providers fail closed with deadletters instead of invented estimates. Spendy provider ChangeSets now create receipt-linked CostEvents with explicit confidence labels after successful actuation, and threshold-crossing observed provider cost creates a CostAnomaly, decision, and provider read-only kill switch. Provider write actuation is currently constrained to explicitly implemented skills: Cloudflare DNS record upsert, Cloudflare R2 bucket create, Cloudflare Worker deployment, Git-connected Cloudflare Pages deployment, DigitalOcean droplet create/destroy, DigitalOcean App Platform deployment, Supabase project create/pause, and Supabase migration apply are supported through the Resource Plane Kernel, while unsupported provider skills and missing credentials fail closed with ResourceReceipts/deadletters until each skill receives explicit actuation support.
+- ProviderOps read-only adapter calls support DigitalOcean, Cloudflare, Supabase, OpenAI, and Anthropic through official APIs. Billing-readable provider accounts can ingest DigitalOcean billing history, OpenAI organization costs, and Anthropic organization cost reports into duplicate-safe CostEvents with explicit confidence labels; unsupported billing providers fail closed with deadletters instead of invented estimates. Spendy provider ChangeSets now create receipt-linked CostEvents with explicit confidence labels after successful actuation, and threshold-crossing observed provider cost creates a CostAnomaly, decision, and provider read-only kill switch. Provider write actuation is currently constrained to explicitly implemented skills: Cloudflare DNS record upsert, Cloudflare R2 bucket create, Cloudflare Worker deployment, Git-connected Cloudflare Pages deployment, DigitalOcean droplet create/destroy, DigitalOcean App Platform deployment, Supabase project create/pause, and Supabase migration apply are supported through the Resource Plane Kernel, while unsupported provider skills and missing credentials fail closed with ResourceReceipts/deadletters until each skill receives explicit actuation support.
 - Real Slack/email delivery remains disabled unless policy and provider credentials explicitly permit it.
 - Enterprise SSO rollout remains environment-specific, but the runtime now supports real OIDC verification plus delegated org-wide RBAC in the current member directory.
-- External hosted and enterprise rollout readiness can be checked locally with `make release-blockers`, which runs a no-network prerequisite report for hosted Account Connect, hosted marketplace/team/billing, Enterprise SCIM/SSO, external support routing, self-hosted package artifacts, live cluster rollout evidence, and ProviderOps write enablement. The report intentionally distinguishes local implementation readiness from live external verification and does not print secret values.
-- Infra scale and rollout posture is now captured in `deploy/environments/boss-infra-profiles.yaml` and documented in `docs/operations/INFRA_RUNBOOK.md`. `make infra-validate` enforces the environment matrix for local dogfood, staging, production, and private enterprise: non-local API auth, production/private HA Postgres and restore drills, Budget Governor precedence over autoscaling, provider-write gates, rollout approvals, rollback evidence, and budget kill switches.
 
 ## Local verification baseline
 
@@ -258,9 +238,6 @@ The current local release-grade baseline for this repo is:
 - `make test`
 - `make build`
 - `make smoke`
-- `make k8s-validate`
-- `make infra-validate`
-- `make release-blockers`
 
 The latest passing local state at the time of this update was:
 
@@ -268,8 +245,6 @@ The latest passing local state at the time of this update was:
 - production web build passed
 - smoke passed
 - OpenAPI parsed successfully
-- infra environment profiles validate locally
-- external rollout blockers are reportable locally without calling hosted/provider services
 
 ## Where to look next
 

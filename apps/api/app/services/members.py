@@ -194,6 +194,7 @@ class MemberDirectoryService:
                        permissions, status, created_by, created_at, updated_at
                 FROM project_members
                 WHERE project_id = :project_id
+                  AND status = 'active'
                 ORDER BY member_type ASC, display_name ASC, member_id ASC
                 """
             ),

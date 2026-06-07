@@ -1323,12 +1323,15 @@ class SpecPackService:
     ) -> set[str]:
         capabilities: set[str] = set()
         edition = self.commercial.edition_status(connection, project_id)
+        active_account_connect_org_id = (
+            edition.get("account_connect_org") or {}
+        ).get("hosted_org_id")
         if edition["status"] == "active":
             capabilities.update(edition.get("included_capabilities") or [])
         rows = connection.execute(
             text(
                 """
-                SELECT capability_key, capabilities
+                SELECT capability_key, capabilities, source, account_connect_org_id
                 FROM license_entitlements
                 WHERE project_id = :project_id
                   AND status IN ('active', 'trial')
@@ -1337,6 +1340,11 @@ class SpecPackService:
             {"project_id": project_id},
         ).mappings().all()
         for row in rows:
+            if (
+                row["source"] == "account_connect_hosted"
+                and row["account_connect_org_id"] != active_account_connect_org_id
+            ):
+                continue
             capabilities.add(row["capability_key"])
             capabilities.update(row["capabilities"] or [])
         return capabilities
