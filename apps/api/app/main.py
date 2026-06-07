@@ -8,7 +8,7 @@ from collections import defaultdict, deque
 from typing import Any, Optional
 from urllib.parse import parse_qs
 
-from fastapi import Body, FastAPI, HTTPException, Query, Request
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, Response
 from sqlalchemy import text
 
@@ -1412,7 +1412,6 @@ def pack_summary_from_service(payload) -> PackSummary:
         workflows=payload["workflows"] or [],
         policies=payload["policies"] or [],
         skills=payload["skills"] or [],
-        source=payload.get("source") or "baked",
         installed=bool(payload["installed"]),
         installed_by=payload.get("installed_by"),
         installed_at=payload.get("installed_at"),
@@ -3379,12 +3378,7 @@ def propose_command(payload: CommandProposeRequest, request: Request) -> Command
 
 
 @app.get("/v1/tasks", response_model=TaskListResponse)
-def list_tasks(project_id: str, limit: int = 50, offset: int = 0) -> TaskListResponse:
-    if limit < 1 or limit > 200:
-        raise HTTPException(status_code=400, detail="limit must be between 1 and 200.")
-    if offset < 0:
-        raise HTTPException(status_code=400, detail="offset must be >= 0.")
-
+def list_tasks(project_id: str) -> TaskListResponse:
     with begin(engine) as connection:
         rows = connection.execute(
             text(
@@ -3395,16 +3389,11 @@ def list_tasks(project_id: str, limit: int = 50, offset: int = 0) -> TaskListRes
                 FROM tasks
                 WHERE project_id = :project_id
                 ORDER BY created_at DESC
-                LIMIT :limit OFFSET :offset
                 """
             ),
-            {"project_id": project_id, "limit": limit, "offset": offset},
+            {"project_id": project_id},
         ).mappings().all()
-        return TaskListResponse(
-            items=[task_summary_from_row(row) for row in rows],
-            limit=limit,
-            offset=offset,
-        )
+        return TaskListResponse(items=[task_summary_from_row(row) for row in rows])
 
 
 @app.post("/v1/tasks", response_model=TaskSummary, status_code=201)
@@ -3483,19 +3472,14 @@ def create_department(payload: DepartmentCreateRequest) -> DepartmentSummary:
 
 
 @app.get("/v1/kpis", response_model=KpiListResponse)
-def list_kpis(project_id: str, limit: int = 50, offset: int = 0) -> KpiListResponse:
-    if limit < 1 or limit > 200:
-        raise HTTPException(status_code=400, detail="limit must be between 1 and 200.")
-    if offset < 0:
-        raise HTTPException(status_code=400, detail="offset must be >= 0.")
-
+def list_kpis(project_id: str) -> KpiListResponse:
     with begin(engine) as connection:
-        items = canonical.list_kpis(connection, project_id, limit=limit, offset=offset)
         return KpiListResponse(
             project_id=project_id,
-            items=[KpiSummary(**item) for item in items],
-            limit=limit,
-            offset=offset,
+            items=[
+                KpiSummary(**item)
+                for item in canonical.list_kpis(connection, project_id)
+            ],
         )
 
 
@@ -3956,11 +3940,9 @@ def create_ops_digest(payload: OpsDigestRequest) -> OpsDigestResponse:
 
 
 @app.get("/v1/artifacts", response_model=ArtifactListResponse)
-def list_artifacts(project_id: str, limit: int = 25, offset: int = 0) -> ArtifactListResponse:
+def list_artifacts(project_id: str, limit: int = 25) -> ArtifactListResponse:
     if limit < 1 or limit > 200:
         raise HTTPException(status_code=400, detail="limit must be between 1 and 200.")
-    if offset < 0:
-        raise HTTPException(status_code=400, detail="offset must be >= 0.")
 
     with begin(engine) as connection:
         rows = connection.execute(
@@ -3971,16 +3953,14 @@ def list_artifacts(project_id: str, limit: int = 25, offset: int = 0) -> Artifac
                 FROM artifacts
                 WHERE project_id = :project_id
                 ORDER BY created_at DESC
-                LIMIT :limit OFFSET :offset
+                LIMIT :limit
                 """
             ),
-            {"project_id": project_id, "limit": limit, "offset": offset},
+            {"project_id": project_id, "limit": limit},
         ).mappings().all()
         return ArtifactListResponse(
             project_id=project_id,
             items=[artifact_summary_from_row(row) for row in rows],
-            limit=limit,
-            offset=offset,
         )
 
 
@@ -4169,49 +4149,6 @@ def install_pack(payload: PackInstallRequest) -> PackDetail:
         except (RoleNotFoundError, ValueError) as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
         return pack_detail_from_service(result)
-
-
-@app.post("/v1/packs/import", response_model=PackDetail, status_code=201)
-def import_pack(
-    project_id: str = Query(...),
-    actor: str = Query("system"),
-    yaml_body: bytes = Body(b"", media_type="application/x-yaml"),
-) -> PackDetail:
-    yaml_str = yaml_body.decode("utf-8")
-    with begin(engine) as connection:
-        try:
-            require_project_actor(
-                connection,
-                project_id,
-                actor,
-                "pack_manage",
-            )
-            result = specpack.import_pack(
-                connection,
-                project_id,
-                yaml_str,
-                actor,
-            )
-        except PackNotFoundError as error:
-            raise HTTPException(status_code=404, detail=str(error)) from error
-        except (RoleNotFoundError, ValueError) as error:
-            # 422 for validation, size, yaml, clash, bad roles etc; 400 for size? but unify
-            if "exceeds 64k" in str(error) or "invalid yaml" in str(error).lower():
-                raise HTTPException(status_code=400, detail=str(error)) from error
-            if "clashes with core" in str(error):
-                raise HTTPException(status_code=409, detail=str(error)) from error
-            raise HTTPException(status_code=422, detail=str(error)) from error
-        return pack_detail_from_service(result)
-
-
-@app.get("/v1/packs/{pack_id}/export")
-def export_pack(pack_id: str, project_id: str = Query(...)):
-    with begin(engine) as connection:
-        try:
-            yaml_text = specpack.export_pack_yaml(connection, project_id, pack_id)
-        except PackNotFoundError as error:
-            raise HTTPException(status_code=404, detail=str(error)) from error
-        return Response(content=yaml_text, media_type="application/x-yaml")
 
 
 @app.get("/v1/agent-modules", response_model=AgentModuleListResponse)
@@ -5020,25 +4957,19 @@ def list_changesets(
     project_id: str,
     status: Optional[str] = None,
     limit: int = 100,
-    offset: int = 0,
 ) -> ChangeSetListResponse:
     if limit < 1 or limit > 500:
         raise HTTPException(status_code=400, detail="limit must be between 1 and 500.")
-    if offset < 0:
-        raise HTTPException(status_code=400, detail="offset must be >= 0.")
     with begin(engine) as connection:
         items = resource_plane.list_changesets(
             connection,
             project_id,
             status=status,
             limit=limit,
-            offset=offset,
         )
         return ChangeSetListResponse(
             project_id=project_id,
             items=[ChangeSetSummary(**item) for item in items],
-            limit=limit,
-            offset=offset,
         )
 
 
@@ -5136,24 +5067,18 @@ def apply_changeset(
 def list_resource_receipts(
     project_id: str,
     limit: int = 100,
-    offset: int = 0,
 ) -> ResourceReceiptListResponse:
     if limit < 1 or limit > 500:
         raise HTTPException(status_code=400, detail="limit must be between 1 and 500.")
-    if offset < 0:
-        raise HTTPException(status_code=400, detail="offset must be >= 0.")
     with begin(engine) as connection:
         items = resource_plane.list_resource_receipts(
             connection,
             project_id,
             limit=limit,
-            offset=offset,
         )
         return ResourceReceiptListResponse(
             project_id=project_id,
             items=[ResourceReceiptSummary(**item) for item in items],
-            limit=limit,
-            offset=offset,
         )
 
 
@@ -5290,18 +5215,12 @@ def run_resource_janitor(payload: ResourceJanitorRunRequest) -> ResourceJanitorR
 
 
 @app.get("/v1/deployments", response_model=DeploymentTargetListResponse)
-def list_deployment_targets(project_id: str, limit: int = 50, offset: int = 0) -> DeploymentTargetListResponse:
-    if limit < 1 or limit > 200:
-        raise HTTPException(status_code=400, detail="limit must be between 1 and 200.")
-    if offset < 0:
-        raise HTTPException(status_code=400, detail="offset must be >= 0.")
+def list_deployment_targets(project_id: str) -> DeploymentTargetListResponse:
     with begin(engine) as connection:
-        items = resource_plane.list_deployment_targets(connection, project_id, limit=limit, offset=offset)
+        items = resource_plane.list_deployment_targets(connection, project_id)
         return DeploymentTargetListResponse(
             project_id=project_id,
             items=[DeploymentTargetSummary(**item) for item in items],
-            limit=limit,
-            offset=offset,
         )
 
 
@@ -5396,24 +5315,18 @@ def upsert_deployment_environment_policy(
 def list_deployment_runs(
     project_id: str,
     limit: int = 50,
-    offset: int = 0,
 ) -> DeploymentRunListResponse:
     if limit < 1 or limit > 200:
         raise HTTPException(status_code=400, detail="limit must be between 1 and 200.")
-    if offset < 0:
-        raise HTTPException(status_code=400, detail="offset must be >= 0.")
     with begin(engine) as connection:
         items = resource_plane.list_deployment_runs(
             connection,
             project_id,
             limit=limit,
-            offset=offset,
         )
         return DeploymentRunListResponse(
             project_id=project_id,
             items=[DeploymentRunSummary(**item) for item in items],
-            limit=limit,
-            offset=offset,
         )
 
 
@@ -5580,19 +5493,15 @@ def upsert_comms_channel_policy(
 
 
 @app.get("/v1/comms/outbox", response_model=OutboxMessageListResponse)
-def list_outbox_messages(project_id: str, limit: int = 50, offset: int = 0) -> OutboxMessageListResponse:
+def list_outbox_messages(project_id: str, limit: int = 50) -> OutboxMessageListResponse:
     if limit < 1 or limit > 200:
         raise HTTPException(status_code=400, detail="limit must be between 1 and 200.")
-    if offset < 0:
-        raise HTTPException(status_code=400, detail="offset must be >= 0.")
 
     with begin(engine) as connection:
-        items = comms.list_outbox_messages(connection, project_id, limit, offset=offset)
+        items = comms.list_outbox_messages(connection, project_id, limit)
         return OutboxMessageListResponse(
             project_id=project_id,
             items=[outbox_message_summary_from_row(item) for item in items],
-            limit=limit,
-            offset=offset,
         )
 
 
@@ -5674,19 +5583,15 @@ def deliver_outbox_message(
 
 
 @app.get("/v1/comms/inbox", response_model=InboxMessageListResponse)
-def list_inbox_messages(project_id: str, limit: int = 50, offset: int = 0) -> InboxMessageListResponse:
+def list_inbox_messages(project_id: str, limit: int = 50) -> InboxMessageListResponse:
     if limit < 1 or limit > 200:
         raise HTTPException(status_code=400, detail="limit must be between 1 and 200.")
-    if offset < 0:
-        raise HTTPException(status_code=400, detail="offset must be >= 0.")
 
     with begin(engine) as connection:
-        items = comms.list_inbox_messages(connection, project_id, limit, offset=offset)
+        items = comms.list_inbox_messages(connection, project_id, limit)
         return InboxMessageListResponse(
             project_id=project_id,
             items=[inbox_message_summary_from_row(item) for item in items],
-            limit=limit,
-            offset=offset,
         )
 
 
@@ -6112,12 +6017,7 @@ def worker_fail(payload: WorkerFailRequest) -> WorkerFailResponse:
 
 
 @app.get("/v1/decisions/inbox", response_model=DecisionInboxResponse)
-def decision_inbox(project_id: str, limit: int = 50, offset: int = 0) -> DecisionInboxResponse:
-    if limit < 1 or limit > 200:
-        raise HTTPException(status_code=400, detail="limit must be between 1 and 200.")
-    if offset < 0:
-        raise HTTPException(status_code=400, detail="offset must be >= 0.")
-
+def decision_inbox(project_id: str) -> DecisionInboxResponse:
     with begin(engine) as connection:
         decisions.expire_overdue(connection, project_id)
         rows = connection.execute(
@@ -6140,16 +6040,13 @@ def decision_inbox(project_id: str, limit: int = 50, offset: int = 0) -> Decisio
                     END,
                     risk_tier DESC,
                     created_at DESC
-                LIMIT :limit OFFSET :offset
                 """
             ),
-            {"project_id": project_id, "limit": limit, "offset": offset},
+            {"project_id": project_id},
         ).mappings().all()
         return DecisionInboxResponse(
             project_id=project_id,
             items=[decision_card_from_row(row) for row in rows],
-            limit=limit,
-            offset=offset,
         )
 
 
@@ -6422,17 +6319,12 @@ def create_sandbox_deployment(
 def list_deployment_rollouts(
     project_id: str = Query(...),
     limit: int = Query(default=20, ge=1, le=100),
-    offset: int = Query(default=0, ge=0),
 ) -> DeploymentRolloutListResponse:
-    if offset < 0:
-        raise HTTPException(status_code=400, detail="offset must be >= 0.")
     with begin(engine) as connection:
-        rows = software_factory.list_deployment_rollouts(connection, project_id, limit, offset=offset)
+        rows = software_factory.list_deployment_rollouts(connection, project_id, limit)
         return DeploymentRolloutListResponse(
             project_id=project_id,
             items=[DeploymentRolloutSummary(**row) for row in rows],
-            limit=limit,
-            offset=offset,
         )
 
 
@@ -6733,11 +6625,9 @@ def event_feed(project_id: str, limit: int = 50, offset: int = 0) -> EventFeedRe
 
 
 @app.get("/v1/deadletters", response_model=DeadletterListResponse)
-def list_deadletters(project_id: str, limit: int = 50, offset: int = 0) -> DeadletterListResponse:
+def list_deadletters(project_id: str, limit: int = 50) -> DeadletterListResponse:
     if limit < 1 or limit > 200:
         raise HTTPException(status_code=400, detail="limit must be between 1 and 200.")
-    if offset < 0:
-        raise HTTPException(status_code=400, detail="offset must be >= 0.")
 
     with begin(engine) as connection:
         rows = connection.execute(
@@ -6750,16 +6640,14 @@ def list_deadletters(project_id: str, limit: int = 50, offset: int = 0) -> Deadl
                 FROM deadletters
                 WHERE project_id = :project_id
                 ORDER BY created_at DESC
-                LIMIT :limit OFFSET :offset
+                LIMIT :limit
                 """
             ),
-            {"project_id": project_id, "limit": limit, "offset": offset},
+            {"project_id": project_id, "limit": limit},
         ).mappings().all()
         return DeadletterListResponse(
             project_id=project_id,
             items=[deadletter_item_from_row(row) for row in rows],
-            limit=limit,
-            offset=offset,
         )
 
 
@@ -6841,19 +6729,15 @@ def requeue_deadletter_job(
 
 
 @app.get("/v1/receipts", response_model=ReceiptListResponse)
-def list_receipts(project_id: str, limit: int = 50, offset: int = 0) -> ReceiptListResponse:
+def list_receipts(project_id: str, limit: int = 50) -> ReceiptListResponse:
     if limit < 1 or limit > 200:
         raise HTTPException(status_code=400, detail="limit must be between 1 and 200.")
-    if offset < 0:
-        raise HTTPException(status_code=400, detail="offset must be >= 0.")
 
     with begin(engine) as connection:
-        items = receipts.list_by_project(connection, project_id, limit, offset=offset)
+        items = receipts.list_by_project(connection, project_id, limit)
         return ReceiptListResponse(
             project_id=project_id,
             items=[receipt_response_from_row(item) for item in items],
-            limit=limit,
-            offset=offset,
         )
 
 
@@ -6869,14 +6753,12 @@ def get_receipt(dedupe_key: str) -> ReceiptResponse:
 
 
 @app.get("/v1/change-journal", response_model=ChangeJournalResponse)
-def list_change_journal(project_id: str, limit: int = 25, offset: int = 0) -> ChangeJournalResponse:
+def list_change_journal(project_id: str, limit: int = 25) -> ChangeJournalResponse:
     if limit < 1 or limit > 200:
         raise HTTPException(status_code=400, detail="limit must be between 1 and 200.")
-    if offset < 0:
-        raise HTTPException(status_code=400, detail="offset must be >= 0.")
     with begin(engine) as connection:
-        items = audit.list_change_journal(connection, project_id, limit, offset=offset)
-        return ChangeJournalResponse(project_id=project_id, items=items, limit=limit, offset=offset)
+        items = audit.list_change_journal(connection, project_id, limit)
+        return ChangeJournalResponse(project_id=project_id, items=items)
 
 
 @app.get("/v1/change-journal/{artifact_id}", response_model=ChangeJournalDetail)

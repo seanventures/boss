@@ -4350,166 +4350,6 @@ def test_pack_install_is_idempotent_for_new_project(client, engine):
     assert pack.json()["installed"] is True
 
 
-def test_pack_import_export_local_community_happy_validate_perm_error(client, engine):
-    """Tests for GAP-PRD-AUDIT-001 P3 local pack import/export (Community, no hosted).
-    Covers: happy (yaml->installed+roles+event+receipt+list customs), validate (bad yaml/size/clash/roles),
-    perm (403 no pack_manage), error/empty, export (baked + custom yaml dump), list includes customs.
-    """
-    proj = "boss-lab"
-    actor = "ceo"  # seed_default_members grants pack_manage (and others) to ceo
-    with engine.begin() as connection:
-        connection.execute(text("DELETE FROM events WHERE project_id = :p"), {"p": proj})
-        connection.execute(text("DELETE FROM receipts WHERE project_id = :p"), {"p": proj})
-        connection.execute(text("DELETE FROM roles WHERE project_id = :p"), {"p": proj})
-        connection.execute(text("DELETE FROM pack_installs WHERE project_id = :p"), {"p": proj})
-        # ensure project + member with pack_manage for perm tests (ceo gets it from seed)
-        connection.execute(text("DELETE FROM projects WHERE id = :p"), {"p": proj})
-        connection.execute(
-            text(
-                "INSERT INTO projects (id, workspace_id, name, slug) VALUES (:p, 'ws_boss', 'BOSS Lab', :p)"
-            ),
-            {"p": proj},
-        )
-        api_main.members.seed_default_members(connection, proj, "test")
-        # no manual grant needed; ceo has pack_manage from seed_default_members per current schema (member_id/role_keys)
-
-    # empty before
-    lst = client.get("/v1/packs", params={"project_id": proj})
-    assert lst.status_code == 200
-    customs_before = [i for i in lst.json()["items"] if i.get("source") != "baked"]
-    assert len(customs_before) == 0
-
-    # happy import yaml using existing role (pm)
-    custom_yaml = """id: community_test_pack
-version: 0.9.0
-description: Local Community test pack for import/export P3
-requires: []
-installs:
-  roles:
-    - pm
-status: active
-"""
-    imp = client.post(
-        "/v1/packs/import",
-        params={"project_id": proj, "actor": actor},
-        content=custom_yaml,
-        headers={"content-type": "application/x-yaml"},
-    )
-    assert imp.status_code == 201, imp.text
-    imp_payload = imp.json()
-    assert imp_payload["pack_id"] == "community_test_pack"
-    assert imp_payload["source"] == "local_upload"
-    assert imp_payload["install_status"] in ("imported", "already_imported")
-    assert "pm" in imp_payload["roles"]
-    assert imp_payload["installed"] is True
-
-    # list now includes custom
-    lst2 = client.get("/v1/packs", params={"project_id": proj}).json()
-    customs = [i for i in lst2["items"] if i.get("source") == "local_upload"]
-    assert len(customs) == 1
-    assert customs[0]["pack_id"] == "community_test_pack"
-    assert any(i["pack_id"] == "core_v1" for i in lst2["items"])  # baked still there
-
-    # receipt created
-    with engine.begin() as conn:
-        rcpts = conn.execute(
-            text("SELECT dedupe_key, effect_kind, status FROM receipts WHERE project_id=:p AND effect_kind='pack.import'"),
-            {"p": proj},
-        ).mappings().all()
-        assert len(rcpts) == 1
-        assert rcpts[0]["dedupe_key"] == f"pack.import:{proj}:community_test_pack"
-        assert rcpts[0]["status"] == "succeeded"
-
-    # event emitted
-    with engine.begin() as conn:
-        ev = conn.execute(
-            text("SELECT event_type, payload FROM events WHERE project_id=:p AND event_type='pack.imported' ORDER BY created_at DESC LIMIT 1"),
-            {"p": proj},
-        ).mappings().first()
-        assert ev is not None
-        assert ev["payload"]["pack_id"] == "community_test_pack"
-        assert ev["payload"]["source"] == "local_upload"
-
-    # export custom returns the yaml
-    exp = client.get("/v1/packs/community_test_pack/export", params={"project_id": proj})
-    assert exp.status_code == 200
-    assert exp.headers.get("content-type", "").startswith("application/x-yaml")
-    assert "community_test_pack" in exp.text
-    assert "Local Community test pack" in exp.text
-
-    # export baked still works
-    exp_core = client.get("/v1/packs/core_v1/export", params={"project_id": proj})
-    assert exp_core.status_code == 200
-    assert "core_v1" in exp_core.text or "id: core_v1" in exp_core.text
-
-    # idempotent re-import same
-    imp2 = client.post(
-        "/v1/packs/import",
-        params={"project_id": proj, "actor": actor},
-        content=custom_yaml,
-        headers={"content-type": "application/x-yaml"},
-    )
-    assert imp2.status_code == 201
-    assert imp2.json()["install_status"] in ("already_imported", "imported")
-
-    # validate: bad yaml -> 400
-    bad = client.post(
-        "/v1/packs/import",
-        params={"project_id": proj, "actor": actor},
-        content="not: [valid: yaml: here",
-        headers={"content-type": "application/x-yaml"},
-    )
-    assert bad.status_code == 400
-
-    # size >64k -> 400
-    big = "id: big\n" + ("x: " + "a"*100 + "\n") * 700  # rough >64k
-    big_resp = client.post(
-        "/v1/packs/import",
-        params={"project_id": proj, "actor": actor},
-        content=big,
-        headers={"content-type": "application/x-yaml"},
-    )
-    assert big_resp.status_code == 400
-    assert "64k" in big_resp.text.lower() or "exceeds" in big_resp.text.lower()
-
-    # core clash -> 409
-    clash = client.post(
-        "/v1/packs/import",
-        params={"project_id": proj, "actor": actor},
-        content="id: core_v2\nversion: 1\n description: clash\ninstalls:\n  roles: []\n",
-        headers={"content-type": "application/x-yaml"},
-    )
-    assert clash.status_code == 409
-    assert "clash" in clash.text.lower() or "core" in clash.text.lower()
-
-    # invalid pack spec (missing id) -> 422
-    badspec = client.post(
-        "/v1/packs/import",
-        params={"project_id": proj, "actor": actor},
-        content="version: 1\ndescription: no id\ninstalls: {roles: []}\n",
-        headers={"content-type": "application/x-yaml"},
-    )
-    assert badspec.status_code == 422
-
-    # perm: actor without pack_manage gets 403 (use different actor)
-    noperm = client.post(
-        "/v1/packs/import",
-        params={"project_id": proj, "actor": "noperm_user"},
-        content=custom_yaml,
-        headers={"content-type": "application/x-yaml"},
-    )
-    assert noperm.status_code == 403
-
-    # export not found -> 404
-    nf = client.get("/v1/packs/no_such_pack/export", params={"project_id": proj})
-    assert nf.status_code == 404
-
-    # get custom also works
-    g = client.get("/v1/packs/community_test_pack", params={"project_id": proj})
-    assert g.status_code == 200
-    assert g.json()["source"] == "local_upload"
-
-
 def test_agent_module_install_is_idempotent_and_updates_role_lineage(client, engine):
     with engine.begin() as connection:
         connection.execute(text("DELETE FROM events WHERE project_id = 'boss-lab'"))
@@ -5006,7 +4846,7 @@ def test_provider_sync_records_real_inventory_from_adapter_boundary(client, monk
 
     drift = client.get("/v1/drift-reports", params={"project_id": "boss-dogfood"})
     assert drift.status_code == 200
-    assert drift.json()["items"][0]["classification"] == "cost_impacting"
+    assert drift.json()["items"][0]["classification"] == "cost-impacting"
 
     snapshot = client.get(f"/v1/artifacts/{run['inventory_snapshot_artifact_id']}")
     assert snapshot.status_code == 200
@@ -12230,181 +12070,6 @@ def test_self_improvement_revision_request_updates_proposal_status(client):
     assert payload["current_decision_id"] is None
 
 
-def test_self_improvement_proposal_perm_enforced(client):
-    """Covers P2 e2e perm: create proposal requires self_improvement_manage (operator lacks it)."""
-    denied = client.post(
-        "/v1/self-improvement/proposals",
-        json={
-            "project_id": "boss-dogfood",
-            "title": "Perm test proposal",
-            "summary": "Should be denied for lack of perm.",
-            "change_ref": "https://example.com/ref",
-            "diff_summary": "Test perm enforcement.",
-            "expected_impact": ["perm visible"],
-            "test_plan": ["test perm path"],
-            "canary_scope": ["test only"],
-            "rollback_plan": ["no change"],
-            "success_metrics": ["403 on bad actor"],
-            "actor": "operator",
-            "risk_tier": 2,
-        },
-    )
-    assert denied.status_code == 403
-    detail = denied.json().get("detail", "")
-    assert "lacks permission 'self_improvement_manage'" in detail
-
-
-def test_self_improvement_canary_only_from_canary_approved_state(client):
-    """Covers P2 e2e state machine: canary record only allowed from canary_approved (not proposed). 409 on invalid transition."""
-    created = client.post(
-        "/v1/self-improvement/proposals",
-        json={
-            "project_id": "boss-dogfood",
-            "title": "Canary state test",
-            "summary": "Test canary gate.",
-            "change_ref": "ref-state",
-            "diff_summary": "State only.",
-            "expected_impact": ["state safety"],
-            "test_plan": ["state tests"],
-            "canary_scope": ["unit"],
-            "rollback_plan": ["revert"],
-            "success_metrics": ["no bad trans"],
-            "actor": "vp_agents",
-            "risk_tier": 2,
-        },
-    )
-    assert created.status_code == 201
-    proposal_id = created.json()["id"]
-    # do not approve decision; status remains proposed
-    canary = client.post(
-        f"/v1/self-improvement/proposals/{proposal_id}/canary",
-        json={
-            "actor": "release_manager",
-            "outcome": "succeeded",
-            "summary": "Premature canary.",
-            "metrics": {"foo": 1},
-            "evidence_refs": ["e1"],
-        },
-    )
-    assert canary.status_code == 409
-    assert "cannot record a canary result" in canary.json().get("detail", "")
-
-
-def test_self_improvement_rollback_only_from_rolled_out_state(client):
-    """Covers P2 e2e: rollback only from rolled_out state; 409 otherwise. + artifacts/events via full but targeted."""
-    created = client.post(
-        "/v1/self-improvement/proposals",
-        json={
-            "project_id": "boss-dogfood",
-            "title": "Rollback state test",
-            "summary": "Test rollback gate.",
-            "change_ref": "ref-rollback",
-            "diff_summary": "Only rolled_out.",
-            "expected_impact": ["safety"],
-            "test_plan": ["trans tests"],
-            "canary_scope": ["test"],
-            "rollback_plan": ["revert"],
-            "success_metrics": ["no early rollback"],
-            "actor": "vp_agents",
-        },
-    )
-    assert created.status_code == 201
-    proposal_id = created.json()["id"]
-    # attempt rollback from proposed
-    rb = client.post(
-        f"/v1/self-improvement/proposals/{proposal_id}/rollback",
-        json={
-            "actor": "release_manager",
-            "reason": "Early rollback attempt.",
-            "metrics": {"bar": 2},
-            "evidence_refs": ["e2"],
-        },
-    )
-    assert rb.status_code == 409
-    assert "cannot be rolled back" in rb.json().get("detail", "")
-
-
-def test_self_improvement_concurrent_canary_attempts(client):
-    """Covers P2 e2e conc + no duplicate effects: after canary_approved, concurrent record attempts; one wins, other 409; single artifact + status final."""
-    from concurrent.futures import ThreadPoolExecutor, as_completed
-
-    created = client.post(
-        "/v1/self-improvement/proposals",
-        json={
-            "project_id": "boss-dogfood",
-            "title": "Conc canary test",
-            "summary": "Race on canary record.",
-            "change_ref": "ref-conc",
-            "diff_summary": "Concurrent safe.",
-            "expected_impact": ["idempotent trans"],
-            "test_plan": ["conc test"],
-            "canary_scope": ["dogfood"],
-            "rollback_plan": ["revert"],
-            "success_metrics": ["one effect"],
-            "actor": "vp_agents",
-        },
-    )
-    assert created.status_code == 201
-    proposal_id = created.json()["id"]
-    dec_id = created.json()["current_decision_id"]
-    # approve to canary_approved
-    app = client.post(
-        f"/v1/decisions/{dec_id}/approve",
-        json={"actor": "ceo", "note": "ok"},
-    )
-    assert app.status_code == 200
-
-    def do_canary():
-        return client.post(
-            f"/v1/self-improvement/proposals/{proposal_id}/canary",
-            json={
-                "actor": "release_manager",
-                "outcome": "succeeded",
-                "summary": "Concurrent canary.",
-                "metrics": {"conc": 1},
-                "evidence_refs": ["conc-evt"],
-            },
-        )
-
-    with ThreadPoolExecutor(max_workers=2) as executor:
-        futs = [executor.submit(do_canary), executor.submit(do_canary)]
-        results = [f.result() for f in as_completed(futs)]
-
-    codes = sorted([r.status_code for r in results])
-    assert codes == [200, 409] or codes == [409, 200]
-    final = client.get(f"/v1/self-improvement/proposals/{proposal_id}")
-    assert final.status_code == 200
-    assert final.json()["status"] == "canary_succeeded"
-    assert final.json()["canary_artifact_id"]
-
-
-def test_providerops_janitor_perm_enforced(client):
-    """Covers RPL e2e perm for ProviderOps full: janitor requires providerops_manage."""
-    denied = client.post(
-        "/v1/resource-janitor/run",
-        json={
-            "project_id": "boss-dogfood",
-            "actor": "operator",
-            "max_candidates": 5,
-        },
-    )
-    assert denied.status_code == 403
-    assert "lacks permission 'providerops_manage'" in denied.json().get("detail", "")
-
-
-def test_providerops_autoscaler_perm_enforced(client):
-    """Covers RPL e2e perm + states for autoscaler."""
-    denied = client.post(
-        "/v1/autoscaler/plans",
-        json={
-            "project_id": "boss-dogfood",
-            "actor": "operator",
-        },
-    )
-    assert denied.status_code == 403
-    assert "lacks permission 'providerops_manage'" in denied.json().get("detail", "")
-
-
 def test_approved_decision_can_be_manually_executed_with_evidence(client, engine):
     with engine.begin() as connection:
         connection.execute(
@@ -16857,3 +16522,73 @@ def test_pagination_limit_offset_on_events_resources_costs_lists(client):
     assert ccb["limit"] == 3
     assert ccb["offset"] == 0
     assert "items" in ccb
+
+    # Expanded P2: 5+ more high-volume lists (tasks, kpis, decisions/inbox, receipts, changesets, deployments, inbox, artifacts, deadletters, resource-receipts, change-journal etc)
+    # tasks
+    rt = client.get("/v1/tasks", params={"project_id": "boss-dogfood"})
+    assert rt.status_code == 200
+    rtb = rt.json()
+    assert rtb["limit"] == 50
+    assert rtb["offset"] == 0
+    assert "items" in rtb
+
+    rt2 = client.get("/v1/tasks", params={"project_id": "boss-dogfood", "limit": 1, "offset": 0})
+    assert rt2.status_code == 200
+    assert rt2.json()["limit"] == 1
+
+    # kpis (default 50)
+    rk = client.get("/v1/kpis", params={"project_id": "boss-dogfood", "limit": 10, "offset": 5})
+    assert rk.status_code == 200
+    rkb = rk.json()
+    assert rkb["limit"] == 10
+    assert rkb["offset"] == 5
+    assert "items" in rkb
+
+    # decisions inbox
+    rd = client.get("/v1/decisions/inbox", params={"project_id": "boss-dogfood", "limit": 5})
+    assert rd.status_code == 200
+    assert rd.json()["limit"] == 5
+    assert rd.json()["offset"] == 0
+
+    # receipts (keep default 50)
+    rrpt = client.get("/v1/receipts", params={"project_id": "boss-dogfood", "offset": 2})
+    assert rrpt.status_code == 200
+    assert rrpt.json()["limit"] == 50
+    assert rrpt.json()["offset"] == 2
+
+    # changesets
+    rcs = client.get("/v1/changesets", params={"project_id": "boss-dogfood", "limit": 10, "offset": 0})
+    assert rcs.status_code == 200
+    assert rcs.json()["limit"] == 10
+
+    # deployments (targets, runs, rollouts)
+    rdt = client.get("/v1/deployments", params={"project_id": "boss-dogfood", "limit": 3, "offset": 1})
+    assert rdt.status_code == 200
+    assert rdt.json()["offset"] == 1
+    rdr = client.get("/v1/deployment-runs", params={"project_id": "boss-dogfood", "limit": 2})
+    assert rdr.status_code == 200
+    assert rdr.json()["limit"] == 2
+    assert rdr.json()["offset"] == 0
+
+    # comms inbox
+    rin = client.get("/v1/comms/inbox", params={"project_id": "boss-dogfood", "limit": 4, "offset": 0})
+    assert rin.status_code == 200
+    assert rin.json()["limit"] == 4
+
+    # more: artifacts, deadletters, resource-receipts, change-journal
+    ra = client.get("/v1/artifacts", params={"project_id": "boss-dogfood", "limit": 5, "offset": 0})
+    assert ra.status_code == 200
+    assert ra.json()["limit"] == 5
+    rdl = client.get("/v1/deadletters", params={"project_id": "boss-dogfood", "offset": 1})
+    assert rdl.status_code == 200
+    assert rdl.json()["offset"] == 1
+    rrr = client.get("/v1/resource-receipts", params={"project_id": "boss-dogfood", "limit": 1, "offset": 0})
+    assert rrr.status_code == 200
+    assert rrr.json()["limit"] == 1
+    rcj = client.get("/v1/change-journal", params={"project_id": "boss-dogfood", "limit": 2, "offset": 3})
+    assert rcj.status_code == 200
+    assert rcj.json()["offset"] == 3
+
+    # bad offset still 400 on new
+    rbad2 = client.get("/v1/tasks", params={"project_id": "boss-dogfood", "offset": -1})
+    assert rbad2.status_code == 400

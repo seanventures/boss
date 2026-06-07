@@ -1763,50 +1763,6 @@ paths:
         '201': { description: Pack installed }
         '404': { description: Pack not found }
         '422': { description: Invalid pack or role spec }
-  /v1/packs/import:
-    post:
-      summary: Import local pack YAML (Community ecosystem, no hosted; P3 per GAP-PRD-AUDIT-001)
-      parameters:
-        - name: project_id
-          in: query
-          required: true
-          schema: { type: string }
-        - name: actor
-          in: query
-          required: false
-          schema: { type: string, default: system }
-      requestBody:
-        required: true
-        content:
-          application/x-yaml:
-            schema:
-              type: string
-              description: Raw PackSpec YAML (<64k). Must validate, no clash with baked core pack ids.
-      responses:
-        '201': { description: Pack imported (stored + roles applied + receipt + pack.imported event) }
-        '400': { description: Invalid yaml or exceeds 64k }
-        '403': { description: Missing pack_manage permission }
-        '409': { description: Core baked pack id clash }
-        '422': { description: Invalid PackSpec or role refs }
-  /v1/packs/{pack_id}/export:
-    get:
-      summary: Export pack definition as YAML (baked source or local_upload blob)
-      parameters:
-        - name: pack_id
-          in: path
-          required: true
-          schema: { type: string }
-        - name: project_id
-          in: query
-          required: true
-          schema: { type: string }
-      responses:
-        '200':
-          description: Pack YAML content
-          content:
-            application/x-yaml:
-              schema: { type: string }
-        '404': { description: Pack not found }
   /v1/agent-modules:
     get:
       summary: List packaged agent modules with install and entitlement status for a project
