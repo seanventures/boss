@@ -1485,6 +1485,8 @@ class DeploymentRolloutSummary(BaseModel):
 class DeploymentRolloutListResponse(BaseModel):
     project_id: str
     items: list[DeploymentRolloutSummary]
+    limit: int
+    offset: int
 
 
 class ReceiptResponse(BaseModel):
@@ -1522,23 +1524,6 @@ class JobSummary(BaseModel):
     max_attempts: int
     attempt: int
     run_after: str
-
-
-class JobListItem(JobSummary):
-    task_title: Optional[str] = None
-    lease_owner: Optional[str] = None
-    lease_expires_at: Optional[str] = None
-    heartbeat_at: Optional[str] = None
-    last_error: dict[str, Any] = Field(default_factory=dict)
-    created_at: str
-    updated_at: str
-
-
-class JobListResponse(BaseModel):
-    project_id: str
-    items: list[JobListItem]
-    limit: int
-    offset: int
 
 
 class JobCreateRequest(BaseModel):
@@ -1736,7 +1721,6 @@ class TaskSummary(BaseModel):
 
 
 class TaskListResponse(BaseModel):
-    project_id: str
     items: list[TaskSummary]
     limit: int
     offset: int
@@ -1782,8 +1766,6 @@ class DepartmentCreateRequest(BaseModel):
 class DepartmentListResponse(BaseModel):
     project_id: str
     items: list[DepartmentSummary]
-    limit: int
-    offset: int
 
 
 class KpiSummary(BaseModel):
@@ -1846,8 +1828,6 @@ class PolicyRecordCreateRequest(BaseModel):
 class PolicyRecordListResponse(BaseModel):
     project_id: str
     items: list[PolicyRecordSummary]
-    limit: int
-    offset: int
 
 
 class PlanSummary(BaseModel):
@@ -1881,8 +1861,6 @@ class PlanCreateRequest(BaseModel):
 class PlanListResponse(BaseModel):
     project_id: str
     items: list[PlanSummary]
-    limit: int
-    offset: int
 
 
 class MeetingSummary(BaseModel):
@@ -1972,8 +1950,6 @@ class MeetingRunRequest(BaseModel):
 class MeetingListResponse(BaseModel):
     project_id: str
     items: list[MeetingSummary]
-    limit: int
-    offset: int
 
 
 class SelfImprovementProposalCreateRequest(BaseModel):
@@ -2046,8 +2022,6 @@ class SelfImprovementProposalDetail(SelfImprovementProposalSummary):
 class SelfImprovementProposalListResponse(BaseModel):
     project_id: str
     items: list[SelfImprovementProposalSummary]
-    limit: int
-    offset: int
 
 
 class SelfImprovementCanaryRequest(BaseModel):
@@ -2138,6 +2112,8 @@ class DecisionCard(BaseModel):
 class DecisionInboxResponse(BaseModel):
     project_id: str
     items: list[DecisionCard]
+    limit: int
+    offset: int
 
 
 class DecisionActionRequest(BaseModel):
@@ -2205,6 +2181,8 @@ class ArtifactDetail(ArtifactSummary):
 class ArtifactListResponse(BaseModel):
     project_id: str
     items: list[ArtifactSummary]
+    limit: int
+    offset: int
 
 
 class ChangeJournalItem(BaseModel):
@@ -2230,6 +2208,8 @@ class ChangeJournalDetail(ChangeJournalItem):
 class ChangeJournalResponse(BaseModel):
     project_id: str
     items: list[ChangeJournalItem]
+    limit: int
+    offset: int
 
 
 class DeadletterItem(BaseModel):
@@ -2253,6 +2233,8 @@ class DeadletterItem(BaseModel):
 class DeadletterListResponse(BaseModel):
     project_id: str
     items: list[DeadletterItem]
+    limit: int
+    offset: int
 
 
 class DeadletterIncidentRequest(BaseModel):
@@ -2428,6 +2410,8 @@ class OutboxMessageSummary(BaseModel):
 class OutboxMessageListResponse(BaseModel):
     project_id: str
     items: list[OutboxMessageSummary]
+    limit: int
+    offset: int
 
 
 class CommsChannelPolicySummary(BaseModel):
@@ -2516,6 +2500,8 @@ class InboxMessageSummary(BaseModel):
 class InboxMessageListResponse(BaseModel):
     project_id: str
     items: list[InboxMessageSummary]
+    limit: int
+    offset: int
 
 
 class RoleSummary(BaseModel):
@@ -2688,6 +2674,7 @@ class PackSummary(BaseModel):
     workflows: list[str]
     policies: list[str]
     skills: list[str]
+    source: str = "baked"
     installed: bool
     installed_by: Optional[str] = None
     installed_at: Optional[str] = None
@@ -2714,47 +2701,8 @@ class PackInstallRequest(BaseModel):
 
 class PackImportRequest(BaseModel):
     project_id: str
-    yaml_content: str
     actor: str = "system"
-
-
-class SecretRefSummary(BaseModel):
-    id: str
-    project_id: str
-    ref_kind: str
-    ref_key: str
-    provider: Optional[str] = None
-    status: str
-    metadata: dict[str, Any] = Field(default_factory=dict)
-    created_by: str
-    created_at: str
-    updated_at: str
-    credential_ref: str
-
-
-class SecretRefListResponse(BaseModel):
-    project_id: str
-    items: list[SecretRefSummary]
-    limit: int
-    offset: int
-
-
-class SecretRefCreateRequest(BaseModel):
-    project_id: str
-    ref_kind: str
-    ref_key: str
-    provider: Optional[str] = None
-    status: str = "active"
-    metadata: dict[str, Any] = Field(default_factory=dict)
-    actor: str = "system"
-
-
-class SecretRefUpdateRequest(BaseModel):
-    project_id: str
-    provider: Optional[str] = None
-    status: Optional[str] = None
-    metadata: Optional[dict[str, Any]] = None
-    actor: str = "system"
+    yaml: str
 
 
 class AgentModuleSummary(BaseModel):
@@ -3372,8 +3320,6 @@ class CostAnomalySummary(BaseModel):
 class CostAnomalyListResponse(BaseModel):
     project_id: str
     items: list[CostAnomalySummary]
-    limit: int
-    offset: int
 
 
 class ProviderHealthSummary(BaseModel):
@@ -3393,8 +3339,6 @@ class ProviderHealthSummary(BaseModel):
 class ProviderHealthListResponse(BaseModel):
     project_id: str
     items: list[ProviderHealthSummary]
-    limit: int
-    offset: int
 
 
 class DriftReportSummary(BaseModel):
@@ -3414,8 +3358,6 @@ class DriftReportSummary(BaseModel):
 class DriftReportListResponse(BaseModel):
     project_id: str
     items: list[DriftReportSummary]
-    limit: int
-    offset: int
 
 
 class ReconciliationRunSummary(BaseModel):
@@ -3437,8 +3379,6 @@ class ReconciliationRunSummary(BaseModel):
 class ReconciliationRunListResponse(BaseModel):
     project_id: str
     items: list[ReconciliationRunSummary]
-    limit: int
-    offset: int
 
 
 class DeploymentTargetSummary(BaseModel):
@@ -3506,8 +3446,6 @@ class DeploymentEnvironmentPolicySummary(BaseModel):
 class DeploymentEnvironmentPolicyListResponse(BaseModel):
     project_id: str
     items: list[DeploymentEnvironmentPolicySummary]
-    limit: int
-    offset: int
 
 
 class DeploymentEnvironmentPolicyUpsertRequest(BaseModel):
@@ -3566,6 +3504,8 @@ class DeploymentRunSummary(BaseModel):
 class DeploymentRunListResponse(BaseModel):
     project_id: str
     items: list[DeploymentRunSummary]
+    limit: int
+    offset: int
 
 
 class DeploymentRunCreateRequest(BaseModel):
@@ -3646,6 +3586,8 @@ class ChangeSetSummary(BaseModel):
 class ChangeSetListResponse(BaseModel):
     project_id: str
     items: list[ChangeSetSummary]
+    limit: int
+    offset: int
 
 
 class ChangeSetCreateRequest(BaseModel):

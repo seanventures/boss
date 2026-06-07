@@ -1113,14 +1113,6 @@ paths:
           in: query
           required: true
           schema: { type: string }
-        - name: limit
-          in: query
-          required: false
-          schema: { type: integer, default: 50 }
-        - name: offset
-          in: query
-          required: false
-          schema: { type: integer, default: 0 }
       responses:
         '200': { description: Task list }
     post:
@@ -1172,14 +1164,6 @@ paths:
           in: query
           required: true
           schema: { type: string }
-        - name: limit
-          in: query
-          required: false
-          schema: { type: integer, default: 50 }
-        - name: offset
-          in: query
-          required: false
-          schema: { type: integer, default: 0 }
       responses:
         '200': { description: Department list }
     post:
@@ -1207,14 +1191,6 @@ paths:
           in: query
           required: true
           schema: { type: string }
-        - name: limit
-          in: query
-          required: false
-          schema: { type: integer, default: 50 }
-        - name: offset
-          in: query
-          required: false
-          schema: { type: integer, default: 0 }
       responses:
         '200': { description: KPI list }
     post:
@@ -1248,14 +1224,6 @@ paths:
           in: query
           required: true
           schema: { type: string }
-        - name: limit
-          in: query
-          required: false
-          schema: { type: integer, default: 50 }
-        - name: offset
-          in: query
-          required: false
-          schema: { type: integer, default: 0 }
       responses:
         '200': { description: Policy record list }
     post:
@@ -1284,14 +1252,6 @@ paths:
           in: query
           required: true
           schema: { type: string }
-        - name: limit
-          in: query
-          required: false
-          schema: { type: integer, default: 50 }
-        - name: offset
-          in: query
-          required: false
-          schema: { type: integer, default: 0 }
       responses:
         '200': { description: Plan list }
     post:
@@ -1323,14 +1283,6 @@ paths:
           in: query
           required: true
           schema: { type: string }
-        - name: limit
-          in: query
-          required: false
-          schema: { type: integer, default: 50 }
-        - name: offset
-          in: query
-          required: false
-          schema: { type: integer, default: 0 }
       responses:
         '200': { description: Meeting list }
     post:
@@ -1598,10 +1550,6 @@ paths:
           in: query
           required: false
           schema: { type: integer, default: 25 }
-        - name: offset
-          in: query
-          required: false
-          schema: { type: integer, default: 0 }
       responses:
         '200': { description: Artifact list including data_boundary classifications }
   /v1/artifacts/{artifact_id}:
@@ -1817,25 +1765,32 @@ paths:
         '422': { description: Invalid pack or role spec }
   /v1/packs/import:
     post:
-      summary: Import a local PackSpec YAML into a project
+      summary: Import local pack YAML (Community ecosystem, no hosted; P3 per GAP-PRD-AUDIT-001)
+      parameters:
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+        - name: actor
+          in: query
+          required: false
+          schema: { type: string, default: system }
       requestBody:
         required: true
         content:
-          application/json:
+          application/x-yaml:
             schema:
-              type: object
-              required: [project_id, yaml_content]
-              properties:
-                project_id: { type: string }
-                yaml_content: { type: string }
-                actor: { type: string, default: system }
+              type: string
+              description: Raw PackSpec YAML (<64k). Must validate, no clash with baked core pack ids.
       responses:
-        '201': { description: Pack imported with receipt and audit event }
-        '403': { description: Actor lacks pack_manage permission }
-        '422': { description: Invalid YAML or PackSpec }
+        '201': { description: Pack imported (stored + roles applied + receipt + pack.imported event) }
+        '400': { description: Invalid yaml or exceeds 64k }
+        '403': { description: Missing pack_manage permission }
+        '409': { description: Core baked pack id clash }
+        '422': { description: Invalid PackSpec or role refs }
   /v1/packs/{pack_id}/export:
     get:
-      summary: Export a pack as YAML for local import or review
+      summary: Export pack definition as YAML (baked source or local_upload blob)
       parameters:
         - name: pack_id
           in: path
@@ -1847,7 +1802,7 @@ paths:
           schema: { type: string }
       responses:
         '200':
-          description: Pack YAML export
+          description: Pack YAML content
           content:
             application/x-yaml:
               schema: { type: string }
@@ -2484,116 +2439,6 @@ paths:
           schema: { type: integer, default: 25 }
       responses:
         '200': { description: Routing log list including data_boundary classifications }
-  /v1/secret-refs:
-    get:
-      summary: List SecretRef metadata records for a project
-      parameters:
-        - name: project_id
-          in: query
-          required: true
-          schema: { type: string }
-        - name: provider
-          in: query
-          required: false
-          schema: { type: string }
-        - name: status
-          in: query
-          required: false
-          schema: { type: string }
-        - name: limit
-          in: query
-          required: false
-          schema: { type: integer, default: 100 }
-        - name: offset
-          in: query
-          required: false
-          schema: { type: integer, default: 0 }
-      responses:
-        '200': { description: SecretRef list without secret material }
-    post:
-      summary: Create a SecretRef metadata record
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [project_id, ref_kind, ref_key]
-              properties:
-                project_id: { type: string }
-                ref_kind:
-                  type: string
-                  enum: [env, vault, local_runner, platform_secret_store]
-                ref_key: { type: string }
-                provider: { type: string }
-                status:
-                  type: string
-                  enum: [active, disabled, rotation_due, revoked]
-                  default: active
-                metadata: { type: object }
-                actor: { type: string, default: system }
-      responses:
-        '201': { description: SecretRef created }
-        '403': { description: Actor lacks providerops_manage permission }
-        '422': { description: Invalid SecretRef payload }
-  /v1/secret-refs/{secret_ref_id}:
-    get:
-      summary: Get a SecretRef metadata record
-      parameters:
-        - name: secret_ref_id
-          in: path
-          required: true
-          schema: { type: string }
-        - name: project_id
-          in: query
-          required: true
-          schema: { type: string }
-      responses:
-        '200': { description: SecretRef detail }
-        '404': { description: SecretRef not found }
-    patch:
-      summary: Update SecretRef metadata or status
-      parameters:
-        - name: secret_ref_id
-          in: path
-          required: true
-          schema: { type: string }
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [project_id]
-              properties:
-                project_id: { type: string }
-                provider: { type: string }
-                status:
-                  type: string
-                  enum: [active, disabled, rotation_due, revoked]
-                metadata: { type: object }
-                actor: { type: string, default: system }
-      responses:
-        '200': { description: SecretRef updated }
-        '404': { description: SecretRef not found }
-    delete:
-      summary: Revoke a SecretRef metadata record
-      parameters:
-        - name: secret_ref_id
-          in: path
-          required: true
-          schema: { type: string }
-        - name: project_id
-          in: query
-          required: true
-          schema: { type: string }
-        - name: actor
-          in: query
-          required: false
-          schema: { type: string, default: system }
-      responses:
-        '204': { description: SecretRef revoked }
-        '404': { description: SecretRef not found }
   /v1/providers:
     get:
       summary: List ProviderOps provider accounts for a project
@@ -2729,10 +2574,6 @@ paths:
           in: query
           required: false
           schema: { type: integer, default: 100 }
-        - name: offset
-          in: query
-          required: false
-          schema: { type: integer, default: 0 }
       responses:
         '200': { description: Cost anomalies with severity, threshold, decision, and recommended kill-switch actions }
   /v1/changesets:
@@ -2751,10 +2592,6 @@ paths:
           in: query
           required: false
           schema: { type: integer, default: 100 }
-        - name: offset
-          in: query
-          required: false
-          schema: { type: integer, default: 0 }
       responses:
         '200': { description: ChangeSets with policy result, quote, approval, and receipt expectations }
     post:
@@ -2839,10 +2676,6 @@ paths:
           in: query
           required: false
           schema: { type: integer, default: 100 }
-        - name: offset
-          in: query
-          required: false
-          schema: { type: integer, default: 0 }
       responses:
         '200': { description: Resource receipts linked to ChangeSets, providers, and general receipts }
   /v1/worker-pools:
@@ -2941,14 +2774,6 @@ paths:
           in: query
           required: true
           schema: { type: string }
-        - name: limit
-          in: query
-          required: false
-          schema: { type: integer, default: 50 }
-        - name: offset
-          in: query
-          required: false
-          schema: { type: integer, default: 0 }
       responses:
         '200': { description: Deployment targets with environments, resource refs, secrets, and rollback points }
     post:
@@ -2995,14 +2820,6 @@ paths:
           in: query
           required: true
           schema: { type: string }
-        - name: limit
-          in: query
-          required: false
-          schema: { type: integer, default: 50 }
-        - name: offset
-          in: query
-          required: false
-          schema: { type: integer, default: 0 }
       responses:
         '200': { description: Active and historical environment policies that gate provider-backed deployment runs }
     post:
@@ -3048,10 +2865,6 @@ paths:
           in: query
           required: false
           schema: { type: integer, default: 50, minimum: 1, maximum: 200 }
-        - name: offset
-          in: query
-          required: false
-          schema: { type: integer, default: 0 }
       responses:
         '200': { description: Deployment runs with release packet, ChangeSet, health, rollback, and decision links }
     post:
@@ -3112,10 +2925,6 @@ paths:
           in: query
           required: false
           schema: { type: integer, default: 100 }
-        - name: offset
-          in: query
-          required: false
-          schema: { type: integer, default: 0 }
       responses:
         '200': { description: Provider health, API availability, quota, and rate-limit status }
   /v1/drift-reports:
@@ -3130,10 +2939,6 @@ paths:
           in: query
           required: false
           schema: { type: integer, default: 100 }
-        - name: offset
-          in: query
-          required: false
-          schema: { type: integer, default: 0 }
       responses:
         '200': { description: Drift reports classifying unmanaged, orphaned, security, and production impact }
   /v1/reconciliation-runs:
@@ -3148,10 +2953,6 @@ paths:
           in: query
           required: false
           schema: { type: integer, default: 100 }
-        - name: offset
-          in: query
-          required: false
-          schema: { type: integer, default: 0 }
       responses:
         '200': { description: Provider inventory and cost reconciliation run history }
   /v1/comms/policies:
@@ -3205,10 +3006,6 @@ paths:
           in: query
           required: false
           schema: { type: integer, default: 50 }
-        - name: offset
-          in: query
-          required: false
-          schema: { type: integer, default: 0 }
       responses:
         '200': { description: Outbox list including data_boundary classifications }
     post:
@@ -3301,10 +3098,6 @@ paths:
           in: query
           required: false
           schema: { type: integer, default: 50 }
-        - name: offset
-          in: query
-          required: false
-          schema: { type: integer, default: 0 }
       responses:
         '200': { description: Inbox list including data_boundary classifications }
   /v1/comms/inbox/ingest:
@@ -3480,39 +3273,6 @@ paths:
         '409': { description: Invalid transition }
         '422': { description: Validation error }
   /v1/jobs:
-    get:
-      summary: List jobs for a project
-      parameters:
-        - name: project_id
-          in: query
-          required: true
-          schema: { type: string }
-        - name: status
-          in: query
-          required: false
-          schema: { type: string }
-        - name: kind
-          in: query
-          required: false
-          schema: { type: string }
-        - name: task_id
-          in: query
-          required: false
-          schema: { type: string }
-        - name: include_terminal
-          in: query
-          required: false
-          schema: { type: boolean, default: true }
-        - name: limit
-          in: query
-          required: false
-          schema: { type: integer, default: 50 }
-        - name: offset
-          in: query
-          required: false
-          schema: { type: integer, default: 0 }
-      responses:
-        '200': { description: Paginated job list with queue metadata }
     post:
       summary: Create job
       requestBody:
@@ -4241,10 +4001,6 @@ paths:
           in: query
           required: false
           schema: { type: integer, default: 50 }
-        - name: offset
-          in: query
-          required: false
-          schema: { type: integer, default: 0 }
       responses:
         '200': { description: Receipt list including data_boundary classifications }
   /v1/change-journal:
@@ -4372,10 +4128,6 @@ paths:
           in: query
           required: false
           schema: { type: integer, default: 50 }
-        - name: offset
-          in: query
-          required: false
-          schema: { type: integer, default: 0 }
       responses:
         '200': { description: Deadletters }
   /v1/deadletters/{deadletter_id}/incident:

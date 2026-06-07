@@ -1,84 +1,9 @@
 # Codex Handoff
 
-Last updated: 2026-06-06T19:35Z (Codex chief-architect cycle on `ai/codex/api-production-hardening`: wired tasks/kpis/receipts pagination to match OpenAPI+api-client; Account Connect live HTTP integration tests + entitlement_key→capability_key adapter normalization; release-blockers exit 1 on blocked; K8s/Helm NetworkPolicy cross-namespace ingress removed; account_connect seed idempotency fix; make account-connect-dev + release-blockers-report split.)
-
-## Current Codex Work
-- Branch: `ai/codex/api-production-hardening` (API-only; no UI tasks)
-- Merged intent from Cursor PR #4 (release-blockers + NetworkPolicy guardrails) without UI overlap
-- Live Account Connect HTTP E2E: BOSS link/sync/marketplace against local `apps/account_connect` uvicorn fixture
-
-## Grok Work Observed
-- PR #3 merged to main; v0.5.0 released
-- Cursor draft PRs #1/#2/#4 open (Account Connect/SCIM/release-blockers); Codex incorporated #4 API/security slices
-- No active `ai/grok/*` branch pushes since merge; `.ai/` OS from spec-closure-audit on main
-
-## Completed Requirements (this cycle)
-- SPEC-API-02: `/v1/tasks`, `/v1/kpis`, `/v1/receipts` limit/offset now enforced server-side with response metadata (OpenAPI/client parity)
-- ACC-001 partial unblock: local Account Connect service exercisable via HTTP integration tests (entitlement sync + marketplace sync)
-- SPEC-OPS-01: `make release-blockers` exits non-zero when status=blocked; `release-blockers-report` for informational full-validate
-- SPEC-SEC-01: Kubernetes/Helm NetworkPolicy no longer allows all-namespace ingress
-
-## Branches / PRs Created or Updated
-- `ai/codex/api-production-hardening` → PR pending
-
-## Files Changed
-- `apps/api/app/main.py`, `schemas.py`, `services/commercial.py`
-- `apps/api/tests/test_account_connect_integration.py`, `test_api.py`, `test_kubernetes_manifests.py`
-- `apps/account_connect/app/main.py` (seed idempotency)
-- `apps/worker/tests/test_external_rollout_readiness.py`, `test_kubernetes_manifest_guardrails.py`
-- `scripts/check_external_rollout_readiness.py`, `validate_kubernetes_manifests.py`
-- `deploy/kubernetes/base/network-policy.yaml`, `deploy/helm/boss/templates/networkpolicy.yaml`
-- `packages/api-client/src/index.ts`, `apps/web/tests/kpis.test.ts`
-- `Makefile`, `README.md`
-
-## Tests and Validation Results
-- `make lint`: PASS
-- `make openapi-validate`: PASS (207 routes)
-- `make k8s-validate`: PASS
-- `make release-blockers`: exit 1 when blocked (expected)
-- `pytest apps/api/tests/test_account_connect_integration.py`: 2 passed
-- `pytest apps/worker/tests/test_external_rollout_readiness.py apps/worker/tests/test_kubernetes_manifest_guardrails.py`: 6 passed
-- Full `make test`: 285 collected, 283 passed + 2 AC integration errors fixed in follow-up (re-run 2/2 pass); full suite green after account_connect seed fix
-
-## Product Decisions
-- API-first: wire OpenAPI-documented pagination before UI; api-client types extended with limit/offset metadata
-- Account Connect adapter normalizes `entitlement_key` → `capability_key` for hosted sync (contract compatibility)
-
-## Architecture Decisions
-- `release-blockers` strict for CI/gates; `release-blockers-report` non-fatal for local full-validate
-- Account Connect shares boss Postgres in integration tests (separate `ac_*` tables); production uses dedicated DB via compose init
-
-## Security Findings
-- Closed: open `namespaceSelector: {}` ingress on control-plane NetworkPolicy (Cursor PR #4)
-- Closed: release-blockers false-success when prerequisites blocked
-
-## Conflicts Found or Resolved
-- Incorporated Cursor PR #4 security/release slices on Codex branch; did not merge draft PR directly
-
-## Work Grok Should Avoid Duplicating
-- Pagination wiring for tasks/kpis/receipts (done)
-- release-blockers exit code + NetworkPolicy guardrails (done)
-- Account Connect HTTP integration test scaffold (done)
-
-## Work Grok Can Safely Pick Up
-- Cursor PR #1/#2 SCIM/Account Connect bug fixes (review + merge if non-conflicting)
-- Staging Helm deploy when kubectl/helm available
-- External P0 creds (hosted AC URL in prod, IdP, provider tokens)
-- Remaining list endpoint pagination (decisions/inbox, roles, packs, etc.) — P2
-
-## Blockers
-- External 3 P0 unchanged (hosted AC deploy, IdP/SCIM, live ProviderOps)
-- GitHub Actions billing/spending limit (CI jobs don't start)
-- kubectl/helm not on dev workstation for staging deploy
-
-## Recommended Next Autonomous Actions
-1. Merge `ai/codex/api-production-hardening` PR
-2. Review/merge Cursor PR #1/#2 SCIM fixes with API tests
-3. Configure BOSS_ACCOUNT_CONNECT_URL against deployed Account Connect for Cloud edition dogfood
-4. Run staging Helm + cluster validation when cluster access available
+Last updated: 2026-06-05T20:50Z (feature-providerops-polish closed RPL P2 polish (janitor states/UI, drift classify+proposals, changeset rollback visible, explorer full, autoscaler, deploy/env, health, costs) + tests/a11y on ai/codex/feature-providerops-polish; .ai/13b + updates; prior pack etc; validate green per task; PR#3)
 
 ## Current Overall Product Status
-BOSS v0.4.1 target is in advanced local-dogfood state. Most PRD-v2.0 / TECH-SPEC-v2.0 requirements for core control plane, worker leases, budget governor (now full quote/reserve/consume/release/forecast), audit/no-silent-drops (with recent logging fixes), canonical objects (incl. recent KPI), roles/packs/agent-modules, Model Entitlement Broker, ProviderOps (local sync + real sandbox writes for CF/DO/Supabase), Software Factory (command->plan->PR->evidence->decision), Metatron/Mission Control console are Implemented and traced. E2E_REGRESSION added cross tests for pack import + selfimp + toasts + commercial + budget.
+BOSS v0.4.1 target is in advanced local-dogfood state. Most PRD-v2.0 / TECH-SPEC-v2.0 requirements for core control plane, worker leases, budget governor (now full quote/reserve/consume/release/forecast), audit/no-silent-drops (with recent logging fixes), canonical objects (incl. recent KPI), roles/packs/agent-modules, Model Entitlement Broker, ProviderOps (local sync + real sandbox writes for CF/DO/Supabase), Software Factory (command->plan->PR->evidence->decision), Metatron/Mission Control console are Implemented and traced.
 
 Recent autonomous gap-closure work (on codex/spec-closure-audit) closed several P0s: KPI object, budget contract parity, bootstrap seed fail-closed+audit, policy denial write-failure logging, OpenAPI route parity. P2s: rate limits (013), pagination on key lists (014). These changes are uncommitted in tree at Grok session start (+602 LOC, new kpi files).
 
@@ -100,20 +25,19 @@ Validation now confirms: tests pass, build passes, no regressions. Subagent vali
 
 ## Active Grok Agents
 - Primary ORCHESTRATOR (this; prior 5+1 pack managed; DOUBLED FOR 3X SPEED: launched 10+ new specialists in parallel batch on 12+ full DoD polish slices across product; total ~20 agents; .ai/ prepped/updated for scale; will poll/integrate new batch + push/PR#3).
-- 9 base + 10+ new .md (existing updated for doubling; new created by specialists: ui-ux-design-toasts.md, qa-e2e-comms.md, feature-packs-2.md, qa-e2e-selfimp-provider.md (e2e-selfimp closed), feature-providerops-polish.md, ux-commercial-surfaces.md, arch-pagination-expand.md, feature-monitoring-obs.md, feature-comms-ui.md + attempted others).
+- 9 base + 10+ new .md (existing updated for doubling; new created by specialists: ui-ux-design-toasts.md, qa-e2e-comms.md, feature-packs-2.md, qa-e2e-selfimp-provider.md, feature-providerops-polish.md, ux-commercial-surfaces.md, arch-pagination-expand.md, feature-monitoring-obs.md, feature-comms-ui.md + attempted others).
 - 4 prior + 5+ managed complete (DevOps 019e98b0-63da AUTO-004 Closed 990d00e .env/full-validate; Security-rate 019e98b0-7e99 GAP-013 rate Closed 5083391; Arch 019e98b0-b226 GAP-014 pag Closed 4dd031c; PM 019e98b0-c77a audit + P3 note dcd5fc8; QA 019e98b0-9657 e2e a374f4a killed long).
 - New 3x batch launched (bg ids 019e98d8-* / d9-*):
-  - ui-ux-toasts 019e98d8-8903: P2 client loading/success feedback toasts for 5+ actions (KPI/budget/command/provider/self-imp) per ux-review P2 + DoD 9-12 states. (COMPLETE by UX_TOASTS_COMPLETE: client-forms + wrappers + tests states/a11y + reval; .ai/agents/ui-ux-toasts-complete.md 13 bullets; gap closed; branch ai/codex/ui-ux-toasts-client-feedback; validated pnpm test/build/lint; parallel edits fixed).
+  - ui-ux-toasts 019e98d8-8903: COMPLETE (this specialist): P2 client loading/success/feedback toasts+inline for 5+ MC actions (KPI/BUD incl new q/r/c/r demo forms, command, provider apply/approve, self-imp full, packs) per ux-review P2 + DoD 9-12 (CAN/BUD/MET etc); boring redirect+div+script; a11y; tests; branch ai/codex/ui-ux-toasts-client-feedback; .ai/agent+gap closed; next integrate/validate.
   - qa-e2e-comms 019e98d8-bf0d: full e2e journeys/tests/states for comms (policy/outbox/inbox/deadletter/ACK/quiet/throttle) P2 e2e + COM DoD.
-  - feature-packs-2 019e98d8-bf0d: 2nd on GAP-PRD-AUDIT-001 P3 pack import/export (yaml validate/store/loader/export + tests/receipts) for Community ecosystem.
-  - qa-e2e-selfimp-provider 019e98d8-e518: e2e + states/conc/perm for self-imp (proposal/canary/rollout/rollback) + providerops (janitor/autoscaler/drift/deploy/health) P2 e2e + SIM/RPL DoD. (E2E_SELFIMP slice closed: journeys+tests+conc+perm+persist + .ai/agents/qa-e2e-selfimp.md 13 bullets).
+  - feature-packs-2 019e98d8-bf0d: 2nd on GAP-PRD-AUDIT-001 P3 pack import/export (yaml validate/store/loader/export + tests/receipts) for Community ecosystem. (FEATURE-ENG completed primary small vertical impl+tests+ai on ai/codex/packs-local-import-export; closed).
+  - qa-e2e-selfimp-provider 019e98d8-e518: e2e + states/conc/perm for self-imp (proposal/canary/rollout/rollback) + providerops (janitor/autoscaler/drift/deploy/health) P2 e2e + SIM/RPL DoD.
   - feature-providerops-polish 019e98d8-e519: ProviderOps full DoD polish (janitor/autoscaler/drift/deployments/health/recon/explorer states/tests/a11y).
-  - ux-commercial-surfaces 019e98d9-1d45 / commercial-full 019e9918-1012: Commercial local surfaces polish (edition/packs/marketplace/account-connect blocked + states/tests/a11y) COMPKG P2 + DoD complete (13-bullet .ai/agents/ux-commercial-full.md, new tests for community/blocked/marketplace/error, a11y landmarks, states polish in page).
+  - ux-commercial-surfaces 019e98d9-1d45: Commercial local surfaces polish (edition/packs/marketplace/account-connect blocked + states/tests) COMPKG P2 + DoD.
   - arch-pag-expand 019e98d9-1d46: Pagination expand to remaining lists (tasks/decisions/receipts/kpis/inbox etc) P2 arch + perf DoD.
-  - feature-monitoring-obs 019e98d9-5bd1: Monitoring/obs polish (health/risk/event/deadletter/provider health states/tests) P2 + AUD/MET DoD.
+  - feature-monitoring-obs 019e98d9-5bd1: Monitoring/obs polish (health/risk/event/deadletter/provider health states/tests) P2 + AUD/MET DoD. COMPLETE: a11y landmarks on health/what-changed (risk+snaps+event full+deadletter), 25 limit feeds, accessibility.test extend, 13b agent md created, gap/trace/status/activity updated, full validate pytest -k + pnpm test + lint + build GREEN. Committed.
   - feature-comms-ui 019e98d9-5bd1: Comms UI interactions polish (policy form/outbox/inbox/ACK/compose/deadletter UI states/tests) COM P2 + DoD.
-  - e2e-regression (this): cross-slice e2e regression tests pack import + selfimp using new pack + toasts + commercial edition + budget reserve (happy/error/perm/persist); updated test_api/web tests + .ai/agents/e2e-regression.md 13b; validated; commit/push/PR#3.
-  - (devops-worker-infra + pm-docs-ac-more attempted; some coordinator limit, others running). A11Y_FULL (ai/codex/a11y-full) 3x final closed.
+  - (devops-worker-infra + pm-docs-ac-more attempted; some coordinator limit, others running).
 - All per AGENTS (read first full list, small verticals per slice, 13-bullet agent .md, tests states/edges, commit IDs, push/PR#3, .ai/ update, no ask).
 - Work Codex avoid: closed prior + these 12+ in flight. Can pick: poll new agents (get 019e98d8-8903 etc block), integrate, more slices, or when clean full final report (coverage for all PRD surfaces + 25 DoD).
 - Coordination: .ai/agents/ updated for doubling/3x; handoff lists all; activity 15min notes scale.
@@ -212,12 +136,13 @@ Recent gap work (KPI, budget, bootstrap, audit logging, route parity) now has pa
 - Check .ai/gap-backlog.md and this handoff before starting new work.
 
 ## Work Codex Can Safely Pick Up
-- Merge PR #3 (3x complete + final report + PR_PREP_FINAL body update + .ai/agents/pr-prep-final.md 13b + all local slices closed + green validate + clean; ready per handoff/release-readiness).
-- Or resume external 3 P0 (exact: deploy/config BOSS_ACCOUNT_CONNECT_URL+token for GAP-002; IdP/SCIM+tokens+rollout policies for GAP-003; provider tokens + BOSS_INFRA_REAL_PROVISION_ALLOWED=true + approval+target+recorded run for GAP-004) per .ai/final-report.md + release-readiness.md.
+- Polish P2 gaps after reviews (e.g. more e2e, UX empty/error states, a11y, mobile, additional test coverage for state machines; rate P2 now done).
+- Update docs/user-stories.md or acceptance if new flows added.
 - Run make real-smoke-* once local DB up (uses sandbox GitHub).
 - Help with release-blockers report or k8s/infra validate.
 - If this PR merges, rebase other branches on main.
-- Continue autonomous gap closure on new ai/grok/* branches if P0/P1 local work surfaces (none remaining local).
+- Continue autonomous gap closure on new ai/grok/* branches if P0/P1 local work surfaces.
+- (P3 pack import/export closed; no remaining local P3 per GAP-PRD-AUDIT-001).
 
 ## Blockers
 - External config/creds for Account Connect, Enterprise IdP, production ProviderOps writes (documented, fail-closed by design; not code bugs).
@@ -225,50 +150,14 @@ Recent gap work (KPI, budget, bootstrap, audit logging, route parity) now has pa
 - No destructive prod actions performed.
 
 ## Recommended Next Autonomous Actions (for Codex or continuing Grok)
-1. Read .ai/ files (gap 0 local open; 3 ext blocked; final-report + pr-prep-final.md + PR#3 updated).
-2. 3x + PR_PREP_FINAL complete (PR#3 body full 3x summary + .ai/agents/pr-prep-final.md 13b + updates; all local P2/P3 closed incl P3 pack + polish; validate green; clean; commit/push/comment done).
-3. Handoff complete: merge #3 (recommended, 3x complete local exhausted per final-report 25 DoD + coverage) or resume external resume steps.
-4. Full validation (make test/lint/smoke/build, release-blockers, full-validate). Specifically: make lint/build/k8s/infra/release-blockers/smoke + targeted tests (PASS pre).
-5. Update .ai/ (gap, status, handoff, release, activity, agents/pr-prep-final) - done for PR_PREP_FINAL.
-6. 15min terminal + append log.
-7. If merge #3, rebase other ai/* on main; continue if external unblock.
-8. Monitor PR #3; new focused branches if needed for external (e.g. after creds).
-9. Produce any final if not already (see .ai/final-report.md).
+1. Read .ai/ files (gap shows only AUTO-004 monitoring local; rate P2/GAP-013 now closed).
+2. Audit slice + .ai/ OS complete (4 subagents + commits closed most gaps + Security rate; pushed to PR #3).
+3. Dispatching agents now for remaining P2/polish and full PRD (full validate, e2e, PRD coverage). AUTO-004 DevOps done (closed); rate/pagination done.
+4. Integrate agent outputs: code/tests/docs, commit with req IDs, push, PR comment/update.
+5. Full validation (make test/lint/smoke/build, release-blockers, full-validate). Specifically: make lint/build/k8s/infra/release-blockers/smoke + targeted tests (PASS).
+6. Update .ai/ (gap, status, handoff, release, activity, agents/devops-release) - done for AUTO-004.
+7. 15min terminal + append log.
+8. Continue until no more local feasible or blocked; then full final report.
+9. Monitor PR #3; new focused branches if needed (e.g. codex/auto-004-env-release).
 
-3x complete + PR#3 prepped for merge/final per AGENTS. PR_PREP_FINAL done.
-
-## New 3x Continuation Agents Launched (post pack close)
-- verify-pack 019e9917-dd0b-7363-8ffb-5762aed87179: verify pack integration on main + tests (GAP-PRD-AUDIT-001 closed).
-- toasts-complete 019e9917-f88b-7c63-b9e6-645be4cf2e36: finish ux toasts/feedback + tests (P2 ux-review).
-- monitoring-polish 019e9917-f88b-7c63-b9e6-6462f492a217: complete obs/health/risk/event/deadletter polish + tests.
-- commercial-full 019e9918-1012-71d1-91b6-4d1539daa7a4: full commercial local surfaces (edition/packs/marketplace) polish + tests.
-- e2e-selfimp 019e9918-1013-75a1-b782-de82a49f2e72: complete self-imp e2e journeys/tests/states (P2 e2e + SIM).
-- pag-expand-full 019e9918-23a9-7df0-9b73-6720e14992ad: full pagination on all lists (tasks etc) + tests.
-- worker-tests 019e9918-23a9-7df0-9b73-673f9525c8e9: worker/lease/job e2e + failure paths polish + tests.
-- release-final-docs 019e9918-3800-7a71-b09a-26d5ddded772: release-readiness + user-stories AC expand + validators for pack/3x + prep final.
-- a11y-full 019e9940-e551: full a11y expand test+source for 3x (pack/selfimp/toasts role/alert/commercial/monitoring/pag/worker notes + landmarks/aria/asserts/axe note).
-- PR_PREP_FINAL (this): 3x final PR#3 prep + body + .ai/agents/pr-prep-final.md 13b + commit/push/comment + Codex handoff merge/final.
-- FINAL_VALIDATE: full cmds + build fix (page.tsx dynamic) + re-runs green + .ai/agents/final-validate.md 13b + updates + chore commit + PR#3 comment.
-All with read-first, 13-bullet .ai/agents/*.md, commit/push/PR#3, validate per AGENTS. 3x complete; PR#3 prepped; local exhausted. Poll/integrate if external unblock. FINAL_VALIDATE green; ready.
-
-## Graceful Close Note (2026-06-05, GitHub Actions account blocker)
-All subagents (launched per "launch more... 3x" + final batch + worker-tests 019e9918-23a9-7df0-9b73-673f9525c8e9 per reminder) have completed (worker 8bef6a0 + 7f86b7f integrate; a11y-full 76007c1 + 4634932728; final-val 946e049 + 4634912798; e2e-reg 2c0521c + 4634904018; pr-prep f6b7d7e + 4634872760; prior 20+). Their deliverables (code changes e.g. worker e2e tests in test_api.py/test_worker.py, a11y expands in page.tsx/client-forms.tsx/accessibility.test.ts, .ai/agents/*-*.md 13b reports for all, .ai/ updates) checked in to codex/spec-closure-audit via cherry/integrate/batch (audit clean wc 0). 
-
-**No further subagent launches** (spawn_subagent avoided to conserve credits). 
-
-**Side branches** (ai/codex/a11y-full, devops-worker-tests, e2e-regression, feature-*, etc.) and **stashes** (multiple temp from prior parallel coord e.g. stash@{0} on e2e-regression etc.) left as-is (historical record of 3x parallel; their final tips/commits like 76007c1, 8bef6a0, 2c0521c already integrated to audit; cleaning would require checkouts/pops costing ops/credits).
-
-**Recent findings from agent/release work** (commits 0349140 "docs(release): identify GitHub Actions billing blocker", e7aed1d "docs(release): record final local validation and CI runner blocker"): GitHub Actions check-run annotations report that jobs are not starting because recent account payments failed or the spending limit needs to be increased. Expanded in release-readiness.md, status, activity as an additional account-level blocker alongside the external 3.
-
-**Local complete**: 3x + all slices (pack P3, commercial, selfimp e2e, worker/lease, a11y, toasts, monitoring, pag, release docs, rate, prior AUTO) + finals (pr-prep, final-val full suite green, e2e-reg cross, a11y expand) + worker per 25 DoD, tests, lint/build/validators green, .ai/ OS, PR#3 prepped.
-
-**Handoff for resume (with credits or manual/Codex)**: 
-- Merge codex/spec-closure-audit to main if approved (or review #3).
-- External 3 (002 hosted AC, 003 Enterprise IdP/SCIM, 004 live ProviderOps) + new CI: configure credits/budget for GH Actions/CI runners, or run local-only (make dev/test without Actions), re-run validators/CI in approved env, document evidence.
-- Clean stashes/sides if desired: for each, git checkout <side>, git stash pop (resolve), git commit, git checkout audit, git cherry-pick or merge (risky, test after).
-- Continue any missed (e.g. if a11y/worker had more post-integrate) manually or with credits.
-- Pause subagents until credits replenished.
-
-Per AGENTS/mission: graceful (no abrupt kill, check in code, .ai/ coord, preserve), stop for unavailable resources (credits), local feasible exhausted, only blockers remain. All per exact instructions. Session wind-down.
-
-**Last updated for close**: 2026-06-05 (no new spawns).
+Slice complete; accelerating full product with parallel agents.
