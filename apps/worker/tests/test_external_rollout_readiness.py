@@ -5,6 +5,7 @@ from scripts.check_external_rollout_readiness import (
     evaluate_readiness,
     format_text,
 )
+from scripts import check_external_rollout_readiness as readiness_cli
 
 
 def _checks_by_id(report):
@@ -49,8 +50,6 @@ def test_external_rollout_readiness_distinguishes_config_from_live_verification(
 
 
 def test_external_rollout_readiness_cli_fails_when_blocked(monkeypatch, capsys):
-    from scripts import check_external_rollout_readiness as readiness_cli
-
     monkeypatch.setattr(
         readiness_cli,
         "evaluate_readiness",
@@ -65,8 +64,6 @@ def test_external_rollout_readiness_cli_allows_non_strict_external_verification(
     monkeypatch,
     capsys,
 ):
-    from scripts import check_external_rollout_readiness as readiness_cli
-
     monkeypatch.setattr(
         readiness_cli,
         "evaluate_readiness",

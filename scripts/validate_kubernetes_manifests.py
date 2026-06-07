@@ -125,6 +125,12 @@ def validate_kubernetes_base() -> list[dict[str, Any]]:
             "Kubernetes base must default provider writes off."
         )
 
+    network_policy = by_key[("NetworkPolicy", "boss-control-plane-ingress")]
+    if _contains_open_namespace_selector(network_policy.get("spec", {}).get("ingress")):
+        raise ManifestValidationError(
+            "Kubernetes base NetworkPolicy must not allow ingress from every namespace."
+        )
+
     secret_template = _load_yaml_documents(BASE / "secret-template.yaml")[0]
     if secret_template.get("kind") != "Secret":
         raise ManifestValidationError("secret-template.yaml must be a Secret.")
@@ -133,12 +139,6 @@ def validate_kubernetes_base() -> list[dict[str, Any]]:
     for key in ("DATABASE_URL", "BOSS_API_KEYS", "BOSS_API_KEY", "BOSS_WORKER_API_KEY"):
         if key not in (secret_template.get("stringData") or {}):
             raise ManifestValidationError(f"secret-template.yaml missing {key}.")
-
-    network_policy = by_key[("NetworkPolicy", "boss-control-plane-ingress")]
-    if _contains_open_namespace_selector(network_policy.get("spec", {}).get("ingress")):
-        raise ManifestValidationError(
-            "Kubernetes base NetworkPolicy must not allow ingress from every namespace."
-        )
 
     return resources
 
@@ -205,8 +205,10 @@ def validate_helm_chart() -> dict[str, Any]:
                     f"Helm template {template_name} missing required fragment: {fragment}"
                 )
 
-    network_policy_text = (templates / "networkpolicy.yaml").read_text(encoding="utf-8")
-    if "namespaceSelector: {}" in network_policy_text:
+    network_policy_template = (templates / "networkpolicy.yaml").read_text(
+        encoding="utf-8"
+    )
+    if "namespaceSelector: {}" in network_policy_template:
         raise ManifestValidationError(
             "Helm NetworkPolicy must not allow ingress from every namespace."
         )
