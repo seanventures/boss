@@ -114,17 +114,6 @@ class MemberDirectoryService:
                 "permissions": ["command_submit", "health_refresh", "audit_export"],
             },
             {
-                "member_id": "coo",
-                "display_name": "COO Operator",
-                "member_type": "system",
-                "role_keys": ["coo"],
-                "permissions": [
-                    "health_refresh",
-                    "audit_export",
-                    "task_create",
-                ],
-            },
-            {
                 "member_id": "executive_console",
                 "display_name": "Executive Console Operator",
                 "member_type": "system",
@@ -193,8 +182,7 @@ class MemberDirectoryService:
                 SELECT id, project_id, member_id, display_name, member_type, role_keys,
                        permissions, status, created_by, created_at, updated_at
                 FROM project_members
-                WHERE project_id = :project_id
-                  AND status = 'active'
+                WHERE project_id = :project_id AND status = 'active'
                 ORDER BY member_type ASC, display_name ASC, member_id ASC
                 """
             ),
