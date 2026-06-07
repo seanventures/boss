@@ -2,6 +2,19 @@
 
 All notable changes to BOSS are documented in this file.
 
+## v0.6.0 - 2026-06-03
+
+Consolidation release restoring production API contracts and commercial services after bad merge conflict resolution on main.
+
+### Fixed
+
+- Restored `commercial.py` hosted Account Connect, marketplace, and auth-session logic removed during merge conflict resolution.
+- Restored API pagination on tasks, KPIs, receipts, and events; pack import/export HTTP routes; `GET /v1/jobs`; and SecretRef CRUD endpoints.
+- Restored `@boss/api-client` pagination helpers, pack import/export, job list, and SecretRef CRUD methods.
+- Restored OpenAPI contract parity with implemented routes (207 routes validated).
+- Restored SpecPack `import_pack` / `export_pack_yaml` with local-upload receipt dedupe keys.
+- Aligned regression tests with project-scoped SCIM member IDs and Account Connect entitlement isolation.
+
 ## v0.5.0 - 2026-06-03
 
 API baseline release for the UI team: pack import/export, job list, SecretRef CRUD, OpenAPI parity CI, and a scaffolded BOSS Account Connect service.
