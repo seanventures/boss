@@ -220,6 +220,8 @@ describe("comms outbox/inbox/policy feed states (policy form, outbox empty/error
 
     vi.mocked(client.listOutboxMessages).mockResolvedValueOnce({
       project_id: "boss-dogfood",
+      limit: 50,
+      offset: 0,
       items: [
         {
           id: "out_ack_1",
@@ -245,7 +247,7 @@ describe("comms outbox/inbox/policy feed states (policy form, outbox empty/error
           provider: "slack",
           delivery_mode: "real_send_allowed",
           allowed_data_boundaries: ["public", "internal"],
-          rollout_notes: null,
+          rollout_notes: undefined,
           status: "active",
           created_by: "ceo",
           metadata: {},
@@ -295,7 +297,9 @@ describe("comms outbox/inbox/policy feed states (policy form, outbox empty/error
 
     const data = {
       project_id: "boss-dogfood",
-      items: [{ id: "out_p", project_id: "boss-dogfood", channel: "email:x", subject: "p", body: "b", status: "draft", data_boundary: "internal", dedupe_key: "dkp", created_at: "2026-06-05T00:00Z", updated_at: "2026-06-05T00:00Z" }],
+      limit: 50,
+      offset: 0,
+      items: [{ id: "out_p", project_id: "boss-dogfood", channel: "email:x", subject: "p", body: "b", status: "draft", data_boundary: "internal" as const, dedupe_key: "dkp", created_at: "2026-06-05T00:00Z", updated_at: "2026-06-05T00:00Z" }],
     };
     const pol = { project_id: "boss-dogfood", items: [] };
     vi.mocked(client.listOutboxMessages).mockResolvedValue(data);
@@ -315,7 +319,7 @@ describe("comms outbox/inbox/policy feed states (policy form, outbox empty/error
     const { client } = await import("../lib/client");
     const { fetchInboxFeed } = await import("../lib/comms");
 
-    vi.mocked(client.listInboxMessages).mockResolvedValueOnce({ project_id: "boss-dogfood", items: [] });
+    vi.mocked(client.listInboxMessages).mockResolvedValueOnce({ project_id: "boss-dogfood", limit: 50, offset: 0, items: [] });
     const empty = await fetchInboxFeed();
     expect(empty.apiReachable).toBe(true);
     expect(empty.items).toEqual([]);

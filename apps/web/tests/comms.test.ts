@@ -13,8 +13,8 @@ describe("Comms feed (policy form, outbox empty/error/success/ACK, perm 403, per
   it("maps success outbox feed with policies + ACK receipt", async () => {
     const { client } = await import("../lib/client");
     const { fetchOutboxFeed } = await import("../lib/comms");
-    vi.mocked(client.listOutboxMessages).mockResolvedValueOnce({ project_id: "boss-dogfood", items: [{ id: "out1", project_id: "boss-dogfood", channel: "slack:#a", subject: "s", body: "b", status: "acked", data_boundary: "internal", dedupe_key: "d1", receipt_id: "r1", created_at: "2026-06-05T00:00:00Z", updated_at: "2026-06-05T00:00:00Z" }] });
-    vi.mocked(client.listCommsChannelPolicies).mockResolvedValueOnce({ project_id: "boss-dogfood", items: [{ id: "p1", project_id: "boss-dogfood", provider: "slack", delivery_mode: "real_send_allowed", allowed_data_boundaries: ["internal"], rollout_notes: null, status: "active", created_by: "ceo", metadata: {}, created_at: "2026-06-05T00:00:00Z", updated_at: "2026-06-05T00:00:00Z" }] });
+    vi.mocked(client.listOutboxMessages).mockResolvedValueOnce({ project_id: "boss-dogfood", limit: 50, offset: 0, items: [{ id: "out1", project_id: "boss-dogfood", channel: "slack:#a", subject: "s", body: "b", status: "acked", data_boundary: "internal", dedupe_key: "d1", receipt_id: "r1", created_at: "2026-06-05T00:00:00Z", updated_at: "2026-06-05T00:00:00Z" }] });
+    vi.mocked(client.listCommsChannelPolicies).mockResolvedValueOnce({ project_id: "boss-dogfood", items: [{ id: "p1", project_id: "boss-dogfood", provider: "slack", delivery_mode: "real_send_allowed", allowed_data_boundaries: ["internal"], rollout_notes: undefined, status: "active", created_by: "ceo", metadata: {}, created_at: "2026-06-05T00:00:00Z", updated_at: "2026-06-05T00:00:00Z" }] });
     const feed = await fetchOutboxFeed("boss-dogfood");
     expect(feed.apiReachable).toBe(true);
     expect(feed.items[0].receiptId).toBe("r1");
@@ -42,11 +42,11 @@ describe("Comms feed (policy form, outbox empty/error/success/ACK, perm 403, per
   it("persist refresh for outbox + inbox", async () => {
     const { client } = await import("../lib/client");
     const { fetchOutboxFeed, fetchInboxFeed } = await import("../lib/comms");
-    const odata = { project_id: "boss-dogfood", items: [{ id: "o1", project_id: "boss-dogfood", channel: "e", subject: null, body: "b", status: "draft", data_boundary: "internal", dedupe_key: "d", created_at: "z", updated_at: "z" }] };
+    const odata = { project_id: "boss-dogfood", limit: 50, offset: 0, items: [{ id: "o1", project_id: "boss-dogfood", channel: "e", subject: undefined, body: "b", status: "draft", data_boundary: "internal" as const, dedupe_key: "d", created_at: "z", updated_at: "z" }] };
     const pdata = { project_id: "boss-dogfood", items: [] };
     vi.mocked(client.listOutboxMessages).mockResolvedValue(odata);
     vi.mocked(client.listCommsChannelPolicies).mockResolvedValue(pdata);
-    vi.mocked(client.listInboxMessages).mockResolvedValue({ project_id: "boss-dogfood", items: [] });
+    vi.mocked(client.listInboxMessages).mockResolvedValue({ project_id: "boss-dogfood", limit: 50, offset: 0, items: [] });
     const f1 = await fetchOutboxFeed();
     const f2 = await fetchOutboxFeed();
     const i1 = await fetchInboxFeed();
