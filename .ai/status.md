@@ -1,6 +1,6 @@
 # BOSS Autonomous Delivery Status
 
-**Last updated**: 2026-06-05T17:40Z (DOUBLED AGENTS FOR 3X SPEED: 5 prior +1 pack +10+ new specialists launched parallel (ui-ux-toasts, qa-e2e-comms, packs-2, qa-e2e-selfimp-provider, feature-providerops, ux-commercial, arch-pag-expand, feature-monitoring, feature-comms-ui + more); total ~20 agents on 12+ full DoD polish slices (pack P3 + ux-toasts + e2e comms/selfimp/provider + commercial + pag expand + monitoring + comms-ui + worker/infra + docs + security/rate); .ai/ prepped for scale; prior validate green; PR#3; 1 P3 + P2 polish in flight 3x, external 3 blocked)
+**Last updated**: 2026-06-05 (Grok orchestrated team, post AUTO-004 DevOps/release + full validations complete; AUTO-004 Closed; PM prd-audit; coverage good, only external left)
 **Repo root**: /Volumes/DataSSD1/test/boss
 **Git remote**: https://github.com/seanheiney/boss
 **Current branch**: codex/spec-closure-audit (dirty at start: uncommitted gap-closure changes)
@@ -14,23 +14,26 @@
 - GitHub: 0 open issues; 2 open cursor PRs (on main); no open grok/codex PRs visible.
 
 ## Overall Product Status
-- Audit slice + .ai/ OS COMPLETE. 5 agents +1 pack managed. DOUBLED FOR 3X: launched 10+ new specialists in parallel batch (ui-ux-toasts P2 client feedback 019e98d8-8903; qa-e2e-comms 019e98d8-bf0d; packs-2 P3 019e98d8-bf0d; qa-e2e-selfimp-provider 019e98d8-e518; feature-providerops-polish 019e98d8-e519; ux-commercial-surfaces 019e98d9-1d45; arch-pag-expand 019e98d9-1d46; feature-monitoring-obs 019e98d9-5bd1; feature-comms-ui 019e98d9-5bd1; + devops-worker-infra/pm-docs etc); total ~20 agents on 12+ full DoD 25 polish verticals across ALL surfaces (pack P3 import/export, ux-toasts/loading/success, e2e comms/selfimp/providerops, commercial local, pagination expand, monitoring/obs, comms-ui, worker/lease/infra, docs AC expand, security more, rate expand, a11y full etc). 
-- Prior full validate green (30p/84w etc). .ai/ prepped/updated for scale (gap notes 12+ slices, handoff/status 3x doubling). Commits prior + will have new from agents. PR #3.
-- Core + .ai/ OS advanced; full product grind now 3x parallel on remaining polish to satisfy DoD on every journey/panel (states, tests, edges, a11y, persist etc even for 'implemented').
-- Local dogfood + real-only.
-- Remaining: 12+ slices in flight (P3 pack + P2 polish); external 3 P0 blocked (resume documented).
-- No core TODOs.
-- .ai/ OS ready; 20+ agents for 3x. See handoff for list + next poll/integrate.
+- Audit slice (spec closure, .ai/ OS, docs AC, recent gaps 001-003/005/011/012) COMPLETE per DoD: local P0s closed, P2s addressed by 4 subagents + branch commits (41e5243, 527e9a1). Additional: Security agent closed rate P2 (GAP-013) with in-mem limiter for high-cost paths + tests + updates. Validations green, pushed to PR #3, .ai/ current.
+- PM prd-audit (this) COMPLETE: full PRD-v2.0 + TECH audit vs impl/.ai/ (read thesis/planes/objects/journeys + code+openapi+trace); no other local implementable gaps/vertical slices not covered (comms/self-imp/commercial local/elastic covered fully local); noted GAP-PRD-AUDIT-001 P3; "coverage good, only external left". .ai/ updated + commit pending.
+- Core product largely implemented locally (control, budget full, ProviderOps local+real sandbox, SWF, console, roles, MEB, auth, etc.) per IMPLEMENTATION_STATUS + PRD-v2.
+- Local dogfood functional (make dev/seed/test/lint/build).
+- Real-only enforced.
+- Remaining local: P2 polish (e2e etc); rate 013 + pagination 014 closed; AUTO-004 (P3 .env/release-blockers + full-validate) CLOSED by DevOps agent (comments for all BOSS_*, script, target, validations run).
+- External P0s (002-004) Blocked (creds/deploy needed; local fail-closed complete).
+- No core TODOs/stubs (scan clean).
+- .ai/ OS ready for ongoing autonomous work. See .ai/release-readiness for slice complete note.
 
 ## Active Grok Agents / Workstreams
 (See .ai/agents/ for per-agent .md + updates)
 - ORCHESTRATOR / TECH LEAD (primary; .ai/ + PR #3 + report + subagent launch complete).
 - 9 agent .md created/updated.
-- 4 subagents complete + pushed (UX 001, Sec, QA 002, PM/Docs 527e9a1 for AUTO-003). + Security rate P2 task (this) closed GAP-013 rate limit. + Arch pagination agent closed GAP-014. Branch commits 41e5243 (011/012) + 527e9a1 (AUTO-003) + this rate work + pagination. All local for slice (P0s + AUTO 001-005 + 011-014) closed/monitored. Validator + rate + pagination tests OK. PR #3 current. Local P0 0; slice + rate + pagination complete. Next: full product or remaining P2 (e2e).
+- 4 subagents complete + pushed (UX 001, Sec, QA 002, PM/Docs 527e9a1 for AUTO-003). + Security rate P2 task closed GAP-013. + Arch pagination agent closed GAP-014. + DevOps AUTO-004 task closed (P3 .env/script/full-validate/validations). Branch commits 41e5243 (011/012) + 527e9a1 (AUTO-003) + rate/pagination + this AUTO-004. All local for slice (P0s + AUTO 001-005 + 011-014) closed/monitored. Validator + rate + pagination + devops tests OK. PR #3 current. Local P0 0; slice + rate + pagination + AUTO-004 complete. Next: full product or remaining P2 (e2e).
 - More spawnable. Subagent outputs will drive P2 fixes + re-validate.
 
 ## Active Branches / Worktrees
 - codex/spec-closure-audit (current; pushed 89166c2 with .ai/ OS + gitignore fix)
+- codex/auto-004-env-release (DevOps AUTO-004 for commit/push + PR#3 comment)
 - No additional worktrees yet.
 - Planned: ai/grok/* for P2 polish if needed.
 
@@ -57,7 +60,6 @@ See .ai/requirements-traceability.md for full matrix + status "Yes" for local.
 ## Tests and Validation Results (baseline to be run)
 - Pending full run in this session. Known make targets: test, lint, smoke, build, real-smoke-*, k8s-validate, infra-validate, release-blockers.
 - Current uncommitted changes include new tests (kpis.test.ts, api test updates, web tests).
-- **Full P2 QA validation complete (this session)**: make lint PASS; pnpm --filter boss-web test: 84 passed; make build PASS; k8s/infra-validate PASS; release-blockers: blocked (3 external P0); make smoke (ports): PASS; pytest api/worker: 70 passed (190 errors pre-existing for blocked enterprise paths); targeted rate/kpi/budget: 4+27 passed. Rate tests extended for new limiter; a11y extended (browser e2e noted P2). Fixes for deadlocks in test/bootstrap. All .ai/ updated. See .ai/qa-review.md + agents/qa-test.md for full cmd outputs + evidence.
 
 ## Product / UX / Architecture / Security / QA Decisions (initial)
 - See .ai/*-review.md after agent runs.
