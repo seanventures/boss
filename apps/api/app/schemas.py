@@ -1129,6 +1129,25 @@ class BudgetReleaseResponse(BaseModel):
     message: str
 
 
+class BudgetConsumeRequest(BaseModel):
+    project_id: str
+    reservation_id: str
+    receipt_id: str
+    category: str
+    skill_or_model_id: str
+    estimated_usd_micros: int = Field(ge=0)
+    actual_usd_micros: Optional[int] = Field(default=None, ge=0)
+    actor: str
+
+
+class BudgetConsumeResponse(BaseModel):
+    status: str
+    reservation_id: str
+    budget_state: str
+    message: str
+    cost_receipt: CostReceiptSummary
+
+
 class BudgetStatusResponse(BaseModel):
     scope_type: str
     scope_id: str
@@ -1145,6 +1164,22 @@ class BudgetStatusResponse(BaseModel):
     time_to_cap_seconds: Optional[int] = None
     utilization_ratio: float
     active_reservations_count: int
+    top_cost_drivers: list[dict[str, Any]]
+
+
+class BudgetForecastResponse(BaseModel):
+    scope_type: str
+    scope_id: str
+    horizon_hours: int
+    budget_state: str
+    cap_usd_micros: int
+    reserved_usd_micros: int
+    actual_usd_micros: int
+    available_usd_micros: int
+    committed_usd_micros: int
+    burn_rate_usd_micros_per_hour: int
+    forecasted_usd_micros: int
+    time_to_cap_seconds: Optional[int] = None
     top_cost_drivers: list[dict[str, Any]]
 
 
@@ -1500,6 +1535,8 @@ class ReceiptResponse(BaseModel):
 class ReceiptListResponse(BaseModel):
     project_id: str
     items: list[ReceiptResponse]
+    limit: int
+    offset: int
 
 
 class JobSummary(BaseModel):
@@ -1513,6 +1550,23 @@ class JobSummary(BaseModel):
     max_attempts: int
     attempt: int
     run_after: str
+
+
+class JobListItem(JobSummary):
+    task_title: Optional[str] = None
+    lease_owner: Optional[str] = None
+    lease_expires_at: Optional[str] = None
+    heartbeat_at: Optional[str] = None
+    last_error: dict[str, Any] = Field(default_factory=dict)
+    created_at: str
+    updated_at: str
+
+
+class JobListResponse(BaseModel):
+    project_id: str
+    items: list[JobListItem]
+    limit: int
+    offset: int
 
 
 class JobCreateRequest(BaseModel):
@@ -1710,7 +1764,10 @@ class TaskSummary(BaseModel):
 
 
 class TaskListResponse(BaseModel):
+    project_id: str
     items: list[TaskSummary]
+    limit: int
+    offset: int
 
 
 class TaskCreateRequest(BaseModel):
@@ -1753,6 +1810,43 @@ class DepartmentCreateRequest(BaseModel):
 class DepartmentListResponse(BaseModel):
     project_id: str
     items: list[DepartmentSummary]
+    limit: int
+    offset: int
+
+
+class KpiSummary(BaseModel):
+    id: str
+    project_id: str
+    kpi_key: str
+    name: str
+    description: Optional[str] = None
+    owner_role_id: Optional[str] = None
+    target_value: float
+    current_value: float
+    unit: str
+    status: str
+    created_by: str
+    created_at: str
+    updated_at: str
+
+
+class KpiCreateRequest(BaseModel):
+    project_id: str
+    kpi_key: str
+    name: str
+    description: Optional[str] = None
+    target_value: float = Field(gt=0)
+    current_value: float = Field(default=0, ge=0)
+    unit: str = "count"
+    owner_role_id: Optional[str] = None
+    actor: str = "ceo"
+
+
+class KpiListResponse(BaseModel):
+    project_id: str
+    items: list[KpiSummary]
+    limit: int
+    offset: int
 
 
 class PolicyRecordSummary(BaseModel):
@@ -1780,6 +1874,8 @@ class PolicyRecordCreateRequest(BaseModel):
 class PolicyRecordListResponse(BaseModel):
     project_id: str
     items: list[PolicyRecordSummary]
+    limit: int
+    offset: int
 
 
 class PlanSummary(BaseModel):
@@ -1813,6 +1909,8 @@ class PlanCreateRequest(BaseModel):
 class PlanListResponse(BaseModel):
     project_id: str
     items: list[PlanSummary]
+    limit: int
+    offset: int
 
 
 class MeetingSummary(BaseModel):
@@ -1902,6 +2000,8 @@ class MeetingRunRequest(BaseModel):
 class MeetingListResponse(BaseModel):
     project_id: str
     items: list[MeetingSummary]
+    limit: int
+    offset: int
 
 
 class SelfImprovementProposalCreateRequest(BaseModel):
@@ -1974,6 +2074,8 @@ class SelfImprovementProposalDetail(SelfImprovementProposalSummary):
 class SelfImprovementProposalListResponse(BaseModel):
     project_id: str
     items: list[SelfImprovementProposalSummary]
+    limit: int
+    offset: int
 
 
 class SelfImprovementCanaryRequest(BaseModel):
@@ -2107,6 +2209,8 @@ class EventItem(BaseModel):
 class EventFeedResponse(BaseModel):
     project_id: str
     items: list[EventItem]
+    limit: int
+    offset: int
 
 
 class ArtifactSummary(BaseModel):
@@ -2636,6 +2740,51 @@ class PackInstallRequest(BaseModel):
     actor: str = "system"
 
 
+class PackImportRequest(BaseModel):
+    project_id: str
+    yaml_content: str
+    actor: str = "system"
+
+
+class SecretRefSummary(BaseModel):
+    id: str
+    project_id: str
+    ref_kind: str
+    ref_key: str
+    provider: Optional[str] = None
+    status: str
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    created_by: str
+    created_at: str
+    updated_at: str
+    credential_ref: str
+
+
+class SecretRefListResponse(BaseModel):
+    project_id: str
+    items: list[SecretRefSummary]
+    limit: int
+    offset: int
+
+
+class SecretRefCreateRequest(BaseModel):
+    project_id: str
+    ref_kind: str
+    ref_key: str
+    provider: Optional[str] = None
+    status: str = "active"
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    actor: str = "system"
+
+
+class SecretRefUpdateRequest(BaseModel):
+    project_id: str
+    provider: Optional[str] = None
+    status: Optional[str] = None
+    metadata: Optional[dict[str, Any]] = None
+    actor: str = "system"
+
+
 class AgentModuleSummary(BaseModel):
     module_id: str
     version: str
@@ -3151,6 +3300,8 @@ class ResourceSyncRunSummary(BaseModel):
     resources_seen: int
     resources_changed: int
     costs_seen: int = 0
+    billing_status: Optional[str] = None
+    billing_message: Optional[str] = None
     provider_health_id: Optional[str] = None
     drift_report_id: Optional[str] = None
     deadletter_id: Optional[str] = None
@@ -3196,6 +3347,8 @@ class ExternalResourceSummary(BaseModel):
 class ExternalResourceListResponse(BaseModel):
     project_id: str
     items: list[ExternalResourceSummary]
+    limit: int
+    offset: int
 
 
 class CostEventSummary(BaseModel):
@@ -3222,6 +3375,8 @@ class CostEventSummary(BaseModel):
 class CostEventListResponse(BaseModel):
     project_id: str
     items: list[CostEventSummary]
+    limit: int
+    offset: int
 
 
 class CostAnomalySummary(BaseModel):
@@ -3245,6 +3400,8 @@ class CostAnomalySummary(BaseModel):
 class CostAnomalyListResponse(BaseModel):
     project_id: str
     items: list[CostAnomalySummary]
+    limit: int
+    offset: int
 
 
 class ProviderHealthSummary(BaseModel):
@@ -3264,6 +3421,8 @@ class ProviderHealthSummary(BaseModel):
 class ProviderHealthListResponse(BaseModel):
     project_id: str
     items: list[ProviderHealthSummary]
+    limit: int
+    offset: int
 
 
 class DriftReportSummary(BaseModel):
@@ -3283,6 +3442,8 @@ class DriftReportSummary(BaseModel):
 class DriftReportListResponse(BaseModel):
     project_id: str
     items: list[DriftReportSummary]
+    limit: int
+    offset: int
 
 
 class ReconciliationRunSummary(BaseModel):
@@ -3304,6 +3465,8 @@ class ReconciliationRunSummary(BaseModel):
 class ReconciliationRunListResponse(BaseModel):
     project_id: str
     items: list[ReconciliationRunSummary]
+    limit: int
+    offset: int
 
 
 class DeploymentTargetSummary(BaseModel):
@@ -3329,6 +3492,8 @@ class DeploymentTargetSummary(BaseModel):
 class DeploymentTargetListResponse(BaseModel):
     project_id: str
     items: list[DeploymentTargetSummary]
+    limit: int
+    offset: int
 
 
 class DeploymentTargetCreateRequest(BaseModel):
@@ -3369,6 +3534,8 @@ class DeploymentEnvironmentPolicySummary(BaseModel):
 class DeploymentEnvironmentPolicyListResponse(BaseModel):
     project_id: str
     items: list[DeploymentEnvironmentPolicySummary]
+    limit: int
+    offset: int
 
 
 class DeploymentEnvironmentPolicyUpsertRequest(BaseModel):
@@ -3558,6 +3725,8 @@ class ResourceReceiptSummary(BaseModel):
 class ResourceReceiptListResponse(BaseModel):
     project_id: str
     items: list[ResourceReceiptSummary]
+    limit: int
+    offset: int
 
 
 class WorkerPoolSummary(BaseModel):

@@ -2,6 +2,34 @@
 
 All notable changes to BOSS are documented in this file.
 
+## v0.6.0 - 2026-06-03
+
+Consolidation release restoring production API contracts and commercial services after bad merge conflict resolution on main.
+
+### Fixed
+
+- Restored `commercial.py` hosted Account Connect, marketplace, and auth-session logic removed during merge conflict resolution.
+- Restored API pagination on tasks, KPIs, receipts, and events; pack import/export HTTP routes; `GET /v1/jobs`; and SecretRef CRUD endpoints.
+- Restored `@boss/api-client` pagination helpers, pack import/export, job list, and SecretRef CRUD methods.
+- Restored OpenAPI contract parity with implemented routes (207 routes validated).
+- Restored SpecPack `import_pack` / `export_pack_yaml` with local-upload receipt dedupe keys.
+- Aligned regression tests with project-scoped SCIM member IDs and Account Connect entitlement isolation.
+
+## v0.5.0 - 2026-06-03
+
+API baseline release for the UI team: pack import/export, job list, SecretRef CRUD, OpenAPI parity CI, and a scaffolded BOSS Account Connect service.
+
+### Added
+
+- Added `POST /v1/packs/import` and `GET /v1/packs/{pack_id}/export` HTTP endpoints backed by existing SpecPack service logic.
+- Added `GET /v1/jobs` list endpoint with status/kind/task filters, paging, and terminal-job inclusion controls.
+- Added SecretRef CRUD APIs (`GET/POST/PATCH/DELETE /v1/secret-refs`) with metadata-only storage and providerops actor enforcement.
+- Added OpenAPI route parity validation script and CI/Makefile gate (`make openapi-validate`).
+- Added `apps/account_connect` FastAPI/Postgres service matching the `AccountConnectAdapter` contract in `commercial.py`.
+- Added local Account Connect docker-compose service, postgres init database, and `.env.example` wiring.
+- Added staging Helm deploy and cluster validation recording scripts.
+- Extended `@boss/api-client` with `importPack`, `exportPack`, `listJobs`, and SecretRef CRUD helpers.
+
 ## v0.4.1 - 2026-06-05
 
 Patch release for the validated `main` rollout of the v0.4 commercial, enterprise, ProviderOps, Model Entitlement Broker, and infrastructure readiness work.

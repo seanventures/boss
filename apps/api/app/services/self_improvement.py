@@ -26,7 +26,7 @@ class SelfImprovementService:
         self.intake = CommandIntakeService(settings)
 
     def list_proposals(
-        self, connection: Connection, project_id: str, limit: int
+        self, connection: Connection, project_id: str, limit: int, offset: int = 0
     ) -> list[dict[str, Any]]:
         rows = connection.execute(
             text(
@@ -39,10 +39,10 @@ class SelfImprovementService:
                 FROM self_improvement_proposals
                 WHERE project_id = :project_id
                 ORDER BY created_at DESC
-                LIMIT :limit
+                LIMIT :limit OFFSET :offset
                 """
             ),
-            {"project_id": project_id, "limit": limit},
+            {"project_id": project_id, "limit": limit, "offset": offset},
         ).mappings().all()
         return [dict(row) for row in rows]
 

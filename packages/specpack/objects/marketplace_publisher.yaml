@@ -1,0 +1,22 @@
+id: MarketplacePublisher
+version: 1
+description: Publisher identity for marketplace packs/modules, currently backed by module marketplace metadata and hosted marketplace listings.
+backing_runtime:
+  primary_tables: [agent_module_installs, hosted_marketplace_listings]
+fields:
+  - name: publisher_id
+    type: string
+    required: true
+  - name: display_name
+    type: string
+    required: true
+  - name: verification_status
+    type: enum
+    values: [local, verified, unverified, suspended]
+    required: true
+  - name: account_connect_org_id
+    type: string
+    required: false
+invariants:
+  - Hosted publisher identity requires Account Connect.
+  - Community/local installs may use local publisher metadata without hosted auth.

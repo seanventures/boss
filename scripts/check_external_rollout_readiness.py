@@ -137,6 +137,19 @@ def _community_local_mode_check(
     else:
         missing.append(".env.example BOSS_EDITION=community default")
 
+    # AUTO-004: verify bootstrap gate documented + default false (local only, fail-closed; P0 from SEC/GAP-007)
+    if env_example.exists():
+        ex_text = env_example.read_text(encoding="utf-8")
+        if "BOSS_BOOTSTRAP_SEED_API_ENABLED=false" in ex_text:
+            evidence.append(".env.example documents BOSS_BOOTSTRAP_SEED_API_ENABLED=false (fail-closed default per AGENTS/SEC)")
+        else:
+            missing.append(".env.example BOSS_BOOTSTRAP_SEED_API_ENABLED=false comment/doc")
+    bootstrap_env = (env.get("BOSS_BOOTSTRAP_SEED_API_ENABLED") or "").strip().lower()
+    if bootstrap_env in {"", "false"}:
+        evidence.append("env default or false: BOSS_BOOTSTRAP_SEED_API_ENABLED (seed API gated)")
+    elif bootstrap_env == "true":
+        evidence.append("env: BOSS_BOOTSTRAP_SEED_API_ENABLED=true (explicit dev only)")
+
     status = READY if not missing and env_edition in {"", "community"} else BLOCKED
     return ReadinessCheck(
         id="community_local_mode",
@@ -456,6 +469,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(json.dumps(report, indent=2, sort_keys=True))
     else:
         print(format_text(report))
+    if report["status"] == BLOCKED:
+        return 1
     if args.strict and report["status"] != READY:
         return 1
     return 0

@@ -40,7 +40,7 @@ export function emptyActivityFeed(reason?: string, projectId = PROJECT_ID): Acti
 
 export async function fetchActivityFeed(
   projectId = PROJECT_ID,
-  limit = 8,
+  limit = 25,
 ): Promise<ActivityFeed> {
   try {
     const payload = await client.listEvents(resolveProjectId(projectId), limit);

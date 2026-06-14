@@ -1,6 +1,8 @@
 import re
+import time
 
 from sqlalchemy import text
+from sqlalchemy.exc import OperationalError
 
 from .config import get_settings
 from .db import ensure_schema, get_engine

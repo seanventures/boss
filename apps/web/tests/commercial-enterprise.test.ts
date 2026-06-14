@@ -205,6 +205,134 @@ describe("commercial, enterprise, and marketplace feeds", async () => {
     });
   });
 
+  it("maps community edition (local, no hosted required) and falls back to edition-pack entitlements", async () => {
+    vi.mocked(client.getEdition).mockResolvedValueOnce({
+      project_id: "boss-dogfood",
+      edition_id: "community",
+      display_name: "BOSS Community",
+      status: "active",
+      account_connect_required: false,
+      account_connect_status: "not_required",
+      account_connect_org: undefined,
+      local_auth_allowed: true,
+      hosted_auth_required: false,
+      connection_mode: "disabled",
+      license_candidate: "open-source-candidate",
+      legal_review_required: false,
+      included_capabilities: ["core_control_plane", "local_workers"],
+      commercial_capabilities: ["core_control_plane"],
+      source_pack: "community_edition.yaml",
+      blocked_reason: undefined,
+    });
+    vi.mocked(client.listLicenseEntitlements).mockResolvedValueOnce({
+      project_id: "boss-dogfood",
+      edition: {} as never,
+      items: [
+        {
+          id: "ent_local_boss-dogfood_core_control_plane",
+          project_id: "boss-dogfood",
+          edition_id: "community",
+          account_connect_org_id: undefined,
+          scope_type: "project",
+          scope_id: "boss-dogfood",
+          capability_key: "core_control_plane",
+          capabilities: ["core_control_plane", "local_workers"],
+          status: "active",
+          source: "edition_pack",
+          metadata: { source_pack: "community_edition.yaml" },
+        },
+      ],
+    });
+    // other lists empty for community blocked-hosted
+    vi.mocked(client.listAccountConnectHealthChecks).mockResolvedValueOnce({ project_id: "boss-dogfood", items: [] });
+    vi.mocked(client.listAccountConnectAuthSessions).mockResolvedValueOnce({ project_id: "boss-dogfood", items: [] });
+    vi.mocked(client.listAccountConnectTeamInvites).mockResolvedValueOnce({ project_id: "boss-dogfood", items: [] });
+    vi.mocked(client.listAccountConnectBillingPortalSessions).mockResolvedValueOnce({ project_id: "boss-dogfood", items: [] });
+
+    const feed = await fetchCommercialFeed("boss-dogfood");
+
+    expect(feed.apiReachable).toBe(true);
+    expect(feed.edition?.editionId).toBe("community");
+    expect(feed.edition?.localAuthAllowed).toBe(true);
+    expect(feed.edition?.accountConnectRequired).toBe(false);
+    expect(feed.edition?.status).toBe("active");
+    expect(feed.entitlements[0]).toMatchObject({ capabilityKey: "core_control_plane", source: "edition_pack" });
+    expect(feed.healthChecks).toEqual([]);
+    expect(feed.authSessions).toEqual([]);
+  });
+
+  it("maps blocked cloud edition (account_connect_required, not linked) with empty hosted lists + blockedReason", async () => {
+    vi.mocked(client.getEdition).mockResolvedValueOnce({
+      project_id: "boss-dogfood",
+      edition_id: "cloud",
+      display_name: "BOSS Cloud",
+      status: "blocked_account_connect_required",
+      account_connect_required: true,
+      account_connect_status: "not_linked",
+      account_connect_org: undefined,
+      local_auth_allowed: false,
+      hosted_auth_required: true,
+      connection_mode: "cloud_required",
+      license_candidate: "source-available-commercial",
+      legal_review_required: true,
+      included_capabilities: ["cloud_auth"],
+      commercial_capabilities: ["cloud_auth", "marketplace_install"],
+      source_pack: "cloud_edition.yaml",
+      blocked_reason: "account_connect_required",
+    });
+    vi.mocked(client.listLicenseEntitlements).mockResolvedValueOnce({
+      project_id: "boss-dogfood",
+      edition: {} as never,
+      items: [], // hosted not linked, only would have from edition but status blocked
+    });
+    vi.mocked(client.listAccountConnectHealthChecks).mockResolvedValueOnce({ project_id: "boss-dogfood", items: [] });
+    vi.mocked(client.listAccountConnectAuthSessions).mockResolvedValueOnce({ project_id: "boss-dogfood", items: [] });
+    vi.mocked(client.listAccountConnectTeamInvites).mockResolvedValueOnce({ project_id: "boss-dogfood", items: [] });
+    vi.mocked(client.listAccountConnectBillingPortalSessions).mockResolvedValueOnce({ project_id: "boss-dogfood", items: [] });
+
+    const feed = await fetchCommercialFeed("boss-dogfood");
+
+    expect(feed.apiReachable).toBe(true);
+    expect(feed.edition?.status).toBe("blocked_account_connect_required");
+    expect(feed.edition?.blockedReason).toBe("account_connect_required");
+    expect(feed.edition?.accountConnectStatus).toBe("not_linked");
+    expect(feed.entitlements).toEqual([]);
+    // marketplace would be blocked too (see agent-modules + commercial context)
+  });
+
+  it("handles marketplace blocked via commercial edition context + empty agent module marketplace feeds", async () => {
+    const { fetchAgentModuleFeed } = await import("../lib/agent-modules");
+    // reuse client mock; simulate reachable but no hosted due to no link (blocked)
+    vi.mocked(client.listAgentModules).mockResolvedValueOnce({ project_id: "boss-dogfood", items: [] });
+    vi.mocked(client.listAgentModuleInstallRecords).mockResolvedValueOnce({ project_id: "boss-dogfood", items: [] });
+    vi.mocked(client.listHostedMarketplaceListings).mockResolvedValueOnce({ project_id: "boss-dogfood", items: [] });
+    vi.mocked(client.listHostedMarketplaceSyncRuns).mockResolvedValueOnce({ project_id: "boss-dogfood", items: [] });
+
+    const feed = await fetchAgentModuleFeed("boss-dogfood");
+    expect(feed.apiReachable).toBe(true);
+    expect(feed.hostedListings).toEqual([]);
+    expect(feed.marketplaceSyncRuns).toEqual([]);
+    // UI polish renders "No hosted... (Hosted catalog requires...)" using commercial.edition.blocked
+  });
+
+  it("maps commercial feed error to empty blocked state (for marketplace / acct connect surfaces)", async () => {
+    vi.mocked(client.getEdition).mockRejectedValueOnce(new Error("commercial api down"));
+    vi.mocked(client.listLicenseEntitlements).mockRejectedValueOnce(new Error("entitlements down"));
+    vi.mocked(client.listAccountConnectHealthChecks).mockRejectedValueOnce(new Error("health down"));
+    vi.mocked(client.listAccountConnectAuthSessions).mockRejectedValueOnce(new Error("auth down"));
+    vi.mocked(client.listAccountConnectTeamInvites).mockRejectedValueOnce(new Error("invites down"));
+    vi.mocked(client.listAccountConnectBillingPortalSessions).mockRejectedValueOnce(new Error("billing down"));
+
+    const feed = await fetchCommercialFeed("boss-dogfood");
+
+    expect(feed.apiReachable).toBe(false);
+    expect(feed.blockedReason).toContain("commercial api down");
+    expect(feed.edition).toBeUndefined();
+    expect(feed.entitlements).toEqual([]);
+    expect(feed.healthChecks).toEqual([]);
+    // ensures UI shows blocked for edition/packs/marketplace/account-connect
+  });
+
   it("maps enterprise cluster, SCIM, and support/SLA state", async () => {
     vi.mocked(client.listEnterpriseClusters).mockResolvedValueOnce({
       project_id: "boss-dogfood",

@@ -50,6 +50,14 @@ function parseInteger(value: FormDataEntryValue | null, fallback: number): numbe
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
+function parseNumber(value: FormDataEntryValue | null, fallback: number): number {
+  if (typeof value !== "string" || !value.trim()) {
+    return fallback;
+  }
+  const parsed = Number.parseFloat(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
 function parseRequiredMetrics(
   value: FormDataEntryValue | null,
 ): Record<string, unknown> {
@@ -217,6 +225,29 @@ export async function submitCommandAction(formData: FormData): Promise<void> {
     getActor(formData),
   );
   await client.proposeCommand(payload);
+  revalidatePath("/");
+}
+
+export async function createKpiAction(formData: FormData): Promise<void> {
+  const targetValue = parseNumber(formData.get("target_value"), 0);
+  if (targetValue <= 0) {
+    throw new Error("target_value must be greater than zero");
+  }
+  const currentValue = parseNumber(formData.get("current_value"), 0);
+  if (currentValue < 0) {
+    throw new Error("current_value must be greater than or equal to zero");
+  }
+  await client.createKpi({
+    project_id: getProjectId(formData),
+    kpi_key: String(formData.get("kpi_key") ?? ""),
+    name: String(formData.get("name") ?? ""),
+    description: String(formData.get("description") ?? "") || undefined,
+    target_value: targetValue,
+    current_value: currentValue,
+    unit: String(formData.get("unit") ?? "count") || "count",
+    owner_role_id: String(formData.get("owner_role_id") ?? "") || undefined,
+    actor: getActor(formData),
+  });
   revalidatePath("/");
 }
 

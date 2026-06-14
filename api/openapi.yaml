@@ -1019,6 +1019,7 @@ paths:
       responses:
         '200': { description: Metatron answer with references }
         '404': { description: Unknown project, task, or decision scope }
+        '429': { description: Rate limit exceeded for high-cost path (in-memory 10/min per IP+actor for local; prod uses external limiter) }
   /v1/health-snapshots:
     get:
       summary: List recent health snapshots for a project
@@ -1103,6 +1104,7 @@ paths:
       responses:
         '201': { description: Command accepted }
         '403': { description: Actor is not allowed to submit commands }
+        '429': { description: Rate limit exceeded for high-cost path (in-memory 10/min per IP+actor for local; prod uses external limiter) }
   /v1/tasks:
     get:
       summary: List tasks
@@ -1111,6 +1113,14 @@ paths:
           in: query
           required: true
           schema: { type: string }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, default: 50 }
+        - name: offset
+          in: query
+          required: false
+          schema: { type: integer, default: 0 }
       responses:
         '200': { description: Task list }
     post:
@@ -1162,6 +1172,14 @@ paths:
           in: query
           required: true
           schema: { type: string }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, default: 50 }
+        - name: offset
+          in: query
+          required: false
+          schema: { type: integer, default: 0 }
       responses:
         '200': { description: Department list }
     post:
@@ -1181,6 +1199,47 @@ paths:
                 actor: { type: string, default: ceo }
       responses:
         '201': { description: Department created or updated }
+  /v1/kpis:
+    get:
+      summary: List canonical KPIs for a project
+      parameters:
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, default: 50 }
+        - name: offset
+          in: query
+          required: false
+          schema: { type: integer, default: 0 }
+      responses:
+        '200': { description: KPI list }
+    post:
+      summary: Create or update a canonical KPI
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id, kpi_key, name, target_value]
+              properties:
+                project_id: { type: string }
+                kpi_key: { type: string }
+                name: { type: string }
+                description: { type: string }
+                target_value: { type: number, exclusiveMinimum: 0 }
+                current_value: { type: number, minimum: 0, default: 0 }
+                unit: { type: string, default: count }
+                owner_role_id: { type: string }
+                actor: { type: string, default: ceo }
+      responses:
+        '201': { description: KPI created or updated }
+        '400': { description: Invalid KPI payload or owner role }
+        '403': { description: Actor is not allowed to manage KPIs }
   /v1/policies:
     get:
       summary: List canonical policy records for a project
@@ -1189,6 +1248,14 @@ paths:
           in: query
           required: true
           schema: { type: string }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, default: 50 }
+        - name: offset
+          in: query
+          required: false
+          schema: { type: integer, default: 0 }
       responses:
         '200': { description: Policy record list }
     post:
@@ -1217,6 +1284,14 @@ paths:
           in: query
           required: true
           schema: { type: string }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, default: 50 }
+        - name: offset
+          in: query
+          required: false
+          schema: { type: integer, default: 0 }
       responses:
         '200': { description: Plan list }
     post:
@@ -1248,6 +1323,14 @@ paths:
           in: query
           required: true
           schema: { type: string }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, default: 50 }
+        - name: offset
+          in: query
+          required: false
+          schema: { type: integer, default: 0 }
       responses:
         '200': { description: Meeting list }
     post:
@@ -1515,6 +1598,10 @@ paths:
           in: query
           required: false
           schema: { type: integer, default: 25 }
+        - name: offset
+          in: query
+          required: false
+          schema: { type: integer, default: 0 }
       responses:
         '200': { description: Artifact list including data_boundary classifications }
   /v1/artifacts/{artifact_id}:
@@ -1728,6 +1815,43 @@ paths:
         '201': { description: Pack installed }
         '404': { description: Pack not found }
         '422': { description: Invalid pack or role spec }
+  /v1/packs/import:
+    post:
+      summary: Import a local PackSpec YAML into a project
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id, yaml_content]
+              properties:
+                project_id: { type: string }
+                yaml_content: { type: string }
+                actor: { type: string, default: system }
+      responses:
+        '201': { description: Pack imported with receipt and audit event }
+        '403': { description: Actor lacks pack_manage permission }
+        '422': { description: Invalid YAML or PackSpec }
+  /v1/packs/{pack_id}/export:
+    get:
+      summary: Export a pack as YAML for local import or review
+      parameters:
+        - name: pack_id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Pack YAML export
+          content:
+            application/x-yaml:
+              schema: { type: string }
+        '404': { description: Pack not found }
   /v1/agent-modules:
     get:
       summary: List packaged agent modules with install and entitlement status for a project
@@ -1974,11 +2098,11 @@ paths:
       responses:
         '200':
           description: Entitlement pools normalized from configured sources with capacity and policy state
-  /v1/entitlement-pools/{id}/probe:
+  /v1/entitlement-pools/{pool_id}/probe:
     post:
       summary: Record observed capacity for an entitlement pool with a durable CapacityReceipt
       parameters:
-        - name: id
+        - name: pool_id
           in: path
           required: true
           schema: { type: string }
@@ -2360,6 +2484,116 @@ paths:
           schema: { type: integer, default: 25 }
       responses:
         '200': { description: Routing log list including data_boundary classifications }
+  /v1/secret-refs:
+    get:
+      summary: List SecretRef metadata records for a project
+      parameters:
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+        - name: provider
+          in: query
+          required: false
+          schema: { type: string }
+        - name: status
+          in: query
+          required: false
+          schema: { type: string }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, default: 100 }
+        - name: offset
+          in: query
+          required: false
+          schema: { type: integer, default: 0 }
+      responses:
+        '200': { description: SecretRef list without secret material }
+    post:
+      summary: Create a SecretRef metadata record
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id, ref_kind, ref_key]
+              properties:
+                project_id: { type: string }
+                ref_kind:
+                  type: string
+                  enum: [env, vault, local_runner, platform_secret_store]
+                ref_key: { type: string }
+                provider: { type: string }
+                status:
+                  type: string
+                  enum: [active, disabled, rotation_due, revoked]
+                  default: active
+                metadata: { type: object }
+                actor: { type: string, default: system }
+      responses:
+        '201': { description: SecretRef created }
+        '403': { description: Actor lacks providerops_manage permission }
+        '422': { description: Invalid SecretRef payload }
+  /v1/secret-refs/{secret_ref_id}:
+    get:
+      summary: Get a SecretRef metadata record
+      parameters:
+        - name: secret_ref_id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: SecretRef detail }
+        '404': { description: SecretRef not found }
+    patch:
+      summary: Update SecretRef metadata or status
+      parameters:
+        - name: secret_ref_id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id]
+              properties:
+                project_id: { type: string }
+                provider: { type: string }
+                status:
+                  type: string
+                  enum: [active, disabled, rotation_due, revoked]
+                metadata: { type: object }
+                actor: { type: string, default: system }
+      responses:
+        '200': { description: SecretRef updated }
+        '404': { description: SecretRef not found }
+    delete:
+      summary: Revoke a SecretRef metadata record
+      parameters:
+        - name: secret_ref_id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+        - name: actor
+          in: query
+          required: false
+          schema: { type: string, default: system }
+      responses:
+        '204': { description: SecretRef revoked }
+        '404': { description: SecretRef not found }
   /v1/providers:
     get:
       summary: List ProviderOps provider accounts for a project
@@ -2436,11 +2670,20 @@ paths:
           in: query
           required: false
           schema: { type: integer, default: 100 }
+        - name: offset
+          in: query
+          required: false
+          schema: { type: integer, default: 0 }
       responses:
         '200': { description: External resource inventory with ownership, health, cost confidence, and links }
   /v1/resources/sync:
     post:
       summary: Run read-only provider inventory and billing reconciliation
+      description: >
+        Exact provider billing is synced only where a real provider billing API
+        is supported. Providers without direct billing support keep inventory
+        sync successful and return billing_status=unavailable with unknown cost
+        confidence instead of fabricating costs or failing the inventory run.
       requestBody:
         required: true
         content:
@@ -2453,8 +2696,9 @@ paths:
                 provider_account_id: { type: string }
                 actor: { type: string, default: system }
       responses:
-        '201': { description: Reconciliation runs with resources seen, costs seen, inventory_snapshot_artifact_id, and drift/deadletter status }
+        '200': { description: Reconciliation runs with resources seen, costs seen, billing status, inventory_snapshot_artifact_id, and drift/deadletter status }
         '403': { description: Actor is not allowed to run ProviderOps sync }
+        '429': { description: Rate limit exceeded for high-cost path (in-memory 10/min per IP+actor for local; prod uses external limiter) }
   /v1/costs:
     get:
       summary: List ProviderOps cost ledger events
@@ -2467,6 +2711,10 @@ paths:
           in: query
           required: false
           schema: { type: integer, default: 100 }
+        - name: offset
+          in: query
+          required: false
+          schema: { type: integer, default: 0 }
       responses:
         '200': { description: Cost events with cost layer and confidence labels }
   /v1/cost-anomalies:
@@ -2481,6 +2729,10 @@ paths:
           in: query
           required: false
           schema: { type: integer, default: 100 }
+        - name: offset
+          in: query
+          required: false
+          schema: { type: integer, default: 0 }
       responses:
         '200': { description: Cost anomalies with severity, threshold, decision, and recommended kill-switch actions }
   /v1/changesets:
@@ -2499,6 +2751,10 @@ paths:
           in: query
           required: false
           schema: { type: integer, default: 100 }
+        - name: offset
+          in: query
+          required: false
+          schema: { type: integer, default: 0 }
       responses:
         '200': { description: ChangeSets with policy result, quote, approval, and receipt expectations }
     post:
@@ -2583,6 +2839,10 @@ paths:
           in: query
           required: false
           schema: { type: integer, default: 100 }
+        - name: offset
+          in: query
+          required: false
+          schema: { type: integer, default: 0 }
       responses:
         '200': { description: Resource receipts linked to ChangeSets, providers, and general receipts }
   /v1/worker-pools:
@@ -2681,6 +2941,14 @@ paths:
           in: query
           required: true
           schema: { type: string }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, default: 50 }
+        - name: offset
+          in: query
+          required: false
+          schema: { type: integer, default: 0 }
       responses:
         '200': { description: Deployment targets with environments, resource refs, secrets, and rollback points }
     post:
@@ -2727,6 +2995,14 @@ paths:
           in: query
           required: true
           schema: { type: string }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, default: 50 }
+        - name: offset
+          in: query
+          required: false
+          schema: { type: integer, default: 0 }
       responses:
         '200': { description: Active and historical environment policies that gate provider-backed deployment runs }
     post:
@@ -2772,6 +3048,10 @@ paths:
           in: query
           required: false
           schema: { type: integer, default: 50, minimum: 1, maximum: 200 }
+        - name: offset
+          in: query
+          required: false
+          schema: { type: integer, default: 0 }
       responses:
         '200': { description: Deployment runs with release packet, ChangeSet, health, rollback, and decision links }
     post:
@@ -2832,6 +3112,10 @@ paths:
           in: query
           required: false
           schema: { type: integer, default: 100 }
+        - name: offset
+          in: query
+          required: false
+          schema: { type: integer, default: 0 }
       responses:
         '200': { description: Provider health, API availability, quota, and rate-limit status }
   /v1/drift-reports:
@@ -2846,6 +3130,10 @@ paths:
           in: query
           required: false
           schema: { type: integer, default: 100 }
+        - name: offset
+          in: query
+          required: false
+          schema: { type: integer, default: 0 }
       responses:
         '200': { description: Drift reports classifying unmanaged, orphaned, security, and production impact }
   /v1/reconciliation-runs:
@@ -2860,6 +3148,10 @@ paths:
           in: query
           required: false
           schema: { type: integer, default: 100 }
+        - name: offset
+          in: query
+          required: false
+          schema: { type: integer, default: 0 }
       responses:
         '200': { description: Provider inventory and cost reconciliation run history }
   /v1/comms/policies:
@@ -2913,6 +3205,10 @@ paths:
           in: query
           required: false
           schema: { type: integer, default: 50 }
+        - name: offset
+          in: query
+          required: false
+          schema: { type: integer, default: 0 }
       responses:
         '200': { description: Outbox list including data_boundary classifications }
     post:
@@ -3005,6 +3301,10 @@ paths:
           in: query
           required: false
           schema: { type: integer, default: 50 }
+        - name: offset
+          in: query
+          required: false
+          schema: { type: integer, default: 0 }
       responses:
         '200': { description: Inbox list including data_boundary classifications }
   /v1/comms/inbox/ingest:
@@ -3180,6 +3480,39 @@ paths:
         '409': { description: Invalid transition }
         '422': { description: Validation error }
   /v1/jobs:
+    get:
+      summary: List jobs for a project
+      parameters:
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+        - name: status
+          in: query
+          required: false
+          schema: { type: string }
+        - name: kind
+          in: query
+          required: false
+          schema: { type: string }
+        - name: task_id
+          in: query
+          required: false
+          schema: { type: string }
+        - name: include_terminal
+          in: query
+          required: false
+          schema: { type: boolean, default: true }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, default: 50 }
+        - name: offset
+          in: query
+          required: false
+          schema: { type: integer, default: 0 }
+      responses:
+        '200': { description: Paginated job list with queue metadata }
     post:
       summary: Create job
       requestBody:
@@ -3204,6 +3537,20 @@ paths:
                 run_after_seconds: { type: integer, default: 0 }
       responses:
         '201': { description: Created }
+  /v1/bootstrap/seed:
+    post:
+      summary: Explicitly reseed local bootstrap data when API seeding is enabled
+      description: >
+        Fails closed unless BOSS_BOOTSTRAP_SEED_API_ENABLED is true. If the
+        default project already exists, the actor must have member_manage.
+      parameters:
+        - name: actor
+          in: query
+          required: false
+          schema: { type: string, default: ceo }
+      responses:
+        '200': { description: Seed completed and audit event recorded }
+        '403': { description: Seed API disabled or actor lacks member_manage }
   /v1/worker/poll:
     post:
       summary: Worker polls for leased job
@@ -3383,6 +3730,65 @@ paths:
                 reason: { type: string }
       responses:
         '200': { description: Quote result }
+  /v1/budget/forecast:
+    get:
+      summary: Forecast project spend over a requested horizon
+      parameters:
+        - name: scope_type
+          in: query
+          required: true
+          schema: { type: string, enum: [project] }
+        - name: scope_id
+          in: query
+          required: true
+          schema: { type: string }
+        - name: horizon_hours
+          in: query
+          required: false
+          schema: { type: integer, default: 24, minimum: 1, maximum: 8784 }
+      responses:
+        '200':
+          description: Budget forecast
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - scope_type
+                  - scope_id
+                  - horizon_hours
+                  - budget_state
+                  - cap_usd_micros
+                  - reserved_usd_micros
+                  - actual_usd_micros
+                  - available_usd_micros
+                  - committed_usd_micros
+                  - burn_rate_usd_micros_per_hour
+                  - forecasted_usd_micros
+                  - top_cost_drivers
+                properties:
+                  scope_type: { type: string }
+                  scope_id: { type: string }
+                  horizon_hours: { type: integer }
+                  budget_state: { type: string }
+                  cap_usd_micros: { type: integer }
+                  reserved_usd_micros: { type: integer }
+                  actual_usd_micros: { type: integer }
+                  available_usd_micros: { type: integer }
+                  committed_usd_micros: { type: integer }
+                  burn_rate_usd_micros_per_hour: { type: integer }
+                  forecasted_usd_micros: { type: integer }
+                  time_to_cap_seconds:
+                    type: integer
+                    nullable: true
+                  top_cost_drivers:
+                    type: array
+                    items:
+                      type: object
+                      required: [skill_or_model_id, amount_usd_micros]
+                      properties:
+                        skill_or_model_id: { type: string }
+                        amount_usd_micros: { type: integer }
   /v1/budget/reserve:
     post:
       summary: Internal budget reservation endpoint
@@ -3419,6 +3825,36 @@ paths:
                 reason: { type: string }
       responses:
         '200': { description: Reservation released or current status returned }
+  /v1/budget/consume:
+    post:
+      summary: Consume an active reservation and record receipt-linked actual or estimated spend
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - project_id
+                - reservation_id
+                - receipt_id
+                - category
+                - skill_or_model_id
+                - estimated_usd_micros
+                - actor
+              properties:
+                project_id: { type: string }
+                reservation_id: { type: string }
+                receipt_id: { type: string }
+                category: { type: string }
+                skill_or_model_id: { type: string }
+                estimated_usd_micros: { type: integer, minimum: 0 }
+                actual_usd_micros: { type: integer, minimum: 0 }
+                actor: { type: string }
+      responses:
+        '200': { description: Reservation consumed and CostReceipt recorded }
+        '403': { description: Actor is not allowed to manage budgets }
+        '409': { description: Active reservation or receipt is missing }
   /v1/openai/plans:
     post:
       summary: Create a real OpenAI-backed plan artifact behind a reservation
@@ -3805,6 +4241,10 @@ paths:
           in: query
           required: false
           schema: { type: integer, default: 50 }
+        - name: offset
+          in: query
+          required: false
+          schema: { type: integer, default: 0 }
       responses:
         '200': { description: Receipt list including data_boundary classifications }
   /v1/change-journal:
@@ -3914,6 +4354,10 @@ paths:
           in: query
           required: false
           schema: { type: integer, default: 50 }
+        - name: offset
+          in: query
+          required: false
+          schema: { type: integer, default: 0 }
       responses:
         '200': { description: Events }
   /v1/deadletters:
@@ -3928,6 +4372,10 @@ paths:
           in: query
           required: false
           schema: { type: integer, default: 50 }
+        - name: offset
+          in: query
+          required: false
+          schema: { type: integer, default: 0 }
       responses:
         '200': { description: Deadletters }
   /v1/deadletters/{deadletter_id}/incident:

@@ -2,7 +2,7 @@
 
 BOSS, the Business Operating System Sentinel, is a financially controlled autonomous company operating system. This repository is the real control plane and dogfood environment for BOSS itself.
 
-Current release: `v0.4.1`
+Current release: `v0.6.0`
 
 ## Operating invariants
 
@@ -79,7 +79,7 @@ If a required credential is missing, the API must fail closed and create visible
 - `make smoke`: run a local schema/bootstrap smoke check
 - `make k8s-validate`: validate Kubernetes and Helm deployment guardrails
 - `make infra-validate`: validate the environment scaling and rollout profile matrix
-- `make release-blockers`: report external hosted/provider rollout blockers without making network calls
+- `make release-blockers`: report external hosted/provider rollout blockers without making network calls; exits non-zero when required local prerequisites are blocked
 - `make real-smoke-plan`: run a real reservation -> OpenAI plan flow against local Postgres
 - `make real-smoke-pr`: run a real reservation -> queued PR job -> leased worker -> sandbox PR proposal flow
 - `make real-smoke-merge`: run the full sandbox PR proposal flow and, when merge policy is enabled, approve and execute the merge job

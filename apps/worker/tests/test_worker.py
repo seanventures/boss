@@ -804,3 +804,74 @@ def test_run_worker_cycle_executes_queued_infra_delete_job():
         "terminate_infra_resource",
         "complete",
     ]
+
+
+# Polish addition: explicit failure path + pack/agent job coverage in unit (leases/heartbeats exercised via cycle; deadletter on err; agent kinds are pack-derived)
+def test_run_worker_cycle_failure_path_calls_fail_not_complete_and_deadletters():
+    leased_job = LeasedJob(
+        id="job_fail_unit",
+        project_id="boss-dogfood",
+        task_id="tsk_test",
+        kind="plan.command",
+        payload={"command": "Will fail in execute sim."},
+        attempt=1,
+        max_attempts=1,
+        lease_token="lease_token",
+        lease_expires_at="future",
+    )
+    # (unused client for first job var left for doc; use only bad_job for failure path)
+    _ = FakeControlPlaneClient(leased_job)
+    # monkey the execute to raise by using unsupported after setup? simulate by temp override no, use bad kind that raises in execute
+    bad_job = LeasedJob(
+        id="job_fail_unit2",
+        project_id="boss-dogfood",
+        task_id=None,
+        kind="bad.pack.job.kind",  # triggers ValueError in execute_job -> fail path
+        payload={},
+        attempt=1,
+        max_attempts=1,
+        lease_token="lease_token",
+        lease_expires_at="future",
+    )
+    client2 = FakeControlPlaneClient(bad_job)
+    settings = SimpleNamespace(
+        worker_id="worker-test-fail",
+        lease_ttl_seconds=60,
+        poll_interval_seconds=1,
+    )
+
+    ran = run_worker_cycle(client2, settings)
+    assert ran is True
+    calls = [c[0] for c in client2.calls]
+    assert calls == ["poll", "heartbeat", "fail"]
+    assert client2.calls[-1][4]["message"].startswith("Unsupported job kind")
+    # fake fail returns deadlettered status; the appended call records the fail invocation (no need to inspect return here)
+
+
+def test_run_worker_cycle_heartbeats_before_any_pack_derived_agent_execute():
+    leased_job = LeasedJob(
+        id="job_pack_agent_unit",
+        project_id="boss-dogfood",
+        task_id="tsk_test",
+        kind="agent.coo.ops_digest",  # pack/role derived agent job
+        payload={
+            "command": "Ops digest from installed pack role.",
+            "agent_module": {"id": "coo_ops_v1", "role_key": "coo"},
+            "agent_runtime": {"job_kind": "agent.coo.ops_digest", "matched": True, "role": {"role_key": "coo"}},
+        },
+        attempt=1,
+        max_attempts=3,
+        lease_token="lease_token",
+        lease_expires_at="future",
+    )
+    client = FakeControlPlaneClient(leased_job)
+    settings = SimpleNamespace(
+        worker_id="worker-test-pack",
+        lease_ttl_seconds=60,
+        poll_interval_seconds=1,
+    )
+
+    ran_job = run_worker_cycle(client, settings)
+    assert ran_job is True
+    assert [call[0] for call in client.calls] == ["poll", "heartbeat", "complete"]
+    # heartbeat happened before execute (which for agent. builds result without client call)

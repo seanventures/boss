@@ -1,0 +1,29 @@
+id: ExecutionNode
+version: 1
+description: Local or cloud execution capacity node represented by worker pool health, worker heartbeats, and provider resource metadata.
+backing_runtime:
+  primary_tables: [worker_pools, jobs, external_resources, provider_health]
+fields:
+  - name: id
+    type: string
+    required: true
+  - name: project_id
+    type: string
+    required: true
+  - name: node_type
+    type: enum
+    values: [local_runner, cloud_worker, managed_worker]
+    required: true
+  - name: status
+    type: enum
+    values: [available, busy, degraded, draining, offline]
+    required: true
+  - name: worker_pool_id
+    type: string
+    required: false
+  - name: provider_resource_id
+    type: string
+    required: false
+invariants:
+  - Execution nodes cannot run work outside the lease protocol.
+  - Cloud execution must remain budget-governed.

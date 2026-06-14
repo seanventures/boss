@@ -16,11 +16,4 @@ spec:
         - podSelector:
             matchLabels:
               {{- include "boss.selectorLabels" . | nindent 14 }}
-    - from:
-        - namespaceSelector: {}
-      ports:
-        - protocol: TCP
-          port: 3000
-        - protocol: TCP
-          port: 8000
 {{- end }}

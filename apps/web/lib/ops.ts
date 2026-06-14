@@ -69,6 +69,7 @@ export async function fetchOpsQueueFeed(
     return mapOpsQueue(
       await client.inspectOpsQueue(resolveProjectId(projectId), 100, true),
     );
+    return mapOpsQueue(await client.inspectOpsQueue(resolveProjectId(projectId), limit));
   } catch (error) {
     if (error instanceof BossApiError) {
       return emptyOpsQueueFeed(`API returned ${error.status}`, projectId);

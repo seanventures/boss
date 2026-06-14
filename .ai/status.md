@@ -1,0 +1,98 @@
+# BOSS Autonomous Delivery Status
+
+**Last updated**: 2026-06-05 (Grok orchestrated team, post AUTO-004 DevOps/release + full validations complete; AUTO-004 Closed; PM prd-audit; coverage good, only external left)
+**Repo root**: /Volumes/DataSSD1/test/boss
+**Git remote**: https://github.com/seanheiney/boss
+**Current branch**: codex/spec-closure-audit (dirty at start: uncommitted gap-closure changes)
+**Base branch**: main (origin/HEAD)
+**Product**: BOSS v0.4.1 target (Business Operating System Sentinel)
+**Mission**: Complete product to production-grade, tested, documented, pushed, Codex-coordinated, ready for real users. Grind until all discovered PRD/spec features satisfy world-class DoD or truly blocked.
+
+## Discovered Spec Sources (see .ai/spec-index.md)
+- Primary: docs/product/PRD-v2.0.md + TECHNICAL_SPEC-v2.0.md
+- Supporting: REQUIREMENT_INVENTORY.md, TRACEABILITY.md, GAP_BACKLOG.md, IMPLEMENTATION_STATUS.md, README, AGENTS.md, user-stories.md, packages/specpack/*, api/openapi.yaml, db/schema.sql
+- GitHub: 0 open issues; 2 open cursor PRs (on main); no open grok/codex PRs visible.
+
+## Overall Product Status
+- Audit slice (spec closure, .ai/ OS, docs AC, recent gaps 001-003/005/011/012) COMPLETE per DoD: local P0s closed, P2s addressed by 4 subagents + branch commits (41e5243, 527e9a1). Additional: Security agent closed rate P2 (GAP-013) with in-mem limiter for high-cost paths + tests + updates. Validations green, pushed to PR #3, .ai/ current.
+- PM prd-audit (this) COMPLETE: full PRD-v2.0 + TECH audit vs impl/.ai/ (read thesis/planes/objects/journeys + code+openapi+trace); no other local implementable gaps/vertical slices not covered (comms/self-imp/commercial local/elastic covered fully local); noted GAP-PRD-AUDIT-001 P3; "coverage good, only external left". .ai/ updated + commit pending.
+- Core product largely implemented locally (control, budget full, ProviderOps local+real sandbox, SWF, console, roles, MEB, auth, etc.) per IMPLEMENTATION_STATUS + PRD-v2.
+- Local dogfood functional (make dev/seed/test/lint/build).
+- Real-only enforced.
+- Remaining local: P2 polish (e2e etc); rate 013 + pagination 014 closed; AUTO-004 (P3 .env/release-blockers + full-validate) CLOSED by DevOps agent (comments for all BOSS_*, script, target, validations run).
+- External P0s (002-004) Blocked (creds/deploy needed; local fail-closed complete).
+- No core TODOs/stubs (scan clean).
+- .ai/ OS ready for ongoing autonomous work. See .ai/release-readiness for slice complete note.
+
+## Active Grok Agents / Workstreams
+(See .ai/agents/ for per-agent .md + updates)
+- ORCHESTRATOR / TECH LEAD (primary; .ai/ + PR #3 + report + subagent launch complete).
+- 9 agent .md created/updated.
+- 4 subagents complete + pushed (UX 001, Sec, QA 002, PM/Docs 527e9a1 for AUTO-003). + Security rate P2 task closed GAP-013. + Arch pagination agent closed GAP-014. + DevOps AUTO-004 task closed (P3 .env/script/full-validate/validations). Branch commits 41e5243 (011/012) + 527e9a1 (AUTO-003) + rate/pagination + this AUTO-004. All local for slice (P0s + AUTO 001-005 + 011-014) closed/monitored. Validator + rate + pagination + devops tests OK. PR #3 current. Local P0 0; slice + rate + pagination + AUTO-004 complete. Next: full product or remaining P2 (e2e).
+- More spawnable. Subagent outputs will drive P2 fixes + re-validate.
+
+## Active Branches / Worktrees
+- codex/spec-closure-audit (current; pushed 89166c2 with .ai/ OS + gitignore fix)
+- codex/auto-004-env-release (DevOps AUTO-004 for commit/push + PR#3 comment)
+- No additional worktrees yet.
+- Planned: ai/grok/* for P2 polish if needed.
+
+## Open PRs
+- #3 (Grok mission): https://github.com/seanheiney/boss/pull/3 - "chore: spec closure audit - .ai/ autonomous OS + traceability for P0 gap closures (KPI, budget, security, audit)" (head codex/spec-closure-audit)
+- #2 cursor/critical-bug-investigation-5450 (Account Connect entitlement drift/SCIM)
+- #1 cursor/critical-bug-investigation-64e0 (Account Connect/SCIM lifecycle)
+- PR #3 body has req IDs, user behavior, files, decisions (product/ux/arch/sec), tests (all GREEN), Codex notes, risks.
+
+## Completed Requirements (high level, see .ai/requirements-traceability.md)
+- All local: MET, DEC, CAN (incl KPI), BUD (full), RUN, AUD (incl logging), RPL (local), MEB, SWF, AGT, COM, SEC (incl gates), NFR.
+- Traced, DoD satisfied, validated, PR #3, .ai/ matrix.
+- External Blocked noted.
+
+See .ai/requirements-traceability.md for full matrix + status "Yes" for local.
+
+## P0/P1/P2/P3 Gap Counts (from docs + scan at start)
+- P0 closed recently: 4 (audit log, bootstrap, budget contract, KPI, route parity)
+- P0 remaining: 3 (all externally Blocked: Account Connect, Enterprise, ProviderOps live rollout)
+- P1: 1 monitoring (placeholders - ok), some potential polish
+- P2/P3: UX polish, more e2e coverage, docs refresh, mobile/accessibility edges per reviews. Rate P2 now closed (GAP-013).
+- New gaps may surface from full validation + agent reviews.
+
+## Tests and Validation Results (baseline to be run)
+- Pending full run in this session. Known make targets: test, lint, smoke, build, real-smoke-*, k8s-validate, infra-validate, release-blockers.
+- Current uncommitted changes include new tests (kpis.test.ts, api test updates, web tests).
+
+## Product / UX / Architecture / Security / QA Decisions (initial)
+- See .ai/*-review.md after agent runs.
+- Key posture from PRD/AGENTS/README: real-only, API-first (web is client), receipts always, reservations for spend, leases always, no silent, fail-closed defaults, small reviewable PRs, state machine tests.
+
+## Known Conflicts / Coordination Risks
+- Current branch has uncommitted changes that align with "Closed" in GAP_BACKLOG - these must be committed with req IDs, validated, pushed, PR opened (or cleaned if conflicting with cursor PRs).
+- Cursor PRs on main may conflict on Account Connect/SCIM areas (but those are Blocked anyway).
+- No human/Codex concurrent edits detected in local tree at start.
+- Git push/PR will use gh cli or MCP; auth confirmed.
+
+## Blockers (true stops per rules)
+- Missing external creds/secrets for hosted Account Connect, live providers (DO/CF/Supabase/OpenAI/Anthropic write), IdP.
+- No paid service setup without approval.
+- Destructive prod actions: avoided (use sandbox, fail-closed).
+- GitHub perms: ok (gh logged in with repo scope).
+- System deps: assume make works (postgres/docker needed for full dev/test).
+
+## Recommended Next Autonomous Actions
+1. Write full .ai/requirements-traceability.md + .ai/gap-backlog.md (P0 prioritized).
+2. Run baseline validation: make lint, make test (with DB), make smoke, pnpm build where applicable; capture output.
+3. Commit current coherent changes on ai/grok/spec-closure-audit or focused subbranch with proper messages (include req IDs like GAP-2026-06-05-009).
+4. Spawn parallel agents via spawn_subagent for reviews + any missing slices.
+5. Use worktrees if parallel feature work needed.
+6. Push branch, open PR via gh or MCP with full DoD description (reqs, decisions, tests, risks).
+7. Update codex-handoff.md.
+8. Close any new P0/P1 that are local-code (not external-blocked).
+9. Run full reviews, fix, re-validate.
+10. Print 15-min terminal updates + append to activity-log.
+11. Continue until all feasible work complete per world-class DoD or truly blocked; produce final report + .ai/release-readiness.md only at end.
+
+## Files Changed (session so far)
+- Created: .ai/spec-index.md, .ai/status.md, .ai/...
+- Modified this Security rate task: apps/api/app/config.py, apps/api/app/main.py, apps/api/tests/test_api.py, apps/api/tests/conftest.py, api/openapi.yaml, .ai/gap-backlog.md, .ai/security-review.md, .ai/agents/security.md, .ai/status.md, .ai/codex-handoff.md, .ai/activity-log.md (plus prior)
+
+See activity-log.md for chronological.

@@ -152,4 +152,4 @@ make infra-validate
 make release-blockers
 ```
 
-`make release-blockers` is expected to report blocked external rollout paths on an unconfigured workstation. That is correct; it prevents local readiness from being confused with live hosted/provider readiness.
+`make release-blockers` is expected to report blocked external rollout paths on an unconfigured workstation and exit non-zero when required local prerequisites are blocked. That is correct; it prevents local readiness from being confused with live hosted/provider readiness in automated gates.

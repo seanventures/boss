@@ -1602,6 +1602,41 @@ details.wf-turn[open] > summary { border-bottom: 1px solid var(--border); margin
   gap: 7px;
 }
 
+.checkbox-field {
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  border: 1px solid rgba(162, 199, 255, 0.14);
+  border-radius: 16px;
+  padding: 12px 14px;
+  background: rgba(4, 10, 18, 0.42);
+}
+
+.checkbox-field input {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--accent);
+}
+
+.check-row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.check-row input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--accent);
+}
+
+.metric-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
 .field span {
   font-size: 0.7rem;
   letter-spacing: 0.1em;
@@ -1735,6 +1770,18 @@ select.input:focus {
   background: rgba(255, 255, 255, 0.09);
   border-color: var(--accent-line);
   transform: none;
+.inline-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.grid h2 {
+  margin: 0;
+  font-size: 1rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
 
 .button.ghost {
@@ -2174,3 +2221,73 @@ select.input:focus {
 .sbx-tel-alert { color: #ef4444; font-weight: 600; }
 .sbx-preserve { display: flex; gap: 8px; }
 .sbx-preserve .sbx-reason { flex: 1; }
+/* Client feedback toasts + loading/error banners (P2 ux-review + DoD for 5+ actions: KPI, command, provider, self-imp, budget) */
+.toast-container {
+  position: fixed;
+  bottom: 16px;
+  right: 16px;
+  z-index: 9999;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: 360px;
+}
+
+.toast {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 16px;
+  border-radius: 10px;
+  font-size: 0.95rem;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+  border: 1px solid rgba(162, 199, 255, 0.2);
+  backdrop-filter: blur(6px);
+}
+
+.toast-success {
+  background: rgba(10, 61, 46, 0.95);
+  color: #7fd7c8;
+  border-color: var(--accent);
+}
+
+.toast-error {
+  background: rgba(61, 26, 26, 0.95);
+  color: #f2b25b;
+  border-color: var(--warning);
+}
+
+.toast-dismiss {
+  background: transparent;
+  border: 0;
+  color: inherit;
+  font-size: 1.2rem;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0.7;
+  padding: 0 4px;
+}
+.toast-dismiss:hover,
+.toast-dismiss:focus {
+  opacity: 1;
+  outline: 2px solid currentColor;
+  outline-offset: 2px;
+}
+
+.loading {
+  margin-top: 8px;
+  color: var(--accent);
+  font-size: 0.9rem;
+  font-style: italic;
+}
+
+.error-banner {
+  margin-top: 8px;
+  padding: 8px 12px;
+  background: rgba(61, 26, 26, 0.6);
+  border: 1px solid var(--warning);
+  border-radius: 8px;
+  color: #f2b25b;
+  font-size: 0.9rem;
+}

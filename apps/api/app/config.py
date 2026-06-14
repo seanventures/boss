@@ -114,6 +114,10 @@ class Settings(BaseSettings):
         default=None, alias="BOSS_EMAIL_FROM_NAME"
     )
     require_api_auth: bool = Field(default=False, alias="BOSS_REQUIRE_API_AUTH")
+    bootstrap_seed_api_enabled: bool = Field(
+        default=False,
+        alias="BOSS_BOOTSTRAP_SEED_API_ENABLED",
+    )
     api_keys: str = Field(default="", alias="BOSS_API_KEYS")
     api_key_principals: str = Field(
         default="",
@@ -364,6 +368,17 @@ class Settings(BaseSettings):
     )
     github_app_installation_id: Optional[str] = Field(
         default=None, alias="BOSS_GITHUB_APP_INSTALLATION_ID"
+    )
+
+    # Simple rate limiting for high-cost paths (P2 per .ai/security-review.md).
+    # In-memory implementation only (see main.py); production requires Redis or
+    # edge limiter (nginx, CDN, etc). Default protects metatron/query, commands/propose,
+    # resources/sync etc at 10 req/min per (IP+actor) key. Can disable or tune via env.
+    rate_limit_enabled: bool = Field(
+        default=True, alias="BOSS_RATE_LIMIT_ENABLED"
+    )
+    rate_limit_requests_per_minute: int = Field(
+        default=10, alias="BOSS_RATE_LIMIT_RPM"
     )
 
     @property
