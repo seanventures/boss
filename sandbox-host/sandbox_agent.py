@@ -28,13 +28,32 @@ from typing import Optional
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
-# Commands the governed helper console allows without break-glass. Read-only /
-# navigation / re-run-tests only; anything else needs an explicit break-glass.
-HELPER_ALLOW = {
-    "git", "ls", "cat", "head", "tail", "grep", "find", "wc", "pwd", "stat",
-    "du", "tree", "mvn", "mvnw", "./mvnw", "gradle", "gradlew", "./gradlew",
-    "java", "javac", "python3", "node", "npm", "pnpm", "go", "cat", "diff",
+# Commands the governed helper console allows without break-glass, grouped for
+# display. Read-only / navigation / diagnostics / re-run-tests only. Anything
+# that mutates outside the working tree, reaches the network, or could leak
+# secrets (env/printenv/set/export) needs an explicit break-glass raw shell.
+HELPER_COMMANDS = {
+    "Version control": ["git"],
+    "Navigate & read": [
+        "ls", "cat", "head", "tail", "wc", "stat", "file", "pwd", "tree",
+        "find", "realpath", "basename", "dirname",
+    ],
+    "Search & text": [
+        "grep", "sed", "awk", "sort", "uniq", "cut", "tr", "diff", "cmp",
+        "comm", "column", "echo", "which",
+    ],
+    "Build & run tests": [
+        "mvn", "mvnw", "./mvnw", "gradle", "gradlew", "./gradlew",
+        "java", "javac", "python3", "node", "npm", "pnpm", "go",
+    ],
+    "Resources & processes": [
+        "ps", "top", "free", "df", "du", "uptime", "vmstat", "nproc",
+        "uname", "hostname", "whoami", "id", "date",
+    ],
+    "Checksums & inspect": ["sha256sum", "md5sum", "cksum", "xxd", "od"],
 }
+# Flat set used for the actual allowlist enforcement.
+HELPER_ALLOW = {c for cmds in HELPER_COMMANDS.values() for c in cmds}
 IDLE_TTL_SECONDS = int(os.environ.get("BOSS_SANDBOX_IDLE_TTL_SECONDS", "1800"))
 # Per-sandbox resource caps (architecture §5.4 cgroup limits) — also what makes
 # the telemetry meaningful (usage vs limit, OOM detectable).
@@ -191,6 +210,11 @@ class ContainerBackend:
             raise PermissionError(
                 f"'{argv[0]}' is not an allowlisted helper command. Use break-glass for a raw shell."
             )
+        # top/htop are curses programs that need a TTY; docker exec here is
+        # non-interactive, so force batch mode for a one-shot snapshot.
+        if argv[0] == "top" and "-b" not in argv:
+            argv = ["top", "-b", "-n1", *argv[1:]]
+            command = shlex.join(argv)
         rec.updated_at = time.time()
         # run inside the container, cwd = the working tree
         p = self._docker(["exec", "-w", "/work/repo", rec.container_id, "bash", "-lc", command],
@@ -283,6 +307,13 @@ class PreserveRequest(BaseModel):
 def healthz() -> dict:
     live = [r.summary() for r in _backend.sandboxes.values() if r.status != "destroyed"]
     return {"status": "ok", "backend": _backend.kind, "image": _backend.image, "sandboxes": len(live)}
+
+
+@app.get("/v1/sandbox/helpers")
+def sandbox_helpers() -> dict:
+    """The governed helper allowlist (commands runnable without break-glass),
+    grouped for display. Single source of truth for the console UI."""
+    return {"categories": HELPER_COMMANDS, "commands": sorted(HELPER_ALLOW)}
 
 
 @app.post("/v1/sandbox/run-task")

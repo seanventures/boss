@@ -27,6 +27,11 @@ async function apiStats(id: string): Promise<SandboxStats> {
   const r = await fetch(`/api/sandboxes/${encodeURIComponent(id)}/stats`);
   return r.json();
 }
+type HelperCatalog = { categories: Record<string, string[]>; commands: string[]; unavailable?: string };
+async function apiHelpers(): Promise<HelperCatalog> {
+  const r = await fetch(`/api/sandboxes/helpers`);
+  return r.json();
+}
 async function apiPreserve(id: string, reason: string): Promise<SandboxSummary> {
   const r = await fetch(`/api/sandboxes/${encodeURIComponent(id)}/preserve`, {
     method: "POST", headers: { "content-type": "application/json" },
@@ -60,6 +65,14 @@ function Console({ sandboxId }: { sandboxId: string }) {
   const [reason, setReason] = useState("");
   const [log, setLog] = useState<{ cmd: string; out: string; bg: boolean }[]>([]);
   const [busy, setBusy] = useState(false);
+  const [helpers, setHelpers] = useState<HelperCatalog | null>(null);
+  const [showHelpers, setShowHelpers] = useState(false);
+
+  useEffect(() => {
+    let live = true;
+    apiHelpers().then((h) => live && setHelpers(h)).catch(() => {});
+    return () => { live = false; };
+  }, []);
 
   const run = useCallback(async () => {
     if (!cmd.trim() || busy) return;
@@ -98,8 +111,37 @@ function Console({ sandboxId }: { sandboxId: string }) {
           placeholder="Reason (required — recorded in the audit log)" />
       ) : null}
       <p className="detail">
-        Helper commands (git, ls, cat, mvn…) run freely. A raw shell needs break-glass + a reason and emits an elevated audit event.
+        Helper commands run freely. A raw shell needs break-glass + a reason and emits an elevated audit event.{" "}
+        <button type="button" className="sbx-helpers-toggle" onClick={() => setShowHelpers((v) => !v)}>
+          {showHelpers ? "Hide" : "Show"} allowed commands{helpers ? ` (${helpers.commands.length})` : ""}
+        </button>
       </p>
+      {showHelpers ? (
+        helpers && !helpers.unavailable ? (
+          <div className="sbx-helpers">
+            {Object.entries(helpers.categories).map(([group, cmds]) => (
+              <div key={group} className="sbx-helper-group">
+                <span className="sbx-helper-label">{group}</span>
+                <span className="sbx-helper-chips">
+                  {cmds.map((c) => (
+                    <button key={c} type="button" className="sbx-helper-chip"
+                      title={`Insert "${c}" into the command box`}
+                      onClick={() => setCmd((cur) => (cur.trim() ? cur : c + " "))}>
+                      {c}
+                    </button>
+                  ))}
+                </span>
+              </div>
+            ))}
+            <p className="detail sbx-helper-note">
+              Diagnostics like <code>top</code> run in batch mode automatically. Anything that mutates outside the
+              working tree, reaches the network, or could expose secrets (e.g. <code>env</code>) needs break-glass.
+            </p>
+          </div>
+        ) : (
+          <p className="detail">{helpers?.unavailable ? `Helper list unavailable: ${helpers.unavailable}` : "Loading allowed commands…"}</p>
+        )
+      ) : null}
       <div className="sbx-console-out">
         {log.map((e, i) => (
           <div key={i} className="sbx-out-entry">

@@ -28,6 +28,14 @@ def list_sandboxes(settings: Settings) -> dict:
     return r.json()
 
 
+def list_helpers(settings: Settings) -> dict:
+    """The governed helper allowlist (no break-glass needed), grouped for display."""
+    with httpx.Client(timeout=10) as c:
+        r = c.get(f"{_base(settings)}/v1/sandbox/helpers")
+    r.raise_for_status()
+    return r.json()
+
+
 def get_sandbox(settings: Settings, sandbox_id: str) -> dict:
     with httpx.Client(timeout=20) as c:
         r = c.get(f"{_base(settings)}/v1/sandboxes/{sandbox_id}")

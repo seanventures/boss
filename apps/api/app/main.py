@@ -4059,6 +4059,16 @@ def list_sandboxes_endpoint():
         return {"sandboxes": [], "unavailable": str(e)[:200]}
 
 
+@app.get("/v1/sandboxes/helpers")
+def sandbox_helpers_endpoint():
+    """The governed helper-command allowlist (runnable without break-glass)."""
+    from .services import sandbox_console
+    try:
+        return sandbox_console.list_helpers(settings)
+    except Exception as e:  # sandbox agent unreachable
+        return {"categories": {}, "commands": [], "unavailable": str(e)[:200]}
+
+
 @app.get("/v1/sandboxes/{sandbox_id}/tree")
 def sandbox_tree_endpoint(sandbox_id: str):
     from .services import sandbox_console

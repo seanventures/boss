@@ -3940,6 +3940,13 @@ export function createBossApiClient(config: BossApiClientConfig) {
     getSandboxes() {
       return request<SandboxesResponse>("GET", "/v1/sandboxes");
     },
+    getSandboxHelpers() {
+      return request<{
+        categories: Record<string, string[]>;
+        commands: string[];
+        unavailable?: string;
+      }>("GET", "/v1/sandboxes/helpers");
+    },
     getSandboxTree(sandboxId: string) {
       return request<{ tree: string[] }>("GET", `/v1/sandboxes/${encodeURIComponent(sandboxId)}/tree`);
     },
