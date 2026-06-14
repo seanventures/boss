@@ -4,15 +4,56 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Optional
 
-from pydantic import AliasChoices, Field
+from pydantic import AliasChoices, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
+    model_config = SettingsConfigDict(
+        env_file=".env", env_file_encoding="utf-8", extra="ignore"
+    )
 
     database_url: str = "postgresql+psycopg://boss:boss@localhost:5432/boss"
     openai_api_key: Optional[str] = Field(default=None, alias="OPENAI_API_KEY")
+    azure_openai_key: Optional[str] = Field(default=None, alias="AZURE_OPENAI_KEY")
+    azure_openai_endpoint: Optional[str] = Field(
+        default=None, alias="AZURE_OPENAI_ENDPOINT"
+    )
+    azure_openai_deployment: Optional[str] = Field(
+        default=None, alias="AZURE_OPENAI_DEPLOYMENT"
+    )
+    azure_openai_api_version: str = Field(
+        default="2024-12-01-preview", alias="AZURE_OPENAI_API_VERSION"
+    )
+    plan_budget_usd_micros: int = Field(
+        default=1_500_000, alias="BOSS_PLAN_BUDGET_USD_MICROS"
+    )
+    agent_repo_root: str = Field(default=".", alias="BOSS_AGENT_REPO_ROOT")
+    agent_max_steps: int = Field(default=12, alias="BOSS_AGENT_MAX_STEPS")
+    agent_autonomous_risk_max: int = Field(
+        default=1, alias="BOSS_AGENT_AUTONOMOUS_RISK_MAX"
+    )
+    # Completion backend: auto (azure→openai) | openai | azure | claude_cli.
+    # claude_cli drives BOSS's own loop but serves each completion via the
+    # Claude Code CLI (`claude -p`) on a Max subscription instead of a paid API.
+    llm_engine: str = Field(default="auto", alias="BOSS_LLM_ENGINE")
+    claude_cli_path: str = Field(default="claude", alias="BOSS_CLAUDE_CLI_PATH")
+    claude_cli_model: Optional[str] = Field(default=None, alias="BOSS_CLAUDE_CLI_MODEL")
+    claude_cli_timeout: int = Field(default=240, alias="BOSS_CLAUDE_CLI_TIMEOUT")
+
+    @model_validator(mode="after")
+    def _azure_satisfies_openai_credential(self):
+        # When Azure OpenAI is configured, treat the OpenAI source as
+        # credential-present so the entitlement broker routes to it. The
+        # adapter then dispatches to Azure internally.
+        if not self.openai_api_key and self.azure_openai_key and self.azure_openai_endpoint:
+            self.openai_api_key = self.azure_openai_key
+        # The Claude-CLI engine has no API key but IS a real model backend, so
+        # mark the credential present so intake routes to the real-model path.
+        if (self.llm_engine or "").lower() == "claude_cli" and not self.openai_api_key:
+            self.openai_api_key = "claude-cli-proxy"
+        return self
+
     anthropic_api_key: Optional[str] = Field(
         default=None, alias="ANTHROPIC_API_KEY"
     )
@@ -247,7 +288,15 @@ class Settings(BaseSettings):
         default="", alias="BOSS_SANDBOX_VALIDATION_COMMANDS"
     )
     sandbox_validation_allowed_commands: str = Field(
-        default="pnpm,npm,node,python,python3,pytest,make",
+        # Build/test executables a coding task may invoke. Wrapper scripts
+        # (./mvnw, ./gradlew) are matched by basename — see EphemeralSandbox.
+        default=(
+            "pnpm,npm,npx,yarn,node,python,python3,pip,pip3,uv,pytest,tox,"
+            "make,cmake,ctest,"
+            "mvn,mvnw,gradle,gradlew,java,javac,kotlin,"
+            "go,cargo,rustc,dotnet,"
+            "ruby,bundle,rake,php,composer,bazel"
+        ),
         alias="BOSS_SANDBOX_VALIDATION_ALLOWED_COMMANDS",
     )
     sandbox_validation_timeout_seconds: int = Field(
@@ -258,6 +307,63 @@ class Settings(BaseSettings):
     )
     sandbox_validation_fetch_remote: bool = Field(
         default=True, alias="BOSS_SANDBOX_VALIDATION_FETCH_REMOTE"
+    )
+
+    # --- Coding agent (clone -> edit -> build -> test -> fix -> PR) -----------
+    # Feature flag for the durable `code.task` pipeline.
+    enable_code_task: bool = Field(default=False, alias="BOSS_ENABLE_CODE_TASK")
+    # Which CodeAgent implementation runs the edit/test loop:
+    #   claude_code = wrap `claude -p` headless WITH its file/bash tools enabled,
+    #                 scoped to the ephemeral sandbox cwd (uses the Max plan).
+    #   native      = (Phase 1) raw model API agent on the Agent SDK.
+    code_agent_engine: str = Field(default="claude_code", alias="BOSS_CODE_AGENT_ENGINE")
+    # Max agent turns inside the sandbox before we stop and take the diff.
+    code_agent_max_turns: int = Field(default=40, alias="BOSS_CODE_AGENT_MAX_TURNS")
+    # Wall-clock cap for a single CodeAgent invocation.
+    code_agent_timeout_seconds: int = Field(
+        default=900, alias="BOSS_CODE_AGENT_TIMEOUT_SECONDS"
+    )
+    # Tools the sandboxed Claude Code agent may use (its OWN native tools here —
+    # the inverse of claude_cli_adapter, which denies them). Bash is constrained
+    # to the sandbox cwd; network egress is the deployment's responsibility.
+    code_agent_allowed_tools: str = Field(
+        default="Read,Edit,MultiEdit,Write,Glob,Grep,Bash,TodoWrite",
+        alias="BOSS_CODE_AGENT_ALLOWED_TOOLS",
+    )
+    # Per-task budget cap for a code task (model spend), reserved before work.
+    code_task_budget_usd_micros: int = Field(
+        default=2_000_000, alias="BOSS_CODE_TASK_BUDGET_USD_MICROS"
+    )
+    # Which SandboxProvider supplies the execution substrate:
+    #   local   = per-task EphemeralSandbox as a local subprocess + temp clone (Phase 0/1)
+    #   microvm = single-tenant sandbox on a Sandbox Host (container stand-in now,
+    #             Kata/Firecracker microVM later); the whole pipeline runs guest-side
+    sandbox_provider: str = Field(default="local", alias="BOSS_SANDBOX_PROVIDER")
+    # The Sandbox Agent (host service) the microvm provider dispatches tasks to.
+    sandbox_agent_url: str = Field(default="http://127.0.0.1:8088", alias="BOSS_SANDBOX_AGENT_URL")
+    sandbox_agent_timeout_seconds: int = Field(default=1500, alias="BOSS_SANDBOX_AGENT_TIMEOUT_SECONDS")
+    # Coding-agent engine that runs INSIDE the sandbox (echo | openai | claude_code).
+    # openai = native agent on the raw model API (no CLI/keychain — works headless).
+    sandbox_guest_engine: str = Field(default="openai", alias="BOSS_SANDBOX_GUEST_ENGINE")
+    # Root dir under which per-task ephemeral sandboxes are cloned and torn down.
+    sandbox_root_path: Optional[Path] = Field(
+        default=None, alias="BOSS_SANDBOX_ROOT_PATH"
+    )
+    # Shallow-clone depth for the ephemeral sandbox.
+    sandbox_clone_depth: int = Field(default=1, alias="BOSS_SANDBOX_CLONE_DEPTH")
+
+    # --- GitHub App (Phase 2: developer impersonation, revocable) ------------
+    # When set, github_app_adapter mints short-lived, repo-scoped installation
+    # tokens instead of using the long-lived PAT (github_token).
+    github_app_id: Optional[str] = Field(default=None, alias="BOSS_GITHUB_APP_ID")
+    github_app_private_key: Optional[str] = Field(
+        default=None, alias="BOSS_GITHUB_APP_PRIVATE_KEY"
+    )
+    github_app_private_key_path: Optional[Path] = Field(
+        default=None, alias="BOSS_GITHUB_APP_PRIVATE_KEY_PATH"
+    )
+    github_app_installation_id: Optional[str] = Field(
+        default=None, alias="BOSS_GITHUB_APP_INSTALLATION_ID"
     )
 
     @property

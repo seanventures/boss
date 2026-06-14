@@ -21,3 +21,8 @@ image.png
 BOSS_Build_Spec_Pack_for_Codex_v0_1.zip
 BOSS_Full_Featured_Product_PRD_v1_0.docx
 BOSS_Full_Featured_Product_PRD_v1_0.pdf
+
+# secrets — never commit private keys
+*.pem
+.local-logs/
+target/

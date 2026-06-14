@@ -187,7 +187,7 @@ CREATE TABLE IF NOT EXISTS account_connect_auth_sessions (
   provider_ref TEXT,
   state TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'requested',
-  receipt_id TEXT REFERENCES receipts(id),
+  receipt_id TEXT,
   created_by TEXT NOT NULL DEFAULT 'system',
   expires_at TIMESTAMPTZ,
   completed_at TIMESTAMPTZ,
@@ -750,6 +750,18 @@ CREATE TABLE IF NOT EXISTS receipts (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE(org_id, dedupe_key)
 );
+-- account_connect_auth_sessions.receipt_id is declared before receipts exists;
+-- attach the foreign key now that receipts is defined (idempotent guard).
+DO $$ BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'account_connect_auth_sessions_receipt_id_fkey'
+  ) THEN
+    ALTER TABLE account_connect_auth_sessions
+      ADD CONSTRAINT account_connect_auth_sessions_receipt_id_fkey
+      FOREIGN KEY (receipt_id) REFERENCES receipts(id);
+  END IF;
+END $$;
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS data_boundary TEXT NOT NULL DEFAULT 'internal';
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS parent_task_id TEXT REFERENCES tasks(id);
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS dependency_task_ids JSONB NOT NULL DEFAULT '[]'::jsonb;
@@ -1536,3 +1548,98 @@ CREATE TABLE IF NOT EXISTS events (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_events_project_created ON events(project_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS mcp_servers (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  url TEXT NOT NULL,
+  transport TEXT NOT NULL DEFAULT 'http',
+  risk_tier INTEGER NOT NULL DEFAULT 1,
+  data_boundary TEXT NOT NULL DEFAULT 'internal',
+  enabled BOOLEAN NOT NULL DEFAULT true,
+  description TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_mcp_servers_project ON mcp_servers(project_id, enabled);
+
+CREATE TABLE IF NOT EXISTS agent_runs (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  task_id TEXT,
+  status TEXT NOT NULL DEFAULT 'running',
+  messages JSONB NOT NULL DEFAULT '[]'::jsonb,
+  transcript JSONB NOT NULL DEFAULT '[]'::jsonb,
+  usage JSONB NOT NULL DEFAULT '{}'::jsonb,
+  step INTEGER NOT NULL DEFAULT 0,
+  pending JSONB,
+  finalize_ctx JSONB,
+  output_text TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_agent_runs_project ON agent_runs(project_id, status, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS meeting_runs (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  task_id TEXT,
+  status TEXT NOT NULL DEFAULT 'running',     -- running | completed | failed
+  phase TEXT NOT NULL DEFAULT 'research',      -- research|round1|round2|synthesis|draft|finalize|done
+  directive TEXT NOT NULL,
+  url TEXT,
+  role_keys JSONB NOT NULL DEFAULT '[]'::jsonb,
+  constraints JSONB NOT NULL DEFAULT '{}'::jsonb,
+  state JSONB NOT NULL DEFAULT '{}'::jsonb,     -- {research, round1, round2, synthesis, prd_markdown}
+  usage JSONB NOT NULL DEFAULT '{}'::jsonb,     -- {cost_usd_micros, model}
+  finalize_ctx JSONB NOT NULL DEFAULT '{}'::jsonb,
+  meeting_id TEXT,
+  minutes_artifact_id TEXT,
+  decision_id TEXT,
+  error TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_meeting_runs_project ON meeting_runs(project_id, status, updated_at DESC);
+
+-- Durable coding-agent task: clone -> edit -> build/test -> open PR (gated).
+-- Unlike meeting_runs (pure-data phases), a code task's working tree is
+-- filesystem-ephemeral, so the whole pipeline runs in ONE job execution;
+-- crash-resumability comes from job lease-reclaim + the PR receipt dedupe
+-- (no double-open). The row tracks status/phase for observability + idempotency.
+CREATE TABLE IF NOT EXISTS code_task_runs (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  task_id TEXT,
+  status TEXT NOT NULL DEFAULT 'running',     -- running | completed | failed | blocked
+  phase TEXT NOT NULL DEFAULT 'queued',       -- queued|provisioning|coding|validating|opening_pr|done
+  title TEXT NOT NULL,
+  spec JSONB NOT NULL DEFAULT '{}'::jsonb,     -- {instructions, acceptance_criteria, test_commands, owner, repo, base_branch}
+  state JSONB NOT NULL DEFAULT '{}'::jsonb,    -- {summary, diff_summary, tests, tests_passed, turns}
+  usage JSONB NOT NULL DEFAULT '{}'::jsonb,    -- {cost_usd_micros, model}
+  finalize_ctx JSONB NOT NULL DEFAULT '{}'::jsonb,
+  reservation_id TEXT,
+  pull_request_url TEXT,
+  pull_request_number INTEGER,
+  decision_id TEXT,
+  error TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_code_task_runs_project ON code_task_runs(project_id, status, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS meeting_roles (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  role_key TEXT NOT NULL,
+  title TEXT NOT NULL,
+  lens TEXT NOT NULL,
+  risk_tier INTEGER NOT NULL DEFAULT 1,
+  data_boundary TEXT NOT NULL DEFAULT 'internal',
+  is_default BOOLEAN NOT NULL DEFAULT false,
+  enabled BOOLEAN NOT NULL DEFAULT true,
+  sort_order INTEGER NOT NULL DEFAULT 100,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(project_id, role_key)
+);

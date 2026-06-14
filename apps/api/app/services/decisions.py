@@ -539,7 +539,41 @@ class DecisionService:
     ) -> None:
         recommendation = row["recommendation"] or {}
         action = recommendation.get("action")
-        if action == "review_plan_draft":
+        if action == "execute_agent_tool":
+            # A high-risk agent tool call that was deferred for approval — run it now.
+            from .agent_loop import execute_agent_tool
+
+            execute_agent_tool(
+                connection,
+                row["project_id"],
+                self.settings,
+                str(recommendation.get("tool")),
+                recommendation.get("args") or {},
+                actor,
+                task_id=row["task_id"],
+            )
+        elif action == "resume_agent_run":
+            # A durable agent run paused for approval — resume it via a worker job
+            # so the conversation continues with the approved tool's result.
+            run_id = recommendation.get("run_id")
+            self.jobs.create_job(
+                connection,
+                project_id=row["project_id"],
+                task_id=row["task_id"],
+                kind="agent.resume",
+                priority=45,
+                payload={"run_id": run_id},
+            )
+            emit_event(
+                connection,
+                row["project_id"],
+                "agent.resume_queued",
+                actor,
+                "agent_run",
+                str(run_id),
+                {"decision_id": row["id"]},
+            )
+        elif action == "review_plan_draft":
             self._queue_pr_proposal_from_plan(connection, row, actor, recommendation)
         elif action == "review_pull_request":
             ci_gate = self._pull_request_ci_gate(connection, row)

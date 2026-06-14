@@ -64,17 +64,34 @@ class PullRequestValidationResult:
 class GitHubAdapter:
     def __init__(self, settings: Settings):
         self.settings = settings
+        self._app = None
 
     @property
     def repository_full_name(self) -> str:
         return f"{self.settings.target_github_owner}/{self.settings.target_github_repo}"
 
-    def _headers(self) -> dict[str, str]:
+    def _auth_token(self) -> str:
+        """Prefer a short-lived, repo-scoped GitHub-App installation token
+        (Phase 2 developer impersonation); fall back to the PAT (Phase 0)."""
+        from .github_app_adapter import GitHubAppAdapter  # optional dependency
+
+        if self._app is None:
+            self._app = GitHubAppAdapter(self.settings)
+        if self._app.configured:
+            return self._app.token_for_repo(
+                self.settings.target_github_owner, self.settings.target_github_repo
+            )
         if not self.settings.github_token:
-            raise IntegrationConfigurationError("BOSS_GITHUB_TOKEN is not configured.")
+            raise IntegrationConfigurationError(
+                "No GitHub credentials configured (need a GitHub App installation "
+                "or BOSS_GITHUB_TOKEN)."
+            )
+        return self.settings.github_token
+
+    def _headers(self) -> dict[str, str]:
         return {
             "Accept": "application/vnd.github+json",
-            "Authorization": f"Bearer {self.settings.github_token}",
+            "Authorization": f"Bearer {self._auth_token()}",
             "X-GitHub-Api-Version": "2022-11-28",
         }
 
@@ -118,6 +135,15 @@ class GitHubAdapter:
             return ref["object"]["sha"]
 
     def upsert_file(self, branch_name: str, path: str, content: str, message: str) -> str:
+        """Create or update a UTF-8 text file on a branch."""
+        return self.upsert_binary_file(
+            branch_name, path, content.encode("utf-8"), message
+        )
+
+    def upsert_binary_file(
+        self, branch_name: str, path: str, data: bytes, message: str
+    ) -> str:
+        """Create or update a file of arbitrary bytes (e.g. a PDF) on a branch."""
         sha = None
         try:
             existing = self._request(
@@ -133,15 +159,15 @@ class GitHubAdapter:
             headers=self._headers(),
             json={
                 "message": message,
-                "content": base64.b64encode(content.encode("utf-8")).decode("utf-8"),
+                "content": base64.b64encode(data).decode("ascii"),
                 "branch": branch_name,
                 **({"sha": sha} if sha else {}),
             },
             timeout=30.0,
         )
         response.raise_for_status()
-        data = response.json()
-        return data["commit"]["sha"]
+        data_json = response.json()
+        return data_json["commit"]["sha"]
 
     def create_pull_request(
         self, branch_name: str, title: str, body: str

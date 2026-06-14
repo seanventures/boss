@@ -1,0 +1,33 @@
+flowchart LR
+    CEO([CEO / stakeholder<br/>directive]) --> CP
+
+    subgraph CPBOX["BOSS CONTROL PLANE — SaaS, BOSS infra (multi-tenant)"]
+        CP["Intake · multi-agent scoping<br/>plan · budget reserve/settle<br/>approvals/decisions · audit"]
+        DISP{"Dispatch coding task<br/>(metadata only)"}
+        CP --> DISP
+    end
+
+    DISP -->|"task spec + policy<br/>(NO source code)"| SBX
+
+    subgraph VMBOX["ISOLATED SINGLE-TENANT MICROVM — ephemeral · BOSS-hosted by default (or customer boundary)"]
+        SBX["Ephemeral sandbox<br/>clone · edit · build · test<br/>(pinned to one tenant)"]
+        AGENT["CodeAgent<br/>(native on model API,<br/>or BYO Codex/Devin)"]
+        SBX --> AGENT
+    end
+
+    AGENT -->|"model calls (scrubbed)"| LLM[["LLM provider<br/>Anthropic / OpenAI<br/>(BYO key or BOSS-bundled)"]]
+    SBX -->|"clone / branch / commit / PR<br/>as 'BOSS bot' dev identity"| GH[["Customer GitHub<br/>(customer-owned repo<br/>+ BOSS GitHub App)"]]
+
+    SBX -->|"diff summary · test results<br/>PR link · audit · cost<br/>(NO source persisted)"| CP
+
+    classDef cp fill:#e6f3ff,stroke:#0284c7,stroke-width:2px,color:#000
+    classDef cust fill:#d4edda,stroke:#22c55e,stroke-width:2px,color:#000
+    classDef gate fill:#ffd700,stroke:#000,color:#000,stroke-width:2px
+    classDef ext fill:#fff4cc,stroke:#f59e0b,color:#000
+    classDef endpoint fill:#f1f5f9,stroke:#64748b,color:#000
+
+    class CP cp
+    class DISP gate
+    class SBX,AGENT cust
+    class LLM,GH ext
+    class CEO endpoint

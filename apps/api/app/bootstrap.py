@@ -1,10 +1,128 @@
+import re
+
 from sqlalchemy import text
 
 from .config import get_settings
 from .db import ensure_schema, get_engine
+from .services.core import make_id
 from .services.entitlements import EntitlementBrokerService
+from .services.mcp_registry import ensure_mcp_server
 from .services.members import MemberDirectoryService
 from .services.specpack import SpecPackService
+
+
+# Built-in MCP servers BOSS ships with — idempotently registered so they're
+# always present in the capability catalog (the processes are launched
+# separately, e.g. via tools/mcp_*_server.py).
+BUILTIN_MCP_SERVERS = [
+    {
+        "name": "boss-devops-reference",
+        "url": "http://127.0.0.1:8765/mcp",
+        "risk_tier": 1,
+        "data_boundary": "public",
+        "description": "External DevOps reference data: cloud_reference_pricing, engineering_runbook",
+    },
+    {
+        "name": "web-intel",
+        "url": "http://127.0.0.1:8770/mcp",
+        "risk_tier": 2,
+        "data_boundary": "public",
+        "description": "Render & study external websites with Playwright: fetch_page, study_site",
+    },
+    {
+        "name": "doc-render",
+        "url": "http://127.0.0.1:8771/mcp",
+        "risk_tier": 1,
+        "data_boundary": "internal",
+        "description": "Render Markdown to PDF: render_markdown_pdf",
+    },
+]
+
+
+def seed_project_defaults(
+    connection,
+    settings,
+    project_id,
+    *,
+    entitlements,
+    members,
+    specpack,
+    actor="bootstrap",
+    budget_policy_id=None,
+):
+    """Seed the COMMON per-project defaults every org/project gets: a budget
+    policy, default members, the core pack + default agent modules, entitlement
+    sources, and the built-in MCP servers. Idempotent. Shared by bootstrap and
+    by onboarding a new organization so every org starts from the same template."""
+    bp_id = budget_policy_id or f"bp_{project_id}"
+    connection.execute(
+        text(
+            """
+            INSERT INTO budget_policies (
+                id, scope_type, scope_id, daily_cap_usd_micros, monthly_cap_usd_micros,
+                burst_cap_usd_micros_per_min, max_concurrent_jobs, max_workers_total,
+                allowed_model_tiers, soft_cap_pct, auto_lite_mode_pct,
+                freeze_provisioning_pct, freeze_tier2_pct
+            )
+            VALUES (
+                :bp_id, 'project', :scope_id, :daily_cap, :monthly_cap, :burst_cap,
+                3, 2, '["gpt-5.2-codex"]'::jsonb, 0.70, 0.85, 0.90, 0.95
+            )
+            ON CONFLICT (id) DO NOTHING
+            """
+        ),
+        {
+            "bp_id": bp_id,
+            "scope_id": project_id,
+            "daily_cap": settings.daily_cap_usd_micros,
+            "monthly_cap": settings.monthly_cap_usd_micros,
+            "burst_cap": settings.burst_cap_usd_micros_per_min,
+        },
+    )
+    members.seed_default_members(connection, project_id, actor)
+    specpack.install_pack(connection, project_id, settings.core_pack_id, actor)
+    specpack.install_default_agent_modules(connection, project_id, actor)
+    entitlements.seed_default_sources(connection, project_id, actor)
+    # seed the meeting role-agent template so a new org's panel isn't empty
+    from .services.meeting_service import seed_roles
+    seed_roles(connection, project_id)
+    for srv in BUILTIN_MCP_SERVERS:
+        ensure_mcp_server(
+            connection,
+            project_id,
+            srv["name"],
+            srv["url"],
+            risk_tier=srv["risk_tier"],
+            data_boundary=srv["data_boundary"],
+            description=srv["description"],
+        )
+
+
+def onboard_org(connection, settings, name, *, entitlements, members, specpack, slug=None):
+    """Create a new organization (org → workspace → project) and seed it with the
+    common defaults. Returns the new ids. Used by the admin onboarding endpoint."""
+    org_id = make_id("org")
+    workspace_id = make_id("ws")
+    project_id = make_id("proj")
+    base_slug = re.sub(r"[^a-z0-9]+", "-", (slug or name or "org").lower()).strip("-") or "org"
+    project_slug = f"{base_slug}-main"
+    connection.execute(
+        text("INSERT INTO orgs (id, name) VALUES (:id, :name)"),
+        {"id": org_id, "name": name},
+    )
+    connection.execute(
+        text("INSERT INTO workspaces (id, org_id, name) VALUES (:id, :org, :name)"),
+        {"id": workspace_id, "org": org_id, "name": "Default workspace"},
+    )
+    connection.execute(
+        text("INSERT INTO projects (id, workspace_id, name, slug) VALUES (:id, :ws, :name, :slug)"),
+        {"id": project_id, "ws": workspace_id, "name": f"{name} workspace", "slug": project_slug},
+    )
+    seed_project_defaults(
+        connection, settings, project_id,
+        entitlements=entitlements, members=members, specpack=specpack, actor="onboarding",
+    )
+    return {"org_id": org_id, "workspace_id": workspace_id, "project_id": project_id, "name": name}
 
 
 def seed() -> None:
@@ -50,49 +168,10 @@ def seed() -> None:
                 "workspace_id": settings.default_workspace_id,
             },
         )
-        connection.execute(
-            text(
-                """
-                INSERT INTO budget_policies (
-                    id, scope_type, scope_id, daily_cap_usd_micros, monthly_cap_usd_micros,
-                    burst_cap_usd_micros_per_min, max_concurrent_jobs, max_workers_total,
-                    allowed_model_tiers, soft_cap_pct, auto_lite_mode_pct,
-                    freeze_provisioning_pct, freeze_tier2_pct
-                )
-                VALUES (
-                    'bp_boss_default', 'project', :scope_id, :daily_cap, :monthly_cap, :burst_cap,
-                    3, 2, '["gpt-5.2-codex"]'::jsonb, 0.70, 0.85, 0.90, 0.95
-                )
-                ON CONFLICT (id) DO NOTHING
-                """
-            ),
-            {
-                "scope_id": settings.default_project_id,
-                "daily_cap": settings.daily_cap_usd_micros,
-                "monthly_cap": settings.monthly_cap_usd_micros,
-                "burst_cap": settings.burst_cap_usd_micros_per_min,
-            },
-        )
-        members.seed_default_members(
-            connection,
-            settings.default_project_id,
-            "bootstrap",
-        )
-        specpack.install_pack(
-            connection,
-            settings.default_project_id,
-            settings.core_pack_id,
-            "bootstrap",
-        )
-        specpack.install_default_agent_modules(
-            connection,
-            settings.default_project_id,
-            "bootstrap",
-        )
-        entitlements.seed_default_sources(
-            connection,
-            settings.default_project_id,
-            "bootstrap",
+        seed_project_defaults(
+            connection, settings, settings.default_project_id,
+            entitlements=entitlements, members=members, specpack=specpack,
+            budget_policy_id="bp_boss_default",
         )
 
 

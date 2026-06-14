@@ -1,0 +1,754 @@
+from __future__ import annotations
+
+import json
+import re
+from pathlib import Path
+from typing import Any, Callable, Optional
+
+from sqlalchemy import text
+from sqlalchemy.engine import Connection
+
+from ..config import Settings
+from .core import create_artifact, create_blocking_decision, emit_event, make_id
+from .github_adapter import GitHubAdapter
+from .mcp_client import MCPClient
+from .mcp_registry import list_mcp_servers
+from .claude_cli_adapter import make_chat_adapter
+from .openai_adapter import OpenAIAdapter, _usage_from_response  # noqa: F401
+from .pdf_render import pdf_page_count, render_markdown_pdf
+
+
+def _slug(value: str) -> str:
+    return re.sub(r"[^a-zA-Z0-9_]+", "_", value or "").strip("_").lower()
+
+# ============================================================
+# Read tools — internal/local data only (no external side effects).
+# Each returns a JSON-serializable dict that is fed back to the LLM.
+# ============================================================
+
+_SENSITIVE = (".env", ".git", "id_rsa", ".pem", ".key", "secret", "credential")
+
+
+def _repo_root(settings: Settings) -> Path:
+    return Path(settings.agent_repo_root or ".").resolve()
+
+
+def _safe_path(settings: Settings, rel: str) -> Optional[Path]:
+    root = _repo_root(settings)
+    try:
+        target = (root / rel).resolve()
+    except Exception:
+        return None
+    if root not in target.parents and target != root:
+        return None
+    lowered = str(target).lower()
+    if any(tok in lowered for tok in _SENSITIVE):
+        return None
+    return target
+
+
+def _tool_budget_and_costs(connection: Connection, project_id: str, settings: Settings, args: dict) -> dict:
+    policy = connection.execute(
+        text(
+            "SELECT daily_cap_usd_micros FROM budget_policies "
+            "WHERE scope_type='project' AND scope_id=:p ORDER BY created_at DESC LIMIT 1"
+        ),
+        {"p": project_id},
+    ).mappings().first()
+    spent = connection.execute(
+        text(
+            "SELECT COALESCE(SUM(COALESCE(actual_usd_micros, estimated_usd_micros)),0) AS s "
+            "FROM cost_receipts WHERE project_id=:p"
+        ),
+        {"p": project_id},
+    ).scalar() or 0
+    by_model = connection.execute(
+        text(
+            "SELECT skill_or_model_id AS model, count(*) AS calls, "
+            "COALESCE(SUM(COALESCE(actual_usd_micros, estimated_usd_micros)),0) AS micros "
+            "FROM cost_receipts WHERE project_id=:p GROUP BY skill_or_model_id ORDER BY micros DESC"
+        ),
+        {"p": project_id},
+    ).mappings().all()
+    infra = connection.execute(
+        text("SELECT provider, status, count(*) AS n FROM infra_resources WHERE project_id=:p GROUP BY provider, status"),
+        {"p": project_id},
+    ).mappings().all()
+    cap = int(policy["daily_cap_usd_micros"]) if policy else 0
+    return {
+        "daily_budget_cap_usd": round(cap / 1e6, 2),
+        "total_spend_usd": round(int(spent) / 1e6, 4),
+        "spend_by_model": [
+            {"model": r["model"], "calls": int(r["calls"]), "usd": round(int(r["micros"]) / 1e6, 4)}
+            for r in by_model
+        ],
+        "provisioned_infrastructure": [
+            {"provider": r["provider"], "status": r["status"], "count": int(r["n"])} for r in infra
+        ]
+        or "none provisioned",
+        "note": "These are BOSS's real recorded costs. No external cloud-provider bill is connected yet.",
+    }
+
+
+def _tool_project_status(connection: Connection, project_id: str, settings: Settings, args: dict) -> dict:
+    def scalar(sql: str) -> int:
+        return int(connection.execute(text(sql), {"p": project_id}).scalar() or 0)
+
+    recent = connection.execute(
+        text(
+            "SELECT event_type, count(*) AS n FROM events WHERE project_id=:p "
+            "AND created_at > now() - interval '7 days' GROUP BY event_type ORDER BY n DESC LIMIT 8"
+        ),
+        {"p": project_id},
+    ).mappings().all()
+    return {
+        "open_tasks": scalar("SELECT count(*) FROM tasks WHERE project_id=:p AND status='open'"),
+        "pending_decisions": scalar("SELECT count(*) FROM decisions WHERE project_id=:p AND status='pending'"),
+        "deadletters": scalar("SELECT count(*) FROM deadletters WHERE project_id=:p AND status='open'"),
+        "jobs_succeeded": scalar("SELECT count(*) FROM jobs WHERE project_id=:p AND status='succeeded'"),
+        "recent_activity": [{"event": r["event_type"], "count": int(r["n"])} for r in recent],
+    }
+
+
+def _tool_list_repo_files(connection: Connection, project_id: str, settings: Settings, args: dict) -> dict:
+    subdir = str(args.get("subdir") or "").strip().lstrip("/")
+    base = _safe_path(settings, subdir or ".")
+    if base is None or not base.exists():
+        return {"error": f"path not allowed or not found: {subdir or '.'}"}
+    root = _repo_root(settings)
+    skip = {"node_modules", ".git", ".next", ".venv", "__pycache__", "dist", ".local-logs"}
+    files: list[str] = []
+    for p in sorted(base.rglob("*")):
+        if any(part in skip for part in p.parts):
+            continue
+        if p.is_file() and not any(tok in str(p).lower() for tok in _SENSITIVE):
+            files.append(str(p.relative_to(root)))
+        if len(files) >= 120:
+            break
+    return {"root": str(root.name), "subdir": subdir or ".", "files": files, "truncated": len(files) >= 120}
+
+
+def _tool_read_repo_file(connection: Connection, project_id: str, settings: Settings, args: dict) -> dict:
+    rel = str(args.get("path") or "").strip().lstrip("/")
+    target = _safe_path(settings, rel)
+    if target is None or not target.is_file():
+        return {"error": f"file not allowed or not found: {rel}"}
+    try:
+        content = target.read_text(encoding="utf-8", errors="replace")
+    except Exception as exc:  # pragma: no cover
+        return {"error": str(exc)}
+    limit = 8000
+    return {
+        "path": rel,
+        "content": content[:limit],
+        "truncated": len(content) > limit,
+        "bytes": len(content),
+    }
+
+
+ToolFn = Callable[[Connection, str, Settings, dict], dict]
+
+TOOLS: list[dict[str, Any]] = [
+    {
+        "fn": _tool_budget_and_costs,
+        "schema": {
+            "type": "function",
+            "function": {
+                "name": "get_budget_and_costs",
+                "description": "Get this project's REAL recorded budget cap, total spend, spend broken down by model, and provisioned infrastructure. Use this before proposing anything about cost, budget, or cloud spend.",
+                "parameters": {"type": "object", "properties": {}, "required": []},
+            },
+        },
+    },
+    {
+        "fn": _tool_project_status,
+        "schema": {
+            "type": "function",
+            "function": {
+                "name": "get_project_status",
+                "description": "Get the project's real current state: open tasks, pending decisions, deadletters, jobs completed, and recent activity. Use this to ground plans in what is actually happening.",
+                "parameters": {"type": "object", "properties": {}, "required": []},
+            },
+        },
+    },
+    {
+        "fn": _tool_list_repo_files,
+        "schema": {
+            "type": "function",
+            "function": {
+                "name": "list_repo_files",
+                "description": "List real files in the codebase under an optional subdirectory. Use to discover what code exists before planning a code change.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"subdir": {"type": "string", "description": "Optional subdirectory, e.g. 'apps/web'"}},
+                    "required": [],
+                },
+            },
+        },
+    },
+    {
+        "fn": _tool_read_repo_file,
+        "schema": {
+            "type": "function",
+            "function": {
+                "name": "read_repo_file",
+                "description": "Read the real contents of a file in the codebase. Use to ground a code plan in the actual implementation.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"path": {"type": "string", "description": "Repo-relative file path, e.g. 'README.md'"}},
+                    "required": ["path"],
+                },
+            },
+        },
+    },
+]
+
+_TOOL_FNS: dict[str, ToolFn] = {t["schema"]["function"]["name"]: t["fn"] for t in TOOLS}
+_TOOL_SCHEMAS: list[dict] = [t["schema"] for t in TOOLS]
+
+
+def _dispatch(connection: Connection, project_id: str, settings: Settings, name: str, args: dict) -> dict:
+    fn = _TOOL_FNS.get(name)
+    if fn is None:
+        return {"error": f"unknown tool: {name}"}
+    # SAVEPOINT so a failing tool query rolls back just itself and cannot poison
+    # the outer transaction that owns the whole plan-generation effect.
+    nested = connection.begin_nested()
+    try:
+        result = fn(connection, project_id, settings, args or {})
+        nested.commit()
+        return result
+    except Exception as exc:  # pragma: no cover
+        nested.rollback()
+        return {"error": f"{type(exc).__name__}: {exc}"}
+
+
+# ============================================================
+# Write tools — real effects, gated by risk tier. Low-risk run inline; high-risk
+# are deferred to a Decision that executes them on human approval.
+# ============================================================
+
+
+def _create_task(
+    connection: Connection,
+    project_id: str,
+    title: str,
+    description: Optional[str],
+    priority: str,
+    risk_tier: int,
+    parent_task_id: Optional[str] = None,
+) -> dict:
+    tid = make_id("tsk")
+    connection.execute(
+        text(
+            """
+            INSERT INTO tasks (id, project_id, title, description, priority, risk_tier, parent_task_id, dedupe_key)
+            VALUES (:id, :p, :title, :desc, :prio, :risk, :parent, :dedupe)
+            """
+        ),
+        {
+            "id": tid,
+            "p": project_id,
+            "title": title[:200],
+            "desc": description,
+            "prio": priority,
+            "risk": int(risk_tier),
+            "parent": parent_task_id,
+            "dedupe": tid,
+        },
+    )
+    emit_event(
+        connection, project_id, "task.created", "agent_loop", "task", tid,
+        {"via": "agent_tool", "parent_task_id": parent_task_id},
+    )
+    return {"task_id": tid, "status": "created", "title": title}
+
+
+def _wt_create_followup_task(connection, project_id, settings, args) -> dict:
+    return _create_task(
+        connection, project_id,
+        str(args.get("title") or "Follow-up task"),
+        args.get("description"),
+        str(args.get("priority") or "p2"),
+        1,
+    )
+
+
+def _wt_open_incident(connection, project_id, settings, args) -> dict:
+    return _create_task(
+        connection, project_id,
+        "INCIDENT: " + str(args.get("title") or "untitled"),
+        args.get("description"),
+        "p0",
+        2,
+    )
+
+
+def _wt_publish_document(connection, project_id, settings, args) -> dict:
+    """Render a written markdown document to PDF and publish it to a GitHub PR
+    (commits both the .md and the .pdf), so a human can review/verify the output.
+    HIGH RISK — deferred to a human decision and only runs on approval."""
+    title = str(args.get("title") or "BOSS Document").strip()
+    markdown = str(args.get("markdown") or "").strip()
+    subtitle = args.get("subtitle")
+    task_id = args.get("task_id")
+    if not markdown:
+        return {"error": "markdown is required to publish a document"}
+    if len(markdown) < 200:
+        return {"error": "document markdown is too short to publish (write the full document first)"}
+
+    subdir = str(args.get("repo_subdir") or "docs/prd").strip("/")
+    slug = re.sub(r"[^a-zA-Z0-9]+", "-", title).strip("-").lower()[:50] or "document"
+    short = make_id("doc").split("_")[-1][:8]
+    branch = f"boss/{slug}-{short}"
+    md_path = f"{subdir}/{slug}.md"
+    pdf_path = f"{subdir}/{slug}.pdf"
+
+    try:
+        pdf_bytes = render_markdown_pdf(markdown, title=title, subtitle=subtitle)
+    except Exception as exc:
+        return {"error": f"PDF render failed: {type(exc).__name__}: {exc}"}
+
+    try:
+        gh = GitHubAdapter(settings)
+        gh.ensure_branch(branch)
+        gh.upsert_file(branch, md_path, markdown, f"BOSS: add {md_path}")
+        gh.upsert_binary_file(branch, pdf_path, pdf_bytes, f"BOSS: add {pdf_path}")
+        body = (
+            f"{subtitle or ''}\n\n"
+            f"This PR was produced by a BOSS agent and approved by a human.\n\n"
+            f"- 📄 Markdown: `{md_path}` (renders inline on GitHub)\n"
+            f"- 📑 PDF: `{pdf_path}` ({pdf_page_count(pdf_bytes)} pages, {len(pdf_bytes)} bytes)\n\n"
+            f"---\n\n{markdown[:8000]}"
+        )
+        pr = gh.create_pull_request(branch, title, body)
+    except Exception as exc:
+        return {"error": f"GitHub publish failed: {type(exc).__name__}: {exc}"}
+
+    artifact_id = create_artifact(
+        connection, settings, project_id, task_id, "published_document", title,
+        {
+            "pull_request_url": pr.url,
+            "pull_request_number": pr.number,
+            "branch": branch,
+            "md_path": md_path,
+            "pdf_path": pdf_path,
+            "pages": pdf_page_count(pdf_bytes),
+            "bytes": len(pdf_bytes),
+            "subtitle": subtitle,
+            "output_text": markdown,
+        },
+    )
+    emit_event(
+        connection, project_id, "document.published", "agent_loop", "artifact", artifact_id,
+        {"pull_request_url": pr.url, "pull_request_number": pr.number, "task_id": task_id},
+    )
+    return {
+        "status": "published",
+        "pull_request_url": pr.url,
+        "pull_request_number": pr.number,
+        "branch": branch,
+        "md_path": md_path,
+        "pdf_path": pdf_path,
+        "pages": pdf_page_count(pdf_bytes),
+        "artifact_id": artifact_id,
+    }
+
+
+WRITE_TOOLS: list[dict[str, Any]] = [
+    {
+        "fn": _wt_create_followup_task,
+        "risk_tier": 1,
+        "schema": {
+            "type": "function",
+            "function": {
+                "name": "create_followup_task",
+                "description": "Create a real follow-up task in BOSS for a concrete next step. Low risk — runs immediately.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "title": {"type": "string"},
+                        "description": {"type": "string"},
+                        "priority": {"type": "string", "enum": ["p0", "p1", "p2", "p3"]},
+                    },
+                    "required": ["title"],
+                },
+            },
+        },
+    },
+    {
+        "fn": _wt_open_incident,
+        "risk_tier": 2,
+        "schema": {
+            "type": "function",
+            "function": {
+                "name": "open_incident",
+                "description": "Open a P0 incident. HIGH RISK — this requires human approval and will be deferred to a decision before it runs.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"title": {"type": "string"}, "description": {"type": "string"}},
+                    "required": ["title"],
+                },
+            },
+        },
+    },
+    {
+        "fn": _wt_publish_document,
+        "risk_tier": 2,
+        "schema": {
+            "type": "function",
+            "function": {
+                "name": "publish_document",
+                "description": (
+                    "Publish a finished written document (e.g. a PRD/spec) to a GitHub "
+                    "pull request as BOTH markdown and a rendered PDF, so a human can "
+                    "review and verify it. Pass the COMPLETE document as `markdown`. "
+                    "HIGH RISK — deferred for human approval; the PR is created on approval."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "title": {"type": "string", "description": "Document title (also the PR title)"},
+                        "markdown": {"type": "string", "description": "The COMPLETE document body in markdown"},
+                        "subtitle": {"type": "string", "description": "Optional subtitle / source context line"},
+                        "repo_subdir": {"type": "string", "description": "Repo folder to commit into (default 'docs/prd')"},
+                    },
+                    "required": ["title", "markdown"],
+                },
+            },
+        },
+    },
+]
+_WRITE_FNS: dict[str, tuple[Any, int]] = {
+    t["schema"]["function"]["name"]: (t["fn"], t["risk_tier"]) for t in WRITE_TOOLS
+}
+_WRITE_SCHEMAS: list[dict] = [t["schema"] for t in WRITE_TOOLS]
+
+
+def describe_native_tools() -> list[dict]:
+    """Introspect the agent's built-in tool catalog for the Capabilities UI —
+    so agents and humans can see exactly what every native tool does and which
+    require approval."""
+    catalog: list[dict] = []
+
+    def _params(fn_schema: dict) -> list[dict]:
+        params = fn_schema.get("parameters") or {}
+        props = params.get("properties") or {}
+        required = set(params.get("required") or [])
+        return [
+            {
+                "name": k,
+                "type": (v or {}).get("type", "any"),
+                "required": k in required,
+                "description": (v or {}).get("description", ""),
+            }
+            for k, v in props.items()
+        ]
+
+    for t in TOOLS:
+        f = t["schema"]["function"]
+        catalog.append({
+            "name": f["name"], "kind": "read", "risk_tier": 0,
+            "description": f.get("description", ""), "parameters": _params(f),
+        })
+    for t in WRITE_TOOLS:
+        f = t["schema"]["function"]
+        catalog.append({
+            "name": f["name"], "kind": "write", "risk_tier": int(t["risk_tier"]),
+            "description": f.get("description", ""), "parameters": _params(f),
+        })
+    return catalog
+
+
+def execute_agent_tool(
+    connection: Connection,
+    project_id: str,
+    settings: Settings,
+    tool: str,
+    args: dict,
+    actor: str = "system",
+    task_id: Optional[str] = None,
+) -> dict:
+    """Run a write tool's effect (used inline for low-risk and by decision
+    approval for deferred high-risk calls)."""
+    entry = _WRITE_FNS.get(tool)
+    if entry is None:
+        return {"error": f"unknown write tool: {tool}"}
+    fn, _ = entry
+    # Make the owning task available to write tools (e.g. so a published document
+    # artifact links to the right task) without the model having to supply it.
+    if task_id and isinstance(args, dict) and not args.get("task_id"):
+        args = {**args, "task_id": task_id}
+    nested = connection.begin_nested()
+    try:
+        result = fn(connection, project_id, settings, args or {})
+        nested.commit()
+    except Exception as exc:  # pragma: no cover
+        nested.rollback()
+        return {"error": f"{type(exc).__name__}: {exc}"}
+    emit_event(connection, project_id, "agent.tool_executed", actor, "task", project_id, {"tool": tool})
+    return result
+
+
+def _zero_usage() -> dict:
+    return {"model": None, "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+
+
+def _save_run(connection, run_id, project_id, task_id, status, messages, transcript, usage, finalize_ctx, *, step=0, pending=None, output_text=None) -> None:
+    connection.execute(
+        text(
+            """
+            INSERT INTO agent_runs (id, project_id, task_id, status, messages, transcript, usage, finalize_ctx, step, pending, output_text)
+            VALUES (:id, :p, :t, :status, CAST(:messages AS JSONB), CAST(:transcript AS JSONB),
+                    CAST(:usage AS JSONB), CAST(:fctx AS JSONB), :step, CAST(:pending AS JSONB), :output)
+            ON CONFLICT (id) DO UPDATE SET
+              status = EXCLUDED.status, messages = EXCLUDED.messages, transcript = EXCLUDED.transcript,
+              usage = EXCLUDED.usage, finalize_ctx = EXCLUDED.finalize_ctx, step = EXCLUDED.step,
+              pending = EXCLUDED.pending, output_text = EXCLUDED.output_text, updated_at = now()
+            """
+        ),
+        {
+            "id": run_id, "p": project_id, "t": task_id, "status": status,
+            "messages": json.dumps(messages), "transcript": json.dumps(transcript),
+            "usage": json.dumps(usage), "fctx": json.dumps(finalize_ctx or {}), "step": int(step),
+            "pending": json.dumps(pending) if pending is not None else None, "output": output_text,
+        },
+    )
+
+
+def load_agent_run(connection, run_id) -> Optional[dict]:
+    row = connection.execute(
+        text(
+            "SELECT id, project_id, task_id, status, messages, transcript, usage, finalize_ctx, step, pending, output_text "
+            "FROM agent_runs WHERE id = :id"
+        ),
+        {"id": run_id},
+    ).mappings().first()
+    return dict(row) if row else None
+
+
+def run_agent_loop(
+    connection: Connection,
+    settings: Settings,
+    project_id: str,
+    system_prompt: Optional[str],
+    user_prompt: str,
+    *,
+    task_id: Optional[str] = None,
+    max_steps: Optional[int] = None,
+    finalize_ctx: Optional[dict] = None,
+) -> dict:
+    """Start a durable agent run and drive it until it completes or suspends for
+    a human approval. State is persisted to agent_runs after every step so the
+    run survives a crash and can be resumed."""
+    run_id = make_id("arun")
+    messages: list[dict] = []
+    if system_prompt:
+        messages.append({"role": "system", "content": system_prompt})
+    messages.append({"role": "user", "content": user_prompt})
+    _save_run(connection, run_id, project_id, task_id, "running", messages, [], _zero_usage(), finalize_ctx or {}, step=0)
+    emit_event(connection, project_id, "agent.run_started", "agent_loop", "agent_run", run_id, {"task_id": task_id})
+    return _drive_run(connection, settings, run_id, max_steps)
+
+
+def resume_agent_run(connection: Connection, settings: Settings, run_id: str) -> dict:
+    """Resume a suspended run: execute the approved deferred tool, feed its real
+    result back into the conversation, and continue the loop."""
+    run = load_agent_run(connection, run_id)
+    if run is None:
+        return {"status": "not_found", "run_id": run_id}
+    if run["status"] != "awaiting_approval":
+        return {"status": run["status"], "run_id": run_id}
+    project_id = run["project_id"]
+    pending = run["pending"] or {}
+    result = execute_agent_tool(
+        connection, project_id, settings, str(pending.get("tool")), pending.get("args") or {},
+        "decision_approval", task_id=run.get("task_id"),
+    )
+    messages = run["messages"]
+    messages.append(
+        {
+            "role": "user",
+            "content": (
+                f"APPROVED & EXECUTED: a human approved the deferred action "
+                f"'{pending.get('tool')}'. Result: {json.dumps(result)[:2000]}. "
+                "Continue and finalize your plan, incorporating this outcome."
+            ),
+        }
+    )
+    transcript = run["transcript"]
+    transcript.append(
+        {
+            "step": int(run["step"] or 0),
+            "tool": pending.get("tool"),
+            "args": pending.get("args"),
+            "result_preview": json.dumps(result)[:240],
+            "deferred": False,
+            "resumed": True,
+        }
+    )
+    _save_run(
+        connection, run_id, project_id, run["task_id"], "running", messages, transcript,
+        run["usage"] or _zero_usage(), run["finalize_ctx"] or {}, step=int(run["step"] or 0), pending=None,
+    )
+    emit_event(connection, project_id, "agent.run_resumed", "decision_approval", "agent_run", run_id, {"tool": pending.get("tool")})
+    return _drive_run(connection, settings, run_id, None)
+
+
+def _drive_run(connection: Connection, settings: Settings, run_id: str, max_steps: Optional[int]) -> dict:
+    run = load_agent_run(connection, run_id)
+    project_id = run["project_id"]
+    task_id = run["task_id"]
+    messages = run["messages"]
+    transcript = run["transcript"]
+    total = run["usage"] or _zero_usage()
+    finalize_ctx = run["finalize_ctx"] or {}
+    step0 = int(run["step"] or 0)
+
+    adapter = make_chat_adapter(settings)
+    mcp = MCPClient(settings)
+    schemas = list(_TOOL_SCHEMAS) + list(_WRITE_SCHEMAS)
+    mcp_map: dict[str, tuple[dict, str]] = {}
+    for server in list_mcp_servers(connection, project_id, enabled_only=True):
+        try:
+            server_tools = mcp.list_tools(server["url"])
+        except Exception:
+            continue
+        for t in server_tools:
+            ns = ("mcp_" + _slug(server["name"]) + "_" + _slug(str(t.get("name") or "tool")))[:60]
+            schemas.append(
+                {
+                    "type": "function",
+                    "function": {
+                        "name": ns,
+                        "description": f"[MCP · {server['name']}] {t.get('description', '')}",
+                        "parameters": t.get("inputSchema") or {"type": "object", "properties": {}},
+                    },
+                }
+            )
+            mcp_map[ns] = (server, str(t.get("name")))
+
+    steps_cap = int(max_steps or settings.agent_max_steps)
+    threshold = int(settings.agent_autonomous_risk_max)
+
+    def add_usage(u: dict) -> None:
+        total["model"] = u.get("model")
+        for k in ("prompt_tokens", "completion_tokens", "total_tokens"):
+            total[k] = int(total.get(k) or 0) + int(u.get(k) or 0)
+        # carry exact per-call cost (e.g. Claude CLI total_cost_usd) when present
+        if u.get("cost_usd_micros") is not None:
+            total["cost_usd_micros"] = int(total.get("cost_usd_micros") or 0) + int(u["cost_usd_micros"])
+
+    final_text: Optional[str] = None
+    last_step = step0
+    for i in range(steps_cap):
+        step = step0 + i
+        last_step = step
+        message, usage = adapter.create_chat_completion(messages, tools=schemas)
+        add_usage(usage)
+        messages.append(message["raw"])
+        tool_calls = message.get("tool_calls")
+        if not tool_calls:
+            final_text = message.get("content") or ""
+            break
+
+        deferred: Optional[dict] = None
+        thought = (message.get("content") or "").strip()
+        for tc_idx, tc in enumerate(tool_calls):
+            try:
+                args = json.loads(tc.get("arguments") or "{}")
+            except Exception:
+                args = {}
+            name = tc["name"]
+            is_deferred = False
+            if deferred is not None:
+                result = {"status": "skipped", "note": "a prior action this turn awaits approval"}
+            elif name in mcp_map:
+                server, tool_name = mcp_map[name]
+                try:
+                    result = mcp.call_tool(server["url"], tool_name, args)
+                except Exception as exc:
+                    result = {"error": f"{type(exc).__name__}: {exc}"}
+                emit_event(connection, project_id, "agent.mcp_invoked", "agent_loop", "task", task_id or project_id, {"server": server["name"], "tool": tool_name, "step": step})
+            elif name in _WRITE_FNS:
+                _, risk = _WRITE_FNS[name]
+                if risk > threshold:
+                    decision_id = create_blocking_decision(
+                        connection, project_id, task_id,
+                        f"Approve agent action: {name}",
+                        {"action": "resume_agent_run", "run_id": run_id, "tool": name, "args": args, "task_id": task_id},
+                        {}, "agent_tool_requires_approval", risk_tier=risk,
+                    )
+                    result = {"status": "deferred_for_approval", "decision_id": decision_id, "message": f"'{name}' (risk tier {risk}) requires human approval; the run is paused and resumes on approval."}
+                    is_deferred = True
+                    deferred = {"tool": name, "args": args, "decision_id": decision_id}
+                    emit_event(connection, project_id, "agent.tool_deferred", "agent_loop", "decision", decision_id, {"tool": name, "risk_tier": risk, "step": step})
+                else:
+                    result = execute_agent_tool(connection, project_id, settings, name, args, "agent_loop", task_id=task_id)
+            else:
+                result = _dispatch(connection, project_id, settings, name, args)
+                emit_event(connection, project_id, "agent.tool_invoked", "agent_loop", "task", task_id or project_id, {"tool": name, "step": step})
+            step_obj = {"step": step, "tool": name, "args": args, "result_preview": json.dumps(result)[:240], "deferred": is_deferred}
+            if tc_idx == 0 and thought:
+                step_obj["thought"] = thought
+            transcript.append(step_obj)
+            messages.append({"role": "tool", "tool_call_id": tc["id"], "content": json.dumps(result)[:16000]})
+
+        if deferred is not None:
+            _save_run(connection, run_id, project_id, task_id, "awaiting_approval", messages, transcript, total, finalize_ctx, step=step + 1, pending=deferred)
+            emit_event(connection, project_id, "agent.run_suspended", "agent_loop", "agent_run", run_id, {"decision_id": deferred["decision_id"], "tool": deferred["tool"]})
+            return {"status": "suspended", "run_id": run_id, "decision_id": deferred["decision_id"], "output_text": "", "usage": total, "transcript": transcript}
+
+        _save_run(connection, run_id, project_id, task_id, "running", messages, transcript, total, finalize_ctx, step=step + 1)
+
+    if final_text is None:
+        message, usage = adapter.create_chat_completion(messages, tools=None)
+        add_usage(usage)
+        final_text = message.get("content") or "(agent reached its step limit before finishing)"
+
+    _save_run(connection, run_id, project_id, task_id, "completed", messages, transcript, total, finalize_ctx, step=last_step + 1, output_text=final_text)
+    emit_event(connection, project_id, "agent.run_completed", "agent_loop", "agent_run", run_id, {"steps": len(transcript)})
+    return {"status": "completed", "run_id": run_id, "output_text": final_text, "usage": total, "transcript": transcript, "tool_calls": len(transcript)}
+
+
+def conversation_from_messages(messages: list[dict]) -> list[dict]:
+    """Transform the raw LLM `messages` array (OpenAI chat format) into clean,
+    display-ready turns for the UI — the faithful agent<->LLM back-and-forth.
+
+    Each turn is one of:
+      {"role":"system","text":...}
+      {"role":"user","text":...}
+      {"role":"assistant","text":...,"calls":[{"name","args"}]}
+      {"role":"tool","name":...,"text":...}
+    """
+    id_to_name: dict[str, str] = {}
+    turns: list[dict] = []
+    for m in messages or []:
+        role = m.get("role")
+        if role == "system":
+            turns.append({"role": "system", "text": m.get("content") or ""})
+        elif role == "user":
+            turns.append({"role": "user", "text": m.get("content") or ""})
+        elif role == "assistant":
+            calls = []
+            for tc in (m.get("tool_calls") or []):
+                fn = tc.get("function") or {}
+                name = fn.get("name")
+                if tc.get("id"):
+                    id_to_name[tc["id"]] = name
+                raw_args = fn.get("arguments")
+                try:
+                    args = json.loads(raw_args) if isinstance(raw_args, str) else (raw_args or {})
+                except Exception:
+                    args = {"_raw": raw_args}
+                calls.append({"name": name, "args": args})
+            turns.append({"role": "assistant", "text": m.get("content") or "", "calls": calls})
+        elif role == "tool":
+            turns.append(
+                {
+                    "role": "tool",
+                    "name": id_to_name.get(m.get("tool_call_id")) or "tool",
+                    "text": m.get("content") or "",
+                }
+            )
+    return turns

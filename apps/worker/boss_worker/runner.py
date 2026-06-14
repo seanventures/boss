@@ -267,6 +267,9 @@ def capabilities() -> list[str]:
         "plan.command",
         "plan.generate",
         "openai.plan",
+        "meeting.step",
+        "code.task",
+        "agent.resume",
         "software_factory.propose_pr",
         "github.pull_request.merge",
         "github.deployment.create",
@@ -535,7 +538,7 @@ def agent_module_id_from_payload(payload: dict[str, Any]) -> Any:
 
 
 def execute_job(job: LeasedJob, client: ControlPlaneClient) -> dict[str, Any]:
-    if job.kind.startswith("agent."):
+    if job.kind.startswith("agent.") and job.kind != "agent.resume":
         return build_agent_brief_result(job)
     if job.kind == "enterprise.marketplace.validate":
         return build_marketplace_validation_result(job)
@@ -551,10 +554,26 @@ def execute_job(job: LeasedJob, client: ControlPlaneClient) -> dict[str, Any]:
                 "system_prompt": job.payload.get("system_prompt"),
                 "agent_module_id": agent_module_id_from_payload(job.payload),
                 "created_by_job_id": job.id,
+                "task_id": job.task_id,
             }
         )
         if result.get("status") == "failed":
             raise RuntimeError(result.get("message") or "OpenAI plan job failed.")
+        return result
+    if job.kind == "meeting.step":
+        result = client.run_meeting_step({"run_id": job.payload["run_id"]})
+        if result.get("status") == "failed":
+            raise RuntimeError(result.get("error") or "Meeting step failed.")
+        return result
+    if job.kind == "code.task":
+        result = client.run_code_task({"run_id": job.payload["run_id"]})
+        if result.get("status") == "failed":
+            raise RuntimeError(result.get("error") or "Code task failed.")
+        return result
+    if job.kind == "agent.resume":
+        result = client.resume_agent_run({"run_id": job.payload["run_id"]})
+        if result.get("status") == "failed":
+            raise RuntimeError(result.get("message") or "Agent resume job failed.")
         return result
     if job.kind == "software_factory.propose_pr":
         result = client.create_pull_request_proposal(

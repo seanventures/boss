@@ -24,7 +24,9 @@ from .github_adapter import (
     IntegrationConfigurationError,
     PullRequestValidationResult,
 )
-from .openai_adapter import OpenAIAdapter
+from .agent_loop import load_agent_run, run_agent_loop
+from .claude_cli_adapter import make_chat_adapter
+from .openai_adapter import OpenAIAdapter, estimate_cost_usd_micros  # noqa: F401
 from .receipts import ReceiptService
 from .sandbox_validation import (
     SandboxValidationAdapter,
@@ -39,7 +41,7 @@ class SoftwareFactoryService:
         self.budget = BudgetGovernor(settings)
         self.receipts = ReceiptService()
         self.github = GitHubAdapter(settings)
-        self.openai = OpenAIAdapter(settings)
+        self.openai = make_chat_adapter(settings)
         self.entitlements = EntitlementBrokerService(settings)
         self.specpack = SpecPackService(settings)
         self.sandbox_validation = SandboxValidationAdapter(settings)
@@ -558,6 +560,7 @@ class SoftwareFactoryService:
         system_prompt: Optional[str],
         created_by_job_id: Optional[str] = None,
         agent_module_id: Optional[str] = None,
+        task_id: Optional[str] = None,
     ) -> dict:
         reservation = self.budget.assert_active_reservation(
             connection, project_id, reservation_id
@@ -629,14 +632,50 @@ class SoftwareFactoryService:
             }
 
         try:
-            provider_ref, output_text = self.openai.create_text_response(
+            merged_system = self._merge_system_prompts(
+                self._module_prompt(module_spec, "system"),
+                self._module_prompt(module_spec, "planning"),
+                system_prompt,
+                "You have read-only tools to fetch the project's real data "
+                "(budget/costs, project status, and codebase files). Call them to "
+                "ground your plan in reality before answering. Cite concrete numbers "
+                "and files you retrieved; do not invent figures. "
+                "You also have write tools: create_followup_task (low risk, runs "
+                "immediately) and open_incident (high risk — it will be deferred to a "
+                "human decision and only run on approval). Use them when the task "
+                "clearly warrants concrete action; prefer create_followup_task for "
+                "routine next steps. "
+                "If MCP tools are available (their names start with 'mcp_'), you may "
+                "have web-research tools (e.g. study_site / fetch_page) to study a live "
+                "external website before writing about it — ALWAYS study the real site "
+                "first when the task references a URL, and cite concrete things you "
+                "found (pages, features, copy) instead of inventing them. "
+                "When the task asks you to PRODUCE A DOCUMENT (a PRD, spec, report, or "
+                "proposal), write the COMPLETE document in markdown and then call the "
+                "publish_document tool with the full markdown to render it as a PDF and "
+                "open a GitHub pull request for human review (high risk — deferred for "
+                "approval). Do not just describe the document; actually publish it.",
+            )
+            finalize_ctx = {
+                "prompt": prompt,
+                "receipt_id": receipt["id"],
+                "reservation_id": reservation_id,
+                "reservation_amount": int(reservation["amount_usd_micros"]),
+                "route_model_id": route["model_id"],
+                "route_source_id": route["source_id"],
+                "route_log_id": route["route_decision_log_id"],
+                "module_descriptor": self._module_descriptor(module_spec),
+                "module_id": module_spec.get("id") if isinstance(module_spec, dict) else None,
+                "created_by_job_id": created_by_job_id,
+            }
+            loop_result = run_agent_loop(
+                connection,
+                self.settings,
+                project_id,
+                merged_system,
                 prompt,
-                self._merge_system_prompts(
-                    self._module_prompt(module_spec, "system"),
-                    self._module_prompt(module_spec, "planning"),
-                    system_prompt,
-                ),
-                route["model_id"],
+                task_id=task_id,
+                finalize_ctx=finalize_ctx,
             )
         except IntegrationConfigurationError as error:
             self.receipts.mark_failed(
@@ -687,35 +726,62 @@ class SoftwareFactoryService:
                 "message": str(error),
             }
 
+        if loop_result["status"] == "suspended":
+            # The agent paused on a high-risk action; the plan is finalized later
+            # when the human approves and the run resumes to completion.
+            return {
+                "status": "suspended",
+                "run_id": loop_result["run_id"],
+                "decision_id": loop_result.get("decision_id"),
+                "message": "Plan paused for human approval of a high-risk action.",
+            }
+        return self._finalize_plan_run(connection, loop_result["run_id"])
+
+    def _finalize_plan_run(self, connection: Connection, run_id: str) -> dict:
+        """Turn a completed agent run into a plan_draft artifact + settled cost +
+        review decision. Called when the run finishes — immediately, or later
+        after a suspend -> approve -> resume cycle."""
+        run = load_agent_run(connection, run_id)
+        ctx = (run.get("finalize_ctx") if run else None) or {}
+        project_id = run["project_id"]
+        task_id = run["task_id"]
+        output_text = run.get("output_text") or ""
+        usage = run.get("usage") or {}
+        transcript = run.get("transcript") or []
         artifact_id = create_artifact(
             connection,
             self.settings,
             project_id,
-            None,
+            task_id,
             "plan_draft",
             "OpenAI plan draft",
             {
-                "prompt": prompt,
+                "prompt": ctx.get("prompt"),
                 "output_text": output_text,
-                "agent_module": self._module_descriptor(module_spec),
+                "agent_module": ctx.get("module_descriptor") or {},
+                "usage": usage,
+                "cost_usd_micros": estimate_cost_usd_micros(usage),
+                "agent_transcript": transcript,
+                "tool_calls": len(transcript),
+                "agent_run_id": run_id,
             },
-            created_by_job_id=created_by_job_id,
+            created_by_job_id=ctx.get("created_by_job_id"),
         )
         self.receipts.mark_succeeded(
             connection,
-            receipt["id"],
-            provider_ref,
+            ctx["receipt_id"],
+            "agent_loop",
             {"artifact_id": artifact_id, "output_text": output_text},
         )
         self.budget.settle(
             connection,
             project_id,
-            reservation_id,
-            receipt["id"],
+            ctx["reservation_id"],
+            ctx["receipt_id"],
             "model",
-            route["model_id"],
-            int(reservation["amount_usd_micros"]),
-            None,
+            usage.get("model") or ctx.get("route_model_id"),
+            int(ctx.get("reservation_amount") or 0),
+            estimate_cost_usd_micros(usage),
         )
         emit_event(
             connection,
@@ -725,21 +791,45 @@ class SoftwareFactoryService:
             "artifact",
             artifact_id,
             {
-                "receipt_id": receipt["id"],
-                "routing_log_id": route["route_decision_log_id"],
-                "source_id": route["source_id"],
-                "model_id": route["model_id"],
-                "agent_module_id": (
-                    module_spec.get("id") if isinstance(module_spec, dict) else None
-                ),
+                "receipt_id": ctx["receipt_id"],
+                "routing_log_id": ctx.get("route_log_id"),
+                "source_id": ctx.get("route_source_id"),
+                "model_id": ctx.get("route_model_id"),
+                "agent_module_id": ctx.get("module_id"),
             },
         )
+        decision_id = None
+        if task_id:
+            task_row = connection.execute(
+                text("SELECT title FROM tasks WHERE id = :t AND project_id = :p"),
+                {"t": task_id, "p": project_id},
+            ).mappings().first()
+            decision_id = create_blocking_decision(
+                connection,
+                project_id,
+                task_id,
+                f"Review plan draft for {(task_row['title'] if task_row else None) or 'queued task'}",
+                {"action": "review_plan_draft", "artifact_id": artifact_id},
+                {},
+                "plan_ready_for_review",
+            )
         return {
             "status": "created",
             "artifact_id": artifact_id,
-            "receipt_id": receipt["id"],
+            "receipt_id": ctx["receipt_id"],
             "output_text": output_text,
+            "decision_id": decision_id,
         }
+
+    def resume_plan_run(self, connection: Connection, run_id: str) -> dict:
+        """Resume a suspended plan run after a human approval; finalize if it
+        completes (it may suspend again on another high-risk action)."""
+        from .agent_loop import resume_agent_run
+
+        result = resume_agent_run(connection, self.settings, run_id)
+        if result.get("status") == "completed":
+            return self._finalize_plan_run(connection, run_id)
+        return result
 
     def _mark_merge_completed(
         self,
@@ -1308,7 +1398,7 @@ class SoftwareFactoryService:
             }
 
         try:
-            review_provider_ref, review_text = self.openai.create_text_response(
+            review_provider_ref, review_text, review_usage = self.openai.create_text_response(
                 (
                     "Create a review packet for a BOSS software-factory proposal.\n\n"
                     f"Title: {title}\n"

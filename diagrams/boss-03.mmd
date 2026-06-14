@@ -1,0 +1,22 @@
+sequenceDiagram
+    autonumber
+    actor Admin as Customer admin
+    participant GH as Customer GitHub
+    participant BOSS as BOSS Control Plane
+    participant RUN as BOSS Runner
+    participant SBX as Sandbox
+
+    Admin->>GH: Install "BOSS Engineering Agent" GitHub App (contents, PR scopes)
+    GH-->>Admin: Installation ID (customer can revoke anytime)
+    Admin->>BOSS: Link installation to org (no PAT, no shared creds)
+
+    Note over BOSS: A coding task is approved to start
+    BOSS->>RUN: Dispatch task spec (repo, branch policy, budget)
+    RUN->>GH: Mint short-lived installation token (scoped to that repo)
+    GH-->>RUN: Installation access token (1h, repo-scoped)
+    RUN->>SBX: clone repo using the token
+    SBX->>SBX: CodeAgent edits files and runs tests in a loop
+    SBX->>GH: push branch and open PR as the bot developer
+    GH-->>SBX: PR number and URL
+    RUN->>BOSS: diff summary, test results, PR link (NO source)
+    Note over GH: Commits authored by the bot, traceable to the task and the approver

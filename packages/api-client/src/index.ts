@@ -874,6 +874,115 @@ export type PlanListResponse = {
   items: PlanSummary[];
 };
 
+export type CodeTaskTestResult = {
+  command: string;
+  exit_code: number | null;
+  timed_out?: boolean;
+  duration_ms?: number;
+};
+
+export type CodeTaskState = {
+  engine?: string;
+  summary?: string;
+  files_changed?: number;
+  additions?: number;
+  deletions?: number;
+  paths?: string[];
+  tests_passed?: boolean;
+  tests?: CodeTaskTestResult[];
+  cost_usd_micros?: number;
+  turns?: number;
+};
+
+export type CodeTaskRun = {
+  id: string;
+  project_id: string;
+  task_id?: string | null;
+  status: string; // running | completed | failed | blocked
+  phase: string;  // queued|provisioning|coding|validating|opening_pr|done
+  title: string;
+  spec: {
+    instructions?: string;
+    acceptance_criteria?: string[];
+    test_commands?: string[];
+    owner?: string;
+    repo?: string;
+    base_branch?: string;
+  };
+  state: CodeTaskState;
+  usage?: { cost_usd_micros?: number; model?: string };
+  reservation_id?: string | null;
+  pull_request_url?: string | null;
+  pull_request_number?: number | null;
+  decision_id?: string | null;
+  error?: string | null;
+};
+
+export type CodeTasksResponse = { code_tasks: CodeTaskRun[] };
+
+export type SandboxSummary = {
+  sandbox_id: string;
+  tenant_id: string;
+  repo: string;
+  title: string;
+  status: string; // running | idle | failed
+  container_id: string;
+  created_at: number;
+  updated_at: number;
+  age_seconds: number;
+  meta?: {
+    engine?: string;
+    summary?: string;
+    diff_summary?: { files_changed?: number; additions?: number; deletions?: number; paths?: string[] };
+    tests?: { command: string; exit_code: number | null }[];
+    tests_passed?: boolean;
+  };
+  preserved?: boolean;
+  preserve_reason?: string;
+  preserved_by?: string;
+  snapshot_image?: string;
+};
+
+export type SandboxesResponse = { sandboxes: SandboxSummary[]; unavailable?: string };
+
+export type SandboxStats = {
+  sandbox_id: string;
+  status: string;
+  cpu_pct?: string;
+  mem_usage?: string;
+  mem_pct?: string;
+  net_io?: string;
+  block_io?: string;
+  pids?: string;
+  oom_killed?: boolean;
+  exit_code?: number;
+  container_status?: string;
+  mem_limit_bytes?: number;
+  nano_cpus?: number;
+  restart_count?: number;
+};
+
+export type SandboxExecResult = {
+  exit_code?: number;
+  stdout?: string;
+  stderr?: string;
+  break_glass?: boolean;
+  blocked?: boolean;
+  detail?: string;
+};
+
+export type CodeTaskCreatePayload = {
+  project_id: string;
+  title: string;
+  instructions: string;
+  acceptance_criteria?: string[];
+  test_commands?: string[];
+  owner?: string;
+  repo?: string;
+  base_branch?: string;
+  task_id?: string;
+};
+
 export type MeetingSummary = {
   id: string;
   project_id: string;
@@ -1199,6 +1308,255 @@ export type WorkerFailResponse = {
   status: string;
   run_after?: string;
   deadletter_id?: string;
+};
+
+export type McpServer = {
+  id: string;
+  name: string;
+  url: string;
+  transport: string;
+  risk_tier: number;
+  data_boundary: DataBoundary;
+  enabled: boolean;
+  description?: string;
+  created_at: string;
+};
+
+export type McpServersResponse = {
+  project_id: string;
+  items: McpServer[];
+};
+
+export type NativeToolParam = {
+  name: string;
+  type: string;
+  required: boolean;
+  description?: string;
+};
+
+export type NativeTool = {
+  name: string;
+  kind: "read" | "write";
+  risk_tier: number;
+  description: string;
+  parameters: NativeToolParam[];
+};
+
+export type McpServerTool = {
+  name: string;
+  description?: string;
+};
+
+export type McpServerWithTools = McpServer & {
+  reachable: boolean;
+  tools: McpServerTool[];
+  error?: string;
+};
+
+export type ApprovalToolRule = {
+  name: string;
+  source: string;
+  kind: string;
+  risk_tier: number;
+  requires_approval: boolean;
+};
+export type ApprovalServiceGate = { domain: string; gate: string; trigger: string; reason: string };
+export type ApprovalRulesResponse = {
+  project_id: string;
+  autonomy_threshold: number;
+  autonomy_explainer: string;
+  tool_rules: ApprovalToolRule[];
+  service_gates: ApprovalServiceGate[];
+  budget_gates: Record<string, number>;
+  policies: { policy_key: string; title: string; status: string; version: number }[];
+};
+
+export type CapabilitiesResponse = {
+  project_id: string;
+  engine?: string;
+  engine_label?: string;
+  engine_model?: string;
+  native_tools: NativeTool[];
+  skills: SkillSummary[];
+  mcp_servers: McpServerWithTools[];
+};
+
+export type OrgSummary = {
+  org_id: string;
+  org_name: string;
+  created_at: string;
+  project_id: string;
+  project_name: string;
+  project_slug: string;
+  workspace_name: string;
+  task_count: number;
+  meeting_count: number;
+};
+
+export type OrgsResponse = { items: OrgSummary[] };
+
+export type MeetingRole = {
+  key: string;
+  title: string;
+  lens: string;
+  default: boolean;
+  is_default?: boolean;
+  enabled?: boolean;
+  risk_tier?: number;
+  data_boundary?: string;
+};
+
+export type MeetingRolesResponse = {
+  roles: MeetingRole[];
+  default_role_keys: string[];
+};
+
+export type Meeting = {
+  id: string;
+  task_id?: string | null;
+  task_title?: string | null;
+  task_status?: string | null;
+  role_keys?: string[];
+  title: string;
+  purpose: string;
+  status: string;
+  phase?: string;
+  participants: string[];
+  created_at: string;
+  completed_at?: string | null;
+  directive?: string | null;
+  url?: string | null;
+  model?: string | null;
+  cost_usd_micros?: number | null;
+  research_summary?: { sitemap?: string[]; pages_studied?: number };
+  round1: Record<string, string>;
+  round2: Record<string, string>;
+  synthesis?: string | null;
+  prd_markdown?: string | null;
+  pull_request_url?: string | null;
+  pull_request_number?: number | null;
+};
+
+export type MeetingsResponse = {
+  project_id: string;
+  items: Meeting[];
+};
+
+export type MeetingConvenePayload = {
+  project_id: string;
+  directive: string;
+  url?: string;
+  roles?: string[];
+  task_id?: string;
+  constraints?: Record<string, unknown>;
+  actor?: string;
+};
+
+export type McpServerRegisterPayload = {
+  project_id: string;
+  name: string;
+  url: string;
+  transport?: string;
+  risk_tier?: number;
+  data_boundary?: DataBoundary;
+  description?: string;
+  actor?: string;
+};
+
+export type AgentRunStep = {
+  step: number;
+  tool: string;
+  args: Record<string, unknown>;
+  result_preview: string;
+  deferred?: boolean;
+  resumed?: boolean;
+  thought?: string;
+};
+
+export type ConversationToolCall = {
+  name: string;
+  args: Record<string, unknown>;
+};
+
+export type ConversationTurn = {
+  role: "system" | "user" | "assistant" | "tool";
+  text: string;
+  name?: string;
+  calls?: ConversationToolCall[];
+};
+
+export type AgentRun = {
+  artifact_id: string;
+  task_id?: string;
+  created_at: string;
+  model?: string;
+  tool_calls: number;
+  cost_usd_micros: number;
+  total_tokens: number;
+  transcript: AgentRunStep[];
+  output_text?: string | null;
+  status?: string | null;
+  conversation?: ConversationTurn[];
+};
+
+export type AgentRunsResponse = {
+  project_id: string;
+  items: AgentRun[];
+};
+
+export type TaskOutput = {
+  task_id: string;
+  kind: string;
+  title: string;
+  link_kind: "external" | "artifact" | "task";
+  url?: string | null;
+  artifact_id?: string;
+  ref_task_id?: string;
+  status?: string;
+  preview?: string | null;
+  created_at: string;
+};
+
+export type TaskOutputsResponse = {
+  project_id: string;
+  items: TaskOutput[];
+};
+
+export type ReportWindow = {
+  tasks: number;
+  jobs: number;
+  jobs_succeeded: number;
+  jobs_failed: number;
+  decisions: number;
+  decisions_approved: number;
+  spend_usd_micros: number;
+};
+
+export type ReportSummaryResponse = {
+  project_id: string;
+  generated_at: string;
+  windows: { today: ReportWindow; week: ReportWindow; month: ReportWindow };
+  daily: Array<{ date: string; tasks: number; succeeded: number; failed: number }>;
+  by_kind: Array<{
+    kind: string;
+    total: number;
+    succeeded: number;
+    failed: number;
+    avg_seconds: number;
+  }>;
+  by_model: Array<{ model: string; count: number; spend_usd_micros: number }>;
+  agents: Array<{
+    role_key: string;
+    display_name: string;
+    trust_score: number;
+    autonomy_level: number;
+    successful_runs: number;
+    policy_violations: number;
+    scope_violations: number;
+    last_reviewed_at: string | null;
+    last_violation_at: string | null;
+  }>;
+  decision_latency: { count: number; avg_seconds: number };
 };
 
 export type BudgetStatusResponse = {
@@ -3302,7 +3660,7 @@ export function createBossApiClient(config: BossApiClientConfig) {
   const apiKey = config.apiKey?.trim();
 
   async function request<T>(
-    method: "GET" | "POST",
+    method: "GET" | "POST" | "PATCH" | "DELETE",
     path: string,
     options?: {
       query?: Record<string, QueryValue>;
@@ -3333,10 +3691,132 @@ export function createBossApiClient(config: BossApiClientConfig) {
       );
     }
 
-    return (await response.json()) as T;
+    if (response.status === 204) {
+      return undefined as T;
+    }
+    const text = await response.text();
+    return (text ? JSON.parse(text) : undefined) as T;
   }
 
   return {
+    getReportSummary(projectId: string) {
+      return request<ReportSummaryResponse>("GET", "/v1/reports/summary", {
+        query: { project_id: projectId },
+      });
+    },
+    getAgentRuns(projectId: string) {
+      return request<AgentRunsResponse>("GET", "/v1/agent-runs", {
+        query: { project_id: projectId },
+      });
+    },
+    getTaskOutputs(projectId: string) {
+      return request<TaskOutputsResponse>("GET", "/v1/outputs", {
+        query: { project_id: projectId },
+      });
+    },
+    getOrgs() {
+      return request<OrgsResponse>("GET", "/v1/orgs");
+    },
+    onboardOrg(name: string) {
+      return request<{ org_id: string; project_id: string; name: string }>(
+        "POST", "/v1/orgs", { body: { name } },
+      );
+    },
+    getApprovalRules(projectId: string) {
+      return request<ApprovalRulesResponse>("GET", "/v1/approval-rules", {
+        query: { project_id: projectId },
+      });
+    },
+    getCapabilities(projectId: string) {
+      return request<CapabilitiesResponse>("GET", "/v1/capabilities", {
+        query: { project_id: projectId },
+      });
+    },
+    getMeetings(projectId: string) {
+      return request<MeetingsResponse>("GET", "/v1/meeting-rooms", {
+        query: { project_id: projectId },
+      });
+    },
+    getMeetingRoles(projectId: string) {
+      return request<MeetingRolesResponse>("GET", "/v1/meeting-roles", {
+        query: { project_id: projectId },
+      });
+    },
+    upsertMeetingRole(payload: {
+      project_id: string; title: string; lens: string; key?: string;
+      risk_tier?: number; is_default?: boolean; enabled?: boolean;
+    }) {
+      return request<{ key: string; title: string }>("POST", "/v1/meeting-roles", { body: payload });
+    },
+    setMeetingRoleEnabled(roleKey: string, projectId: string, enabled: boolean) {
+      return request<{ role_key: string; enabled: boolean }>(
+        "PATCH", `/v1/meeting-roles/${encodeURIComponent(roleKey)}`,
+        { query: { project_id: projectId, enabled } },
+      );
+    },
+    deleteMeetingRole(roleKey: string, projectId: string) {
+      return request<void>("DELETE", `/v1/meeting-roles/${encodeURIComponent(roleKey)}`, {
+        query: { project_id: projectId },
+      });
+    },
+    conveneMeeting(payload: MeetingConvenePayload) {
+      return request<{ status: string; task_id: string; job_id: string }>(
+        "POST", "/v1/meetings/prd", { body: payload },
+      );
+    },
+    getCodeTasks(projectId: string, limit = 50) {
+      return request<CodeTasksResponse>("GET", "/v1/code-tasks", {
+        query: { project_id: projectId, limit },
+      });
+    },
+    getCodeTask(runId: string) {
+      return request<CodeTaskRun>("GET", `/v1/code-tasks/${encodeURIComponent(runId)}`);
+    },
+    createCodeTask(payload: CodeTaskCreatePayload) {
+      return request<{ status: string; run_id: string }>("POST", "/v1/code-tasks", { body: payload });
+    },
+    getSandboxes() {
+      return request<SandboxesResponse>("GET", "/v1/sandboxes");
+    },
+    getSandboxTree(sandboxId: string) {
+      return request<{ tree: string[] }>("GET", `/v1/sandboxes/${encodeURIComponent(sandboxId)}/tree`);
+    },
+    getSandboxFile(sandboxId: string, path: string) {
+      return request<{ path: string; content: string }>(
+        "GET", `/v1/sandboxes/${encodeURIComponent(sandboxId)}/file`, { query: { path } });
+    },
+    execSandbox(sandboxId: string, command: string, breakGlass = false, reason?: string) {
+      return request<SandboxExecResult>("POST", `/v1/sandboxes/${encodeURIComponent(sandboxId)}/exec`,
+        { body: { command, break_glass: breakGlass, reason } });
+    },
+    getSandboxStats(sandboxId: string) {
+      return request<SandboxStats>("GET", `/v1/sandboxes/${encodeURIComponent(sandboxId)}/stats`);
+    },
+    preserveSandbox(sandboxId: string, reason: string, actor = "operator") {
+      return request<SandboxSummary>("POST", `/v1/sandboxes/${encodeURIComponent(sandboxId)}/preserve`,
+        { body: { reason, actor } });
+    },
+    destroySandbox(sandboxId: string) {
+      return request<{ status: string }>("DELETE", `/v1/sandboxes/${encodeURIComponent(sandboxId)}`);
+    },
+    registerMcpServer(payload: McpServerRegisterPayload) {
+      return request<McpServer>("POST", "/v1/mcp/servers", { body: payload });
+    },
+    setMcpServerEnabled(serverId: string, projectId: string, enabled: boolean) {
+      return request<McpServer>("PATCH", `/v1/mcp/servers/${encodeURIComponent(serverId)}`, {
+        query: { project_id: projectId, enabled },
+      });
+    },
+    deleteMcpServer(serverId: string, projectId: string) {
+      return request<void>("DELETE", `/v1/mcp/servers/${encodeURIComponent(serverId)}`, {
+        query: { project_id: projectId },
+      });
+    },
+    getMcpServers(projectId: string) {
+      return request<McpServersResponse>("GET", "/v1/mcp/servers", {
+        query: { project_id: projectId },
+      });
+    },
     getHealth() {
       return request<HealthResponse>("GET", "/health");
     },

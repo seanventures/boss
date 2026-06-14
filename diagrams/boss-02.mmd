@@ -1,0 +1,15 @@
+flowchart TD
+    subgraph A["Shape A — Full SaaS (default · BOSS-hosted)"]
+        A1["BOSS control plane (SaaS)"] -->|dispatch spec| A2["Isolated single-tenant<br/>microVM (Firecracker/gVisor)<br/>on BOSS infra<br/>(ephemeral · per task)"]
+        A2 -->|"code never persisted;<br/>scrubbed; short-lived token"| A3["Customer GitHub"]
+    end
+    subgraph B["Shape B — Customer-boundary residency (regulated tier)"]
+        B1["BOSS control plane (SaaS)"] -->|"outbound pull"| B2["BOSS Runner in CUSTOMER VPC<br/>(self-hosted CI-runner style)"]
+        B2 --> B3["Same microVM, in customer infra"]
+        B3 --> B4["Customer GitHub"]
+    end
+
+    classDef cp fill:#e6f3ff,stroke:#0284c7,color:#000
+    classDef cust fill:#d4edda,stroke:#22c55e,color:#000
+    class A1,B1 cp
+    class A2,A3,B2,B3,B4 cust

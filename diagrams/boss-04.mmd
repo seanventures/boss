@@ -1,0 +1,30 @@
+flowchart TD
+    Start([CEO directive / ticket]) --> S1
+    S1["1 · Intake & scope<br/>(optional multi-agent panel<br/>refines requirements + acceptance criteria)"] --> S2
+    S2{"2 · Budget reserve<br/>cap this task's model spend"}
+    S2 -->|denied| STOP([Hold / escalate])
+    S2 -->|reserved| S3
+    S3["3 · Dispatch to Runner<br/>(task spec, NO code) — customer boundary"] --> S4
+    S4["4 · Provision sandbox<br/>mint repo-scoped token · clone repo"] --> S5
+    S5["5 · CodeAgent loop<br/>search → edit files → build → test<br/>→ fail → fix → repeat (bounded)"] --> S6
+    S6{"6 · Verify gate<br/>tests green? lint clean?<br/>within budget & step caps?"}
+    S6 -->|no| S5
+    S6 -->|yes| S7
+    S7["7 · Open chunked PR(s) as bot<br/>branch + commits + review packet<br/>→ customer GitHub"] --> S8
+    S8{"8 · Human approval (BOSS Decision)<br/>review PR · approve / revise / reject"}
+    S8 -->|revise| S5
+    S8 -->|reject| S10
+    S8 -->|approve| S9
+    S9["9 · Merge (gated)<br/>via branch protection + BOSS gate"] --> S10
+    S10[/"10 · Settle budget · audit · exactly-once receipts<br/>cost, diff summary, PR, outcome"/]
+    S10 --> Done([Done — reviewable, attributable, governed])
+
+    classDef gate fill:#ffd700,stroke:#000,color:#000,stroke-width:2px
+    classDef cp fill:#e6f3ff,stroke:#0284c7,color:#000
+    classDef cust fill:#d4edda,stroke:#22c55e,color:#000
+    classDef audit fill:#ffe4b5,stroke:#000,color:#000
+    classDef endpoint fill:#f1f5f9,stroke:#64748b,color:#000
+    class S2,S6,S8 gate
+    class S1,S3 cp
+    class S4,S5,S7,S9 cust
+    class S10 audit
