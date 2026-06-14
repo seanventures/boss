@@ -21,7 +21,7 @@ import subprocess
 import tempfile
 import time
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Optional
 
@@ -102,6 +102,13 @@ class ContainerBackend:
         self.work_root.mkdir(parents=True, exist_ok=True)
         self.runtime = runtime
         self.sandboxes: dict[str, SandboxRecord] = {}
+        # Registry is persisted to disk so an agent restart doesn't blank the
+        # console (in-memory only would lose every sandbox on restart).
+        self.state_path = Path(
+            os.environ.get("BOSS_SANDBOX_STATE")
+            or (self.work_root.parent / "registry.json")
+        ).expanduser()
+        self._restore()
 
     # -- docker helpers -----------------------------------------------------
     def _docker(self, args, timeout=60, check=False):
@@ -125,6 +132,81 @@ class ContainerBackend:
                 self.destroy(sid)
             except Exception:
                 pass
+
+    # -- registry persistence + restore (survive agent restarts) -----------
+    def _persist(self):
+        """Write the live registry to disk so a restart doesn't lose sandboxes."""
+        try:
+            data = {sid: asdict(r) for sid, r in self.sandboxes.items()
+                    if r.status != "destroyed"}
+            self.state_path.parent.mkdir(parents=True, exist_ok=True)
+            self.state_path.write_text(json.dumps(data, indent=2))
+        except Exception:
+            pass
+
+    def _container_status(self, cid: str) -> Optional[str]:
+        if not cid:
+            return None
+        p = self._docker(["inspect", "-f", "{{.State.Status}}", cid])
+        return p.stdout.strip() if p.returncode == 0 else None
+
+    def _restore(self):
+        """Rebuild the registry on startup: load the persisted file, reconcile
+        against live Docker, and recover orphaned containers / quarantine
+        snapshots not in the file (e.g. created before persistence existed)."""
+        try:
+            if self.state_path.exists():
+                for sid, d in json.loads(self.state_path.read_text()).items():
+                    try:
+                        self.sandboxes[sid] = SandboxRecord(**d)
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+        # Drop stale records whose container is gone (keep quarantined — the
+        # snapshot image is the artifact; its container is expected to be gone).
+        for sid, rec in list(self.sandboxes.items()):
+            if rec.status == "quarantined":
+                continue
+            st = self._container_status(rec.container_id)
+            if st is None:
+                del self.sandboxes[sid]
+            elif st != "running" and rec.status not in ("failed", "idle"):
+                rec.status = "failed"
+        # Recover preserved snapshots (quarantine images) not already tracked.
+        try:
+            imgs = self._docker(["images", "--format", "{{.Repository}}:{{.Tag}}",
+                                 "boss-sandbox-quarantine"])
+            for line in (imgs.stdout or "").splitlines():
+                line = line.strip()
+                if not line.startswith("boss-sandbox-quarantine:"):
+                    continue
+                sid = line.split(":", 1)[1]
+                if sid and sid not in self.sandboxes:
+                    self.sandboxes[sid] = SandboxRecord(
+                        sandbox_id=sid, container_id="", tenant_id="unknown",
+                        repo="unknown", title="(recovered preserved snapshot)",
+                        work_dir="", status="quarantined", preserved=True,
+                        snapshot_image=line, preserve_reason="recovered after agent restart")
+        except Exception:
+            pass
+        # Recover live/stopped sandbox containers (by label) not already tracked.
+        try:
+            ps = self._docker(["ps", "-a", "--filter", "label=boss.sandbox", "--format",
+                               '{{.ID}}|{{.State}}|{{.Label "boss.sandbox"}}|{{.Label "boss.tenant"}}'])
+            for line in (ps.stdout or "").splitlines():
+                parts = line.split("|")
+                if len(parts) < 4 or not parts[2]:
+                    continue
+                cid, state, sid, tenant = parts[0], parts[1], parts[2], parts[3]
+                if sid not in self.sandboxes:
+                    self.sandboxes[sid] = SandboxRecord(
+                        sandbox_id=sid, container_id=cid, tenant_id=tenant or "unknown",
+                        repo="unknown", title="(recovered container)", work_dir="",
+                        status="idle" if state == "running" else "failed")
+        except Exception:
+            pass
+        self._persist()
 
     # -- lifecycle ----------------------------------------------------------
     def run_task(self, spec: dict, *, tenant_id: str) -> dict:
@@ -150,6 +232,7 @@ class ContainerBackend:
         cid = cp.stdout.strip()
         rec = SandboxRecord(sandbox_id, cid, tenant_id, repo, spec.get("title", ""), str(work))
         self.sandboxes[sandbox_id] = rec
+        self._persist()
 
         # Run the in-guest agent inside the live container.
         ex = self._docker(["exec", cid, "python3", "/opt/boss/in_guest_agent.py"],
@@ -160,6 +243,7 @@ class ContainerBackend:
         rec.status = "idle" if result.get("status") == "ok" else "failed"
         rec.updated_at = time.time()
         rec.meta = {k: result.get(k) for k in ("engine", "summary", "diff_summary", "tests", "tests_passed")}
+        self._persist()
         result["sandbox_id"] = sandbox_id
         return result
 
@@ -171,6 +255,7 @@ class ContainerBackend:
         shutil.rmtree(rec.work_dir, ignore_errors=True)
         rec.status = "destroyed"
         rec.updated_at = time.time()
+        self._persist()
 
     # -- visibility ---------------------------------------------------------
     def _repo_root(self, rec: SandboxRecord) -> Path:
@@ -262,6 +347,7 @@ class ContainerBackend:
         rec.snapshot_image = image
         rec.status = "quarantined"   # excluded from the reaper; kept for investigation
         rec.updated_at = time.time()
+        self._persist()
         return rec.summary()
 
     def _require(self, sandbox_id: str) -> SandboxRecord:
