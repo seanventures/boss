@@ -1770,6 +1770,8 @@ select.input:focus {
   background: rgba(255, 255, 255, 0.09);
   border-color: var(--accent-line);
   transform: none;
+}
+
 .inline-actions {
   display: flex;
   flex-wrap: wrap;
