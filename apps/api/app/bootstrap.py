@@ -29,7 +29,7 @@ BUILTIN_MCP_SERVERS = [
         "url": "http://127.0.0.1:8770/mcp",
         "risk_tier": 2,
         "data_boundary": "public",
-        "description": "Render & study external websites with Playwright: fetch_page, study_site",
+        "description": "Render & study external websites + screenshot HTML mockups with Playwright: fetch_page, study_site, render_mockup",
     },
     {
         "name": "doc-render",

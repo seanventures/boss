@@ -9,6 +9,9 @@ Tools:
   - fetch_page(url, render=true)         -> rendered title/text/links for ONE url
   - study_site(url, max_pages=6)         -> entry page + a breadth crawl of same-
                                             origin nav routes, as compact digests
+  - render_mockup(html, viewport, ...)   -> screenshot a self-contained HTML/CSS
+                                            mockup to a PNG (the "designer screen"
+                                            capability — free, reuses Chromium)
 
 Rendering uses Playwright/Chromium (handles SPAs that a plain HTTP GET cannot).
 Results are size-capped so they fit an agent's tool-result budget; an agent that
@@ -180,6 +183,59 @@ def _study_site(args: dict) -> dict:
         return {"error": f"{type(exc).__name__}: {exc}", "url": url}
 
 
+def _render_mockup(args: dict) -> dict:
+    """Render a self-contained HTML mockup with Chromium and save a PNG screenshot.
+
+    Closes the 'designer screenshot' gap with no paid dependency: the agent writes
+    a self-contained HTML/CSS mockup (the model already does this), and this tool
+    turns it into a real, pixel-accurate design screen via the Playwright that
+    web-intel already runs. HTML must be self-contained (inline CSS; web fonts /
+    images via https URLs only — no local file refs)."""
+    import os
+    import hashlib
+
+    html = args.get("html")
+    if not html or not isinstance(html, str):
+        return {"error": "an 'html' string (self-contained mockup) is required"}
+    presets = {"desktop": (1280, 800), "tablet": (834, 1112), "mobile": (390, 844)}
+    vp = args.get("viewport") or "desktop"
+    if isinstance(vp, dict):
+        try:
+            width, height = int(vp.get("width", 1280)), int(vp.get("height", 800))
+        except Exception:
+            width, height = presets["desktop"]
+    else:
+        width, height = presets.get(str(vp), presets["desktop"])
+    width = max(320, min(width, 2560))
+    height = max(320, min(height, 4000))
+    full_page = bool(args.get("full_page", True))
+    label = re.sub(r"[^a-z0-9]+", "-", str(args.get("label") or "mockup").lower()).strip("-") or "mockup"
+    out_dir = os.path.expanduser(os.environ.get("BOSS_MOCKUP_DIR", "~/.boss/mockups"))
+    os.makedirs(out_dir, exist_ok=True)
+    digest = hashlib.sha1(html.encode("utf-8")).hexdigest()[:8]
+    fpath = os.path.join(out_dir, f"{label}-{width}x{height}-{digest}.png")
+
+    def shoot(page):
+        page.set_viewport_size({"width": width, "height": height})
+        page.set_content(html, wait_until="networkidle")
+        page.wait_for_timeout(400)
+        page.screenshot(path=fpath, full_page=full_page)
+        return True
+
+    try:
+        _with_browser(shoot)
+    except Exception as exc:
+        return {"error": f"{type(exc).__name__}: {exc}"}
+    return {
+        "path": fpath,
+        "viewport": {"width": width, "height": height},
+        "full_page": full_page,
+        "bytes": os.path.getsize(fpath),
+        "note": "PNG mockup rendered from the provided HTML. Open/attach the path; "
+                "embed in a PRD or PR for review.",
+    }
+
+
 TOOLS = [
     {
         "name": "fetch_page",
@@ -215,8 +271,31 @@ TOOLS = [
             "required": ["url"],
         },
     },
+    {
+        "name": "render_mockup",
+        "description": (
+            "RENDER a self-contained HTML/CSS mockup to a PNG screenshot (a real "
+            "designer screen). Use after writing a mockup to produce a visual the "
+            "user can review or attach to a PRD/PR. HTML must be self-contained: "
+            "inline CSS, and any fonts/images via https URLs (no local file refs). "
+            "Returns the saved PNG path."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "html": {"type": "string", "description": "Self-contained HTML document to render"},
+                "viewport": {
+                    "description": "Preset 'desktop'|'tablet'|'mobile' or {width,height}",
+                    "type": ["string", "object"],
+                },
+                "full_page": {"type": "boolean", "description": "Capture full scroll height (default true)"},
+                "label": {"type": "string", "description": "Filename hint, e.g. 'home-mockup'"},
+            },
+            "required": ["html"],
+        },
+    },
 ]
-TOOL_FNS = {"fetch_page": _fetch_page, "study_site": _study_site}
+TOOL_FNS = {"fetch_page": _fetch_page, "study_site": _study_site, "render_mockup": _render_mockup}
 
 
 @app.post("/mcp")
