@@ -16619,6 +16619,11 @@ def test_command_to_merge_flow_completes_task_when_merge_policy_enabled(
     )
 
     try:
+        # Intake prefers a model-generated plan (openai.plan) when a model key is
+        # configured; this E2E exercises the deterministic plan.command flow, so
+        # drop the key for the proposal step and restore it for the later
+        # software-factory review-packet step.
+        api_main.software_factory.settings.openai_api_key = None
         created = client.post(
             "/v1/commands/propose",
             json={
@@ -16627,6 +16632,7 @@ def test_command_to_merge_flow_completes_task_when_merge_policy_enabled(
                 "constraints": {"deadline": "this week"},
             },
         )
+        api_main.software_factory.settings.openai_api_key = "test-openai-key"
         assert created.status_code == 201
         payload = created.json()
         task_id = payload["task_id"]
@@ -17009,6 +17015,11 @@ def test_command_to_deploy_flow_completes_task_when_deploy_policy_enabled(
     )
 
     try:
+        # Intake prefers a model-generated plan (openai.plan) when a model key is
+        # configured; this E2E exercises the deterministic plan.command flow, so
+        # drop the key for the proposal step and restore it for the later
+        # software-factory review-packet step.
+        api_main.software_factory.settings.openai_api_key = None
         created = client.post(
             "/v1/commands/propose",
             json={
@@ -17017,6 +17028,7 @@ def test_command_to_deploy_flow_completes_task_when_deploy_policy_enabled(
                 "constraints": {"deadline": "this week"},
             },
         )
+        api_main.software_factory.settings.openai_api_key = "test-openai-key"
         assert created.status_code == 201
         payload = created.json()
         task_id = payload["task_id"]
