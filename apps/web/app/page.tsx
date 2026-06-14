@@ -108,6 +108,10 @@ import { fetchSkillFeed } from "../lib/skills";
 import { fetchStatus } from "../lib/status";
 import { fetchTaskFeed } from "../lib/tasks";
 import { PROJECT_ID } from "../lib/client";
+import { fetchCodeTasksFeed } from "../lib/code-tasks";
+import { CodeTasksHome } from "./code-tasks-ui";
+import { fetchSandboxFeed } from "../lib/sandboxes";
+import { SandboxesHome } from "./sandboxes-ui";
 
 // Force dynamic rendering (no static page generation at build). This app's Mission Control is fully
 // data-driven from live fetches (empty states on unreachable), searchParams, and client actions.
@@ -452,6 +456,12 @@ export default async function HomePage({ searchParams }: HomePageProps) {
   const softwareFactoryArtifactEvidence = extractSoftwareFactoryArtifactEvidence(
     artifacts.items,
   );
+
+  // Coding-agent platform feeds (governed code.task pipeline + live sandboxes).
+  const [codeTasksFeed, sandboxFeed] = await Promise.all([
+    fetchCodeTasksFeed(activeProjectId),
+    fetchSandboxFeed(),
+  ]);
 
   return (
     <main className="shell" aria-labelledby="boss-console-title">
@@ -6197,6 +6207,35 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               })}
             </div>
           )}
+        </section>
+
+        <section className="panel-stack" data-area="code-tasks" aria-label="Code tasks">
+          <div className="section-head">
+            <div>
+              <span className="eyebrow">Code Tasks</span>
+              <h2>An agent clones the repo, edits code, runs your tests — then opens a gated PR.</h2>
+            </div>
+          </div>
+          <CodeTasksHome
+            projectId={activeProjectId}
+            orgId={activeOrgId}
+            codeTasks={codeTasksFeed.items}
+            apiReachable={codeTasksFeed.apiReachable}
+          />
+        </section>
+
+        <section className="panel-stack" data-area="sandboxes" aria-label="Sandboxes">
+          <div className="section-head">
+            <div>
+              <span className="eyebrow">Execution Plane</span>
+              <h2>Inspect live sandboxes — browse the working tree and run a governed console.</h2>
+            </div>
+          </div>
+          <SandboxesHome
+            sandboxes={sandboxFeed.items}
+            apiReachable={sandboxFeed.apiReachable}
+            unavailable={sandboxFeed.unavailable}
+          />
         </section>
       </div>
     </main>
