@@ -7,6 +7,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
 from ..config import Settings
+from .budget import BudgetGovernor
 from .core import create_artifact, emit_event, make_id, normalize_data_boundary
 from .jobs import JobLeaseService
 from .specpack import SpecPackService
@@ -17,6 +18,7 @@ class CommandIntakeService:
         self.settings = settings
         self.jobs = JobLeaseService(settings)
         self.specpack = SpecPackService(settings)
+        self.budget = BudgetGovernor(settings)
 
     def create_task(
         self,
@@ -209,34 +211,80 @@ class CommandIntakeService:
                 "next_expected_artifact": "plan_draft",
             },
         )
-        default_module = self.specpack.find_default_agent_module_for_job_kind(
-            connection,
-            project_id,
-            "plan.command",
-        )
-        module_descriptor = None
-        if isinstance(default_module, dict):
-            role = default_module.get("role") or {}
-            module_descriptor = {
-                "id": default_module.get("id"),
-                "version": default_module.get("version"),
-                "display_name": default_module.get("display_name"),
-                "role_key": role.get("role_key") or role.get("role_id"),
-                "prompt_bundle": default_module.get("prompt_bundle") or {},
-            }
-        job = self.jobs.create_job(
-            connection,
-            project_id=project_id,
-            task_id=task_id,
-            kind="plan.command",
-            priority=50,
-            payload={
-                "command": command,
-                "constraints": constraints or {},
-                "artifact_id": artifact_id,
-                "agent_module": module_descriptor,
-            },
-        )
+        job = None
+        # Prefer a real model-generated plan when a model is configured and
+        # budget allows; otherwise fall back to a deterministic local plan.
+        if self.settings.openai_api_key:
+            reservation = self.budget.reserve(
+                connection,
+                project_id,
+                "model",
+                self.settings.plan_budget_usd_micros,
+                "CEO command plan generation.",
+                60,
+            )
+            if reservation.get("status") == "reserved":
+                plan_prompt = (
+                    f"You are planning a CEO directive for project {project_id}.\n\n"
+                    f"Directive: {command}\n\n"
+                    f"Constraints: {json.dumps(constraints or {})}\n\n"
+                    "Produce a concrete, actionable implementation plan. Include: a one-line "
+                    "objective; a numbered list of concrete execution steps (each with what to do "
+                    "and how you will know it is done); key risks with mitigations; explicit "
+                    "acceptance criteria; and the single decision that needs human approval. "
+                    "Be specific to the directive and avoid generic boilerplate."
+                )
+                job = self.jobs.create_job(
+                    connection,
+                    project_id=project_id,
+                    task_id=task_id,
+                    kind="openai.plan",
+                    priority=50,
+                    payload={
+                        "project_id": project_id,
+                        "reservation_id": reservation["reservation_id"],
+                        "dedupe_key": f"ceo-plan-{task_id}",
+                        "prompt": plan_prompt,
+                        "system_prompt": None,
+                        "command": command,
+                        "constraints": constraints or {},
+                        "artifact_id": artifact_id,
+                        "requires_reservation": True,
+                    },
+                )
+                self.budget.attach_job(
+                    connection, project_id, reservation["reservation_id"], job["id"]
+                )
+
+        if job is None:
+            default_module = self.specpack.find_default_agent_module_for_job_kind(
+                connection,
+                project_id,
+                "plan.command",
+            )
+            module_descriptor = None
+            if isinstance(default_module, dict):
+                role = default_module.get("role") or {}
+                module_descriptor = {
+                    "id": default_module.get("id"),
+                    "version": default_module.get("version"),
+                    "display_name": default_module.get("display_name"),
+                    "role_key": role.get("role_key") or role.get("role_id"),
+                    "prompt_bundle": default_module.get("prompt_bundle") or {},
+                }
+            job = self.jobs.create_job(
+                connection,
+                project_id=project_id,
+                task_id=task_id,
+                kind="plan.command",
+                priority=50,
+                payload={
+                    "command": command,
+                    "constraints": constraints or {},
+                    "artifact_id": artifact_id,
+                    "agent_module": module_descriptor,
+                },
+            )
         return {
             "task_id": task_id,
             "job_id": job["id"],

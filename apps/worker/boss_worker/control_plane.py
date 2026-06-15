@@ -28,9 +28,12 @@ class ControlPlaneClient:
         headers = {"Accept": "application/json"}
         if api_key and api_key.strip():
             headers["Authorization"] = f"Bearer {api_key.strip()}"
+        # Long-running jobs (software-factory PR proposals run the model + create a
+        # GitHub PR + poll CI) can take a few minutes server-side. Keep connect short
+        # but allow a generous read timeout so the worker doesn't abandon the call.
         self._client = httpx.Client(
             base_url=self.base_url,
-            timeout=timeout,
+            timeout=httpx.Timeout(connect=10.0, read=900.0, write=30.0, pool=30.0),
             headers=headers,
         )
 
@@ -97,6 +100,22 @@ class ControlPlaneClient:
 
     def create_openai_plan(self, payload: dict[str, Any]) -> dict[str, Any]:
         response = self._client.post("/v1/openai/plans", json=payload)
+        response.raise_for_status()
+        return response.json()
+
+    def resume_agent_run(self, payload: dict[str, Any]) -> dict[str, Any]:
+        run_id = payload["run_id"]
+        response = self._client.post(f"/v1/agent-runs/{run_id}/resume", json={})
+        response.raise_for_status()
+        return response.json()
+
+    def run_meeting_step(self, payload: dict[str, Any]) -> dict[str, Any]:
+        response = self._client.post("/v1/meetings/step", json=payload)
+        response.raise_for_status()
+        return response.json()
+
+    def run_code_task(self, payload: dict[str, Any]) -> dict[str, Any]:
+        response = self._client.post("/v1/code-tasks/step", json=payload)
         response.raise_for_status()
         return response.json()
 

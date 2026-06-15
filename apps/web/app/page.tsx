@@ -19,7 +19,6 @@ import {
   createAccountConnectTeamInviteAction,
   createEnterpriseSupportCaseAction,
   createEnterpriseClusterValidationRunAction,
-  createKpiAction,
   installAgentModuleAction,
   installPackAction,
   linkAccountConnectAction,
@@ -58,18 +57,9 @@ import {
   upsertOrgMemberAction,
   upsertWorkerPoolAction,
 } from "./actions";
-import {
-  KpiCreateForm,
-  CommandSubmitForm,
-  ProviderCreateForm,
-  SelfImprovementProposalForm,
-  BudgetReserveQueueForm,
-  ProviderTestForm,
-  ProviderSyncForm,
-  SelfImpCanaryForm,
-  SelfImpRolloutForm,
-  ChangeSetApplyForm,
-} from "./client-forms";
+import ConsoleShell from "./ConsoleShell";
+import { WorkBoard, WorkflowHealth } from "./workflow-ui";
+import { ReportsView } from "./reports-ui";
 import type { DataBoundary } from "@boss/api-client";
 import { fetchAuditSummary } from "../lib/audit";
 import { fetchArtifactFeed } from "../lib/artifacts";
@@ -88,11 +78,28 @@ import { fetchEnterpriseFeed } from "../lib/enterprise";
 import { fetchActivityFeed } from "../lib/events";
 import { fetchHealthSnapshotFeed } from "../lib/health-snapshots";
 import { fetchInfrastructureResourceFeed } from "../lib/infrastructure";
-import { fetchKpiFeed } from "../lib/kpis";
 import { fetchMemberFeed, fetchOrgMemberFeed } from "../lib/members";
 import { fetchMeetingFeed } from "../lib/meetings";
 import { fetchMetatronQuery } from "../lib/metatron";
 import { fetchOpsQueueFeed } from "../lib/ops";
+import { fetchReportSummary } from "../lib/reports";
+import { fetchAgentRuns } from "../lib/agent-runs";
+import { fetchTaskOutputs } from "../lib/outputs";
+import { fetchCapabilities } from "../lib/capabilities";
+import { CapabilitiesView } from "./capabilities-ui";
+import { fetchMeetingRooms } from "../lib/meeting-rooms";
+import { MeetingsHome } from "./meeting-room-ui";
+import { fetchCodeTasksFeed } from "../lib/code-tasks";
+import { CodeTasksHome } from "./code-tasks-ui";
+import { fetchSandboxFeed } from "../lib/sandboxes";
+import { SandboxesHome } from "./sandboxes-ui";
+import { AreaLink } from "./area-link";
+import { Suspense } from "react";
+import { fetchOrgs } from "../lib/orgs";
+import { OrgGate } from "./org-gate";
+import { fetchApprovalRules } from "../lib/approval-rules";
+import { ApprovalRulesView } from "./approval-rules-ui";
+import { fetchMcpServers } from "../lib/mcp";
 import { fetchPackFeed } from "../lib/packs";
 import { fetchProviderOpsFeed } from "../lib/providerops";
 import { fetchProjectFeed } from "../lib/projects";
@@ -108,13 +115,6 @@ import { fetchSkillFeed } from "../lib/skills";
 import { fetchStatus } from "../lib/status";
 import { fetchTaskFeed } from "../lib/tasks";
 import { PROJECT_ID } from "../lib/client";
-
-// Force dynamic rendering (no static page generation at build). This app's Mission Control is fully
-// data-driven from live fetches (empty states on unreachable), searchParams, and client actions.
-// Avoids "Collecting page data" phase which was surfacing internal Next manifest ENOENTs in this
-// build env (despite all fetch* catching network errs to empty feeds, and tsc/lint green).
-// Per 3x validation: make build must be green; dynamic is correct for console (no pre-renderable static content).
-export const dynamic = 'force-dynamic';
 
 function formatMicros(amount: unknown): string {
   if (typeof amount !== "number") {
@@ -141,6 +141,24 @@ function formatRecommendation(decision: DecisionFeedItem): string {
     return action.replaceAll("_", " ");
   }
   return "review required";
+}
+
+// The approval rule that raised this decision (derived from recommendation.action).
+function decisionRuleLabel(decision: DecisionFeedItem): string {
+  const action = typeof decision.recommendation.action === "string" ? decision.recommendation.action : "";
+  const tool = typeof decision.recommendation.tool === "string" ? ` (${decision.recommendation.tool})` : "";
+  const map: Record<string, string> = {
+    execute_agent_tool: `Agent tool requires approval${tool}`,
+    resume_agent_run: `Agent action gated — deferred tool${tool}`,
+    review_plan_draft: "Plan ready for review",
+    review_pull_request: "Pull request review",
+    review_deployment: "Deployment review",
+    review_infra_provisioning: "Infrastructure provisioning review",
+    "role.autonomy_change": "Role autonomy change",
+  };
+  if (map[action]) return map[action];
+  if (action) return action.replaceAll("_", " ").replace(/\./g, " · ");
+  return "governance gate";
 }
 
 function formatDeadline(deadlineAt?: string): string {
@@ -309,6 +327,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
   const resolvedSearchParams = searchParams ? await searchParams : undefined;
   const requestedProjectId =
     getParam(resolvedSearchParams?.project_id) ?? PROJECT_ID;
+  const requestedArea = getParam(resolvedSearchParams?.area);
+  const requestedWorkTask = getParam(resolvedSearchParams?.task);
   const metatronQuestion = getParam(resolvedSearchParams?.q);
   const metatronTaskId = getParam(resolvedSearchParams?.task_id);
   const metatronDecisionId = getParam(resolvedSearchParams?.decision_id);
@@ -328,22 +348,33 @@ export default async function HomePage({ searchParams }: HomePageProps) {
     routingOutcomeParam === "selected" || routingOutcomeParam === "denied"
       ? routingOutcomeParam
       : undefined;
-  const projects = await fetchProjectFeed(requestedProjectId);
-  const activeProjectId = projects.items.some(
-    (project) => project.id === requestedProjectId,
-  )
-    ? requestedProjectId
-    : projects.items[0]?.id ?? requestedProjectId;
+  // ---- Organization gate ----------------------------------------------------
+  // An org must be selected before entering the console; all data is scoped to
+  // the selected org's project. No org in the URL → show the org picker.
+  const requestedOrgId = getParam(resolvedSearchParams?.org);
+  const orgs = await fetchOrgs();
+  const selectedOrg = requestedOrgId
+    ? orgs.items.find((o) => o.org_id === requestedOrgId)
+    : undefined;
+  if (!selectedOrg) {
+    return (
+      <Suspense fallback={null}>
+        <OrgGate orgs={orgs.items} />
+      </Suspense>
+    );
+  }
+  const activeOrgId = selectedOrg.org_id;
+  const activeOrgName = selectedOrg.org_name;
+  const activeProjectId = selectedOrg.project_id;
+  const projects = await fetchProjectFeed(activeProjectId);
   const activeProject = projects.items.find(
     (project) => project.id === activeProjectId,
   );
-  const activeOrgId = activeProject?.orgId ?? "org_boss";
   const [
     status,
     decisions,
     tasks,
     meetings,
-    kpis,
     artifacts,
     events,
     healthSnapshots,
@@ -372,18 +403,26 @@ export default async function HomePage({ searchParams }: HomePageProps) {
     metatron,
     authSession,
     breakGlassGrants,
+    report,
+    agentRuns,
+    mcpServers,
+    taskOutputs,
+    capabilities,
+    meetingRooms,
+    approvalRules,
+    codeTasksFeed,
+    sandboxFeed,
   ] =
     await Promise.all([
       fetchStatus(activeProjectId),
       fetchDecisionFeed(activeProjectId),
       fetchTaskFeed(activeProjectId),
       fetchMeetingFeed(activeProjectId),
-      fetchKpiFeed(activeProjectId),
       fetchArtifactFeed(activeProjectId),
-      fetchActivityFeed(activeProjectId, 25),
+      fetchActivityFeed(activeProjectId, 40),
       fetchHealthSnapshotFeed(activeProjectId),
       fetchOpsQueueFeed(activeProjectId),
-      fetchDeadletterFeed(activeProjectId, 25),
+      fetchDeadletterFeed(activeProjectId),
       fetchPackFeed(activeProjectId),
       fetchRoleFeed(activeProjectId),
       fetchAgentModuleFeed(activeProjectId),
@@ -422,6 +461,15 @@ export default async function HomePage({ searchParams }: HomePageProps) {
       ),
       fetchAuthSession(),
       fetchBreakGlassGrantFeed(activeProjectId),
+      fetchReportSummary(activeProjectId),
+      fetchAgentRuns(activeProjectId),
+      fetchMcpServers(activeProjectId),
+      fetchTaskOutputs(activeProjectId),
+      fetchCapabilities(activeProjectId),
+      fetchMeetingRooms(activeProjectId),
+      fetchApprovalRules(activeProjectId),
+      fetchCodeTasksFeed(activeProjectId),
+      fetchSandboxFeed(),
     ]);
 
   const deadletterCount = deadletters.items.length;
@@ -454,96 +502,116 @@ export default async function HomePage({ searchParams }: HomePageProps) {
   );
 
   return (
-    <main className="shell" aria-labelledby="boss-console-title">
-      <a className="skip-link" href="#decision-inbox">
-        Skip to decision inbox
-      </a>
+    <ConsoleShell
+      status={{
+        apiReachable: status.apiReachable,
+        budgetState: status.budgetState,
+        deadletters: deadletterCount,
+        pendingDecisions: status.pendingDecisions,
+      }}
+      scope={{
+        project: activeProject?.name ?? activeProjectId,
+        actor: activeActor?.displayName ?? activeActorId,
+      }}
+      org={{ id: activeOrgId, name: activeOrgName }}
+      initialArea={requestedArea}
+    >
       <div className="frame">
-        <section className="hero">
+        <section className="ov-header" data-area="overview" aria-label="Overview header">
+          <div className="ov-header-copy">
+            <span className="eyebrow">Business Operating System Sentinel</span>
+            <h1 id="boss-console-title">Executive control plane for autonomous work.</h1>
+            <p>
+              A cloud control plane for running an autonomous, policy-governed,
+              agentic organization that produces real work products — specs, code,
+              tests, decisions, communications — with auditable execution. The CEO
+              gives outcomes; BOSS turns them into shipped artifacts safely,
+              predictably, and within financial and policy constraints.
+            </p>
+            <p className="ov-cc-sub">
+              Viewing <b>{activeOrgName}</b> / {activeProject?.name ?? activeProjectId} · acting as{" "}
+              <b>{activeActor?.displayName ?? activeActorId}</b>
+            </p>
+          </div>
+          <div className="hero-pills">
+            <span className={`pill${status.apiReachable ? "" : " warn"}`}>
+              {status.apiReachable ? "API reachable" : "API unavailable"}
+            </span>
+            <span className={`pill${deadletterCount > 0 ? " warn" : ""}`}>
+              {deadletterCount > 0 ? `${deadletterCount} deadletter${deadletterCount === 1 ? "" : "s"}` : "No deadletters"}
+            </span>
+          </div>
+        </section>
+
+        <section className="ov-cc" data-area="overview" aria-label="Command center">
+          <div className="ov-cc-bar">
+            <span className="eyebrow">Command Center</span>
+            <span className="ov-cc-tag">What needs you — and what to do next</span>
+          </div>
+
+          <div className="ov-kpis">
+            <AreaLink className={`ov-kpi${status.pendingDecisions > 0 ? " alert" : ""}`} area="decisions" orgId={activeOrgId}>
+              <span className="ov-kpi-n">{status.pendingDecisions}</span>
+              <span className="ov-kpi-l">Pending decisions</span>
+              <span className="ov-kpi-cta">{status.pendingDecisions > 0 ? "Review →" : "All clear"}</span>
+            </AreaLink>
+            <AreaLink className="ov-kpi" area="work" orgId={activeOrgId}>
+              <span className="ov-kpi-n">{status.openTasks}</span>
+              <span className="ov-kpi-l">Open tasks</span>
+              <span className="ov-kpi-cta">View work →</span>
+            </AreaLink>
+            <AreaLink className="ov-kpi" area="code_tasks" orgId={activeOrgId}>
+              <span className="ov-kpi-n">{codeTasksFeed.items.length}</span>
+              <span className="ov-kpi-l">Code tasks</span>
+              <span className="ov-kpi-cta">Open →</span>
+            </AreaLink>
+            <AreaLink className="ov-kpi" area="meetings" orgId={activeOrgId}>
+              <span className="ov-kpi-n">{meetingRooms.items.length}</span>
+              <span className="ov-kpi-l">Meetings</span>
+              <span className="ov-kpi-cta">Open →</span>
+            </AreaLink>
+            <AreaLink className="ov-kpi" area="budget" orgId={activeOrgId}>
+              <span className={`ov-kpi-n ov-state-${status.budgetState}`}>{status.budgetState}</span>
+              <span className="ov-kpi-l">Budget state</span>
+              <span className="ov-kpi-cta">Details →</span>
+            </AreaLink>
+          </div>
+
+          <div className="ov-actions">
+            <span className="ov-actions-label">Start something</span>
+            <AreaLink className="ov-action primary" area="meetings" orgId={activeOrgId}>Convene a design panel</AreaLink>
+            <AreaLink className="ov-action" area="code_tasks" orgId={activeOrgId}>Start a code task</AreaLink>
+            <AreaLink className="ov-action" area="decisions" orgId={activeOrgId}>Review decisions</AreaLink>
+            <AreaLink className="ov-action" area="work" orgId={activeOrgId}>View work</AreaLink>
+            <AreaLink className="ov-action" area="reports" orgId={activeOrgId}>Reports</AreaLink>
+          </div>
+        </section>
+
+        <section className="hero" data-area="overview">
           <div className="hero-grid">
             <div className="hero-copy">
-              <span className="eyebrow">Business Operating System Sentinel</span>
-              <h1 id="boss-console-title">
-                Executive control for autonomous work.
-              </h1>
+              <span className="eyebrow">CEO Command</span>
+              <h2>Turn an outcome into governed work.</h2>
               <p>
-                Real GitHub and OpenAI integrations are gated behind receipts,
-                reservations, and approvals. The console now submits CEO
-                commands directly to the live control plane and surfaces the
-                resulting tasks, artifacts, events, and deadletters.
+                Describe an outcome in plain language — BOSS creates a task,
+                plans it, and routes every real effect through budget and
+                approval gates. Prefer to design first? Convene a panel from the
+                command center above.
               </p>
-              <div className="hero-pills">
-                <span className={`pill${status.apiReachable ? "" : " warn"}`}>
-                  {status.apiReachable ? "API reachable" : "API unavailable"}
-                </span>
-                <span className={`pill${deadletterCount > 0 ? " warn" : ""}`}>
-                  {deadletterCount > 0
-                    ? `${deadletterCount} deadletter${deadletterCount === 1 ? "" : "s"}`
-                    : "No deadletters"}
-                </span>
-              </div>
-              {projects.apiReachable && projects.items.length > 0 ? (
-                <form method="get" className="composer compact">
-                  <label className="field">
-                    <span>Project scope</span>
-                    <select
-                      className="input"
-                      name="project_id"
-                      defaultValue={activeProjectId}
-                    >
-                      {projects.items.map((project) => (
-                        <option key={project.id} value={project.id}>
-                          {project.orgName} / {project.workspaceName} / {project.name}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <label className="field">
-                    <span>Active actor</span>
-                    <select
-                      className="input"
-                      name="actor"
-                      defaultValue={activeActorId}
-                    >
-                      {actorOptions.length > 0 ? (
-                        actorOptions.map((member) => (
-                          <option key={member.id} value={member.memberId}>
-                            {member.displayName} ({member.memberId}, {member.source})
-                          </option>
-                        ))
-                      ) : (
-                        <option value={activeActorId}>{activeActorId}</option>
-                      )}
-                    </select>
-                  </label>
-                  <button className="button secondary" type="submit">
-                    Apply scope
-                  </button>
-                  <p className="detail">
-                    Every write action now carries the selected project member actor.
-                  </p>
-                </form>
-              ) : (
-                <p className="detail">
-                  {projects.blockedReason ??
-                    "Project registry is unavailable, so the console is using its default scope."}
-                </p>
-              )}
               <p className="detail">
-                Active actor: {activeActor?.displayName ?? activeActorId} / roles{" "}
-                {activeActor?.roleKeys.join(", ") || "unknown"} / permissions{" "}
-                {activeActor?.permissions.length ?? 0} / source{" "}
-                {activeActor?.source ?? "fallback"}
-                {!members.apiReachable && members.blockedReason
-                  ? ` (${members.blockedReason})`
+                Acting as <b>{activeActor?.displayName ?? activeActorId}</b> · project{" "}
+                <b>{activeProject?.name ?? activeProjectId}</b> — set by your selected org.
+                {actorOptions.length > 1
+                  ? " (To act as a different member or switch project, append ?actor=… or ?project_id=… to the URL.)"
                   : ""}
+                {!members.apiReachable && members.blockedReason ? ` (${members.blockedReason})` : ""}
                 {!orgMembers.apiReachable && orgMembers.blockedReason
                   ? ` (org members: ${orgMembers.blockedReason})`
                   : ""}
               </p>
             </div>
 
-            <CommandSubmitForm className="composer">
+            <form action={submitCommandAction} className="composer">
               <input type="hidden" name="project_id" value={activeProjectId} />
               <input type="hidden" name="actor" value={activeActorId} />
               <div>
@@ -581,11 +649,11 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                     "The control plane is not ready to accept commands."
                   : "Creates a task, command brief, and queued planning job through the API."}
               </p>
-            </CommandSubmitForm>
+            </form>
           </div>
         </section>
 
-        <section className="stack-grid">
+        <section className="stack-grid" data-area="overview">
           <article className="stack-card">
             <div className="section-head">
               <div>
@@ -684,7 +752,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
           </article>
         </section>
 
-        <section className="grid">
+        <section className="grid" data-area="overview">
           <article>
             <h2>Project</h2>
             <div className="metric">{status.projectName}</div>
@@ -747,7 +815,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
           </article>
         </section>
 
-        <section className="grid">
+        <section className="grid" data-area="overview">
           <article>
             <h2>Open Tasks</h2>
             <div className="metric">{status.openTasks}</div>
@@ -788,125 +856,96 @@ export default async function HomePage({ searchParams }: HomePageProps) {
           </article>
         </section>
 
-        <section className="panel-stack" aria-labelledby="kpi-heading">
-          <div className="section-head">
-            <div>
-              <span className="eyebrow">Operating metrics</span>
-              <h2 id="kpi-heading">Company KPIs</h2>
-            </div>
-            <p className="status-meta">
-              PRD canonical object coverage: KPIs are durable project-scoped
-              operating metrics, not transient dashboard numbers.
-            </p>
-          </div>
-          <div className="stack-grid">
-            <article className="stack-card">
-              <h3>Add or update KPI</h3>
-              <KpiCreateForm className="composer compact">
-                <input type="hidden" name="project_id" value={activeProjectId} />
-                <input type="hidden" name="actor" value={activeActorId} />
-                <div className="input-grid">
-                  <label className="field">
-                    <span>KPI key</span>
-                    <input
-                      className="input"
-                      name="kpi_key"
-                      placeholder="verified_work_throughput"
-                      required
-                    />
-                  </label>
-                  <label className="field">
-                    <span>Name</span>
-                    <input
-                      className="input"
-                      name="name"
-                      placeholder="Verified Work Throughput"
-                      required
-                    />
-                  </label>
+        <section className="bx-overview" data-area="overview" aria-label="Overview summary">
+          <div className="bx-overview-split">
+            <article
+              className="bx-card"
+              style={{ padding: "22px", display: "grid", gap: "14px" }}
+            >
+              <div className="section-head">
+                <div>
+                  <span className="eyebrow">Needs attention</span>
+                  <h2 style={{ fontSize: "1.18rem", margin: "4px 0 0" }}>
+                    Pending decisions
+                  </h2>
                 </div>
-                <div className="input-grid">
-                  <label className="field">
-                    <span>Target</span>
-                    <input
-                      className="input"
-                      name="target_value"
-                      type="number"
-                      min="0.000001"
-                      step="any"
-                      placeholder="10"
-                      required
-                    />
-                  </label>
-                  <label className="field">
-                    <span>Current</span>
-                    <input
-                      className="input"
-                      name="current_value"
-                      type="number"
-                      min="0"
-                      step="any"
-                      defaultValue="0"
-                    />
-                  </label>
-                </div>
-                <div className="input-grid">
-                  <label className="field">
-                    <span>Unit</span>
-                    <input className="input" name="unit" defaultValue="count" />
-                  </label>
-                  <label className="field">
-                    <span>Owner role id</span>
-                    <input
-                      className="input"
-                      name="owner_role_id"
-                      placeholder="role_..."
-                    />
-                  </label>
-                </div>
-                <label className="field">
-                  <span>Description</span>
-                  <textarea
-                    className="input"
-                    name="description"
-                    placeholder="What this KPI proves and how it should be reviewed."
-                  />
-                </label>
-                <button className="button secondary" type="submit">
-                  Save KPI
-                </button>
-              </KpiCreateForm>
-            </article>
-            <article className="stack-card">
-              <h3>KPI registry</h3>
-              {!kpis.apiReachable ? (
-                <p className="detail">
-                  {kpis.blockedReason ?? "KPI API unavailable."}
-                </p>
-              ) : kpis.items.length === 0 ? (
-                <p className="detail">
-                  No KPIs defined yet. Use the Add or update KPI form to record
-                  the first operating metric and make company health durable.
-                </p>
-              ) : (
-                <div className="feed-list">
-                  {kpis.items.map((kpi) => (
-                    <div key={kpi.id}>
-                      <div className="item-heading">
-                        <strong>{kpi.name}</strong>
-                        <span className="pill">{kpi.status}</span>
+                <span
+                  className={`pill${status.pendingDecisions > 0 ? " warn" : ""}`}
+                >
+                  {status.pendingDecisions} open
+                </span>
+              </div>
+              {decisions.items.filter(
+                (decision) =>
+                  decision.status === "pending" ||
+                  decision.status === "delegated",
+              ).length > 0 ? (
+                <div className="bx-attention">
+                  {decisions.items
+                    .filter(
+                      (decision) =>
+                        decision.status === "pending" ||
+                        decision.status === "delegated",
+                    )
+                    .slice(0, 4)
+                    .map((decision) => (
+                      <div className="bx-attention-item" key={decision.id}>
+                        <span className="bx-tier">T{decision.riskTier}</span>
+                        <div style={{ minWidth: 0 }}>
+                          <div style={{ fontWeight: 600 }}>
+                            {decision.question}
+                          </div>
+                          <p
+                            className="detail"
+                            style={{ fontSize: "0.84rem" }}
+                          >
+                            Recommends {formatRecommendation(decision)} /{" "}
+                            {decision.status}
+                          </p>
+                        </div>
                       </div>
-                      <p className="detail">
-                        {kpi.currentValue} / {kpi.targetValue} {kpi.unit} ·{" "}
-                        {kpi.kpiKey}
-                      </p>
-                      <p className="detail">
-                        {kpi.description ?? "No description."}
-                        {kpi.ownerRoleId ? ` Owner role: ${kpi.ownerRoleId}.` : ""}
-                      </p>
+                    ))}
+                </div>
+              ) : (
+                <p className="detail">
+                  No decisions are waiting. The queue is clear.
+                </p>
+              )}
+            </article>
+
+            <article
+              className="bx-card"
+              style={{ padding: "22px", display: "grid", gap: "14px" }}
+            >
+              <div className="section-head">
+                <div>
+                  <span className="eyebrow">What changed</span>
+                  <h2 style={{ fontSize: "1.18rem", margin: "4px 0 0" }}>
+                    Recent activity
+                  </h2>
+                </div>
+              </div>
+              {events.apiReachable && events.items.length > 0 ? (
+                <div className="feed-list">
+                  {events.items.slice(0, 6).map((event) => (
+                    <div className="feed-row" key={event.id}>
+                      <div style={{ minWidth: 0 }}>
+                        <h4 style={{ margin: 0 }}>
+                          {titleCaseToken(event.eventType)}
+                        </h4>
+                        <p
+                          className="detail"
+                          style={{ fontSize: "0.82rem" }}
+                        >
+                          {event.actor} / {formatDateTime(event.createdAt)}
+                        </p>
+                      </div>
+                      <code className="mono">{event.entityId}</code>
                     </div>
                   ))}
                 </div>
+              ) : (
+                <p className="detail">No activity recorded yet.</p>
               )}
             </article>
           </div>
@@ -915,7 +954,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
         <section className="panel-stack">
           <div className="section-head">
             <div>
-              <span className="eyebrow">Org Delegation</span>
+              <span className="eyebrow" data-area="org">Org Delegation</span>
               <h2>Organization-wide actors with scoped project authorization.</h2>
             </div>
             <p className="status-meta">
@@ -1031,7 +1070,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
         <section className="panel-stack">
           <div className="section-head">
             <div>
-              <span className="eyebrow">Break-Glass Access</span>
+              <span className="eyebrow" data-area="org">Break-Glass Access</span>
               <h2>Emergency RBAC with TTL and postmortem tasks.</h2>
             </div>
             <p className="status-meta">
@@ -1171,11 +1210,11 @@ export default async function HomePage({ searchParams }: HomePageProps) {
           </div>
         </section>
 
-        <section className="panel-stack" aria-labelledby="budget-control-heading">
+        <section className="panel-stack">
           <div className="section-head">
             <div>
-              <span className="eyebrow">Budget Control Center</span>
-              <h2 id="budget-control-heading">Live spend, forecast, and cap pressure.</h2>
+              <span className="eyebrow" data-area="budget">Budget Control Center</span>
+              <h2>Live spend, forecast, and cap pressure.</h2>
             </div>
             <p className="status-meta">
               Source: `/v1/budget/status` for project {activeProjectId}.
@@ -1261,11 +1300,11 @@ export default async function HomePage({ searchParams }: HomePageProps) {
           </article>
         </section>
 
-        <section className="panel-stack" aria-labelledby="budget-allocations-heading">
+        <section className="panel-stack">
           <div className="section-head">
             <div>
-              <span className="eyebrow">Budget Allocations</span>
-              <h2 id="budget-allocations-heading">Hierarchical spend envelopes for departments and initiatives.</h2>
+              <span className="eyebrow" data-area="budget">Budget Allocations</span>
+              <h2>Hierarchical spend envelopes for departments and initiatives.</h2>
             </div>
             <p className="status-meta">
               Child allocations and reservations cannot exceed the parent envelope.
@@ -1316,11 +1355,47 @@ export default async function HomePage({ searchParams }: HomePageProps) {
           </article>
         </section>
 
-        <section className="panel-stack" aria-labelledby="providerops-heading">
+        <section className="panel-stack" data-area="infra" aria-label="MCP servers">
           <div className="section-head">
             <div>
-              <span className="eyebrow">ProviderOps</span>
-              <h2 id="providerops-heading">Elastic Resource Plane for real provider assets.</h2>
+              <span className="eyebrow">MCP Servers</span>
+              <h2>Registered tool backends the agent can call — governed by policy, budget, and receipts.</h2>
+            </div>
+          </div>
+          {mcpServers.items.length === 0 ? (
+            <p className="detail">
+              {mcpServers.apiReachable
+                ? "No MCP servers registered. Register one via POST /v1/mcp/servers."
+                : mcpServers.blockedReason ?? "MCP registry unavailable."}
+            </p>
+          ) : (
+            <div className="feed-list">
+              {mcpServers.items.map((server) => (
+                <div className="feed-row" key={server.id}>
+                  <div>
+                    <h4 style={{ margin: "0 0 4px", display: "flex", gap: 8, alignItems: "center" }}>
+                      {server.name}
+                      <span className={`pill${server.enabled ? "" : " warn"}`}>
+                        {server.enabled ? "enabled" : "disabled"}
+                      </span>
+                    </h4>
+                    {server.description ? <p className="detail">{server.description}</p> : null}
+                    <p className="detail">
+                      <code className="mono">{server.url}</code> · {server.transport} · risk tier{" "}
+                      {server.risk_tier} · {server.data_boundary}
+                    </p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+
+        <section className="panel-stack">
+          <div className="section-head">
+            <div>
+              <span className="eyebrow" data-area="infra">ProviderOps</span>
+              <h2>Elastic Resource Plane for real provider assets.</h2>
             </div>
             <p className="status-meta">
               Provider APIs stay behind Resource Plane gates: ChangeSet, policy,
@@ -1405,9 +1480,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               </div>
 
               <div className="stack-grid">
-                <article className="stack-card" aria-labelledby="provider-connection-heading">
-                  <h3 id="provider-connection-heading">Provider Connection Center</h3>
-                  <ProviderCreateForm className="composer compact">
+                <article className="stack-card">
+                  <h3>Provider Connection Center</h3>
+                  <form action={createProviderAccountAction} className="composer compact">
                     <input type="hidden" name="project_id" value={activeProjectId} />
                     <input type="hidden" name="actor" value={activeActorId} />
                     <div className="input-grid">
@@ -1479,7 +1554,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                     <button className="button secondary" type="submit">
                       Register provider account
                     </button>
-                  </ProviderCreateForm>
+                  </form>
 
                   <div className="feed-list">
                     {providerOps.providerAccounts.length === 0 ? (
@@ -1511,7 +1586,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                             ) : null}
                           </div>
                           <div className="button-stack">
-                            <ProviderTestForm>
+                            <form action={testProviderAccountAction}>
                               <input
                                 type="hidden"
                                 name="provider_account_id"
@@ -1530,8 +1605,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                               <button className="button secondary" type="submit">
                                 Test
                               </button>
-                            </ProviderTestForm>
-                            <ProviderSyncForm>
+                            </form>
+                            <form action={syncProviderResourcesAction}>
                               <input
                                 type="hidden"
                                 name="provider_account_id"
@@ -1550,7 +1625,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                               <button className="button secondary" type="submit">
                                 Sync
                               </button>
-                            </ProviderSyncForm>
+                            </form>
                           </div>
                         </div>
                       ))
@@ -1561,13 +1636,13 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                 <article className="stack-card">
                   <h3>Resource Explorer</h3>
                   <div className="button-stack">
-                    <ProviderSyncForm>
+                    <form action={syncProviderResourcesAction}>
                       <input type="hidden" name="project_id" value={activeProjectId} />
                       <input type="hidden" name="actor" value={activeActorId} />
                       <button className="button secondary" type="submit">
                         Sync all providers
                       </button>
-                    </ProviderSyncForm>
+                    </form>
                     <form action={runResourceJanitorAction} className="composer compact">
                       <input type="hidden" name="project_id" value={activeProjectId} />
                       <input type="hidden" name="actor" value={activeActorId} />
@@ -1608,7 +1683,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                       No external resources have been synced for this project.
                     </p>
                   ) : (
-                    <div className="feed-list" role="list" aria-label="External resources list (paginated, limit 8)">
+                    <div className="feed-list">
                       {providerOps.resources.slice(0, 8).map((resource) => (
                         <div className="feed-row" key={resource.id}>
                           <div>
@@ -1786,7 +1861,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                       create the default local pool.
                     </p>
                   ) : (
-                    <div className="feed-list" role="list" aria-label="Worker pools list (paginated, notes on capacity/cost)">
+                    <div className="feed-list">
                       {providerOps.workerPools.slice(0, 4).map((pool) => (
                         <div className="feed-row" key={pool.id}>
                           <div>
@@ -2367,8 +2442,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                   ) : null}
                 </article>
 
-                <article className="stack-card" aria-labelledby="health-drift-receipts-heading">
-                  <h3 id="health-drift-receipts-heading">Health, Drift, and Receipts</h3>
+                <article className="stack-card">
+                  <h3>Health, Drift, and Receipts</h3>
                   <div className="feed-list">
                     {providerOps.providerHealth.slice(0, 4).map((health) => (
                       <div className="feed-row" key={health.id}>
@@ -2419,20 +2494,18 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                         </code>
                       </div>
                     ))}
-                    {providerOps.providerHealth.length === 0 && (
-                      <p className="detail">No provider health observations yet.</p>
-                    )}
-                    {providerOps.driftReports.length === 0 &&
+                    {providerOps.providerHealth.length === 0 &&
+                    providerOps.driftReports.length === 0 &&
                     providerOps.resourceReceipts.length === 0 ? (
                       <p className="detail">
-                        No drift or receipt records yet.
+                        No ProviderOps health, drift, or receipt records yet.
                       </p>
                     ) : null}
                   </div>
                 </article>
 
-                <article className="stack-card" aria-labelledby="cost-reconciliation-heading">
-                  <h3 id="cost-reconciliation-heading">Cost and Reconciliation Ledger</h3>
+                <article className="stack-card">
+                  <h3>Cost and Reconciliation Ledger</h3>
                   <div className="feed-list">
                     {providerOps.costAnomalies.slice(0, 4).map((anomaly) => (
                       <div className="feed-row" key={anomaly.id}>
@@ -2510,7 +2583,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
         <section className="panel-stack">
           <div className="section-head">
             <div>
-              <span className="eyebrow">Infrastructure Resources</span>
+              <span className="eyebrow" data-area="infra">Infrastructure Resources</span>
               <h2>Receipt-backed droplets with TTL and janitor visibility.</h2>
             </div>
             <p className="status-meta">
@@ -2566,11 +2639,30 @@ export default async function HomePage({ searchParams }: HomePageProps) {
           </article>
         </section>
 
-        <section className="panel-stack" aria-labelledby="health-snapshots-heading">
+        <section className="panel-stack" data-area="ops" aria-label="Workflow health">
           <div className="section-head">
             <div>
-              <span className="eyebrow">Health Snapshots</span>
-              <h2 id="health-snapshots-heading">Durable system state for what changed and what is risky.</h2>
+              <span className="eyebrow">Workflow Health</span>
+              <h2>Mission control — what is running, stuck, or failing.</h2>
+            </div>
+          </div>
+          <WorkflowHealth
+            jobStatusCounts={opsQueue.jobStatusCounts}
+            jobKindCounts={opsQueue.jobKindCounts}
+            staleLeaseJobIds={opsQueue.staleLeaseJobIds}
+            blockerCount={opsQueue.blockerCount}
+            recommendedActions={opsQueue.recommendedActions}
+            deadletters={deadletters.items}
+            openTasks={status.openTasks}
+            pendingDecisions={status.pendingDecisions}
+          />
+        </section>
+
+        <section className="panel-stack">
+          <div className="section-head">
+            <div>
+              <span className="eyebrow" data-area="ops">Health Snapshots</span>
+              <h2>Durable system state for what changed and what is risky.</h2>
             </div>
             <p className="status-meta">
               Metatron-style visibility now has a canonical snapshot object with queue, budget, workload, and incident state.
@@ -2578,8 +2670,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
           </div>
 
           <div className="stack-grid">
-            <article className="stack-card" aria-labelledby="live-top-risks-heading">
-              <h3 id="live-top-risks-heading">Live top risks</h3>
+            <article className="stack-card">
+              <h3>Live top risks</h3>
               <p className="detail">
                 {status.latestSnapshotAt
                   ? `Latest snapshot at ${formatDateTime(status.latestSnapshotAt)}.`
@@ -2689,7 +2781,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               ) : healthSnapshots.items.length === 0 ? (
                 <p className="detail">No health snapshots have been persisted yet.</p>
               ) : (
-                <div className="feed-list" role="list" aria-label="Health snapshots list (monitoring paginated)">
+                <div className="feed-list">
                   {healthSnapshots.items.map((snapshot) => (
                     <div className="feed-row" key={snapshot.id}>
                       <div>
@@ -2717,7 +2809,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
         <section className="panel-stack">
           <div className="section-head">
             <div>
-              <span className="eyebrow">Audit & Replay</span>
+              <span className="eyebrow" data-area="ops">Audit & Replay</span>
               <h2>Exportable lineage for real runs.</h2>
             </div>
             <p className="status-meta">
@@ -2850,11 +2942,11 @@ export default async function HomePage({ searchParams }: HomePageProps) {
           </div>
         </section>
 
-        <section className="panel-stack" aria-labelledby="self-improvement-heading">
+        <section className="panel-stack">
           <div className="section-head">
             <div>
-              <span className="eyebrow">Self-Improvement</span>
-              <h2 id="self-improvement-heading">Change BOSS only through governed rollout steps.</h2>
+              <span className="eyebrow" data-area="ops">Self-Improvement</span>
+              <h2>Change BOSS only through governed rollout steps.</h2>
             </div>
             <p className="status-meta">
               Every self-improvement now becomes a task, proposal artifact, approval gate, canary report, rollout record, and rollback record.
@@ -2864,7 +2956,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
           <div className="stack-grid">
             <article className="stack-card">
               <h3>Propose an improvement</h3>
-              <SelfImprovementProposalForm className="composer compact">
+              <form action={submitSelfImprovementProposalAction} className="composer compact">
                 <input type="hidden" name="project_id" value={activeProjectId} />
                 <input type="hidden" name="actor" value={activeActorId} />
                 <label className="field">
@@ -2953,7 +3045,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                 <button className="button secondary" type="submit">
                   Submit improvement proposal
                 </button>
-              </SelfImprovementProposalForm>
+              </form>
             </article>
 
             <article className="stack-card">
@@ -2965,7 +3057,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               ) : selfImprovement.items.length === 0 ? (
                 <p className="detail">No self-improvement proposals have been created yet.</p>
               ) : (
-                <div className="feed-list" role="list" aria-label="Self-improvement proposals list (with form actions for canary/rollout notes)">
+                <div className="feed-list">
                   {selfImprovement.items.map((proposal) => (
                     <div className="feed-row" key={proposal.id}>
                       <div>
@@ -2982,7 +3074,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                       </div>
                       {proposal.status === "canary_approved" ? (
                         <div className="button-stack">
-                          <SelfImpCanaryForm className="composer compact">
+                          <form action={recordSelfImprovementCanaryAction} className="composer compact">
                             <input type="hidden" name="proposal_id" value={proposal.id} />
                             <input type="hidden" name="project_id" value={activeProjectId} />
                             <input type="hidden" name="actor" value={activeActorId} />
@@ -3014,8 +3106,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                             <button className="button secondary" type="submit">
                               Record canary success
                             </button>
-                          </SelfImpCanaryForm>
-                          <SelfImpCanaryForm className="composer compact">
+                          </form>
+                          <form action={recordSelfImprovementCanaryAction} className="composer compact">
                             <input type="hidden" name="proposal_id" value={proposal.id} />
                             <input type="hidden" name="project_id" value={activeProjectId} />
                             <input type="hidden" name="actor" value={activeActorId} />
@@ -3047,10 +3139,10 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                             <button className="button secondary" type="submit">
                               Record canary failure
                             </button>
-                          </SelfImpCanaryForm>
+                          </form>
                         </div>
                       ) : proposal.status === "rollout_approved" ? (
-                        <SelfImpRolloutForm className="composer compact">
+                        <form action={recordSelfImprovementRolloutAction} className="composer compact">
                           <input type="hidden" name="proposal_id" value={proposal.id} />
                           <input type="hidden" name="project_id" value={activeProjectId} />
                           <input type="hidden" name="actor" value={activeActorId} />
@@ -3087,7 +3179,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                           <button className="button secondary" type="submit">
                             Record rollout
                           </button>
-                        </SelfImpRolloutForm>
+                        </form>
                       ) : proposal.status === "rolled_out" ? (
                         <form action={rollbackSelfImprovementProposalAction} className="composer compact">
                           <input type="hidden" name="proposal_id" value={proposal.id} />
@@ -3141,7 +3233,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
         <section className="panel-stack">
           <div className="section-head">
             <div>
-              <span className="eyebrow">Communications</span>
+              <span className="eyebrow" data-area="comms">Communications</span>
               <h2>Outbox discipline before external sends.</h2>
             </div>
             <p className="status-meta">
@@ -3312,7 +3404,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                         </p>
                       </div>
                       {message.status === "draft" ? (
-                        <BudgetReserveQueueForm>
+                        <form action={queueOutboxMessageAction}>
                           <input type="hidden" name="message_id" value={message.id} />
                           <input type="hidden" name="project_id" value={activeProjectId} />
                           <input type="hidden" name="actor" value={activeActorId} />
@@ -3332,7 +3424,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                           <button className="button secondary" type="submit">
                             Queue send
                           </button>
-                        </BudgetReserveQueueForm>
+                        </form>
                       ) : (
                         <code className="mono">{message.id}</code>
                       )}
@@ -3372,11 +3464,11 @@ export default async function HomePage({ searchParams }: HomePageProps) {
           </div>
         </section>
 
-        <section className="panel-stack" aria-labelledby="company-pack-heading">
+        <section className="panel-stack">
           <div className="section-head">
             <div>
-              <span className="eyebrow">Company Pack</span>
-              <h2 id="company-pack-heading">Installed roles and operating charter.</h2>
+              <span className="eyebrow" data-area="org">Company Pack</span>
+              <h2>Installed roles and operating charter.</h2>
             </div>
             <p className="status-meta">
               Company structure is now installed from spec-backed packs, not hardcoded UI assumptions.
@@ -3384,8 +3476,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
           </div>
 
           <div className="stack-grid">
-            <article className="stack-card" aria-labelledby="installed-packs-heading">
-              <h3 id="installed-packs-heading">Installed packs</h3>
+            <article className="stack-card">
+              <h3>Installed packs</h3>
               {!packs.apiReachable ? (
                 <p className="detail">
                   {packs.blockedReason ?? "Pack API is unavailable."}
@@ -3393,7 +3485,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               ) : packs.items.length === 0 ? (
                 <p className="detail">No packs are available.</p>
               ) : (
-                <div className="feed-list" role="list" aria-label="Installed packs list (pack import/install UI)">
+                <div className="feed-list">
                   {packs.items.map((pack) => (
                     <div className="feed-row" key={pack.packId}>
                       <div>
@@ -3425,8 +3517,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               )}
             </article>
 
-            <article className="stack-card" aria-labelledby="installed-roles-heading">
-              <h3 id="installed-roles-heading">Installed roles</h3>
+            <article className="stack-card">
+              <h3>Installed roles</h3>
               {!roles.apiReachable ? (
                 <p className="detail">
                   {roles.blockedReason ?? "Role API is unavailable."}
@@ -3438,7 +3530,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                     : "Install a company pack to provision role specs."}
                 </p>
               ) : (
-                <div className="feed-list" role="list" aria-label="Installed roles list (from pack)">
+                <div className="feed-list">
                   {roles.items.map((role) => (
                     <div className="feed-row" key={role.id}>
                       <div>
@@ -3480,7 +3572,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
         <section className="panel-stack">
           <div className="section-head">
             <div>
-              <span className="eyebrow">Commercial Trust Layer</span>
+              <span className="eyebrow" data-area="enterprise">Commercial Trust Layer</span>
               <h2>Edition, Account Connect, Enterprise, and SCIM governance.</h2>
             </div>
             <p className="status-meta">
@@ -3491,8 +3583,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
           </div>
 
           <div className="stack-grid">
-            <article className="stack-card" aria-labelledby="edition-account-connect-heading">
-              <h3 id="edition-account-connect-heading">Edition and Account Connect</h3>
+            <article className="stack-card">
+              <h3>Edition and Account Connect</h3>
               {!commercial.apiReachable ? (
                 <p className="detail">
                   {commercial.blockedReason ?? "Commercial API is unavailable."}
@@ -3525,12 +3617,10 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                           : ""}
                       </p>
                       {commercial.edition.blockedReason ? (
-                        <p className="detail warn">
-                          Blocked: {commercial.edition.blockedReason}. Local auth {commercial.edition.localAuthAllowed ? "allowed (Community/Self-hosted)" : "not allowed"}.
+                        <p className="detail">
+                          Blocked: {commercial.edition.blockedReason}
                         </p>
-                      ) : (
-                        <p className="detail">Status: active with entitlements from edition pack + any Account Connect syncs.</p>
-                      )}
+                      ) : null}
                     </div>
                     <span
                       className={`pill${
@@ -3681,8 +3771,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               )}
             </article>
 
-            <article className="stack-card" aria-labelledby="account-connect-health-heading">
-              <h3 id="account-connect-health-heading">Account Connect health</h3>
+            <article className="stack-card">
+              <h3>Account Connect health</h3>
               {!commercial.apiReachable ? (
                 <p className="detail">
                   {commercial.blockedReason ?? "Commercial API is unavailable."}
@@ -3775,8 +3865,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               )}
             </article>
 
-            <article className="stack-card" aria-labelledby="hosted-auth-sessions-heading">
-              <h3 id="hosted-auth-sessions-heading">Hosted auth sessions</h3>
+            <article className="stack-card">
+              <h3>Hosted auth sessions</h3>
               {!commercial.apiReachable ? (
                 <p className="detail">
                   {commercial.blockedReason ?? "Commercial API is unavailable."}
@@ -3788,7 +3878,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                       No hosted Account Connect auth sessions have been requested.
                     </p>
                   ) : (
-                    <div className="feed-list" role="list" aria-label="Hosted auth sessions list (commercial paginated)">
+                    <div className="feed-list">
                       {commercial.authSessions.slice(0, 6).map((session) => (
                         <div className="feed-row" key={session.id}>
                           <div>
@@ -3909,8 +3999,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               )}
             </article>
 
-            <article className="stack-card" aria-labelledby="license-entitlements-heading">
-              <h3 id="license-entitlements-heading">License entitlements</h3>
+            <article className="stack-card">
+              <h3>License entitlements</h3>
               {!commercial.apiReachable ? (
                 <p className="detail">
                   {commercial.blockedReason ?? "Commercial API is unavailable."}
@@ -3953,8 +4043,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               )}
             </article>
 
-            <article className="stack-card" aria-labelledby="team-invites-heading">
-              <h3 id="team-invites-heading">Team invites</h3>
+            <article className="stack-card">
+              <h3>Team invites</h3>
               {!commercial.apiReachable ? (
                 <p className="detail">
                   {commercial.blockedReason ?? "Commercial API is unavailable."}
@@ -3966,7 +4056,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                       No Account Connect team invites have been requested.
                     </p>
                   ) : (
-                    <div className="feed-list" role="list" aria-label="Team invites list (commercial paginated)">
+                    <div className="feed-list">
                       {commercial.teamInvites.slice(0, 6).map((invite) => (
                         <div className="feed-row" key={invite.id}>
                           <div>
@@ -4079,8 +4169,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               )}
             </article>
 
-            <article className="stack-card" aria-labelledby="billing-portal-sessions-heading">
-              <h3 id="billing-portal-sessions-heading">Billing portal sessions</h3>
+            <article className="stack-card">
+              <h3>Billing portal sessions</h3>
               {!commercial.apiReachable ? (
                 <p className="detail">
                   {commercial.blockedReason ?? "Commercial API is unavailable."}
@@ -5002,7 +5092,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
         <section className="panel-stack">
           <div className="section-head">
             <div>
-              <span className="eyebrow">Agent Marketplace</span>
+              <span className="eyebrow" data-area="org">Agent Marketplace</span>
               <h2>Packaged worker modules with contained prompts, skills, and runtime policy.</h2>
             </div>
             <p className="status-meta">
@@ -5011,8 +5101,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             </p>
           </div>
 
-          <article className="stack-card" aria-labelledby="hosted-marketplace-catalog-heading">
-            <h3 id="hosted-marketplace-catalog-heading">Hosted marketplace catalog</h3>
+          <article className="stack-card">
+            <h3>Hosted marketplace catalog</h3>
             {!agentModules.apiReachable ? (
               <p className="detail">
                 {agentModules.blockedReason ?? "Agent module API is unavailable."}
@@ -5051,7 +5141,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                     No hosted marketplace sync runs have been recorded.
                   </p>
                 ) : (
-                  <div className="feed-list" role="list" aria-label="Marketplace sync runs list (paginated commercial)">
+                  <div className="feed-list">
                     {agentModules.marketplaceSyncRuns.slice(0, 3).map((run) => (
                       <div className="feed-row" key={run.id}>
                         <div>
@@ -5087,7 +5177,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                     remain available below.
                   </p>
                 ) : (
-                  <div className="feed-list" role="list" aria-label="Hosted marketplace listings list (paginated, blocked if no connect)">
+                  <div className="feed-list">
                     {agentModules.hostedListings.slice(0, 6).map((listing) => (
                       <div className="feed-row" key={listing.id}>
                         <div>
@@ -5276,7 +5366,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
         <section className="panel-stack">
           <div className="section-head">
             <div>
-              <span className="eyebrow">AI Capacity</span>
+              <span className="eyebrow" data-area="infra">AI Capacity</span>
               <h2>Entitlements, routing, and skill registry.</h2>
             </div>
             <p className="status-meta">
@@ -5667,10 +5757,103 @@ export default async function HomePage({ searchParams }: HomePageProps) {
           </div>
         </section>
 
+        <section className="panel-stack" data-area="reports" aria-label="Reports">
+          <div className="section-head">
+            <div>
+              <span className="eyebrow">Reports</span>
+              <h2>Holistic view — throughput, cost, and agent performance.</h2>
+            </div>
+          </div>
+          <ReportsView report={report} />
+        </section>
+
+        <section className="panel-stack" data-area="capabilities" aria-label="Capabilities">
+          <div className="section-head">
+            <div>
+              <span className="eyebrow">Capabilities</span>
+              <h2>Agent tools &amp; MCP servers — discover, audit, extend.</h2>
+            </div>
+          </div>
+          <CapabilitiesView
+            projectId={activeProjectId}
+            nativeTools={capabilities.nativeTools}
+            skills={capabilities.skills}
+            mcpServers={capabilities.mcpServers}
+            apiReachable={capabilities.apiReachable}
+            engineLabel={capabilities.engineLabel}
+            engineModel={capabilities.engineModel}
+          />
+        </section>
+
+        <section className="panel-stack" data-area="meetings" aria-label="Meeting room">
+          <div className="section-head">
+            <div>
+              <span className="eyebrow">Meeting Room</span>
+              <h2>Cross-functional agent panels — watch them debate to a PRD.</h2>
+            </div>
+          </div>
+          <MeetingsHome
+            projectId={activeProjectId}
+            orgId={activeOrgId}
+            meetings={meetingRooms.items}
+            roles={meetingRooms.roles}
+            tasks={tasks.items.map((t) => ({ id: t.id, title: t.title }))}
+            apiReachable={meetingRooms.apiReachable}
+          />
+        </section>
+
+        <section className="panel-stack" data-area="code_tasks" aria-label="Code tasks">
+          <div className="section-head">
+            <div>
+              <span className="eyebrow">Code Tasks</span>
+              <h2>An agent clones the repo, edits code, runs your tests — then opens a gated PR.</h2>
+            </div>
+          </div>
+          <CodeTasksHome
+            projectId={activeProjectId}
+            orgId={activeOrgId}
+            codeTasks={codeTasksFeed.items}
+            apiReachable={codeTasksFeed.apiReachable}
+          />
+        </section>
+
+        <section className="panel-stack" data-area="sandboxes" aria-label="Sandboxes">
+          <div className="section-head">
+            <div>
+              <span className="eyebrow">Execution Plane</span>
+              <h2>Inspect live sandboxes — browse the working tree and run a governed console.</h2>
+            </div>
+          </div>
+          <SandboxesHome
+            sandboxes={sandboxFeed.items}
+            apiReachable={sandboxFeed.apiReachable}
+            unavailable={sandboxFeed.unavailable}
+          />
+        </section>
+
+        <section className="panel-stack" data-area="work" aria-label="Task runs">
+          <div className="section-head">
+            <div>
+              <span className="eyebrow">Task Runs</span>
+              <h2>Workflow transitions — click a task to trace its run.</h2>
+            </div>
+          </div>
+          <WorkBoard
+            tasks={tasks.items}
+            jobs={opsQueue.jobs}
+            events={events.items}
+            artifacts={artifacts.items}
+            decisions={decisions.items}
+            agentRuns={agentRuns.items}
+            outputs={taskOutputs.items}
+            initialTaskId={requestedWorkTask}
+          />
+        </section>
+
         <section className="panel-stack">
           <div className="section-head">
             <div>
-              <span className="eyebrow">Company Workspace</span>
+              <span className="eyebrow" data-area="work">Company Workspace</span>
               <h2>Tasks and artifacts with real lineage.</h2>
             </div>
             <p className="status-meta">
@@ -5856,11 +6039,11 @@ export default async function HomePage({ searchParams }: HomePageProps) {
           </div>
         </section>
 
-        <section className="panel-stack" aria-labelledby="what-changed-heading">
+        <section className="panel-stack">
           <div className="section-head">
             <div>
-              <span className="eyebrow">What Changed</span>
-              <h2 id="what-changed-heading">Recent events and visible failures.</h2>
+              <span className="eyebrow" data-area="work">What Changed</span>
+              <h2>Recent events and visible failures.</h2>
             </div>
             <p className="status-meta">
               No silent drops: deadletters remain visible beside the event feed.
@@ -5868,8 +6051,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
           </div>
 
           <div className="stack-grid">
-            <article className="stack-card" aria-labelledby="recent-events-heading">
-              <h3 id="recent-events-heading">Recent events</h3>
+            <article className="stack-card">
+              <h3>Recent events</h3>
               {!events.apiReachable ? (
                 <p className="detail">
                   {events.blockedReason ?? "Event feed is unavailable."}
@@ -5877,7 +6060,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               ) : events.items.length === 0 ? (
                 <p className="detail">No events have been emitted yet.</p>
               ) : (
-                <div className="feed-list" role="list" aria-label="Recent events list (paginated feed)">
+                <div className="feed-list">
                   {events.items.map((event) => (
                     <div className="feed-row" key={event.id}>
                       <div>
@@ -5893,8 +6076,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               )}
             </article>
 
-            <article className="stack-card" aria-labelledby="deadletters-heading">
-              <h3 id="deadletters-heading">Deadletters</h3>
+            <article className="stack-card">
+              <h3>Deadletters</h3>
               {!deadletters.apiReachable ? (
                 <p className="detail">
                   {deadletters.blockedReason ?? "Deadletter API is unavailable."}
@@ -5904,7 +6087,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                   No failed jobs or effects are currently isolated for review.
                 </p>
               ) : (
-                <div className="feed-list" role="list" aria-label="Deadletters list (paginated feed)">
+                <div className="feed-list">
                   {deadletters.items.map((deadletter) => (
                     <div className="feed-row" key={deadletter.id}>
                       <div>
@@ -5986,6 +6169,16 @@ export default async function HomePage({ searchParams }: HomePageProps) {
           </div>
         </section>
 
+        <section className="panel-stack" data-area="decisions" aria-label="Approval rules">
+          <div className="section-head">
+            <div>
+              <span className="eyebrow">Approval Rules</span>
+              <h2>What requires your approval — and why.</h2>
+            </div>
+          </div>
+          <ApprovalRulesView rules={approvalRules.rules} apiReachable={approvalRules.apiReachable} />
+        </section>
+
         <section
           aria-labelledby="decision-inbox-title"
           className="panel-stack"
@@ -5994,7 +6187,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
         >
           <div className="section-head">
             <div>
-              <span className="eyebrow">Decision Inbox</span>
+              <span className="eyebrow" data-area="decisions">Decision Inbox</span>
               <h2 id="decision-inbox-title">
                 Explicit approvals before real effects.
               </h2>
@@ -6083,6 +6276,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                         <h3>{decision.question}</h3>
                       </div>
                       <div className="decision-meta">
+                        <span className="decision-rule">⚖ {decisionRuleLabel(decision)}</span>
                         <span>Risk tier {decision.riskTier}</span>
                         <span>Default: {decision.defaultAction ?? "hold"}</span>
                         <span>Deadline: {formatDeadline(decision.deadlineAt)}</span>
@@ -6199,6 +6393,6 @@ export default async function HomePage({ searchParams }: HomePageProps) {
           )}
         </section>
       </div>
-    </main>
+    </ConsoleShell>
   );
 }

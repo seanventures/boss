@@ -209,7 +209,13 @@ def test_worker_capabilities_include_infra_job_kinds():
 
 
 def test_agent_work_product_strategies_cover_initial_agent_capabilities():
-    agent_capabilities = [item for item in capabilities() if item.startswith("agent.")]
+    # "agent.resume" is a control capability (resume a suspended agent run), not a
+    # work-product-producing agent kind, so it has no AGENT_WORK_PRODUCT_STRATEGIES entry.
+    agent_capabilities = [
+        item
+        for item in capabilities()
+        if item.startswith("agent.") and item != "agent.resume"
+    ]
 
     assert len(agent_capabilities) == len(set(agent_capabilities))
     assert sorted(AGENT_WORK_PRODUCT_STRATEGIES) == sorted(agent_capabilities)

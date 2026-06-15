@@ -1498,3 +1498,151 @@ export async function rollbackSelfImprovementProposalAction(
   });
   revalidatePath("/");
 }
+
+// ---- Capabilities: MCP server management ----
+
+export async function registerMcpServerAction(formData: FormData): Promise<void> {
+  const projectId = getProjectId(formData);
+  const name = String(formData.get("name") ?? "").trim();
+  const url = String(formData.get("url") ?? "").trim();
+  if (!name || !url) {
+    return;
+  }
+  const riskRaw = String(formData.get("risk_tier") ?? "1").trim();
+  const risk = Number.isFinite(Number(riskRaw)) ? Number(riskRaw) : 1;
+  const boundary = String(formData.get("data_boundary") ?? "internal").trim() as DataBoundary;
+  const description = String(formData.get("description") ?? "").trim();
+  await client.registerMcpServer({
+    project_id: projectId,
+    name,
+    url,
+    risk_tier: risk,
+    data_boundary: boundary || "internal",
+    description: description || undefined,
+    actor: getActor(formData),
+  });
+  revalidatePath("/");
+}
+
+export async function setMcpServerEnabledAction(formData: FormData): Promise<void> {
+  const projectId = getProjectId(formData);
+  const serverId = String(formData.get("server_id") ?? "").trim();
+  const enabled = String(formData.get("enabled") ?? "").trim() === "true";
+  if (!serverId) {
+    return;
+  }
+  await client.setMcpServerEnabled(serverId, projectId, enabled);
+  revalidatePath("/");
+}
+
+export async function deleteMcpServerAction(formData: FormData): Promise<void> {
+  const projectId = getProjectId(formData);
+  const serverId = String(formData.get("server_id") ?? "").trim();
+  if (!serverId) {
+    return;
+  }
+  await client.deleteMcpServer(serverId, projectId);
+  revalidatePath("/");
+}
+
+// ---- Convene a multi-agent PRD meeting ----
+
+export async function conveneMeetingAction(formData: FormData): Promise<void> {
+  const projectId = getProjectId(formData);
+  const directive = String(formData.get("directive") ?? "").trim();
+  const url = String(formData.get("url") ?? "").trim();
+  const taskId = String(formData.get("task_id") ?? "").trim();
+  const roles = formData.getAll("roles").map((r) => String(r)).filter(Boolean);
+  if (!directive) {
+    return;
+  }
+  await client.conveneMeeting({
+    project_id: projectId,
+    directive,
+    url: url || undefined,
+    roles: roles.length ? roles : undefined,
+    task_id: taskId || undefined,
+    actor: getActor(formData),
+  });
+  revalidatePath("/");
+}
+
+// ---- Start a coding-agent task (clone -> edit -> test -> gated PR) ----
+
+function splitLines(value: string): string[] {
+  return value
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean);
+}
+
+export async function createCodeTaskAction(formData: FormData): Promise<void> {
+  const projectId = getProjectId(formData);
+  const title = String(formData.get("title") ?? "").trim();
+  const instructions = String(formData.get("instructions") ?? "").trim();
+  if (!title || !instructions) {
+    return;
+  }
+  await client.createCodeTask({
+    project_id: projectId,
+    title,
+    instructions,
+    acceptance_criteria: splitLines(String(formData.get("acceptance_criteria") ?? "")),
+    test_commands: splitLines(String(formData.get("test_commands") ?? "")),
+    owner: String(formData.get("owner") ?? "").trim() || undefined,
+    repo: String(formData.get("repo") ?? "").trim() || undefined,
+    base_branch: String(formData.get("base_branch") ?? "").trim() || undefined,
+  });
+  revalidatePath("/");
+}
+
+// ---- Onboard a new organization (admin) ----
+
+export async function onboardOrgAction(formData: FormData): Promise<void> {
+  const name = String(formData.get("name") ?? "").trim();
+  if (!name) {
+    return;
+  }
+  await client.onboardOrg(name);
+  revalidatePath("/");
+}
+
+// ---- Manage meeting role-agents (per-org template) ----
+
+export async function upsertMeetingRoleAction(formData: FormData): Promise<void> {
+  const projectId = getProjectId(formData);
+  const title = String(formData.get("title") ?? "").trim();
+  const lens = String(formData.get("lens") ?? "").trim();
+  if (!title || !lens) {
+    return;
+  }
+  await client.upsertMeetingRole({
+    project_id: projectId,
+    title,
+    lens,
+    key: String(formData.get("key") ?? "").trim() || undefined,
+    is_default: String(formData.get("is_default") ?? "") === "true",
+  });
+  revalidatePath("/");
+}
+
+export async function setMeetingRoleEnabledAction(formData: FormData): Promise<void> {
+  const projectId = getProjectId(formData);
+  const roleKey = String(formData.get("role_key") ?? "").trim();
+  const enabled = String(formData.get("enabled") ?? "") === "true";
+  if (!roleKey) {
+    return;
+  }
+  await client.setMeetingRoleEnabled(roleKey, projectId, enabled);
+  revalidatePath("/");
+}
+
+export async function deleteMeetingRoleAction(formData: FormData): Promise<void> {
+  const projectId = getProjectId(formData);
+  const roleKey = String(formData.get("role_key") ?? "").trim();
+  if (!roleKey) {
+    return;
+  }
+  await client.deleteMeetingRole(roleKey, projectId);
+  revalidatePath("/");
+}

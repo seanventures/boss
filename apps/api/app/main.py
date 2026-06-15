@@ -1,5 +1,8 @@
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
+import json
+import re
+from secrets import compare_digest
 import logging
 import re
 from secrets import compare_digest
@@ -74,6 +77,8 @@ from .schemas import (
     ChangeJournalResponse,
     CommandProposeRequest,
     CommandProposeResponse,
+    MeetingProposeRequest,
+    MeetingProposeResponse,
     CommsChannelPolicyListResponse,
     CommsChannelPolicySummary,
     CommsChannelPolicyUpsertRequest,
@@ -191,6 +196,7 @@ from .schemas import (
     LeasedJob,
     MetatronQueryRequest,
     MetatronQueryResponse,
+    McpServerRegisterRequest,
     OpenAIPlanRequest,
     OpenAIPlanResponse,
     MeetingCreateRequest,
@@ -316,6 +322,7 @@ from .schemas import (
     WorkerPollResponse,
 )
 from .services.audit import AuditTrailService
+from .services.agent_loop import conversation_from_messages, describe_native_tools
 from .services.agent_runtime import AgentRuntimeService
 from .services.budget import BudgetGovernor
 from .services.break_glass import BreakGlassGrantNotFoundError, BreakGlassService
@@ -333,6 +340,7 @@ from .services.commercial import (
     AccountConnectSyncError,
     CommercialService,
 )
+from .services.core import emit_event, make_id
 from .services.core import emit_event
 from .services.deadletters import DeadletterRemediationService
 from .services.decisions import (
@@ -374,6 +382,14 @@ from .services.saml import (
     SamlSessionService,
 )
 from .services.ops import OpsQueueService
+from .services.reports import ReportService
+from .services.mcp_client import MCPClient
+from .services.mcp_registry import (
+    delete_mcp_server,
+    list_mcp_servers,
+    register_mcp_server,
+    set_mcp_enabled,
+)
 from .services.receipts import ReceiptService
 from .services.resource_plane import (
     ChangeSetNotFoundError,
@@ -423,6 +439,7 @@ members = MemberDirectoryService(settings)
 canonical = CanonicalObjectService()
 deadletter_remediation = DeadletterRemediationService(settings)
 ops_queue = OpsQueueService(settings)
+reports = ReportService(settings)
 break_glass = BreakGlassService()
 resource_plane = ResourcePlaneService(settings)
 oidc_auth = OidcAuthenticator(settings)
@@ -935,6 +952,56 @@ def record_account_connect_denial(
             reason,
             exc_info=audit_error,
         )
+        return
+
+
+def record_account_connect_sync_denial(project_id: str, actor: str, reason: str) -> None:
+    try:
+        with begin(engine) as audit_connection:
+            project_exists = audit_connection.execute(
+                text("SELECT 1 FROM projects WHERE id = :project_id"),
+                {"project_id": project_id},
+            ).first()
+            if not project_exists:
+                return
+            emit_event(
+                audit_connection,
+                project_id,
+                "account_connect.sync_denied",
+                actor,
+                "account_connect_org",
+                project_id,
+                {"reason": reason},
+            )
+    except Exception:
+        return
+
+
+def record_account_connect_denial(
+    project_id: str,
+    actor: str,
+    event_type: str,
+    reason: str,
+    entity_type: str,
+) -> None:
+    try:
+        with begin(engine) as audit_connection:
+            project_exists = audit_connection.execute(
+                text("SELECT 1 FROM projects WHERE id = :project_id"),
+                {"project_id": project_id},
+            ).first()
+            if not project_exists:
+                return
+            emit_event(
+                audit_connection,
+                project_id,
+                event_type,
+                actor,
+                entity_type,
+                project_id,
+                {"reason": reason},
+            )
+    except Exception:
         return
 
 
@@ -3046,6 +3113,89 @@ def scim_delete_user(
         return Response(status_code=204)
 
 
+@app.get("/v1/orgs")
+def list_orgs():
+    """Organizations onboarded to BOSS, each with its primary project and some
+    activity counts. Used by the org picker shown before entering the console."""
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    with begin(engine) as connection:
+        rows = connection.execute(
+            text(
+                """
+                SELECT o.id AS org_id, o.name AS org_name, o.created_at,
+                       p.id AS project_id, p.name AS project_name, p.slug AS project_slug,
+                       w.name AS workspace_name,
+                       (SELECT count(*) FROM tasks t WHERE t.project_id = p.id) AS task_count,
+                       (SELECT count(*) FROM meetings m WHERE m.project_id = p.id) AS meeting_count
+                FROM orgs o
+                JOIN workspaces w ON w.org_id = o.id
+                JOIN projects p ON p.workspace_id = w.id
+                -- one primary (earliest) project per org
+                WHERE p.created_at = (
+                    SELECT min(p2.created_at) FROM projects p2
+                    JOIN workspaces w2 ON w2.id = p2.workspace_id
+                    WHERE w2.org_id = o.id
+                )
+                ORDER BY o.created_at
+                """
+            )
+        ).mappings().all()
+        return {
+            "items": [
+                {
+                    "org_id": r["org_id"],
+                    "org_name": r["org_name"],
+                    "created_at": r["created_at"].isoformat() if hasattr(r["created_at"], "isoformat") else r["created_at"],
+                    "project_id": r["project_id"],
+                    "project_name": r["project_name"],
+                    "project_slug": r["project_slug"],
+                    "workspace_name": r["workspace_name"],
+                    "task_count": int(r["task_count"] or 0),
+                    "meeting_count": int(r["meeting_count"] or 0),
+                }
+                for r in rows
+            ]
+        }
+
+
+@app.post("/v1/orgs", status_code=201)
+def onboard_org_endpoint(payload: dict):
+    """Onboard a new organization: create org → workspace → project and seed it
+    with the common defaults (budget policy, members, packs, agent modules,
+    entitlement sources, MCP servers). No auth yet — this is the admin action."""
+    name = str(payload.get("name") or "").strip()
+    if not name:
+        raise HTTPException(status_code=422, detail="Organization name is required.")
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    from .bootstrap import onboard_org
+    with begin(engine) as connection:
+        result = onboard_org(
+            connection, settings, name,
+            entitlements=entitlements, members=members, specpack=specpack,
+        )
+        # A clearly-labeled welcome task so a brand-new org isn't empty in Work/Overview.
+        intake.create_task(
+            connection,
+            project_id=result["project_id"],
+            title=f"👋 Welcome to BOSS, {name} — issue your first command",
+            description=(
+                "Your organization is set up with the shared capabilities (tools, skills, MCP servers, "
+                "meeting roles) and a budget policy. Get started:\n"
+                "• Overview → issue a CEO command and BOSS will plan it, gating any real effect behind your approval.\n"
+                "• Meetings → convene a cross-functional agent panel to debate and draft a PRD.\n"
+                "• Capabilities → review the tools and skills your agents can use, and plug in your own MCP servers.\n"
+                "You can close this task once you're oriented."
+            ),
+            dedupe_key=make_id("welcome"),
+            priority="p3",
+            risk_tier=0,
+            data_boundary="internal",
+        )
+    return result
+
+
 @app.get("/v1/projects", response_model=ProjectListResponse)
 def list_projects() -> ProjectListResponse:
     with begin(engine) as connection:
@@ -3266,6 +3416,842 @@ def revoke_break_glass_grant(
             reason=payload.reason,
         )
         return break_glass_grant_summary_from_service(grant)
+
+
+@app.get("/v1/reports/summary")
+def report_summary(project_id: str):
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    with begin(engine) as connection:
+        return reports.build_summary(connection, project_id)
+
+
+@app.get("/v1/agent-runs")
+def list_agent_runs(project_id: str, limit: int = 50):
+    """Agent tool-calling transcripts (which read tools the agent invoked to
+    ground each plan), surfaced for the Run view."""
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    with begin(engine) as connection:
+        rows = connection.execute(
+            text(
+                """
+                SELECT id, task_id, created_at,
+                       content->'agent_transcript' AS transcript,
+                       content->>'tool_calls' AS tool_calls,
+                       content->>'cost_usd_micros' AS cost_usd_micros,
+                       content->>'output_text' AS output_text,
+                       content->>'agent_run_id' AS agent_run_id,
+                       content->'usage'->>'total_tokens' AS total_tokens,
+                       content->'usage'->>'model' AS model
+                FROM artifacts
+                WHERE project_id = :p AND artifact_type = 'plan_draft'
+                  AND content ? 'agent_transcript'
+                ORDER BY created_at DESC
+                LIMIT :limit
+                """
+            ),
+            {"p": project_id, "limit": max(1, min(limit, 200))},
+        ).mappings().all()
+        # Join the raw LLM conversation (persisted in agent_runs.messages but never
+        # otherwise surfaced) so the UI can show the full agent<->LLM back-and-forth.
+        run_ids = [r["agent_run_id"] for r in rows if r["agent_run_id"]]
+        convo_by_run: dict[str, list] = {}
+        status_by_run: dict[str, str] = {}
+        if run_ids:
+            cr = connection.execute(
+                text("SELECT id, status, messages FROM agent_runs WHERE id = ANY(:ids)"),
+                {"ids": run_ids},
+            ).mappings().all()
+            for run in cr:
+                msgs = run["messages"]
+                if isinstance(msgs, str):
+                    try:
+                        msgs = json.loads(msgs)
+                    except Exception:
+                        msgs = []
+                convo_by_run[run["id"]] = conversation_from_messages(msgs or [])
+                status_by_run[run["id"]] = run["status"]
+        return {
+            "project_id": project_id,
+            "items": [
+                {
+                    "artifact_id": r["id"],
+                    "task_id": r["task_id"],
+                    "created_at": r["created_at"].isoformat()
+                    if hasattr(r["created_at"], "isoformat")
+                    else r["created_at"],
+                    "model": r["model"],
+                    "tool_calls": int(r["tool_calls"] or 0),
+                    "cost_usd_micros": int(r["cost_usd_micros"] or 0),
+                    "total_tokens": int(r["total_tokens"] or 0),
+                    "transcript": r["transcript"] or [],
+                    "output_text": r["output_text"],
+                    "status": status_by_run.get(r["agent_run_id"]) if r["agent_run_id"] else None,
+                    "conversation": convo_by_run.get(r["agent_run_id"], []) if r["agent_run_id"] else [],
+                }
+                for r in rows
+            ],
+        }
+
+
+def _artifact_output_preview(content) -> str:
+    """Build a human-readable inline preview of an artifact's content for the
+    Deliverables viewer. Prefers a natural-language field; otherwise pretty-prints
+    the structured content with heavy/noisy keys removed. Size-capped."""
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        try:
+            content = json.loads(content)
+        except Exception:
+            return content[:6000]
+    if not isinstance(content, dict):
+        return str(content)[:6000]
+    for key in ("output_text", "summary", "narrative", "brief", "text", "body"):
+        val = content.get(key)
+        if isinstance(val, str) and val.strip():
+            return val.strip()[:6000]
+    drop = {"agent_transcript", "messages", "raw", "agent_module"}
+    slim = {k: v for k, v in content.items() if k not in drop}
+    try:
+        body = json.dumps(slim, indent=2, default=str, ensure_ascii=False)
+    except Exception:
+        body = str(slim)
+    return body[:6000] + ("\n… (truncated)" if len(body) > 6000 else "")
+
+
+@app.get("/v1/outputs")
+def list_task_outputs(project_id: str):
+    """Unified, linkable 'deliverables' for every task — aggregates the actual
+    outputs a task produced from the three places they land: artifacts
+    (design docs, test reports, diffs), decisions (GitHub PR urls), and child
+    tasks (incidents / follow-ups). One item per deliverable, tagged by task_id."""
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+
+    def _iso(v):
+        return v.isoformat() if hasattr(v, "isoformat") else v
+
+    with begin(engine) as connection:
+        items: list[dict] = []
+        # 1) Artifacts (design docs, test reports, diffs, review packets, ...)
+        arts = connection.execute(
+            text(
+                """
+                SELECT id, task_id, artifact_type, title, uri, content, created_at
+                FROM artifacts
+                WHERE project_id = :p AND task_id IS NOT NULL
+                ORDER BY created_at DESC LIMIT 500
+                """
+            ),
+            {"p": project_id},
+        ).mappings().all()
+        for a in arts:
+            # artifacts.uri is a local filesystem path, not a browsable URL — only
+            # surface it as a link when it is an actual http(s) URL. Otherwise the
+            # content is shown inline via `preview`.
+            uri = a["uri"]
+            http_url = uri if isinstance(uri, str) and uri.startswith("http") else None
+            content = a["content"]
+            if isinstance(content, str):
+                try:
+                    content = json.loads(content)
+                except Exception:
+                    content = {}
+            items.append(
+                {
+                    "task_id": a["task_id"],
+                    "kind": a["artifact_type"],
+                    "title": a["title"],
+                    "link_kind": "artifact",
+                    "artifact_id": a["id"],
+                    "url": http_url,
+                    "preview": _artifact_output_preview(a["content"]),
+                    "created_at": _iso(a["created_at"]),
+                }
+            )
+            # a published document carries the GitHub PR it landed in — surface it
+            # as a clickable external deliverable too.
+            pr_url = content.get("pull_request_url") if isinstance(content, dict) else None
+            if pr_url:
+                num = content.get("pull_request_number")
+                items.append(
+                    {
+                        "task_id": a["task_id"],
+                        "kind": "pull_request",
+                        "title": f"GitHub PR #{num}" if num else "GitHub pull request",
+                        "link_kind": "external",
+                        "url": pr_url,
+                        "created_at": _iso(a["created_at"]),
+                    }
+                )
+        # 2) GitHub PRs (and other external refs) carried on decisions
+        prs = connection.execute(
+            text(
+                """
+                SELECT id, task_id,
+                       recommendation->>'pull_request_url' AS url,
+                       recommendation->>'pull_request_number' AS number,
+                       created_at
+                FROM decisions
+                WHERE project_id = :p AND task_id IS NOT NULL
+                  AND recommendation ? 'pull_request_url'
+                ORDER BY created_at DESC LIMIT 500
+                """
+            ),
+            {"p": project_id},
+        ).mappings().all()
+        seen_urls: set = set()
+        for d in prs:
+            if not d["url"] or d["url"] in seen_urls:
+                continue
+            seen_urls.add(d["url"])
+            num = d["number"]
+            items.append(
+                {
+                    "task_id": d["task_id"],
+                    "kind": "pull_request",
+                    "title": f"GitHub PR #{num}" if num else "GitHub pull request",
+                    "link_kind": "external",
+                    "url": d["url"],
+                    "created_at": _iso(d["created_at"]),
+                }
+            )
+        # 3) Child tasks (incidents / follow-ups) spawned by this task
+        children = connection.execute(
+            text(
+                """
+                SELECT id, parent_task_id, title, status, created_at
+                FROM tasks
+                WHERE project_id = :p AND parent_task_id IS NOT NULL
+                ORDER BY created_at DESC LIMIT 500
+                """
+            ),
+            {"p": project_id},
+        ).mappings().all()
+        for c in children:
+            is_incident = (c["title"] or "").upper().startswith("INCIDENT")
+            items.append(
+                {
+                    "task_id": c["parent_task_id"],
+                    "kind": "incident" if is_incident else "follow_up",
+                    "title": c["title"],
+                    "link_kind": "task",
+                    "ref_task_id": c["id"],
+                    "status": c["status"],
+                    "created_at": _iso(c["created_at"]),
+                }
+            )
+        return {"project_id": project_id, "items": items}
+
+
+@app.post("/v1/agent-runs/{run_id}/resume")
+def resume_agent_run_endpoint(run_id: str):
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    with begin(engine) as connection:
+        return software_factory.resume_plan_run(connection, run_id)
+
+
+@app.get("/v1/mcp/servers")
+def list_mcp(project_id: str):
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    with begin(engine) as connection:
+        return {"project_id": project_id, "items": list_mcp_servers(connection, project_id)}
+
+
+@app.post("/v1/mcp/servers", status_code=201)
+def register_mcp(payload: McpServerRegisterRequest):
+    with begin(engine) as connection:
+        return register_mcp_server(
+            connection,
+            payload.project_id,
+            payload.name,
+            payload.url,
+            transport=payload.transport,
+            risk_tier=payload.risk_tier,
+            data_boundary=payload.data_boundary,
+            description=payload.description,
+            actor=payload.actor,
+        )
+
+
+@app.patch("/v1/mcp/servers/{server_id}")
+def toggle_mcp(server_id: str, project_id: str, enabled: bool):
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    with begin(engine) as connection:
+        row = set_mcp_enabled(connection, project_id, server_id, enabled, actor="executive_console")
+        if row is None:
+            raise HTTPException(status_code=404, detail="MCP server not found.")
+        return row
+
+
+@app.delete("/v1/mcp/servers/{server_id}", status_code=204)
+def remove_mcp(server_id: str, project_id: str):
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    with begin(engine) as connection:
+        ok = delete_mcp_server(connection, project_id, server_id, actor="executive_console")
+        if not ok:
+            raise HTTPException(status_code=404, detail="MCP server not found.")
+    return Response(status_code=204)
+
+
+@app.post("/v1/meetings/prd", response_model=MeetingProposeResponse, status_code=201)
+def convene_prd_meeting(payload: MeetingProposeRequest):
+    """Convene a multi-agent PRD meeting: a panel of role-agents debates, then
+    synthesizes, then drafts — gated by a human approval before publish."""
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    with begin(engine) as connection:
+        # Attach to an existing task if one was supplied, else create one.
+        if payload.task_id:
+            exists = connection.execute(
+                text("SELECT id FROM tasks WHERE id = :t AND project_id = :p"),
+                {"t": payload.task_id, "p": payload.project_id},
+            ).mappings().first()
+            if not exists:
+                raise HTTPException(status_code=404, detail="task_id not found in project.")
+            task_id = payload.task_id
+        else:
+            task = intake.create_task(
+                connection,
+                project_id=payload.project_id,
+                title=f"PRD meeting: {payload.directive[:90]}",
+                description=payload.directive,
+                dedupe_key=make_id("mtg"),
+                priority="p1",
+                risk_tier=2,
+                inputs={"directive": payload.directive, "url": payload.url, "constraints": payload.constraints},
+                required_artifacts=["meeting_minutes"],
+                data_boundary=str(payload.constraints.get("data_boundary") or "internal"),
+            )
+            task_id = task["task_id"]
+        reservation = budget.reserve(
+            connection, payload.project_id, "model",
+            settings.plan_budget_usd_micros * 4,  # a panel runs ~10 model calls
+            "Multi-agent PRD meeting.", 120,
+        )
+        reservation_id = reservation.get("reservation_id") if reservation.get("status") == "reserved" else None
+        # Start a DURABLE meeting run (one phase per worker step → crash-resumable).
+        from .services.meeting_service import start_meeting_run
+        run_id = start_meeting_run(
+            connection,
+            project_id=payload.project_id, task_id=task_id,
+            directive=payload.directive, url=payload.url,
+            constraints=payload.constraints, role_keys=payload.roles,
+            finalize_ctx={"reservation_id": reservation_id},
+        )
+        job = jobs.create_job(
+            connection, project_id=payload.project_id, task_id=task_id,
+            kind="meeting.step", priority=48, payload={"run_id": run_id},
+        )
+        return MeetingProposeResponse(status="accepted", task_id=task_id, job_id=job["id"])
+
+
+@app.get("/v1/meeting-roles")
+def list_meeting_roles(project_id: str):
+    """The org's AI role-agent catalog (the meeting template) — read from the DB,
+    seeded from the baseline on first use, editable per organization."""
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    from .services.meeting_service import list_project_roles
+    with begin(engine) as connection:
+        roles = list_project_roles(connection, project_id)
+    return {
+        "roles": [{**r, "default": r["is_default"]} for r in roles],
+        "default_role_keys": [r["key"] for r in roles if r["is_default"]],
+    }
+
+
+@app.post("/v1/meeting-roles", status_code=201)
+def upsert_meeting_role_endpoint(payload: dict):
+    """Add or update a role-agent for an org's meeting template."""
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    project_id = str(payload.get("project_id") or "").strip()
+    title = str(payload.get("title") or "").strip()
+    lens = str(payload.get("lens") or "").strip()
+    if not project_id or not title or not lens:
+        raise HTTPException(status_code=422, detail="project_id, title and lens are required.")
+    from .services.meeting_service import upsert_meeting_role
+    with begin(engine) as connection:
+        return upsert_meeting_role(
+            connection, project_id,
+            key=payload.get("key") or title, title=title, lens=lens,
+            risk_tier=int(payload.get("risk_tier") or 1),
+            is_default=bool(payload.get("is_default")),
+            enabled=bool(payload.get("enabled", True)),
+        )
+
+
+@app.patch("/v1/meeting-roles/{role_key}")
+def toggle_meeting_role_endpoint(role_key: str, project_id: str, enabled: bool):
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    from .services.meeting_service import set_meeting_role_enabled
+    with begin(engine) as connection:
+        if not set_meeting_role_enabled(connection, project_id, role_key, enabled):
+            raise HTTPException(status_code=404, detail="role not found")
+    return {"role_key": role_key, "enabled": enabled}
+
+
+@app.delete("/v1/meeting-roles/{role_key}", status_code=204)
+def delete_meeting_role_endpoint(role_key: str, project_id: str):
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    from .services.meeting_service import delete_meeting_role
+    with begin(engine) as connection:
+        if not delete_meeting_role(connection, project_id, role_key):
+            raise HTTPException(status_code=404, detail="role not found")
+    return Response(status_code=204)
+
+
+@app.get("/v1/meeting-rooms")
+def list_meeting_rooms(project_id: str, limit: int = 25):
+    """Full meeting records for the Meeting Room: participants, each round's
+    contributions, the debate, the synthesis, the drafted PRD, and the PR it
+    landed in."""
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+
+    def _iso(v):
+        return v.isoformat() if hasattr(v, "isoformat") else v
+
+    from .services.meeting_service import resolve_roles, load_role_map, FACILITATOR_TITLE
+
+    def _pr_for_task(connection, tid):
+        if not tid:
+            return None, None
+        pub = connection.execute(
+            text("SELECT content FROM artifacts WHERE task_id = :t AND artifact_type = 'published_document' "
+                 "ORDER BY created_at DESC LIMIT 1"),
+            {"t": tid},
+        ).mappings().first()
+        if not pub:
+            return None, None
+        pc = pub["content"] or {}
+        if isinstance(pc, str):
+            try:
+                pc = json.loads(pc)
+            except Exception:
+                pc = {}
+        return pc.get("pull_request_url"), pc.get("pull_request_number")
+
+    def _task_info(connection, tid):
+        if not tid:
+            return None, None
+        tr = connection.execute(text("SELECT title, status FROM tasks WHERE id = :t"), {"t": tid}).mappings().first()
+        return (tr["title"], tr["status"]) if tr else (None, None)
+
+    with begin(engine) as connection:
+        items = []
+        covered_tasks: set = set()
+        # 1) Durable meeting_runs — live phase/status + per-round state.
+        runs = connection.execute(
+            text("""SELECT id, task_id, status, phase, directive, url, role_keys, state, usage, created_at, updated_at
+                    FROM meeting_runs WHERE project_id = :p ORDER BY updated_at DESC LIMIT :limit"""),
+            {"p": project_id, "limit": max(1, min(limit, 100))},
+        ).mappings().all()
+        for r in runs:
+
+            def _j(v):
+                if isinstance(v, str):
+                    try:
+                        return json.loads(v)
+                    except Exception:
+                        return {}
+                return v
+            state = _j(r["state"]) or {}
+            usage = _j(r["usage"]) or {}
+            personas = resolve_roles(_j(r["role_keys"]) or [], load_role_map(connection, project_id))
+            if r["task_id"]:
+                covered_tasks.add(r["task_id"])
+            pr_url, pr_num = _pr_for_task(connection, r["task_id"])
+            t_title, t_status = _task_info(connection, r["task_id"])
+            research = state.get("research") or {}
+            items.append({
+                "id": r["id"], "task_id": r["task_id"], "task_title": t_title, "task_status": t_status,
+                "role_keys": [p["key"] for p in personas],
+                "title": f"PRD meeting: {r['directive']}",
+                "purpose": "Cross-functional PRD review and drafting",
+                "status": r["status"], "phase": r["phase"],
+                "participants": [p["title"] for p in personas] + [FACILITATOR_TITLE],
+                "created_at": _iso(r["created_at"]), "completed_at": _iso(r["updated_at"]) if r["status"] == "completed" else None,
+                "directive": r["directive"], "url": r["url"],
+                "model": usage.get("model"), "cost_usd_micros": usage.get("cost_usd_micros"),
+                "research_summary": {"sitemap": research.get("sitemap", []), "pages_studied": len(research.get("pages", []))},
+                "round1": state.get("round1") or {}, "round2": state.get("round2") or {},
+                "synthesis": state.get("synthesis"), "prd_markdown": state.get("prd_markdown"),
+                "pull_request_url": pr_url, "pull_request_number": pr_num,
+            })
+
+        # 2) Legacy meetings table (pre-durable) — only those not covered by a run.
+        rows = connection.execute(
+            text(
+                """
+                SELECT id, title, purpose, status, participants, minutes_artifact_id,
+                       completed_at, created_at
+                FROM meetings WHERE project_id = :p
+                ORDER BY created_at DESC LIMIT :limit
+                """
+            ),
+            {"p": project_id, "limit": max(1, min(limit, 100))},
+        ).mappings().all()
+
+        for m in rows:
+            content: dict = {}
+            task_id = None
+            if m["minutes_artifact_id"]:
+                art = connection.execute(
+                    text("SELECT task_id, content FROM artifacts WHERE id = :a"),
+                    {"a": m["minutes_artifact_id"]},
+                ).mappings().first()
+                if art:
+                    task_id = art["task_id"]
+                    content = art["content"] or {}
+                    if isinstance(content, str):
+                        try:
+                            content = json.loads(content)
+                        except Exception:
+                            content = {}
+            if task_id and task_id in covered_tasks:
+                continue  # a durable run already represents this meeting
+            pr_url = None
+            pr_num = None
+            task_title = None
+            task_status = None
+            if task_id:
+                tr = connection.execute(
+                    text("SELECT title, status FROM tasks WHERE id = :t"),
+                    {"t": task_id},
+                ).mappings().first()
+                if tr:
+                    task_title = tr["title"]
+                    task_status = tr["status"]
+                pub = connection.execute(
+                    text(
+                        "SELECT content FROM artifacts WHERE task_id = :t AND artifact_type = 'published_document' "
+                        "ORDER BY created_at DESC LIMIT 1"
+                    ),
+                    {"t": task_id},
+                ).mappings().first()
+                if pub:
+                    pc = pub["content"] or {}
+                    if isinstance(pc, str):
+                        try:
+                            pc = json.loads(pc)
+                        except Exception:
+                            pc = {}
+                    pr_url = pc.get("pull_request_url")
+                    pr_num = pc.get("pull_request_number")
+            items.append(
+                {
+                    "id": m["id"],
+                    "task_id": task_id,
+                    "task_title": task_title,
+                    "task_status": task_status,
+                    "role_keys": content.get("role_keys") or [],
+                    "title": m["title"],
+                    "purpose": m["purpose"],
+                    "status": m["status"],
+                    "phase": "done",
+                    "participants": m["participants"] or [],
+                    "created_at": _iso(m["created_at"]),
+                    "completed_at": _iso(m["completed_at"]),
+                    "directive": content.get("directive"),
+                    "url": content.get("url"),
+                    "model": content.get("model"),
+                    "cost_usd_micros": content.get("cost_usd_micros"),
+                    "research_summary": content.get("research_summary") or {},
+                    "round1": content.get("round1_perspectives") or {},
+                    "round2": content.get("round2_debate") or {},
+                    "synthesis": content.get("synthesis"),
+                    "prd_markdown": content.get("prd_markdown"),
+                    "pull_request_url": pr_url,
+                    "pull_request_number": pr_num,
+                }
+            )
+        return {"project_id": project_id, "items": items}
+
+
+@app.post("/v1/meetings/step")
+def run_meeting_step_endpoint(payload: dict):
+    """Worker-invoked: advance a durable meeting by exactly ONE phase. Each step
+    persists its result and enqueues the next step, so a crash/restart resumes
+    from the last completed phase instead of re-running the whole meeting."""
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    from .services.meeting_service import advance_meeting_run
+    return advance_meeting_run(engine, settings, jobs, payload["run_id"])
+
+
+@app.post("/v1/code-tasks")
+def start_code_task_endpoint(payload: dict):
+    """Convene a durable coding task: clone -> agent edits + tests -> gated PR.
+    Returns the run_id; a `code.task` worker picks it up and runs the pipeline."""
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    project_id = payload.get("project_id")
+    if not project_id:
+        raise HTTPException(status_code=422, detail="project_id is required.")
+    from .services.code_task_service import start_code_task
+    with begin(engine) as c:
+        run_id = start_code_task(
+            c, project_id=project_id, task_id=payload.get("task_id"),
+            title=payload.get("title") or "Code task",
+            instructions=payload.get("instructions") or "",
+            acceptance_criteria=payload.get("acceptance_criteria") or [],
+            test_commands=payload.get("test_commands") or [],
+            owner=payload.get("owner") or settings.target_github_owner,
+            repo=payload.get("repo") or settings.target_github_repo,
+            base_branch=payload.get("base_branch") or "main",
+            finalize_ctx=payload.get("finalize_ctx") or {},
+            jobs=jobs,
+        )
+    return {"status": "queued", "run_id": run_id}
+
+
+@app.post("/v1/code-tasks/step")
+def run_code_task_step_endpoint(payload: dict):
+    """Worker-invoked: run one full code-task attempt. Safe to re-run after a
+    crash — the PR receipt dedupe makes re-opening the PR a no-op."""
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    from .services.code_task_service import run_code_task
+    return run_code_task(engine, settings, jobs, payload["run_id"])
+
+
+@app.get("/v1/code-tasks")
+def list_code_tasks_endpoint(project_id: str, limit: int = 50):
+    """List code-task runs for a project (newest first) for the Code Tasks view."""
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    from .services.code_task_service import list_code_task_runs
+    with begin(engine) as c:
+        return {"code_tasks": list_code_task_runs(c, project_id, limit)}
+
+
+@app.get("/v1/code-tasks/{run_id}")
+def get_code_task_endpoint(run_id: str):
+    """Fetch a single code-task run (status, phase, diff summary, tests, PR, decision)."""
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    from .services.code_task_service import load_code_task_run
+    with begin(engine) as c:
+        run = load_code_task_run(c, run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="code task not found")
+    return run
+
+
+# --- Execution plane: governed sandbox visibility + console ------------------
+@app.get("/v1/sandboxes")
+def list_sandboxes_endpoint():
+    """List live sandboxes on the execution plane (visibility)."""
+    from .services import sandbox_console
+    try:
+        return sandbox_console.list_sandboxes(settings)
+    except Exception as e:  # sandbox agent unreachable
+        return {"sandboxes": [], "unavailable": str(e)[:200]}
+
+
+@app.get("/v1/sandboxes/helpers")
+def sandbox_helpers_endpoint():
+    """The governed helper-command allowlist (runnable without break-glass)."""
+    from .services import sandbox_console
+    try:
+        return sandbox_console.list_helpers(settings)
+    except Exception as e:  # sandbox agent unreachable
+        return {"categories": {}, "commands": [], "unavailable": str(e)[:200]}
+
+
+@app.get("/v1/sandboxes/{sandbox_id}/tree")
+def sandbox_tree_endpoint(sandbox_id: str):
+    from .services import sandbox_console
+    return sandbox_console.get_tree(settings, sandbox_id)
+
+
+@app.get("/v1/sandboxes/{sandbox_id}/file")
+def sandbox_file_endpoint(sandbox_id: str, path: str, actor: str = "operator"):
+    """Read a tracked file from a sandbox working tree — audited."""
+    from .services import sandbox_console
+    with begin(engine) as c:
+        return sandbox_console.read_file(c, settings, sandbox_id, path, actor=actor)
+
+
+@app.post("/v1/sandboxes/{sandbox_id}/exec")
+def sandbox_exec_endpoint(sandbox_id: str, payload: dict):
+    """Run a command in a sandbox. Allowlisted helpers run freely; a raw shell
+    (break_glass=true) requires a reason and emits an elevated audit event."""
+    from .services import sandbox_console
+    try:
+        with begin(engine) as c:
+            return sandbox_console.exec_command(
+                c, settings, sandbox_id, payload.get("command", ""),
+                break_glass=bool(payload.get("break_glass")),
+                reason=payload.get("reason"), actor=payload.get("actor", "operator"),
+            )
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+
+@app.get("/v1/sandboxes/{sandbox_id}/stats")
+def sandbox_stats_endpoint(sandbox_id: str):
+    """Per-sandbox resource telemetry (CPU/mem/io, OOM, limits) for operators."""
+    from .services import sandbox_console
+    return sandbox_console.get_stats(settings, sandbox_id)
+
+
+@app.post("/v1/sandboxes/{sandbox_id}/preserve")
+def sandbox_preserve_endpoint(sandbox_id: str, payload: dict):
+    """Quarantine + snapshot a sandbox for a customer escalation — requires a
+    reason, excluded from the reaper, audited (sandbox.preserved)."""
+    from .services import sandbox_console
+    try:
+        with begin(engine) as c:
+            return sandbox_console.preserve(
+                c, settings, sandbox_id, reason=payload.get("reason", ""),
+                actor=payload.get("actor", "operator"),
+            )
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+
+@app.delete("/v1/sandboxes/{sandbox_id}")
+def sandbox_destroy_endpoint(sandbox_id: str):
+    from .services import sandbox_console
+    return sandbox_console.destroy(settings, sandbox_id)
+
+
+# Curated catalog of the named service-level approval gates (the ~38 in-code
+# create_blocking_decision triggers, grouped by domain for the Approval Rules view).
+SERVICE_APPROVAL_GATES = [
+    {"domain": "Agent loop", "gate": "Risk-tier autonomy gate", "trigger": "Any agent tool whose risk tier is above the autonomy threshold defers to a human Decision.", "reason": "agent_tool_requires_approval"},
+    {"domain": "Software factory", "gate": "Plan / PRD review", "trigger": "A generated plan or PRD draft is reviewed before it becomes work.", "reason": "plan_ready_for_review · review_plan_draft"},
+    {"domain": "Software factory", "gate": "Pull request proposal", "trigger": "Opening a GitHub pull request from an approved plan.", "reason": "review_pull_request"},
+    {"domain": "Software factory", "gate": "PR merge", "trigger": "Merging a pull request requires explicit approval.", "reason": "blocked_manual_merge_required"},
+    {"domain": "Software factory", "gate": "CI validation", "trigger": "A PR whose CI checks fail or are incomplete is held for a human.", "reason": "blocked_ci_validation_failed · _incomplete"},
+    {"domain": "Software factory", "gate": "Deployment / rollout", "trigger": "Deploying or rolling out to an environment.", "reason": "blocked_manual_deploy_required · review_deployment"},
+    {"domain": "Communications", "gate": "External send", "trigger": "Sending Slack / email to external recipients via the outbox.", "reason": "blocked_outbox_messages"},
+    {"domain": "Infrastructure", "gate": "Provisioning / teardown", "trigger": "Provisioning, terminating, or changing infrastructure.", "reason": "blocked_manual_provision_required · review_infra_provisioning"},
+    {"domain": "Budget", "gate": "Spend cap / freeze", "trigger": "An action that would exceed the daily cap or cross a freeze threshold is denied or gated.", "reason": "budget_denied · budget_governor"},
+    {"domain": "Meetings", "gate": "Publish PRD", "trigger": "Publishing a cross-functional panel meeting's drafted PRD.", "reason": "meeting_prd_ready_to_publish"},
+    {"domain": "Roles", "gate": "Autonomy change", "trigger": "Changing an agent role's autonomy level.", "reason": "role.autonomy_change"},
+    {"domain": "Account connect", "gate": "Account connect required", "trigger": "An action that needs a connected external account before it can run.", "reason": "blocked_account_connect_required"},
+]
+
+
+@app.get("/v1/approval-rules")
+def list_approval_rules(project_id: str):
+    """The full set of rules that determine what requires human approval: the
+    autonomy threshold, every tool/skill/MCP capability's risk tier (auto vs
+    needs-approval), the named service gates, the budget gate thresholds, and the
+    org's policy records. Read-only governance catalog."""
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    threshold = int(settings.agent_autonomous_risk_max)
+
+    def _req(t):
+        return int(t) > threshold
+
+    tool_rules = []
+    for t in describe_native_tools():
+        tool_rules.append({"name": t["name"], "source": "native tool", "kind": t["kind"],
+                           "risk_tier": t["risk_tier"], "requires_approval": _req(t["risk_tier"])})
+    try:
+        for s in entitlements.list_skills():
+            sm = skill_summary_from_service(s).model_dump()
+            tool_rules.append({"name": sm["id"], "source": "skill", "kind": sm["kind"],
+                               "risk_tier": sm["risk_tier"], "requires_approval": _req(sm["risk_tier"])})
+    except Exception:
+        pass
+
+    with begin(engine) as connection:
+        for srv in list_mcp_servers(connection, project_id):
+            tool_rules.append({"name": srv["name"], "source": "MCP server", "kind": "mcp",
+                               "risk_tier": srv["risk_tier"], "requires_approval": _req(srv["risk_tier"])})
+        bp = connection.execute(
+            text("SELECT daily_cap_usd_micros, monthly_cap_usd_micros, soft_cap_pct, auto_lite_mode_pct, "
+                 "freeze_provisioning_pct, freeze_tier2_pct FROM budget_policies "
+                 "WHERE scope_type='project' AND scope_id=:p ORDER BY created_at DESC LIMIT 1"),
+            {"p": project_id},
+        ).mappings().first()
+        budget_gates = dict(bp) if bp else {}
+        pol = connection.execute(
+            text("SELECT policy_key, title, status, version FROM policy_records "
+                 "WHERE project_id=:p ORDER BY policy_key, version DESC"),
+            {"p": project_id},
+        ).mappings().all()
+        policies = [dict(r) for r in pol]
+
+    return {
+        "project_id": project_id,
+        "autonomy_threshold": threshold,
+        "autonomy_explainer": (
+            f"Agent actions at risk tier {threshold + 1} or higher require human approval; "
+            f"tier {threshold} and below run autonomously."
+        ),
+        "tool_rules": tool_rules,
+        "service_gates": SERVICE_APPROVAL_GATES,
+        "budget_gates": budget_gates,
+        "policies": policies,
+    }
+
+
+@app.get("/v1/capabilities")
+def list_capabilities(project_id: str):
+    """The full capability catalog an agent can use: BOSS's native tools (read +
+    write, with risk tiers) and every registered MCP server with its live tools.
+    Powers the Capabilities console so agents discover what's available and humans
+    can audit/extend it."""
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    settings = get_settings()
+    mcp = MCPClient(settings, timeout=6.0)
+    with begin(engine) as connection:
+        servers = list_mcp_servers(connection, project_id)
+    enriched: list[dict] = []
+    for s in servers:
+        entry = dict(s)
+        try:
+            tools = mcp.list_tools(s["url"])
+            entry["reachable"] = True
+            entry["tools"] = [
+                {"name": t.get("name"), "description": t.get("description", "")}
+                for t in (tools or [])
+            ]
+        except Exception as exc:  # server down / unreachable
+            entry["reachable"] = False
+            entry["tools"] = []
+            entry["error"] = f"{type(exc).__name__}: {exc}"
+        enriched.append(entry)
+    engine_kind = (settings.llm_engine or "auto").lower()
+    if engine_kind == "claude_cli":
+        engine_label = "Claude Code CLI (Max subscription)"
+        engine_model = settings.claude_cli_model or "claude (default)"
+    elif engine_kind == "azure" or (engine_kind == "auto" and settings.azure_openai_key):
+        engine_label = "Azure OpenAI"
+        engine_model = settings.azure_openai_deployment or "gpt-4o"
+    else:
+        engine_label = "OpenAI"
+        engine_model = settings.openai_model
+    try:
+        skills = [skill_summary_from_service(s).model_dump() for s in entitlements.list_skills()]
+    except Exception:
+        skills = []
+    return {
+        "project_id": project_id,
+        "engine": engine_kind,
+        "engine_label": engine_label,
+        "engine_model": engine_model,
+        "native_tools": describe_native_tools(),
+        "skills": skills,
+        "mcp_servers": enriched,
+    }
 
 
 @app.get("/v1/status", response_model=StatusResponse)
@@ -6544,6 +7530,7 @@ def create_openai_plan(payload: OpenAIPlanRequest) -> OpenAIPlanResponse:
                 payload.system_prompt,
                 payload.created_by_job_id,
                 payload.agent_module_id,
+                payload.task_id,
             )
         except AgentModuleNotFoundError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error

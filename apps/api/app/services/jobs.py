@@ -210,11 +210,14 @@ class JobLeaseService:
               AND run_after <= :now_utc
               AND (
                 status IN ('queued', 'failed_retryable')
-                OR (status = 'leased' AND lease_expires_at <= :now_utc)
+                -- reclaim leased OR running jobs whose lease expired: a worker that
+                -- crashed mid-job leaves it 'running', and it must be recoverable.
+                OR (status IN ('leased', 'running') AND lease_expires_at <= :now_utc)
               )
             ORDER BY
               CASE status
                 WHEN 'leased' THEN 0
+                WHEN 'running' THEN 0
                 WHEN 'failed_retryable' THEN 1
                 ELSE 2
               END,
@@ -605,7 +608,7 @@ class JobLeaseService:
         job_row,
         result: dict[str, Any],
     ) -> dict[str, Any]:
-        if job_row["kind"] == "openai.plan":
+        if job_row["kind"] in {"openai.plan", "agent.resume"}:
             return {
                 "artifact_id": result.get("artifact_id"),
                 "decision_id": result.get("decision_id"),

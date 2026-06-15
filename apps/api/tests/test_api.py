@@ -99,6 +99,7 @@ def configure_pr_proposal_integrations(monkeypatch):
         lambda prompt, system_prompt=None, model=None: (
             "resp_review_packet",
             "## Implementation summary\n- Review packet generated for test coverage.",
+            {"prompt_tokens": 100, "completion_tokens": 20},
         ),
     )
     monkeypatch.setattr(
@@ -15675,6 +15676,7 @@ def test_pr_proposal_blocks_without_github_credentials_and_releases_reservation(
         lambda prompt, system_prompt=None, model=None: (
             "resp_review_packet",
             "Review packet",
+            {"prompt_tokens": 100, "completion_tokens": 20},
         ),
     )
     previous = api_main.software_factory.settings.github_token
@@ -15839,6 +15841,7 @@ def test_pr_proposal_records_github_validation_evidence(client, monkeypatch):
         lambda prompt, system_prompt=None, model=None: (
             "resp_review_packet",
             "## Implementation summary\n- Review packet generated with CI evidence.",
+            {"prompt_tokens": 100, "completion_tokens": 20},
         ),
     )
     monkeypatch.setattr(
@@ -16564,6 +16567,7 @@ def test_command_to_merge_flow_completes_task_when_merge_policy_enabled(
         lambda prompt, system_prompt=None, model=None: (
             "resp_review_packet",
             "## Implementation summary\n- Review packet generated for test coverage.",
+            {"prompt_tokens": 100, "completion_tokens": 20},
         ),
     )
     monkeypatch.setattr(
@@ -16615,6 +16619,11 @@ def test_command_to_merge_flow_completes_task_when_merge_policy_enabled(
     )
 
     try:
+        # Intake prefers a model-generated plan (openai.plan) when a model key is
+        # configured; this E2E exercises the deterministic plan.command flow, so
+        # drop the key for the proposal step and restore it for the later
+        # software-factory review-packet step.
+        api_main.software_factory.settings.openai_api_key = None
         created = client.post(
             "/v1/commands/propose",
             json={
@@ -16623,6 +16632,7 @@ def test_command_to_merge_flow_completes_task_when_merge_policy_enabled(
                 "constraints": {"deadline": "this week"},
             },
         )
+        api_main.software_factory.settings.openai_api_key = "test-openai-key"
         assert created.status_code == 201
         payload = created.json()
         task_id = payload["task_id"]
@@ -16923,6 +16933,7 @@ def test_command_to_deploy_flow_completes_task_when_deploy_policy_enabled(
         lambda prompt, system_prompt=None, model=None: (
             "resp_review_packet",
             "## Implementation summary\n- Review packet generated for deploy test.",
+            {"prompt_tokens": 100, "completion_tokens": 20},
         ),
     )
     monkeypatch.setattr(
@@ -17004,6 +17015,11 @@ def test_command_to_deploy_flow_completes_task_when_deploy_policy_enabled(
     )
 
     try:
+        # Intake prefers a model-generated plan (openai.plan) when a model key is
+        # configured; this E2E exercises the deterministic plan.command flow, so
+        # drop the key for the proposal step and restore it for the later
+        # software-factory review-packet step.
+        api_main.software_factory.settings.openai_api_key = None
         created = client.post(
             "/v1/commands/propose",
             json={
@@ -17012,6 +17028,7 @@ def test_command_to_deploy_flow_completes_task_when_deploy_policy_enabled(
                 "constraints": {"deadline": "this week"},
             },
         )
+        api_main.software_factory.settings.openai_api_key = "test-openai-key"
         assert created.status_code == 201
         payload = created.json()
         task_id = payload["task_id"]

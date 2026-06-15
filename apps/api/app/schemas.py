@@ -1063,6 +1063,22 @@ class CommandProposeResponse(BaseModel):
     artifact_id: str
 
 
+class MeetingProposeRequest(BaseModel):
+    project_id: str
+    directive: str
+    url: str = ""
+    roles: list[str] = Field(default_factory=list)
+    task_id: Optional[str] = None
+    constraints: dict[str, Any] = Field(default_factory=dict)
+    actor: str = "executive_console"
+
+
+class MeetingProposeResponse(BaseModel):
+    status: str
+    task_id: str
+    job_id: str
+
+
 class BudgetReserveRequest(BaseModel):
     project_id: str
     category: str
@@ -1200,6 +1216,17 @@ class BudgetAllocationCreateRequest(BaseModel):
     actor: str = "ceo"
 
 
+class McpServerRegisterRequest(BaseModel):
+    project_id: str
+    name: str
+    url: str
+    transport: str = "http"
+    risk_tier: int = 1
+    data_boundary: DataBoundary = "internal"
+    description: Optional[str] = None
+    actor: str = "system"
+
+
 class OpenAIPlanRequest(BaseModel):
     project_id: str
     reservation_id: str
@@ -1208,6 +1235,7 @@ class OpenAIPlanRequest(BaseModel):
     system_prompt: Optional[str] = None
     agent_module_id: Optional[str] = None
     created_by_job_id: Optional[str] = None
+    task_id: Optional[str] = None
 
 
 class OpenAIPlanResponse(BaseModel):
