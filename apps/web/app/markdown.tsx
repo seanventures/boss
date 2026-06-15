@@ -97,7 +97,7 @@ export function Markdown({
 
     const h = /^(#{1,6})\s+(.*)$/.exec(line);
     if (h) {
-      const level = Math.min(h[1].length + 2, 6);
+      const level = Math.min(h[1].length + 1, 6);
       const Tag = `h${level}` as React.ElementType;
       const hid = k++;
       blocks.push(
