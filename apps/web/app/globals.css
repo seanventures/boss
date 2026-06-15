@@ -1094,7 +1094,10 @@ details.wf-turn[open] > summary { border-bottom: 1px solid var(--border); margin
 .mr-directive-detail { border: 1px solid var(--border); border-radius: 10px; background: var(--surface); padding: 0 14px; }
 .mr-directive-detail > summary { cursor: pointer; padding: 11px 0; font-size: 0.8rem; font-weight: 600; color: var(--muted); list-style-position: inside; }
 .mr-directive-detail[open] > summary { border-bottom: 1px solid var(--border); }
-.mr-directive-body { padding: 10px 0 14px; font-size: 0.86rem; line-height: 1.55; color: var(--ink); }
+.mr-directive-body {
+  padding: 10px 0 14px; font-size: 0.86rem; line-height: 1.6; color: var(--ink);
+  white-space: pre-wrap; overflow-wrap: anywhere;
+}
 
 /* home / landing */
 .mr-home-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; }

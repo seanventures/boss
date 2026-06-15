@@ -177,7 +177,7 @@ function MeetingDetail({ meeting, onBack, orgId }: { meeting: Meeting; onBack: (
       <div className="mr-header">
         <div className="mr-header-main">
           <span className="eyebrow">Meeting room</span>
-          <h3 className="mr-title">{meeting.title.replace(/^PRD meeting:\s*/, "")}</h3>
+          <h3 className="mr-title">{meeting.title.replace(/^PRD meeting:\s*/, "").replace(/\s+/g, " ")}</h3>
           {meeting.url ? (
             <a className="mr-source" href={meeting.url} target="_blank" rel="noreferrer">studied {meeting.url} ↗</a>
           ) : null}
@@ -211,7 +211,7 @@ function MeetingDetail({ meeting, onBack, orgId }: { meeting: Meeting; onBack: (
       {meeting.directive ? (
         <details className="mr-directive-detail">
           <summary>Directive</summary>
-          <div className="mr-directive-body"><Markdown text={meeting.directive} /></div>
+          <div className="mr-directive-body">{meeting.directive.replace(/\r\n/g, "\n")}</div>
         </details>
       ) : null}
 
@@ -421,7 +421,7 @@ export function MeetingsHome({
                 </span>
                 <span className="mr-meeting-date">{fmtDate(m.completed_at ?? m.created_at)}</span>
               </div>
-              <span className="mr-meeting-title">{m.title.replace(/^PRD meeting:\s*/, "")}</span>
+              <span className="mr-meeting-title">{m.title.replace(/^PRD meeting:\s*/, "").replace(/\s+/g, " ")}</span>
               <div className="mr-meeting-avatars">
                 {(m.participants ?? []).map((p) => <Avatar key={p} role={p} />)}
               </div>
