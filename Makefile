@@ -5,7 +5,7 @@ PIP := $(VENV)/bin/pip
 BOSS_POSTGRES_PORT ?= 5432
 DATABASE_URL ?= postgresql+psycopg://boss:boss@localhost:$(BOSS_POSTGRES_PORT)/boss
 
-.PHONY: install install-node install-python wait-db dev test lint build seed smoke k8s-validate infra-validate release-blockers real-smoke-plan real-smoke-pr real-smoke-merge real-smoke-deploy worker-drain-once sandbox-template deps-audit full-validate
+.PHONY: install install-node install-python wait-db dev test lint build seed seed-demo smoke k8s-validate infra-validate release-blockers real-smoke-plan real-smoke-pr real-smoke-merge real-smoke-deploy worker-drain-once sandbox-template deps-audit full-validate
 
 install: install-node install-python
 
@@ -41,6 +41,11 @@ seed: install-python
 	docker compose -f infra/docker-compose.yml up -d db
 	DATABASE_URL=$(DATABASE_URL) $(PYTHON) scripts/wait_for_postgres.py
 	DATABASE_URL=$(DATABASE_URL) $(PYTHON) -m apps.api.app.bootstrap
+
+# Baseline seed + realistic DEMO data (tasks, decisions, a multi-agent PRD
+# meeting, code tasks) so a fresh console is populated. Offline, idempotent.
+seed-demo: seed
+	DATABASE_URL=$(DATABASE_URL) PYTHONPATH=apps/api $(PYTHON) scripts/seed_demo.py
 
 smoke: install-python
 	docker compose -f infra/docker-compose.yml up -d db
