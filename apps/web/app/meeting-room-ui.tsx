@@ -207,6 +207,14 @@ function MeetingDetail({ meeting, onBack, orgId }: { meeting: Meeting; onBack: (
         </div>
       ) : null}
 
+      {/* Directive (full text — collapsed, expand to read) */}
+      {meeting.directive ? (
+        <details className="mr-directive-detail">
+          <summary>Directive</summary>
+          <div className="mr-directive-body"><Markdown text={meeting.directive} /></div>
+        </details>
+      ) : null}
+
       {/* Participants */}
       <div className="mr-participants">
         {(meeting.participants ?? []).map((p) => (
