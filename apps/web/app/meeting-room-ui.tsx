@@ -118,16 +118,24 @@ function NewMeetingForm({
   return (
     <form action={conveneMeetingAction} className="mr-convene">
       <input type="hidden" name="project_id" value={projectId} />
-      <div className="mr-convene-row">
-        <label>
-          Directive
-          <input name="directive" placeholder="e.g. Add an AI support chatbot to our website" required />
-        </label>
-        <label>
-          Website to study (optional)
-          <input name="url" placeholder="https://example.com" />
-        </label>
-      </div>
+      <label className="mr-field-label" htmlFor="mr-directive">Directive</label>
+      <textarea
+        id="mr-directive"
+        name="directive"
+        className="mr-textarea"
+        rows={8}
+        required
+        placeholder={
+          "Describe the goal in detail. e.g.\n" +
+          "Produce a PRD to redesign our website (study the URL below).\n" +
+          "• Preserve 100% of current features — list them.\n" +
+          "• Make accessibility the priority.\n" +
+          "• Add online donations and a volunteer-hours portal.\n" +
+          "Publish the final PRD as a PDF pull request."
+        }
+      />
+      <label className="mr-field-label" htmlFor="mr-url">Website to study (optional)</label>
+      <input id="mr-url" name="url" className="mr-url-input" placeholder="https://example.com" />
 
       <label className="mr-field-label">Attach to a task (optional — otherwise a new task is created)</label>
       <select name="task_id" className="mr-select" defaultValue="">

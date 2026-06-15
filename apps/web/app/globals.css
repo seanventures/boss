@@ -1083,6 +1083,13 @@ details.wf-turn[open] > summary { border-bottom: 1px solid var(--border); margin
   background: var(--surface-2); border: 1px solid var(--border-strong); color: var(--ink);
 }
 .mr-convene input:focus { outline: none; border-color: var(--accent-line); }
+.mr-textarea {
+  width: 100%; box-sizing: border-box; resize: vertical; min-height: 180px;
+  padding: 10px 12px; border-radius: 8px; font-size: 0.86rem; line-height: 1.55;
+  font-family: inherit; background: var(--surface-2); border: 1px solid var(--border-strong); color: var(--ink);
+}
+.mr-textarea:focus { outline: none; border-color: var(--accent-line); }
+.mr-url-input { width: 100%; box-sizing: border-box; }
 .mr-convene-note { font-size: 0.74rem; color: var(--muted); line-height: 1.5; }
 
 /* home / landing */
