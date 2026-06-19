@@ -135,12 +135,20 @@ Each phase ends with an acceptance test so "done" is observable.
 - **Acceptance:** BOSS triggers a sample ingestion worker on the test host that writes N
   embedded nodes into Neo4j; BOSS reports completion + a receipt.
 
-### Phase 4 — Optional self-tenant autonomy (E) (~0.5 day)
-- For self-owned repos only: enable `BOSS_ENABLE_SANDBOX_MERGE` / `BOSS_ENABLE_SANDBOX_DEPLOY`
-  and add a per-tenant override so `github_real_merge_allowed` can be true for owned repos
-  while remaining false for client production.
-- **Acceptance:** BOSS completes build→merge→deploy on a Kaappu repo with no human gate;
-  client-repo path still halts for human approval.
+### Phase 4 — ~~Optional self-tenant autonomy (E)~~ **DROPPED 2026-06-18**
+- Decision: do **not** relax autonomy gates for a "self-tenant." Dogfooding must follow the
+  **exact customer configuration** — all default safety gates ON, ChangeSet → approval →
+  budget → receipt — because relaxing them would bypass the precise approval/access path a
+  real customer depends on and would *hide* the security/access bugs we want to surface.
+- Replacement: **Phase 4' — governed-path dogfood.** Run the full customer governance flow
+  locally (Postgres-backed, per `BOSS_Local_Run_Guide.md`) with no shortcuts:
+  create a scoped `ProviderAccount` (provider `ssh_host`), submit an
+  `ssh_host.workload.deploy` ChangeSet, clear the risk-tier-3 CEO/CTO approval gate, actuate,
+  and verify a persisted `ResourceReceipt` + `external_resource` row + the live container.
+  Probe access control: unknown/under-permissioned actors must be rejected; the agent must
+  never see the raw key.
+- **Acceptance:** a real receipted deploy completes only after a genuine approval; an
+  unauthorized actor is denied; teardown is likewise governed + receipted.
 
 ### Phase 5 — End-to-end dry run (~1 day)
 - Against a throwaway repo + test host, run: PR chatbot UI → deploy Neo4j → trigger ingestion
@@ -220,3 +228,25 @@ All must be ✅ before sending the PRD to the client:
   image auto-cleaned. ruff + all 4 skill specs validate. **Same caveat as Phase 2:** the
   receipted `apply_changeset` e2e run needs a Postgres environment.
   Phase 3 status: **code complete; receipted e2e run pending a DB environment.**
+- 2026-06-19 — Phase 4' **governed-path dogfood PASSED** (full customer config, all safety
+  gates ON, local Postgres stack). Flow against AWS prod host `3.94.66.139`:
+  create scoped `ProviderAccount` (ssh_host) → deploy `ChangeSet` → CEO/CTO approval gate →
+  apply → actuation → `ResourceReceipt` (`rrcpt_87c1cbba…`, succeeded) + `external_resource`
+  (container, active/running, env=production) + **live container confirmed on host** →
+  governed teardown `ChangeSet` (receipt `rrcpt_60a028f9…`) → host clean. This closes the
+  Phase 2 receipted-e2e caveat through the exact path a customer would use.
+
+  Access-control probes (all correct): apply-before-approval → 422 "must be approved";
+  approve by non-member `qa` → 403; agent never receives the raw key (env SecretRef only).
+
+  Governance gates surfaced (expected customer onboarding/config steps):
+  1. Production-affecting ops require a `rollback_plan` (422 until provided).
+  2. Deployment ChangeSets require an **active** `deployment-environment-policy` for the
+     target env (production → `runtime_mode: production_allowed`, `allowed_target_kinds`
+     incl. `container`); absent → 422 `missing_active_environment_policy`.
+
+  ⚠️ FINDING to upstream: the skill declares `requires_approval: [ceo, cto]` (dual control),
+  but a single `ceo` approval flipped the ChangeSet to `approved` and apply succeeded — the
+  changeset gate appears to enforce a generic `requires_approval` boolean, not the per-skill
+  multi-approver list. For security-sensitive deploys a customer expecting two distinct
+  approvers would not get dual control. Worth a fix/issue in BOSS core.
