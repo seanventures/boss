@@ -79,7 +79,55 @@ Invariants hold at every tier: test author ≠ implementer, reviewer ≠ impleme
 gate, every stage receipted, no merge without a passing QualityGate. Tier auto-escalates to 3
 when changed paths touch auth/payment/secrets/migration/deploy.
 
-## 6. Status & the follow-on (runtime wiring)
+## 6. Worked example — one real code task through the pipeline
+
+Take a concrete follow-up to the leads app we built (`paramg/boss-sandbox` PR #15):
+
+> **Task:** "Add a `list_by_status(status)` method to `LeadStore` that returns only leads
+> with the given status." (user-facing data path → **risk tier 2**)
+
+There is a subtle trap in this task: `set_status` already *rejects* an unknown status, so
+`list_by_status` should be **consistent** and reject one too — not silently return `[]`.
+
+| Phase | Owner role | What happens | Output / gate |
+|---|---|---|---|
+| spec_contract | `pm` | Writes executable acceptance criteria, incl. *"an invalid status is rejected, consistent with `set_status`"* and *"empty result when no leads match"* | `AcceptanceCriteria` · gate: criteria present, risk_tier=2 |
+| architecture_review | `cao` | Flags the consistency requirement as a known failure mode (silent-empty vs raise) | `FailureModeCatalog` |
+| **test_authoring** | `qa` *(≠ implementer)* | Writes tests **from the spec, before any code**: happy path, **invalid-status raises**, empty-result, case-sensitivity | `TestArtifact` (4 cases) · gate: tests map to criteria |
+| **implementation** | `software_engineer` | Must make those tests pass — so it is **forced** to add the validation it might otherwise skip | `DiffArtifact`, `TestReport` · gate: authored tests pass, diff small |
+| **adversarial_review** | `adversarial_reviewer` *(fresh context)* | Tries to *refute*: `list_by_status('Won')` vs `'won'`? empty store? status not in enum? | `AdversarialVerdict` · gate: survived or findings resolved → loops back if refuted |
+| mutation_grade | `qa` | Flips the validation comparison / drops the guard; if tests still pass, the suite is inadequate | `MutationReport` · gate: mutation ≥ 0.6 |
+| quality_gate | deterministic | Aggregates evidence, **fail-closed** | `QualityGate` (pass) · gate: status=pass |
+| merge_decision | `release_manager` | Tier-2 → single approval (tier-3 would require dual-control) | `Decision` |
+
+Each arrow emits a **Receipt**; the merge `Decision` cannot proceed until `QualityGate` is
+`pass`. If adversarial review refutes, findings route back to `implementation` — at most 3
+iterations, then it escalates to a human `Decision` rather than spinning.
+
+## 7. Before vs. after this change
+
+**The bug that ships "before" and is caught "after":** the implementer adds `list_by_status`
+but writes a self-test that only checks the happy path; `list_by_status('WON')` silently
+returns `[]` instead of raising. Because the *same* agent wrote the code and the test, the
+test never probes the gap — the PR opens green and the inconsistency ships.
+
+| | **Before (today's `code.task`)** | **After (governed pipeline)** |
+|---|---|---|
+| Who writes the tests | the implementer (same agent) | `qa`, **before** the code, from the spec |
+| Who reviews | the implementer / no fresh review | `adversarial_reviewer`, **isolated context**, refute-first |
+| Standards | in the prompt (forgotten as context summarizes) | **fail-closed `QualityGate`** object |
+| Test quality | unmeasured (green ≠ good) | **mutation-graded** (≥ tier threshold) |
+| The trap above | **ships** — self-test misses it | **caught** — independent test asserts it; reviewer probes it; mutation grade fails a weak suite |
+| Rigor | same for a typo and for auth code | **scales with risk tier** (0→3); dual-control at tier 3 |
+| Evidence | a PR + the agent's say-so | spec, independent tests, diff, adversarial verdict, mutation report, QualityGate — all **receipted & replayable** |
+| When it's "done" | tests (it wrote) pass | every **separation invariant + fail-closed gate** satisfied |
+
+The observed "before" is real: dogfood run `crun_860c68df…` had **one** `ClaudeCodeAgent`
+produce `leads_app.py` **and** `test_leads.py` and iterate to green — a self-graded exam. The
+"after" makes a different role set the exam, a different role grade it, and the grade itself
+get audited.
+
+## 8. Status & the follow-on (runtime wiring)
 
 **Done (this change):** the pattern is fully expressed in the specpack and registered as a
 **default** — new role (`adversarial_reviewer`), object (`QualityGate`), skill set
