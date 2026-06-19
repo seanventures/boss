@@ -127,7 +127,31 @@ produce `leads_app.py` **and** `test_leads.py` and iterate to green — a self-g
 "after" makes a different role set the exam, a different role grade it, and the grade itself
 get audited.
 
-## 8. Status & the follow-on (runtime wiring)
+## 8. Prior art & alignment — Kaappu `agentic-sdlc`
+
+This pattern independently converges with `agentic-sdlc` (a Claude Code skill authored in the
+Kaappu repos, May 2026): a 10-phase multi-agent SDLC — requirements → architecture → design-
+critique loop → human design gate → planning → coder ‖ test-writer → code-review loop →
+security-review loop → integration validation → human merge gate. Same DNA: *separation of
+duties ("the agent that wrote the code is not the one approving it"), critique before code,
+bounded loops with iteration ceilings, human gates only where they pay, full audit trail,
+skip for trivial work.*
+
+Phase mapping: Requirements→`spec_contract`, Architect→`architecture_review`,
+Code-Reviewer→`adversarial_review`, human merge gate→`merge_decision`, bounded loops→
+`max_iterations`, "when NOT to use"→risk-tier 0.
+
+The two are the same pattern at different maturities — `agentic-sdlc` is **advisory** (markdown
+skill the model is asked to follow, artifacts under `.agentic-sdlc/`); this is **enforced**
+(durable BOSS primitives that fail closed: receipts, Decisions, budget, autonomy ladder).
+
+Each has what the other lacks — a natural merge list:
+- **Pull in from `agentic-sdlc`:** a dedicated design-critique loop (+ design human-gate), a
+  dedicated security-reviewer stage/role, and an integration-validation stage/role.
+- **Already added here:** mutation grading, the fail-closed `QualityGate` object, formal
+  risk-tier scaling 0–3, dual-control, and native governance integration.
+
+## 9. Status & the follow-on (runtime wiring)
 
 **Done (this change):** the pattern is fully expressed in the specpack and registered as a
 **default** — new role (`adversarial_reviewer`), object (`QualityGate`), skill set
