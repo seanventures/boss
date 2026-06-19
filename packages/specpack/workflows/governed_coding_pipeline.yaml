@@ -1,0 +1,88 @@
+kind: WorkflowSpec
+id: governed_coding_pipeline
+version: 0.1.0
+purpose: >
+  The default, governed pipeline every coding task follows. Encodes the agentic-engineering
+  patterns as role-separated, evidence-gated, risk-scaled stages so quality is a property of
+  the workflow, not a hope placed on a single agent. Spine: the test author, the implementer,
+  and the reviewer are DIFFERENT roles with isolated context; standards are fail-closed gates,
+  not prompts; rigor scales with risk_tier (governed_coding_pipeline_policy).
+governed_by: governed_coding_pipeline_policy_v0
+phases:
+  - id: spec_contract
+    owner_role: pm
+    inputs: [Task]
+    outputs: [Spec, AcceptanceCriteria]
+    gates:
+      - acceptance_criteria_present       # spec-as-contract: executable criteria, not prose
+      - risk_tier_assigned
+
+  - id: architecture_review
+    owner_role: cao
+    inputs: [Spec, AcceptanceCriteria]
+    outputs: [TechReview, FailureModeCatalog]
+    gates:
+      - complexity_within_budget          # design around known failure modes
+    run_when: risk_tier >= 1
+
+  - id: test_authoring
+    owner_role: qa                        # AUTHOR != IMPLEMENTER
+    skill: coding_pipeline.author_tests
+    inputs: [Spec, AcceptanceCriteria]
+    outputs: [TestArtifact]
+    gates:
+      - tests_authored_independently
+      - tests_map_to_acceptance_criteria
+    run_when: risk_tier >= 1
+
+  - id: implementation
+    owner_role: software_engineer         # implements against tests it did NOT write
+    skill: coding_pipeline.implement
+    inputs: [Spec, TestArtifact]
+    outputs: [DiffArtifact, TestReport]
+    gates:
+      - authored_tests_pass
+      - diff_small_and_scoped
+
+  - id: adversarial_review
+    owner_role: adversarial_reviewer      # REVIEWER != IMPLEMENTER, fresh context
+    skill: coding_pipeline.adversarial_review
+    inputs: [DiffArtifact, Spec]
+    outputs: [AdversarialVerdict, SecurityFindings]
+    gates:
+      - verdict_survived_or_findings_resolved
+    on_failure:
+      route_findings_to: implementation   # evaluator -> optimizer loop (bounded)
+    run_when: risk_tier >= 2
+
+  - id: mutation_grade
+    owner_role: qa
+    skill: coding_pipeline.mutation_grade
+    inputs: [DiffArtifact, TestArtifact]
+    outputs: [MutationReport]
+    gates:
+      - mutation_score_meets_tier_threshold   # grade the tests, not just the code
+    run_when: risk_tier >= 2
+
+  - id: quality_gate
+    owner_role: deterministic_quality_gate
+    skill: coding_pipeline.quality_gate
+    inputs: [TestReport, AdversarialVerdict, MutationReport, SecurityFindings]
+    outputs: [QualityGate]
+    gates:
+      - quality_gate_status_pass          # FAIL-CLOSED: missing evidence = fail
+
+  - id: merge_decision
+    owner_role: release_manager
+    inputs: [QualityGate, DiffArtifact]
+    outputs: [Decision]
+    gates:
+      - decision_card_complete
+      - approval_matches_risk_tier        # single vs dual-control by tier
+
+completion:
+  emits_events: true
+  artifacts_required: [Spec, TestArtifact, DiffArtifact, QualityGate, Decision]
+  bounded_execution:
+    max_iterations: 3
+    on_exhaustion: create_decision

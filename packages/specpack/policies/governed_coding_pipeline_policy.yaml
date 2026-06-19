@@ -1,0 +1,64 @@
+kind: Policy
+id: governed_coding_pipeline_policy_v0
+version: 0.1.0
+purpose: >
+  Make the governed coding pipeline the default for all code tasks, and scale its rigor to
+  risk. Separation of judgment (test author != implementer, fresh-context adversarial review)
+  and fail-closed quality evidence are the spine; the depth of the panel grows with risk tier.
+
+applies_to_skills:
+  - code.task
+  - software_factory.codex_pr_proposal
+  - coding_pipeline.*
+
+# Stages always present, regardless of tier. Quality is evidence, never a prompt.
+invariants:
+  - test_author_must_differ_from_implementer
+  - reviewer_must_differ_from_implementer
+  - quality_gate_is_fail_closed
+  - every_stage_emits_a_receipt
+  - no_merge_without_passing_quality_gate
+
+# Rigor scales with the task's risk_tier (same tiers as the autonomy ladder).
+tiers:
+  0:
+    label: trivial            # docs, comments, pure refactor with existing tests
+    required_stages: [implement, quality_gate]
+    gates: { tests_pass: true }
+    approval: none
+  1:
+    label: low                # small feature slice, internal tool
+    required_stages: [author_tests, implement, quality_gate]
+    gates: { tests_pass: true, coverage_min: 0.6 }
+    approval: single          # one authorized approver
+  2:
+    label: standard           # user-facing change, business logic
+    required_stages: [author_tests, implement, adversarial_review, mutation_grade, quality_gate]
+    gates: { tests_pass: true, coverage_min: 0.7, mutation_min: 0.6, adversarial: survived, security_scan: pass }
+    approval: single
+  3:
+    label: high               # auth, payments, data-loss/security surface, prod deploy
+    required_stages: [author_tests, implement, adversarial_review, mutation_grade, security_scan, quality_gate]
+    gates: { tests_pass: true, coverage_min: 0.8, mutation_min: 0.75, adversarial: survived, security_scan: pass }
+    approval: dual            # two distinct named approvers (see dual-control on ChangeSet)
+
+# What to do when a stage or gate fails — never silently pass.
+on_gate_failure:
+  default: route_findings_to_implementer_and_reopen   # evaluator->optimizer loop
+  bounded_execution:
+    max_pipeline_iterations: 3                          # circuit breaker; then escalate
+    on_exhaustion: create_decision                      # human judgment, not infinite spend
+  waiver:
+    allowed: true
+    requires: decision                                  # an auditable Decision, ceo/cto for tier>=2
+    fail_closed_default: true
+
+# Tier inference when the caller does not set one explicitly.
+tier_inference:
+  default_tier: 2
+  escalate_to_3_when_paths_touch:
+    - auth
+    - payment
+    - secrets
+    - migration
+    - deploy

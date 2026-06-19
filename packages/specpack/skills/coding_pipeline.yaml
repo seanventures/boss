@@ -1,0 +1,136 @@
+skills:
+  - id: coding_pipeline.author_tests
+    kind: software_factory
+    risk_tier: 1
+    mock_mode: false
+    description: Independently author tests from the spec/acceptance criteria BEFORE implementation, by a role other than the implementer (breaks author==judge correlation).
+    data_boundary: internal
+    input_schema:
+      task_id: string
+      spec_ref: string
+      acceptance_criteria: array
+    output_schema:
+      test_artifact_id: string
+      cases: integer
+    cost:
+      estimator: runtime_plus_model
+      category: model
+    retry:
+      max_attempts: 2
+      backoff: exponential
+    permissions:
+      allowed_callers: [qa, software_factory, worker]
+      required_permissions: [test_author]
+    policy:
+      requires_receipt: true
+      author_must_not_be_implementer: true
+      dedupe_key_template: "coding_pipeline.author_tests:{task_id}"
+
+  - id: coding_pipeline.implement
+    kind: software_factory
+    risk_tier: 2
+    mock_mode: false
+    description: Implement the smallest change that makes the independently-authored tests pass; isolated context scoped to the task slice.
+    data_boundary: internal
+    input_schema:
+      task_id: string
+      spec_ref: string
+      test_artifact_id: string
+    output_schema:
+      diff_artifact_id: string
+      tests_passed: boolean
+    cost:
+      estimator: runtime_plus_model
+      category: model
+    retry:
+      max_attempts: 2
+      backoff: exponential
+    permissions:
+      allowed_callers: [software_engineer, software_factory, worker]
+      required_permissions: [code_task_run]
+    policy:
+      requires_receipt: true
+      keep_diff_small: true
+      dedupe_key_template: "coding_pipeline.implement:{task_id}"
+
+  - id: coding_pipeline.adversarial_review
+    kind: software_factory
+    risk_tier: 2
+    mock_mode: false
+    description: Fresh-context reviewer attempts to REFUTE the diff (correctness, security, reproduction); defaults to refuted under uncertainty. Implementer may not be the reviewer.
+    data_boundary: internal
+    input_schema:
+      task_id: string
+      diff_artifact_id: string
+      spec_ref: string
+    output_schema:
+      verdict: string
+      findings: array
+    cost:
+      estimator: runtime_plus_model
+      category: model
+    retry:
+      max_attempts: 1
+      backoff: none
+    permissions:
+      allowed_callers: [adversarial_reviewer, qa, software_factory]
+      required_permissions: [code_review]
+    policy:
+      requires_receipt: true
+      reviewer_must_not_be_implementer: true
+      isolated_context: true
+      dedupe_key_template: "coding_pipeline.adversarial_review:{task_id}:{diff_artifact_id}"
+
+  - id: coding_pipeline.mutation_grade
+    kind: software_factory
+    risk_tier: 1
+    mock_mode: false
+    description: Grade the test suite by injecting mutants (flip comparisons, drop lines, alter constants) and measuring detection; a suite that can't catch mutants fails the gate.
+    data_boundary: internal
+    input_schema:
+      task_id: string
+      diff_artifact_id: string
+      test_artifact_id: string
+    output_schema:
+      mutation_score: number
+      survived_mutants: integer
+    cost:
+      estimator: runtime_plus_model
+      category: tool
+    retry:
+      max_attempts: 1
+      backoff: none
+    permissions:
+      allowed_callers: [qa, software_factory, worker]
+      required_permissions: [test_author]
+    policy:
+      requires_receipt: true
+      dedupe_key_template: "coding_pipeline.mutation_grade:{task_id}:{diff_artifact_id}"
+
+  - id: coding_pipeline.quality_gate
+    kind: software_factory
+    risk_tier: 2
+    mock_mode: false
+    description: Fail-closed aggregate gate. Emits a QualityGate record from the stage evidence (independent tests, adversarial verdict, mutation score, security scan). Missing evidence = fail.
+    data_boundary: internal
+    input_schema:
+      task_id: string
+      code_task_run_id: string
+      risk_tier: integer
+    output_schema:
+      quality_gate_id: string
+      status: string
+    cost:
+      estimator: fixed
+      category: tool
+    retry:
+      max_attempts: 1
+      backoff: none
+    permissions:
+      allowed_callers: [software_factory, release_manager, worker]
+      required_permissions: [quality_gate_manage]
+    policy:
+      requires_receipt: true
+      fail_closed: true
+      waiver_requires_decision: true
+      dedupe_key_template: "coding_pipeline.quality_gate:{code_task_run_id}"
