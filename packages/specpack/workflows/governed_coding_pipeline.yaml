@@ -1,12 +1,13 @@
 kind: WorkflowSpec
 id: governed_coding_pipeline
-version: 0.1.0
+version: 0.2.0
 purpose: >
-  The default, governed pipeline every coding task follows. Encodes the agentic-engineering
-  patterns as role-separated, evidence-gated, risk-scaled stages so quality is a property of
-  the workflow, not a hope placed on a single agent. Spine: the test author, the implementer,
-  and the reviewer are DIFFERENT roles with isolated context; standards are fail-closed gates,
-  not prompts; rigor scales with risk_tier (governed_coding_pipeline_policy).
+  The default, governed pipeline every coding task follows. A superset of two independently
+  designed pipelines (BOSS governed pipeline + Kaappu agentic-sdlc): role-separated, evidence-
+  gated, risk-scaled stages so quality is a property of the workflow, not a hope placed on a
+  single agent. Spine: the design critic, test author, implementer, code reviewer, and security
+  reviewer are DIFFERENT roles with isolated context; standards are fail-closed gates, not
+  prompts; feedback loops are bounded; rigor scales with risk_tier.
 governed_by: governed_coding_pipeline_policy_v0
 phases:
   - id: spec_contract
@@ -17,16 +18,35 @@ phases:
       - acceptance_criteria_present       # spec-as-contract: executable criteria, not prose
       - risk_tier_assigned
 
-  - id: architecture_review
+  - id: architecture
     owner_role: cao
     inputs: [Spec, AcceptanceCriteria]
-    outputs: [TechReview, FailureModeCatalog]
+    outputs: [TechDesign]
     gates:
-      - complexity_within_budget          # design around known failure modes
+      - design_addresses_acceptance_criteria
     run_when: risk_tier >= 1
 
+  - id: design_critique
+    owner_role: design_critic             # CRITIC != ARCHITECT, fresh context
+    skill: coding_pipeline.design_critique
+    inputs: [TechDesign, AcceptanceCriteria]
+    outputs: [DesignCritique, FailureModeCatalog]
+    gates:
+      - design_clean_or_max_iterations    # catch defects in design, before code
+    on_failure:
+      route_findings_to: architecture      # bounded design loop
+    run_when: risk_tier >= 1
+
+  - id: design_signoff
+    owner_role: release_manager
+    inputs: [TechDesign, DesignCritique]
+    outputs: [Decision]
+    gates:
+      - human_design_approval              # HUMAN GATE before any code is written
+    run_when: risk_tier >= 2
+
   - id: test_authoring
-    owner_role: qa                        # AUTHOR != IMPLEMENTER
+    owner_role: qa                         # AUTHOR != IMPLEMENTER
     skill: coding_pipeline.author_tests
     inputs: [Spec, AcceptanceCriteria]
     outputs: [TestArtifact]
@@ -36,7 +56,7 @@ phases:
     run_when: risk_tier >= 1
 
   - id: implementation
-    owner_role: software_engineer         # implements against tests it did NOT write
+    owner_role: software_engineer          # implements against tests it did NOT write
     skill: coding_pipeline.implement
     inputs: [Spec, TestArtifact]
     outputs: [DiffArtifact, TestReport]
@@ -45,14 +65,25 @@ phases:
       - diff_small_and_scoped
 
   - id: adversarial_review
-    owner_role: adversarial_reviewer      # REVIEWER != IMPLEMENTER, fresh context
+    owner_role: adversarial_reviewer       # REVIEWER != IMPLEMENTER, fresh context
     skill: coding_pipeline.adversarial_review
     inputs: [DiffArtifact, Spec]
-    outputs: [AdversarialVerdict, SecurityFindings]
+    outputs: [AdversarialVerdict]
     gates:
       - verdict_survived_or_findings_resolved
     on_failure:
-      route_findings_to: implementation   # evaluator -> optimizer loop (bounded)
+      route_findings_to: implementation    # bounded evaluator -> optimizer loop
+    run_when: risk_tier >= 2
+
+  - id: security_review
+    owner_role: security_reviewer          # dedicated security pass, separate from correctness
+    skill: coding_pipeline.security_review
+    inputs: [DiffArtifact]
+    outputs: [SecurityFindings, SecurityVerdict]
+    gates:
+      - security_clean_or_findings_resolved
+    on_failure:
+      route_findings_to: implementation    # bounded security loop
     run_when: risk_tier >= 2
 
   - id: mutation_grade
@@ -64,10 +95,21 @@ phases:
       - mutation_score_meets_tier_threshold   # grade the tests, not just the code
     run_when: risk_tier >= 2
 
+  - id: integration_validation
+    owner_role: integration_validator
+    skill: coding_pipeline.integration_validate
+    inputs: [DiffArtifact]
+    outputs: [IntegrationResults, RegressionReport]
+    gates:
+      - full_suite_passed_no_regressions
+    on_failure:
+      route_findings_to: implementation
+    run_when: risk_tier >= 2
+
   - id: quality_gate
     owner_role: deterministic_quality_gate
     skill: coding_pipeline.quality_gate
-    inputs: [TestReport, AdversarialVerdict, MutationReport, SecurityFindings]
+    inputs: [TestReport, AdversarialVerdict, SecurityVerdict, MutationReport, IntegrationResults]
     outputs: [QualityGate]
     gates:
       - quality_gate_status_pass          # FAIL-CLOSED: missing evidence = fail
@@ -78,11 +120,11 @@ phases:
     outputs: [Decision]
     gates:
       - decision_card_complete
-      - approval_matches_risk_tier        # single vs dual-control by tier
+      - approval_matches_risk_tier        # HUMAN GATE; single vs dual-control by tier
 
 completion:
   emits_events: true
-  artifacts_required: [Spec, TestArtifact, DiffArtifact, QualityGate, Decision]
+  artifacts_required: [Spec, TechDesign, TestArtifact, DiffArtifact, QualityGate, Decision]
   bounded_execution:
-    max_iterations: 3
+    max_iterations_per_loop: 3
     on_exhaustion: create_decision

@@ -134,3 +134,84 @@ skills:
       fail_closed: true
       waiver_requires_decision: true
       dedupe_key_template: "coding_pipeline.quality_gate:{code_task_run_id}"
+
+  - id: coding_pipeline.design_critique
+    kind: software_factory
+    risk_tier: 1
+    mock_mode: false
+    description: Fresh-context critic reviews the architecture for bad complexity and missing constraints, before any code; loops with the architect (bounded) so defects are caught in design.
+    data_boundary: internal
+    input_schema:
+      task_id: string
+      design_ref: string
+      acceptance_criteria: array
+    output_schema:
+      verdict: string
+      findings: array
+    cost:
+      estimator: runtime_plus_model
+      category: model
+    retry:
+      max_attempts: 1
+      backoff: none
+    permissions:
+      allowed_callers: [design_critic, cao, software_factory]
+      required_permissions: [code_review]
+    policy:
+      requires_receipt: true
+      critic_must_not_be_architect: true
+      isolated_context: true
+      dedupe_key_template: "coding_pipeline.design_critique:{task_id}:{design_ref}"
+
+  - id: coding_pipeline.security_review
+    kind: software_factory
+    risk_tier: 2
+    mock_mode: false
+    description: Dedicated security pass on the diff (injection, authz, secrets, data exposure), separate from correctness review; loops with the implementer (bounded).
+    data_boundary: internal
+    input_schema:
+      task_id: string
+      diff_artifact_id: string
+    output_schema:
+      verdict: string
+      findings: array
+    cost:
+      estimator: runtime_plus_model
+      category: model
+    retry:
+      max_attempts: 1
+      backoff: none
+    permissions:
+      allowed_callers: [security_reviewer, software_factory]
+      required_permissions: [code_review]
+    policy:
+      requires_receipt: true
+      reviewer_must_not_be_implementer: true
+      isolated_context: true
+      dedupe_key_template: "coding_pipeline.security_review:{task_id}:{diff_artifact_id}"
+
+  - id: coding_pipeline.integration_validate
+    kind: software_factory
+    risk_tier: 2
+    mock_mode: false
+    description: Run the full test suite and end-to-end checks; confirm no regressions beyond the slice's unit tests before the quality gate.
+    data_boundary: internal
+    input_schema:
+      task_id: string
+      diff_artifact_id: string
+    output_schema:
+      passed: boolean
+      regressions: array
+    cost:
+      estimator: runtime_plus_model
+      category: tool
+    retry:
+      max_attempts: 1
+      backoff: none
+    permissions:
+      allowed_callers: [integration_validator, qa, software_factory, worker]
+      required_permissions: [test_author]
+    policy:
+      requires_receipt: true
+      full_suite_required: true
+      dedupe_key_template: "coding_pipeline.integration_validate:{task_id}:{diff_artifact_id}"

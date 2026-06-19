@@ -51,17 +51,23 @@ Three roles must be distinct, with isolated context:
 | Tool sandboxing | reuses the existing microvm/Docker sandbox |
 | Scale rigor to stakes | `governed_coding_pipeline_policy` risk tiers (the key knob) |
 
-## 4. The pipeline (workflow `governed_coding_pipeline`)
+## 4. The pipeline (workflow `governed_coding_pipeline`, v0.2 superset)
 
 ```
-spec_contract(pm) → architecture_review(cao) → test_authoring(qa) →
-implementation(software_engineer) → adversarial_review(adversarial_reviewer) →
-mutation_grade(qa) → quality_gate(deterministic, fail-closed) → merge_decision(release_manager)
+spec_contract(pm) → architecture(cao) → design_critique(design_critic, loop) →
+design_signoff(human, tier≥2) → test_authoring(qa) → implementation(software_engineer) →
+adversarial_review(adversarial_reviewer, loop) → security_review(security_reviewer, loop) →
+mutation_grade(qa) → integration_validation(integration_validator, loop) →
+quality_gate(deterministic, fail-closed) → merge_decision(human; dual-control @ tier3)
 ```
 - `implementation` consumes the tests it did **not** write and must make them pass.
-- `adversarial_review` runs in **isolated context**; failures route findings back to
-  `implementation` (a bounded evaluator→optimizer loop, max 3 iterations, then a Decision).
+- `design_critique`, `adversarial_review`, `security_review`, `integration_validation` run in
+  **isolated context**; failures route findings back (bounded loops, max 3 each, then a Decision).
 - `quality_gate` is **fail-closed**: missing/unavailable evidence counts as fail.
+
+> The canonical, shareable orchestrator (with mermaid + plain-text flowchart and per-stage
+> agent briefs) is **`skills/boss-governed-coding-pipeline/SKILL.md`** — the default skill for
+> all coding tasks.
 
 ## 5. Scaling rigor to risk (`governed_coding_pipeline_policy`)
 
@@ -145,11 +151,13 @@ The two are the same pattern at different maturities — `agentic-sdlc` is **adv
 skill the model is asked to follow, artifacts under `.agentic-sdlc/`); this is **enforced**
 (durable BOSS primitives that fail closed: receipts, Decisions, budget, autonomy ladder).
 
-Each has what the other lacks — a natural merge list:
-- **Pull in from `agentic-sdlc`:** a dedicated design-critique loop (+ design human-gate), a
-  dedicated security-reviewer stage/role, and an integration-validation stage/role.
-- **Already added here:** mutation grading, the fail-closed `QualityGate` object, formal
-  risk-tier scaling 0–3, dual-control, and native governance integration.
+The v0.2 workflow is the **superset of both** — every stage of each, expressed as governed BOSS
+specs:
+- **Folded in from `agentic-sdlc`:** the design-critique loop (`design_critic`) + design
+  human-gate (`design_signoff`), a dedicated security-reviewer stage (`security_reviewer`), and
+  integration validation (`integration_validator`).
+- **From the BOSS side:** mutation grading, the fail-closed `QualityGate` object, formal
+  risk-tier scaling 0–3, dual-control, and native governance integration (receipts/Decisions/budget).
 
 ## 9. Status & the follow-on (runtime wiring)
 

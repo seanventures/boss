@@ -25,6 +25,9 @@ installs:
     - secrets_steward
     - model_spend_analyst
     - adversarial_reviewer
+    - design_critic
+    - security_reviewer
+    - integration_validator
   workflows:
     - ceo_command_to_pr
     - decision_inbox

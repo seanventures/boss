@@ -13,10 +13,14 @@ applies_to_skills:
 
 # Stages always present, regardless of tier. Quality is evidence, never a prompt.
 invariants:
+  - design_critic_must_differ_from_architect
   - test_author_must_differ_from_implementer
   - reviewer_must_differ_from_implementer
+  - security_reviewer_must_differ_from_implementer
+  - integration_validator_must_differ_from_implementer
   - quality_gate_is_fail_closed
   - every_stage_emits_a_receipt
+  - feedback_loops_are_bounded
   - no_merge_without_passing_quality_gate
 
 # Rigor scales with the task's risk_tier (same tiers as the autonomy ladder).
@@ -28,19 +32,20 @@ tiers:
     approval: none
   1:
     label: low                # small feature slice, internal tool
-    required_stages: [author_tests, implement, quality_gate]
-    gates: { tests_pass: true, coverage_min: 0.6 }
+    required_stages: [architecture, design_critique, author_tests, implement, quality_gate]
+    gates: { tests_pass: true, coverage_min: 0.6, design_clean: true }
     approval: single          # one authorized approver
   2:
     label: standard           # user-facing change, business logic
-    required_stages: [author_tests, implement, adversarial_review, mutation_grade, quality_gate]
-    gates: { tests_pass: true, coverage_min: 0.7, mutation_min: 0.6, adversarial: survived, security_scan: pass }
+    required_stages: [architecture, design_critique, design_signoff, author_tests, implement, adversarial_review, security_review, mutation_grade, integration_validation, quality_gate]
+    gates: { tests_pass: true, coverage_min: 0.7, mutation_min: 0.6, adversarial: survived, security: clean, no_regressions: true, design_clean: true }
     approval: single
   3:
     label: high               # auth, payments, data-loss/security surface, prod deploy
-    required_stages: [author_tests, implement, adversarial_review, mutation_grade, security_scan, quality_gate]
-    gates: { tests_pass: true, coverage_min: 0.8, mutation_min: 0.75, adversarial: survived, security_scan: pass }
+    required_stages: [architecture, design_critique, design_signoff, author_tests, implement, adversarial_review, security_review, mutation_grade, integration_validation, quality_gate]
+    gates: { tests_pass: true, coverage_min: 0.8, mutation_min: 0.75, adversarial: survived, security: clean, no_regressions: true, design_clean: true }
     approval: dual            # two distinct named approvers (see dual-control on ChangeSet)
+    human_gates: [design_signoff, merge_decision]
 
 # What to do when a stage or gate fails — never silently pass.
 on_gate_failure:
