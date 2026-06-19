@@ -90,3 +90,42 @@ skills:
       requires_change_set: true
       requires_approval: [ceo, cto]
       dedupe_key_template: "ssh_host.teardown:{host}:{workload}"
+
+  - id: ssh_host.job.run
+    kind: deployment
+    risk_tier: 2
+    mock_mode: false
+    description: Run a one-shot job container (e.g. RAG ingestion / embedding backfill) on a customer host and poll to completion. Embeddings and graph population execute in customer infra; BOSS only initiates and observes.
+    data_boundary: external
+    input_schema:
+      host: string
+      workload: string
+      image: string
+      user: string?
+      port: integer?
+      env: object?
+      volumes: array?
+      command: string?
+      timeout: integer?
+    output_schema:
+      state: string
+      exit_code: integer
+      finished: boolean
+      logs_tail: string
+      receipt_id: string
+    cost:
+      estimator: runtime_plus_model
+      category: tool
+    retry:
+      max_attempts: 1
+      backoff: none
+    permissions:
+      allowed_callers: [deployment_manager, release_manager, worker]
+      required_permissions: [infra_deploy]
+    policy:
+      requires_receipt: true
+      requires_change_set: true
+      requires_budget_reservation: true
+      requires_approval: [ceo]
+      forbid_raw_provider_secrets_in_agent_context: true
+      dedupe_key_template: "ssh_host.job.run:{host}:{workload}:{image}"

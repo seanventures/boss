@@ -98,6 +98,7 @@ SUPPORTED_PROVIDERS = {
             "ssh_host.workload.deploy",
             "ssh_host.workload.health_check",
             "ssh_host.workload.teardown",
+            "ssh_host.job.run",
         ],
     },
 }
@@ -4120,6 +4121,8 @@ class ResourcePlaneService:
             return self._ssh_host_workload_teardown(operation)
         if skill_id == "ssh_host.workload.health_check":
             return self._ssh_host_workload_health_check(operation)
+        if skill_id == "ssh_host.job.run":
+            return self._ssh_host_job_run(operation)
         raise ProviderAdapterError(
             "Provider write adapter execution is not enabled for this skill. "
             "The action was recorded and deadlettered without calling the provider."
@@ -4628,6 +4631,42 @@ class ResourcePlaneService:
             "operation": "read",
             "host": host,
             "running": result.running,
+        }
+
+    def _ssh_host_job_run(self, operation: dict[str, Any]) -> dict[str, Any]:
+        desired, host, job, user, port = self._ssh_host_desired(operation)
+        image = self._require_text(str(desired.get("image") or ""), "image")
+        env = {str(k): str(v) for k, v in (desired.get("env") or {}).items()}
+        volumes = [str(v) for v in (desired.get("volumes") or []) if str(v).strip()]
+        command = desired.get("command")
+        timeout = int(desired.get("timeout") or 900)
+        result = self.ssh_host.run_job_to_completion(
+            host=host,
+            job=job,
+            image=image,
+            user=user,
+            port=port,
+            env=env,
+            volumes=volumes,
+            command=str(command) if command else None,
+            timeout=timeout,
+        )
+        succeeded = result.finished and result.exit_code == 0
+        return {
+            "provider_ref": f"ssh://{user}@{host}",
+            "resource_external_id": job,
+            "resource_name": job,
+            "resource_type": "job",
+            "state": "completed" if succeeded else "failed",
+            "health_status": (
+                f"exit={result.exit_code}" if result.finished else "timeout"
+            ),
+            "operation": "job_run",
+            "host": host,
+            "image": image,
+            "exit_code": result.exit_code,
+            "finished": result.finished,
+            "logs_tail": result.logs[-2000:],
         }
 
     def _supabase_migration_apply(

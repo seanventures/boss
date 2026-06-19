@@ -207,3 +207,16 @@ All must be ✅ before sending the PRD to the client:
   `apply_changeset` flow (budget reservation → approval gate → actuation → `ResourceReceipt`
   row) — needs a Postgres-backed run, not available in this local check.
   Phase 2 status: **code complete; receipted e2e run pending a DB environment.**
+- 2026-06-18 — Phase 3 (remote-job orchestration) implemented: `SSHHostAdapter` gains
+  one-shot job primitives (`run_job` / `job_status` / `job_logs` / `remove_job` /
+  `run_job_to_completion` — start, poll-to-exit, collect logs+exit code, auto-cleanup).
+  Wired `ssh_host.job.run` into `resource_plane` (`_ssh_host_job_run`, capability +
+  dispatch) and the skill spec (risk_tier 2, ChangeSet + budget + ceo approval + receipt).
+  This is the "BOSS initiates ingestion; embeddings + graph population run in customer
+  infra; BOSS only sets up and observes" primitive. The continuous re-ingest-on-new-files
+  trigger is handled by a watcher container BOSS *deploys* via Phase 2, not by per-file
+  BOSS calls. Live-tested the job-run actuation against `3.94.66.139`: an alpine job ran to
+  completion, BOSS captured exit_code=0 and logs (`ingest:start/ingest:done`), container +
+  image auto-cleaned. ruff + all 4 skill specs validate. **Same caveat as Phase 2:** the
+  receipted `apply_changeset` e2e run needs a Postgres environment.
+  Phase 3 status: **code complete; receipted e2e run pending a DB environment.**
