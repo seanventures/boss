@@ -1,0 +1,46 @@
+kind: ObjectSpec
+id: Standards
+version: 0.1.0
+description: >
+  The project's coding rules the AI workers follow during a governed coding run. Derived once
+  per project from the repo's existing conventions plus the organization's rules, and honored by
+  every stage; the final gate checks the change follows them. Internal to the BOSS harness — the
+  agents read it to work to the project's standard, it is not a developer-facing document.
+fields:
+  - name: id
+    type: string
+  - name: project_id
+    type: string
+  - name: version
+    type: string
+  - name: status
+    type: enum
+    values: [draft, active, superseded]
+  - name: rules
+    type: array
+    description: The must-follow rules for this project.
+  - name: coding_style
+    type: object
+    description: Language/style/structure conventions the code must follow.
+  - name: test_requirements
+    type: object
+    description: Required coverage and how strong the tests must be (per risk tier).
+  - name: security_rules
+    type: object
+    description: Minimum security rules (access control, secret handling, dependencies).
+  - name: design_limits
+    type: array
+    description: Allowed/forbidden patterns and complexity limits.
+  - name: done_when
+    type: array
+    description: What a change must satisfy before it counts as done.
+  - name: derived_from
+    type: string
+    description: Where these came from — the repo's conventions and/or an org-wide rule set.
+  - name: created_by
+    type: string
+  - name: created_at
+    type: datetime
+constraints:
+  unique:
+    - [project_id, version]

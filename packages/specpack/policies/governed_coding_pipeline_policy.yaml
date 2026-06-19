@@ -2,67 +2,66 @@ kind: Policy
 id: governed_coding_pipeline_policy_v0
 version: 0.1.0
 purpose: >
-  Make the governed coding pipeline the default for all code tasks, and scale its rigor to
-  risk. Separation of judgment (test author != implementer, fresh-context adversarial review)
-  and fail-closed quality evidence are the spine; the depth of the panel grows with risk tier.
+  Make the governed coding pipeline the default for every code task, and scale how many steps
+  run to how risky the change is. The agent that writes something never judges it, the final
+  gate fails closed, and the project standards bind every step.
 
 applies_to_skills:
   - code.task
   - software_factory.codex_pr_proposal
   - coding_pipeline.*
 
-# Stages always present, regardless of tier. Quality is evidence, never a prompt.
-invariants:
-  - design_critic_must_differ_from_architect
-  - test_author_must_differ_from_implementer
-  - reviewer_must_differ_from_implementer
-  - security_reviewer_must_differ_from_implementer
-  - integration_validator_must_differ_from_implementer
-  - quality_gate_is_fail_closed
-  - every_stage_emits_a_receipt
-  - feedback_loops_are_bounded
-  - no_merge_without_passing_quality_gate
+# Rules that hold no matter the risk. Quality is evidence, never just a claim.
+always:
+  - follow_the_project_standards
+  - the_planner_does_not_review_the_plan
+  - the_tester_is_not_the_coder
+  - the_reviewer_is_not_the_coder
+  - the_security_reviewer_is_not_the_coder
+  - the_final_gate_fails_closed
+  - every_step_leaves_a_receipt
+  - loops_are_bounded
+  - nothing_merges_without_the_final_gate_passing
 
-# Rigor scales with the task's risk_tier (same tiers as the autonomy ladder).
+# How many steps run, by how risky the change is (same tiers as the autonomy ladder).
 tiers:
   0:
-    label: trivial            # docs, comments, pure refactor with existing tests
-    required_stages: [implement, quality_gate]
-    gates: { tests_pass: true }
+    label: trivial            # docs, comments, a refactor already covered by tests
+    steps: [implement, final_gate]
+    must_pass: { tests_pass: true }
     approval: none
   1:
-    label: low                # small feature slice, internal tool
-    required_stages: [architecture, design_critique, author_tests, implement, quality_gate]
-    gates: { tests_pass: true, coverage_min: 0.6, design_clean: true }
-    approval: single          # one authorized approver
+    label: low                # a small internal change
+    steps: [standards, spec, refine, plan, review_plan, tasks, write_tests, implement, final_gate]
+    must_pass: { tests_pass: true, coverage_min: 0.6, plan_clean: true }
+    approval: single
   2:
-    label: standard           # user-facing change, business logic
-    required_stages: [architecture, design_critique, design_signoff, author_tests, implement, adversarial_review, security_review, mutation_grade, integration_validation, quality_gate]
-    gates: { tests_pass: true, coverage_min: 0.7, mutation_min: 0.6, adversarial: survived, security: clean, no_regressions: true, design_clean: true }
+    label: standard           # something users see, or real business logic
+    steps: [standards, spec, refine, plan, review_plan, approve_plan, tasks, write_tests, implement, review_code, security_check, check_tests, run_all_tests, consistency_check, final_gate]
+    must_pass: { tests_pass: true, coverage_min: 0.7, test_strength_min: 0.6, code_safe: true, security_clean: true, nothing_broke: true, consistent: true }
     approval: single
   3:
-    label: high               # auth, payments, data-loss/security surface, prod deploy
-    required_stages: [architecture, design_critique, design_signoff, author_tests, implement, adversarial_review, security_review, mutation_grade, integration_validation, quality_gate]
-    gates: { tests_pass: true, coverage_min: 0.8, mutation_min: 0.75, adversarial: survived, security: clean, no_regressions: true, design_clean: true }
-    approval: dual            # two distinct named approvers (see dual-control on ChangeSet)
-    human_gates: [design_signoff, merge_decision]
+    label: high               # login, payments, secrets, migrations, deploys
+    steps: [standards, spec, refine, plan, review_plan, approve_plan, tasks, write_tests, implement, review_code, security_check, check_tests, run_all_tests, consistency_check, final_gate]
+    must_pass: { tests_pass: true, coverage_min: 0.8, test_strength_min: 0.75, code_safe: true, security_clean: true, nothing_broke: true, consistent: true }
+    approval: two_approvers   # two different people sign off
+    human_signoffs: [approve_plan, approve]
 
-# What to do when a stage or gate fails — never silently pass.
-on_gate_failure:
-  default: route_findings_to_implementer_and_reopen   # evaluator->optimizer loop
-  bounded_execution:
-    max_pipeline_iterations: 3                          # circuit breaker; then escalate
-    on_exhaustion: create_decision                      # human judgment, not infinite spend
-  waiver:
+# When a step fails, never quietly pass.
+on_failure:
+  default: send_findings_back_to_the_coder
+  bounded:
+    max_loops_per_step: 3
+    then: ask_a_human            # a Decision, not endless retries
+  override:
     allowed: true
-    requires: decision                                  # an auditable Decision, ceo/cto for tier>=2
-    fail_closed_default: true
+    needs: a_decision            # any override is recorded and approved
 
-# Tier inference when the caller does not set one explicitly.
-tier_inference:
-  default_tier: 2
-  escalate_to_3_when_paths_touch:
-    - auth
+# If nobody sets a risk tier, guess one — and treat sensitive areas as high.
+guess_tier:
+  default: 2
+  high_when_change_touches:
+    - login
     - payment
     - secrets
     - migration

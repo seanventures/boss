@@ -2,128 +2,161 @@ kind: WorkflowSpec
 id: governed_coding_pipeline
 version: 0.1.0
 purpose: >
-  The default, governed pipeline every coding task follows: role-separated, evidence-gated,
-  risk-scaled stages so quality is a property of the workflow, not a hope placed on a single
-  agent. Spine: the design critic, test author, implementer, code reviewer, security reviewer,
-  and integration validator are DIFFERENT roles with isolated context; standards are fail-closed
-  gates, not prompts; feedback loops are bounded; rigor scales with risk_tier.
+  The default steps every coding task follows. Plain steps, run by different agents — the agent
+  that writes something never judges it. The project standards bind every step, checks fail
+  closed (missing evidence = fail), loops are bounded, and how many steps run scales with risk.
 governed_by: governed_coding_pipeline_policy_v0
 phases:
-  - id: spec_contract
-    owner_role: pm
+  - id: standards
+    owner_role: cao
     inputs: [Task]
-    outputs: [Spec, AcceptanceCriteria]
+    outputs: [Standards]
     gates:
-      - acceptance_criteria_present       # spec-as-contract: executable criteria, not prose
+      - standards_ready          # the project's coding rules, from the repo + org rules
       - risk_tier_assigned
 
-  - id: architecture
+  - id: spec
+    owner_role: pm
+    inputs: [Task, Standards]
+    outputs: [Spec, AcceptanceCriteria, ChangeList]
+    gates:
+      - acceptance_criteria_present
+      - change_list_present       # what is added / changed / removed vs. today
+
+  - id: refine
+    owner_role: pm
+    skill: coding_pipeline.refine
+    inputs: [Spec, Standards]
+    outputs: [ClearSpec, OpenQuestions]
+    gates:
+      - no_vague_requirements      # clear, testable criteria before any code
+    run_when: risk_tier >= 1
+
+  - id: plan
     owner_role: cao
-    inputs: [Spec, AcceptanceCriteria]
-    outputs: [TechDesign]
+    inputs: [ClearSpec]
+    outputs: [Plan]
     gates:
-      - design_addresses_acceptance_criteria
+      - plan_covers_acceptance_criteria
     run_when: risk_tier >= 1
 
-  - id: design_critique
-    owner_role: design_critic             # CRITIC != ARCHITECT, fresh context
-    skill: coding_pipeline.design_critique
-    inputs: [TechDesign, AcceptanceCriteria]
-    outputs: [DesignCritique, FailureModeCatalog]
+  - id: review_plan
+    owner_role: design_critic        # reviewer is not the planner
+    skill: coding_pipeline.review_plan
+    inputs: [Plan, AcceptanceCriteria]
+    outputs: [PlanReview]
     gates:
-      - design_clean_or_max_iterations    # catch defects in design, before code
+      - plan_clean_or_max_loops
     on_failure:
-      route_findings_to: architecture      # bounded design loop
+      route_findings_to: plan
     run_when: risk_tier >= 1
 
-  - id: design_signoff
+  - id: approve_plan
     owner_role: release_manager
-    inputs: [TechDesign, DesignCritique]
+    inputs: [Plan, PlanReview]
     outputs: [Decision]
     gates:
-      - human_design_approval              # HUMAN GATE before any code is written
+      - human_plan_approval          # human sign-off before any code
     run_when: risk_tier >= 2
 
-  - id: test_authoring
-    owner_role: qa                         # AUTHOR != IMPLEMENTER
-    skill: coding_pipeline.author_tests
-    inputs: [Spec, AcceptanceCriteria]
-    outputs: [TestArtifact]
+  - id: tasks
+    owner_role: program_manager
+    skill: coding_pipeline.tasks
+    inputs: [ClearSpec, Plan]
+    outputs: [Tasks]
     gates:
-      - tests_authored_independently
-      - tests_map_to_acceptance_criteria
+      - tasks_have_order_and_focused_context
     run_when: risk_tier >= 1
 
-  - id: implementation
-    owner_role: software_engineer          # implements against tests it did NOT write
+  - id: write_tests
+    owner_role: qa                   # tester is not the coder
+    skill: coding_pipeline.write_tests
+    inputs: [ClearSpec, AcceptanceCriteria]
+    outputs: [TestArtifact]
+    gates:
+      - tests_written_first
+      - tests_match_acceptance_criteria
+    run_when: risk_tier >= 1
+
+  - id: implement
+    owner_role: software_engineer    # codes against tests it did NOT write
     skill: coding_pipeline.implement
-    inputs: [Spec, TestArtifact]
+    inputs: [ClearSpec, TestArtifact]
     outputs: [DiffArtifact, TestReport]
     gates:
-      - authored_tests_pass
-      - diff_small_and_scoped
+      - written_tests_pass
+      - change_is_small
 
-  - id: adversarial_review
-    owner_role: adversarial_reviewer       # REVIEWER != IMPLEMENTER, fresh context
-    skill: coding_pipeline.adversarial_review
-    inputs: [DiffArtifact, Spec]
-    outputs: [AdversarialVerdict]
+  - id: review_code
+    owner_role: adversarial_reviewer # reviewer is not the coder, fresh context
+    skill: coding_pipeline.review_code
+    inputs: [DiffArtifact, ClearSpec]
+    outputs: [CodeReview]
     gates:
-      - verdict_survived_or_findings_resolved
+      - code_safe_or_fixed
     on_failure:
-      route_findings_to: implementation    # bounded evaluator -> optimizer loop
+      route_findings_to: implement
     run_when: risk_tier >= 2
 
-  - id: security_review
-    owner_role: security_reviewer          # dedicated security pass, separate from correctness
-    skill: coding_pipeline.security_review
+  - id: security_check
+    owner_role: security_reviewer    # separate from the code review
+    skill: coding_pipeline.security_check
     inputs: [DiffArtifact]
-    outputs: [SecurityFindings, SecurityVerdict]
+    outputs: [SecurityReview]
     gates:
-      - security_clean_or_findings_resolved
+      - security_clean_or_fixed
     on_failure:
-      route_findings_to: implementation    # bounded security loop
+      route_findings_to: implement
     run_when: risk_tier >= 2
 
-  - id: mutation_grade
+  - id: check_tests
     owner_role: qa
-    skill: coding_pipeline.mutation_grade
+    skill: coding_pipeline.check_tests
     inputs: [DiffArtifact, TestArtifact]
-    outputs: [MutationReport]
+    outputs: [TestStrength]
     gates:
-      - mutation_score_meets_tier_threshold   # grade the tests, not just the code
+      - tests_strong_enough          # the tests actually catch bugs
     run_when: risk_tier >= 2
 
-  - id: integration_validation
+  - id: run_all_tests
     owner_role: integration_validator
-    skill: coding_pipeline.integration_validate
+    skill: coding_pipeline.run_all_tests
     inputs: [DiffArtifact]
-    outputs: [IntegrationResults, RegressionReport]
+    outputs: [FullTestRun]
     gates:
-      - full_suite_passed_no_regressions
+      - whole_suite_passes_nothing_broke
     on_failure:
-      route_findings_to: implementation
+      route_findings_to: implement
     run_when: risk_tier >= 2
 
-  - id: quality_gate
-    owner_role: deterministic_quality_gate
-    skill: coding_pipeline.quality_gate
-    inputs: [TestReport, AdversarialVerdict, SecurityVerdict, MutationReport, IntegrationResults]
-    outputs: [QualityGate]
+  - id: consistency_check
+    owner_role: qa
+    skill: coding_pipeline.consistency_check
+    inputs: [Standards, Spec, TestArtifact, DiffArtifact]
+    outputs: [ConsistencyReport]
     gates:
-      - quality_gate_status_pass          # FAIL-CLOSED: missing evidence = fail
+      - standards_spec_tests_code_agree
+    run_when: risk_tier >= 2
 
-  - id: merge_decision
+  - id: final_gate
+    owner_role: deterministic_final_gate
+    skill: coding_pipeline.final_gate
+    inputs: [TestReport, CodeReview, SecurityReview, TestStrength, FullTestRun, ConsistencyReport]
+    outputs: [FinalGate]
+    gates:
+      - final_gate_passes             # fail closed: missing evidence = fail
+
+  - id: approve
     owner_role: release_manager
-    inputs: [QualityGate, DiffArtifact]
+    inputs: [FinalGate, DiffArtifact]
     outputs: [Decision]
     gates:
       - decision_card_complete
-      - approval_matches_risk_tier        # HUMAN GATE; single vs dual-control by tier
+      - approval_matches_risk_tier    # human sign-off; two approvers at the top tier
 
 completion:
   emits_events: true
-  artifacts_required: [Spec, TechDesign, TestArtifact, DiffArtifact, QualityGate, Decision]
+  artifacts_required: [Standards, ClearSpec, TestArtifact, DiffArtifact, FinalGate, Decision]
   bounded_execution:
-    max_iterations_per_loop: 3
+    max_loops_per_step: 3
     on_exhaustion: create_decision

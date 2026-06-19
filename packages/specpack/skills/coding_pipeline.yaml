@@ -1,17 +1,19 @@
+# The governed coding pipeline, in plain steps. Each step is run by a different agent with
+# its own context — the agent that writes something never judges it. Standards bind every step.
 skills:
-  - id: coding_pipeline.author_tests
+  - id: coding_pipeline.refine
     kind: software_factory
     risk_tier: 1
     mock_mode: false
-    description: Independently author tests from the spec/acceptance criteria BEFORE implementation, by a role other than the implementer (breaks author==judge correlation).
+    description: Clear up anything vague in the spec before building — find missing or ambiguous requirements, fill them from the project standards and the code, and ask a human for anything left. Output is clear, testable acceptance criteria.
     data_boundary: internal
     input_schema:
       task_id: string
       spec_ref: string
-      acceptance_criteria: array
+      standards_ref: string
     output_schema:
-      test_artifact_id: string
-      cases: integer
+      clear_spec_ref: string
+      open_questions: array
     cost:
       estimator: runtime_plus_model
       category: model
@@ -19,131 +21,22 @@ skills:
       max_attempts: 2
       backoff: exponential
     permissions:
-      allowed_callers: [qa, software_factory, worker]
-      required_permissions: [test_author]
+      allowed_callers: [pm, software_factory, worker]
+      required_permissions: [spec_author]
     policy:
       requires_receipt: true
-      author_must_not_be_implementer: true
-      dedupe_key_template: "coding_pipeline.author_tests:{task_id}"
+      no_vague_build: true
+      dedupe_key_template: "coding_pipeline.refine:{task_id}"
 
-  - id: coding_pipeline.implement
-    kind: software_factory
-    risk_tier: 2
-    mock_mode: false
-    description: Implement the smallest change that makes the independently-authored tests pass; isolated context scoped to the task slice.
-    data_boundary: internal
-    input_schema:
-      task_id: string
-      spec_ref: string
-      test_artifact_id: string
-    output_schema:
-      diff_artifact_id: string
-      tests_passed: boolean
-    cost:
-      estimator: runtime_plus_model
-      category: model
-    retry:
-      max_attempts: 2
-      backoff: exponential
-    permissions:
-      allowed_callers: [software_engineer, software_factory, worker]
-      required_permissions: [code_task_run]
-    policy:
-      requires_receipt: true
-      keep_diff_small: true
-      dedupe_key_template: "coding_pipeline.implement:{task_id}"
-
-  - id: coding_pipeline.adversarial_review
-    kind: software_factory
-    risk_tier: 2
-    mock_mode: false
-    description: Fresh-context reviewer attempts to REFUTE the diff (correctness, security, reproduction); defaults to refuted under uncertainty. Implementer may not be the reviewer.
-    data_boundary: internal
-    input_schema:
-      task_id: string
-      diff_artifact_id: string
-      spec_ref: string
-    output_schema:
-      verdict: string
-      findings: array
-    cost:
-      estimator: runtime_plus_model
-      category: model
-    retry:
-      max_attempts: 1
-      backoff: none
-    permissions:
-      allowed_callers: [adversarial_reviewer, qa, software_factory]
-      required_permissions: [code_review]
-    policy:
-      requires_receipt: true
-      reviewer_must_not_be_implementer: true
-      isolated_context: true
-      dedupe_key_template: "coding_pipeline.adversarial_review:{task_id}:{diff_artifact_id}"
-
-  - id: coding_pipeline.mutation_grade
+  - id: coding_pipeline.review_plan
     kind: software_factory
     risk_tier: 1
     mock_mode: false
-    description: Grade the test suite by injecting mutants (flip comparisons, drop lines, alter constants) and measuring detection; a suite that can't catch mutants fails the gate.
+    description: A different agent reviews the plan before any code is written — looks for over-complexity, missing constraints, and simpler options; loops back to the planner until clean.
     data_boundary: internal
     input_schema:
       task_id: string
-      diff_artifact_id: string
-      test_artifact_id: string
-    output_schema:
-      mutation_score: number
-      survived_mutants: integer
-    cost:
-      estimator: runtime_plus_model
-      category: tool
-    retry:
-      max_attempts: 1
-      backoff: none
-    permissions:
-      allowed_callers: [qa, software_factory, worker]
-      required_permissions: [test_author]
-    policy:
-      requires_receipt: true
-      dedupe_key_template: "coding_pipeline.mutation_grade:{task_id}:{diff_artifact_id}"
-
-  - id: coding_pipeline.quality_gate
-    kind: software_factory
-    risk_tier: 2
-    mock_mode: false
-    description: Fail-closed aggregate gate. Emits a QualityGate record from the stage evidence (independent tests, adversarial verdict, mutation score, security scan). Missing evidence = fail.
-    data_boundary: internal
-    input_schema:
-      task_id: string
-      code_task_run_id: string
-      risk_tier: integer
-    output_schema:
-      quality_gate_id: string
-      status: string
-    cost:
-      estimator: fixed
-      category: tool
-    retry:
-      max_attempts: 1
-      backoff: none
-    permissions:
-      allowed_callers: [software_factory, release_manager, worker]
-      required_permissions: [quality_gate_manage]
-    policy:
-      requires_receipt: true
-      fail_closed: true
-      waiver_requires_decision: true
-      dedupe_key_template: "coding_pipeline.quality_gate:{code_task_run_id}"
-
-  - id: coding_pipeline.design_critique
-    kind: software_factory
-    risk_tier: 1
-    mock_mode: false
-    description: Fresh-context critic reviews the architecture for bad complexity and missing constraints, before any code; loops with the architect (bounded) so defects are caught in design.
-    data_boundary: internal
-    input_schema:
-      task_id: string
-      design_ref: string
+      plan_ref: string
       acceptance_criteria: array
     output_schema:
       verdict: string
@@ -159,15 +52,123 @@ skills:
       required_permissions: [code_review]
     policy:
       requires_receipt: true
-      critic_must_not_be_architect: true
+      reviewer_is_not_planner: true
       isolated_context: true
-      dedupe_key_template: "coding_pipeline.design_critique:{task_id}:{design_ref}"
+      dedupe_key_template: "coding_pipeline.review_plan:{task_id}:{plan_ref}"
 
-  - id: coding_pipeline.security_review
+  - id: coding_pipeline.tasks
+    kind: software_factory
+    risk_tier: 1
+    mock_mode: false
+    description: Break the work into small pieces with clear order and dependencies, marking which can run at the same time. Each piece carries only the context it needs.
+    data_boundary: internal
+    input_schema:
+      task_id: string
+      clear_spec_ref: string
+      plan_ref: string
+    output_schema:
+      tasks_ref: string
+      piece_count: integer
+    cost:
+      estimator: runtime_plus_model
+      category: model
+    retry:
+      max_attempts: 1
+      backoff: none
+    permissions:
+      allowed_callers: [program_manager, software_factory, worker]
+      required_permissions: [plan_author]
+    policy:
+      requires_receipt: true
+      dedupe_key_template: "coding_pipeline.tasks:{task_id}"
+
+  - id: coding_pipeline.write_tests
+    kind: software_factory
+    risk_tier: 1
+    mock_mode: false
+    description: Write the tests from the spec, BEFORE the code, by a different agent than the one who writes the code — so the tests check the intent, not the coder's mistakes.
+    data_boundary: internal
+    input_schema:
+      task_id: string
+      clear_spec_ref: string
+      acceptance_criteria: array
+    output_schema:
+      test_artifact_id: string
+      cases: integer
+    cost:
+      estimator: runtime_plus_model
+      category: model
+    retry:
+      max_attempts: 2
+      backoff: exponential
+    permissions:
+      allowed_callers: [qa, software_factory, worker]
+      required_permissions: [test_author]
+    policy:
+      requires_receipt: true
+      author_is_not_implementer: true
+      dedupe_key_template: "coding_pipeline.write_tests:{task_id}"
+
+  - id: coding_pipeline.implement
     kind: software_factory
     risk_tier: 2
     mock_mode: false
-    description: Dedicated security pass on the diff (injection, authz, secrets, data exposure), separate from correctness review; loops with the implementer (bounded).
+    description: Write the smallest change that makes the already-written tests pass. May not edit the tests.
+    data_boundary: internal
+    input_schema:
+      task_id: string
+      clear_spec_ref: string
+      test_artifact_id: string
+    output_schema:
+      diff_artifact_id: string
+      tests_passed: boolean
+    cost:
+      estimator: runtime_plus_model
+      category: model
+    retry:
+      max_attempts: 2
+      backoff: exponential
+    permissions:
+      allowed_callers: [software_engineer, software_factory, worker]
+      required_permissions: [code_task_run]
+    policy:
+      requires_receipt: true
+      keep_change_small: true
+      dedupe_key_template: "coding_pipeline.implement:{task_id}"
+
+  - id: coding_pipeline.review_code
+    kind: software_factory
+    risk_tier: 2
+    mock_mode: false
+    description: A fresh agent tries to break the change — find a real bug or edge case the tests miss. Defaults to "not safe" when unsure. May not edit the code.
+    data_boundary: internal
+    input_schema:
+      task_id: string
+      diff_artifact_id: string
+      clear_spec_ref: string
+    output_schema:
+      verdict: string
+      findings: array
+    cost:
+      estimator: runtime_plus_model
+      category: model
+    retry:
+      max_attempts: 1
+      backoff: none
+    permissions:
+      allowed_callers: [adversarial_reviewer, qa, software_factory]
+      required_permissions: [code_review]
+    policy:
+      requires_receipt: true
+      reviewer_is_not_implementer: true
+      isolated_context: true
+      dedupe_key_template: "coding_pipeline.review_code:{task_id}:{diff_artifact_id}"
+
+  - id: coding_pipeline.security_check
+    kind: software_factory
+    risk_tier: 2
+    mock_mode: false
+    description: A separate security pass on the change — access control, input handling, secrets, data exposure. Loops back to the coder until clean.
     data_boundary: internal
     input_schema:
       task_id: string
@@ -186,22 +187,48 @@ skills:
       required_permissions: [code_review]
     policy:
       requires_receipt: true
-      reviewer_must_not_be_implementer: true
+      reviewer_is_not_implementer: true
       isolated_context: true
-      dedupe_key_template: "coding_pipeline.security_review:{task_id}:{diff_artifact_id}"
+      dedupe_key_template: "coding_pipeline.security_check:{task_id}:{diff_artifact_id}"
 
-  - id: coding_pipeline.integration_validate
+  - id: coding_pipeline.check_tests
+    kind: software_factory
+    risk_tier: 1
+    mock_mode: false
+    description: Make sure the tests actually catch bugs — change the code on purpose (flip a comparison, drop a guard) and confirm a test fails. If the tests still pass, they are too weak.
+    data_boundary: internal
+    input_schema:
+      task_id: string
+      diff_artifact_id: string
+      test_artifact_id: string
+    output_schema:
+      score: number
+      missed: integer
+    cost:
+      estimator: runtime_plus_model
+      category: tool
+    retry:
+      max_attempts: 1
+      backoff: none
+    permissions:
+      allowed_callers: [qa, software_factory, worker]
+      required_permissions: [test_author]
+    policy:
+      requires_receipt: true
+      dedupe_key_template: "coding_pipeline.check_tests:{task_id}:{diff_artifact_id}"
+
+  - id: coding_pipeline.run_all_tests
     kind: software_factory
     risk_tier: 2
     mock_mode: false
-    description: Run the full test suite and end-to-end checks; confirm no regressions beyond the slice's unit tests before the quality gate.
+    description: Run the whole test suite (not just the new tests) and confirm nothing else broke.
     data_boundary: internal
     input_schema:
       task_id: string
       diff_artifact_id: string
     output_schema:
       passed: boolean
-      regressions: array
+      broke: array
     cost:
       estimator: runtime_plus_model
       category: tool
@@ -214,4 +241,59 @@ skills:
     policy:
       requires_receipt: true
       full_suite_required: true
-      dedupe_key_template: "coding_pipeline.integration_validate:{task_id}:{diff_artifact_id}"
+      dedupe_key_template: "coding_pipeline.run_all_tests:{task_id}:{diff_artifact_id}"
+
+  - id: coding_pipeline.consistency_check
+    kind: software_factory
+    risk_tier: 2
+    mock_mode: false
+    description: Check the standards, spec, tests, and code all agree — flag anything that drifts (a test or change that contradicts the spec or breaks a rule) before the final gate.
+    data_boundary: internal
+    input_schema:
+      task_id: string
+      standards_ref: string
+      diff_artifact_id: string
+    output_schema:
+      consistent: boolean
+      drift: array
+    cost:
+      estimator: runtime_plus_model
+      category: model
+    retry:
+      max_attempts: 1
+      backoff: none
+    permissions:
+      allowed_callers: [qa, software_factory]
+      required_permissions: [code_review]
+    policy:
+      requires_receipt: true
+      fail_on_drift: true
+      dedupe_key_template: "coding_pipeline.consistency_check:{task_id}:{diff_artifact_id}"
+
+  - id: coding_pipeline.final_gate
+    kind: software_factory
+    risk_tier: 2
+    mock_mode: false
+    description: The last check — collect all the evidence (independent tests, code review, security, test strength, full suite, consistency) into one record. If anything is missing, it fails (closed). Nothing merges without this passing.
+    data_boundary: internal
+    input_schema:
+      task_id: string
+      code_task_run_id: string
+      risk_tier: integer
+    output_schema:
+      gate_id: string
+      status: string
+    cost:
+      estimator: fixed
+      category: tool
+    retry:
+      max_attempts: 1
+      backoff: none
+    permissions:
+      allowed_callers: [software_factory, release_manager, worker]
+      required_permissions: [quality_gate_manage]
+    policy:
+      requires_receipt: true
+      fail_closed: true
+      override_needs_decision: true
+      dedupe_key_template: "coding_pipeline.final_gate:{code_task_run_id}"

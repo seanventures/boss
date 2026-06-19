@@ -324,6 +324,12 @@ class Settings(BaseSettings):
     # --- Coding agent (clone -> edit -> build -> test -> fix -> PR) -----------
     # Feature flag for the durable `code.task` pipeline.
     enable_code_task: bool = Field(default=False, alias="BOSS_ENABLE_CODE_TASK")
+    # When true, code tasks run through the governed coding pipeline (role-separated
+    # stages: qa authors tests -> SE implements -> adversarial review -> fail-closed
+    # QualityGate) instead of a single agent. See docs/product/GOVERNED_CODING_PIPELINE.md.
+    governed_coding_pipeline: bool = Field(
+        default=False, alias="BOSS_GOVERNED_CODING_PIPELINE"
+    )
     # Which CodeAgent implementation runs the edit/test loop:
     #   claude_code = wrap `claude -p` headless WITH its file/bash tools enabled,
     #                 scoped to the ephemeral sandbox cwd (uses the Max plan).

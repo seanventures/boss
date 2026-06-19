@@ -153,6 +153,11 @@ def run_code_task(engine, settings: Settings, jobs, run_id: str) -> dict:
             return _fail(c, run_id, run["project_id"],
                          "Code tasks are disabled (BOSS_ENABLE_CODE_TASK=false).", status="blocked")
 
+    # Default for all coding tasks: route through the governed, role-separated pipeline.
+    if settings.governed_coding_pipeline:
+        from .governed_code_task_service import run_governed_code_task
+        return run_governed_code_task(engine, settings, jobs, run_id)
+
     project_id = run["project_id"]; task_id = run["task_id"]; spec = run["spec"]
     fctx = run["finalize_ctx"] or {}
     sf = SoftwareFactoryService(settings)
