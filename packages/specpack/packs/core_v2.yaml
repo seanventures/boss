@@ -49,5 +49,6 @@ installs:
     - model_providers
     - providerops
     - deployment
+    - ssh_host
   canaries: []
 status: planned

@@ -23,6 +23,7 @@ from .core import (
     now_utc,
 )
 from .digitalocean_adapter import DigitalOceanAdapter
+from .ssh_host_adapter import SSHHostAdapter
 from .receipts import ReceiptService
 
 
@@ -89,6 +90,16 @@ SUPPORTED_PROVIDERS = {
             "anthropic.usage_cost.sync",
         ],
     },
+    "ssh_host": {
+        "credential_ref": "env:BOSS_SSH_HOST_PRIVATE_KEY",
+        "capabilities": [
+            "provider_connection_test",
+            "resource_inventory_sync",
+            "ssh_host.workload.deploy",
+            "ssh_host.workload.health_check",
+            "ssh_host.workload.teardown",
+        ],
+    },
 }
 
 DEPLOYMENT_ROLLOUT_MODES = {
@@ -111,6 +122,7 @@ DEPLOYMENT_SKILL_IDS = {
     "cloudflare.pages.deploy",
     "digitalocean.app.deploy",
     "supabase.migration.apply",
+    "ssh_host.workload.deploy",
 }
 
 
@@ -153,6 +165,7 @@ class ResourcePlaneService:
         self.budget = BudgetGovernor(settings)
         self.receipts = ReceiptService()
         self.digitalocean = DigitalOceanAdapter(settings)
+        self.ssh_host = SSHHostAdapter(settings)
 
     def list_provider_accounts(
         self, connection: Connection, project_id: str
@@ -4101,6 +4114,12 @@ class ResourcePlaneService:
             return self._supabase_project_pause(credential, operation)
         if skill_id == "supabase.project.create":
             return self._supabase_project_create(credential, operation)
+        if skill_id == "ssh_host.workload.deploy":
+            return self._ssh_host_workload_deploy(operation)
+        if skill_id == "ssh_host.workload.teardown":
+            return self._ssh_host_workload_teardown(operation)
+        if skill_id == "ssh_host.workload.health_check":
+            return self._ssh_host_workload_health_check(operation)
         raise ProviderAdapterError(
             "Provider write adapter execution is not enabled for this skill. "
             "The action was recorded and deadlettered without calling the provider."
@@ -4532,6 +4551,83 @@ class ResourcePlaneService:
             "status": result.status,
             "phase": result.phase,
             "api_url": result.api_url,
+        }
+
+    def _ssh_host_desired(self, operation: dict[str, Any]) -> tuple[dict, str, str, str, int]:
+        desired = operation.get("desired_state") or {}
+        host = self._require_text(str(desired.get("host") or ""), "host")
+        workload = self._require_text(
+            str(desired.get("workload") or operation.get("resource_ref") or ""),
+            "workload",
+        )
+        user = str(desired.get("user") or "root").strip() or "root"
+        port = int(desired.get("port") or 22)
+        return desired, host, workload, user, port
+
+    def _ssh_host_workload_deploy(self, operation: dict[str, Any]) -> dict[str, Any]:
+        desired, host, workload, user, port = self._ssh_host_desired(operation)
+        image = self._require_text(str(desired.get("image") or ""), "image")
+        env = {str(k): str(v) for k, v in (desired.get("env") or {}).items()}
+        ports = [str(p) for p in (desired.get("ports") or []) if str(p).strip()]
+        volumes = [str(v) for v in (desired.get("volumes") or []) if str(v).strip()]
+        command = desired.get("command")
+        result = self.ssh_host.deploy_workload(
+            host=host,
+            workload=workload,
+            image=image,
+            user=user,
+            port=port,
+            env=env,
+            ports=ports,
+            volumes=volumes,
+            command=str(command) if command else None,
+        )
+        return {
+            "provider_ref": f"ssh://{user}@{host}",
+            "resource_external_id": result.container_id or workload,
+            "resource_name": workload,
+            "resource_type": "container",
+            "state": "active",
+            "health_status": result.status,
+            "operation": "deployed",
+            "host": host,
+            "image": image,
+            "container_id": result.container_id,
+            "ports": result.ports,
+        }
+
+    def _ssh_host_workload_teardown(self, operation: dict[str, Any]) -> dict[str, Any]:
+        _desired, host, workload, user, port = self._ssh_host_desired(operation)
+        result = self.ssh_host.teardown_workload(
+            host=host, workload=workload, user=user, port=port
+        )
+        return {
+            "provider_ref": f"ssh://{user}@{host}",
+            "resource_external_id": workload,
+            "resource_name": workload,
+            "resource_type": "container",
+            "state": "deleted" if result.removed else "active",
+            "health_status": "deleted" if result.removed else "unknown",
+            "operation": "deleted",
+            "host": host,
+            "removed": result.removed,
+        }
+
+    def _ssh_host_workload_health_check(self, operation: dict[str, Any]) -> dict[str, Any]:
+        _desired, host, workload, user, port = self._ssh_host_desired(operation)
+        result = self.ssh_host.health_check(
+            host=host, workload=workload, user=user, port=port
+        )
+        return {
+            "provider_ref": f"ssh://{user}@{host}",
+            "resource_external_id": workload,
+            "resource_name": workload,
+            "resource_type": "container",
+            "state": "active" if result.running else "stopped",
+            "health_status": result.status,
+            "operation": "read",
+            "host": host,
+            "running": result.running,
         }
 
     def _supabase_migration_apply(

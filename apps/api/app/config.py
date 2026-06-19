@@ -74,6 +74,14 @@ class Settings(BaseSettings):
     supabase_access_token: Optional[str] = Field(
         default=None, alias="BOSS_SUPABASE_ACCESS_TOKEN"
     )
+    # SSH host (bring-your-own / customer-provided compute) — Docker workload deploys.
+    # Gated like DO provisioning; private key held as a SecretRef, never in agent context.
+    ssh_host_deploy_allowed: bool = Field(
+        default=False, alias="BOSS_SSH_HOST_DEPLOY_ALLOWED"
+    )
+    ssh_host_private_key: Optional[str] = Field(
+        default=None, alias="BOSS_SSH_HOST_PRIVATE_KEY"
+    )
     digitalocean_default_image: str = Field(
         default="ubuntu-24-04-x64",
         alias="BOSS_DIGITALOCEAN_DEFAULT_IMAGE",

@@ -7,7 +7,7 @@ fields:
     type: string
   - name: provider
     type: enum
-    values: [digitalocean, cloudflare, supabase, openai, anthropic, google_ai, xai, github_actions, stripe, aws, gcp, azure, local]
+    values: [digitalocean, cloudflare, supabase, openai, anthropic, google_ai, xai, github_actions, stripe, aws, gcp, azure, local, ssh_host]
   - name: scope_type
     type: enum
     values: [org, workspace, project]
