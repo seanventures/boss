@@ -1,6 +1,6 @@
 # The Governed Coding Pipeline — BOSS's Default Pattern for All Coding Tasks
 
-Status: Pattern (v0.2 superset) defined in specpack; runtime wiring is the follow-on (see §9)
+Status: Pattern defined in specpack; runtime wiring is the follow-on (see §9)
 Date: 2026-06-19
 Owner: param
 Canonical shareable skill: `skills/boss-governed-coding-pipeline/SKILL.md`
@@ -62,7 +62,7 @@ fail), not instructions an agent forgets when context summarizes away.
 | Tool sandboxing | reuses the existing microvm/Docker sandbox |
 | Scale rigor to stakes | `governed_coding_pipeline_policy` risk tiers (the key knob) |
 
-## 4. The pipeline (workflow `governed_coding_pipeline`, v0.2 superset)
+## 4. The pipeline (workflow `governed_coding_pipeline`)
 
 ```
 spec_contract(pm) → architecture(cao) → design_critique(design_critic, loop) →
@@ -217,40 +217,31 @@ produce `leads_app.py` **and** `test_leads.py` and iterate to green — a self-g
 "after" makes a different role set the exam, a different role grade it, and the grade itself
 get audited.
 
-## 8. Prior art & alignment — Kaappu `agentic-sdlc`
+## 8. Design lineage — standard controls, made enforceable
 
-This pattern independently converges with `agentic-sdlc` (a Claude Code skill authored in the
-Kaappu repos, May 2026): a 10-phase multi-agent SDLC — requirements → architecture → design-
-critique loop → human design gate → planning → coder ‖ test-writer → code-review loop →
-security-review loop → integration validation → human merge gate. Same DNA: *separation of
-duties ("the agent that wrote the code is not the one approving it"), critique before code,
-bounded loops with iteration ceilings, human gates only where they pay, full audit trail,
-skip for trivial work.*
+The pipeline composes well-understood software-delivery controls and applies them to AI agents,
+with the difference that here they are **enforced**, not advisory:
 
-Phase mapping (now 1:1 in the v0.2 superset): Requirements→`spec_contract`,
-Architect→`architecture`, Design-Critic→`design_critique`, design gate→`design_signoff`,
-Test-Writer→`test_authoring`, Coder→`implementation`, Code-Reviewer→`adversarial_review`,
-Security-Reviewer→`security_review`, Integration-Validator→`integration_validation`,
-merge gate→`merge_decision`, bounded loops→`max_iterations_per_loop`, "when NOT to use"→risk-tier 0.
+- **Separation of duties** — the author of an artifact never approves it (the control behind
+  code review and SOX/SOC2 segregation).
+- **Critique before code** — defects are cheaper to fix in design than in implementation.
+- **Independent / test-first authorship** — tests encode intent, written by a different role.
+- **Adversarial and dedicated security review** — independent passes that try to break the change.
+- **Mutation grading** — measure whether the tests can actually catch bugs.
+- **Bounded feedback loops** — every loop has a ceiling, then escalates to a human decision.
+- **Human gates only where they pay** — design sign-off and pre-merge approval.
+- **Full audit trail** — every step leaves durable evidence.
 
-The two are the same pattern at different maturities — `agentic-sdlc` is **advisory** (markdown
-skill the model is asked to follow, artifacts under `.agentic-sdlc/`); this is **enforced**
-(durable BOSS primitives that fail closed: receipts, Decisions, budget, autonomy ladder).
-
-The v0.2 workflow is the **superset of both** — every stage of each, expressed as governed BOSS
-specs:
-- **Folded in from `agentic-sdlc`:** the design-critique loop (`design_critic`) + design
-  human-gate (`design_signoff`), a dedicated security-reviewer stage (`security_reviewer`), and
-  integration validation (`integration_validator`).
-- **From the BOSS side:** mutation grading, the fail-closed `QualityGate` object, formal
-  risk-tier scaling 0–3, dual-control, and native governance integration (receipts/Decisions/budget).
+The contribution is not the patterns themselves but making them a **control** rather than a
+recommendation: enforced by the BOSS kernel (receipts, Decisions, budget, dual-control) and
+scaled to risk.
 
 ## 9. Status & the follow-on (runtime wiring)
 
-**Done (this change):** the v0.2 superset is fully expressed in the specpack and registered as
-the **default** — roles (`adversarial_reviewer`, `design_critic`, `security_reviewer`,
+**Done (this change):** the pattern is fully expressed in the specpack and registered as the
+**default** — roles (`adversarial_reviewer`, `design_critic`, `security_reviewer`,
 `integration_validator`), object (`QualityGate`), skill set (`coding_pipeline.*`, 8 skills),
-policy (`governed_coding_pipeline_policy`), workflow (`governed_coding_pipeline` v0.2), and the
+policy (`governed_coding_pipeline_policy`), workflow (`governed_coding_pipeline`), and the
 shareable orchestrator (`skills/boss-governed-coding-pipeline/SKILL.md`) — all added to
 `core_v1`/`core_v2`. All 8 skills pass `validate_skill_spec`; all 4 roles pass
 `validate_role_spec`; both packs' installs resolve.

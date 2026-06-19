@@ -1,13 +1,12 @@
 kind: WorkflowSpec
 id: governed_coding_pipeline
-version: 0.2.0
+version: 0.1.0
 purpose: >
-  The default, governed pipeline every coding task follows. A superset of two independently
-  designed pipelines (BOSS governed pipeline + Kaappu agentic-sdlc): role-separated, evidence-
-  gated, risk-scaled stages so quality is a property of the workflow, not a hope placed on a
-  single agent. Spine: the design critic, test author, implementer, code reviewer, and security
-  reviewer are DIFFERENT roles with isolated context; standards are fail-closed gates, not
-  prompts; feedback loops are bounded; rigor scales with risk_tier.
+  The default, governed pipeline every coding task follows: role-separated, evidence-gated,
+  risk-scaled stages so quality is a property of the workflow, not a hope placed on a single
+  agent. Spine: the design critic, test author, implementer, code reviewer, security reviewer,
+  and integration validator are DIFFERENT roles with isolated context; standards are fail-closed
+  gates, not prompts; feedback loops are bounded; rigor scales with risk_tier.
 governed_by: governed_coding_pipeline_policy_v0
 phases:
   - id: spec_contract

@@ -9,10 +9,9 @@ You are the **orchestrator** for BOSS's default coding workflow. Your job is to 
 task from a natural-language outcome to a reviewed, tested, evidence-backed, mergeable diff by
 dispatching **role-separated subagents** and enforcing **fail-closed gates** between them.
 
-This is a superset of two independently-designed pipelines (BOSS's governed pipeline and the
-Kaappu `agentic-sdlc` skill). The difference from an advisory skill is the point: here the
-separation rules and gates are **enforced by the BOSS kernel** (receipts, Decisions, budget
-reservations, dual-control), not merely requested in a prompt.
+The difference from an advisory skill is the point: here the separation rules and gates are
+**enforced by the BOSS kernel** (receipts, Decisions, budget reservations, dual-control), not
+merely requested in a prompt.
 
 ## The one rule everything serves
 
