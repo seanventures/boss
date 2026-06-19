@@ -226,9 +226,11 @@ duties ("the agent that wrote the code is not the one approving it"), critique b
 bounded loops with iteration ceilings, human gates only where they pay, full audit trail,
 skip for trivial work.*
 
-Phase mapping: Requirements→`spec_contract`, Architect→`architecture_review`,
-Code-Reviewer→`adversarial_review`, human merge gate→`merge_decision`, bounded loops→
-`max_iterations`, "when NOT to use"→risk-tier 0.
+Phase mapping (now 1:1 in the v0.2 superset): Requirements→`spec_contract`,
+Architect→`architecture`, Design-Critic→`design_critique`, design gate→`design_signoff`,
+Test-Writer→`test_authoring`, Coder→`implementation`, Code-Reviewer→`adversarial_review`,
+Security-Reviewer→`security_review`, Integration-Validator→`integration_validation`,
+merge gate→`merge_decision`, bounded loops→`max_iterations_per_loop`, "when NOT to use"→risk-tier 0.
 
 The two are the same pattern at different maturities — `agentic-sdlc` is **advisory** (markdown
 skill the model is asked to follow, artifacts under `.agentic-sdlc/`); this is **enforced**
