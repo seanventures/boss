@@ -1771,6 +1771,45 @@ class ResourcePlaneService:
             raise ChangeSetNotFoundError("ChangeSet not found.")
         return self._serialize_changeset(row)
 
+    def _approval_broker(self):
+        """Lazily build the skill broker (reads skill specs from yaml; no DB)."""
+        if getattr(self, "_entitlement_broker", None) is None:
+            from .entitlements import EntitlementBrokerService
+
+            self._entitlement_broker = EntitlementBrokerService(self.settings)
+        return self._entitlement_broker
+
+    def _required_approvers_for_operations(
+        self, operations: list[dict[str, Any]]
+    ) -> list[str]:
+        """Union of the per-skill `policy.requires_approval` approver roles across a
+        ChangeSet's operations. Only LIST-valued requirements impose multi-approver
+        (dual-control) gating; string/absent values preserve single-approval behavior."""
+        try:
+            policies = {
+                skill["id"]: (skill.get("policy") or {})
+                for skill in self._approval_broker().list_skills()
+            }
+        except Exception:
+            policies = {}
+        required: set[str] = set()
+        for operation in operations or []:
+            skill_id = str(operation.get("skill_id") or "")
+            approvers = (policies.get(skill_id) or {}).get("requires_approval")
+            if isinstance(approvers, list):
+                for role in approvers:
+                    if isinstance(role, str) and role.strip():
+                        required.add(role.strip())
+        return sorted(required)
+
+    def required_approvers_for_changeset(
+        self, connection: Connection, changeset_id: str
+    ) -> list[str]:
+        """Approver roles required (dual-control) for a ChangeSet, derived from its
+        operations' skills. Empty list => no per-skill approver list (single-approval)."""
+        row = self._get_changeset_any_project(connection, changeset_id)
+        return self._required_approvers_for_operations(row.get("operations") or [])
+
     def approve_changeset(
         self,
         connection: Connection,
@@ -1781,18 +1820,66 @@ class ResourcePlaneService:
         row = self._get_changeset_any_project(connection, changeset_id)
         if row["status"] not in {"pending_approval", "policy_checked", "budget_reserved"}:
             raise ValueError(f"ChangeSet is {row['status']} and cannot be approved.")
+
+        # Dual-control: accumulate approvals and only finalize once every approver role
+        # named by the operations' skills has approved.
+        required = self._required_approvers_for_operations(row.get("operations") or [])
+        policy_result = dict(row.get("policy_result") or {})
+        approvals = list(policy_result.get("approvals") or [])
+        if actor not in approvals:
+            approvals.append(actor)
+        policy_result["required_approvers"] = required
+        policy_result["approvals"] = approvals
+        missing = [role for role in required if role not in set(approvals)]
+
+        if missing:
+            connection.execute(
+                text(
+                    """
+                    UPDATE changesets
+                    SET policy_result = CAST(:policy_result AS JSONB),
+                        updated_at = now()
+                    WHERE id = :changeset_id
+                    """
+                ),
+                {
+                    "changeset_id": changeset_id,
+                    "policy_result": json.dumps(policy_result),
+                },
+            )
+            emit_event(
+                connection,
+                row["project_id"],
+                "changeset.approval_recorded",
+                actor,
+                "changeset",
+                changeset_id,
+                {
+                    "approvals": approvals,
+                    "required_approvers": required,
+                    "missing_approvers": missing,
+                },
+            )
+            return self.get_changeset(connection, row["project_id"], changeset_id)
+
+        final_approver = ", ".join(approvals) if required else actor
         connection.execute(
             text(
                 """
                 UPDATE changesets
                 SET status = 'approved',
-                    approved_by = :actor,
+                    approved_by = :approved_by,
                     approved_at = now(),
+                    policy_result = CAST(:policy_result AS JSONB),
                     updated_at = now()
                 WHERE id = :changeset_id
                 """
             ),
-            {"changeset_id": changeset_id, "actor": actor},
+            {
+                "changeset_id": changeset_id,
+                "approved_by": final_approver,
+                "policy_result": json.dumps(policy_result),
+            },
         )
         if row["approval_decision_id"]:
             connection.execute(
@@ -1816,7 +1903,11 @@ class ResourcePlaneService:
             actor,
             "changeset",
             changeset_id,
-            {"approval_decision_id": row["approval_decision_id"]},
+            {
+                "approval_decision_id": row["approval_decision_id"],
+                "approvals": approvals,
+                "required_approvers": required,
+            },
         )
         return self.get_changeset(connection, row["project_id"], changeset_id)
 

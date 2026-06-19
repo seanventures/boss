@@ -6260,12 +6260,37 @@ def approve_changeset(
 ) -> ChangeSetSummary:
     with begin(engine) as connection:
         project_id = project_id_for_changeset(connection, changeset_id)
-        require_project_actor(
-            connection,
-            project_id,
-            payload.actor,
-            "providerops_manage",
+        required_roles = resource_plane.required_approvers_for_changeset(
+            connection, changeset_id
         )
+        if required_roles:
+            # Dual-control: only an active member holding one of the named approver
+            # roles may approve (no generic providerops_manage shortcut).
+            try:
+                members.require_member(
+                    connection,
+                    project_id,
+                    payload.actor,
+                    role_keys_any=required_roles,
+                )
+            except (
+                ProjectMemberNotFoundError,
+                ProjectMemberPermissionError,
+            ) as error:
+                record_policy_denial(
+                    project_id, payload.actor, "changeset_approve", str(error)
+                )
+                raise HTTPException(status_code=403, detail=str(error)) from error
+            require_authenticated_actor_binding(
+                project_id, payload.actor, "changeset_approve"
+            )
+        else:
+            require_project_actor(
+                connection,
+                project_id,
+                payload.actor,
+                "providerops_manage",
+            )
         try:
             item = resource_plane.approve_changeset(
                 connection,

@@ -250,3 +250,19 @@ All must be ✅ before sending the PRD to the client:
   changeset gate appears to enforce a generic `requires_approval` boolean, not the per-skill
   multi-approver list. For security-sensitive deploys a customer expecting two distinct
   approvers would not get dual control. Worth a fix/issue in BOSS core.
+
+- 2026-06-19 — **Dual-control FIXED** (decision: enforce true two-person rule for all
+  skills). `resource_plane.approve_changeset` now accumulates approvals in `policy_result`
+  and only finalizes (`approved`) once every role named in the operations' skills'
+  `requires_approval` lists has approved; partial approval stays `pending_approval` and apply
+  stays blocked. The approve endpoint (`main.py`) now authorizes a changeset's *named*
+  approver roles via membership+role (no generic `providerops_manage` shortcut) — which both
+  lets `release_manager`/`cto` provide the second approval AND tightens it (a generic
+  providerops manager can't satisfy a dual-control gate). A second gap surfaced and was also
+  fixed: `release_manager` lacked `providerops_manage`, so dual-control on
+  `[ceo, release_manager]` skills (DO app / Cloudflare / Supabase deploys) was previously
+  uncompletable. Tests: updated the provider/deployment changeset tests to supply both
+  approvers + a `half_apply` assertion proving one approval can't apply. Full suite: the only
+  failures are 7 pre-existing, environment-caused (`.env` has real creds, so
+  `*_blocks_without_credentials` tests invert) + known ordering flakiness — identical with
+  and without this change (verified by stash diff). No regressions introduced.

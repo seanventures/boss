@@ -5370,9 +5370,22 @@ def test_provider_changeset_requires_approval_and_receipts_failed_actuation(clie
     )
     assert blocked_apply.status_code == 422
 
-    approved = client.post(
+    # Dual-control: droplet.create requires [ceo, cto]; first approval is partial.
+    partial = client.post(
         f"/v1/changesets/{changeset['id']}/approve",
         json={"actor": "ceo"},
+    )
+    assert partial.status_code == 200
+    assert partial.json()["status"] == "pending_approval"
+    # Security property: one of two required approvers is not enough to apply.
+    half_apply = client.post(
+        f"/v1/changesets/{changeset['id']}/apply",
+        json={"actor": "ceo"},
+    )
+    assert half_apply.status_code == 422
+    approved = client.post(
+        f"/v1/changesets/{changeset['id']}/approve",
+        json={"actor": "cto"},
     )
     assert approved.status_code == 200
     assert approved.json()["status"] == "approved"
@@ -5568,9 +5581,14 @@ def test_provider_changeset_digitalocean_droplet_create_succeeds_with_receipts(
         )
         assert created.status_code == 201
         changeset = created.json()
+        # Dual-control: droplet.create requires [ceo, cto].
         client.post(
             f"/v1/changesets/{changeset['id']}/approve",
             json={"actor": "ceo"},
+        )
+        client.post(
+            f"/v1/changesets/{changeset['id']}/approve",
+            json={"actor": "cto"},
         )
         applied = client.post(
             f"/v1/changesets/{changeset['id']}/apply",
@@ -6220,9 +6238,14 @@ def test_provider_changeset_supabase_project_create_uses_secret_ref_without_pers
         )
         assert created.status_code == 201
         changeset = created.json()
-        approved = client.post(
+        # Dual-control: supabase.project.create requires [ceo, cto].
+        client.post(
             f"/v1/changesets/{changeset['id']}/approve",
             json={"actor": "ceo"},
+        )
+        approved = client.post(
+            f"/v1/changesets/{changeset['id']}/approve",
+            json={"actor": "cto"},
         )
         assert approved.status_code == 200
         applied = client.post(
@@ -7265,9 +7288,14 @@ def test_deployment_run_digitalocean_app_apply_marks_deployed(
         )
         assert planned.status_code == 201
         run = planned.json()
-        approved = client.post(
+        # Dual-control: deployment skills require [ceo, release_manager].
+        client.post(
             f"/v1/changesets/{run['changeset_id']}/approve",
             json={"actor": "ceo"},
+        )
+        approved = client.post(
+            f"/v1/changesets/{run['changeset_id']}/approve",
+            json={"actor": "release_manager"},
         )
         assert approved.status_code == 200
         applied = client.post(
@@ -7434,9 +7462,14 @@ def test_deployment_run_cloudflare_worker_apply_marks_deployed(
         )
         assert planned.status_code == 201
         run = planned.json()
-        approved = client.post(
+        # Dual-control: deployment skills require [ceo, release_manager].
+        client.post(
             f"/v1/changesets/{run['changeset_id']}/approve",
             json={"actor": "ceo"},
+        )
+        approved = client.post(
+            f"/v1/changesets/{run['changeset_id']}/approve",
+            json={"actor": "release_manager"},
         )
         assert approved.status_code == 200
         applied = client.post(
@@ -7614,9 +7647,14 @@ def test_deployment_run_cloudflare_pages_apply_marks_deployed(
             if item["id"] == run["changeset_id"]
         )
         assert changeset["operations"][0]["skill_id"] == "cloudflare.pages.deploy"
-        approved = client.post(
+        # Dual-control: deployment skills require [ceo, release_manager].
+        client.post(
             f"/v1/changesets/{run['changeset_id']}/approve",
             json={"actor": "ceo"},
+        )
+        approved = client.post(
+            f"/v1/changesets/{run['changeset_id']}/approve",
+            json={"actor": "release_manager"},
         )
         assert approved.status_code == 200
         applied = client.post(
@@ -7781,9 +7819,14 @@ def test_deployment_run_supabase_migration_apply_marks_deployed(
         )
         assert planned.status_code == 201
         run = planned.json()
-        approved = client.post(
+        # Dual-control: deployment skills require [ceo, release_manager].
+        client.post(
             f"/v1/changesets/{run['changeset_id']}/approve",
             json={"actor": "ceo"},
+        )
+        approved = client.post(
+            f"/v1/changesets/{run['changeset_id']}/approve",
+            json={"actor": "release_manager"},
         )
         assert approved.status_code == 200
         applied = client.post(
