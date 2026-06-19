@@ -8,12 +8,13 @@ Canonical shareable skill: `skills/boss-governed-coding-pipeline/SKILL.md`
 ## 1. Why this exists
 
 Frontier models are commoditized — everyone has them. The bottleneck in agentic engineering
-is no longer *generating* code; it is *establishing trust* in generated code. The failure mode
-the whole field warns about is **correlated error**: when one agent (one context) writes the
-code, writes the tests, and reviews the result, the tests and the review inherit the same
-misunderstanding that produced the bug. As the Salesforce piece puts it, *"the tests inherit
-whatever the agent misunderstood,"* and *"the reviewer faces a large, fully formed diff with
-none of the shared context."*
+is no longer *generating* code; it is *establishing trust* in generated code. The core failure
+mode is **correlated error**: when one agent (one context) writes the code, writes the tests,
+and reviews the result, the tests and the review inherit the same misunderstanding that
+produced the bug — the suite green-lights the very defect it should catch, and an after-the-fact
+reviewer faces a large, fully formed diff with none of the shared context a human accrues while
+writing. This is the **separation-of-duties** principle — an author must not audit their own
+work, the same control behind code review and SOX/SOC2 segregation — applied to AI agents.
 
 BOSS's moat is therefore not "an orchestrator" (ADK/Azure/LangGraph all ship those). It is
 **governed, durable, auditable agentic engineering**: quality made *structural and enforced*
