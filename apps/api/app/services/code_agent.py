@@ -91,7 +91,7 @@ class CodeAgent(Protocol):
         """Run one isolated, role-scoped invocation against an existing workdir.
         Returns {summary, usage, cost_usd_micros, turns, model}. The role prompt is the
         guidance; the model impersonates the role. read_only stages must not edit files;
-        model overrides which model runs this step (cheap vs strong routing)."""
+        model overrides which model runs this step (low-cost vs strong routing)."""
         ...
 
 
@@ -216,7 +216,7 @@ class ClaudeCodeAgent:
         """Run a single role-scoped agent invocation against an existing workdir and
         return {summary, usage, cost_usd_micros, turns, model}. Used by the governed
         pipeline to dispatch each step as an ISOLATED context — a fresh `claude -p` process
-        with no shared session state between roles. `model` routes cheap vs strong."""
+        with no shared session state between roles. `model` routes low-cost vs strong."""
         data = self._invoke(prompt, cwd, read_only=read_only, model=model)
         usage, cost_micros = self._usage(data, self.settings)
         return {

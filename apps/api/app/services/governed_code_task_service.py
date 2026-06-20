@@ -32,7 +32,8 @@ from .code_agent import make_code_agent
 from .code_task_service import _fail, _release, _set_phase, load_code_task_run
 from .core import emit_event, make_id
 from .github_app_adapter import GitHubAppAdapter
-from .pipeline_profiles import infer_risk_tier, model_for_step, resolve_profile
+from .pipeline_profile_service import resolve_for_run
+from .pipeline_profiles import infer_risk_tier, model_for_step
 from .sandbox import SandboxError
 from .sandbox_provider import LocalSubprocessProvider
 from .software_factory import SoftwareFactoryService
@@ -183,9 +184,10 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
     title = run["title"]
     instructions = spec.get("instructions", "")
     criteria = spec.get("acceptance_criteria", [])
-    # Cost/rigor dial: pick the profile (per-task override > project setting) and infer the
-    # risk tier, clamped to the profile's range. This scales effort to the work.
-    profile = resolve_profile(spec.get("profile") or settings.pipeline_profile)
+    # Cost/rigor dial: resolve the profile (per-task override > project default > edition
+    # default) and infer the risk tier, clamped to the profile's range. Scales effort to work.
+    with begin(engine) as c:
+        profile = resolve_for_run(c, project_id, spec.get("profile"), settings)
     risk_tier = infer_risk_tier({**spec, "title": title}, profile)
 
     with begin(engine) as c:
@@ -228,7 +230,7 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
         def _model_for(step):
             cls = model_for_step(profile, step)
             picked = (settings.code_agent_strong_model if cls == "strong"
-                      else settings.code_agent_cheap_model)
+                      else settings.code_agent_low_cost_model)
             return picked or None  # None => the engine's default model
 
         r1 = {"cost_usd_micros": 0, "summary": "", "usage": {}, "model": None}

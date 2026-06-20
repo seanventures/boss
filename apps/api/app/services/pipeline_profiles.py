@@ -1,7 +1,7 @@
 """Pipeline cost/rigor profiles — the dial that scales effort to the work.
 
 A profile picks how much of the governed pipeline runs and which models run it, so a prototype
-runs cheap and a production change runs strict. AI budget is finite; this turns BOSS's built-in
+runs low-cost and a production change runs strict. AI budget is finite; this turns BOSS's built-in
 efficiency into a customer-tunable setting instead of a fixed cost.
 
 Phase 1: profiles + risk-tier inference + per-step cost accounting. The model-routing and
@@ -18,14 +18,14 @@ SENSITIVE_MARKERS = (
     "schema change", "deploy", "infra", "permission", "access control",
 )
 
-# Each profile clamps the inferred risk tier, hints a model per step (cheap|strong), and toggles
+# Each profile clamps the inferred risk tier, hints a model per step (low_cost|strong), and toggles
 # the efficiency levers wired in Phase 2.
 PROFILES: dict[str, dict] = {
     "lean": {
-        "label": "Lean — cheapest, for prototypes and throwaway work",
+        "label": "Lean — lowest cost, for prototypes and throwaway work",
         "tier_floor": 0,
         "tier_cap": 1,
-        "model": {"default": "cheap"},
+        "model": {"default": "low_cost"},
         "caching": True,
         "parallel_checks": True,
     },
@@ -34,7 +34,7 @@ PROFILES: dict[str, dict] = {
         "tier_floor": 0,
         "tier_cap": 3,
         "model": {
-            "default": "cheap",
+            "default": "low_cost",
             "implement": "strong",
             "review_code": "strong",
             "security_check": "strong",
@@ -83,7 +83,7 @@ def infer_risk_tier(spec: dict, profile: dict) -> int:
     else:
         tier = 3 if sensitive else 2
     clamped = max(int(profile.get("tier_floor", 0)), min(int(profile.get("tier_cap", 3)), tier))
-    # Safety override: a sensitive change never runs below standard rigor, even in a cheap
+    # Safety override: a sensitive change never runs below standard rigor, even in a low-cost
     # profile — cost caps must not silently de-risk auth/payments/secrets/migrations/deploys.
     if sensitive:
         clamped = max(clamped, 2)
@@ -91,6 +91,6 @@ def infer_risk_tier(spec: dict, profile: dict) -> int:
 
 
 def model_for_step(profile: dict, step: str) -> str:
-    """Which model class (cheap|strong) a step should use under this profile."""
+    """Which model class (low_cost|strong) a step should use under this profile."""
     routing = profile.get("model", {}) or {}
     return routing.get(step, routing.get("default", "strong"))

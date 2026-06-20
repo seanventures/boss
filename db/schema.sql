@@ -1674,6 +1674,24 @@ CREATE TABLE IF NOT EXISTS quality_gates (
 CREATE INDEX IF NOT EXISTS idx_quality_gates_run ON quality_gates(code_task_run_id);
 CREATE UNIQUE INDEX IF NOT EXISTS uq_quality_gates_run ON quality_gates(project_id, code_task_run_id);
 
+-- Custom pipeline cost/rigor profiles per project (presets live in code; these are overrides
+-- and customer-defined profiles). is_default marks the project's chosen profile.
+CREATE TABLE IF NOT EXISTS pipeline_profiles (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  label TEXT,
+  tier_floor INTEGER NOT NULL DEFAULT 0,
+  tier_cap INTEGER NOT NULL DEFAULT 3,
+  model_routing JSONB NOT NULL DEFAULT '{}'::jsonb,
+  caching BOOLEAN NOT NULL DEFAULT true,
+  parallel_checks BOOLEAN NOT NULL DEFAULT true,
+  is_default BOOLEAN NOT NULL DEFAULT false,
+  created_by TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_pipeline_profiles_name ON pipeline_profiles(project_id, name);
+
 CREATE TABLE IF NOT EXISTS meeting_roles (
   id TEXT PRIMARY KEY,
   project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
