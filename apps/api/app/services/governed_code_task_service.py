@@ -443,7 +443,7 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
                 branch_name=f"boss/code/{run_id}",
                 summary=(f"Governed pipeline: tests by qa, impl by SE, adversarial review SURVIVED. "
                          f"QualityGate {qg_id} PASS.\n\n{r2.get('summary','')}"),
-                files=sandbox.diff(), created_by_job_id=job_id)
+                files=sandbox.diff(), created_by_job_id=job_id, actual_usd_micros=cost)
 
         status = proposal.get("status")
         if status not in ("created", "succeeded"):

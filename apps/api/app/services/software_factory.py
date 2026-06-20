@@ -1298,6 +1298,7 @@ class SoftwareFactoryService:
         files: list[FileChange],
         created_by_job_id: Optional[str] = None,
         agent_module_id: Optional[str] = None,
+        actual_usd_micros: Optional[int] = None,
     ) -> dict:
         reservation = self.budget.assert_active_reservation(
             connection, project_id, reservation_id
@@ -1782,7 +1783,7 @@ class SoftwareFactoryService:
             "tool",
             "github.pull_request.create",
             int(reservation["amount_usd_micros"]),
-            None,
+            actual_usd_micros,
         )
         emit_event(
             connection,
