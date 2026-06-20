@@ -4,8 +4,10 @@ How BOSS builds code: every coding task runs through plain, role-separated steps
 agents write, test, and review — with fail-closed checks, full receipts, a cost/rigor dial the
 customer controls, and any model behind it.
 
-Status: core runtime **live** (model-agnostic, proven on Claude + Azure gpt-4o); cost-control
-feature **complete** (runtime + API + UI). Date: 2026-06-19. Owner: param.
+Status: runtime **live** end-to-end at tier ≥ 2 — design phase + test-first build + concurrent
+review panel (mutation + security + full-suite) + fail-closed gate, model-agnostic (proven on
+Claude + Azure gpt-4o). Cost-control feature **complete** (runtime + API + UI). The human
+approve-plan gate is the remaining increment (§11). Date: 2026-06-19. Owner: param.
 Canonical shareable skill: `skills/boss-governed-coding-pipeline/SKILL.md`.
 Interactive diagrams (fullscreen zoom + drag-to-pan): open `docs/product/pipeline-diagrams.html`
 in a browser.
@@ -293,18 +295,34 @@ dual-control), scaled to risk.
 
 ## 11. Status & roadmap
 
-**Live today (runtime, model-agnostic):** at tier ≥ 2 the runner executes a full review panel —
-`write tests → implement → review code → security check → check tests (mutation) → run all
-tests` → fail-closed gate — on any model (proven on Claude and Azure gpt-4o), with per-step cost
-recorded and the PR gated. The three read-only checks (review ∥ security ∥ full-suite) run
-**concurrently**, bounded by a lane-capacity limit (`BOSS_CODE_AGENT_MAX_CONCURRENCY`); the
-mutation check is serial (it edits then restores the workdir). So `strict` genuinely runs ~5
-agents (~$0.06) vs `balanced`'s 3 (~$0.04). The adversarial review judges against the task's
-acceptance criteria (defaults to *survived*; no refute-first false positives). **Cost-control
-feature complete:** profiles, tier inference, per-step model routing, edition gating, and the UI.
+**Live today (runtime, model-agnostic).** At tier ≥ 2 the runner executes the pipeline end to end
+as separate agents — on any model (proven on Claude and Azure gpt-4o), with per-step cost recorded
+and the PR gated:
 
-**Next increment (Wire-Phase 2/3):** wire the front of the pipeline (`standards` from the repo,
-`spec`, `refine`, `plan`/`review plan` with the design sign-off gate, `consistency check`) and
-then `tasks`/work-graph (parallel sub-tasks). Remaining efficiency lever: **prompt caching** of
-the stable repo context across steps. See `docs/product/PIPELINE_WIRING_PHASE1.md` and
-`docs/product/PIPELINE_COST_CONTROL.md`.
+```
+standards → spec → plan → review plan        (design phase — spec-driven; refined spec + plan
+                                              feed the coding steps)
+  → write tests → implement                  (test-first; the implementer can't touch the tests)
+  → ┌ review code ┐
+    ├ security    ┤  run CONCURRENTLY (read-only)   → check tests (mutation, serial)
+    └ run all     ┘                                  → run all tests
+  → final gate (FAILS CLOSED) → PR
+```
+
+- **Design phase (Wire-Phase 2):** `standards → spec → plan → review plan` run before any code;
+  the refined spec + plan are fed forward so write-tests/implement are spec-driven. (The human
+  *approve plan* sign-off is Wire-Phase 2b; today `review plan` records a `PLAN: OK/REVISE` note.)
+- **Review panel (Wire-Phase 1/1b):** the three read-only checks (`review code` ∥ `security` ∥
+  `run all tests`) run **concurrently**, bounded by a lane-capacity limit
+  (`BOSS_CODE_AGENT_MAX_CONCURRENCY`); the **mutation** check (`check tests`) is serial — it plants
+  a bug, confirms the tests fail, then restores the real code. The adversarial review judges
+  against the task's acceptance criteria (defaults to *survived* — no refute-first false positives).
+- So `strict` genuinely runs **~9 steps (~$0.06)** vs `balanced`'s 3 (~$0.04); the tiers and custom
+  profiles produce a real cost/rigor difference. Budget settles at **actual** model spend.
+- **Cost-control feature complete:** profiles, tier inference, per-step model routing, edition
+  gating, and the console UI.
+
+**Next increment (Wire-Phase 2b / 3):** the human **approve plan** sign-off gate (a Decision that
+blocks before code), `consistency check`, and `tasks`/work-graph (parallel sub-tasks). Remaining
+efficiency lever: **prompt caching** of the stable repo context across steps. See
+`docs/product/PIPELINE_WIRING_PHASE1.md` and `docs/product/PIPELINE_COST_CONTROL.md`.
