@@ -59,7 +59,7 @@ flowchart LR
 1. **A governed, role-separated pipeline** — different agents write, test, and review; quality is
    a property of the workflow, not a hope placed on one agent (§3).
 2. **A cost/rigor dial** — profiles (lean / balanced / strict / custom) scale *how much* of the
-   pipeline runs and *which models* run it, so prototypes are cheap and production is strict (§4).
+   pipeline runs and *which models* run it, so prototypes run low-cost and production runs strict (§4).
 3. **Model-agnostic execution** — the steps are guidance any model impersonates; route per step
    (low-cost vs strong), on Claude, OpenAI, Azure, or local (§5).
 
@@ -144,7 +144,7 @@ flowchart TD
 
 ## 4. The cost/rigor dial — tunable efficiency
 
-The same pipeline can be cheap or strict. A **profile** scales *how much runs* and *which models
+The same pipeline can run low-cost or strict. A **profile** scales *how much runs* and *which models
 run it*, and the risk tier is inferred per task and clamped to the profile's range.
 
 ```mermaid
@@ -164,7 +164,7 @@ flowchart LR
 | Profile | For | Tier range | Models | Relative cost |
 |---|---|---|---|---|
 | **Lean** | prototypes, throwaway | 0–1 | low-cost everywhere | ≈ 1× |
-| **Balanced** (default) | normal work | 0–3 (inferred) | low-cost for cheap steps, strong for implement/review/security | ≈ 1.5–3× |
+| **Balanced** (default) | normal work | 0–3 (inferred) | low-cost for low-cost steps, strong for implement/review/security | ≈ 1.5–3× |
 | **Strict** | production / enterprise | 2–3 | strong everywhere, two-person at top | ≈ 4–8× |
 | **Custom** (enterprise) | your call | any | any per-step | — |
 
@@ -200,7 +200,7 @@ vendor, and they place strong models where reasoning is hard and low-cost models
 | Benefit | How this feature delivers it |
 |---|---|
 | **Trustworthy AI code** | a different agent writes the tests, another tries to break the change, a separate pass checks security — correlated error is broken by construction |
-| **Pay for rigor only where it's worth it** | the cost/rigor dial: prototypes run ≈1×, production runs strict; the average workload stays cheap |
+| **Pay for rigor only where it's worth it** | the cost/rigor dial: prototypes run ≈1×, production runs strict; the average workload stays low-cost |
 | **No "expensive surprise"** | trials default to Lean; a visible per-tier cost comparison in the console; effort auto-scales to risk |
 | **No vendor lock-in** | model-agnostic — Claude, OpenAI, Azure, or local; low-cost vs strong per step |
 | **Auditable & compliant** | every step leaves a receipt; the final gate fails closed; two-person sign-off on high-risk; a replayable evidence trail (the spec, tests, reviews, costs) |
