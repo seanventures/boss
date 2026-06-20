@@ -44,17 +44,34 @@ function ProfileCard({
         minWidth: 250,
       }}
     >
-      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-        <strong style={{ fontSize: 15, textTransform: "capitalize", color: "var(--ink)" }}>{p.name}</strong>
-        {isDefault && (
-          <span style={{ fontSize: 10.5, fontWeight: 600, color: "#0d1117", background: tone, padding: "1px 8px", borderRadius: 999 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, minHeight: 28 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <strong style={{ fontSize: 15, textTransform: "capitalize", color: "var(--ink)" }}>{p.name}</strong>
+          {p.custom && (
+            <span style={{ fontSize: 10.5, color: tone, border: `1px solid ${tone}`, padding: "0 7px", borderRadius: 999 }}>
+              custom
+            </span>
+          )}
+        </div>
+        {isDefault ? (
+          <span style={{ fontSize: 10.5, fontWeight: 700, color: "#0d1117", background: tone, padding: "3px 11px", borderRadius: 999, letterSpacing: 0.3 }}>
             DEFAULT
           </span>
-        )}
-        {p.custom && (
-          <span style={{ fontSize: 10.5, color: tone, border: `1px solid ${tone}`, padding: "0 7px", borderRadius: 999 }}>
-            custom
-          </span>
+        ) : (
+          <form action={setPipelineDefaultAction}>
+            <input type="hidden" name="project_id" value={projectId} />
+            <input type="hidden" name="name" value={p.name} />
+            <button
+              type="submit"
+              style={{
+                fontSize: 11.5, fontWeight: 600, padding: "4px 12px", borderRadius: 999,
+                border: "1px solid var(--accent-line)", background: "var(--accent-soft)",
+                color: "var(--accent-text)", cursor: "pointer", whiteSpace: "nowrap",
+              }}
+            >
+              Set default
+            </button>
+          </form>
         )}
       </div>
       <div style={{ color: "var(--muted)", fontSize: 12, margin: "5px 0 12px" }}>{p.label}</div>
@@ -78,22 +95,6 @@ function ProfileCard({
         </div>
       </div>
 
-      {!isDefault && (
-        <form action={setPipelineDefaultAction} style={{ marginTop: 14 }}>
-          <input type="hidden" name="project_id" value={projectId} />
-          <input type="hidden" name="name" value={p.name} />
-          <button
-            type="submit"
-            style={{
-              fontSize: 12.5, padding: "6px 13px", borderRadius: 8,
-              border: "1px solid var(--border-strong)", background: "var(--surface-3)",
-              color: "var(--ink)", cursor: "pointer",
-            }}
-          >
-            Set as default
-          </button>
-        </form>
-      )}
     </div>
   );
 }
