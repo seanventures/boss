@@ -130,6 +130,28 @@ Risk jumps to **high** automatically when the change touches login, payments, se
 migrations, or deploys. The rule holds at every level: whoever writes something doesn't approve
 it, the final gate fails closed, every step leaves a receipt, loops are bounded.
 
+## Cost vs. rigor — the profile dial
+
+The same pipeline can run cheap or strict. A **profile** scales how many steps run and which
+models run them; the risk tier is inferred per task and clamped to the profile's range.
+
+| Profile | For | Tier range | Models | Relative cost |
+|---|---|---|---|---|
+| **lean** | prototypes, throwaway | 0–1 | low-cost everywhere | ≈ 1× |
+| **balanced** (default) | normal work | 0–3 | low-cost for cheap steps, strong for implement/review/security | ≈ 1.5–3× |
+| **strict** | production / enterprise | 2–3 | strong everywhere, two-person at top | ≈ 4–8× |
+| **custom** (enterprise) | your call | any | any per-step | — |
+
+- **Tier 0 → 1 agent call, tier 1 → 2, tier 2 → 3** — fewer steps = lower cost. (Proven: same
+  task on gpt-4o, lean $0.0261 / 2 steps vs strict $0.0378 / 3 steps; strict's extra review
+  caught a problem and blocked.)
+- **Per-step model routing**: low-cost model for cheap steps (`write tests`, `check tests`),
+  strong for the hard ones (`implement`, `review code`, `security check`).
+- **Safety override**: sensitive changes (auth/payments/secrets/migrations/deploys) never run
+  below standard rigor, even under lean — a cost dial must not silently de-risk.
+- **Editions**: community uses the lean/balanced/strict presets and defaults new projects to
+  lean; enterprise can define custom profiles. Set it per project, or override per task.
+
 ## Model-agnostic
 
 The step descriptions are the *guidance*; any model can play each role. BOSS resolves the agent
@@ -139,8 +161,12 @@ shows which model ran each step.
 ## Status
 
 Defined and registered as the default (workflow `governed_coding_pipeline`, skills
-`coding_pipeline.*`, policy `governed_coding_pipeline_policy`, object `Standards`). The runtime
-today runs the core separation live (write tests → implement → review code → fail-closed gate),
-proven on both Claude and OpenAI/Azure. Wiring the remaining steps (refine, plan review,
-security, check tests, run all tests, consistency) into the live runner is the next increment.
-See docs/product/GOVERNED_CODING_PIPELINE.md.
+`coding_pipeline.*`, policy `governed_coding_pipeline_policy`, objects `Standards` +
+`QualityGate`). The runtime today runs the core separation live (write tests → implement →
+review code → fail-closed gate), model-agnostic and **proven on both Claude and Azure gpt-4o**,
+with per-step cost recorded and the PR gated. The **cost-control dial is complete** — profiles,
+tier inference, per-step model routing, edition gating, and a console UI with a per-tier cost
+comparison. Wiring the remaining steps (refine, plan review, security, check tests, run all
+tests, consistency) into the live runner — which also unlocks prompt caching + parallel checks —
+is the next increment. See `docs/product/GOVERNED_CODING_PIPELINE.md` and
+`docs/product/PIPELINE_COST_CONTROL.md`.
