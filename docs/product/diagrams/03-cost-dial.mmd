@@ -1,0 +1,11 @@
+flowchart LR
+    A["Profile<br/>lean · balanced · strict · custom"] --> C
+    B["Task risk<br/>(inferred; sensitive=high)"] --> C
+    C{{"Resolved tier (0–3)"}} --> D["Steps that run<br/>tier 0 = 1 agent · tier 2 = 3+"]
+    C --> E["Model per step<br/>low_cost vs strong"]
+    D --> F([Cost & latency])
+    E --> F
+    classDef x fill:#e6f3ff,stroke:#333,color:#000
+    classDef y fill:#fff3cd,stroke:#333,color:#000
+    class A,B,D,E x
+    class C y

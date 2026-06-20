@@ -7,10 +7,11 @@ customer controls, and any model behind it.
 Status: runtime **live** end-to-end at tier ≥ 2 — design phase + test-first build + concurrent
 review panel (mutation + security + full-suite) + fail-closed gate, model-agnostic (proven on
 Claude + Azure gpt-4o). Cost-control feature **complete** (runtime + API + UI). The human
-approve-plan gate is the remaining increment (§11). Date: 2026-06-19. Owner: param.
+approve-plan gate is the remaining increment (§11). Date: 2026-06-19.
 Canonical shareable skill: `skills/boss-governed-coding-pipeline/SKILL.md`.
-Interactive diagrams (fullscreen zoom + drag-to-pan): open `docs/product/pipeline-diagrams.html`
-in a browser.
+Diagrams render inline on GitHub; each also has a **"View as zoomable image →"** link to a
+standalone SVG (`docs/product/diagrams/`) for infinite vector zoom + fullscreen. Re-render with
+`python3 docs/product/build_diagrams.py`.
 
 ---
 
@@ -59,6 +60,8 @@ flowchart LR
     class DIAL b
     class G,OUT c
 ```
+
+📂 **[View as zoomable image →](./diagrams/01-value-flow.svg)** _(opens in a new tab — use your browser's zoom / scroll-wheel + fullscreen)_
 
 1. **A governed, role-separated pipeline** — different agents write, test, and review; quality is
    a property of the workflow, not a hope placed on one agent (§3).
@@ -123,6 +126,8 @@ flowchart TD
     class Start,Done dn
 ```
 
+📂 **[View as zoomable image →](./diagrams/02-pipeline.svg)** _(opens in a new tab — use your browser's zoom / scroll-wheel + fullscreen)_
+
 **What each step does** (internal harness names — the AI agents use them; never developer-facing):
 
 | Step | Plain meaning |
@@ -164,6 +169,8 @@ flowchart LR
     class A,B,D,E x
     class C y
 ```
+
+📂 **[View as zoomable image →](./diagrams/03-cost-dial.svg)** _(opens in a new tab — use your browser's zoom / scroll-wheel + fullscreen)_
 
 | Profile | For | Tier range | Models | Relative cost |
 |---|---|---|---|---|

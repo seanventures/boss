@@ -1,0 +1,12 @@
+flowchart LR
+    T([Coding task]) --> DIAL{{"Cost/rigor dial<br/>(profile + risk)"}}
+    DIAL --> P["Governed pipeline<br/>role-separated steps"]
+    P --> M["Any model<br/>(Claude · OpenAI · Azure · local)"]
+    P --> G[("Fail-closed gate<br/>+ receipts")]
+    G --> OUT([Mergeable change<br/>+ evidence trail])
+    classDef a fill:#e6f3ff,stroke:#333,color:#000
+    classDef b fill:#fff3cd,stroke:#333,color:#000
+    classDef c fill:#d4edda,stroke:#333,color:#000
+    class P,M a
+    class DIAL b
+    class G,OUT c
