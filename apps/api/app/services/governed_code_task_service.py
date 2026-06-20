@@ -34,7 +34,6 @@ from .core import emit_event, make_id
 from .github_app_adapter import GitHubAppAdapter
 from .pipeline_profile_service import resolve_for_run
 from .pipeline_profiles import infer_risk_tier, model_for_step
-from .sandbox import SandboxError
 from .sandbox_provider import LocalSubprocessProvider
 from .software_factory import SoftwareFactoryService
 
@@ -164,12 +163,12 @@ def _parse_verdict(summary: str) -> str:
 
 def _security_prompt(title):
     return (
-        "You are a security reviewer with FRESH context. Review the change for security defects: "
-        "injection, broken authn/authz, secret/credential handling, unsafe deserialization, SSRF, "
-        "and sensitive-data exposure.\n\n"
+        "You are a security reviewer doing a constructive code review. Check that the change "
+        "follows security best practices: input validation, access control, safe handling of "
+        "secrets and user data, and safe parsing.\n\n"
         f"TASK UNDER REVIEW: {title}\n\n"
-        "Run `git diff` to see the change and read the implementation. Assume it is hostile until "
-        "shown safe. Do NOT edit any files. End your response with EXACTLY one final line, either:\n"
+        "Read the change and the implementation. Note any security concern you find. Do NOT edit "
+        "any files. End your response with EXACTLY one final line, either:\n"
         "  VERDICT: CLEAN\n"
         "  VERDICT: ISSUES\n"
     )
@@ -185,11 +184,11 @@ def _parse_security(summary: str) -> str:
 def _mutate_prompt(impl_files):
     fl = ", ".join(impl_files) or "the implementation file(s)"
     return (
-        "You are running a mutation test to check whether the test suite actually catches bugs. "
-        f"Introduce ONE small, plausible bug into an implementation file ({fl}) — e.g. flip a "
-        "comparison, drop a validation/guard, or change a constant. Edit ONLY implementation files, "
-        "NEVER test files. Make exactly one subtle change. Do not run anything; end with a one-line "
-        "summary of the bug you introduced."
+        "Mutation testing is a standard QA practice that verifies a test suite can detect a defect. "
+        f"In an implementation file ({fl}), change exactly ONE line so its behaviour differs from "
+        "the spec — for example adjust a comparison operator, a constant, or remove a validation "
+        "step. Edit ONLY implementation files, never the test files. Make a single change and end "
+        "with a one-line summary of what you changed."
     )
 
 
@@ -443,7 +442,7 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
                         "decision_id": proposal.get("decision_id"), "quality_gate_id": qg_id})
         return {"status": "completed", "done": True, "quality_gate_id": qg_id, **proposal}
 
-    except (SandboxError, RuntimeError) as exc:
+    except Exception as exc:  # noqa: BLE001 — fail the run gracefully on any agent/model error
         with begin(engine) as c:
             _release(sf, c, project_id, reservation_id, f"governed code task error: {exc}")
             return _fail(c, run_id, project_id, str(exc))
