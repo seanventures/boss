@@ -19,6 +19,26 @@ function toneFor(name: string): string {
   return "#d29922"; // custom
 }
 
+// The cost story, in one line per profile: how many separate AI agents, and the tradeoff.
+function blurbFor(name: string): string {
+  if (name === "lean")
+    return "One builder agent (plus a separate tester) on a low-cost model. No independent reviewer — fast and lowest cost, best for prototypes; less independent checking.";
+  if (name === "balanced")
+    return "A separate tester, builder, and a reviewer that tries to break the change — strong model where it matters. Independent checks catch more, at moderate cost. The everyday default.";
+  if (name === "strict")
+    return "A full panel of specialized agents — tester, builder, reviewer, security — all on the strong model, with extra iterations. Production-grade quality; highest cost.";
+  return "Your chosen mix of agents, tiers, and per-step models.";
+}
+
+// Each step is a separate agent; cost ≈ number of agents × model strength.
+function modelClass(p: PipelineProfile, step: string): string {
+  return p.model[step] ?? p.model.default ?? "strong";
+}
+function costUnits(p: PipelineProfile, steps: string[]): number {
+  return steps.reduce((a, s) => a + (modelClass(p, s) === "strong" ? 2 : 1), 0);
+}
+const MAX_COST_UNITS = 6; // 3 agents on the strong model (the strict standard-task case)
+
 function ProfileCard({
   p,
   projectId,
@@ -30,7 +50,9 @@ function ProfileCard({
 }) {
   const tier = effectiveTier(p);
   const steps = stepsForTier(tier);
-  const costPct = Math.round((steps.length / 3) * 100);
+  const agents = steps.length;
+  const anyStrong = steps.some((s) => modelClass(p, s) === "strong");
+  const costPct = Math.min(100, Math.round((costUnits(p, steps) / MAX_COST_UNITS) * 100));
   const tone = toneFor(p.name);
   return (
     <div
@@ -74,22 +96,29 @@ function ProfileCard({
           </form>
         )}
       </div>
-      <div style={{ color: "var(--muted)", fontSize: 12, margin: "5px 0 12px" }}>{p.label}</div>
+      <div style={{ color: "var(--muted)", fontSize: 12, margin: "5px 0 9px" }}>{p.label}</div>
 
-      <div style={{ fontSize: 12.5, lineHeight: 1.8, color: "var(--ink-soft)" }}>
-        <div>Risk tiers: <b style={{ color: "var(--ink)" }}>{p.tier_floor}–{p.tier_cap}</b></div>
-        <div>Standard task → tier {tier}: <b style={{ color: "var(--ink)" }}>{steps.length} {steps.length === 1 ? "step" : "steps"}</b></div>
+      <div style={{ fontSize: 12.5, color: "var(--ink-soft)", lineHeight: 1.55, marginBottom: 12 }}>
+        {blurbFor(p.name)}
+      </div>
+
+      <div style={{ fontSize: 12.5, lineHeight: 1.85, color: "var(--ink-soft)" }}>
+        <div>
+          A standard task runs{" "}
+          <b style={{ color: "var(--ink)" }}>{agents} separate AI {agents === 1 ? "agent" : "agents"}</b>{" "}
+          <span style={{ color: "var(--muted)" }}>(tier {tier})</span>
+        </div>
         <div style={{ color: "var(--muted)" }}>{steps.join(" → ")}</div>
         <div style={{ color: "var(--muted)" }}>
-          Models:{" "}
-          {Object.keys(p.model).length
-            ? Object.entries(p.model).map(([k, v]) => `${k}=${v}`).join(", ")
-            : "default"}
+          Model: <b style={{ color: "var(--ink-soft)" }}>{anyStrong ? "strong where it matters" : "low-cost"}</b> · risk tiers {p.tier_floor}–{p.tier_cap}
         </div>
       </div>
 
       <div style={{ marginTop: 12 }}>
-        <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 4 }}>relative cost</div>
+        <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 4, display: "flex", justifyContent: "space-between" }}>
+          <span>relative cost</span>
+          <span>{agents} {agents === 1 ? "agent" : "agents"} × {anyStrong ? "strong" : "low-cost"} model</span>
+        </div>
         <div style={{ height: 8, background: "var(--surface-3)", borderRadius: 6, overflow: "hidden" }}>
           <div style={{ width: `${costPct}%`, height: "100%", background: tone }} />
         </div>
@@ -109,11 +138,17 @@ export function PipelineView({ data }: { data: PipelineData }) {
   }
   return (
     <div style={{ color: "var(--ink)" }}>
-      <p style={{ color: "var(--muted)", margin: "0 0 16px", maxWidth: 760, fontSize: 13, lineHeight: 1.6 }}>
-        Pick how much of the governed pipeline runs. <b style={{ color: "var(--ink)" }}>Lean</b> is the
-        lowest cost for prototypes; <b style={{ color: "var(--ink)" }}>strict</b> runs the full rigor for
-        production. Effort scales with risk automatically — sensitive changes (auth, payments, secrets)
-        always run at least standard rigor. Current default:{" "}
+      <p style={{ color: "var(--muted)", margin: "0 0 18px", maxWidth: 820, fontSize: 13, lineHeight: 1.65 }}>
+        Every step of the pipeline runs as a <b style={{ color: "var(--ink)" }}>separate AI agent</b>, and
+        that&apos;s what drives the cost. <b style={{ color: "var(--ink)" }}>Lower-cost</b> profiles use{" "}
+        <b style={{ color: "var(--ink)" }}>fewer agents</b> — one agent builds and tests on a low-cost
+        model: quick results, less independent checking (good for prototypes).{" "}
+        <b style={{ color: "var(--ink)" }}>Higher-rigor</b> profiles run{" "}
+        <b style={{ color: "var(--ink)" }}>more specialized agents</b> — a separate tester, an independent
+        reviewer, and a security pass that each try to break the others&apos; work, on the strong model and
+        with extra iterations: production-grade quality, higher cost. Effort scales with risk
+        automatically; sensitive changes (auth, payments, secrets) always run at least standard rigor.
+        Current default:{" "}
         <b style={{ color: "var(--accent-text)", textTransform: "capitalize" }}>{data.defaultProfile}</b>.
       </p>
 
