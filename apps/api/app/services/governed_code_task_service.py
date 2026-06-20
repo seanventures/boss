@@ -198,6 +198,42 @@ def _mutate_prompt(impl_files):
     )
 
 
+# --- Design phase (Wire-Phase 2): standards -> spec -> plan -> review plan, before any code. ---
+def _standards_prompt():
+    return (
+        "You are a senior engineer. Read this repo's existing code and summarise the coding "
+        "standards a new change should follow: style, naming, error handling, test conventions, and "
+        "file structure. Do NOT edit any files. Output a short bulleted list of the standards."
+    )
+
+
+def _spec_prompt(title, instructions, criteria):
+    crit = "\n".join(f"- {c}" for c in criteria) or "- (none given)"
+    return (
+        "You are a product engineer. Turn the task into a clear, testable specification: a "
+        "one-paragraph summary, a change list (added / changed / removed), and a clarified, testable "
+        "list of acceptance criteria — resolve any ambiguity explicitly. Do NOT edit any files.\n\n"
+        f"TASK: {title}\n\n{instructions}\n\nACCEPTANCE CRITERIA:\n{crit}"
+    )
+
+
+def _plan_prompt(title, spec):
+    return (
+        "You are a software architect. Given the spec, write a short technical plan: the files to "
+        "add/change, the function signatures, and the key edge cases to handle. Do NOT edit any "
+        f"files.\n\nTASK: {title}\n\nSPEC:\n{spec}"
+    )
+
+
+def _review_plan_prompt(title, plan):
+    return (
+        "You are a design reviewer with FRESH context. Critique the plan below for gaps, missing "
+        "edge cases, or risky choices, judged against the task. Do NOT edit any files. End with "
+        "EXACTLY one final line:\n  PLAN: OK\n  PLAN: REVISE\n\n"
+        f"TASK: {title}\n\nPLAN:\n{plan}"
+    )
+
+
 # --------------------------------------------------------------------------- #
 #  The governed job handler                                                   #
 # --------------------------------------------------------------------------- #
@@ -268,6 +304,32 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
             picked = (settings.code_agent_strong_model if cls == "strong"
                       else settings.code_agent_low_cost_model)
             return picked or None  # None => the engine's default model
+
+        # DESIGN PHASE (tier >= 2): standards -> spec -> plan -> review plan, BEFORE any code.
+        # Spec-driven: the refined spec + plan are fed into the downstream coding steps. (The human
+        # approve-plan gate is Wire-Phase 2b; for now review plan records a PLAN: OK/REVISE note.)
+        design: dict = {}
+        do_design = risk_tier >= 2
+        if do_design:
+            with begin(engine) as c:
+                _set_phase(c, run_id, "design")
+            d1 = agent.run_role(_standards_prompt(), root, read_only=True,
+                                model=_model_for("standards"))
+            d2 = agent.run_role(_spec_prompt(title, instructions, criteria), root, read_only=True,
+                                model=_model_for("spec"))
+            d3 = agent.run_role(_plan_prompt(title, d2.get("summary", "")), root, read_only=True,
+                                model=_model_for("plan"))
+            d4 = agent.run_role(_review_plan_prompt(title, d3.get("summary", "")), root,
+                                read_only=True, model=_model_for("review_plan"))
+            for d in (d1, d2, d3, d4):
+                cost += int(d.get("cost_usd_micros") or 0)
+            plan_ok = "REVISE" not in d4.get("summary", "").upper()
+            design = {"standards": d1.get("summary", ""), "spec": d2.get("summary", ""),
+                      "plan": d3.get("summary", ""), "plan_review": d4.get("summary", ""),
+                      "plan_ok": plan_ok}
+            # feed the refined spec + plan forward so write-tests/implement are spec-driven
+            instructions = (f"{instructions}\n\nREFINED SPEC:\n{d2.get('summary', '')}"
+                            f"\n\nTECHNICAL PLAN:\n{d3.get('summary', '')}")
 
         r1 = {"cost_usd_micros": 0, "summary": "", "usage": {}, "model": None}
         test_files: list[str] = []
@@ -384,7 +446,8 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
             if regressions_ok is not None:
                 gates["nothing_broke"] = regressions_ok
 
-        steps_run = (["write_tests"] if do_separate_tests else []) + ["implement"] \
+        steps_run = (["standards", "spec", "plan", "review_plan"] if do_design else []) \
+            + (["write_tests"] if do_separate_tests else []) + ["implement"] \
             + (["review_code", "security_check", "check_tests", "run_all_tests"] if do_review else [])
         evidence = {
             "risk_tier": risk_tier,
@@ -402,6 +465,8 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
             "mutation_caught": mutation_caught,
             "regressions_ok": regressions_ok,
             "panel_parallel": panel_parallel,
+            "design": design,
+            "plan_ok": design.get("plan_ok") if do_design else None,
             "stage_models": {
                 "write_tests": (_model_for("write_tests") or r1.get("model")) if do_separate_tests else None,
                 "implement": _model_for("implement") or r2.get("model"),
