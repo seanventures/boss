@@ -293,14 +293,18 @@ dual-control), scaled to risk.
 
 ## 11. Status & roadmap
 
-**Live today (runtime, model-agnostic):** the core separation — `write tests → implement →
-review code → fail-closed gate` — runs on any model (proven on Claude and Azure gpt-4o), with
-per-step cost recorded and the PR gated. **Cost-control feature complete:** profiles, tier
-inference, per-step model routing, edition gating, and the UI with cost comparison.
+**Live today (runtime, model-agnostic):** at tier ≥ 2 the runner executes a full review panel —
+`write tests → implement → review code → security check → check tests (mutation) → run all
+tests` → fail-closed gate — on any model (proven on Claude and Azure gpt-4o), with per-step cost
+recorded and the PR gated. The three read-only checks (review ∥ security ∥ full-suite) run
+**concurrently**, bounded by a lane-capacity limit (`BOSS_CODE_AGENT_MAX_CONCURRENCY`); the
+mutation check is serial (it edits then restores the workdir). So `strict` genuinely runs ~5
+agents (~$0.06) vs `balanced`'s 3 (~$0.04). The adversarial review judges against the task's
+acceptance criteria (defaults to *survived*; no refute-first false positives). **Cost-control
+feature complete:** profiles, tier inference, per-step model routing, edition gating, and the UI.
 
-**Next increment:** wire the remaining steps (`refine`, `plan`/`review plan`, `security check`,
-`check tests`, `run all tests`, `consistency check`) into the live runner. That unlocks the last
-two efficiency levers — **prompt caching** of the stable repo context across steps and
-**parallelizing the independent checks** (review / security / check-tests on the same diff) —
-which recover most of the higher-tier latency and token overhead. See
-`docs/product/PIPELINE_COST_CONTROL.md` for the cost-control phase detail.
+**Next increment (Wire-Phase 2/3):** wire the front of the pipeline (`standards` from the repo,
+`spec`, `refine`, `plan`/`review plan` with the design sign-off gate, `consistency check`) and
+then `tasks`/work-graph (parallel sub-tasks). Remaining efficiency lever: **prompt caching** of
+the stable repo context across steps. See `docs/product/PIPELINE_WIRING_PHASE1.md` and
+`docs/product/PIPELINE_COST_CONTROL.md`.
