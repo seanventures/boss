@@ -573,6 +573,33 @@ class DecisionService:
                 str(run_id),
                 {"decision_id": row["id"]},
             )
+        elif action == "resume_code_task":
+            # A governed code task paused for human plan approval — resume it via a worker job.
+            # The runner reuses the persisted design and continues (write tests -> implement -> PR).
+            run_id = recommendation.get("run_id")
+            # Flip the paused run back to running so the re-enqueued code.task job proceeds
+            # (the runner reuses the persisted design and skips the design phase + gate).
+            connection.execute(
+                text("UPDATE code_task_runs SET status='running', updated_at=now() WHERE id=:id"),
+                {"id": run_id},
+            )
+            self.jobs.create_job(
+                connection,
+                project_id=row["project_id"],
+                task_id=row["task_id"],
+                kind="code.task",
+                priority=46,
+                payload={"run_id": run_id},
+            )
+            emit_event(
+                connection,
+                row["project_id"],
+                "code_task.resume_queued",
+                actor,
+                "code_task_run",
+                str(run_id),
+                {"decision_id": row["id"]},
+            )
         elif action == "review_plan_draft":
             self._queue_pr_proposal_from_plan(connection, row, actor, recommendation)
         elif action == "review_pull_request":
