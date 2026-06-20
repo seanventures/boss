@@ -2,8 +2,20 @@
 
 import { revalidatePath } from "next/cache";
 import type { DataBoundary } from "@boss/api-client";
-import { client, PROJECT_ID, resolveProjectId } from "../lib/client";
+import { API_URL, client, PROJECT_ID, resolveProjectId } from "../lib/client";
 import { buildCommandRequest } from "../lib/commands";
+
+export async function setPipelineDefaultAction(formData: FormData): Promise<void> {
+  const projectId = getProjectId(formData);
+  const name = String(formData.get("name") ?? "").trim();
+  if (!name) return;
+  await fetch(`${API_URL}/v1/pipeline-profiles/default`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ project_id: projectId, name, actor: getActor(formData) }),
+  });
+  revalidatePath("/");
+}
 
 function getProjectId(formData: FormData): string {
   const value = formData.get("project_id");

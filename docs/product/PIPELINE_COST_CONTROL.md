@@ -74,3 +74,10 @@ touches login/payments/secrets/migrations/deploys, regardless of profile floor.
   looks expensive. The runtime resolves the profile per-task > project default > edition default.
   Verified: presets list, set-default persists, community custom-create → 403, enterprise
   custom-create + per-task resolve work.
+- 2026-06-19 — Phase 4 done: **UI** in the web console. New "Coding Pipeline" area
+  (`apps/web/app/pipeline-ui.tsx`, `lib/pipeline-profiles.ts`, `setPipelineDefaultAction`):
+  profile cards (lean/balanced/strict + custom) showing risk-tier range, steps that run for a
+  standard task, per-step model routing, a relative-cost bar, the default badge, and a
+  "Set as default" control; plus a **Recent run costs** comparison table (profile · tier · steps
+  · total · per-step cost · result) from the recorded run data. Verified rendering with all
+  four profiles incl. the custom `qa-heavy`. tsc clean. **All four phases complete.**
