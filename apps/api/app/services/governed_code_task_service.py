@@ -162,6 +162,37 @@ def _parse_verdict(summary: str) -> str:
     return "survived" if m[-1] == "SURVIVED" else "refuted"
 
 
+def _security_prompt(title):
+    return (
+        "You are a security reviewer with FRESH context. Review the change for security defects: "
+        "injection, broken authn/authz, secret/credential handling, unsafe deserialization, SSRF, "
+        "and sensitive-data exposure.\n\n"
+        f"TASK UNDER REVIEW: {title}\n\n"
+        "Run `git diff` to see the change and read the implementation. Assume it is hostile until "
+        "shown safe. Do NOT edit any files. End your response with EXACTLY one final line, either:\n"
+        "  VERDICT: CLEAN\n"
+        "  VERDICT: ISSUES\n"
+    )
+
+
+def _parse_security(summary: str) -> str:
+    m = re.findall(r"VERDICT:\s*(CLEAN|ISSUES)", summary.upper())
+    if not m:
+        return "not_run"
+    return "clean" if m[-1] == "CLEAN" else "issues"
+
+
+def _mutate_prompt(impl_files):
+    fl = ", ".join(impl_files) or "the implementation file(s)"
+    return (
+        "You are running a mutation test to check whether the test suite actually catches bugs. "
+        f"Introduce ONE small, plausible bug into an implementation file ({fl}) — e.g. flip a "
+        "comparison, drop a validation/guard, or change a constant. Edit ONLY implementation files, "
+        "NEVER test files. Make exactly one subtle change. Do not run anything; end with a one-line "
+        "summary of the bug you introduced."
+    )
+
+
 # --------------------------------------------------------------------------- #
 #  The governed job handler                                                   #
 # --------------------------------------------------------------------------- #
@@ -281,6 +312,43 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
             cost += int(r3.get("cost_usd_micros") or 0)
             verdict = _parse_verdict(r3.get("summary", ""))
 
+        # REVIEW PANEL (tier >= 2): a dedicated security pass, a mutation check that proves the
+        # tests catch bugs, and a full-suite regression run — each its own agent/check.
+        r4 = {"cost_usd_micros": 0, "summary": "", "model": None}
+        r5 = {"cost_usd_micros": 0, "summary": "", "model": None}
+        sec_verdict = "skipped"
+        mutation_caught = None
+        regressions_ok = None
+        if do_review:
+            # security check (fresh context, read-only)
+            with begin(engine) as c:
+                _set_phase(c, run_id, "security_check")
+            r4 = agent.run_role(_security_prompt(title), root, read_only=True,
+                                model=_model_for("security_check"))
+            cost += int(r4.get("cost_usd_micros") or 0)
+            sec_verdict = _parse_security(r4.get("summary", ""))
+
+            # check tests (mutation): snapshot impl, introduce a bug, expect the tests to FAIL,
+            # then restore the real implementation so the PR diff is unchanged.
+            with begin(engine) as c:
+                _set_phase(c, run_id, "check_tests")
+            orig = {p: (root / p).read_text(errors="ignore")
+                    for p in impl_files if (root / p).exists()}
+            if orig:
+                r5 = agent.run_role(_mutate_prompt(list(orig.keys())), root,
+                                    model=_model_for("check_tests"))
+                cost += int(r5.get("cost_usd_micros") or 0)
+                mut = sandbox.run(test_cmd)
+                mutation_caught = not bool(mut.ok)  # a real suite FAILS on the planted bug
+                for p, content in orig.items():
+                    (root / p).write_text(content, encoding="utf-8")
+
+            # run all tests (full suite) — deterministic, no model spend
+            with begin(engine) as c:
+                _set_phase(c, run_id, "run_all_tests")
+            full = sandbox.run("python3 -m unittest discover -v")
+            regressions_ok = bool(full.ok)
+
         # FINAL GATE — fail-closed; only the checks that apply at this tier.
         gates = {
             "code_written": bool(impl_files),
@@ -291,9 +359,14 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
             gates["coder_did_not_edit_tests"] = tests_untouched
         if do_review:
             gates["code_review_passed"] = verdict == "survived"
+            gates["security_clean"] = sec_verdict == "clean"
+            if mutation_caught is not None:
+                gates["tests_strong_enough"] = mutation_caught
+            if regressions_ok is not None:
+                gates["nothing_broke"] = regressions_ok
 
         steps_run = (["write_tests"] if do_separate_tests else []) + ["implement"] \
-            + (["review_code"] if do_review else [])
+            + (["review_code", "security_check", "check_tests", "run_all_tests"] if do_review else [])
         evidence = {
             "risk_tier": risk_tier,
             "profile": profile["name"],
@@ -303,7 +376,12 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
                 "write_tests": int(r1.get("cost_usd_micros") or 0),
                 "implement": int(r2.get("cost_usd_micros") or 0),
                 "review_code": int(r3.get("cost_usd_micros") or 0),
+                "security_check": int(r4.get("cost_usd_micros") or 0),
+                "check_tests": int(r5.get("cost_usd_micros") or 0),
             },
+            "security_verdict": sec_verdict,
+            "mutation_caught": mutation_caught,
+            "regressions_ok": regressions_ok,
             "stage_models": {
                 "write_tests": (_model_for("write_tests") or r1.get("model")) if do_separate_tests else None,
                 "implement": _model_for("implement") or r2.get("model"),

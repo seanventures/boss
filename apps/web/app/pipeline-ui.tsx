@@ -108,7 +108,7 @@ function modelClass(p: PipelineProfile, step: string): string {
 function costUnits(p: PipelineProfile, steps: string[]): number {
   return steps.reduce((a, s) => a + (modelClass(p, s) === "strong" ? 2 : 1), 0);
 }
-const MAX_COST_UNITS = 6; // 3 agents on the strong model (the strict standard-task case)
+const MAX_COST_UNITS = 10; // 5 agents on the strong model (the strict standard-task case)
 
 function ProfileCard({
   p,

@@ -48,7 +48,11 @@ export function stepsForTier(tier: number): string[] {
   const steps: string[] = [];
   if (tier >= 1) steps.push("write tests");
   steps.push("implement");
-  if (tier >= 2) steps.push("review code");
+  if (tier >= 2) {
+    steps.push("review code");
+    steps.push("security check");
+    steps.push("check tests");
+  }
   return steps;
 }
 
