@@ -46,12 +46,11 @@ export function emptyPipelineData(projectId = PROJECT_ID): PipelineData {
 // The steps that run live today, by tier (the runtime currently runs the core separation).
 export function stepsForTier(tier: number): string[] {
   const steps: string[] = [];
+  if (tier >= 2) steps.push("standards", "spec", "plan", "review plan"); // design phase
   if (tier >= 1) steps.push("write tests");
   steps.push("implement");
   if (tier >= 2) {
-    steps.push("review code");
-    steps.push("security check");
-    steps.push("check tests");
+    steps.push("review code", "security check", "check tests", "consistency check");
   }
   return steps;
 }
