@@ -27,6 +27,7 @@ export type PipelineData = {
   projectId: string;
   apiReachable: boolean;
   defaultProfile: string;
+  edition: string;
   profiles: PipelineProfile[];
   recentRuns: PipelineRunCost[];
 };
@@ -36,6 +37,7 @@ export function emptyPipelineData(projectId = PROJECT_ID): PipelineData {
     projectId: resolveProjectId(projectId),
     apiReachable: false,
     defaultProfile: "balanced",
+    edition: "community",
     profiles: [],
     recentRuns: [],
   };
@@ -94,10 +96,22 @@ export async function fetchPipelineData(projectId = PROJECT_ID): Promise<Pipelin
       // recent-run cost is best-effort; the profiles still render
     }
 
+    let edition = "community";
+    try {
+      const er = await fetch(
+        `${API_URL}/v1/edition?project_id=${encodeURIComponent(resolved)}`,
+        { cache: "no-store" },
+      );
+      if (er.ok) edition = String((await er.json()).edition_id ?? "community");
+    } catch {
+      // edition is best-effort; default to community (presets only)
+    }
+
     return {
       projectId: resolved,
       apiReachable: true,
       defaultProfile: String(pdata.default ?? "balanced"),
+      edition,
       profiles: (pdata.items ?? []) as PipelineProfile[],
       recentRuns,
     };

@@ -17,6 +17,36 @@ export async function setPipelineDefaultAction(formData: FormData): Promise<void
   revalidatePath("/");
 }
 
+export async function createPipelineProfileAction(formData: FormData): Promise<void> {
+  const projectId = getProjectId(formData);
+  const name = String(formData.get("name") ?? "").trim().toLowerCase();
+  if (!name) return;
+  const tierFloor = Number(formData.get("tier_floor") ?? 0);
+  const tierCap = Number(formData.get("tier_cap") ?? 3);
+  const defaultModel = String(formData.get("default_model") ?? "low_cost");
+  const strongHard = formData.get("strong_hard") === "on";
+  const model: Record<string, string> = { default: defaultModel };
+  if (strongHard) {
+    model.implement = "strong";
+    model.review_code = "strong";
+    model.security_check = "strong";
+  }
+  await fetch(`${API_URL}/v1/pipeline-profiles`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      project_id: projectId,
+      name,
+      label: String(formData.get("label") ?? "").trim() || name,
+      tier_floor: tierFloor,
+      tier_cap: tierCap,
+      model,
+      actor: getActor(formData),
+    }),
+  });
+  revalidatePath("/");
+}
+
 function getProjectId(formData: FormData): string {
   const value = formData.get("project_id");
   return typeof value === "string" && value.trim()
