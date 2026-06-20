@@ -25,6 +25,18 @@ from ..schemas import FileChange
 from .sandbox import CommandResult, DiffSummary, EphemeralSandbox
 
 
+def _as_text(v) -> str:
+    """Coerce a model's summary/result field to text. Models sometimes return a JSON
+    list (e.g. a bulleted list) or object instead of a string; don't crash on it."""
+    if isinstance(v, str):
+        return v
+    if isinstance(v, list):
+        return "\n".join(_as_text(x) for x in v)
+    if isinstance(v, dict):
+        return json.dumps(v)
+    return "" if v is None else str(v)
+
+
 @dataclass
 class CodeTaskSpec:
     task_id: str
@@ -220,7 +232,7 @@ class ClaudeCodeAgent:
         data = self._invoke(prompt, cwd, read_only=read_only, model=model)
         usage, cost_micros = self._usage(data, self.settings)
         return {
-            "summary": (data.get("result") or "").strip() or "(no summary returned)",
+            "summary": _as_text(data.get("result")).strip() or "(no summary returned)",
             "usage": usage,
             "cost_usd_micros": cost_micros,
             "turns": int(data.get("num_turns") or 0),
@@ -235,7 +247,7 @@ class ClaudeCodeAgent:
         prompt = self._build_prompt(spec, repo)
         data = self._invoke(prompt, sandbox.path)
         usage, cost_micros = self._usage(data, self.settings)
-        summary = (data.get("result") or "").strip() or "(no summary returned)"
+        summary = _as_text(data.get("result")).strip() or "(no summary returned)"
         turns = int(data.get("num_turns") or 0)
 
         # Authoritative verification: BOSS re-runs the test commands itself.
@@ -355,7 +367,7 @@ class NativeCodeAgent:
         if not read_only:
             self._apply_files(cwd, data.get("files", []))
         return {
-            "summary": (data.get("summary") or "").strip() or "(no summary)",
+            "summary": _as_text(data.get("summary")).strip() or "(no summary)",
             "usage": usage,
             "cost_usd_micros": estimate_cost_usd_micros(usage),
             "turns": 1,
