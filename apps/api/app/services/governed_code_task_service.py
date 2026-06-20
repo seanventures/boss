@@ -32,6 +32,7 @@ from .code_agent import make_code_agent
 from .code_task_service import _fail, _release, _set_phase, load_code_task_run
 from .core import emit_event, make_id
 from .github_app_adapter import GitHubAppAdapter
+from .pipeline_profiles import infer_risk_tier, resolve_profile
 from .sandbox import SandboxError
 from .sandbox_provider import LocalSubprocessProvider
 from .software_factory import SoftwareFactoryService
@@ -169,6 +170,10 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
     title = run["title"]
     instructions = spec.get("instructions", "")
     criteria = spec.get("acceptance_criteria", [])
+    # Cost/rigor dial: pick the profile (per-task override > project setting) and infer the
+    # risk tier, clamped to the profile's range. This scales effort to the work.
+    profile = resolve_profile(spec.get("profile") or settings.pipeline_profile)
+    risk_tier = infer_risk_tier({**spec, "title": title}, profile)
 
     with begin(engine) as c:
         reservation = sf.budget.reserve(
@@ -245,7 +250,14 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
             "code_review_passed": verdict == "survived",
         }
         evidence = {
-            "risk_tier": 2,
+            "risk_tier": risk_tier,
+            "profile": profile["name"],
+            "cost_usd_micros": cost,
+            "stage_costs": {
+                "write_tests": int(r1.get("cost_usd_micros") or 0),
+                "implement": int(r2.get("cost_usd_micros") or 0),
+                "review_code": int(r3.get("cost_usd_micros") or 0),
+            },
             "engine": getattr(agent, "engine", "unknown"),
             "model": r2.get("usage", {}).get("model"),
             "test_author_independent": True, "reviewer_independent": True,
