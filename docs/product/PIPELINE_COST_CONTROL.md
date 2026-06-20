@@ -58,3 +58,11 @@ touches login/payments/secrets/migrations/deploys, regardless of profile floor.
 
 ## Status log
 - 2026-06-19 — Plan drafted. Phase 1 starting.
+- 2026-06-19 — Phase 1 done: profiles + tier inference + per-step cost accounting; sensitive
+  changes safety-floored to standard rigor even under a cheap profile.
+- 2026-06-19 — Phase 2 done: **steps are tier-driven** (tier 0 = 1 agent call, tier 1 = 2,
+  tier 2 = 3) and each step routes to a cheap/strong model per profile; per-step cost + model
+  recorded. Live demo (same `is_even` task, gpt-4o): **Lean $0.0261 / 2 steps → PR** vs
+  **Strict $0.0378 / 3 steps → review refuted, blocked** — ~31% cheaper from step-count alone;
+  model routing widens it when cheap/strong models are configured. Remaining levers (prompt
+  caching, parallel independent checks) pay off once the additional review steps are wired live.

@@ -85,10 +85,13 @@ class CodeAgent(Protocol):
         self, spec: CodeTaskSpec, repo: RepoContext, sandbox: EphemeralSandbox
     ) -> CodeAgentResult: ...
 
-    def run_role(self, prompt: str, cwd: Path, *, read_only: bool = False) -> dict:
+    def run_role(
+        self, prompt: str, cwd: Path, *, read_only: bool = False, model: Optional[str] = None
+    ) -> dict:
         """Run one isolated, role-scoped invocation against an existing workdir.
-        Returns {summary, usage, cost_usd_micros, turns}. The role prompt is the
-        guidance; the model impersonates the role. read_only stages must not edit files."""
+        Returns {summary, usage, cost_usd_micros, turns, model}. The role prompt is the
+        guidance; the model impersonates the role. read_only stages must not edit files;
+        model overrides which model runs this step (cheap vs strong routing)."""
         ...
 
 
@@ -136,7 +139,9 @@ class ClaudeCodeAgent:
             "- When done, end with a concise summary of WHAT you changed and WHY.\n"
         )
 
-    def _invoke(self, prompt: str, cwd: Path, *, read_only: bool = False) -> dict:
+    def _invoke(
+        self, prompt: str, cwd: Path, *, read_only: bool = False, model: Optional[str] = None
+    ) -> dict:
         timeout = int(self.settings.code_agent_timeout_seconds or 900)
         # Review stages run read-only (no Edit/Write tools, no auto-accept) so a reviewer
         # cannot mutate the change it is judging.
@@ -150,7 +155,7 @@ class ClaudeCodeAgent:
             "--allowedTools", allowed,
             "--permission-mode", permission,
         ]
-        model = getattr(self.settings, "claude_cli_model", None)
+        model = model or getattr(self.settings, "claude_cli_model", None)
         if model:
             cmd += ["--model", model]
         try:
@@ -205,18 +210,21 @@ class ClaudeCodeAgent:
         }
         return usage, cost_micros
 
-    def run_role(self, prompt: str, cwd: Path, *, read_only: bool = False) -> dict:
+    def run_role(
+        self, prompt: str, cwd: Path, *, read_only: bool = False, model: Optional[str] = None
+    ) -> dict:
         """Run a single role-scoped agent invocation against an existing workdir and
-        return {summary, usage, cost_usd_micros, turns}. Used by the governed pipeline
-        to dispatch each stage (qa / implementer / reviewer) as an ISOLATED context —
-        a fresh `claude -p` process with no shared session state between roles."""
-        data = self._invoke(prompt, cwd, read_only=read_only)
+        return {summary, usage, cost_usd_micros, turns, model}. Used by the governed
+        pipeline to dispatch each step as an ISOLATED context — a fresh `claude -p` process
+        with no shared session state between roles. `model` routes cheap vs strong."""
+        data = self._invoke(prompt, cwd, read_only=read_only, model=model)
         usage, cost_micros = self._usage(data, self.settings)
         return {
             "summary": (data.get("result") or "").strip() or "(no summary returned)",
             "usage": usage,
             "cost_usd_micros": cost_micros,
             "turns": int(data.get("num_turns") or 0),
+            "model": model or usage.get("model"),
         }
 
     def run(
@@ -332,13 +340,16 @@ class NativeCodeAgent:
             written.append(path)
         return written
 
-    def run_role(self, prompt: str, cwd: Path, *, read_only: bool = False) -> dict:
+    def run_role(
+        self, prompt: str, cwd: Path, *, read_only: bool = False, model: Optional[str] = None
+    ) -> dict:
         from .openai_adapter import estimate_cost_usd_micros
 
         system = self._REVIEW_SYS if read_only else self._EDIT_SYS
         msg, usage = self._llm.create_chat_completion(
             [{"role": "system", "content": system},
-             {"role": "user", "content": f"{prompt}\n\n{self._repo_context(cwd)}"}]
+             {"role": "user", "content": f"{prompt}\n\n{self._repo_context(cwd)}"}],
+            model_override=model or None,
         )
         data = self._safe_json(msg.get("content") or "")
         if not read_only:
@@ -348,6 +359,7 @@ class NativeCodeAgent:
             "usage": usage,
             "cost_usd_micros": estimate_cost_usd_micros(usage),
             "turns": 1,
+            "model": usage.get("model"),
         }
 
     def run(

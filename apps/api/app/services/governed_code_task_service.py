@@ -32,7 +32,7 @@ from .code_agent import make_code_agent
 from .code_task_service import _fail, _release, _set_phase, load_code_task_run
 from .core import emit_event, make_id
 from .github_app_adapter import GitHubAppAdapter
-from .pipeline_profiles import infer_risk_tier, resolve_profile
+from .pipeline_profiles import infer_risk_tier, model_for_step, resolve_profile
 from .sandbox import SandboxError
 from .sandbox_provider import LocalSubprocessProvider
 from .software_factory import SoftwareFactoryService
@@ -127,6 +127,19 @@ def _impl_prompt(title, instructions, test_files, test_cmd):
     )
 
 
+def _solo_prompt(title, instructions, criteria, test_cmd):
+    crit = "\n".join(f"- {c}" for c in criteria) or "- (none specified)"
+    return (
+        "You are a software engineer. Implement the task below AND write tests for it, then make "
+        "the tests pass. This is a low-risk task, so one agent does both.\n\n"
+        f"TASK: {title}\n\n{instructions}\n\nACCEPTANCE CRITERIA:\n{crit}\n\n"
+        "RULES:\n"
+        "- Create the implementation file(s) and stdlib `unittest` test file(s).\n"
+        f"- Run `{test_cmd}` and iterate until it passes. Do NOT commit.\n"
+        "- End with a one-line summary of what you built.\n"
+    )
+
+
 def _review_prompt(title):
     return (
         "You are an adversarial code reviewer with FRESH context — you did NOT write this code or "
@@ -207,25 +220,46 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
                           work_branch=f"boss/code/{run_id}", token=token)
         root = sandbox.path
 
-        # STAGE 1 — test authoring (qa), isolated context, tests only.
-        with begin(engine) as c:
-            _set_phase(c, run_id, "write_tests")
-        r1 = agent.run_role(_qa_prompt(title, instructions, criteria, test_cmd), root)
-        cost += int(r1.get("cost_usd_micros") or 0)
-        test_files = [fc.path for fc in sandbox.diff() if _is_test_path(fc.path)]
-        if not test_files:
-            with begin(engine) as c:
-                _release(sf, c, project_id, reservation_id, "no independent tests authored")
-                return _fail(c, run_id, project_id, "Gate fail: test author produced no test files.")
-        tests_before = _hash_files(root, test_files)
+        # Which steps run is set by the risk tier (the cost dial): tier 0 = one agent writes
+        # code + tests; tier >=1 = a separate tester; tier >=2 = add a fresh-context code review.
+        do_separate_tests = risk_tier >= 1
+        do_review = risk_tier >= 2
 
-        # STAGE 2 — implementation (software_engineer), tests frozen.
+        def _model_for(step):
+            cls = model_for_step(profile, step)
+            picked = (settings.code_agent_strong_model if cls == "strong"
+                      else settings.code_agent_cheap_model)
+            return picked or None  # None => the engine's default model
+
+        r1 = {"cost_usd_micros": 0, "summary": "", "usage": {}, "model": None}
+        test_files: list[str] = []
+        tests_untouched = True
+
+        if do_separate_tests:
+            # STEP write tests (qa), tests only.
+            with begin(engine) as c:
+                _set_phase(c, run_id, "write_tests")
+            r1 = agent.run_role(_qa_prompt(title, instructions, criteria, test_cmd), root,
+                                model=_model_for("write_tests"))
+            cost += int(r1.get("cost_usd_micros") or 0)
+            test_files = [fc.path for fc in sandbox.diff() if _is_test_path(fc.path)]
+            if not test_files:
+                with begin(engine) as c:
+                    _release(sf, c, project_id, reservation_id, "no independent tests authored")
+                    return _fail(c, run_id, project_id, "Gate fail: test author produced no test files.")
+            tests_before = _hash_files(root, test_files)
+
+        # STEP implement.
         with begin(engine) as c:
             _set_phase(c, run_id, "implement")
-        r2 = agent.run_role(_impl_prompt(title, instructions, test_files, test_cmd), root)
+        impl_prompt = (_impl_prompt(title, instructions, test_files, test_cmd) if do_separate_tests
+                       else _solo_prompt(title, instructions, criteria, test_cmd))
+        r2 = agent.run_role(impl_prompt, root, model=_model_for("implement"))
         cost += int(r2.get("cost_usd_micros") or 0)
-        tests_after = _hash_files(root, test_files)
-        tests_untouched = tests_before == tests_after
+        if do_separate_tests:
+            tests_untouched = tests_before == _hash_files(root, test_files)
+        else:  # tier 0: the implementer wrote the tests too
+            test_files = [fc.path for fc in sandbox.diff() if _is_test_path(fc.path)]
         impl_files = [fc.path for fc in sandbox.diff() if not _is_test_path(fc.path)]
 
         # Authoritative verification — BOSS runs the tests itself.
@@ -234,33 +268,48 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
         test_result = sandbox.run(test_cmd)
         tests_passed = bool(test_result.ok)
 
-        # STAGE 3 — adversarial review (adversarial_reviewer), fresh context, read-only.
-        with begin(engine) as c:
-            _set_phase(c, run_id, "review_code")
-        r3 = agent.run_role(_review_prompt(title), root, read_only=True)
-        cost += int(r3.get("cost_usd_micros") or 0)
-        verdict = _parse_verdict(r3.get("summary", ""))
+        # STEP review code (tier >= 2), fresh context, read-only.
+        r3 = {"cost_usd_micros": 0, "summary": "", "usage": {}, "model": None}
+        verdict = "skipped"
+        if do_review:
+            with begin(engine) as c:
+                _set_phase(c, run_id, "review_code")
+            r3 = agent.run_role(_review_prompt(title), root, read_only=True,
+                                model=_model_for("review_code"))
+            cost += int(r3.get("cost_usd_micros") or 0)
+            verdict = _parse_verdict(r3.get("summary", ""))
 
-        # QUALITY GATE — fail-closed.
+        # FINAL GATE — fail-closed; only the checks that apply at this tier.
         gates = {
-            "tests_written_first": bool(test_files),
-            "coder_did_not_edit_tests": tests_untouched,
             "code_written": bool(impl_files),
             "written_tests_pass": tests_passed,
-            "code_review_passed": verdict == "survived",
         }
+        if do_separate_tests:
+            gates["tests_written_first"] = bool(test_files)
+            gates["coder_did_not_edit_tests"] = tests_untouched
+        if do_review:
+            gates["code_review_passed"] = verdict == "survived"
+
+        steps_run = (["write_tests"] if do_separate_tests else []) + ["implement"] \
+            + (["review_code"] if do_review else [])
         evidence = {
             "risk_tier": risk_tier,
             "profile": profile["name"],
+            "steps_run": steps_run,
             "cost_usd_micros": cost,
             "stage_costs": {
                 "write_tests": int(r1.get("cost_usd_micros") or 0),
                 "implement": int(r2.get("cost_usd_micros") or 0),
                 "review_code": int(r3.get("cost_usd_micros") or 0),
             },
+            "stage_models": {
+                "write_tests": (_model_for("write_tests") or r1.get("model")) if do_separate_tests else None,
+                "implement": _model_for("implement") or r2.get("model"),
+                "review_code": (_model_for("review_code") or r3.get("model")) if do_review else None,
+            },
             "engine": getattr(agent, "engine", "unknown"),
-            "model": r2.get("usage", {}).get("model"),
-            "test_author_independent": True, "reviewer_independent": True,
+            "model": r2.get("model") or r2.get("usage", {}).get("model"),
+            "test_author_independent": do_separate_tests, "reviewer_independent": do_review,
             "tests_passed": tests_passed, "adversarial_verdict": verdict,
             "test_files": test_files, "impl_files": impl_files,
             "test_command": test_cmd, "test_exit_code": test_result.exit_code,
@@ -273,7 +322,7 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
                            "usage=jsonb_build_object('cost_usd_micros', CAST(:cost AS bigint), "
                            "'model', CAST(:m AS text)), updated_at=now() WHERE id=:id"),
                       {"s": json.dumps(evidence), "cost": cost,
-                       "m": r2.get("usage", {}).get("model"), "id": run_id})
+                       "m": evidence.get("model"), "id": run_id})
             qg_id, qg_status = _record_quality_gate(
                 c, run_id=run_id, project_id=project_id, task_id=task_id, job_id=job_id,
                 evidence=evidence, gates=gates)

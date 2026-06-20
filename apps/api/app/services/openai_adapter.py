@@ -97,6 +97,7 @@ class OpenAIAdapter:
         messages: list[dict],
         tools: Optional[list[dict]] = None,
         tool_choice: str = "auto",
+        model_override: Optional[str] = None,
     ) -> Tuple[dict, dict]:
         """One turn of a tool-calling conversation.
 
@@ -116,6 +117,8 @@ class OpenAIAdapter:
         else:
             raise IntegrationConfigurationError("OPENAI_API_KEY is not configured.")
 
+        if model_override:
+            model = model_override
         kwargs: dict = {"model": model, "messages": messages}
         if tools:
             kwargs["tools"] = tools

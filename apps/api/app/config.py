@@ -333,6 +333,11 @@ class Settings(BaseSettings):
     # Cost/rigor dial for the governed pipeline: lean | balanced | strict (or a custom profile
     # name once the profiles API lands). Scales which steps run and which models run them.
     pipeline_profile: str = Field(default="balanced", alias="BOSS_PIPELINE_PROFILE")
+    # Per-step model routing for the pipeline: cheap steps (write tests, checks) can use a
+    # smaller model; hard steps (implement, review) use the strong one. Empty => use the
+    # engine's default model for every step (routing is a safe no-op until configured).
+    code_agent_cheap_model: str = Field(default="", alias="BOSS_CODE_AGENT_CHEAP_MODEL")
+    code_agent_strong_model: str = Field(default="", alias="BOSS_CODE_AGENT_STRONG_MODEL")
     # Which CodeAgent implementation runs the edit/test loop:
     #   claude_code = wrap `claude -p` headless WITH its file/bash tools enabled,
     #                 scoped to the ephemeral sandbox cwd (uses the Max plan).

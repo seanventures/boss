@@ -4011,6 +4011,8 @@ def start_code_task_endpoint(payload: dict):
             base_branch=payload.get("base_branch") or "main",
             finalize_ctx=payload.get("finalize_ctx") or {},
             jobs=jobs,
+            profile=payload.get("profile"),
+            risk_tier=payload.get("risk_tier"),
         )
     return {"status": "queued", "run_id": run_id}
 
