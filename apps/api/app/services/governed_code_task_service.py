@@ -22,6 +22,8 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from sqlalchemy import text
@@ -304,35 +306,55 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
         test_result = sandbox.run(test_cmd)
         tests_passed = bool(test_result.ok)
 
-        # STEP review code (tier >= 2), fresh context, read-only.
-        r3 = {"cost_usd_micros": 0, "summary": "", "usage": {}, "model": None}
-        verdict = "skipped"
-        if do_review:
-            with begin(engine) as c:
-                _set_phase(c, run_id, "review_code")
-            r3 = agent.run_role(_review_prompt(title, criteria), root, read_only=True,
-                                model=_model_for("review_code"))
-            cost += int(r3.get("cost_usd_micros") or 0)
-            verdict = _parse_verdict(r3.get("summary", ""))
-
-        # REVIEW PANEL (tier >= 2): a dedicated security pass, a mutation check that proves the
-        # tests catch bugs, and a full-suite regression run — each its own agent/check.
+        # REVIEW PANEL (tier >= 2). The read-only checks — adversarial review, security review, and
+        # the full-suite regression run — are independent, so they run CONCURRENTLY, bounded by
+        # code_agent_max_concurrency (the lane capacity: extra checks wait for a free slot, and any
+        # authorised model impersonates the role when one frees up). check_tests mutates the workdir,
+        # so it runs afterwards, serially.
+        r3 = {"cost_usd_micros": 0, "summary": "", "model": None}
         r4 = {"cost_usd_micros": 0, "summary": "", "model": None}
         r5 = {"cost_usd_micros": 0, "summary": "", "model": None}
+        verdict = "skipped"
         sec_verdict = "skipped"
         mutation_caught = None
         regressions_ok = None
+        panel_parallel = False
         if do_review:
-            # security check (fresh context, read-only)
             with begin(engine) as c:
-                _set_phase(c, run_id, "security_check")
-            r4 = agent.run_role(_security_prompt(title), root, read_only=True,
-                                model=_model_for("security_check"))
-            cost += int(r4.get("cost_usd_micros") or 0)
-            sec_verdict = _parse_security(r4.get("summary", ""))
+                _set_phase(c, run_id, "review_panel")
+            panel: dict = {}
+            panel_cost = {"v": 0}
+            lock = threading.Lock()
 
-            # check tests (mutation): snapshot impl, introduce a bug, expect the tests to FAIL,
-            # then restore the real implementation so the PR diff is unchanged.
+            def _do_review():
+                rr = agent.run_role(_review_prompt(title, criteria), root, read_only=True,
+                                    model=_model_for("review_code"))
+                with lock:
+                    panel_cost["v"] += int(rr.get("cost_usd_micros") or 0)
+                panel["review"] = (rr, _parse_verdict(rr.get("summary", "")))
+
+            def _do_security():
+                rr = agent.run_role(_security_prompt(title), root, read_only=True,
+                                    model=_model_for("security_check"))
+                with lock:
+                    panel_cost["v"] += int(rr.get("cost_usd_micros") or 0)
+                panel["security"] = (rr, _parse_security(rr.get("summary", "")))
+
+            def _do_full():
+                panel["full"] = bool(sandbox.run("python3 -m unittest discover -v").ok)
+
+            checks = [_do_review, _do_security, _do_full]
+            max_workers = min(max(1, settings.code_agent_max_concurrency), len(checks))
+            panel_parallel = max_workers > 1
+            with ThreadPoolExecutor(max_workers=max_workers) as pool:
+                list(pool.map(lambda fn: fn(), checks))
+            cost += panel_cost["v"]
+            r3, verdict = panel["review"]
+            r4, sec_verdict = panel["security"]
+            regressions_ok = panel["full"]
+
+            # check tests (mutation) — serial: it edits the workdir, then restores it so the PR diff
+            # is unchanged. snapshot impl, plant one bug, expect the tests to FAIL, restore.
             with begin(engine) as c:
                 _set_phase(c, run_id, "check_tests")
             orig = {p: (root / p).read_text(errors="ignore")
@@ -345,12 +367,6 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
                 mutation_caught = not bool(mut.ok)  # a real suite FAILS on the planted bug
                 for p, content in orig.items():
                     (root / p).write_text(content, encoding="utf-8")
-
-            # run all tests (full suite) — deterministic, no model spend
-            with begin(engine) as c:
-                _set_phase(c, run_id, "run_all_tests")
-            full = sandbox.run("python3 -m unittest discover -v")
-            regressions_ok = bool(full.ok)
 
         # FINAL GATE — fail-closed; only the checks that apply at this tier.
         gates = {
@@ -385,6 +401,7 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
             "security_verdict": sec_verdict,
             "mutation_caught": mutation_caught,
             "regressions_ok": regressions_ok,
+            "panel_parallel": panel_parallel,
             "stage_models": {
                 "write_tests": (_model_for("write_tests") or r1.get("model")) if do_separate_tests else None,
                 "implement": _model_for("implement") or r2.get("model"),
