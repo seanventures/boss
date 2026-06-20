@@ -19,33 +19,33 @@
                padding:10px 14px; border-bottom:1px solid var(--line); background:#fafbfc; }
   .card-head h2 { margin:0; font-size:14px; }
   .card-head .hint { color:var(--muted); font-size:11.5px; }
-  .btns { display:flex; gap:6px; }
-  button { font-size:12.5px; padding:5px 11px; border:1px solid #c2c8cf; background:#fff; color:var(--ink);
-           border-radius:7px; cursor:pointer; }
+  .btns { display:flex; gap:6px; align-items:center; }
+  button { font-size:12.5px; padding:5px 10px; border:1px solid #c2c8cf; background:#fff; color:var(--ink);
+           border-radius:7px; cursor:pointer; line-height:1; }
   button:hover { background:#f0f3f6; }
   button.primary { border-color:var(--accent); color:var(--accent); }
-  .stage { position:relative; height:480px; background:
-           radial-gradient(circle at 1px 1px, #e7ebef 1px, transparent 0) 0 0/22px 22px; }
-  .stage svg { width:100% !important; height:100% !important; max-width:none !important; display:block; }
-  /* Fullscreen: the stage fills the screen and stays pan/zoomable */
-  .stage:fullscreen { height:100vh; width:100vw; background:#fff; }
-  .stage:-webkit-full-screen { height:100vh; width:100vw; background:#fff; }
+  .zlabel { font-size:11.5px; color:var(--muted); min-width:42px; text-align:center; font-variant-numeric:tabular-nums; }
+
+  /* The viewport is the pan/zoom surface. overflow hidden = the "window"; the inner layer is transformed. */
+  .stage { position:relative; height:480px; overflow:hidden; cursor:grab; touch-action:none;
+           background: radial-gradient(circle at 1px 1px, #e7ebef 1px, transparent 0) 0 0/22px 22px; }
+  .stage.grabbing { cursor:grabbing; }
+  .layer { position:absolute; top:0; left:0; transform-origin:0 0; will-change:transform; }
+  .layer svg { display:block; max-width:none !important; height:auto !important; }
+  .stage:fullscreen, .stage:-webkit-full-screen { height:100vh; width:100vw; background:#fff; }
   .fs-exit { position:absolute; top:12px; right:12px; z-index:5; display:none; }
   .stage:fullscreen .fs-exit, .stage:-webkit-full-screen .fs-exit { display:inline-block; }
-  .err { padding:16px; color:#b23c17; font-size:13px; white-space:pre-wrap; }
-  /* svg-pan-zoom controls styling */
-  .svg-pan-zoom-control { opacity:.65; } .svg-pan-zoom-control:hover { opacity:1; }
+  .err { position:absolute; inset:0; padding:16px; color:#b23c17; font-size:13px; white-space:pre-wrap; }
 </style>
 </head>
 <body>
 <header>
   <h1>Governed Coding Pipeline — Interactive Diagrams</h1>
-  <p>Scroll to zoom · drag to pan when zoomed in · use the on-canvas controls · <b>Fullscreen</b> for a full-screen view.</p>
+  <p>Scroll / pinch to <b>zoom</b> · <b>drag</b> to pan at any zoom · <b>+ / − / Fit</b> buttons · <b>Fullscreen</b> for a full-screen view.</p>
 </header>
 <div class="wrap" id="wrap"></div>
 
 <script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/svg-pan-zoom@3.6.1/dist/svg-pan-zoom.min.js"></script>
 <script>
 const DIAGRAMS = [
   { title: "1 · Value flow — the three pillars", def: `
@@ -62,41 +62,35 @@ flowchart LR
     class DIAL b
     class G,OUT c
 ` },
-  { title: "2 · The pipeline — plain steps, run by different agents", def: `
+  { title: "2 · The pipeline — what runs live at tier >= 2", def: `
 flowchart TD
-    Start([Task + risk]) --> S0["standards"] --> S1["spec"] --> S2["refine"] --> S3["plan"]
-    S3 --> S4{"review plan"}
-    S4 -->|"issues, loop<3"| S3
-    S4 -->|clean| G1{{"approve plan (human, risk>=2)"}}
-    G1 -->|approve| S6["tasks"] --> S7["write tests"] --> S8["implement"]
-    S8 --> S9{"review code"}
-    S9 -->|"not safe, loop<3"| S8
-    S9 -->|safe| S10{"security check"}
-    S10 -->|"issues, loop<3"| S8
-    S10 -->|clean| S11{"check tests"}
-    S11 -->|"too weak"| S7
-    S11 -->|strong| S12{"run all tests"}
-    S12 -->|"broke, loop<3"| S8
-    S12 -->|green| S13{"consistency check"}
-    S13 -->|"drift"| S8
-    S13 -->|agree| S14{"final gate - FAILS CLOSED"}
+    Start([Task + risk]) --> S0["standards"] --> S1["spec"] --> S3["plan"]
+    S3 --> S4["review plan (PLAN: OK/REVISE)"]
+    S4 --> S7["write tests"] --> S8["implement"]
+    S8 --> PANEL{{"review panel - concurrent (read-only)"}}
+    PANEL --> S9["review code"]
+    PANEL --> S10["security check"]
+    PANEL --> S12["run all tests"]
+    S9 --> S11["check tests (mutation, serial)"]
+    S10 --> S11
+    S12 --> S11
+    S11 --> S14{"final gate - FAILS CLOSED"}
     S14 -->|fail| S8
-    S14 -->|pass| G2{{"approve (human; 2 people at top risk)"}}
-    G2 -->|approve| Done([Mergeable change + receipts])
-    classDef gate fill:#ffd700,stroke:#000,color:#000
+    S14 -->|pass| Done([Gated PR + receipts])
     classDef chk fill:#ffcccc,stroke:#000,color:#000
     classDef stp fill:#e6f3ff,stroke:#000,color:#000
     classDef dn fill:#d4edda,stroke:#000,color:#000
-    class G1,G2 gate
-    class S4,S9,S10,S11,S12,S13,S14 chk
-    class S0,S1,S2,S3,S6,S7,S8 stp
+    classDef par fill:#fff3cd,stroke:#000,color:#000
+    class S14 chk
+    class PANEL par
+    class S0,S1,S3,S4,S7,S8,S9,S10,S11,S12 stp
     class Start,Done dn
 ` },
   { title: "3 · The cost / rigor dial", def: `
 flowchart LR
     A["Profile: lean / balanced / strict / custom"] --> C
     B["Task risk (inferred; sensitive = high)"] --> C
-    C{{"Resolved tier (0-3)"}} --> D["Steps that run: tier 0 = 1 agent, tier 2 = 3+"]
+    C{{"Resolved tier (0-3)"}} --> D["Steps that run: tier 0 = 1 agent, tier 2 = ~9"]
     C --> E["Model per step: low_cost vs strong"]
     D --> F([Cost & latency])
     E --> F
@@ -111,78 +105,153 @@ mermaid.initialize({ startOnLoad: false, theme: "default", securityLevel: "loose
                      flowchart: { htmlLabels: true, curve: "basis" } });
 
 const wrap = document.getElementById("wrap");
+const MIN = 0.2, MAX = 12;
 
 function makeCard(d, i) {
   const card = document.createElement("div"); card.className = "card";
   card.innerHTML = `
     <div class="card-head">
-      <div><h2>${d.title}</h2><span class="hint">scroll = zoom · drag = pan · fullscreen for full view</span></div>
+      <div><h2>${d.title}</h2> <span class="hint">scroll = zoom · drag = pan</span></div>
       <div class="btns">
-        <button data-act="reset" data-i="${i}">Reset view</button>
+        <button data-act="out" data-i="${i}" title="Zoom out">−</button>
+        <span class="zlabel" id="z-${i}">100%</span>
+        <button data-act="in" data-i="${i}" title="Zoom in">+</button>
+        <button data-act="fit" data-i="${i}">Fit</button>
         <button class="primary" data-act="fs" data-i="${i}">⤢ Fullscreen</button>
       </div>
     </div>
     <div class="stage" id="stage-${i}">
       <button class="fs-exit" data-act="exit" data-i="${i}">Exit fullscreen ✕</button>
-      <div class="err" id="err-${i}" style="display:none"></div>
+      <div class="layer" id="layer-${i}"></div>
     </div>`;
   wrap.appendChild(card);
-  return card;
 }
 
-const panzoom = {};
+// One pan/zoom controller per stage, using a CSS transform on the inner layer.
+function controller(i) {
+  const stage = document.getElementById("stage-" + i);
+  const layer = document.getElementById("layer-" + i);
+  const zlabel = document.getElementById("z-" + i);
+  const st = { scale: 1, x: 0, y: 0 };
+
+  function apply() {
+    layer.style.transform = `translate(${st.x}px, ${st.y}px) scale(${st.scale})`;
+    zlabel.textContent = Math.round(st.scale * 100) + "%";
+  }
+  function clamp(s) { return Math.max(MIN, Math.min(MAX, s)); }
+
+  function fit() {
+    const svg = layer.querySelector("svg"); if (!svg) return;
+    // natural size of the rendered svg
+    const bb = svg.getBBox ? null : null;
+    const w = svg.viewBox && svg.viewBox.baseVal && svg.viewBox.baseVal.width
+              ? svg.viewBox.baseVal.width : svg.getBoundingClientRect().width;
+    const h = svg.viewBox && svg.viewBox.baseVal && svg.viewBox.baseVal.height
+              ? svg.viewBox.baseVal.height : svg.getBoundingClientRect().height;
+    // pin the svg to its natural pixel size so transforms are predictable
+    svg.setAttribute("width", w); svg.setAttribute("height", h);
+    const sw = stage.clientWidth, sh = stage.clientHeight;
+    const s = clamp(Math.min(sw / w, sh / h) * 0.92);
+    st.scale = s;
+    st.x = (sw - w * s) / 2;
+    st.y = (sh - h * s) / 2;
+    apply();
+  }
+
+  function zoomAt(cx, cy, factor) {
+    const ns = clamp(st.scale * factor);
+    if (ns === st.scale) return;
+    // keep the content point under the cursor fixed
+    st.x = cx - (cx - st.x) * (ns / st.scale);
+    st.y = cy - (cy - st.y) * (ns / st.scale);
+    st.scale = ns;
+    apply();
+  }
+
+  // wheel zoom toward cursor
+  stage.addEventListener("wheel", (e) => {
+    e.preventDefault();
+    const r = stage.getBoundingClientRect();
+    zoomAt(e.clientX - r.left, e.clientY - r.top, e.deltaY < 0 ? 1.12 : 1 / 1.12);
+  }, { passive: false });
+
+  // drag to pan (any zoom)
+  let drag = null;
+  stage.addEventListener("mousedown", (e) => {
+    drag = { sx: e.clientX, sy: e.clientY, ox: st.x, oy: st.y };
+    stage.classList.add("grabbing");
+  });
+  window.addEventListener("mousemove", (e) => {
+    if (!drag) return;
+    st.x = drag.ox + (e.clientX - drag.sx);
+    st.y = drag.oy + (e.clientY - drag.sy);
+    apply();
+  });
+  window.addEventListener("mouseup", () => { drag = null; stage.classList.remove("grabbing"); });
+
+  // touch: one finger pan, two finger pinch
+  let pinch = null;
+  stage.addEventListener("touchstart", (e) => {
+    if (e.touches.length === 1) {
+      drag = { sx: e.touches[0].clientX, sy: e.touches[0].clientY, ox: st.x, oy: st.y };
+    } else if (e.touches.length === 2) {
+      const [a, b] = e.touches;
+      pinch = { d: Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY) };
+    }
+  }, { passive: true });
+  stage.addEventListener("touchmove", (e) => {
+    const r = stage.getBoundingClientRect();
+    if (e.touches.length === 2 && pinch) {
+      const [a, b] = e.touches;
+      const d = Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
+      const mx = (a.clientX + b.clientX) / 2 - r.left, my = (a.clientY + b.clientY) / 2 - r.top;
+      zoomAt(mx, my, d / pinch.d); pinch.d = d;
+    } else if (e.touches.length === 1 && drag) {
+      st.x = drag.ox + (e.touches[0].clientX - drag.sx);
+      st.y = drag.oy + (e.touches[0].clientY - drag.sy);
+      apply();
+    }
+  }, { passive: true });
+  stage.addEventListener("touchend", () => { drag = null; pinch = null; });
+
+  return {
+    fit,
+    zoom: (f) => { const r = stage.getBoundingClientRect(); zoomAt(r.width / 2, r.height / 2, f); },
+  };
+}
+
+const ctl = {};
 
 async function renderAll() {
   for (let i = 0; i < DIAGRAMS.length; i++) {
-    const d = DIAGRAMS[i];
-    makeCard(d, i);
-    const stage = document.getElementById("stage-" + i);
+    makeCard(DIAGRAMS[i], i);
+    const layer = document.getElementById("layer-" + i);
     try {
-      const { svg } = await mermaid.render("m" + i, d.def.trim());
-      const holder = document.createElement("div");
-      holder.innerHTML = svg;
-      const svgEl = holder.querySelector("svg");
-      svgEl.style.maxWidth = "none"; svgEl.style.width = "100%"; svgEl.style.height = "100%";
-      stage.appendChild(svgEl);
-      panzoom[i] = svgPanZoom(svgEl, {
-        zoomEnabled: true, panEnabled: true, controlIconsEnabled: true,
-        dblClickZoomEnabled: true, mouseWheelZoomEnabled: true,
-        fit: true, center: true, minZoom: 0.2, maxZoom: 12, zoomScaleSensitivity: 0.35,
-      });
+      const { svg } = await mermaid.render("m" + i, DIAGRAMS[i].def.trim());
+      layer.innerHTML = svg;
+      ctl[i] = controller(i);
+      // let layout settle, then fit
+      requestAnimationFrame(() => ctl[i].fit());
     } catch (e) {
-      const err = document.getElementById("err-" + i);
-      err.style.display = "block"; err.textContent = "Diagram failed to render:\n" + (e && e.message || e);
+      document.getElementById("stage-" + i).insertAdjacentHTML("beforeend",
+        `<div class="err">Diagram failed to render:\n${(e && e.message) || e}</div>`);
     }
   }
 }
 
-function resize(i) {
-  const pz = panzoom[i]; if (!pz) return;
-  pz.resize(); pz.fit(); pz.center();
-}
-
 document.addEventListener("click", (ev) => {
   const btn = ev.target.closest("button[data-act]"); if (!btn) return;
-  const i = +btn.dataset.i; const act = btn.dataset.act;
-  const stage = document.getElementById("stage-" + i);
-  if (act === "reset") resize(i);
-  if (act === "fs") {
-    (stage.requestFullscreen || stage.webkitRequestFullscreen).call(stage);
-  }
-  if (act === "exit") {
-    (document.exitFullscreen || document.webkitExitFullscreen).call(document);
-  }
+  const i = +btn.dataset.i, act = btn.dataset.act, stage = document.getElementById("stage-" + i);
+  if (act === "in") ctl[i] && ctl[i].zoom(1.25);
+  else if (act === "out") ctl[i] && ctl[i].zoom(1 / 1.25);
+  else if (act === "fit") ctl[i] && ctl[i].fit();
+  else if (act === "fs") (stage.requestFullscreen || stage.webkitRequestFullscreen).call(stage);
+  else if (act === "exit") (document.exitFullscreen || document.webkitExitFullscreen).call(document);
 });
 
-// When entering/leaving fullscreen, re-fit the pan/zoom to the new size.
-function onFsChange() {
-  const el = document.fullscreenElement || document.webkitFullscreenElement;
-  DIAGRAMS.forEach((_, i) => setTimeout(() => resize(i), 60));
-  void el;
-}
+function onFsChange() { DIAGRAMS.forEach((_, i) => ctl[i] && setTimeout(() => ctl[i].fit(), 80)); }
 document.addEventListener("fullscreenchange", onFsChange);
 document.addEventListener("webkitfullscreenchange", onFsChange);
-window.addEventListener("resize", () => DIAGRAMS.forEach((_, i) => resize(i)));
 
 renderAll();
 </script>
