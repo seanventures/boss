@@ -140,17 +140,21 @@ def _solo_prompt(title, instructions, criteria, test_cmd):
     )
 
 
-def _review_prompt(title):
+def _review_prompt(title, criteria):
+    crit = "\n".join(f"- {c}" for c in criteria) or "- (judge against the task description)"
     return (
         "You are an adversarial code reviewer with FRESH context — you did NOT write this code or "
-        "these tests. Your job is to REFUTE the change.\n\n"
-        f"TASK UNDER REVIEW: {title}\n\n"
-        "Run `git diff` to see the change. Read the implementation and the tests. Try to find a REAL "
-        "correctness or edge-case failure the tests miss (invalid inputs, empty/boundary values, case "
+        "these tests. Try HARD to break the change: read the implementation and the tests and look "
+        "for a REAL correctness or edge-case failure (invalid inputs, empty/boundary values, case "
         "sensitivity, error handling, off-by-one).\n\n"
-        "Do NOT edit any files. End your response with EXACTLY one final line, either:\n"
-        "  VERDICT: SURVIVED\n"
-        "  VERDICT: REFUTED\n"
+        f"TASK UNDER REVIEW: {title}\n\nACCEPTANCE CRITERIA (the agreed scope):\n{crit}\n\n"
+        "Judge ONLY against the stated task and acceptance criteria. A concern that is OUT OF SCOPE "
+        "— a feature that was not asked for, or a spec stricter than what was agreed — is NOT a "
+        "defect; note it but do not fail the change for it.\n\n"
+        "Do NOT edit any files. End your response with EXACTLY one final line:\n"
+        "  VERDICT: REFUTED   — ONLY if you found a CONCRETE defect that violates the task/criteria.\n"
+        "  VERDICT: SURVIVED  — if the change satisfies the task and criteria. This is the default "
+        "when you did not find a real, in-scope defect.\n"
     )
 
 
@@ -306,7 +310,7 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
         if do_review:
             with begin(engine) as c:
                 _set_phase(c, run_id, "review_code")
-            r3 = agent.run_role(_review_prompt(title), root, read_only=True,
+            r3 = agent.run_role(_review_prompt(title, criteria), root, read_only=True,
                                 model=_model_for("review_code"))
             cost += int(r3.get("cost_usd_micros") or 0)
             verdict = _parse_verdict(r3.get("summary", ""))
