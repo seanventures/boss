@@ -24,6 +24,10 @@ installs:
     - deployment_manager
     - secrets_steward
     - model_spend_analyst
+    - adversarial_reviewer
+    - design_critic
+    - security_reviewer
+    - integration_validator
   workflows:
     - ceo_command_to_pr
     - decision_inbox
@@ -33,12 +37,14 @@ installs:
     - deployment_run
     - budget_governed_scale_plan
     - model_entitlement_routing
+    - governed_coding_pipeline
   policies:
     - default_safety
     - budget_governor_policy
     - model_entitlement_policy
     - autonomy_ladder
     - resource_plane_policy
+    - governed_coding_pipeline_policy
   skills:
     - model_gateway
     - github
@@ -50,5 +56,6 @@ installs:
     - providerops
     - deployment
     - ssh_host
+    - coding_pipeline
   canaries: []
 status: planned

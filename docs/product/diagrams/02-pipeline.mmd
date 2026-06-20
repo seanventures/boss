@@ -1,0 +1,28 @@
+flowchart TD
+    Start([Task + risk]) --> S0["standards"] --> S1["spec"] --> S2["refine"] --> S3["plan"]
+    S3 --> S4{"review plan"}
+    S4 -->|"issues · loop<3"| S3
+    S4 -->|clean| G1{{"approve plan (human, risk≥2)"}}
+    G1 -->|approve| S6["tasks"] --> S7["write tests"] --> S8["implement"]
+    S8 --> S9{"review code"}
+    S9 -->|"not safe · loop<3"| S8
+    S9 -->|safe| S10{"security check"}
+    S10 -->|"issues · loop<3"| S8
+    S10 -->|clean| S11{"check tests"}
+    S11 -->|"too weak"| S7
+    S11 -->|strong| S12{"run all tests"}
+    S12 -->|"broke · loop<3"| S8
+    S12 -->|green| S13{"consistency check"}
+    S13 -->|"drift"| S8
+    S13 -->|agree| S14{"final gate · FAILS CLOSED"}
+    S14 -->|fail| S8
+    S14 -->|pass| G2{{"approve (human; 2 people at top risk)"}}
+    G2 -->|approve| Done([Mergeable change + receipts])
+    classDef gate fill:#ffd700,stroke:#000,color:#000
+    classDef chk fill:#ffcccc,stroke:#000,color:#000
+    classDef stp fill:#e6f3ff,stroke:#000,color:#000
+    classDef dn fill:#d4edda,stroke:#000,color:#000
+    class G1,G2 gate
+    class S4,S9,S10,S11,S12,S13,S14 chk
+    class S0,S1,S2,S3,S6,S7,S8 stp
+    class Start,Done dn

@@ -1652,6 +1652,46 @@ CREATE TABLE IF NOT EXISTS code_task_runs (
 );
 CREATE INDEX IF NOT EXISTS idx_code_task_runs_project ON code_task_runs(project_id, status, updated_at DESC);
 
+-- Fail-closed quality evidence for a governed coding-pipeline run (see QualityGate ObjectSpec).
+CREATE TABLE IF NOT EXISTS quality_gates (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  task_id TEXT,
+  code_task_run_id TEXT,
+  risk_tier INTEGER NOT NULL DEFAULT 2,
+  test_author_independent BOOLEAN NOT NULL DEFAULT false,
+  reviewer_independent BOOLEAN NOT NULL DEFAULT false,
+  tests_passed BOOLEAN NOT NULL DEFAULT false,
+  adversarial_verdict TEXT NOT NULL DEFAULT 'not_run',  -- survived | refuted | not_run
+  status TEXT NOT NULL DEFAULT 'fail',                  -- pass | fail | waived
+  fail_closed BOOLEAN NOT NULL DEFAULT true,
+  gates_passed JSONB NOT NULL DEFAULT '[]'::jsonb,
+  gates_failed JSONB NOT NULL DEFAULT '[]'::jsonb,
+  evidence JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_by_job_id TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_quality_gates_run ON quality_gates(code_task_run_id);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_quality_gates_run ON quality_gates(project_id, code_task_run_id);
+
+-- Custom pipeline cost/rigor profiles per project (presets live in code; these are overrides
+-- and customer-defined profiles). is_default marks the project's chosen profile.
+CREATE TABLE IF NOT EXISTS pipeline_profiles (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  label TEXT,
+  tier_floor INTEGER NOT NULL DEFAULT 0,
+  tier_cap INTEGER NOT NULL DEFAULT 3,
+  model_routing JSONB NOT NULL DEFAULT '{}'::jsonb,
+  caching BOOLEAN NOT NULL DEFAULT true,
+  parallel_checks BOOLEAN NOT NULL DEFAULT true,
+  is_default BOOLEAN NOT NULL DEFAULT false,
+  created_by TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_pipeline_profiles_name ON pipeline_profiles(project_id, name);
+
 CREATE TABLE IF NOT EXISTS meeting_roles (
   id TEXT PRIMARY KEY,
   project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,

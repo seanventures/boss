@@ -4011,8 +4011,66 @@ def start_code_task_endpoint(payload: dict):
             base_branch=payload.get("base_branch") or "main",
             finalize_ctx=payload.get("finalize_ctx") or {},
             jobs=jobs,
+            profile=payload.get("profile"),
+            risk_tier=payload.get("risk_tier"),
         )
     return {"status": "queued", "run_id": run_id}
+
+
+@app.get("/v1/pipeline-profiles")
+def list_pipeline_profiles_endpoint(project_id: str):
+    """List the cost/rigor profiles available to a project: built-in presets plus any custom
+    ones, with the project default marked."""
+    from .services import pipeline_profile_service as pps
+
+    with begin(engine) as c:
+        items = pps.list_profiles(c, project_id)
+        default = pps.default_profile_name(c, project_id, settings)
+    return {"project_id": project_id, "default": default, "items": items}
+
+
+@app.post("/v1/pipeline-profiles", status_code=201)
+def create_pipeline_profile_endpoint(payload: dict):
+    """Create/update a custom profile (enterprise edition only)."""
+    from .services import pipeline_profile_service as pps
+
+    project_id = payload.get("project_id")
+    if not project_id or not payload.get("name"):
+        raise HTTPException(status_code=422, detail="project_id and name are required.")
+    with begin(engine) as c:
+        require_project_actor(c, project_id, payload.get("actor", "ceo"), "budget_manage")
+        try:
+            result = pps.create_custom_profile(
+                c, project_id=project_id, name=payload["name"],
+                label=payload.get("label"),
+                tier_floor=payload.get("tier_floor", 0), tier_cap=payload.get("tier_cap", 3),
+                model_routing=payload.get("model") or payload.get("model_routing") or {},
+                caching=payload.get("caching", True),
+                parallel_checks=payload.get("parallel_checks", True),
+                actor=payload.get("actor", "ceo"), settings=settings,
+            )
+        except PermissionError as e:
+            raise HTTPException(status_code=403, detail=str(e)) from e
+        except ValueError as e:
+            raise HTTPException(status_code=422, detail=str(e)) from e
+    return {"status": "created", **result}
+
+
+@app.post("/v1/pipeline-profiles/default")
+def set_pipeline_profile_default_endpoint(payload: dict):
+    """Set the project's default profile (a preset or a custom one)."""
+    from .services import pipeline_profile_service as pps
+
+    project_id = payload.get("project_id")
+    if not project_id or not payload.get("name"):
+        raise HTTPException(status_code=422, detail="project_id and name are required.")
+    with begin(engine) as c:
+        require_project_actor(c, project_id, payload.get("actor", "ceo"), "budget_manage")
+        try:
+            pps.set_default_profile(c, project_id, payload["name"], payload.get("actor", "ceo"))
+        except ValueError as e:
+            raise HTTPException(status_code=422, detail=str(e)) from e
+    return {"status": "ok", "project_id": project_id, "default": payload["name"].strip().lower()}
 
 
 @app.post("/v1/code-tasks/step")

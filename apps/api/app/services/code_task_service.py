@@ -83,7 +83,7 @@ def start_code_task(
     connection, *, project_id: str, task_id: Optional[str], title: str,
     instructions: str, acceptance_criteria: list[str], test_commands: list[str],
     owner: str, repo: str, base_branch: str, finalize_ctx: Optional[dict],
-    jobs,
+    jobs, profile: Optional[str] = None, risk_tier: Optional[int] = None,
 ) -> str:
     """Create the durable run row and enqueue the single `code.task` job."""
     run_id = make_id("crun")
@@ -93,6 +93,10 @@ def start_code_task(
         "test_commands": test_commands or [],
         "owner": owner, "repo": repo, "base_branch": base_branch,
     }
+    if profile:  # per-task cost/rigor override (else the project setting applies)
+        spec["profile"] = profile
+    if isinstance(risk_tier, int):
+        spec["risk_tier"] = risk_tier
     connection.execute(
         text("""
             INSERT INTO code_task_runs (id, project_id, task_id, status, phase, title, spec, finalize_ctx)
@@ -152,6 +156,11 @@ def run_code_task(engine, settings: Settings, jobs, run_id: str) -> dict:
         with begin(engine) as c:
             return _fail(c, run_id, run["project_id"],
                          "Code tasks are disabled (BOSS_ENABLE_CODE_TASK=false).", status="blocked")
+
+    # Default for all coding tasks: route through the governed, role-separated pipeline.
+    if settings.governed_coding_pipeline:
+        from .governed_code_task_service import run_governed_code_task
+        return run_governed_code_task(engine, settings, jobs, run_id)
 
     project_id = run["project_id"]; task_id = run["task_id"]; spec = run["spec"]
     fctx = run["finalize_ctx"] or {}

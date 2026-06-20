@@ -23,6 +23,10 @@ installs:
     - deployment_manager
     - secrets_steward
     - model_spend_analyst
+    - adversarial_reviewer
+    - design_critic
+    - security_reviewer
+    - integration_validator
   workflows:
     - ceo_command_to_pr
     - decision_inbox
@@ -30,11 +34,13 @@ installs:
     - providerops_readonly_sync
     - changeset_apply_with_receipts
     - deployment_run
+    - governed_coding_pipeline
   policies:
     - default_safety
     - budget_v0
     - autonomy_ladder
     - resource_plane_policy
+    - governed_coding_pipeline_policy
   skills:
     - model_gateway
     - github
@@ -46,5 +52,6 @@ installs:
     - providerops
     - deployment
     - ssh_host
+    - coding_pipeline
   canaries: []
 status: active

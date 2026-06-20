@@ -91,6 +91,8 @@ import { fetchMeetingRooms } from "../lib/meeting-rooms";
 import { MeetingsHome } from "./meeting-room-ui";
 import { fetchCodeTasksFeed } from "../lib/code-tasks";
 import { CodeTasksHome } from "./code-tasks-ui";
+import { fetchPipelineData } from "../lib/pipeline-profiles";
+import { PipelineView } from "./pipeline-ui";
 import { fetchSandboxFeed } from "../lib/sandboxes";
 import { SandboxesHome } from "./sandboxes-ui";
 import { AreaLink } from "./area-link";
@@ -412,6 +414,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
     approvalRules,
     codeTasksFeed,
     sandboxFeed,
+    pipelineData,
   ] =
     await Promise.all([
       fetchStatus(activeProjectId),
@@ -470,6 +473,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
       fetchApprovalRules(activeProjectId),
       fetchCodeTasksFeed(activeProjectId),
       fetchSandboxFeed(),
+      fetchPipelineData(activeProjectId),
     ]);
 
   const deadletterCount = deadletters.items.length;
@@ -5815,6 +5819,16 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             codeTasks={codeTasksFeed.items}
             apiReachable={codeTasksFeed.apiReachable}
           />
+        </section>
+
+        <section className="panel-stack" data-area="pipeline" aria-label="Coding pipeline">
+          <div className="section-head">
+            <div>
+              <span className="eyebrow">Coding Pipeline</span>
+              <h2>Tune cost vs. rigor — pick a profile, see what runs per tier, compare run costs.</h2>
+            </div>
+          </div>
+          <PipelineView data={pipelineData} />
         </section>
 
         <section className="panel-stack" data-area="sandboxes" aria-label="Sandboxes">

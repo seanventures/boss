@@ -25,6 +25,18 @@ from ..schemas import FileChange
 from .sandbox import CommandResult, DiffSummary, EphemeralSandbox
 
 
+def _as_text(v) -> str:
+    """Coerce a model's summary/result field to text. Models sometimes return a JSON
+    list (e.g. a bulleted list) or object instead of a string; don't crash on it."""
+    if isinstance(v, str):
+        return v
+    if isinstance(v, list):
+        return "\n".join(_as_text(x) for x in v)
+    if isinstance(v, dict):
+        return json.dumps(v)
+    return "" if v is None else str(v)
+
+
 @dataclass
 class CodeTaskSpec:
     task_id: str
@@ -85,6 +97,15 @@ class CodeAgent(Protocol):
         self, spec: CodeTaskSpec, repo: RepoContext, sandbox: EphemeralSandbox
     ) -> CodeAgentResult: ...
 
+    def run_role(
+        self, prompt: str, cwd: Path, *, read_only: bool = False, model: Optional[str] = None
+    ) -> dict:
+        """Run one isolated, role-scoped invocation against an existing workdir.
+        Returns {summary, usage, cost_usd_micros, turns, model}. The role prompt is the
+        guidance; the model impersonates the role. read_only stages must not edit files;
+        model overrides which model runs this step (low-cost vs strong routing)."""
+        ...
+
 
 # --------------------------------------------------------------------------- #
 #  Claude Code headless implementation                                        #
@@ -130,18 +151,23 @@ class ClaudeCodeAgent:
             "- When done, end with a concise summary of WHAT you changed and WHY.\n"
         )
 
-    def _invoke(self, prompt: str, cwd: Path) -> dict:
+    def _invoke(
+        self, prompt: str, cwd: Path, *, read_only: bool = False, model: Optional[str] = None
+    ) -> dict:
         timeout = int(self.settings.code_agent_timeout_seconds or 900)
+        # Review stages run read-only (no Edit/Write tools, no auto-accept) so a reviewer
+        # cannot mutate the change it is judging.
+        allowed = "Read,Grep,Glob,Bash" if read_only else self.settings.code_agent_allowed_tools
+        permission = "default" if read_only else "acceptEdits"
         cmd = [
             self._claude_bin(),
             "-p", prompt,
             "--output-format", "json",
             "--max-turns", str(int(self.settings.code_agent_max_turns or 40)),
-            "--allowedTools", self.settings.code_agent_allowed_tools,
-            # Headless: auto-accept file edits within the sandbox working tree.
-            "--permission-mode", "acceptEdits",
+            "--allowedTools", allowed,
+            "--permission-mode", permission,
         ]
-        model = getattr(self.settings, "claude_cli_model", None)
+        model = model or getattr(self.settings, "claude_cli_model", None)
         if model:
             cmd += ["--model", model]
         try:
@@ -196,6 +222,23 @@ class ClaudeCodeAgent:
         }
         return usage, cost_micros
 
+    def run_role(
+        self, prompt: str, cwd: Path, *, read_only: bool = False, model: Optional[str] = None
+    ) -> dict:
+        """Run a single role-scoped agent invocation against an existing workdir and
+        return {summary, usage, cost_usd_micros, turns, model}. Used by the governed
+        pipeline to dispatch each step as an ISOLATED context — a fresh `claude -p` process
+        with no shared session state between roles. `model` routes low-cost vs strong."""
+        data = self._invoke(prompt, cwd, read_only=read_only, model=model)
+        usage, cost_micros = self._usage(data, self.settings)
+        return {
+            "summary": _as_text(data.get("result")).strip() or "(no summary returned)",
+            "usage": usage,
+            "cost_usd_micros": cost_micros,
+            "turns": int(data.get("num_turns") or 0),
+            "model": model or usage.get("model"),
+        }
+
     def run(
         self, spec: CodeTaskSpec, repo: RepoContext, sandbox: EphemeralSandbox
     ) -> CodeAgentResult:
@@ -204,7 +247,7 @@ class ClaudeCodeAgent:
         prompt = self._build_prompt(spec, repo)
         data = self._invoke(prompt, sandbox.path)
         usage, cost_micros = self._usage(data, self.settings)
-        summary = (data.get("result") or "").strip() or "(no summary returned)"
+        summary = _as_text(data.get("result")).strip() or "(no summary returned)"
         turns = int(data.get("num_turns") or 0)
 
         # Authoritative verification: BOSS re-runs the test commands itself.
@@ -228,9 +271,154 @@ class ClaudeCodeAgent:
         )
 
 
+# --------------------------------------------------------------------------- #
+#  Native chat-API implementation (model-agnostic: OpenAI / Azure)            #
+# --------------------------------------------------------------------------- #
+class NativeCodeAgent:
+    """Model-agnostic code agent on the raw chat API (OpenAI or Azure, via OpenAIAdapter).
+
+    The host-side analogue of the guest native loop: the role prompt is the *guidance*; the
+    model impersonates the role. It asks the model for whole-file writes as JSON, applies them
+    in the sandbox working tree, and (for ``run``) re-runs the tests and iterates. No CLI or
+    keychain dependency — works with any chat model the operator's lane routes to.
+    """
+
+    engine = "native"
+
+    _EDIT_SYS = (
+        "You are an expert engineer working in a checked-out git repository (files shown below). "
+        'Reply ONLY as compact JSON: {"summary": str, "files": [{"path": str, "content": str}], '
+        '"done": bool}. Each file is written in FULL (not a patch). Return an empty files list to '
+        "make no changes. Output nothing outside the JSON."
+    )
+    _REVIEW_SYS = (
+        "You are an expert reviewer working in a checked-out git repository (files shown below). "
+        'Reply ONLY as compact JSON: {"summary": str}. Do NOT propose file changes. Put any '
+        "required verdict line inside the summary string."
+    )
+
+    def __init__(self, settings: Settings):
+        self.settings = settings
+        from .openai_adapter import OpenAIAdapter
+
+        self._llm = OpenAIAdapter(settings)
+
+    def _repo_context(self, cwd: Path, *, limit: int = 40) -> str:
+        exts = {".py", ".js", ".ts", ".go", ".java", ".rb", ".rs", ".json", ".md", ".txt",
+                ".cfg", ".toml", ".yaml", ".yml", ".gradle", ".xml"}
+        files: list[str] = []
+        for p in sorted(cwd.rglob("*")):
+            if not p.is_file() or ".git" in p.parts:
+                continue
+            files.append(p.relative_to(cwd).as_posix())
+        blobs: list[str] = []
+        for rel in files:
+            fp = cwd / rel
+            try:
+                if fp.suffix in exts and fp.stat().st_size < 20000:
+                    blobs.append(f"--- {rel} ---\n{fp.read_text(errors='ignore')}")
+            except OSError:
+                continue
+        listing = "\n".join(files) or "(empty repo)"
+        return f"REPO FILES:\n{listing}\n\nFILE CONTENTS:\n" + "\n\n".join(blobs[:limit])
+
+    @staticmethod
+    def _safe_json(content: str) -> dict:
+        s = (content or "").strip()
+        if s.startswith("```"):
+            s = s.split("```", 2)[1] if "```" in s[3:] else s[3:]
+            if s.startswith("json"):
+                s = s[4:]
+        try:
+            return json.loads(s)
+        except Exception:
+            i, j = s.find("{"), s.rfind("}")
+            if i != -1 and j > i:
+                try:
+                    return json.loads(s[i:j + 1])
+                except Exception:
+                    pass
+            return {"summary": (content or "")[:400], "files": []}
+
+    def _apply_files(self, cwd: Path, files: list) -> list[str]:
+        written: list[str] = []
+        for f in files or []:
+            path = (f.get("path") or "").lstrip("/")
+            if not path or ".." in path:
+                continue
+            fp = cwd / path
+            fp.parent.mkdir(parents=True, exist_ok=True)
+            fp.write_text(f.get("content", ""), encoding="utf-8")
+            written.append(path)
+        return written
+
+    def run_role(
+        self, prompt: str, cwd: Path, *, read_only: bool = False, model: Optional[str] = None
+    ) -> dict:
+        from .openai_adapter import estimate_cost_usd_micros
+
+        system = self._REVIEW_SYS if read_only else self._EDIT_SYS
+        msg, usage = self._llm.create_chat_completion(
+            [{"role": "system", "content": system},
+             {"role": "user", "content": f"{prompt}\n\n{self._repo_context(cwd)}"}],
+            model_override=model or None,
+        )
+        data = self._safe_json(msg.get("content") or "")
+        if not read_only:
+            self._apply_files(cwd, data.get("files", []))
+        return {
+            "summary": _as_text(data.get("summary")).strip() or "(no summary)",
+            "usage": usage,
+            "cost_usd_micros": estimate_cost_usd_micros(usage),
+            "turns": 1,
+            "model": usage.get("model"),
+        }
+
+    def run(
+        self, spec: CodeTaskSpec, repo: RepoContext, sandbox: EphemeralSandbox
+    ) -> CodeAgentResult:
+        if sandbox.path is None:
+            raise RuntimeError("Sandbox must be provisioned before running the agent.")
+        criteria = "\n".join(f"- {c}" for c in spec.acceptance_criteria) or "- (none)"
+        tline = "\n".join(f"- {c}" for c in spec.test_commands) or "- (none)"
+        base = (f"TASK: {spec.title}\n\n{spec.instructions}\n\nACCEPTANCE CRITERIA:\n{criteria}\n\n"
+                f"TEST COMMANDS (make these pass):\n{tline}\n")
+        summary = ""
+        total_cost = 0
+        usage_last: dict = {}
+        feedback = ""
+        turns = 0
+        for _ in range(4):
+            turns += 1
+            r = self.run_role(
+                base + (f"\n\nThe previous attempt's tests FAILED:\n{feedback}\nFix it."
+                        if feedback else ""),
+                sandbox.path,
+            )
+            summary = r["summary"] or summary
+            total_cost += int(r.get("cost_usd_micros") or 0)
+            usage_last = r.get("usage") or usage_last
+            tests = [sandbox.run(cmd) for cmd in spec.test_commands]
+            if (all(t.ok for t in tests) if tests else False):
+                break
+            feedback = "\n\n".join(
+                f"$ {t.command} (exit {t.exit_code})\n{((t.stdout or '') + (t.stderr or ''))[-1500:]}"
+                for t in tests if not t.ok
+            )[:6000]
+        tests = [sandbox.run(cmd) for cmd in spec.test_commands]
+        tests_passed = all(t.ok for t in tests) if tests else False
+        return CodeAgentResult(
+            summary=summary or "(no summary)", diff=sandbox.diff(),
+            diff_summary=sandbox.diff_summary(), tests=tests, tests_passed=tests_passed,
+            cost_usd_micros=total_cost, usage=usage_last, transcript=summary,
+            turns=turns, engine=self.engine,
+        )
+
+
 def make_code_agent(settings: Settings) -> CodeAgent:
     engine = (settings.code_agent_engine or "claude_code").lower()
     if engine == "claude_code":
         return ClaudeCodeAgent(settings)
-    # Phase 1: native Agent-SDK implementation slots in here behind the same seam.
+    if engine in ("native", "openai", "azure"):
+        return NativeCodeAgent(settings)
     raise NotImplementedError(f"Unknown code_agent_engine: {settings.code_agent_engine!r}")
