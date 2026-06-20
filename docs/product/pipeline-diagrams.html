@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Governed Coding Pipeline — Interactive Diagrams</title>
+<style>
+  :root { --bg:#f4f6f8; --card:#fff; --line:#dde2e7; --ink:#1c2530; --muted:#5b6470; --accent:#1565c0; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+         background:var(--bg); color:var(--ink); }
+  header { padding:22px 28px 6px; }
+  header h1 { margin:0 0 4px; font-size:20px; }
+  header p { margin:0; color:var(--muted); font-size:13px; }
+  .wrap { padding:14px 28px 40px; display:flex; flex-direction:column; gap:18px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; overflow:hidden;
+          box-shadow:0 1px 2px rgba(0,0,0,.04); }
+  .card-head { display:flex; align-items:center; justify-content:space-between; gap:10px;
+               padding:10px 14px; border-bottom:1px solid var(--line); background:#fafbfc; }
+  .card-head h2 { margin:0; font-size:14px; }
+  .card-head .hint { color:var(--muted); font-size:11.5px; }
+  .btns { display:flex; gap:6px; }
+  button { font-size:12.5px; padding:5px 11px; border:1px solid #c2c8cf; background:#fff; color:var(--ink);
+           border-radius:7px; cursor:pointer; }
+  button:hover { background:#f0f3f6; }
+  button.primary { border-color:var(--accent); color:var(--accent); }
+  .stage { position:relative; height:480px; background:
+           radial-gradient(circle at 1px 1px, #e7ebef 1px, transparent 0) 0 0/22px 22px; }
+  .stage svg { width:100% !important; height:100% !important; max-width:none !important; display:block; }
+  /* Fullscreen: the stage fills the screen and stays pan/zoomable */
+  .stage:fullscreen { height:100vh; width:100vw; background:#fff; }
+  .stage:-webkit-full-screen { height:100vh; width:100vw; background:#fff; }
+  .fs-exit { position:absolute; top:12px; right:12px; z-index:5; display:none; }
+  .stage:fullscreen .fs-exit, .stage:-webkit-full-screen .fs-exit { display:inline-block; }
+  .err { padding:16px; color:#b23c17; font-size:13px; white-space:pre-wrap; }
+  /* svg-pan-zoom controls styling */
+  .svg-pan-zoom-control { opacity:.65; } .svg-pan-zoom-control:hover { opacity:1; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Governed Coding Pipeline — Interactive Diagrams</h1>
+  <p>Scroll to zoom · drag to pan when zoomed in · use the on-canvas controls · <b>Fullscreen</b> for a full-screen view.</p>
+</header>
+<div class="wrap" id="wrap"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/svg-pan-zoom@3.6.1/dist/svg-pan-zoom.min.js"></script>
+<script>
+const DIAGRAMS = [
+  { title: "1 · Value flow — the three pillars", def: `
+flowchart LR
+    T([Coding task]) --> DIAL{{"Cost/rigor dial (profile + risk)"}}
+    DIAL --> P["Governed pipeline: role-separated steps"]
+    P --> M["Any model (Claude / OpenAI / Azure / local)"]
+    P --> G[("Fail-closed gate + receipts")]
+    G --> OUT([Mergeable change + evidence trail])
+    classDef a fill:#e6f3ff,stroke:#333,color:#000
+    classDef b fill:#fff3cd,stroke:#333,color:#000
+    classDef c fill:#d4edda,stroke:#333,color:#000
+    class P,M a
+    class DIAL b
+    class G,OUT c
+` },
+  { title: "2 · The pipeline — plain steps, run by different agents", def: `
+flowchart TD
+    Start([Task + risk]) --> S0["standards"] --> S1["spec"] --> S2["refine"] --> S3["plan"]
+    S3 --> S4{"review plan"}
+    S4 -->|"issues, loop<3"| S3
+    S4 -->|clean| G1{{"approve plan (human, risk>=2)"}}
+    G1 -->|approve| S6["tasks"] --> S7["write tests"] --> S8["implement"]
+    S8 --> S9{"review code"}
+    S9 -->|"not safe, loop<3"| S8
+    S9 -->|safe| S10{"security check"}
+    S10 -->|"issues, loop<3"| S8
+    S10 -->|clean| S11{"check tests"}
+    S11 -->|"too weak"| S7
+    S11 -->|strong| S12{"run all tests"}
+    S12 -->|"broke, loop<3"| S8
+    S12 -->|green| S13{"consistency check"}
+    S13 -->|"drift"| S8
+    S13 -->|agree| S14{"final gate - FAILS CLOSED"}
+    S14 -->|fail| S8
+    S14 -->|pass| G2{{"approve (human; 2 people at top risk)"}}
+    G2 -->|approve| Done([Mergeable change + receipts])
+    classDef gate fill:#ffd700,stroke:#000,color:#000
+    classDef chk fill:#ffcccc,stroke:#000,color:#000
+    classDef stp fill:#e6f3ff,stroke:#000,color:#000
+    classDef dn fill:#d4edda,stroke:#000,color:#000
+    class G1,G2 gate
+    class S4,S9,S10,S11,S12,S13,S14 chk
+    class S0,S1,S2,S3,S6,S7,S8 stp
+    class Start,Done dn
+` },
+  { title: "3 · The cost / rigor dial", def: `
+flowchart LR
+    A["Profile: lean / balanced / strict / custom"] --> C
+    B["Task risk (inferred; sensitive = high)"] --> C
+    C{{"Resolved tier (0-3)"}} --> D["Steps that run: tier 0 = 1 agent, tier 2 = 3+"]
+    C --> E["Model per step: low_cost vs strong"]
+    D --> F([Cost & latency])
+    E --> F
+    classDef x fill:#e6f3ff,stroke:#333,color:#000
+    classDef y fill:#fff3cd,stroke:#333,color:#000
+    class A,B,D,E x
+    class C y
+` },
+];
+
+mermaid.initialize({ startOnLoad: false, theme: "default", securityLevel: "loose",
+                     flowchart: { htmlLabels: true, curve: "basis" } });
+
+const wrap = document.getElementById("wrap");
+
+function makeCard(d, i) {
+  const card = document.createElement("div"); card.className = "card";
+  card.innerHTML = `
+    <div class="card-head">
+      <div><h2>${d.title}</h2><span class="hint">scroll = zoom · drag = pan · fullscreen for full view</span></div>
+      <div class="btns">
+        <button data-act="reset" data-i="${i}">Reset view</button>
+        <button class="primary" data-act="fs" data-i="${i}">⤢ Fullscreen</button>
+      </div>
+    </div>
+    <div class="stage" id="stage-${i}">
+      <button class="fs-exit" data-act="exit" data-i="${i}">Exit fullscreen ✕</button>
+      <div class="err" id="err-${i}" style="display:none"></div>
+    </div>`;
+  wrap.appendChild(card);
+  return card;
+}
+
+const panzoom = {};
+
+async function renderAll() {
+  for (let i = 0; i < DIAGRAMS.length; i++) {
+    const d = DIAGRAMS[i];
+    makeCard(d, i);
+    const stage = document.getElementById("stage-" + i);
+    try {
+      const { svg } = await mermaid.render("m" + i, d.def.trim());
+      const holder = document.createElement("div");
+      holder.innerHTML = svg;
+      const svgEl = holder.querySelector("svg");
+      svgEl.style.maxWidth = "none"; svgEl.style.width = "100%"; svgEl.style.height = "100%";
+      stage.appendChild(svgEl);
+      panzoom[i] = svgPanZoom(svgEl, {
+        zoomEnabled: true, panEnabled: true, controlIconsEnabled: true,
+        dblClickZoomEnabled: true, mouseWheelZoomEnabled: true,
+        fit: true, center: true, minZoom: 0.2, maxZoom: 12, zoomScaleSensitivity: 0.35,
+      });
+    } catch (e) {
+      const err = document.getElementById("err-" + i);
+      err.style.display = "block"; err.textContent = "Diagram failed to render:\n" + (e && e.message || e);
+    }
+  }
+}
+
+function resize(i) {
+  const pz = panzoom[i]; if (!pz) return;
+  pz.resize(); pz.fit(); pz.center();
+}
+
+document.addEventListener("click", (ev) => {
+  const btn = ev.target.closest("button[data-act]"); if (!btn) return;
+  const i = +btn.dataset.i; const act = btn.dataset.act;
+  const stage = document.getElementById("stage-" + i);
+  if (act === "reset") resize(i);
+  if (act === "fs") {
+    (stage.requestFullscreen || stage.webkitRequestFullscreen).call(stage);
+  }
+  if (act === "exit") {
+    (document.exitFullscreen || document.webkitExitFullscreen).call(document);
+  }
+});
+
+// When entering/leaving fullscreen, re-fit the pan/zoom to the new size.
+function onFsChange() {
+  const el = document.fullscreenElement || document.webkitFullscreenElement;
+  DIAGRAMS.forEach((_, i) => setTimeout(() => resize(i), 60));
+  void el;
+}
+document.addEventListener("fullscreenchange", onFsChange);
+document.addEventListener("webkitfullscreenchange", onFsChange);
+window.addEventListener("resize", () => DIAGRAMS.forEach((_, i) => resize(i)));
+
+renderAll();
+</script>
+</body>
+</html>

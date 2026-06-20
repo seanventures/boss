@@ -7,6 +7,8 @@ customer controls, and any model behind it.
 Status: core runtime **live** (model-agnostic, proven on Claude + Azure gpt-4o); cost-control
 feature **complete** (runtime + API + UI). Date: 2026-06-19. Owner: param.
 Canonical shareable skill: `skills/boss-governed-coding-pipeline/SKILL.md`.
+Interactive diagrams (fullscreen zoom + drag-to-pan): open `docs/product/pipeline-diagrams.html`
+in a browser.
 
 ---
 
