@@ -438,6 +438,16 @@ class BudgetGovernor:
             "post_reservation_available_usd_micros": post_available,
         }
 
+    def _burst_cap(self, connection: Connection, project_id: str) -> int:
+        row = connection.execute(
+            text(
+                "SELECT burst_cap_usd_micros_per_min FROM budget_policies "
+                "WHERE scope_type = 'project' AND scope_id = :p ORDER BY created_at DESC LIMIT 1"
+            ),
+            {"p": project_id},
+        ).mappings().first()
+        return int(row["burst_cap_usd_micros_per_min"]) if row else 0
+
     def reserve(
         self,
         connection: Connection,
@@ -493,6 +503,31 @@ class BudgetGovernor:
                 "budget_state": snapshot["budget_state"],
                 "message": "Budget cap exceeded. Decision created.",
             }
+
+        # Burst cap: limit $/min to absorb sudden spikes (spec §22.4 cost-anomaly controls).
+        burst_cap = self._burst_cap(connection, project_id)
+        if burst_cap:
+            recent = connection.execute(
+                text(
+                    "SELECT COALESCE(SUM(amount_usd_micros), 0) FROM budget_reservations "
+                    "WHERE project_id = :p AND created_at >= now() - interval '60 seconds' "
+                    "AND status IN ('active', 'consumed')"
+                ),
+                {"p": project_id},
+            ).scalar() or 0
+            if int(recent) + amount_usd_micros > burst_cap:
+                record_policy_eval(
+                    connection, project_id, "budget.reserve", "deny", action=category,
+                    reason="burst cap exceeded ($/min)",
+                    detail={"burst_cap_usd_micros_per_min": burst_cap,
+                            "recent_60s_usd_micros": int(recent),
+                            "requested_usd_micros": amount_usd_micros})
+                return {
+                    "status": "denied",
+                    "decision_id": None,
+                    "budget_state": snapshot["budget_state"],
+                    "message": "Burst cap exceeded ($/min). Retry shortly.",
+                }
 
         if allocation_id:
             allocation = self._get_allocation(
