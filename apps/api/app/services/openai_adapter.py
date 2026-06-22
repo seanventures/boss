@@ -8,6 +8,7 @@ from openai import APIConnectionError, APITimeoutError, AzureOpenAI, OpenAI, Rat
 
 from ..config import Settings
 from .github_adapter import IntegrationConfigurationError
+from .redaction import redact as _redact
 
 _RETRYABLE = (RateLimitError, APITimeoutError, APIConnectionError)
 
@@ -86,7 +87,11 @@ class OpenAIAdapter:
         prompt: str,
         system_prompt: Optional[str] = None,
         model: Optional[str] = None,
+        redact: bool = False,
     ) -> Tuple[str, str, dict]:
+        # Data-boundary safety: redact PII before the prompt crosses to the external model.
+        if redact:
+            prompt, _ = _redact(prompt)
         if self._azure_enabled():
             client = AzureOpenAI(
                 api_key=self.settings.azure_openai_key,
@@ -122,12 +127,18 @@ class OpenAIAdapter:
         tools: Optional[list[dict]] = None,
         tool_choice: str = "auto",
         model_override: Optional[str] = None,
+        redact: bool = False,
     ) -> Tuple[dict, dict]:
         """One turn of a tool-calling conversation.
 
         Returns (message, usage) where message = {content, tool_calls, raw}.
         tool_calls is a list of {id, name, arguments(JSON string)} or None.
         """
+        if redact:  # data-boundary safety: mask PII in message content before the external call
+            messages = [
+                {**m, "content": _redact(m["content"])[0]} if isinstance(m.get("content"), str) else m
+                for m in messages
+            ]
         if self._azure_enabled():
             client = AzureOpenAI(
                 api_key=self.settings.azure_openai_key,
