@@ -32,7 +32,7 @@ from ..config import Settings
 from ..db import begin
 from .code_agent import make_code_agent
 from .code_task_service import _fail, _release, _set_phase, load_code_task_run
-from .core import emit_event, make_id
+from .core import create_blocking_decision, emit_event, make_id
 from .github_app_adapter import GitHubAppAdapter
 from .pipeline_profile_service import resolve_for_run
 from .pipeline_profiles import infer_risk_tier, model_for_step
@@ -161,7 +161,10 @@ def _review_prompt(title, criteria):
 
 
 def _parse_verdict(summary: str) -> str:
-    m = re.findall(r"VERDICT:\s*(SURVIVED|REFUTED)", summary.upper())
+    up = summary.upper()
+    m = re.findall(r"VERDICT:\s*(SURVIVED|REFUTED)", up)
+    if not m:  # the model sometimes omits the "VERDICT:" prefix — accept the keyword anywhere
+        m = re.findall(r"\b(SURVIVED|REFUTED)\b", up)
     if not m:
         return "not_run"
     return "survived" if m[-1] == "SURVIVED" else "refuted"
@@ -234,6 +237,56 @@ def _review_plan_prompt(title, plan):
     )
 
 
+def _consistency_prompt(title, criteria, design):
+    crit = "\n".join(f"- {c}" for c in criteria) or "- (the task description)"
+    spec = (design or {}).get("spec", "")
+    extra = f"\n\nAGREED SPEC:\n{spec}" if spec else ""
+    return (
+        "You are a reviewer checking internal consistency. Read the implementation and the tests "
+        "and confirm they agree with the task and its acceptance criteria: every criterion is "
+        "implemented and tested, names and behaviour match the spec, and nothing contradicts. Do "
+        "NOT edit any files. End with EXACTLY one final line:\n"
+        "  CONSISTENT: YES\n  CONSISTENT: NO\n\n"
+        f"TASK: {title}\n\nACCEPTANCE CRITERIA:\n{crit}{extra}"
+    )
+
+
+def _parse_consistency(summary: str) -> str:
+    m = re.findall(r"CONSISTENT:\s*(YES|NO)", summary.upper())
+    if not m:
+        return "not_run"
+    return "consistent" if m[-1] == "YES" else "drift"
+
+
+def _requires_plan_approval(risk_tier: int) -> bool:
+    # Top-risk changes pause for a human to sign off the plan BEFORE any code is written.
+    return risk_tier >= 3
+
+
+def _block_for_plan_approval(engine, sf, *, run_id, project_id, task_id, reservation_id,
+                             design, risk_tier):
+    """Wire-Phase 2b: pause the run after the design phase, persist the design so the resumed run
+    reuses it, release budget + sandbox during the wait, and raise a Decision whose approval
+    re-enqueues the code.task job (decisions._handle_approved_follow_on → resume_code_task)."""
+    with begin(engine) as c:
+        c.execute(
+            text("UPDATE code_task_runs SET state = COALESCE(state, '{}'::jsonb) || CAST(:s AS JSONB), "
+                 "updated_at=now() WHERE id=:id"),
+            {"s": json.dumps({"design": design, "awaiting_plan_approval": True}), "id": run_id})
+        _release(sf, c, project_id, reservation_id, "Paused for human plan approval (Wire-Phase 2b).")
+        dec_id = create_blocking_decision(
+            c, project_id, task_id,
+            "Approve the technical plan before any code is written?",
+            {"action": "resume_code_task", "run_id": run_id, "plan": (design.get("plan") or "")[:4000]},
+            {"phase": "plan", "risk_tier": risk_tier},
+            "High-risk change: the plan needs human sign-off before implementation.",
+            risk_tier=risk_tier)
+        c.execute(text("UPDATE code_task_runs SET status='blocked', phase='awaiting_plan_approval', "
+                       "decision_id=:d, updated_at=now() WHERE id=:id"),
+                  {"d": dec_id, "id": run_id})
+    return {"status": "blocked", "done": True, "awaiting_plan_approval": True, "decision_id": dec_id}
+
+
 # --------------------------------------------------------------------------- #
 #  The governed job handler                                                   #
 # --------------------------------------------------------------------------- #
@@ -261,6 +314,10 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
     with begin(engine) as c:
         profile = resolve_for_run(c, project_id, spec.get("profile"), settings)
     risk_tier = infer_risk_tier({**spec, "title": title}, profile)
+    # Resume support (Wire-Phase 2b): if this run already passed plan approval, its design was
+    # persisted — reuse it and skip the design phase + the gate.
+    prior_state = run.get("state") or {}
+    resume_design = prior_state.get("design") if prior_state.get("awaiting_plan_approval") else None
 
     with begin(engine) as c:
         reservation = sf.budget.reserve(
@@ -310,7 +367,12 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
         # approve-plan gate is Wire-Phase 2b; for now review plan records a PLAN: OK/REVISE note.)
         design: dict = {}
         do_design = risk_tier >= 2
-        if do_design:
+        if do_design and resume_design:
+            # Resuming after human plan approval — reuse the approved design, skip re-running it.
+            design = resume_design
+            instructions = (f"{instructions}\n\nREFINED SPEC:\n{design.get('spec', '')}"
+                            f"\n\nTECHNICAL PLAN:\n{design.get('plan', '')}")
+        elif do_design:
             with begin(engine) as c:
                 _set_phase(c, run_id, "design")
             d1 = agent.run_role(_standards_prompt(), root, read_only=True,
@@ -330,6 +392,11 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
             # feed the refined spec + plan forward so write-tests/implement are spec-driven
             instructions = (f"{instructions}\n\nREFINED SPEC:\n{d2.get('summary', '')}"
                             f"\n\nTECHNICAL PLAN:\n{d3.get('summary', '')}")
+            # HUMAN APPROVE-PLAN GATE (Wire-Phase 2b): top risk pauses for sign-off before code.
+            if _requires_plan_approval(risk_tier):
+                return _block_for_plan_approval(
+                    engine, sf, run_id=run_id, project_id=project_id, task_id=task_id,
+                    reservation_id=reservation_id, design=design, risk_tier=risk_tier)
 
         r1 = {"cost_usd_micros": 0, "summary": "", "usage": {}, "model": None}
         test_files: list[str] = []
@@ -376,8 +443,10 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
         r3 = {"cost_usd_micros": 0, "summary": "", "model": None}
         r4 = {"cost_usd_micros": 0, "summary": "", "model": None}
         r5 = {"cost_usd_micros": 0, "summary": "", "model": None}
+        r6 = {"cost_usd_micros": 0, "summary": "", "model": None}
         verdict = "skipped"
         sec_verdict = "skipped"
+        cons_verdict = "skipped"
         mutation_caught = None
         regressions_ok = None
         panel_parallel = False
@@ -405,7 +474,14 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
             def _do_full():
                 panel["full"] = bool(sandbox.run("python3 -m unittest discover -v").ok)
 
-            checks = [_do_review, _do_security, _do_full]
+            def _do_consistency():
+                rr = agent.run_role(_consistency_prompt(title, criteria, design), root,
+                                    read_only=True, model=_model_for("consistency_check"))
+                with lock:
+                    panel_cost["v"] += int(rr.get("cost_usd_micros") or 0)
+                panel["consistency"] = (rr, _parse_consistency(rr.get("summary", "")))
+
+            checks = [_do_review, _do_security, _do_full, _do_consistency]
             max_workers = min(max(1, settings.code_agent_max_concurrency), len(checks))
             panel_parallel = max_workers > 1
             with ThreadPoolExecutor(max_workers=max_workers) as pool:
@@ -413,6 +489,7 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
             cost += panel_cost["v"]
             r3, verdict = panel["review"]
             r4, sec_verdict = panel["security"]
+            r6, cons_verdict = panel["consistency"]
             regressions_ok = panel["full"]
 
             # check tests (mutation) — serial: it edits the workdir, then restores it so the PR diff
@@ -445,10 +522,12 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
                 gates["tests_strong_enough"] = mutation_caught
             if regressions_ok is not None:
                 gates["nothing_broke"] = regressions_ok
+            gates["consistent"] = cons_verdict != "drift"  # block only on explicit drift
 
         steps_run = (["standards", "spec", "plan", "review_plan"] if do_design else []) \
             + (["write_tests"] if do_separate_tests else []) + ["implement"] \
-            + (["review_code", "security_check", "check_tests", "run_all_tests"] if do_review else [])
+            + (["review_code", "security_check", "check_tests", "run_all_tests", "consistency_check"]
+               if do_review else [])
         evidence = {
             "risk_tier": risk_tier,
             "profile": profile["name"],
@@ -460,8 +539,10 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
                 "review_code": int(r3.get("cost_usd_micros") or 0),
                 "security_check": int(r4.get("cost_usd_micros") or 0),
                 "check_tests": int(r5.get("cost_usd_micros") or 0),
+                "consistency_check": int(r6.get("cost_usd_micros") or 0),
             },
             "security_verdict": sec_verdict,
+            "consistency_verdict": cons_verdict,
             "mutation_caught": mutation_caught,
             "regressions_ok": regressions_ok,
             "panel_parallel": panel_parallel,

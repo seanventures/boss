@@ -1,11 +1,33 @@
 from __future__ import annotations
 
+import random
+import time
 from typing import Optional, Tuple
 
-from openai import AzureOpenAI, OpenAI
+from openai import APIConnectionError, APITimeoutError, AzureOpenAI, OpenAI, RateLimitError
 
 from ..config import Settings
 from .github_adapter import IntegrationConfigurationError
+
+_RETRYABLE = (RateLimitError, APITimeoutError, APIConnectionError)
+
+
+def _with_retry(call, *, tries: int = 5, base: float = 2.0):
+    """Call an OpenAI request, retrying on 429 / transient errors with exponential backoff +
+    jitter. Honours a Retry-After header when the provider supplies one."""
+    for attempt in range(tries):
+        try:
+            return call()
+        except _RETRYABLE as exc:
+            if attempt == tries - 1:
+                raise
+            delay = base * (2 ** attempt) + random.uniform(0, 1)
+            retry_after = getattr(getattr(exc, "response", None), "headers", {}) or {}
+            try:
+                delay = max(delay, float(retry_after.get("retry-after")))
+            except (TypeError, ValueError):
+                pass
+            time.sleep(min(delay, 30.0))
 
 # USD per 1,000,000 tokens: (input, output). Turns real token usage into a
 # dollar cost (micros) for budget settlement and reporting.
@@ -76,7 +98,9 @@ class OpenAIAdapter:
                 messages.append({"role": "system", "content": system_prompt})
             messages.append({"role": "user", "content": prompt})
             deployment = self.settings.azure_openai_deployment or "gpt-4o"
-            response = client.chat.completions.create(model=deployment, messages=messages)
+            response = _with_retry(
+                lambda: client.chat.completions.create(model=deployment, messages=messages)
+            )
             text = response.choices[0].message.content or ""
             return response.id, text, _usage_from_response(response, deployment)
 
@@ -85,11 +109,11 @@ class OpenAIAdapter:
 
         client = OpenAI(api_key=self.settings.openai_api_key)
         used_model = model or self.settings.openai_model
-        response = client.responses.create(
+        response = _with_retry(lambda: client.responses.create(
             model=used_model,
             instructions=system_prompt,
             input=prompt,
-        )
+        ))
         return response.id, response.output_text, _usage_from_response(response, used_model)
 
     def create_chat_completion(
@@ -123,7 +147,7 @@ class OpenAIAdapter:
         if tools:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = tool_choice
-        response = client.chat.completions.create(**kwargs)
+        response = _with_retry(lambda: client.chat.completions.create(**kwargs))
         msg = response.choices[0].message
         tool_calls = None
         if getattr(msg, "tool_calls", None):
