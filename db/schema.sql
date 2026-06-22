@@ -1720,3 +1720,15 @@ CREATE TABLE IF NOT EXISTS canary_runs (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_canary_runs_project ON canary_runs (project_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS policy_eval_log (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  boundary TEXT NOT NULL,        -- budget.reserve | comms.delivery | data_boundary | approval | ...
+  action TEXT,                   -- what was being attempted
+  decision TEXT NOT NULL,        -- allow | deny | defer
+  reason TEXT,
+  detail JSONB,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_policy_eval_log_project ON policy_eval_log (project_id, created_at DESC);

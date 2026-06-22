@@ -7260,6 +7260,27 @@ def canaries_list(project_id: str, limit: int = 20) -> dict:
     return {"items": canaries_svc.list_canary_runs(engine, project_id, limit)}
 
 
+@app.get("/v1/policy-evals")
+def policy_evals_list(project_id: str, limit: int = 50, decision: Optional[str] = None) -> dict:
+    """The policy-evaluation audit trail (allow/deny/defer at every enforcement boundary)."""
+    clause = "AND decision = :decision" if decision else ""
+    params: dict = {"p": project_id, "l": limit}
+    if decision:
+        params["decision"] = decision
+    with begin(engine) as connection:
+        rows = connection.execute(
+            text(
+                f"""
+                SELECT id, boundary, action, decision, reason, detail, created_at
+                FROM policy_eval_log WHERE project_id = :p {clause}
+                ORDER BY created_at DESC LIMIT :l
+                """
+            ),
+            params,
+        ).mappings().all()
+    return {"items": [dict(r) for r in rows]}
+
+
 @app.get("/v1/budget/forecast", response_model=BudgetForecastResponse)
 def budget_forecast(
     scope_type: str,

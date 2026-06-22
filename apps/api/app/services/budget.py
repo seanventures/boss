@@ -8,7 +8,14 @@ from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
 from ..config import Settings
-from .core import create_blocking_decision, emit_event, expires_at, make_id, now_utc
+from .core import (
+    create_blocking_decision,
+    emit_event,
+    expires_at,
+    make_id,
+    now_utc,
+    record_policy_eval,
+)
 
 
 class BudgetGovernor:
@@ -475,6 +482,11 @@ class BudgetGovernor:
                 decision_id,
                 {"requested_usd_micros": amount_usd_micros, "reason": reason},
             )
+            record_policy_eval(
+                connection, project_id, "budget.reserve", "deny",
+                action=category, reason="budget cap exceeded",
+                detail={"requested_usd_micros": amount_usd_micros,
+                        "budget_state": snapshot["budget_state"], "decision_id": decision_id})
             return {
                 "status": "denied",
                 "decision_id": decision_id,
@@ -562,6 +574,10 @@ class BudgetGovernor:
                 "allocation_id": allocation_id,
             },
         )
+        record_policy_eval(
+            connection, project_id, "budget.reserve", "allow",
+            action=category, reason="within budget",
+            detail={"amount_usd_micros": amount_usd_micros, "reservation_id": reservation_id})
         fresh = self.status_for_project(connection, project_id)
         return {
             "status": "reserved",
