@@ -75,13 +75,13 @@ consensus engine · 10/10 MVP API endpoints · audit export + replay bundles.
 
 ## Prioritized, phase-wise plan (MVP-first)
 
-### Phase 0 — Complete & *prove* the MVP v0 loop  (≈ Sean's "2-week vertical slice", mostly done)
+### Phase 0 — Complete & *prove* the MVP v0 loop  ✅ DONE (branch `feat/gap-phase0-mvp`)
 Goal: the dogfooding loop is demonstrably end-to-end with the guarantees proven.
-1. Budget intensity slider (endpoint + CEO UI). **[MVP signature control]**
-2. Canary suite: e2e / exactly-once / no-drop / software-factory / router-fallback smokes, nightly. **[proves the non-negotiables]**
-3. CEO outcome command palette (semantic intents).
-4. Plan→job orchestration linkage.
-5. Rollback UI on the change journal.
+1. ✅ Budget intensity slider — `POST /v1/budget/set_intensity` (0–100 → caps/concurrency/tiers) + console slider. Validated.
+2. ✅ Canary suite — `exactly_once` / `no_drop_outbox` / `job_lifecycle` / `budget_reserve_release` (4 pass) + software-factory/router-fallback declared-skipped; `POST /v1/canaries/run`, persisted to `canary_runs`.
+3. ✅ CEO outcome commands — semantic intent in the composer ("set intensity to 70" acts immediately; else → governed command pipeline).
+4. ✅ Plan→job orchestration — `dispatch_plan` turns phases into sequenced child tasks; `POST /v1/plans/{id}/dispatch`. Validated (Design→Build→Ship chain).
+5. ✅ Rollback surfaced on change-journal rows (deep-links to working rollback controls).
 
 ### Phase 1 — Safety & trust moat  (unlocks serious dogfooding + enterprise conversations)
 1. PII sanitizer/redaction + data-boundary enforcement (local-only runner).
