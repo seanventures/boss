@@ -71,6 +71,7 @@ from .schemas import (
     BudgetReleaseRequest,
     BudgetReleaseResponse,
     BudgetSetIntensityRequest,
+    AnomalyScanRequest,
     CanaryRunRequest,
     PlanDispatchRequest,
     BudgetStatusResponse,
@@ -7232,6 +7233,7 @@ def budget_status(scope_type: str, scope_id: str) -> BudgetStatusResponse:
             utilization_ratio=snapshot["utilization_ratio"],
             active_reservations_count=snapshot["active_reservations_count"],
             top_cost_drivers=snapshot["top_cost_drivers"],
+            operational_intensity=snapshot.get("operational_intensity"),
         )
 
 
@@ -7258,6 +7260,13 @@ def canaries_run(payload: CanaryRunRequest) -> dict:
 def canaries_list(project_id: str, limit: int = 20) -> dict:
     from .services import canaries as canaries_svc
     return {"items": canaries_svc.list_canary_runs(engine, project_id, limit)}
+
+
+@app.post("/v1/anomalies/scan")
+def anomalies_scan(payload: AnomalyScanRequest) -> dict:
+    """Scan for operational cost anomalies (retry storms, spend spikes) → incident + auto-lite."""
+    from .services import anomaly_detector
+    return anomaly_detector.scan(engine, settings, payload.project_id, auto_lite=payload.auto_lite)
 
 
 @app.get("/v1/policy-evals")

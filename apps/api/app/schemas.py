@@ -1165,6 +1165,11 @@ class PlanDispatchRequest(BaseModel):
     actor: str = "program_manager"
 
 
+class AnomalyScanRequest(BaseModel):
+    project_id: str
+    auto_lite: bool = True
+
+
 class BudgetStatusResponse(BaseModel):
     scope_type: str
     scope_id: str
@@ -1182,6 +1187,7 @@ class BudgetStatusResponse(BaseModel):
     utilization_ratio: float
     active_reservations_count: int
     top_cost_drivers: list[dict[str, Any]]
+    operational_intensity: Optional[int] = None
 
 
 class BudgetForecastResponse(BaseModel):
