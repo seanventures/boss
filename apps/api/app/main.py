@@ -72,6 +72,7 @@ from .schemas import (
     BudgetReleaseResponse,
     BudgetSetIntensityRequest,
     CanaryRunRequest,
+    PlanDispatchRequest,
     BudgetStatusResponse,
     BudgetReserveRequest,
     BudgetReserveResponse,
@@ -4683,6 +4684,17 @@ def create_plan(payload: PlanCreateRequest) -> PlanSummary:
             actor=payload.actor,
         )
         return PlanSummary(**result)
+
+
+@app.post("/v1/plans/{plan_id}/dispatch")
+def dispatch_plan(plan_id: str, payload: PlanDispatchRequest) -> dict:
+    """Turn a plan's phases into sequenced, executable child tasks (plan → task/job engine)."""
+    with begin(engine) as connection:
+        require_project_actor(connection, payload.project_id, payload.actor, "task_create")
+        try:
+            return intake.dispatch_plan(connection, plan_id, payload.actor)
+        except ValueError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
 
 
 @app.get("/v1/meetings", response_model=MeetingListResponse)

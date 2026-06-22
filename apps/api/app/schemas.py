@@ -1160,6 +1160,11 @@ class CanaryRunRequest(BaseModel):
     actor: str = "canary"
 
 
+class PlanDispatchRequest(BaseModel):
+    project_id: str
+    actor: str = "program_manager"
+
+
 class BudgetStatusResponse(BaseModel):
     scope_type: str
     scope_id: str
