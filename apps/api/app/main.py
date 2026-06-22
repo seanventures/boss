@@ -70,6 +70,7 @@ from .schemas import (
     BudgetReservationSummary,
     BudgetReleaseRequest,
     BudgetReleaseResponse,
+    BudgetSetIntensityRequest,
     BudgetStatusResponse,
     BudgetReserveRequest,
     BudgetReserveResponse,
@@ -7219,6 +7220,18 @@ def budget_status(scope_type: str, scope_id: str) -> BudgetStatusResponse:
             active_reservations_count=snapshot["active_reservations_count"],
             top_cost_drivers=snapshot["top_cost_drivers"],
         )
+
+
+@app.post("/v1/budget/set_intensity")
+def budget_set_intensity(payload: BudgetSetIntensityRequest) -> dict:
+    """CEO Operational Intensity slider (0-100) → spend envelope + scaling limits."""
+    if payload.scope_type != "project":
+        raise HTTPException(status_code=400, detail="Only project scope is supported.")
+    with begin(engine) as connection:
+        result = budget.set_intensity(
+            connection, payload.scope_type, payload.scope_id, payload.intensity, payload.actor
+        )
+    return {"scope_type": payload.scope_type, "scope_id": payload.scope_id, **result}
 
 
 @app.get("/v1/budget/forecast", response_model=BudgetForecastResponse)

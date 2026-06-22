@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import timedelta
 from typing import Any, Optional
 
@@ -62,7 +63,8 @@ class BudgetGovernor:
         policy_row = connection.execute(
             text(
                 """
-                SELECT daily_cap_usd_micros, soft_cap_pct, auto_lite_mode_pct, freeze_provisioning_pct
+                SELECT daily_cap_usd_micros, soft_cap_pct, auto_lite_mode_pct,
+                       freeze_provisioning_pct, operational_intensity
                 FROM budget_policies
                 WHERE scope_type = 'project' AND scope_id = :project_id
                 ORDER BY created_at DESC
@@ -202,6 +204,73 @@ class BudgetGovernor:
             "soft_cap_pct": soft,
             "auto_lite_mode_pct": orange,
             "freeze_provisioning_pct": red,
+            "operational_intensity": policy_row["operational_intensity"],
+        }
+
+    def set_intensity(
+        self, connection: Connection, scope_type: str, scope_id: str, intensity: int,
+        actor: str = "ceo",
+    ) -> dict:
+        """CEO Operational Intensity slider (0-100) → spend envelope + scaling limits.
+        Maps one knob to daily/monthly/burst caps, max concurrency/workers, and allowed model
+        tiers, then upserts the budget policy for the scope. Returns the derived envelope."""
+        intensity = max(0, min(100, int(intensity)))
+        f = intensity / 100.0
+        daily = int(round(5 + f * 495) * 1_000_000)          # $5 → $500 / day
+        monthly = daily * 20
+        burst = int(round((0.5 + f * 9.5) * 1_000_000))      # $0.50 → $10 / min
+        max_concurrent = 1 + round(f * 19)                   # 1 → 20
+        max_workers = 1 + round(f * 29)                       # 1 → 30
+        if intensity < 34:
+            tiers = ["gpt-4o-mini"]                           # low-cost only
+        elif intensity < 67:
+            tiers = ["gpt-4o-mini", "gpt-4o"]
+        else:
+            tiers = ["gpt-4o-mini", "gpt-4o", "gpt-5.2-codex"]
+        params = {
+            "st": scope_type, "sid": scope_id, "daily": daily, "monthly": monthly,
+            "burst": burst, "mc": max_concurrent, "mw": max_workers,
+            "tiers": json.dumps(tiers), "intensity": intensity,
+        }
+        updated = connection.execute(
+            text(
+                """
+                UPDATE budget_policies
+                SET daily_cap_usd_micros = :daily, monthly_cap_usd_micros = :monthly,
+                    burst_cap_usd_micros_per_min = :burst, max_concurrent_jobs = :mc,
+                    max_workers_total = :mw, allowed_model_tiers = CAST(:tiers AS JSONB),
+                    operational_intensity = :intensity, version = version + 1
+                WHERE scope_type = :st AND scope_id = :sid
+                """
+            ),
+            params,
+        )
+        if updated.rowcount == 0:
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO budget_policies (
+                        id, scope_type, scope_id, daily_cap_usd_micros, monthly_cap_usd_micros,
+                        burst_cap_usd_micros_per_min, max_concurrent_jobs, max_workers_total,
+                        allowed_model_tiers, operational_intensity)
+                    VALUES (:id, :st, :sid, :daily, :monthly, :burst, :mc, :mw,
+                            CAST(:tiers AS JSONB), :intensity)
+                    """
+                ),
+                {**params, "id": make_id("bp")},
+            )
+        emit_event(connection, scope_id, "budget.intensity_set", actor, "budget_policy", scope_id,
+                   {"intensity": intensity, "daily_cap_usd_micros": daily,
+                    "max_concurrent_jobs": max_concurrent, "max_workers_total": max_workers,
+                    "allowed_model_tiers": tiers})
+        return {
+            "operational_intensity": intensity,
+            "daily_cap_usd_micros": daily,
+            "monthly_cap_usd_micros": monthly,
+            "burst_cap_usd_micros_per_min": burst,
+            "max_concurrent_jobs": max_concurrent,
+            "max_workers_total": max_workers,
+            "allowed_model_tiers": tiers,
         }
 
     def list_allocations(

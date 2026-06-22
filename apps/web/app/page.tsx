@@ -67,7 +67,8 @@ import { fetchAgentModuleFeed } from "../lib/agent-modules";
 import { fetchAuthSession } from "../lib/auth-session";
 import { fetchInboxFeed, fetchOutboxFeed } from "../lib/comms";
 import { fetchBudgetAllocationFeed } from "../lib/budget-allocations";
-import { fetchBudgetStatus } from "../lib/budget-status";
+import { fetchBudgetStatus, fetchBudgetIntensity } from "../lib/budget-status";
+import { BudgetIntensitySlider } from "./budget-intensity-ui";
 import { fetchBreakGlassGrantFeed } from "../lib/break-glass";
 import { fetchChangeJournalFeed } from "../lib/change-journal";
 import { fetchCommercialFeed } from "../lib/commercial";
@@ -394,6 +395,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
     receipts,
     infrastructureResources,
     budgetStatus,
+    budgetIntensity,
     budgetAllocations,
     auditSummary,
     changeJournal,
@@ -444,6 +446,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
       fetchReceiptFeed(activeProjectId),
       fetchInfrastructureResourceFeed(activeProjectId),
       fetchBudgetStatus(activeProjectId),
+      fetchBudgetIntensity(activeProjectId),
       fetchBudgetAllocationFeed(activeProjectId),
       fetchAuditSummary(activeProjectId),
       fetchChangeJournalFeed(activeProjectId),
@@ -1224,6 +1227,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               Source: `/v1/budget/status` for project {activeProjectId}.
             </p>
           </div>
+
+          <BudgetIntensitySlider projectId={activeProjectId} current={budgetIntensity} />
 
           <article className="stack-card">
             {!budgetStatus.apiReachable ? (

@@ -17,6 +17,17 @@ export async function setPipelineDefaultAction(formData: FormData): Promise<void
   revalidatePath("/");
 }
 
+export async function setBudgetIntensityAction(formData: FormData): Promise<void> {
+  const projectId = getProjectId(formData);
+  const intensity = Number(formData.get("intensity") ?? 50);
+  await fetch(`${API_URL}/v1/budget/set_intensity`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ scope_id: projectId, intensity, actor: getActor(formData) }),
+  });
+  revalidatePath("/");
+}
+
 export async function createPipelineProfileAction(formData: FormData): Promise<void> {
   const projectId = getProjectId(formData);
   const name = String(formData.get("name") ?? "").trim().toLowerCase();

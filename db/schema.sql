@@ -1440,6 +1440,7 @@ CREATE TABLE IF NOT EXISTS budget_policies (
   auto_lite_mode_pct NUMERIC NOT NULL DEFAULT 0.85,
   freeze_provisioning_pct NUMERIC NOT NULL DEFAULT 0.9,
   freeze_tier2_pct NUMERIC NOT NULL DEFAULT 0.95,
+  operational_intensity INTEGER,  -- CEO budget slider 0-100 (null = caps set directly)
   version INTEGER NOT NULL DEFAULT 1,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );

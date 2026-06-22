@@ -1148,6 +1148,13 @@ class BudgetConsumeResponse(BaseModel):
     cost_receipt: CostReceiptSummary
 
 
+class BudgetSetIntensityRequest(BaseModel):
+    scope_id: str
+    intensity: int
+    scope_type: str = "project"
+    actor: str = "ceo"
+
+
 class BudgetStatusResponse(BaseModel):
     scope_type: str
     scope_id: str
