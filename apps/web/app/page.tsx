@@ -2911,6 +2911,25 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                         {item.rollbackPlan ? (
                           <p className="detail">Rollback: {item.rollbackPlan}</p>
                         ) : null}
+                        {(() => {
+                          const t = `${item.artifactType} ${item.changeKind}`.toLowerCase();
+                          const area = t.includes("self_improvement")
+                            ? "ops"
+                            : t.includes("module")
+                              ? "org"
+                              : null;
+                          return area ? (
+                            <p className="detail">
+                              <AreaLink
+                                area={area}
+                                orgId={activeOrgId}
+                                title="Open the rollback control for this change"
+                              >
+                                ↩ Roll back
+                              </AreaLink>
+                            </p>
+                          ) : null;
+                        })()}
                       </div>
                       <code className="mono">{item.taskId ?? item.id}</code>
                     </div>
