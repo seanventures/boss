@@ -631,7 +631,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                   name="command"
                   rows={5}
                   className="textarea"
-                  placeholder="Build the next operator visibility slice and validate it through the sandbox workflow."
+                  placeholder="Type an outcome — e.g. 'Ship the operator visibility slice to staging', or an ops intent like 'set intensity to 70' (acts immediately)."
                   disabled={disableCommandEntry}
                   required
                 />

@@ -271,6 +271,22 @@ export async function resolveDecisionAction(formData: FormData): Promise<void> {
 
 export async function submitCommandAction(formData: FormData): Promise<void> {
   const projectId = getProjectId(formData);
+  const text = String(formData.get("command") ?? "").trim();
+
+  // Semantic outcome intent: budget intensity (e.g. "set intensity to 70", "budget intensity 40").
+  // Recognized ops intents act immediately; everything else flows to the governed command pipeline.
+  const m = text.match(/\b(?:operational\s+)?intensity\b[^0-9]*(\d{1,3})/i);
+  if (m) {
+    const intensity = Math.max(0, Math.min(100, Number(m[1])));
+    await fetch(`${API_URL}/v1/budget/set_intensity`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ scope_id: projectId, intensity, actor: getActor(formData) }),
+    });
+    revalidatePath("/");
+    return;
+  }
+
   const payload = buildCommandRequest(
     formData.get("command"),
     formData.get("deadline"),
