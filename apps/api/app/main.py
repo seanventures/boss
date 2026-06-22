@@ -71,6 +71,7 @@ from .schemas import (
     BudgetReleaseRequest,
     BudgetReleaseResponse,
     BudgetSetIntensityRequest,
+    CanaryRunRequest,
     BudgetStatusResponse,
     BudgetReserveRequest,
     BudgetReserveResponse,
@@ -7232,6 +7233,19 @@ def budget_set_intensity(payload: BudgetSetIntensityRequest) -> dict:
             connection, payload.scope_type, payload.scope_id, payload.intensity, payload.actor
         )
     return {"scope_type": payload.scope_type, "scope_id": payload.scope_id, **result}
+
+
+@app.post("/v1/canaries/run")
+def canaries_run(payload: CanaryRunRequest) -> dict:
+    """Run the canary suite (exactly-once / no-drop / job-lifecycle / budget) and persist results."""
+    from .services import canaries as canaries_svc
+    return canaries_svc.run_canary_suite(engine, settings, payload.project_id, payload.actor)
+
+
+@app.get("/v1/canaries")
+def canaries_list(project_id: str, limit: int = 20) -> dict:
+    from .services import canaries as canaries_svc
+    return {"items": canaries_svc.list_canary_runs(engine, project_id, limit)}
 
 
 @app.get("/v1/budget/forecast", response_model=BudgetForecastResponse)

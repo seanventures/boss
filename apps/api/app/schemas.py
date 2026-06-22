@@ -1155,6 +1155,11 @@ class BudgetSetIntensityRequest(BaseModel):
     actor: str = "ceo"
 
 
+class CanaryRunRequest(BaseModel):
+    project_id: str
+    actor: str = "canary"
+
+
 class BudgetStatusResponse(BaseModel):
     scope_type: str
     scope_id: str

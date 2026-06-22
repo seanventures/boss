@@ -1708,3 +1708,15 @@ CREATE TABLE IF NOT EXISTS meeting_roles (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE(project_id, role_key)
 );
+
+CREATE TABLE IF NOT EXISTS canary_runs (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  status TEXT NOT NULL,            -- pass | fail
+  results JSONB NOT NULL,          -- per-canary {canary, status, detail}
+  passed INTEGER NOT NULL,
+  failed INTEGER NOT NULL,
+  skipped INTEGER NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_canary_runs_project ON canary_runs (project_id, created_at DESC);
