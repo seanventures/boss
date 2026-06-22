@@ -83,12 +83,14 @@ Goal: the dogfooding loop is demonstrably end-to-end with the guarantees proven.
 4. ✅ Plan→job orchestration — `dispatch_plan` turns phases into sequenced child tasks; `POST /v1/plans/{id}/dispatch`. Validated (Design→Build→Ship chain).
 5. ✅ Rollback surfaced on change-journal rows (deep-links to working rollback controls).
 
-### Phase 1 — Safety & trust moat  (unlocks serious dogfooding + enterprise conversations)
-1. PII sanitizer/redaction + data-boundary enforcement (local-only runner).
-2. Unified PolicyEvaluator + `policy_eval_log` audit trail.
-3. Distributed tracing (trace IDs across model/tool/job) + run-viewer/audit linkage.
-4. Cost anomaly detection + burst-cap enforcement + auto lite-mode (with decision artifacts).
-5. Break-glass postmortem enforcement.
+### Phase 1 — Safety & trust moat  (IN PROGRESS, branch `feat/gap-phase0-mvp`)
+1. ✅ **PII sanitizer/redaction** — `redaction.py` + opt-in `redact=` on the model adapter.
+2. ✅ **Policy-eval audit trail** — `policy_eval_log` + `record_policy_eval` + budget-gate wiring + `GET /v1/policy-evals`.
+3. ✅ **Burst-cap enforcement** — `$/min` cap enforced at `reserve()` with deny + policy-eval record.
+4. ✅ **Cost-anomaly detection + auto-lite** — `anomaly_detector.scan` (retry storms, spend spikes) → incident Decision + auto-lite-mode; `POST /v1/anomalies/scan`.
+5. ✅ **Break-glass postmortem** — already auto-created per grant (was overstated as a gap).
+6. ⏳ **Data-boundary enforcement** (local-only tasks pinned to local runner) — invasive (worker-kind awareness).
+7. ⏳ **Distributed tracing** (trace IDs job→model→tool→receipt) — invasive; next focused pass.
 
 ### Phase 2 — Earned autonomy & controlled self-improvement  (the moat / the "BOSS improves BOSS" story)
 1. Self-improvement runtime: canary runner + staged rollout + auto-rollback thresholds.
