@@ -17,6 +17,28 @@ export async function setPipelineDefaultAction(formData: FormData): Promise<void
   revalidatePath("/");
 }
 
+export async function runCanariesAction(formData: FormData): Promise<void> {
+  const projectId = getProjectId(formData);
+  await fetch(`${API_URL}/v1/canaries/run`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ project_id: projectId, actor: getActor(formData) }),
+  });
+  revalidatePath("/");
+}
+
+export async function dispatchPlanAction(formData: FormData): Promise<void> {
+  const projectId = getProjectId(formData);
+  const planId = String(formData.get("plan_id") ?? "").trim();
+  if (!planId) return;
+  await fetch(`${API_URL}/v1/plans/${encodeURIComponent(planId)}/dispatch`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ project_id: projectId, actor: getActor(formData) }),
+  });
+  revalidatePath("/");
+}
+
 export async function setBudgetIntensityAction(formData: FormData): Promise<void> {
   const projectId = getProjectId(formData);
   const intensity = Number(formData.get("intensity") ?? 50);

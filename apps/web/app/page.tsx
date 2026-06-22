@@ -69,6 +69,10 @@ import { fetchInboxFeed, fetchOutboxFeed } from "../lib/comms";
 import { fetchBudgetAllocationFeed } from "../lib/budget-allocations";
 import { fetchBudgetStatus, fetchBudgetIntensity } from "../lib/budget-status";
 import { BudgetIntensitySlider } from "./budget-intensity-ui";
+import { fetchLatestCanary } from "../lib/canaries";
+import { CanaryCard } from "./canary-ui";
+import { fetchPlans } from "../lib/plans";
+import { PlansCard } from "./plans-ui";
 import { fetchBreakGlassGrantFeed } from "../lib/break-glass";
 import { fetchChangeJournalFeed } from "../lib/change-journal";
 import { fetchCommercialFeed } from "../lib/commercial";
@@ -396,6 +400,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
     infrastructureResources,
     budgetStatus,
     budgetIntensity,
+    canaryRun,
+    plansList,
     budgetAllocations,
     auditSummary,
     changeJournal,
@@ -447,6 +453,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
       fetchInfrastructureResourceFeed(activeProjectId),
       fetchBudgetStatus(activeProjectId),
       fetchBudgetIntensity(activeProjectId),
+      fetchLatestCanary(activeProjectId),
+      fetchPlans(activeProjectId),
       fetchBudgetAllocationFeed(activeProjectId),
       fetchAuditSummary(activeProjectId),
       fetchChangeJournalFeed(activeProjectId),
@@ -2655,6 +2663,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               <h2>Mission control — what is running, stuck, or failing.</h2>
             </div>
           </div>
+          <CanaryCard projectId={activeProjectId} run={canaryRun} />
           <WorkflowHealth
             jobStatusCounts={opsQueue.jobStatusCounts}
             jobKindCounts={opsQueue.jobKindCounts}
@@ -5876,6 +5885,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               <h2>Workflow transitions — click a task to trace its run.</h2>
             </div>
           </div>
+          <PlansCard projectId={activeProjectId} plans={plansList} />
           <WorkBoard
             tasks={tasks.items}
             jobs={opsQueue.jobs}
