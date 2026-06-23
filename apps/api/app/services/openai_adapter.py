@@ -74,6 +74,12 @@ class OpenAIAdapter:
     def __init__(self, settings: Settings):
         self.settings = settings
 
+    def _openai_client(self) -> OpenAI:
+        kwargs = {"api_key": self.settings.openai_api_key}
+        if self.settings.openai_base_url:
+            kwargs["base_url"] = self.settings.openai_base_url.rstrip("/")
+        return OpenAI(**kwargs)
+
     def _azure_enabled(self) -> bool:
         return bool(
             self.settings.azure_openai_key
@@ -107,8 +113,21 @@ class OpenAIAdapter:
         if not self.settings.openai_api_key:
             raise IntegrationConfigurationError("OPENAI_API_KEY is not configured.")
 
-        client = OpenAI(api_key=self.settings.openai_api_key)
+        client = self._openai_client()
         used_model = model or self.settings.openai_model
+        if self.settings.openai_base_url:
+            messages: list[dict] = []
+            if system_prompt:
+                messages.append({"role": "system", "content": system_prompt})
+            messages.append({"role": "user", "content": prompt})
+            response = _with_retry(
+                lambda: client.chat.completions.create(
+                    model=used_model,
+                    messages=messages,
+                )
+            )
+            text = response.choices[0].message.content or ""
+            return response.id, text, _usage_from_response(response, used_model)
         response = _with_retry(lambda: client.responses.create(
             model=used_model,
             instructions=system_prompt,
@@ -136,7 +155,7 @@ class OpenAIAdapter:
             )
             model = self.settings.azure_openai_deployment or "gpt-4o"
         elif self.settings.openai_api_key:
-            client = OpenAI(api_key=self.settings.openai_api_key)
+            client = self._openai_client()
             model = self.settings.openai_model
         else:
             raise IntegrationConfigurationError("OPENAI_API_KEY is not configured.")

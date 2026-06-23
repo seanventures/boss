@@ -1,0 +1,75 @@
+# Goldeneye Deployment
+
+BOSS is prepared for goldeneye as a multi-service app: API, worker, and web
+Mission Control. The production compose package uses goldeneye-injected
+Postgres and platform services; it does not run its own Postgres, Redis,
+Supabase, MinIO, or mail infrastructure.
+
+## Files
+
+- `Dockerfile`: multi-target linux/amd64 build for `api`, `worker`, `web`, and optional `account-connect`.
+- `docker-compose.yaml`: goldeneye production compose file with Traefik labels.
+- `app.env.tmpl`: env template for goldeneye to fill and operators to review.
+
+## Single Command
+
+After goldeneye fills `app.env`, deploy from the repo root:
+
+```sh
+docker compose --env-file app.env up -d --build
+```
+
+Use the optional Account Connect service only for hosted/attached Cloud flows:
+
+```sh
+docker compose --env-file app.env --profile account-connect up -d --build
+```
+
+## Routing
+
+BOSS is primarily an admin/control-plane product, so the default compose labels
+publish the web console on the tailnet-only hostname:
+
+- Web/admin: `https://boss.local.sean.network`
+- API: `https://boss-api.local.sean.network`
+
+No direct public TCP/UDP ports are required.
+
+## Platform Services
+
+Goldeneye injects the source-of-truth datastores and services:
+
+- `DATABASE_URL` for Postgres.
+- `REDIS_URL`, `SUPABASE_*`, `S3_*`, `OPENAI_*`, `SMTP_*`, `MAIL_FROM`, OIDC, and other platform endpoints.
+- `OPENAI_BASE_URL` is supported for the Groq-backed OpenAI-compatible gateway. When set, BOSS uses chat completions rather than assuming the OpenAI Responses API.
+- `SMTP_HOST`/`SMTP_PORT`/`MAIL_FROM` and `OIDC_ISSUER`/`OIDC_CLIENT_ID` are accepted directly, while legacy `BOSS_*` aliases remain supported.
+
+## Operator-Provided Keys
+
+Goldeneye provides the platform values listed in `app.env.tmpl`. Before deploy,
+the operator must replace app-owned placeholders:
+
+- Required for production auth: `BOSS_API_KEYS`, `BOSS_API_KEY_PRINCIPALS`, `BOSS_API_KEY`, and `BOSS_WORKER_API_KEY`.
+- Required for real software-factory GitHub work: `BOSS_GITHUB_TOKEN` or the `BOSS_GITHUB_APP_*` values.
+- Required only when Account Connect is enabled: `AC_SERVICE_TOKEN` and, if not sharing `DATABASE_URL`, `AC_DATABASE_URL`.
+- Required only when provider writes are explicitly enabled: the relevant provider credentials such as `BOSS_DIGITALOCEAN_TOKEN`, `BOSS_CLOUDFLARE_API_TOKEN`, `BOSS_SUPABASE_ACCESS_TOKEN`, or `BOSS_SSH_HOST_PRIVATE_KEY`.
+- Optional third-party model/provider keys remain blank unless that adapter is enabled: `ANTHROPIC_API_KEY`, `GOOGLE_API_KEY`, `XAI_API_KEY`, and similar adapter-specific keys.
+
+Do not enable `BOSS_INFRA_REAL_PROVISION_ALLOWED`,
+`BOSS_EMAIL_REAL_SEND_ALLOWED`, `BOSS_SLACK_REAL_SEND_ALLOWED`,
+`BOSS_ENABLE_SANDBOX_MERGE`, or `BOSS_ENABLE_SANDBOX_DEPLOY` until the
+corresponding policy, receipt, budget, approval, and rollback controls are
+configured for that environment.
+
+## Direct Ports
+
+`DEPLOY_PORTS=` stays empty. BOSS needs no direct public TCP or UDP ports;
+Traefik routes HTTP(S) by hostname to the internal service ports.
+
+## Production Rules
+
+- Do not enable provider writes unless the relevant BOSS ChangeSet, BudgetReservation, approval, and ResourceReceipt path is configured.
+- Do not expose Mission Control on the public hostname by default.
+- Do not publish database or platform-service ports.
+- Do not commit `app.env`; commit only `app.env.tmpl`.
+- Build amd64 images with `docker buildx build --platform linux/amd64 ...` or use the compose `platform: linux/amd64` setting.

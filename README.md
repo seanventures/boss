@@ -38,6 +38,7 @@ If a required credential is missing, the API must fail closed and create visible
 - `docs/product/ROADMAP-v2.0.md`: product maturity roadmap
 - `docs/product/IMPLEMENTATION_STATUS.md`: shipped runtime status and current constraints
 - `docs/operations/INFRA_RUNBOOK.md`: scaling, environment, rollout, and rollback runbook
+- `docs/operations/GOLDENEYE_DEPLOYMENT.md`: goldeneye self-hosted production deployment package
 - `CHANGELOG.md`: release notes
 - `api/openapi.yaml`: active API contract
 - `db/schema.sql`: active starter schema
@@ -85,6 +86,11 @@ If a required credential is missing, the API must fail closed and create visible
 - `make real-smoke-merge`: run the full sandbox PR proposal flow and, when merge policy is enabled, approve and execute the merge job
 - `make real-smoke-deploy`: run the full sandbox PR proposal -> merge -> deployment flow when both merge and deploy policies are enabled
 - `make worker-drain-once`: poll the control plane once and execute at most one leased job
+
+Goldeneye deployment uses the root `Dockerfile`, root `docker-compose.yaml`, and
+`app.env.tmpl`; see `docs/operations/GOLDENEYE_DEPLOYMENT.md`. The production
+compose file consumes goldeneye-injected services and does not run bundled
+Postgres, Redis, Supabase, or object storage.
 
 The database-backed commands now wait for Postgres readiness before seeding, testing, or smoke execution, which avoids race conditions during local startup.
 

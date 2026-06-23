@@ -13,8 +13,55 @@ class Settings(BaseSettings):
         env_file=".env", env_file_encoding="utf-8", extra="ignore"
     )
 
-    database_url: str = "postgresql+psycopg://boss:boss@localhost:5432/boss"
+    database_url: str = Field(
+        default="postgresql+psycopg://boss:boss@localhost:5432/boss",
+        alias="DATABASE_URL",
+    )
+    app_base_url: Optional[str] = Field(default=None, alias="APP_BASE_URL")
+    admin_url: Optional[str] = Field(default=None, alias="ADMIN_URL")
+    redis_url: Optional[str] = Field(default=None, alias="REDIS_URL")
+    sentry_dsn: Optional[str] = Field(default=None, alias="SENTRY_DSN")
+    supabase_url: Optional[str] = Field(default=None, alias="SUPABASE_URL")
+    supabase_anon_key: Optional[str] = Field(default=None, alias="SUPABASE_ANON_KEY")
+    supabase_service_role_key: Optional[str] = Field(
+        default=None, alias="SUPABASE_SERVICE_ROLE_KEY"
+    )
+    s3_endpoint: Optional[str] = Field(default=None, alias="S3_ENDPOINT")
+    s3_access_key_id: Optional[str] = Field(default=None, alias="S3_ACCESS_KEY_ID")
+    s3_secret_access_key: Optional[str] = Field(default=None, alias="S3_SECRET_ACCESS_KEY")
+    s3_bucket: Optional[str] = Field(default=None, alias="S3_BUCKET")
+    s3_region: Optional[str] = Field(default=None, alias="S3_REGION")
+    temporal_address: Optional[str] = Field(default=None, alias="TEMPORAL_ADDRESS")
+    temporal_namespace: Optional[str] = Field(default=None, alias="TEMPORAL_NAMESPACE")
+    nextcloud_url: Optional[str] = Field(default=None, alias="NEXTCLOUD_URL")
+    webdav_url: Optional[str] = Field(default=None, alias="WEBDAV_URL")
+    caldav_url: Optional[str] = Field(default=None, alias="CALDAV_URL")
+    carddav_url: Optional[str] = Field(default=None, alias="CARDDAV_URL")
+    nextcloud_username: Optional[str] = Field(default=None, alias="NEXTCLOUD_USERNAME")
+    nextcloud_password: Optional[str] = Field(default=None, alias="NEXTCLOUD_PASSWORD")
+    docuseal_url: Optional[str] = Field(default=None, alias="DOCUSEAL_URL")
+    docuseal_api_url: Optional[str] = Field(default=None, alias="DOCUSEAL_API_URL")
+    docuseal_token: Optional[str] = Field(default=None, alias="DOCUSEAL_TOKEN")
+    map_tile_url: Optional[str] = Field(default=None, alias="MAP_TILE_URL")
+    map_style_url: Optional[str] = Field(default=None, alias="MAP_STYLE_URL")
+    routing_url: Optional[str] = Field(default=None, alias="ROUTING_URL")
+    umami_url: Optional[str] = Field(default=None, alias="UMAMI_URL")
+    umami_website_id: Optional[str] = Field(default=None, alias="UMAMI_WEBSITE_ID")
+    umami_script_url: Optional[str] = Field(default=None, alias="UMAMI_SCRIPT_URL")
+    posthog_host: Optional[str] = Field(default=None, alias="POSTHOG_HOST")
+    posthog_key: Optional[str] = Field(default=None, alias="POSTHOG_KEY")
+    n8n_url: Optional[str] = Field(default=None, alias="N8N_URL")
+    n8n_webhook_url: Optional[str] = Field(default=None, alias="N8N_WEBHOOK_URL")
+    meili_url: Optional[str] = Field(default=None, alias="MEILI_URL")
+    meili_api_key: Optional[str] = Field(default=None, alias="MEILI_API_KEY")
+    meili_search_key: Optional[str] = Field(default=None, alias="MEILI_SEARCH_KEY")
+    typebot_viewer_url: Optional[str] = Field(default=None, alias="TYPEBOT_VIEWER_URL")
+    typebot_builder_url: Optional[str] = Field(default=None, alias="TYPEBOT_BUILDER_URL")
+    admin_username: Optional[str] = Field(default=None, alias="ADMIN_USERNAME")
+    admin_email: Optional[str] = Field(default=None, alias="ADMIN_EMAIL")
+    admin_password: Optional[str] = Field(default=None, alias="ADMIN_PASSWORD")
     openai_api_key: Optional[str] = Field(default=None, alias="OPENAI_API_KEY")
+    openai_base_url: Optional[str] = Field(default=None, alias="OPENAI_BASE_URL")
     azure_openai_key: Optional[str] = Field(default=None, alias="AZURE_OPENAI_KEY")
     azure_openai_endpoint: Optional[str] = Field(
         default=None, alias="AZURE_OPENAI_ENDPOINT"
@@ -100,9 +147,13 @@ class Settings(BaseSettings):
         default=False, alias="BOSS_EMAIL_REAL_SEND_ALLOWED"
     )
     email_smtp_host: Optional[str] = Field(
-        default=None, alias="BOSS_EMAIL_SMTP_HOST"
+        default=None,
+        validation_alias=AliasChoices("SMTP_HOST", "MAIL_HOST", "BOSS_EMAIL_SMTP_HOST"),
     )
-    email_smtp_port: int = Field(default=587, alias="BOSS_EMAIL_SMTP_PORT")
+    email_smtp_port: int = Field(
+        default=587,
+        validation_alias=AliasChoices("SMTP_PORT", "MAIL_PORT", "BOSS_EMAIL_SMTP_PORT"),
+    )
     email_smtp_username: Optional[str] = Field(
         default=None, alias="BOSS_EMAIL_SMTP_USERNAME"
     )
@@ -116,7 +167,8 @@ class Settings(BaseSettings):
         default=False, alias="BOSS_EMAIL_SMTP_USE_SSL"
     )
     email_from_address: Optional[str] = Field(
-        default=None, alias="BOSS_EMAIL_FROM_ADDRESS"
+        default=None,
+        validation_alias=AliasChoices("MAIL_FROM", "BOSS_EMAIL_FROM_ADDRESS"),
     )
     email_from_name: Optional[str] = Field(
         default=None, alias="BOSS_EMAIL_FROM_NAME"
@@ -132,8 +184,17 @@ class Settings(BaseSettings):
         alias="BOSS_API_KEY_PRINCIPALS",
     )
     oidc_enabled: bool = Field(default=False, alias="BOSS_OIDC_ENABLED")
-    oidc_issuer: Optional[str] = Field(default=None, alias="BOSS_OIDC_ISSUER")
-    oidc_audience: Optional[str] = Field(default=None, alias="BOSS_OIDC_AUDIENCE")
+    oidc_issuer: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("OIDC_ISSUER", "BOSS_OIDC_ISSUER"),
+    )
+    oidc_audience: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("OIDC_CLIENT_ID", "BOSS_OIDC_AUDIENCE"),
+    )
+    oidc_client_secret: Optional[str] = Field(default=None, alias="OIDC_CLIENT_SECRET")
+    keycloak_url: Optional[str] = Field(default=None, alias="KEYCLOAK_URL")
+    keycloak_realm: Optional[str] = Field(default=None, alias="KEYCLOAK_REALM")
     oidc_jwks_url: Optional[str] = Field(default=None, alias="BOSS_OIDC_JWKS_URL")
     oidc_principal_claim: str = Field(
         default="boss_member_id",
@@ -147,7 +208,10 @@ class Settings(BaseSettings):
         default="",
         alias="BOSS_OIDC_SUBJECT_PRINCIPALS",
     )
-    openai_model: str = Field(default="gpt-5.2-codex", alias="BOSS_OPENAI_MODEL")
+    openai_model: str = Field(
+        default="gpt-5.2-codex",
+        validation_alias=AliasChoices("OPENAI_MODEL", "BOSS_OPENAI_MODEL"),
+    )
     openai_codex_oauth_enabled: bool = Field(
         default=False, alias="BOSS_OPENAI_CODEX_OAUTH_ENABLED"
     )
