@@ -55,6 +55,13 @@ services:
 
   web:
     image: ${BOSS_WEB_IMAGE}
+    command:
+      - pnpm
+      - --dir
+      - /app/apps/web
+      - start
+      - -H
+      - 0.0.0.0
     restart: unless-stopped
     env_file:
       - ./.env
