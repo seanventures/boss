@@ -100,7 +100,9 @@ COPY --from=web-builder --chown=boss:boss /app/node_modules ./node_modules
 COPY --from=web-builder --chown=boss:boss /app/apps/web ./apps/web
 COPY --from=web-builder --chown=boss:boss /app/packages/api-client ./packages/api-client
 
+WORKDIR /app/apps/web
+
 USER boss
 EXPOSE 3000
 
-CMD ["pnpm", "--filter", "boss-web", "start", "--", "-H", "0.0.0.0"]
+CMD ["pnpm", "start", "-H", "0.0.0.0"]
