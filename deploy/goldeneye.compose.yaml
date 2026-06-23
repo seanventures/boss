@@ -16,6 +16,7 @@ services:
     networks:
       - boss
       - web
+      - boss_supabase
     healthcheck:
       test:
         - CMD
@@ -47,6 +48,7 @@ services:
       - boss-artifacts:/var/lib/boss/artifacts
     networks:
       - boss
+      - boss_supabase
     depends_on:
       api:
         condition: service_healthy
@@ -107,6 +109,9 @@ services:
 networks:
   boss:
     driver: bridge
+  boss_supabase:
+    name: boss_default
+    external: true
   web:
     external: true
 
