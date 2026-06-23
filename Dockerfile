@@ -71,7 +71,7 @@ FROM node:20-bookworm-slim AS web-builder
 
 WORKDIR /app
 
-RUN corepack enable
+RUN npm install --global pnpm@9.15.0
 
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY apps/web/package.json ./apps/web/package.json
@@ -89,7 +89,7 @@ ENV NODE_ENV=production \
 
 WORKDIR /app
 
-RUN corepack enable \
+RUN npm install --global pnpm@9.15.0 \
     && addgroup --system boss \
     && adduser --system --ingroup boss boss
 

@@ -9,14 +9,27 @@ Supabase, MinIO, or mail infrastructure.
 
 - `Dockerfile`: multi-target linux/amd64 build for `api`, `worker`, `web`, and optional `account-connect`.
 - `docker-compose.yaml`: goldeneye production compose file with Traefik labels.
+- `deploy/goldeneye.compose.yaml`: image-backed compose file for the goldeneye `deploy --compose` CLI.
 - `app.env.tmpl`: env template for goldeneye to fill and operators to review.
 
 ## Single Command
 
-After goldeneye fills `app.env`, deploy from the repo root:
+For a source-tree deployment on goldeneye, after goldeneye fills `app.env`,
+deploy from the repo root:
 
 ```sh
 docker compose --env-file app.env up -d --build
+```
+
+For the platform-native path, push the images first and deploy with the
+image-backed compose file:
+
+```sh
+docker buildx build --platform linux/amd64 --target api -t goldeneye.tail95d980.ts.net:5000/boss-api:<git-sha> --push .
+docker buildx build --platform linux/amd64 --target worker -t goldeneye.tail95d980.ts.net:5000/boss-worker:<git-sha> --push .
+docker buildx build --platform linux/amd64 --target web -t goldeneye.tail95d980.ts.net:5000/boss-web:<git-sha> --push .
+docker buildx build --platform linux/amd64 --target account-connect -t goldeneye.tail95d980.ts.net:5000/boss-account-connect:<git-sha> --push .
+ssh root@goldeneye deploy boss --compose /path/to/goldeneye.compose.yaml --env-template /path/to/app.env.tmpl
 ```
 
 Use the optional Account Connect service only for hosted/attached Cloud flows:
