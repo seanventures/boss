@@ -489,7 +489,9 @@ def _finalize_meeting(connection, settings, run_id) -> dict:
     if run["meeting_id"]:  # already finalized — idempotent
         return {"meeting_id": run["meeting_id"], "minutes_artifact_id": run["minutes_artifact_id"],
                 "decision_id": run["decision_id"], "already": True}
-    project_id = run["project_id"]; task_id = run["task_id"]; state = run["state"]
+    project_id = run["project_id"]
+    task_id = run["task_id"]
+    state = run["state"]
     personas = resolve_roles(run["role_keys"], load_role_map(connection, project_id))
     fctx = run["finalize_ctx"] or {}
     research = state.get("research") or {}

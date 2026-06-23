@@ -1,8 +1,6 @@
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
 import json
-import re
-from secrets import compare_digest
 import logging
 import re
 from secrets import compare_digest
@@ -341,7 +339,6 @@ from .services.commercial import (
     CommercialService,
 )
 from .services.core import emit_event, make_id
-from .services.core import emit_event
 from .services.deadletters import DeadletterRemediationService
 from .services.decisions import (
     DecisionNotFoundError,
@@ -952,56 +949,6 @@ def record_account_connect_denial(
             reason,
             exc_info=audit_error,
         )
-        return
-
-
-def record_account_connect_sync_denial(project_id: str, actor: str, reason: str) -> None:
-    try:
-        with begin(engine) as audit_connection:
-            project_exists = audit_connection.execute(
-                text("SELECT 1 FROM projects WHERE id = :project_id"),
-                {"project_id": project_id},
-            ).first()
-            if not project_exists:
-                return
-            emit_event(
-                audit_connection,
-                project_id,
-                "account_connect.sync_denied",
-                actor,
-                "account_connect_org",
-                project_id,
-                {"reason": reason},
-            )
-    except Exception:
-        return
-
-
-def record_account_connect_denial(
-    project_id: str,
-    actor: str,
-    event_type: str,
-    reason: str,
-    entity_type: str,
-) -> None:
-    try:
-        with begin(engine) as audit_connection:
-            project_exists = audit_connection.execute(
-                text("SELECT 1 FROM projects WHERE id = :project_id"),
-                {"project_id": project_id},
-            ).first()
-            if not project_exists:
-                return
-            emit_event(
-                audit_connection,
-                project_id,
-                event_type,
-                actor,
-                entity_type,
-                project_id,
-                {"reason": reason},
-            )
-    except Exception:
         return
 
 

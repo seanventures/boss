@@ -4325,7 +4325,7 @@ def test_pack_install_is_idempotent_for_new_project(client, engine):
     first_payload = first.json()
     assert first_payload["pack_id"] == "core_v1"
     assert first_payload["install_status"] == "installed"
-    assert first_payload["role_count"] == 16
+    assert first_payload["role_count"] == 20
 
     second = client.post(
         "/v1/packs/install",
@@ -4339,12 +4339,15 @@ def test_pack_install_is_idempotent_for_new_project(client, engine):
     assert roles.status_code == 200
     role_keys = [item["role_key"] for item in roles.json()["items"]]
     assert role_keys == [
+        "adversarial_reviewer",
         "cao",
         "coo",
         "cto",
         "deployment_manager",
+        "design_critic",
         "finops_sentinel",
         "infra_steward",
+        "integration_validator",
         "metatron",
         "model_spend_analyst",
         "pm",
@@ -4354,6 +4357,7 @@ def test_pack_install_is_idempotent_for_new_project(client, engine):
         "release_manager",
         "resource_janitor",
         "secrets_steward",
+        "security_reviewer",
         "vp_agents",
     ]
 
