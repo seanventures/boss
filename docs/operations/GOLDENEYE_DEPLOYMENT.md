@@ -27,10 +27,17 @@ image-backed compose file:
 ```sh
 docker buildx build --platform linux/amd64 --target api -t goldeneye.tail95d980.ts.net:5000/boss-api:<git-sha> --push .
 docker buildx build --platform linux/amd64 --target worker -t goldeneye.tail95d980.ts.net:5000/boss-worker:<git-sha> --push .
-docker buildx build --platform linux/amd64 --target web -t goldeneye.tail95d980.ts.net:5000/boss-web:<git-sha> --push .
+docker buildx build --platform linux/amd64 --target web \
+  --build-arg NEXT_PUBLIC_BOSS_API_URL=https://boss-api.local.sean.network \
+  --build-arg NEXT_PUBLIC_BOSS_PROJECT_ID=boss-dogfood \
+  -t goldeneye.tail95d980.ts.net:5000/boss-web:<git-sha> --push .
 docker buildx build --platform linux/amd64 --target account-connect -t goldeneye.tail95d980.ts.net:5000/boss-account-connect:<git-sha> --push .
 ssh root@goldeneye deploy boss --compose /path/to/goldeneye.compose.yaml --env-template /path/to/app.env.tmpl
 ```
+
+`NEXT_PUBLIC_BOSS_API_URL` is a Next.js public value and is compiled into the
+browser bundle at build time. Setting it only in the runtime compose
+environment is not sufficient for production web images.
 
 Use the optional Account Connect service only for hosted/attached Cloud flows:
 

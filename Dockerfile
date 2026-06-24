@@ -71,6 +71,11 @@ FROM node:20-bookworm-slim AS web-builder
 
 WORKDIR /app
 
+ARG NEXT_PUBLIC_BOSS_API_URL=http://127.0.0.1:8000
+ARG NEXT_PUBLIC_BOSS_PROJECT_ID=boss-dogfood
+ENV NEXT_PUBLIC_BOSS_API_URL=$NEXT_PUBLIC_BOSS_API_URL \
+    NEXT_PUBLIC_BOSS_PROJECT_ID=$NEXT_PUBLIC_BOSS_PROJECT_ID
+
 RUN npm install --global pnpm@9.15.0
 
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
@@ -84,8 +89,12 @@ RUN pnpm --filter boss-web build
 
 FROM node:20-bookworm-slim AS web
 
+ARG NEXT_PUBLIC_BOSS_API_URL=http://127.0.0.1:8000
+ARG NEXT_PUBLIC_BOSS_PROJECT_ID=boss-dogfood
 ENV NODE_ENV=production \
-    PORT=3000
+    PORT=3000 \
+    NEXT_PUBLIC_BOSS_API_URL=$NEXT_PUBLIC_BOSS_API_URL \
+    NEXT_PUBLIC_BOSS_PROJECT_ID=$NEXT_PUBLIC_BOSS_PROJECT_ID
 
 WORKDIR /app
 
