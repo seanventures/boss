@@ -37,7 +37,9 @@ ssh root@goldeneye deploy boss --compose /path/to/goldeneye.compose.yaml --env-t
 
 `NEXT_PUBLIC_BOSS_API_URL` is a Next.js public value and is compiled into the
 browser bundle at build time. Setting it only in the runtime compose
-environment is not sufficient for production web images.
+environment is not sufficient for production web images. If it is omitted, the
+web client falls back to same-origin relative API requests rather than baking a
+developer localhost endpoint into the browser bundle.
 
 Use the optional Account Connect service only for hosted/attached Cloud flows:
 
