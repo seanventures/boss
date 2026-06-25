@@ -22,6 +22,7 @@ from typing import Optional, Protocol
 
 from ..config import Settings
 from ..schemas import FileChange
+from .redaction import redact as _redact_pii
 from .sandbox import CommandResult, DiffSummary, EphemeralSandbox
 
 
@@ -229,6 +230,8 @@ class ClaudeCodeAgent:
         return {summary, usage, cost_usd_micros, turns, model}. Used by the governed
         pipeline to dispatch each step as an ISOLATED context — a fresh `claude -p` process
         with no shared session state between roles. `model` routes low-cost vs strong."""
+        if getattr(self, "redact", False):  # data-boundary: mask PII for restricted tasks
+            prompt = _redact_pii(prompt)[0]
         data = self._invoke(prompt, cwd, read_only=read_only, model=model)
         usage, cost_micros = self._usage(data, self.settings)
         return {
@@ -362,6 +365,7 @@ class NativeCodeAgent:
             [{"role": "system", "content": system},
              {"role": "user", "content": f"{prompt}\n\n{self._repo_context(cwd)}"}],
             model_override=model or None,
+            redact=getattr(self, "redact", False),  # data-boundary: mask PII for restricted tasks
         )
         data = self._safe_json(msg.get("content") or "")
         if not read_only:
