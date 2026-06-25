@@ -17642,3 +17642,189 @@ def test_secret_ref_crud_http_endpoints(client, engine):
     )
     assert revoked.status_code == 200
     assert revoked.json()["status"] == "revoked"
+
+
+# --- Phase 2: self-improvement runtime, eval-harness, evidence-based autonomy engine ---
+
+
+def _create_self_improvement_proposal(client, title="Phase2 runtime change"):
+    response = client.post(
+        "/v1/self-improvement/proposals",
+        json={
+            "project_id": "boss-dogfood",
+            "title": title,
+            "summary": "Phase 2 self-improvement runtime end-to-end coverage.",
+            "change_ref": "https://github.com/seanheiney/boss/pull/77",
+            "diff_summary": "Wire the self-improvement runtime and eval-harness gate.",
+            "expected_impact": ["Faster safe rollouts"],
+            "test_plan": ["Run canary + eval suites"],
+            "canary_scope": ["dogfood workspace only"],
+            "rollback_plan": ["Revert PR"],
+            "success_metrics": ["No regression in error rate"],
+            "actor": "vp_agents",
+            "risk_tier": 2,
+        },
+    )
+    assert response.status_code == 201
+    return response.json()
+
+
+def test_eval_harness_suite_runs_and_lists(client):
+    run = client.post("/v1/evals/run", json={"project_id": "boss-dogfood"})
+    assert run.status_code == 200
+    payload = run.json()
+    assert payload["status"] == "pass"
+    assert payload["failed"] == 0
+    eval_names = {result["eval"] for result in payload["results"]}
+    assert {
+        "routing_fallback_chain",
+        "policy_audit_roundtrip",
+        "factory_gate_fail_closed",
+        "autonomy_ladder_monotonic",
+    } <= eval_names
+
+    listed = client.get("/v1/evals", params={"project_id": "boss-dogfood"})
+    assert listed.status_code == 200
+    assert any(item["id"] == payload["id"] for item in listed.json()["items"])
+
+
+def test_self_improvement_runtime_auto_canary_and_staged_rollout(client):
+    proposal = _create_self_improvement_proposal(client, "Auto canary + staged rollout")
+    proposal_id = proposal["id"]
+
+    approve = client.post(
+        f"/v1/decisions/{proposal['current_decision_id']}/approve",
+        json={"actor": "ceo", "note": "Run the canary."},
+    )
+    assert approve.status_code == 200
+
+    # Runtime auto-runs the canary + eval suites and records the outcome (no human metrics).
+    run = client.post(
+        f"/v1/self-improvement/proposals/{proposal_id}/run-canary",
+        json={"actor": "release_manager"},
+    )
+    assert run.status_code == 200
+    run_payload = run.json()
+    assert run_payload["status"] == "canary_succeeded"
+    assert run_payload["canary_artifact_id"]
+    rollout_decision_id = run_payload["current_decision_id"]
+    assert rollout_decision_id
+
+    assert (
+        client.post(
+            f"/v1/decisions/{rollout_decision_id}/approve",
+            json={"actor": "ceo", "note": "Promote."},
+        ).status_code
+        == 200
+    )
+
+    started = client.post(
+        f"/v1/self-improvement/proposals/{proposal_id}/rollout/start",
+        json={"actor": "release_manager"},
+    )
+    assert started.status_code == 200
+    started_payload = started.json()
+    assert started_payload["status"] == "rolling_out"
+    stages = started_payload["rollout_state"]["stages"]
+    assert len(stages) == 3
+
+    final = None
+    for _ in stages:
+        advanced = client.post(
+            f"/v1/self-improvement/proposals/{proposal_id}/rollout/advance",
+            json={"actor": "release_manager", "observation": {"health": "healthy", "error_rate": 0.0}},
+        )
+        assert advanced.status_code == 200
+        final = advanced.json()
+    assert final["status"] == "rolled_out"
+    assert final["rollout_state"]["status"] == "completed"
+    assert final["rollout_artifact_id"]
+
+
+def test_self_improvement_runtime_auto_rollback_on_regression(client):
+    proposal = _create_self_improvement_proposal(client, "Auto rollback on regression")
+    proposal_id = proposal["id"]
+    client.post(
+        f"/v1/decisions/{proposal['current_decision_id']}/approve",
+        json={"actor": "ceo", "note": "Run the canary."},
+    )
+    run_payload = client.post(
+        f"/v1/self-improvement/proposals/{proposal_id}/run-canary",
+        json={"actor": "release_manager"},
+    ).json()
+    client.post(
+        f"/v1/decisions/{run_payload['current_decision_id']}/approve",
+        json={"actor": "ceo", "note": "Promote."},
+    )
+    client.post(
+        f"/v1/self-improvement/proposals/{proposal_id}/rollout/start",
+        json={"actor": "release_manager"},
+    )
+
+    # First stage healthy, then a regressing observation must auto-rollback.
+    healthy = client.post(
+        f"/v1/self-improvement/proposals/{proposal_id}/rollout/advance",
+        json={"actor": "release_manager", "observation": {"health": "healthy"}},
+    )
+    assert healthy.json()["status"] == "rolling_out"
+
+    rolled_back = client.post(
+        f"/v1/self-improvement/proposals/{proposal_id}/rollout/advance",
+        json={"actor": "release_manager", "observation": {"error_rate": 0.9}},
+    )
+    assert rolled_back.status_code == 200
+    rb_payload = rolled_back.json()
+    assert rb_payload["status"] == "rolled_back"
+    assert rb_payload["rollback_artifact_id"]
+    assert rb_payload["rollout_state"]["status"] == "rolled_back"
+
+    # No further advance is possible once rolled back.
+    blocked = client.post(
+        f"/v1/self-improvement/proposals/{proposal_id}/rollout/advance",
+        json={"actor": "release_manager", "observation": {"health": "healthy"}},
+    )
+    assert blocked.status_code == 409
+
+
+def test_autonomy_engine_recommends_upgrade_on_clean_evidence(client):
+    # metatron starts at autonomy level 1; accumulate clean allowed-action evidence.
+    for _ in range(30):
+        allowed = client.post(
+            "/v1/roles/metatron/autonomy/check",
+            json={"project_id": "boss-dogfood", "actor": "system", "action": "read", "risk_tier": 0},
+        )
+        assert allowed.json()["allowed"] is True
+
+    evaluation = client.post(
+        "/v1/roles/metatron/autonomy/evaluate",
+        json={"project_id": "boss-dogfood", "actor": "vp_agents"},
+    )
+    assert evaluation.status_code == 201
+    payload = evaluation.json()
+    assert payload["evidence"]["successful_runs"] >= 30
+    assert payload["evidence"]["policy_violations"] == 0
+    assert payload["recent_reviews"][0]["governance_outcome"] == "upgrade_recommended"
+    assert payload["pending_autonomy_change"]["change_type"] == "upgrade"
+    assert payload["pending_autonomy_change"]["status"] == "pending_decision"
+
+
+def test_autonomy_engine_auto_downgrades_on_denial_evidence(client):
+    # Denied authorization checks emit evidence without mutating the level in real time.
+    for _ in range(3):
+        denied = client.post(
+            "/v1/roles/metatron/autonomy/check",
+            json={"project_id": "boss-dogfood", "actor": "system", "action": "execute", "risk_tier": 3},
+        )
+        assert denied.json()["allowed"] is False
+
+    evaluation = client.post(
+        "/v1/roles/metatron/autonomy/evaluate",
+        json={"project_id": "boss-dogfood", "actor": "vp_agents"},
+    )
+    assert evaluation.status_code == 201
+    payload = evaluation.json()
+    assert payload["evidence"]["policy_violations"] == 3
+    assert payload["role"]["autonomy_level"] == 0
+    assert payload["recent_reviews"][0]["governance_outcome"] == "auto_downgraded"
+    assert payload["recent_autonomy_changes"][0]["change_type"] == "downgrade"
+    assert payload["recent_autonomy_changes"][0]["status"] == "applied"

@@ -73,6 +73,7 @@ from .schemas import (
     BudgetSetIntensityRequest,
     AnomalyScanRequest,
     CanaryRunRequest,
+    EvalRunRequest,
     PlanDispatchRequest,
     BudgetStatusResponse,
     BudgetReserveRequest,
@@ -276,6 +277,7 @@ from .schemas import (
     ResourceSyncRequest,
     ResourceSyncResponse,
     ResourceSyncRunSummary,
+    AutonomyEvaluateRequest,
     RoleAutonomyCheckRequest,
     RoleAutonomyCheckResponse,
     RoleGovernanceDetail,
@@ -301,8 +303,11 @@ from .schemas import (
     SelfImprovementProposalDetail,
     SelfImprovementProposalListResponse,
     SelfImprovementProposalSummary,
+    SelfImprovementAdvanceRolloutRequest,
     SelfImprovementRollbackRequest,
     SelfImprovementRolloutRequest,
+    SelfImprovementRunCanaryRequest,
+    SelfImprovementStartRolloutRequest,
     ScalePlanListResponse,
     ScalePlanRunRequest,
     ScalePlanRunResponse,
@@ -400,6 +405,7 @@ from .services.resource_plane import (
     ProviderAccountNotFoundError,
     ResourcePlaneService,
 )
+from .services.autonomy_engine import AutonomyEngine
 from .services.role_governance import RoleGovernanceService
 from .services.secret_refs import SecretRefNotFoundError, SecretRefService
 from .services.self_improvement import (
@@ -439,6 +445,7 @@ self_improvement = SelfImprovementService(settings)
 health_snapshots = HealthSnapshotService(settings)
 metatron = MetatronService(settings)
 role_governance = RoleGovernanceService(settings)
+autonomy_engine = AutonomyEngine(settings)
 members = MemberDirectoryService(settings)
 canonical = CanonicalObjectService()
 deadletter_remediation = DeadletterRemediationService(settings)
@@ -1164,6 +1171,7 @@ def self_improvement_summary_from_row(row) -> SelfImprovementProposalSummary:
         canary_artifact_id=row.get("canary_artifact_id"),
         rollout_artifact_id=row.get("rollout_artifact_id"),
         rollback_artifact_id=row.get("rollback_artifact_id"),
+        rollout_state=row.get("rollout_state") or {},
         created_by=row["created_by"],
         created_at=row["created_at"].isoformat(),
         updated_at=row["updated_at"].isoformat(),
@@ -5029,6 +5037,107 @@ def rollback_self_improvement_proposal(
         return self_improvement_detail_from_row(row)
 
 
+@app.post(
+    "/v1/self-improvement/proposals/{proposal_id}/run-canary",
+    response_model=SelfImprovementProposalDetail,
+)
+def run_self_improvement_canary(
+    proposal_id: str, payload: SelfImprovementRunCanaryRequest
+) -> SelfImprovementProposalDetail:
+    """Self-improvement runtime: auto-run the canary + eval-harness suites and record the outcome."""
+    with begin(engine) as connection:
+        try:
+            proposal = self_improvement.get_proposal(connection, proposal_id)
+            require_project_actor(
+                connection,
+                proposal["project_id"],
+                payload.actor,
+                "self_improvement_manage",
+            )
+        except SelfImprovementProposalNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except (ProjectMemberNotFoundError, ProjectMemberPermissionError) as error:
+            raise_project_actor_error(error)
+    try:
+        row = self_improvement.run_canary(engine, proposal_id, payload.actor)
+    except SelfImprovementProposalNotFoundError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except InvalidSelfImprovementTransitionError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    return self_improvement_detail_from_row(row)
+
+
+@app.post(
+    "/v1/self-improvement/proposals/{proposal_id}/rollout/start",
+    response_model=SelfImprovementProposalDetail,
+)
+def start_self_improvement_rollout(
+    proposal_id: str, payload: SelfImprovementStartRolloutRequest
+) -> SelfImprovementProposalDetail:
+    """Begin a staged rollout (ship narrow → widen, each stage gated by a health observation)."""
+    with begin(engine) as connection:
+        try:
+            proposal = self_improvement.get_proposal(connection, proposal_id)
+            require_project_actor(
+                connection,
+                proposal["project_id"],
+                payload.actor,
+                "self_improvement_manage",
+            )
+            row = self_improvement.start_rollout(
+                connection,
+                proposal_id,
+                payload.actor,
+                stages=payload.stages,
+                thresholds=payload.thresholds,
+            )
+        except SelfImprovementProposalNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except InvalidSelfImprovementTransitionError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        except (ProjectMemberNotFoundError, ProjectMemberPermissionError) as error:
+            raise_project_actor_error(error)
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        return self_improvement_detail_from_row(row)
+
+
+@app.post(
+    "/v1/self-improvement/proposals/{proposal_id}/rollout/advance",
+    response_model=SelfImprovementProposalDetail,
+)
+def advance_self_improvement_rollout(
+    proposal_id: str, payload: SelfImprovementAdvanceRolloutRequest
+) -> SelfImprovementProposalDetail:
+    """Record a stage health observation; advance, finalize, or auto-rollback on regression."""
+    with begin(engine) as connection:
+        try:
+            proposal = self_improvement.get_proposal(connection, proposal_id)
+            require_project_actor(
+                connection,
+                proposal["project_id"],
+                payload.actor,
+                "self_improvement_manage",
+            )
+            row = self_improvement.advance_rollout(
+                connection,
+                proposal_id,
+                payload.actor,
+                payload.observation,
+            )
+        except SelfImprovementProposalNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except InvalidSelfImprovementTransitionError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        except (ProjectMemberNotFoundError, ProjectMemberPermissionError) as error:
+            raise_project_actor_error(error)
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        return self_improvement_detail_from_row(row)
+
+
 @app.get("/v1/health-snapshots", response_model=HealthSnapshotListResponse)
 def list_health_snapshots(
     project_id: str, limit: int = 25
@@ -5268,6 +5377,40 @@ def record_role_review(
         except ValueError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
         return role_governance_detail_from_service(detail)
+
+
+@app.post(
+    "/v1/roles/{role_key}/autonomy/evaluate",
+    response_model=RoleGovernanceDetail,
+    status_code=201,
+)
+def evaluate_role_autonomy(
+    role_key: str, request: AutonomyEvaluateRequest
+) -> RoleGovernanceDetail:
+    """Evidence-based autonomy engine: gather the role's allowed/denied/violation events since its
+    last review and run a governance review — auto-proposing an upgrade decision or auto-downgrading
+    on a detected violation (spec §C evidence-based autonomy auto-upgrade/downgrade)."""
+    with begin(engine) as connection:
+        try:
+            require_project_actor(
+                connection,
+                request.project_id,
+                request.actor,
+                "role_review",
+            )
+            detail = autonomy_engine.evaluate(
+                connection,
+                project_id=request.project_id,
+                role_key=role_key,
+                actor=request.actor,
+            )
+        except RoleNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        response = role_governance_detail_from_service(detail)
+        response.evidence = detail.get("evidence")
+        return response
 
 
 @app.get("/v1/packs", response_model=PackListResponse)
@@ -7260,6 +7403,21 @@ def canaries_run(payload: CanaryRunRequest) -> dict:
 def canaries_list(project_id: str, limit: int = 20) -> dict:
     from .services import canaries as canaries_svc
     return {"items": canaries_svc.list_canary_runs(engine, project_id, limit)}
+
+
+@app.post("/v1/evals/run")
+def evals_run(payload: EvalRunRequest) -> dict:
+    """Run the eval-harness regression suite (routing / policy / factory-gate / autonomy-ladder)
+    and persist results. Gates self-improvement rollouts (spec §C)."""
+    from .services import eval_harness
+    return eval_harness.run_eval_suite(
+        engine, settings, payload.project_id, payload.actor, payload.suite)
+
+
+@app.get("/v1/evals")
+def evals_list(project_id: str, limit: int = 20) -> dict:
+    from .services import eval_harness
+    return {"items": eval_harness.list_eval_runs(engine, project_id, limit)}
 
 
 @app.post("/v1/anomalies/scan")

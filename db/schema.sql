@@ -1732,3 +1732,23 @@ CREATE TABLE IF NOT EXISTS policy_eval_log (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_policy_eval_log_project ON policy_eval_log (project_id, created_at DESC);
+
+-- Phase 2: eval-harness regression suites (routing/policy/factory/autonomy quality). Run on demand
+-- or nightly; results gate self-improvement rollouts. Mirrors canary_runs but carries a suite label.
+CREATE TABLE IF NOT EXISTS eval_runs (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  suite TEXT NOT NULL,             -- regression suite name (e.g. 'all', 'routing', 'policy')
+  status TEXT NOT NULL,            -- pass | fail
+  results JSONB NOT NULL,          -- per-eval {eval, status, detail, metrics}
+  passed INTEGER NOT NULL,
+  failed INTEGER NOT NULL,
+  skipped INTEGER NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_eval_runs_project ON eval_runs (project_id, created_at DESC);
+
+-- Phase 2: staged rollout state for the self-improvement runtime (stages, current index, history,
+-- auto-rollback thresholds). Empty {} until a staged rollout begins.
+ALTER TABLE self_improvement_proposals
+  ADD COLUMN IF NOT EXISTS rollout_state JSONB NOT NULL DEFAULT '{}'::jsonb;

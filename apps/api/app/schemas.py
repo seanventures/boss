@@ -1170,6 +1170,12 @@ class AnomalyScanRequest(BaseModel):
     auto_lite: bool = True
 
 
+class EvalRunRequest(BaseModel):
+    project_id: str
+    actor: str = "eval_harness"
+    suite: str = "all"
+
+
 class BudgetStatusResponse(BaseModel):
     scope_type: str
     scope_id: str
@@ -2085,6 +2091,7 @@ class SelfImprovementProposalSummary(BaseModel):
     canary_artifact_id: Optional[str] = None
     rollout_artifact_id: Optional[str] = None
     rollback_artifact_id: Optional[str] = None
+    rollout_state: dict[str, Any] = Field(default_factory=dict)
     created_by: str
     created_at: str
     updated_at: str
@@ -2157,6 +2164,39 @@ class SelfImprovementRollbackRequest(BaseModel):
         self.evidence_refs = _require_non_empty_string_list(
             self.evidence_refs, "evidence_refs"
         )
+        return self
+
+
+class SelfImprovementRunCanaryRequest(BaseModel):
+    actor: str = "release_manager"
+
+    @model_validator(mode="after")
+    def validate_actor(self) -> "SelfImprovementRunCanaryRequest":
+        self.actor = _require_text(self.actor, "actor")
+        return self
+
+
+class SelfImprovementStartRolloutRequest(BaseModel):
+    actor: str = "release_manager"
+    stages: Optional[list[str]] = None
+    thresholds: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def validate_fields(self) -> "SelfImprovementStartRolloutRequest":
+        self.actor = _require_text(self.actor, "actor")
+        if self.stages is not None:
+            self.stages = _require_non_empty_string_list(self.stages, "stages")
+        return self
+
+
+class SelfImprovementAdvanceRolloutRequest(BaseModel):
+    actor: str = "release_manager"
+    observation: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def validate_fields(self) -> "SelfImprovementAdvanceRolloutRequest":
+        self.actor = _require_text(self.actor, "actor")
+        self.observation = _require_non_empty_mapping(self.observation, "observation")
         return self
 
 
@@ -2616,6 +2656,16 @@ class RoleReviewRequest(BaseModel):
         return self
 
 
+class AutonomyEvaluateRequest(BaseModel):
+    project_id: str
+    actor: str = "vp_agents"
+
+    @model_validator(mode="after")
+    def validate_fields(self) -> "AutonomyEvaluateRequest":
+        self.actor = _require_text(self.actor, "actor")
+        return self
+
+
 class RoleAutonomyCheckRequest(BaseModel):
     project_id: str
     actor: str = "system"
@@ -2727,6 +2777,7 @@ class RoleGovernanceDetail(BaseModel):
     pending_autonomy_change: Optional[AutonomyChangeSummary] = None
     recent_reviews: list[RoleReviewSummary] = Field(default_factory=list)
     recent_autonomy_changes: list[AutonomyChangeSummary] = Field(default_factory=list)
+    evidence: Optional[dict[str, Any]] = None
 
 
 class PackSummary(BaseModel):

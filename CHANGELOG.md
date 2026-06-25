@@ -2,6 +2,21 @@
 
 All notable changes to BOSS are documented in this file.
 
+## Unreleased — Gap Phase 2 (earned autonomy & controlled self-improvement)
+
+### Added
+
+- Self-improvement runtime: `POST /v1/self-improvement/proposals/{id}/run-canary` auto-runs the
+  canary + eval-harness suites and records the outcome; `…/rollout/start` and `…/rollout/advance`
+  drive a staged rollout (ship-narrow→widen) with **auto-rollback** when a health observation
+  breaches the thresholds. New `rollout_state` column on `self_improvement_proposals`.
+- Eval-harness regression suites (`eval_harness.py`): routing fallback chain, policy audit
+  round-trip, software-factory fail-closed gate, and autonomy-ladder monotonicity — persisted to
+  the new `eval_runs` table; `POST /v1/evals/run` + `GET /v1/evals`.
+- Evidence-based autonomy engine (`autonomy_engine.py`): `POST /v1/roles/{role_key}/autonomy/evaluate`
+  gathers a role's allowed/denied/scope-violation events since its last review and runs a governance
+  review — auto-proposing an upgrade decision on clean evidence or auto-downgrading on a violation.
+
 ## v0.6.0 - 2026-06-03
 
 Consolidation release restoring production API contracts and commercial services after bad merge conflict resolution on main.

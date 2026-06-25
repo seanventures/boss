@@ -12,7 +12,7 @@ Verdict: **the hard foundations are built (~75% overall); remaining work is brea
 | Core primitives + execution engine + exactly-once | **~95%** | objects, durable job queue (state machine, SKIP-LOCKED leasing, TTL+heartbeat, reclaim, bounded retries, deadletters), receipts+dedupe — all live |
 | Policy + approval + budget/FinOps + elasticity | **~80%** | budget reserve→settle, hierarchical budgets, risk-tier approvals, break-glass, worker pools, autoscaler — live; gaps in anomaly detection + unified policy eval |
 | Comms (outbox/inbox) + meetings + Metatron | **~70%** | delivery backbone, meeting phase-machine, Metatron query+command — live; gaps in inbox states/ack, email/slack contracts, vote/quorum |
-| Router + skills + autonomy + self-improvement + factory | **~65%** | router (budget-pressure modes), 16 typed skills, autonomy+trust, governed software factory — live; self-improvement is schema-only |
+| Router + skills + autonomy + self-improvement + factory | **~80%** | router (budget-pressure modes), 16 typed skills, autonomy+trust, governed software factory — live; self-improvement runtime (auto-canary + staged rollout + auto-rollback), eval-harness, and evidence-based autonomy auto-upgrade/downgrade now live (Phase 2); skill-invocation mock mode remains |
 | UX + security + observability + public API | **~70%** | 10/10 MVP API endpoints, console, audit export+replay, break-glass — live; gaps in CEO command palette, PII redaction, tracing, dashboards |
 | **Overall** | **~75%** | foundations done; the gap is the trust/autonomy/proof layer |
 
@@ -92,12 +92,24 @@ Goal: the dogfooding loop is demonstrably end-to-end with the guarantees proven.
 6. ✅ **Data-boundary enforcement** — restricted/confidential tasks redact PII before every external model call + `[data_boundary]` policy eval.
 7. ✅ **Distributed tracing** — `GET /v1/trace?run_id` reconstructs a run's full timeline (run + gate + every referencing event).
 
-### Phase 2 — Earned autonomy & controlled self-improvement  (the moat / the "BOSS improves BOSS" story)
-1. Self-improvement runtime: canary runner + staged rollout + auto-rollback thresholds.
-2. Eval-harness regression suites (routing/policy/factory quality).
-3. Evidence-based autonomy auto-upgrade/downgrade engine.
-4. Router fallback canary tester + provider-health polling + rationale artifact.
-5. Skill-invocation framework + mock mode.
+### Phase 2 — Earned autonomy & controlled self-improvement  (the moat / the "BOSS improves BOSS" story)  🟡 CORE COMPLETE (branch `feat/gap-phase2-autonomy`)
+1. ✅ **Self-improvement runtime** — `run_canary` auto-runs the canary + eval-harness suites and
+   records the outcome (no human reports it); staged rollout (`start`/`advance`, ship-narrow→widen)
+   with **auto-rollback** when an observation breaches the thresholds. `rollout_state` JSONB +
+   `POST /v1/self-improvement/proposals/{id}/run-canary` · `…/rollout/start` · `…/rollout/advance`.
+   Validated end-to-end (auto-canary→rollout→completed, and degraded→auto-rollback→409).
+2. ✅ **Eval-harness regression suites** — `eval_harness.py` (routing_fallback_chain /
+   policy_audit_roundtrip / factory_gate_fail_closed / autonomy_ladder_monotonic), persisted to
+   `eval_runs`; `POST /v1/evals/run` + `GET /v1/evals`. Gates self-improvement rollouts.
+3. ✅ **Evidence-based autonomy auto-upgrade/downgrade** — `autonomy_engine.py` gathers a role's
+   allowed/denied/scope-violation events since its last review and feeds them through the existing
+   governance review engine → clean evidence auto-proposes an upgrade decision; a violation
+   auto-downgrades. `POST /v1/roles/{role_key}/autonomy/evaluate`. Both paths validated.
+4. 🟡 Router fallback canary tester + provider-health polling + rationale artifact — fallback-chain
+   regression covered by the eval-harness `routing_fallback_chain` eval; provider-health polling
+   already exists (`GET /v1/provider-health`). A dedicated router-fallback canary + structured
+   rationale artifact remain.
+5. ⬜ Skill-invocation framework + mock mode — remaining.
 
 ### Phase 3 — Comms robustness + meetings + factory scale  (multi-agent org at volume)
 1. Inbox PARSED/ROUTED + ack_state; email command contracts; Slack dept channels/persona/digest.
