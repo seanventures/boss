@@ -2061,6 +2061,12 @@ class MeetingRunRequest(BaseModel):
     consensus_reached: bool = True
     dissent_records: list[dict[str, Any]] = Field(default_factory=list)
     blocked_state: Optional[dict[str, Any]] = None
+    # Explicit vote phase: when votes are supplied, the consensus engine tallies them under
+    # quorum/threshold rules and derives consensus_reached/dissent/outcome itself.
+    votes: list[dict[str, Any]] = Field(default_factory=list)
+    quorum: Optional[int] = Field(default=None, ge=1)
+    vote_threshold: float = Field(default=0.5, gt=0.0, le=1.0)
+    default_action: str = "hold"
 
     @model_validator(mode="after")
     def validate_meeting_outputs(self) -> "MeetingRunRequest":
@@ -2070,9 +2076,28 @@ class MeetingRunRequest(BaseModel):
             raise ValueError("minutes must be a non-empty object.")
         if self.outcome_status == "blocked" and not self.blocked_state:
             raise ValueError("blocked_state is required when outcome_status is blocked.")
-        if not self.consensus_reached and not self.dissent_records:
+        # When votes drive the outcome, the tally supplies dissent — skip the manual requirement.
+        if not self.votes and not self.consensus_reached and not self.dissent_records:
             raise ValueError("dissent_records are required when consensus_reached is false.")
         return self
+
+
+class MeetingTallyRequest(BaseModel):
+    votes: list[dict[str, Any]]
+    eligible_count: Optional[int] = Field(default=None, ge=0)
+    quorum: Optional[int] = Field(default=None, ge=1)
+    vote_threshold: float = Field(default=0.5, gt=0.0, le=1.0)
+    default_action: str = "hold"
+
+    @model_validator(mode="after")
+    def validate_votes(self) -> "MeetingTallyRequest":
+        if not self.votes:
+            raise ValueError("votes must contain at least one entry.")
+        return self
+
+
+class MeetingSweepRequest(BaseModel):
+    actor: str = "meeting_watchdog"
 
 
 class MeetingListResponse(BaseModel):

@@ -18091,3 +18091,120 @@ def test_slack_digest_batches_drafts_per_channel(client, engine):
             )
         ).scalar_one()
     assert batched == 3
+
+
+# --- Phase 3 (workstream E-1): meeting consensus — vote/quorum/timeout/budgets ---
+
+
+def test_meeting_vote_tally_preview_outcomes(client):
+    approved = client.post(
+        "/v1/meetings/tally",
+        json={"votes": [{"voter": "a", "vote": "approve"}, {"voter": "b", "vote": "approve"},
+                        {"voter": "c", "vote": "reject"}], "eligible_count": 3},
+    ).json()
+    assert approved["outcome"] == "approved"
+    assert approved["consensus_reached"] is True
+    assert approved["quorum_met"] is True
+
+    rejected = client.post(
+        "/v1/meetings/tally",
+        json={"votes": [{"voter": "a", "vote": "reject"}, {"voter": "b", "vote": "reject"},
+                        {"voter": "c", "vote": "approve"}], "eligible_count": 3},
+    ).json()
+    assert rejected["outcome"] == "rejected"
+    assert rejected["consensus_reached"] is False
+    assert len(rejected["dissent_records"]) == 2
+
+    no_quorum = client.post(
+        "/v1/meetings/tally",
+        json={"votes": [{"voter": "a", "vote": "approve"}], "eligible_count": 3, "quorum": 3},
+    ).json()
+    assert no_quorum["outcome"] == "no_quorum"
+    assert no_quorum["quorum_met"] is False
+    assert no_quorum["consensus_reached"] is False
+
+
+def test_meeting_run_with_votes_records_consensus(client):
+    meeting = client.post(
+        "/v1/meetings",
+        json={"project_id": "boss-dogfood", "title": "Vote run", "purpose": "decide",
+              "participants": ["ceo", "program_manager", "release_manager"],
+              "agenda": ["decision"], "actor": "ceo"},
+    ).json()
+    run = client.post(
+        f"/v1/meetings/{meeting['id']}/run",
+        json={
+            "actor": "ceo",
+            "transcript": [{"speaker": "ceo", "message": "let us vote", "phase": "vote"}],
+            "minutes": {"summary": "Voted on the proposal."},
+            "votes": [
+                {"voter": "ceo", "vote": "approve"},
+                {"voter": "program_manager", "vote": "approve"},
+                {"voter": "release_manager", "vote": "reject", "reason": "rollout risk"},
+            ],
+        },
+    )
+    assert run.status_code == 200
+    payload = run.json()
+    assert payload["status"] == "completed"
+    assert len(payload["dissent_records"]) == 1
+    assert payload["dissent_records"][0]["reason"] == "rollout risk"
+
+
+def test_meeting_run_without_quorum_is_blocked(client):
+    meeting = client.post(
+        "/v1/meetings",
+        json={"project_id": "boss-dogfood", "title": "No quorum", "purpose": "decide",
+              "participants": ["ceo", "program_manager", "release_manager", "qa"],
+              "agenda": ["decision"], "actor": "ceo"},
+    ).json()
+    run = client.post(
+        f"/v1/meetings/{meeting['id']}/run",
+        json={
+            "actor": "ceo",
+            "transcript": [{"speaker": "ceo", "message": "vote", "phase": "vote"}],
+            "minutes": {"summary": "Only one vote arrived."},
+            "votes": [{"voter": "ceo", "vote": "approve"}],
+            "quorum": 3,
+        },
+    )
+    assert run.status_code == 200
+    assert run.json()["status"] == "blocked"
+
+
+def test_meeting_phase_budget_and_timeout_helpers():
+    from apps.api.app.services import meeting_consensus as mc
+    from datetime import timedelta, timezone, datetime as _dt
+
+    assert mc.phase_within_budget("round1", 100_000) is True
+    assert mc.phase_within_budget("round1", 10_000_000) is False
+    now = _dt(2026, 6, 25, 12, 0, 0, tzinfo=timezone.utc)
+    fresh = now - timedelta(seconds=10)
+    stale = now - timedelta(seconds=mc.phase_timeout_seconds("round1") + 60)
+    assert mc.phase_timed_out("round1", fresh, now) is False
+    assert mc.phase_timed_out("round1", stale, now) is True
+
+
+def test_meeting_sweep_stalled_runs_opens_incident(client, engine):
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                """
+                INSERT INTO meeting_runs (id, project_id, status, phase, directive, updated_at)
+                VALUES ('mrun_sweep_test', 'boss-dogfood', 'running', 'round1', 'stalled run',
+                        now() - interval '2 hours')
+                """
+            )
+        )
+    sweep = client.post("/v1/meetings/sweep-stalled", json={})
+    assert sweep.status_code == 200
+    swept_ids = [r["run_id"] for r in sweep.json()["runs"]]
+    assert "mrun_sweep_test" in swept_ids
+    target = next(r for r in sweep.json()["runs"] if r["run_id"] == "mrun_sweep_test")
+    assert target["decision_id"].startswith("dec_")
+
+    with engine.begin() as connection:
+        status = connection.execute(
+            text("SELECT status FROM meeting_runs WHERE id = 'mrun_sweep_test'")
+        ).scalar_one()
+    assert status == "failed"

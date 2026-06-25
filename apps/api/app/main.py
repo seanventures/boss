@@ -212,6 +212,8 @@ from .schemas import (
     MeetingCreateRequest,
     MeetingListResponse,
     MeetingRunRequest,
+    MeetingSweepRequest,
+    MeetingTallyRequest,
     MeetingSummary,
     OpsDigestRequest,
     OpsDigestResponse,
@@ -422,6 +424,7 @@ from .services.slack_comms import (
     department_channel,
     render_persona_message,
 )
+from .services import meeting_consensus
 from .services.secret_refs import SecretRefNotFoundError, SecretRefService
 from .services.self_improvement import (
     InvalidSelfImprovementTransitionError,
@@ -4766,7 +4769,7 @@ def create_meeting(payload: MeetingCreateRequest) -> MeetingSummary:
 def run_meeting(meeting_id: str, payload: MeetingRunRequest) -> MeetingSummary:
     with begin(engine) as connection:
         row = connection.execute(
-            text("SELECT project_id FROM meetings WHERE id = :meeting_id"),
+            text("SELECT project_id, participants FROM meetings WHERE id = :meeting_id"),
             {"meeting_id": meeting_id},
         ).mappings().first()
         if not row:
@@ -4777,6 +4780,32 @@ def run_meeting(meeting_id: str, payload: MeetingRunRequest) -> MeetingSummary:
             payload.actor,
             "task_create",
         )
+
+        minutes = payload.minutes
+        dissent_records = payload.dissent_records
+        consensus_reached = payload.consensus_reached
+        outcome_status = payload.outcome_status
+        blocked_state = payload.blocked_state
+        # Explicit vote phase: tally supplied votes under quorum/threshold rules and let the
+        # consensus engine derive the outcome (spec §D meeting consensus completeness).
+        if payload.votes:
+            eligible = len(row["participants"] or []) or len(payload.votes)
+            tally = meeting_consensus.tally_votes(
+                payload.votes,
+                eligible_count=eligible,
+                quorum=payload.quorum,
+                threshold=payload.vote_threshold,
+                default_action=payload.default_action,
+            )
+            minutes = {**payload.minutes, "vote_tally": tally}
+            consensus_reached = tally["consensus_reached"]
+            dissent_records = list(payload.dissent_records) + tally["dissent_records"]
+            if tally["outcome"] == "no_quorum":
+                outcome_status = "blocked"
+                blocked_state = blocked_state or {
+                    "reason": "quorum_not_met",
+                    "vote_tally": tally,
+                }
         try:
             result = canonical.run_meeting(
                 connection,
@@ -4784,13 +4813,13 @@ def run_meeting(meeting_id: str, payload: MeetingRunRequest) -> MeetingSummary:
                 meeting_id=meeting_id,
                 actor=payload.actor,
                 transcript=[item.model_dump() for item in payload.transcript],
-                minutes=payload.minutes,
+                minutes=minutes,
                 action_items=[item.model_dump() for item in payload.action_items],
                 decision_items=[item.model_dump() for item in payload.decision_items],
-                dissent_records=payload.dissent_records,
-                blocked_state=payload.blocked_state,
-                outcome_status=payload.outcome_status,
-                consensus_reached=payload.consensus_reached,
+                dissent_records=dissent_records,
+                blocked_state=blocked_state,
+                outcome_status=outcome_status,
+                consensus_reached=consensus_reached,
             )
         except ValueError as error:
             detail = str(error)
@@ -4798,6 +4827,26 @@ def run_meeting(meeting_id: str, payload: MeetingRunRequest) -> MeetingSummary:
                 raise HTTPException(status_code=409, detail=detail) from error
             raise HTTPException(status_code=400, detail=detail) from error
         return MeetingSummary(**result)
+
+
+@app.post("/v1/meetings/tally")
+def tally_meeting_votes(payload: MeetingTallyRequest) -> dict:
+    """Preview a vote tally under quorum/threshold rules (spec §D explicit vote phase)."""
+    eligible = payload.eligible_count if payload.eligible_count is not None else len(payload.votes)
+    return meeting_consensus.tally_votes(
+        payload.votes,
+        eligible_count=eligible,
+        quorum=payload.quorum,
+        threshold=payload.vote_threshold,
+        default_action=payload.default_action,
+    )
+
+
+@app.post("/v1/meetings/sweep-stalled")
+def sweep_stalled_meetings(payload: MeetingSweepRequest) -> dict:
+    """Fail out meeting runs stalled past their phase timeout, opening an incident Decision for each
+    (spec §D phase timeouts / stall prevention)."""
+    return meeting_consensus.sweep_stalled_meeting_runs(engine, settings, actor=payload.actor)
 
 
 @app.get("/v1/jobs", response_model=JobListResponse)

@@ -2,6 +2,18 @@
 
 All notable changes to BOSS are documented in this file.
 
+## Unreleased — Gap Phase 3 workstream E-1 (meeting consensus)
+
+### Added
+
+- Meeting consensus completeness (`meeting_consensus.py`): an explicit vote phase with
+  quorum/threshold/default rules. `tally_votes` decides approved / rejected / no_quorum and emits
+  dissent records; wired into `POST /v1/meetings/{id}/run` (supply `votes` → the engine derives
+  consensus/dissent; a no-quorum vote blocks the meeting) plus a `POST /v1/meetings/tally` preview.
+- Per-phase tool budgets + phase timeouts (pure config/helpers the LLM phase-machine consults).
+- Stall prevention: `POST /v1/meetings/sweep-stalled` fails out meeting runs stuck past their phase
+  timeout and opens an incident Decision for each — a silent stall becomes a visible item.
+
 ## Unreleased — Gap Phase 3 workstream D (comms robustness)
 
 ### Added
