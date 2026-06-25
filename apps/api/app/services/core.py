@@ -66,6 +66,33 @@ def emit_event(
     )
 
 
+def record_policy_eval(
+    connection: Connection,
+    project_id: str,
+    boundary: str,
+    decision: str,
+    *,
+    action: Optional[str] = None,
+    reason: Optional[str] = None,
+    detail: Optional[dict] = None,
+) -> str:
+    """Append a durable record of a policy evaluation at any enforcement boundary (spec §13:
+    policy_eval_log). `decision` is allow | deny | defer. This is the audit trail behind
+    'policy violation attempts (tracked and blocked)' and replay/'why did we do that'."""
+    eval_id = make_id("pev")
+    connection.execute(
+        text(
+            """
+            INSERT INTO policy_eval_log (id, project_id, boundary, action, decision, reason, detail)
+            VALUES (:id, :p, :b, :a, :d, :r, CAST(:det AS JSONB))
+            """
+        ),
+        {"id": eval_id, "p": project_id, "b": boundary, "a": action, "d": decision,
+         "r": reason, "det": json.dumps(detail or {})},
+    )
+    return eval_id
+
+
 def create_blocking_decision(
     connection: Connection,
     project_id: str,

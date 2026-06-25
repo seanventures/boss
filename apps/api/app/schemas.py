@@ -1148,6 +1148,28 @@ class BudgetConsumeResponse(BaseModel):
     cost_receipt: CostReceiptSummary
 
 
+class BudgetSetIntensityRequest(BaseModel):
+    scope_id: str
+    intensity: int
+    scope_type: str = "project"
+    actor: str = "ceo"
+
+
+class CanaryRunRequest(BaseModel):
+    project_id: str
+    actor: str = "canary"
+
+
+class PlanDispatchRequest(BaseModel):
+    project_id: str
+    actor: str = "program_manager"
+
+
+class AnomalyScanRequest(BaseModel):
+    project_id: str
+    auto_lite: bool = True
+
+
 class BudgetStatusResponse(BaseModel):
     scope_type: str
     scope_id: str
@@ -1165,6 +1187,7 @@ class BudgetStatusResponse(BaseModel):
     utilization_ratio: float
     active_reservations_count: int
     top_cost_drivers: list[dict[str, Any]]
+    operational_intensity: Optional[int] = None
 
 
 class BudgetForecastResponse(BaseModel):

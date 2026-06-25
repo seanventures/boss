@@ -32,7 +32,7 @@ from ..config import Settings
 from ..db import begin
 from .code_agent import make_code_agent
 from .code_task_service import _fail, _release, _set_phase, load_code_task_run
-from .core import create_blocking_decision, emit_event, make_id
+from .core import create_blocking_decision, emit_event, make_id, record_policy_eval
 from .github_app_adapter import GitHubAppAdapter
 from .pipeline_profile_service import resolve_for_run
 from .pipeline_profiles import infer_risk_tier, model_for_step
@@ -341,6 +341,15 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
 
     provider = LocalSubprocessProvider(settings)
     agent = make_code_agent(settings)  # model-agnostic: claude_code | native (OpenAI/Azure)
+    # Data-boundary enforcement: restricted/confidential tasks redact PII before any external
+    # model call (spec §7.4 / §25). The flag rides on the agent; each run_role honours it.
+    data_boundary = spec.get("data_boundary", "internal")
+    if data_boundary in ("restricted", "confidential"):
+        agent.redact = True
+        with begin(engine) as c:
+            record_policy_eval(c, project_id, "data_boundary", "allow", action="redact_external",
+                               reason=f"{data_boundary} task — PII redacted before external model calls",
+                               detail={"run_id": run_id, "data_boundary": data_boundary})
     sandbox = None
     cost = 0
     try:

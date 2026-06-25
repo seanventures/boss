@@ -17,6 +17,39 @@ export async function setPipelineDefaultAction(formData: FormData): Promise<void
   revalidatePath("/");
 }
 
+export async function runCanariesAction(formData: FormData): Promise<void> {
+  const projectId = getProjectId(formData);
+  await fetch(`${API_URL}/v1/canaries/run`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ project_id: projectId, actor: getActor(formData) }),
+  });
+  revalidatePath("/");
+}
+
+export async function dispatchPlanAction(formData: FormData): Promise<void> {
+  const projectId = getProjectId(formData);
+  const planId = String(formData.get("plan_id") ?? "").trim();
+  if (!planId) return;
+  await fetch(`${API_URL}/v1/plans/${encodeURIComponent(planId)}/dispatch`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ project_id: projectId, actor: getActor(formData) }),
+  });
+  revalidatePath("/");
+}
+
+export async function setBudgetIntensityAction(formData: FormData): Promise<void> {
+  const projectId = getProjectId(formData);
+  const intensity = Number(formData.get("intensity") ?? 50);
+  await fetch(`${API_URL}/v1/budget/set_intensity`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ scope_id: projectId, intensity, actor: getActor(formData) }),
+  });
+  revalidatePath("/");
+}
+
 export async function createPipelineProfileAction(formData: FormData): Promise<void> {
   const projectId = getProjectId(formData);
   const name = String(formData.get("name") ?? "").trim().toLowerCase();
@@ -260,6 +293,22 @@ export async function resolveDecisionAction(formData: FormData): Promise<void> {
 
 export async function submitCommandAction(formData: FormData): Promise<void> {
   const projectId = getProjectId(formData);
+  const text = String(formData.get("command") ?? "").trim();
+
+  // Semantic outcome intent: budget intensity (e.g. "set intensity to 70", "budget intensity 40").
+  // Recognized ops intents act immediately; everything else flows to the governed command pipeline.
+  const m = text.match(/\b(?:operational\s+)?intensity\b[^0-9]*(\d{1,3})/i);
+  if (m) {
+    const intensity = Math.max(0, Math.min(100, Number(m[1])));
+    await fetch(`${API_URL}/v1/budget/set_intensity`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ scope_id: projectId, intensity, actor: getActor(formData) }),
+    });
+    revalidatePath("/");
+    return;
+  }
+
   const payload = buildCommandRequest(
     formData.get("command"),
     formData.get("deadline"),

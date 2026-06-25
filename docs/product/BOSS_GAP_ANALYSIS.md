@@ -75,20 +75,22 @@ consensus engine · 10/10 MVP API endpoints · audit export + replay bundles.
 
 ## Prioritized, phase-wise plan (MVP-first)
 
-### Phase 0 — Complete & *prove* the MVP v0 loop  (≈ Sean's "2-week vertical slice", mostly done)
+### Phase 0 — Complete & *prove* the MVP v0 loop  ✅ DONE (branch `feat/gap-phase0-mvp`)
 Goal: the dogfooding loop is demonstrably end-to-end with the guarantees proven.
-1. Budget intensity slider (endpoint + CEO UI). **[MVP signature control]**
-2. Canary suite: e2e / exactly-once / no-drop / software-factory / router-fallback smokes, nightly. **[proves the non-negotiables]**
-3. CEO outcome command palette (semantic intents).
-4. Plan→job orchestration linkage.
-5. Rollback UI on the change journal.
+1. ✅ Budget intensity slider — `POST /v1/budget/set_intensity` (0–100 → caps/concurrency/tiers) + console slider. Validated.
+2. ✅ Canary suite — `exactly_once` / `no_drop_outbox` / `job_lifecycle` / `budget_reserve_release` (4 pass) + software-factory/router-fallback declared-skipped; `POST /v1/canaries/run`, persisted to `canary_runs`.
+3. ✅ CEO outcome commands — semantic intent in the composer ("set intensity to 70" acts immediately; else → governed command pipeline).
+4. ✅ Plan→job orchestration — `dispatch_plan` turns phases into sequenced child tasks; `POST /v1/plans/{id}/dispatch`. Validated (Design→Build→Ship chain).
+5. ✅ Rollback surfaced on change-journal rows (deep-links to working rollback controls).
 
-### Phase 1 — Safety & trust moat  (unlocks serious dogfooding + enterprise conversations)
-1. PII sanitizer/redaction + data-boundary enforcement (local-only runner).
-2. Unified PolicyEvaluator + `policy_eval_log` audit trail.
-3. Distributed tracing (trace IDs across model/tool/job) + run-viewer/audit linkage.
-4. Cost anomaly detection + burst-cap enforcement + auto lite-mode (with decision artifacts).
-5. Break-glass postmortem enforcement.
+### Phase 1 — Safety & trust moat  ✅ COMPLETE (branch `feat/gap-phase0-mvp`)
+1. ✅ **PII sanitizer/redaction** — `redaction.py` + opt-in `redact=` on the model adapter.
+2. ✅ **Policy-eval audit trail** — `policy_eval_log` + `record_policy_eval` + budget-gate wiring + `GET /v1/policy-evals`.
+3. ✅ **Burst-cap enforcement** — `$/min` cap enforced at `reserve()` with deny + policy-eval record.
+4. ✅ **Cost-anomaly detection + auto-lite** — `anomaly_detector.scan` (retry storms, spend spikes) → incident Decision + auto-lite-mode; `POST /v1/anomalies/scan`.
+5. ✅ **Break-glass postmortem** — already auto-created per grant (was overstated as a gap).
+6. ✅ **Data-boundary enforcement** — restricted/confidential tasks redact PII before every external model call + `[data_boundary]` policy eval.
+7. ✅ **Distributed tracing** — `GET /v1/trace?run_id` reconstructs a run's full timeline (run + gate + every referencing event).
 
 ### Phase 2 — Earned autonomy & controlled self-improvement  (the moat / the "BOSS improves BOSS" story)
 1. Self-improvement runtime: canary runner + staged rollout + auto-rollback thresholds.

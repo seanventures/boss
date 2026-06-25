@@ -67,7 +67,12 @@ import { fetchAgentModuleFeed } from "../lib/agent-modules";
 import { fetchAuthSession } from "../lib/auth-session";
 import { fetchInboxFeed, fetchOutboxFeed } from "../lib/comms";
 import { fetchBudgetAllocationFeed } from "../lib/budget-allocations";
-import { fetchBudgetStatus } from "../lib/budget-status";
+import { fetchBudgetStatus, fetchBudgetIntensity } from "../lib/budget-status";
+import { BudgetIntensitySlider } from "./budget-intensity-ui";
+import { fetchLatestCanary } from "../lib/canaries";
+import { CanaryCard } from "./canary-ui";
+import { fetchPlans } from "../lib/plans";
+import { PlansCard } from "./plans-ui";
 import { fetchBreakGlassGrantFeed } from "../lib/break-glass";
 import { fetchChangeJournalFeed } from "../lib/change-journal";
 import { fetchCommercialFeed } from "../lib/commercial";
@@ -394,6 +399,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
     receipts,
     infrastructureResources,
     budgetStatus,
+    budgetIntensity,
+    canaryRun,
+    plansList,
     budgetAllocations,
     auditSummary,
     changeJournal,
@@ -444,6 +452,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
       fetchReceiptFeed(activeProjectId),
       fetchInfrastructureResourceFeed(activeProjectId),
       fetchBudgetStatus(activeProjectId),
+      fetchBudgetIntensity(activeProjectId),
+      fetchLatestCanary(activeProjectId),
+      fetchPlans(activeProjectId),
       fetchBudgetAllocationFeed(activeProjectId),
       fetchAuditSummary(activeProjectId),
       fetchChangeJournalFeed(activeProjectId),
@@ -628,7 +639,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                   name="command"
                   rows={5}
                   className="textarea"
-                  placeholder="Build the next operator visibility slice and validate it through the sandbox workflow."
+                  placeholder="Type an outcome — e.g. 'Ship the operator visibility slice to staging', or an ops intent like 'set intensity to 70' (acts immediately)."
                   disabled={disableCommandEntry}
                   required
                 />
@@ -1224,6 +1235,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               Source: `/v1/budget/status` for project {activeProjectId}.
             </p>
           </div>
+
+          <BudgetIntensitySlider projectId={activeProjectId} current={budgetIntensity} />
 
           <article className="stack-card">
             {!budgetStatus.apiReachable ? (
@@ -2650,6 +2663,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               <h2>Mission control — what is running, stuck, or failing.</h2>
             </div>
           </div>
+          <CanaryCard projectId={activeProjectId} run={canaryRun} />
           <WorkflowHealth
             jobStatusCounts={opsQueue.jobStatusCounts}
             jobKindCounts={opsQueue.jobKindCounts}
@@ -2906,6 +2920,25 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                         {item.rollbackPlan ? (
                           <p className="detail">Rollback: {item.rollbackPlan}</p>
                         ) : null}
+                        {(() => {
+                          const t = `${item.artifactType} ${item.changeKind}`.toLowerCase();
+                          const area = t.includes("self_improvement")
+                            ? "ops"
+                            : t.includes("module")
+                              ? "org"
+                              : null;
+                          return area ? (
+                            <p className="detail">
+                              <AreaLink
+                                area={area}
+                                orgId={activeOrgId}
+                                title="Open the rollback control for this change"
+                              >
+                                ↩ Roll back
+                              </AreaLink>
+                            </p>
+                          ) : null;
+                        })()}
                       </div>
                       <code className="mono">{item.taskId ?? item.id}</code>
                     </div>
@@ -5852,6 +5885,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               <h2>Workflow transitions — click a task to trace its run.</h2>
             </div>
           </div>
+          <PlansCard projectId={activeProjectId} plans={plansList} />
           <WorkBoard
             tasks={tasks.items}
             jobs={opsQueue.jobs}

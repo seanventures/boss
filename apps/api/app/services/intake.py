@@ -113,6 +113,48 @@ class CommandIntakeService:
         )
         return {"task_id": task_id}
 
+    def dispatch_plan(self, connection: Connection, plan_id: str, actor: str = "program_manager") -> dict:
+        """Turn a plan's structured phases into executable tasks: one child task per phase, parented
+        to the plan's task and sequenced (each phase depends on the previous unless the phase
+        declares its own `depends_on`). Bridges the plan primitive to the task/job engine."""
+        plan = connection.execute(
+            text("SELECT id, project_id, task_id, title, status, phases FROM plans WHERE id = :id"),
+            {"id": plan_id},
+        ).mappings().first()
+        if not plan:
+            raise ValueError(f"plan {plan_id} not found")
+        if plan["status"] == "dispatched":
+            raise ValueError(f"plan {plan_id} already dispatched")
+        phases = plan["phases"] if isinstance(plan["phases"], list) else json.loads(plan["phases"] or "[]")
+        project_id = plan["project_id"]
+        created: list[str] = []
+        prev_task_id: Optional[str] = None
+        for i, phase in enumerate(phases):
+            phase = phase if isinstance(phase, dict) else {"title": str(phase)}
+            title = phase.get("title") or phase.get("name") or f"{plan['title']} — phase {i + 1}"
+            desc = phase.get("objective") or phase.get("summary") or phase.get("description") or ""
+            # explicit deps (by 0-based phase index) or default to the previous phase (sequential)
+            dep_idx = phase.get("depends_on")
+            if isinstance(dep_idx, list) and dep_idx:
+                deps = [created[d] for d in dep_idx if isinstance(d, int) and 0 <= d < len(created)]
+            else:
+                deps = [prev_task_id] if prev_task_id else []
+            result = self.create_task(
+                connection, project_id, title=title, description=desc,
+                dedupe_key=f"plan:{plan_id}:phase:{i}",
+                risk_tier=int(phase.get("risk_tier", 1)),
+                parent_task_id=plan["task_id"], dependency_task_ids=deps,
+            )
+            created.append(result["task_id"])
+            prev_task_id = result["task_id"]
+        connection.execute(
+            text("UPDATE plans SET status = 'dispatched', updated_at = now() WHERE id = :id"),
+            {"id": plan_id},
+        )
+        emit_event(connection, project_id, "plan.dispatched", actor, "plan", plan_id,
+                   {"phase_task_ids": created, "phase_count": len(created)})
+        return {"plan_id": plan_id, "status": "dispatched", "phase_task_ids": created}
+
     def _normalize_optional_text(self, value: Optional[str], field_name: str) -> Optional[str]:
         if value is None:
             return None

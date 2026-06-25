@@ -1440,6 +1440,7 @@ CREATE TABLE IF NOT EXISTS budget_policies (
   auto_lite_mode_pct NUMERIC NOT NULL DEFAULT 0.85,
   freeze_provisioning_pct NUMERIC NOT NULL DEFAULT 0.9,
   freeze_tier2_pct NUMERIC NOT NULL DEFAULT 0.95,
+  operational_intensity INTEGER,  -- CEO budget slider 0-100 (null = caps set directly)
   version INTEGER NOT NULL DEFAULT 1,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -1707,3 +1708,27 @@ CREATE TABLE IF NOT EXISTS meeting_roles (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE(project_id, role_key)
 );
+
+CREATE TABLE IF NOT EXISTS canary_runs (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  status TEXT NOT NULL,            -- pass | fail
+  results JSONB NOT NULL,          -- per-canary {canary, status, detail}
+  passed INTEGER NOT NULL,
+  failed INTEGER NOT NULL,
+  skipped INTEGER NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_canary_runs_project ON canary_runs (project_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS policy_eval_log (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  boundary TEXT NOT NULL,        -- budget.reserve | comms.delivery | data_boundary | approval | ...
+  action TEXT,                   -- what was being attempted
+  decision TEXT NOT NULL,        -- allow | deny | defer
+  reason TEXT,
+  detail JSONB,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_policy_eval_log_project ON policy_eval_log (project_id, created_at DESC);

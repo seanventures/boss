@@ -70,6 +70,10 @@ from .schemas import (
     BudgetReservationSummary,
     BudgetReleaseRequest,
     BudgetReleaseResponse,
+    BudgetSetIntensityRequest,
+    AnomalyScanRequest,
+    CanaryRunRequest,
+    PlanDispatchRequest,
     BudgetStatusResponse,
     BudgetReserveRequest,
     BudgetReserveResponse,
@@ -4683,6 +4687,17 @@ def create_plan(payload: PlanCreateRequest) -> PlanSummary:
         return PlanSummary(**result)
 
 
+@app.post("/v1/plans/{plan_id}/dispatch")
+def dispatch_plan(plan_id: str, payload: PlanDispatchRequest) -> dict:
+    """Turn a plan's phases into sequenced, executable child tasks (plan → task/job engine)."""
+    with begin(engine) as connection:
+        require_project_actor(connection, payload.project_id, payload.actor, "task_create")
+        try:
+            return intake.dispatch_plan(connection, plan_id, payload.actor)
+        except ValueError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+
+
 @app.get("/v1/meetings", response_model=MeetingListResponse)
 def list_meetings(project_id: str, limit: int = 50, offset: int = 0) -> MeetingListResponse:
     if limit < 1 or limit > 200:
@@ -7218,7 +7233,99 @@ def budget_status(scope_type: str, scope_id: str) -> BudgetStatusResponse:
             utilization_ratio=snapshot["utilization_ratio"],
             active_reservations_count=snapshot["active_reservations_count"],
             top_cost_drivers=snapshot["top_cost_drivers"],
+            operational_intensity=snapshot.get("operational_intensity"),
         )
+
+
+@app.post("/v1/budget/set_intensity")
+def budget_set_intensity(payload: BudgetSetIntensityRequest) -> dict:
+    """CEO Operational Intensity slider (0-100) → spend envelope + scaling limits."""
+    if payload.scope_type != "project":
+        raise HTTPException(status_code=400, detail="Only project scope is supported.")
+    with begin(engine) as connection:
+        result = budget.set_intensity(
+            connection, payload.scope_type, payload.scope_id, payload.intensity, payload.actor
+        )
+    return {"scope_type": payload.scope_type, "scope_id": payload.scope_id, **result}
+
+
+@app.post("/v1/canaries/run")
+def canaries_run(payload: CanaryRunRequest) -> dict:
+    """Run the canary suite (exactly-once / no-drop / job-lifecycle / budget) and persist results."""
+    from .services import canaries as canaries_svc
+    return canaries_svc.run_canary_suite(engine, settings, payload.project_id, payload.actor)
+
+
+@app.get("/v1/canaries")
+def canaries_list(project_id: str, limit: int = 20) -> dict:
+    from .services import canaries as canaries_svc
+    return {"items": canaries_svc.list_canary_runs(engine, project_id, limit)}
+
+
+@app.post("/v1/anomalies/scan")
+def anomalies_scan(payload: AnomalyScanRequest) -> dict:
+    """Scan for operational cost anomalies (retry storms, spend spikes) → incident + auto-lite."""
+    from .services import anomaly_detector
+    return anomaly_detector.scan(engine, settings, payload.project_id, auto_lite=payload.auto_lite)
+
+
+@app.get("/v1/trace")
+def trace_run(run_id: str) -> dict:
+    """Reconstruct a code-task run's full timeline — the run + its fail-closed quality gate + every
+    event referencing it (jobs, model/tool calls, receipts, decisions). The 'why did we do that'
+    trace (spec §26 replay/observability), assembled from existing links — no per-call threading."""
+    with begin(engine) as connection:
+        run = connection.execute(
+            text(
+                "SELECT id, project_id, task_id, status, phase, title, state, pull_request_url, "
+                "decision_id, error, created_at, updated_at FROM code_task_runs WHERE id = :r"
+            ),
+            {"r": run_id},
+        ).mappings().first()
+        if not run:
+            raise HTTPException(status_code=404, detail=f"run {run_id} not found")
+        gate = connection.execute(
+            text(
+                "SELECT id, status, gates_passed, gates_failed, evidence, created_at "
+                "FROM quality_gates WHERE code_task_run_id = :r"
+            ),
+            {"r": run_id},
+        ).mappings().first()
+        timeline = connection.execute(
+            text(
+                "SELECT event_type, actor, entity_type, entity_id, data, created_at FROM events "
+                "WHERE project_id = :p AND (entity_id = :r OR data::text LIKE :like) "
+                "ORDER BY created_at ASC"
+            ),
+            {"p": run["project_id"], "r": run_id, "like": f"%{run_id}%"},
+        ).mappings().all()
+    return {
+        "run": dict(run),
+        "quality_gate": dict(gate) if gate else None,
+        "timeline": [dict(e) for e in timeline],
+        "event_count": len(timeline),
+    }
+
+
+@app.get("/v1/policy-evals")
+def policy_evals_list(project_id: str, limit: int = 50, decision: Optional[str] = None) -> dict:
+    """The policy-evaluation audit trail (allow/deny/defer at every enforcement boundary)."""
+    clause = "AND decision = :decision" if decision else ""
+    params: dict = {"p": project_id, "l": limit}
+    if decision:
+        params["decision"] = decision
+    with begin(engine) as connection:
+        rows = connection.execute(
+            text(
+                f"""
+                SELECT id, boundary, action, decision, reason, detail, created_at
+                FROM policy_eval_log WHERE project_id = :p {clause}
+                ORDER BY created_at DESC LIMIT :l
+                """
+            ),
+            params,
+        ).mappings().all()
+    return {"items": [dict(r) for r in rows]}
 
 
 @app.get("/v1/budget/forecast", response_model=BudgetForecastResponse)
