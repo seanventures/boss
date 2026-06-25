@@ -11,6 +11,10 @@ RUN pnpm install --frozen-lockfile
 
 COPY apps/web ./apps/web
 COPY packages/api-client ./packages/api-client
+
+ARG NEXT_PUBLIC_BOSS_API_URL=http://boss-api:8000
+ENV NEXT_PUBLIC_BOSS_API_URL=$NEXT_PUBLIC_BOSS_API_URL
+
 RUN pnpm --filter boss-web build
 
 FROM node:20-bookworm-slim AS runtime
