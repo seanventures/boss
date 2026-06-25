@@ -1,4 +1,4 @@
-import { API_URL, PROJECT_ID, resolveProjectId } from "./client";
+import { API_URL, PROJECT_ID, resolveProjectId, authHeaders} from "./client";
 
 export type PlanItem = {
   id: string;
@@ -12,7 +12,7 @@ export async function fetchPlans(projectId = PROJECT_ID): Promise<PlanItem[]> {
   try {
     const r = await fetch(
       `${API_URL}/v1/plans?project_id=${encodeURIComponent(resolveProjectId(projectId))}&limit=20`,
-      { cache: "no-store" },
+      { cache: "no-store", headers: authHeaders() },
     );
     if (!r.ok) return [];
     const items = (await r.json()).items ?? [];

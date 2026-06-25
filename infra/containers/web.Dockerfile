@@ -20,13 +20,18 @@ RUN pnpm --filter boss-web build
 FROM node:20-bookworm-slim AS runtime
 
 ENV NODE_ENV=production \
-    PORT=3000
+    PORT=3000 \
+    HOME=/home/boss
 
 WORKDIR /app
 
-RUN corepack enable \
+# Install pnpm globally (readable by the non-root user) instead of corepack-on-first-run, which
+# tried to write to $HOME/.cache and crash-looped (EACCES, since HOME was /nonexistent). Also give
+# boss a real, writable home for any runtime cache.
+RUN npm install -g pnpm@9.15.0 \
     && addgroup --system boss \
-    && adduser --system --ingroup boss boss
+    && adduser --system --ingroup boss --home /home/boss boss \
+    && mkdir -p /home/boss && chown -R boss:boss /home/boss
 
 COPY --from=builder --chown=boss:boss /app/package.json ./package.json
 COPY --from=builder --chown=boss:boss /app/pnpm-lock.yaml ./pnpm-lock.yaml

@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import type { DataBoundary } from "@boss/api-client";
-import { API_URL, client, PROJECT_ID, resolveProjectId } from "../lib/client";
+import { API_URL, client, PROJECT_ID, resolveProjectId, authHeaders} from "../lib/client";
 import { buildCommandRequest } from "../lib/commands";
 
 export async function setPipelineDefaultAction(formData: FormData): Promise<void> {
@@ -11,7 +11,7 @@ export async function setPipelineDefaultAction(formData: FormData): Promise<void
   if (!name) return;
   await fetch(`${API_URL}/v1/pipeline-profiles/default`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify({ project_id: projectId, name, actor: getActor(formData) }),
   });
   revalidatePath("/");
@@ -21,7 +21,7 @@ export async function runCanariesAction(formData: FormData): Promise<void> {
   const projectId = getProjectId(formData);
   await fetch(`${API_URL}/v1/canaries/run`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify({ project_id: projectId, actor: getActor(formData) }),
   });
   revalidatePath("/");
@@ -33,7 +33,7 @@ export async function dispatchPlanAction(formData: FormData): Promise<void> {
   if (!planId) return;
   await fetch(`${API_URL}/v1/plans/${encodeURIComponent(planId)}/dispatch`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify({ project_id: projectId, actor: getActor(formData) }),
   });
   revalidatePath("/");
@@ -44,7 +44,7 @@ export async function setBudgetIntensityAction(formData: FormData): Promise<void
   const intensity = Number(formData.get("intensity") ?? 50);
   await fetch(`${API_URL}/v1/budget/set_intensity`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify({ scope_id: projectId, intensity, actor: getActor(formData) }),
   });
   revalidatePath("/");
@@ -66,7 +66,7 @@ export async function createPipelineProfileAction(formData: FormData): Promise<v
   }
   await fetch(`${API_URL}/v1/pipeline-profiles`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify({
       project_id: projectId,
       name,
@@ -302,7 +302,7 @@ export async function submitCommandAction(formData: FormData): Promise<void> {
     const intensity = Math.max(0, Math.min(100, Number(m[1])));
     await fetch(`${API_URL}/v1/budget/set_intensity`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: authHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify({ scope_id: projectId, intensity, actor: getActor(formData) }),
     });
     revalidatePath("/");

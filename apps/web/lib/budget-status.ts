@@ -1,12 +1,12 @@
 import { BossApiError, type BudgetStatusResponse } from "@boss/api-client";
-import { API_URL, client, PROJECT_ID, resolveProjectId } from "./client";
+import { API_URL, client, PROJECT_ID, resolveProjectId, authHeaders} from "./client";
 
 // operational_intensity isn't in the typed client yet — read it directly. Returns 0-100 or null.
 export async function fetchBudgetIntensity(projectId = PROJECT_ID): Promise<number | null> {
   try {
     const r = await fetch(
       `${API_URL}/v1/budget/status?scope_type=project&scope_id=${encodeURIComponent(resolveProjectId(projectId))}`,
-      { cache: "no-store" },
+      { cache: "no-store", headers: authHeaders() },
     );
     if (!r.ok) return null;
     const v = (await r.json()).operational_intensity;

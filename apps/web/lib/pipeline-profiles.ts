@@ -1,4 +1,4 @@
-import { API_URL, PROJECT_ID, resolveProjectId } from "./client";
+import { API_URL, PROJECT_ID, resolveProjectId, authHeaders} from "./client";
 
 export type PipelineProfile = {
   name: string;
@@ -65,7 +65,7 @@ export async function fetchPipelineData(projectId = PROJECT_ID): Promise<Pipelin
   try {
     const pr = await fetch(
       `${API_URL}/v1/pipeline-profiles?project_id=${encodeURIComponent(resolved)}`,
-      { cache: "no-store" },
+      { cache: "no-store", headers: authHeaders() },
     );
     if (!pr.ok) return emptyPipelineData(resolved);
     const pdata = await pr.json();
@@ -74,7 +74,7 @@ export async function fetchPipelineData(projectId = PROJECT_ID): Promise<Pipelin
     try {
       const rr = await fetch(
         `${API_URL}/v1/code-tasks?project_id=${encodeURIComponent(resolved)}&limit=25`,
-        { cache: "no-store" },
+        { cache: "no-store", headers: authHeaders() },
       );
       if (rr.ok) {
         const rdata = await rr.json();
@@ -103,7 +103,7 @@ export async function fetchPipelineData(projectId = PROJECT_ID): Promise<Pipelin
     try {
       const er = await fetch(
         `${API_URL}/v1/edition?project_id=${encodeURIComponent(resolved)}`,
-        { cache: "no-store" },
+        { cache: "no-store", headers: authHeaders() },
       );
       if (er.ok) edition = String((await er.json()).edition_id ?? "community");
     } catch {
