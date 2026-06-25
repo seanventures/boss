@@ -1,4 +1,4 @@
-import { API_URL, PROJECT_ID, resolveProjectId } from "./client";
+import { API_URL, PROJECT_ID, resolveProjectId, authHeaders} from "./client";
 
 export type CanaryResult = { canary: string; status: string; detail: string };
 export type CanaryRun = {
@@ -16,7 +16,7 @@ export async function fetchLatestCanary(projectId = PROJECT_ID): Promise<CanaryR
   try {
     const r = await fetch(
       `${API_URL}/v1/canaries?project_id=${encodeURIComponent(resolveProjectId(projectId))}&limit=1`,
-      { cache: "no-store" },
+      { cache: "no-store", headers: authHeaders() },
     );
     if (!r.ok) return null;
     const items = (await r.json()).items ?? [];
