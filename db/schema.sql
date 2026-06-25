@@ -1752,3 +1752,25 @@ CREATE INDEX IF NOT EXISTS idx_eval_runs_project ON eval_runs (project_id, creat
 -- auto-rollback thresholds). Empty {} until a staged rollout begins.
 ALTER TABLE self_improvement_proposals
   ADD COLUMN IF NOT EXISTS rollout_state JSONB NOT NULL DEFAULT '{}'::jsonb;
+
+-- Phase 2: skill-invocation framework records. Every invocation through the runtime (mock or real)
+-- records the permission decision, cost estimate, retry attempts, and outcome. Mock mode runs the
+-- full governance gauntlet with no real side effects (used by canaries).
+CREATE TABLE IF NOT EXISTS skill_invocations (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  skill_id TEXT NOT NULL,
+  caller TEXT NOT NULL,
+  mode TEXT NOT NULL,                       -- mock | real
+  status TEXT NOT NULL,                     -- succeeded | denied | failed
+  permission_decision TEXT NOT NULL,        -- allow | deny
+  attempts INTEGER NOT NULL DEFAULT 0,
+  max_attempts INTEGER NOT NULL DEFAULT 1,
+  cost_estimate_usd_micros BIGINT NOT NULL DEFAULT 0,
+  reservation_id TEXT,
+  reason TEXT,
+  result JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_skill_invocations_project
+  ON skill_invocations (project_id, created_at DESC);

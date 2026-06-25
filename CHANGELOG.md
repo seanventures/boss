@@ -16,6 +16,15 @@ All notable changes to BOSS are documented in this file.
 - Evidence-based autonomy engine (`autonomy_engine.py`): `POST /v1/roles/{role_key}/autonomy/evaluate`
   gathers a role's allowed/denied/scope-violation events since its last review and runs a governance
   review — auto-proposing an upgrade decision on clean evidence or auto-downgrading on a violation.
+- Router health + rationale (`router_health.py`): `POST /v1/provider-health/poll` snapshots every
+  model lane into `provider_health`; `POST /v1/router/rationale` persists the selected lane + ranked
+  fallback chain + rejected sources as a `router_rationale` artifact. The `router_fallback` canary is
+  now live (no longer skipped) and proves the chain is coherent before an incident.
+- Skill-invocation framework (`skill_runtime.py`): enforces per-skill permission (allowed_callers),
+  cost (budget reservation in the skill's category), and retry (retry.max_attempts), recording each
+  call to the new `skill_invocations` table. **Mock mode** runs the full gauntlet with no side
+  effects — `POST /v1/skills/{skill_id}/invoke` (API mock-only) + `GET /v1/skills/invocations`; a
+  `skill_mock_invocation` canary proves the no-side-effect guarantee.
 
 ## v0.6.0 - 2026-06-03
 

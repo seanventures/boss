@@ -1,7 +1,6 @@
-# BOSS — Gap Analysis vs. Target Spec (Sean's PRD + Tech Spec v1)
+# BOSS — Gap Analysis vs. Target Spec (PRD + Tech Spec v1)
 
 Date: 2026-06-21. Source spec: BOSS PRD + Technical Specification v1 Draft (May 15, 2026).
-Method: 5 parallel code/schema audits of `~/startup/sean/boss` against the spec's domains.
 Verdict: **the hard foundations are built (~75% overall); remaining work is breadth, the
 "earned-autonomy / self-improvement" loops, the safety moat, and proof (canary/test suite).**
 
@@ -92,7 +91,7 @@ Goal: the dogfooding loop is demonstrably end-to-end with the guarantees proven.
 6. ✅ **Data-boundary enforcement** — restricted/confidential tasks redact PII before every external model call + `[data_boundary]` policy eval.
 7. ✅ **Distributed tracing** — `GET /v1/trace?run_id` reconstructs a run's full timeline (run + gate + every referencing event).
 
-### Phase 2 — Earned autonomy & controlled self-improvement  (the moat / the "BOSS improves BOSS" story)  🟡 CORE COMPLETE (branch `feat/gap-phase2-autonomy`)
+### Phase 2 — Earned autonomy & controlled self-improvement  (the moat / the "BOSS improves BOSS" story)  ✅ COMPLETE (branch `feat/gap-phase2-autonomy`)
 1. ✅ **Self-improvement runtime** — `run_canary` auto-runs the canary + eval-harness suites and
    records the outcome (no human reports it); staged rollout (`start`/`advance`, ship-narrow→widen)
    with **auto-rollback** when an observation breaches the thresholds. `rollout_state` JSONB +
@@ -105,11 +104,20 @@ Goal: the dogfooding loop is demonstrably end-to-end with the guarantees proven.
    allowed/denied/scope-violation events since its last review and feeds them through the existing
    governance review engine → clean evidence auto-proposes an upgrade decision; a violation
    auto-downgrades. `POST /v1/roles/{role_key}/autonomy/evaluate`. Both paths validated.
-4. 🟡 Router fallback canary tester + provider-health polling + rationale artifact — fallback-chain
-   regression covered by the eval-harness `routing_fallback_chain` eval; provider-health polling
-   already exists (`GET /v1/provider-health`). A dedicated router-fallback canary + structured
-   rationale artifact remain.
-5. ⬜ Skill-invocation framework + mock mode — remaining.
+4. ✅ **Router fallback canary + provider-health polling + rationale artifact** — `router_health.py`:
+   `poll_provider_health` snapshots every model lane into `provider_health` (`POST /v1/provider-health/poll`,
+   visible via existing `GET /v1/provider-health`); `record_rationale` persists the selected lane +
+   ranked fallback chain + rejected sources as a `router_rationale` artifact (`POST /v1/router/rationale`);
+   the `router_fallback` canary (now live, not skipped) proves the chain is coherent before an incident.
+5. ✅ **Skill-invocation framework + mock mode** — `skill_runtime.py` enforces per-skill
+   permission (allowed_callers) + cost (budget reserve in the skill's category) + retry
+   (retry.max_attempts), recording each call to `skill_invocations`. **Mock mode** runs the full
+   gauntlet with zero side effects (no reservation, deterministic echo) — `POST /v1/skills/{id}/invoke`
+   (API is mock-only; real invocation is worker-driven) + `GET /v1/skills/invocations`; a
+   `skill_mock_invocation` canary proves the no-side-effect guarantee.
+
+**Phase 2 complete.** Remaining router work (live provider API ping vs. config-derived health) and a
+real ≥2-lane fallback exercise are deferred to when multiple model lanes are credentialed.
 
 ### Phase 3 — Comms robustness + meetings + factory scale  (multi-agent org at volume)
 1. Inbox PARSED/ROUTED + ack_state; email command contracts; Slack dept channels/persona/digest.
@@ -124,7 +132,7 @@ Goal: the dogfooding loop is demonstrably end-to-end with the guarantees proven.
 
 ---
 
-## Bottom line for the conversation with Sean
+## Bottom line
 BOSS already implements the spec's *hardest* non-negotiables — durable execution, exactly-once
 effects, the budget/approval/policy governor, and a working governed software factory. The ~25%
 gap is concentrated in (1) **proving** the guarantees (canary suite), (2) the **safety moat**

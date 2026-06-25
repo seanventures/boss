@@ -1176,6 +1176,33 @@ class EvalRunRequest(BaseModel):
     suite: str = "all"
 
 
+class ProviderHealthPollRequest(BaseModel):
+    project_id: str
+    actor: str = "router_health"
+
+
+class RouterRationaleRequest(BaseModel):
+    project_id: str
+    actor: str = "router_health"
+    skill_id: str = "model.generate_text"
+    task_kind: str = "code"
+    workload_class: str = "owner_sandbox"
+    risk_tier: int = Field(default=1, ge=0, le=3)
+
+
+class SkillInvokeRequest(BaseModel):
+    project_id: str
+    caller: str
+    inputs: dict[str, Any] = Field(default_factory=dict)
+    mock: bool = True
+    actor: Optional[str] = None
+
+    @model_validator(mode="after")
+    def validate_fields(self) -> "SkillInvokeRequest":
+        self.caller = _require_text(self.caller, "caller")
+        return self
+
+
 class BudgetStatusResponse(BaseModel):
     scope_type: str
     scope_id: str

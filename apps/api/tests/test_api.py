@@ -17828,3 +17828,112 @@ def test_autonomy_engine_auto_downgrades_on_denial_evidence(client):
     assert payload["recent_reviews"][0]["governance_outcome"] == "auto_downgraded"
     assert payload["recent_autonomy_changes"][0]["change_type"] == "downgrade"
     assert payload["recent_autonomy_changes"][0]["status"] == "applied"
+
+
+# --- Phase 2 (items 4-5): router fallback/health/rationale, skill-invocation framework ---
+
+
+def test_router_provider_health_poll_and_rationale_artifact(client):
+    poll = client.post("/v1/provider-health/poll", json={"project_id": "boss-dogfood"})
+    assert poll.status_code == 200
+    poll_payload = poll.json()
+    assert poll_payload["polled"] >= 1
+    assert poll_payload["healthy"] >= 1
+    assert all("status" in s and "provider" in s for s in poll_payload["snapshots"])
+
+    # Polled health is visible through the existing provider-health list endpoint.
+    listed = client.get("/v1/provider-health", params={"project_id": "boss-dogfood"})
+    assert listed.status_code == 200
+    assert len(listed.json()["items"]) >= 1
+
+    rationale = client.post("/v1/router/rationale", json={"project_id": "boss-dogfood"})
+    assert rationale.status_code == 201
+    payload = rationale.json()
+    assert payload["artifact_id"]
+    assert payload["rationale"]["route_decision_log_id"]
+    assert payload["rationale"]["selected_source_id"]
+    assert "fallback_order" in payload["rationale"]
+
+    artifact = client.get(f"/v1/artifacts/{payload['artifact_id']}")
+    assert artifact.status_code == 200
+    assert artifact.json()["artifact_type"] == "router_rationale"
+
+
+def test_router_rationale_rejects_unknown_skill(client):
+    response = client.post(
+        "/v1/router/rationale",
+        json={"project_id": "boss-dogfood", "skill_id": "model.does_not_exist"},
+    )
+    assert response.status_code == 404
+
+
+def test_skill_invocation_mock_allows_permitted_caller_without_side_effects(client, engine):
+    with engine.begin() as connection:
+        before = connection.execute(
+            text("SELECT count(*) FROM budget_reservations WHERE project_id = 'boss-dogfood'")
+        ).scalar()
+
+    response = client.post(
+        "/v1/skills/cloudflare.dns.record.upsert/invoke",
+        json={
+            "project_id": "boss-dogfood",
+            "caller": "resource_plane_kernel",
+            "inputs": {"zone_id": "z", "name": "n", "record_type": "TXT", "value": "v"},
+            "mock": True,
+        },
+    )
+    assert response.status_code == 201
+    payload = response.json()
+    assert payload["status"] == "succeeded"
+    assert payload["mode"] == "mock"
+    assert payload["permission_decision"] == "allow"
+    assert payload["reservation_id"] is None
+    assert payload["result"]["mock"] is True
+
+    with engine.begin() as connection:
+        after = connection.execute(
+            text("SELECT count(*) FROM budget_reservations WHERE project_id = 'boss-dogfood'")
+        ).scalar()
+    assert after == before  # mock mode created no budget reservation
+
+    listed = client.get("/v1/skills/invocations", params={"project_id": "boss-dogfood"})
+    assert listed.status_code == 200
+    assert any(item["id"] == payload["id"] for item in listed.json()["items"])
+
+
+def test_skill_invocation_mock_denies_unpermitted_caller(client):
+    response = client.post(
+        "/v1/skills/cloudflare.dns.record.upsert/invoke",
+        json={
+            "project_id": "boss-dogfood",
+            "caller": "random_intruder",
+            "inputs": {},
+            "mock": True,
+        },
+    )
+    assert response.status_code == 201
+    payload = response.json()
+    assert payload["status"] == "denied"
+    assert payload["permission_decision"] == "deny"
+    assert "allowed_callers" in payload["reason"]
+
+
+def test_skill_invocation_real_mode_rejected_via_api(client):
+    response = client.post(
+        "/v1/skills/cloudflare.dns.record.upsert/invoke",
+        json={
+            "project_id": "boss-dogfood",
+            "caller": "resource_plane_kernel",
+            "inputs": {},
+            "mock": False,
+        },
+    )
+    assert response.status_code == 400
+
+
+def test_skill_invocation_unknown_skill_returns_404(client):
+    response = client.post(
+        "/v1/skills/does.not.exist/invoke",
+        json={"project_id": "boss-dogfood", "caller": "resource_plane_kernel", "mock": True},
+    )
+    assert response.status_code == 404

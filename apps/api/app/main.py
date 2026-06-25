@@ -75,6 +75,9 @@ from .schemas import (
     CanaryRunRequest,
     EvalRunRequest,
     PlanDispatchRequest,
+    ProviderHealthPollRequest,
+    RouterRationaleRequest,
+    SkillInvokeRequest,
     BudgetStatusResponse,
     BudgetReserveRequest,
     BudgetReserveResponse,
@@ -407,6 +410,11 @@ from .services.resource_plane import (
 )
 from .services.autonomy_engine import AutonomyEngine
 from .services.role_governance import RoleGovernanceService
+from .services.router_health import RouterHealthService
+from .services.skill_runtime import (
+    SkillPermissionError,
+    SkillRuntimeService,
+)
 from .services.secret_refs import SecretRefNotFoundError, SecretRefService
 from .services.self_improvement import (
     InvalidSelfImprovementTransitionError,
@@ -446,6 +454,8 @@ health_snapshots = HealthSnapshotService(settings)
 metatron = MetatronService(settings)
 role_governance = RoleGovernanceService(settings)
 autonomy_engine = AutonomyEngine(settings)
+router_health = RouterHealthService(settings)
+skill_runtime = SkillRuntimeService(settings)
 members = MemberDirectoryService(settings)
 canonical = CanonicalObjectService()
 deadletter_remediation = DeadletterRemediationService(settings)
@@ -5758,6 +5768,42 @@ def list_skills() -> SkillListResponse:
     )
 
 
+@app.get("/v1/skills/invocations")
+def list_skill_invocations(project_id: str, limit: int = 50) -> dict:
+    with begin(engine) as connection:
+        return {"items": skill_runtime.list_invocations(connection, project_id, limit)}
+
+
+@app.post("/v1/skills/{skill_id}/invoke", status_code=201)
+def invoke_skill(skill_id: str, payload: SkillInvokeRequest) -> dict:
+    """Invoke a skill through the runtime (per-skill permission/cost/retry enforcement). The API
+    only drives mock mode — full governance gauntlet, no real side effects (spec §C). Real
+    invocation is driven by the worker runtime with a server-side executor."""
+    if not payload.mock:
+        raise HTTPException(
+            status_code=400,
+            detail="Real skill invocation must be driven by the worker runtime, not the API. "
+            "Use mock=true for a side-effect-free invocation.",
+        )
+    with begin(engine) as connection:
+        try:
+            return skill_runtime.invoke(
+                connection,
+                payload.project_id,
+                skill_id,
+                payload.caller,
+                payload.inputs,
+                mock=True,
+                actor=payload.actor or payload.caller,
+            )
+        except SkillNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except SkillPermissionError as error:
+            raise HTTPException(status_code=403, detail=str(error)) from error
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+
+
 @app.get("/v1/model-adapters", response_model=ModelAdapterListResponse)
 def list_model_adapters() -> ModelAdapterListResponse:
     return ModelAdapterListResponse(
@@ -7418,6 +7464,35 @@ def evals_run(payload: EvalRunRequest) -> dict:
 def evals_list(project_id: str, limit: int = 20) -> dict:
     from .services import eval_harness
     return {"items": eval_harness.list_eval_runs(engine, project_id, limit)}
+
+
+@app.post("/v1/provider-health/poll")
+def provider_health_poll(payload: ProviderHealthPollRequest) -> dict:
+    """Live provider-health polling: snapshot every model lane's health into provider_health so the
+    router fallback chain can be validated before an incident (spec §C)."""
+    with begin(engine) as connection:
+        return router_health.poll_provider_health(connection, payload.project_id, payload.actor)
+
+
+@app.post("/v1/router/rationale", status_code=201)
+def router_rationale(payload: RouterRationaleRequest) -> dict:
+    """Persist the router's decision (selected lane + ranked fallback chain + rejected sources)
+    as a durable `router_rationale` artifact — the structured 'why this lane' (spec §C)."""
+    with begin(engine) as connection:
+        try:
+            return router_health.record_rationale(
+                connection,
+                payload.project_id,
+                skill_id=payload.skill_id,
+                task_kind=payload.task_kind,
+                workload_class=payload.workload_class,
+                risk_tier=payload.risk_tier,
+                actor=payload.actor,
+            )
+        except SkillNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
 
 
 @app.post("/v1/anomalies/scan")
