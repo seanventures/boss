@@ -1774,3 +1774,25 @@ CREATE TABLE IF NOT EXISTS skill_invocations (
 );
 CREATE INDEX IF NOT EXISTS idx_skill_invocations_project
   ON skill_invocations (project_id, created_at DESC);
+
+-- Phase 3 (comms robustness): inbound acknowledgment ledger — one row per inbox message, advanced
+-- through received → parsed → routed → (actioned | deadlettered | acknowledged). The durable proof
+-- of "no silent drops": every inbound reaches a terminal ack state, with the full transition history.
+CREATE TABLE IF NOT EXISTS ack_state (
+  id TEXT PRIMARY KEY,
+  project_id TEXT REFERENCES projects(id),
+  inbox_message_id TEXT NOT NULL,
+  channel TEXT NOT NULL,
+  state TEXT NOT NULL,             -- received | parsed | routed | actioned | deadlettered | acknowledged
+  terminal BOOLEAN NOT NULL DEFAULT false,
+  route_kind TEXT,                 -- decision | informational | ...
+  target_ref TEXT,                 -- e.g. decision_id the command routed to
+  reason TEXT,
+  remediation TEXT,
+  history JSONB NOT NULL DEFAULT '[]'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(inbox_message_id)
+);
+CREATE INDEX IF NOT EXISTS idx_ack_state_project
+  ON ack_state (project_id, state, updated_at DESC);

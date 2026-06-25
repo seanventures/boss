@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from datetime import datetime, time, timedelta
@@ -807,6 +808,15 @@ class CommsService:
             message_id,
             {"channel": channel, "raw_ref": raw_ref, "data_boundary": boundary},
         )
+        # No-silent-drops ledger: record receipt immediately. Plain informational messages have no
+        # command to route, so they're acknowledged (terminal) here; command messages advance later.
+        self._record_ack(
+            connection, project_id, message_id, channel, "received", terminal=False, actor=actor
+        )
+        if parsed.get("kind") == "message":
+            self._record_ack(
+                connection, project_id, message_id, channel, "acknowledged",
+                terminal=True, actor=actor, route_kind="informational")
         row = connection.execute(
             text(
                 """
@@ -819,6 +829,148 @@ class CommsService:
             {"message_id": message_id},
         ).mappings().one()
         return dict(row)
+
+    def _record_ack(
+        self,
+        connection: Connection,
+        project_id: Optional[str],
+        message_id: str,
+        channel: str,
+        state: str,
+        *,
+        terminal: bool,
+        actor: str,
+        route_kind: Optional[str] = None,
+        target_ref: Optional[str] = None,
+        reason: Optional[str] = None,
+        remediation: Optional[str] = None,
+    ) -> None:
+        """Upsert the inbound acknowledgment ledger and append the transition to its history. This is
+        the durable 'no silent drops' record — every inbound advances here until a terminal state."""
+        entry = {"state": state, "at": now_utc().isoformat(), "actor": actor}
+        if reason:
+            entry["reason"] = reason
+        connection.execute(
+            text(
+                """
+                INSERT INTO ack_state (
+                    id, project_id, inbox_message_id, channel, state, terminal,
+                    route_kind, target_ref, reason, remediation, history
+                )
+                VALUES (
+                    :id, :project_id, :message_id, :channel, :state, :terminal,
+                    :route_kind, :target_ref, :reason, :remediation, CAST(:history AS JSONB)
+                )
+                ON CONFLICT (inbox_message_id) DO UPDATE SET
+                    state = EXCLUDED.state,
+                    terminal = EXCLUDED.terminal,
+                    route_kind = COALESCE(EXCLUDED.route_kind, ack_state.route_kind),
+                    target_ref = COALESCE(EXCLUDED.target_ref, ack_state.target_ref),
+                    reason = EXCLUDED.reason,
+                    remediation = COALESCE(EXCLUDED.remediation, ack_state.remediation),
+                    history = ack_state.history || CAST(:entry AS JSONB),
+                    updated_at = now()
+                """
+            ),
+            {
+                "id": make_id("ack"),
+                "project_id": project_id,
+                "message_id": message_id,
+                "channel": channel,
+                "state": state,
+                "terminal": terminal,
+                "route_kind": route_kind,
+                "target_ref": target_ref,
+                "reason": reason,
+                "remediation": remediation,
+                "history": json.dumps([entry]),
+                "entry": json.dumps(entry),
+            },
+        )
+        emit_event(
+            connection,
+            project_id,
+            f"inbox.ack.{state}",
+            actor,
+            "inbox_message",
+            message_id,
+            {"state": state, "terminal": terminal, "route_kind": route_kind,
+             "target_ref": target_ref, "reason": reason},
+        )
+
+    def advance_inbox(
+        self,
+        connection: Connection,
+        project_id: str,
+        message_id: str,
+        *,
+        status: Optional[str],
+        ack: str,
+        terminal: bool,
+        actor: str,
+        route_kind: Optional[str] = None,
+        target_ref: Optional[str] = None,
+        reason: Optional[str] = None,
+        remediation: Optional[str] = None,
+    ) -> None:
+        """Advance an inbox message: optionally update its lifecycle status and always record the ack."""
+        if status is not None:
+            connection.execute(
+                text(
+                    "UPDATE inbox_messages SET status = :status, updated_at = now() "
+                    "WHERE id = :message_id AND project_id = :project_id"
+                ),
+                {"status": status, "message_id": message_id, "project_id": project_id},
+            )
+        channel = self._inbox_channel(connection, message_id)
+        self._record_ack(
+            connection, project_id, message_id, channel, ack, terminal=terminal, actor=actor,
+            route_kind=route_kind, target_ref=target_ref, reason=reason, remediation=remediation)
+
+    def _inbox_channel(self, connection: Connection, message_id: str) -> str:
+        row = connection.execute(
+            text("SELECT channel FROM inbox_messages WHERE id = :id"),
+            {"id": message_id},
+        ).mappings().first()
+        return row["channel"] if row else "unknown"
+
+    def get_ack_state(
+        self, connection: Connection, message_id: str
+    ) -> Optional[dict]:
+        row = connection.execute(
+            text(
+                """
+                SELECT id, project_id, inbox_message_id, channel, state, terminal,
+                       route_kind, target_ref, reason, remediation, history,
+                       created_at, updated_at
+                FROM ack_state
+                WHERE inbox_message_id = :message_id
+                """
+            ),
+            {"message_id": message_id},
+        ).mappings().first()
+        return dict(row) if row else None
+
+    def list_ack_state(
+        self, connection: Connection, project_id: str, limit: int = 50, *,
+        pending_only: bool = False
+    ) -> list[dict]:
+        clause = "AND terminal = false" if pending_only else ""
+        rows = connection.execute(
+            text(
+                f"""
+                SELECT id, project_id, inbox_message_id, channel, state, terminal,
+                       route_kind, target_ref, reason, remediation, history,
+                       created_at, updated_at
+                FROM ack_state
+                WHERE project_id = :project_id {clause}
+                ORDER BY updated_at DESC
+                LIMIT :limit
+                """
+            ),
+            {"project_id": project_id, "limit": limit},
+        ).mappings().all()
+        return [dict(row) for row in rows]
 
     def mark_inbox_actioned(
         self,
@@ -863,6 +1015,10 @@ class CommsService:
             message_id,
             {"decision_id": decision_id, "status": outcome_status},
         )
+        self._record_ack(
+            connection, project_id, message_id,
+            self._inbox_channel(connection, message_id), "actioned",
+            terminal=True, actor=actor, route_kind="decision", target_ref=decision_id)
 
     def deadletter_inbox_message(
         self,
@@ -873,6 +1029,7 @@ class CommsService:
         actor: str,
         reason: str,
         payload: dict,
+        remediation: Optional[str] = None,
     ) -> str:
         deadletter_id = make_id("dlq")
         connection.execute(
@@ -923,6 +1080,10 @@ class CommsService:
             message_id,
             {"deadletter_id": deadletter_id, "reason": reason},
         )
+        self._record_ack(
+            connection, project_id, message_id,
+            self._inbox_channel(connection, message_id), "deadlettered",
+            terminal=True, actor=actor, reason=reason, remediation=remediation)
         return deadletter_id
 
     def mark_outbox_retrying(
@@ -1100,8 +1261,15 @@ class CommsService:
         text_blob = "\n".join(
             item for item in [subject or "", body or "", raw_ref or ""] if item
         )
+        is_email = channel.lower().startswith("email")
+        context = self._parse_command_tokens(subject, body)
+        if is_email and not context.get("thread_id"):
+            context["thread_id"] = self._derive_thread_id(subject, raw_ref)
         if not re.search(r"\bdecision\b|\bdecision_id\b|\bdec_", text_blob, re.I):
-            return {"kind": "message"}
+            result: dict[str, object] = {"kind": "message"}
+            if context:
+                result["command_context"] = context
+            return result
 
         decision_match = re.search(r"\b(dec_[A-Za-z0-9_]+)\b", text_blob)
         action_match = re.search(
@@ -1114,6 +1282,8 @@ class CommsService:
             "source_channel": channel,
             "note": body.strip()[:1000],
         }
+        if context:
+            parsed["command_context"] = context
         if decision_match:
             parsed["decision_id"] = decision_match.group(1)
         if action_match:
@@ -1133,4 +1303,47 @@ class CommsService:
             parsed["delegate_to"] = delegate_match.group(1)
         if "decision_id" not in parsed or "action" not in parsed:
             parsed["parse_error"] = "decision_reply_missing_id_or_action"
+            parsed["remediation"] = self._command_remediation(is_email)
         return parsed
+
+    _COMMAND_TOKEN_RE = re.compile(
+        r"\[(org|ws|workspace|proj|project|thread):([^\]]+)\]", re.I
+    )
+
+    def _parse_command_tokens(self, subject: Optional[str], body: Optional[str]) -> dict:
+        """Extract structured email command tokens — [org:..][ws:..][proj:..][thread:..] — that scope
+        an inbound command to an org/workspace/project and thread (spec §D email command contracts)."""
+        blob = " ".join(item for item in [subject or "", body or ""] if item)
+        context: dict[str, str] = {}
+        for key, value in self._COMMAND_TOKEN_RE.findall(blob):
+            key = key.lower()
+            value = value.strip()
+            if not value:
+                continue
+            if key == "org":
+                context["org"] = value
+            elif key in ("ws", "workspace"):
+                context["workspace"] = value
+            elif key in ("proj", "project"):
+                context["project"] = value
+            elif key == "thread":
+                context["thread_id"] = value
+        return context
+
+    def _derive_thread_id(self, subject: Optional[str], raw_ref: Optional[str]) -> str:
+        """Deterministic thread id for an email: stable across Re:/Fwd: so a conversation coheres."""
+        if raw_ref:
+            base = raw_ref.strip().lower()
+        else:
+            base = re.sub(r"\b(re|fwd|fw):\s*", "", (subject or "").lower()).strip()
+        return "thread_" + hashlib.sha1(base.encode("utf-8")).hexdigest()[:12]
+
+    def _command_remediation(self, is_email: bool) -> str:
+        """Deterministic remediation for a malformed command — tells the sender how to fix it."""
+        lead = (
+            "Email commands must name a decision and an action. "
+            "Example subject: '[proj:boss] approve dec_ab12'. "
+            if is_email
+            else "Replies must name a decision and an action. "
+        )
+        return lead + "Valid actions: approve, reject, revise, execute, delegate."

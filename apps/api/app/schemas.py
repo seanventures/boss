@@ -1203,6 +1203,28 @@ class SkillInvokeRequest(BaseModel):
         return self
 
 
+class SlackRenderRequest(BaseModel):
+    persona: str
+    role: Optional[str] = None
+    subject: Optional[str] = None
+    body: str
+    department: Optional[str] = None
+    signature: bool = True
+
+    @model_validator(mode="after")
+    def validate_fields(self) -> "SlackRenderRequest":
+        self.persona = _require_text(self.persona, "persona")
+        self.body = _require_text(self.body, "body")
+        return self
+
+
+class SlackDigestBatchRequest(BaseModel):
+    project_id: str
+    actor: str = "system"
+    channel: Optional[str] = None
+    min_batch: int = Field(default=2, ge=1)
+
+
 class BudgetStatusResponse(BaseModel):
     scope_type: str
     scope_id: str

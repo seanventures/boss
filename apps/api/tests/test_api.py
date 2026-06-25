@@ -17937,3 +17937,157 @@ def test_skill_invocation_unknown_skill_returns_404(client):
         json={"project_id": "boss-dogfood", "caller": "resource_plane_kernel", "mock": True},
     )
     assert response.status_code == 404
+
+
+# --- Phase 3 (workstream D): inbox states + ack_state, email contracts, Slack ---
+
+
+def test_inbox_ack_state_tracks_command_through_terminal(client, engine):
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                """
+                INSERT INTO decisions (
+                    id, project_id, question, recommendation, options,
+                    risk_tier, cost_summary, deadline_at, default_action, status
+                )
+                VALUES (
+                    'dec_ack_state_flow', 'boss-dogfood', 'Approve from inbound?',
+                    '{"action":"approve"}'::jsonb,
+                    '[{"label":"Approve","action":"approve"}]'::jsonb,
+                    1, '{}'::jsonb, now() + interval '1 day', 'hold', 'pending'
+                )
+                """
+            )
+        )
+    inbox = client.post(
+        "/v1/comms/inbox/ingest",
+        json={
+            "project_id": "boss-dogfood",
+            "channel": "email:founder@example.com",
+            "subject": "[proj:boss] approve decision dec_ack_state_flow",
+            "body": "Approved.",
+            "raw_ref": "thread-ack-1",
+            "actor": "ceo",
+        },
+    )
+    assert inbox.status_code == 201
+    message_id = inbox.json()["id"]
+    assert inbox.json()["status"] == "actioned"
+
+    ack = client.get("/v1/comms/inbox/ack-state", params={"project_id": "boss-dogfood"})
+    assert ack.status_code == 200
+    row = next(a for a in ack.json()["items"] if a["inbox_message_id"] == message_id)
+    assert row["terminal"] is True
+    assert row["state"] == "actioned"
+    assert row["route_kind"] == "decision"
+    assert row["target_ref"] == "dec_ack_state_flow"
+    assert [h["state"] for h in row["history"]] == ["received", "parsed", "routed", "actioned"]
+
+
+def test_inbox_plain_message_is_acknowledged_terminal(client):
+    inbox = client.post(
+        "/v1/comms/inbox/ingest",
+        json={
+            "project_id": "boss-dogfood",
+            "channel": "email:founder@example.com",
+            "subject": "[proj:boss] FYI",
+            "body": "Just a heads up, nothing to action.",
+            "actor": "system",
+        },
+    )
+    assert inbox.status_code == 201
+    payload = inbox.json()
+    assert payload["status"] == "received"  # plain messages keep the received status
+    assert payload["parsed"]["command_context"]["project"] == "boss"
+    assert payload["parsed"]["command_context"]["thread_id"].startswith("thread_")
+
+    ack = client.get("/v1/comms/inbox/ack-state", params={"project_id": "boss-dogfood"})
+    row = next(a for a in ack.json()["items"] if a["inbox_message_id"] == payload["id"])
+    assert row["terminal"] is True
+    assert row["state"] == "acknowledged"
+    assert row["route_kind"] == "informational"
+
+
+def test_inbox_malformed_email_command_deadletters_with_remediation(client):
+    inbox = client.post(
+        "/v1/comms/inbox/ingest",
+        json={
+            "project_id": "boss-dogfood",
+            "channel": "email:founder@example.com",
+            "subject": "[org:acme][proj:boss] please handle this decision",
+            "body": "do something about the decision",
+            "actor": "system",
+        },
+    )
+    assert inbox.status_code == 201
+    payload = inbox.json()
+    assert payload["status"] == "deadlettered"
+    assert payload["parsed"]["command_context"]["org"] == "acme"
+
+    ack = client.get("/v1/comms/inbox/ack-state", params={"project_id": "boss-dogfood"})
+    row = next(a for a in ack.json()["items"] if a["inbox_message_id"] == payload["id"])
+    assert row["terminal"] is True
+    assert row["state"] == "deadlettered"
+    assert "approve, reject, revise, execute, delegate" in row["remediation"]
+
+
+def test_inbox_email_threads_are_stable_across_replies(client):
+    first = client.post(
+        "/v1/comms/inbox/ingest",
+        json={"project_id": "boss-dogfood", "channel": "email:a@x.com",
+              "subject": "Quarterly plan", "body": "draft", "actor": "system"},
+    ).json()
+    reply = client.post(
+        "/v1/comms/inbox/ingest",
+        json={"project_id": "boss-dogfood", "channel": "email:a@x.com",
+              "subject": "Re: Quarterly plan", "body": "more", "actor": "system"},
+    ).json()
+    assert (
+        first["parsed"]["command_context"]["thread_id"]
+        == reply["parsed"]["command_context"]["thread_id"]
+    )
+
+
+def test_slack_render_persona_and_department_channel(client):
+    response = client.post(
+        "/v1/comms/slack/render",
+        json={"persona": "Metatron", "role": "VP Agents",
+              "subject": "Status", "body": "All green.", "department": "Engineering"},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["channel"] == "#boss-engineering"
+    assert payload["text"].startswith("*[Metatron · VP Agents]*")
+    assert payload["text"].rstrip().endswith("— Metatron, VP Agents · BOSS")
+
+
+def test_slack_digest_batches_drafts_per_channel(client, engine):
+    for index in range(3):
+        client.post(
+            "/v1/comms/outbox",
+            json={"project_id": "boss-dogfood", "channel": "slack:#boss-eng",
+                  "subject": f"Update {index}", "body": f"body {index}",
+                  "dedupe_key": f"digest-src-{index}", "actor": "system"},
+        )
+    client.post(
+        "/v1/comms/outbox",
+        json={"project_id": "boss-dogfood", "channel": "slack:#boss-sales",
+              "subject": "Solo", "body": "only one", "dedupe_key": "digest-solo", "actor": "system"},
+    )
+
+    digest = client.post("/v1/comms/slack/digest", json={"project_id": "boss-dogfood"})
+    assert digest.status_code == 200
+    payload = digest.json()
+    assert payload["channels_batched"] == 1  # solo channel below min_batch is left alone
+    assert payload["messages_batched"] == 3
+    assert payload["digests"][0]["channel"] == "slack:#boss-eng"
+
+    with engine.begin() as connection:
+        batched = connection.execute(
+            text(
+                "SELECT count(*) FROM outbox_messages "
+                "WHERE project_id = 'boss-dogfood' AND status = 'batched'"
+            )
+        ).scalar_one()
+    assert batched == 3

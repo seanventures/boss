@@ -78,6 +78,8 @@ from .schemas import (
     ProviderHealthPollRequest,
     RouterRationaleRequest,
     SkillInvokeRequest,
+    SlackDigestBatchRequest,
+    SlackRenderRequest,
     BudgetStatusResponse,
     BudgetReserveRequest,
     BudgetReserveResponse,
@@ -415,6 +417,11 @@ from .services.skill_runtime import (
     SkillPermissionError,
     SkillRuntimeService,
 )
+from .services.slack_comms import (
+    SlackCommsService,
+    department_channel,
+    render_persona_message,
+)
 from .services.secret_refs import SecretRefNotFoundError, SecretRefService
 from .services.self_improvement import (
     InvalidSelfImprovementTransitionError,
@@ -456,6 +463,7 @@ role_governance = RoleGovernanceService(settings)
 autonomy_engine = AutonomyEngine(settings)
 router_health = RouterHealthService(settings)
 skill_runtime = SkillRuntimeService(settings)
+slack_comms = SlackCommsService(settings)
 members = MemberDirectoryService(settings)
 canonical = CanonicalObjectService()
 deadletter_remediation = DeadletterRemediationService(settings)
@@ -7171,6 +7179,52 @@ def list_inbox_messages(project_id: str, limit: int = 50) -> InboxMessageListRes
         )
 
 
+@app.get("/v1/comms/inbox/ack-state")
+def list_inbox_ack_state(project_id: str, limit: int = 50, pending_only: bool = False) -> dict:
+    """The no-silent-drops ledger: every inbound's acknowledgment state + transition history.
+    pending_only=true surfaces any inbound that has not yet reached a terminal ack (spec §D)."""
+    if limit < 1 or limit > 200:
+        raise HTTPException(status_code=400, detail="limit must be between 1 and 200.")
+    with begin(engine) as connection:
+        return {
+            "project_id": project_id,
+            "items": comms.list_ack_state(
+                connection, project_id, limit, pending_only=pending_only
+            ),
+        }
+
+
+@app.post("/v1/comms/slack/render")
+def render_slack_message(payload: SlackRenderRequest) -> dict:
+    """Render a Slack message with persona prefix/signature and resolve the department channel
+    (spec §D Slack per-department channels + persona rendering)."""
+    channel = department_channel(payload.department) if payload.department else None
+    rendered = render_persona_message(
+        payload.persona,
+        payload.role,
+        payload.subject,
+        payload.body,
+        signature=payload.signature,
+    )
+    return {"channel": channel, "text": rendered}
+
+
+@app.post("/v1/comms/slack/digest")
+def batch_slack_digests(payload: SlackDigestBatchRequest) -> dict:
+    """Collapse draft Slack outbox messages into one digest per channel (spec §D digest batching)."""
+    with begin(engine) as connection:
+        require_project_actor(
+            connection, payload.project_id, payload.actor, "comms_manage"
+        )
+        return slack_comms.batch_digests(
+            connection,
+            payload.project_id,
+            payload.actor,
+            channel=payload.channel,
+            min_batch=payload.min_batch,
+        )
+
+
 @app.post("/v1/comms/inbox/ingest", response_model=InboxMessageSummary, status_code=201)
 def ingest_inbox_message(payload: InboxMessageIngestRequest) -> InboxMessageSummary:
     with begin(engine) as connection:
@@ -7192,6 +7246,15 @@ def ingest_inbox_message(payload: InboxMessageIngestRequest) -> InboxMessageSumm
         )
         parsed = item.get("parsed") or {}
         if parsed.get("kind") == "decision_reply":
+            comms.advance_inbox(
+                connection,
+                payload.project_id,
+                item["id"],
+                status="parsed",
+                ack="parsed",
+                terminal=False,
+                actor=payload.actor,
+            )
             parse_error = parsed.get("parse_error")
             decision_id = parsed.get("decision_id")
             action = parsed.get("action")
@@ -7203,10 +7266,26 @@ def ingest_inbox_message(payload: InboxMessageIngestRequest) -> InboxMessageSumm
                     actor=payload.actor,
                     reason=str(parse_error or "decision_reply_missing_id_or_action"),
                     payload={"parsed": parsed},
+                    remediation=(
+                        parsed.get("remediation")
+                        if isinstance(parsed.get("remediation"), str)
+                        else None
+                    ),
                 )
                 return inbox_message_summary_from_row(
                     reload_inbox_message(connection, item["id"])
                 )
+            comms.advance_inbox(
+                connection,
+                payload.project_id,
+                item["id"],
+                status="routed",
+                ack="routed",
+                terminal=False,
+                actor=payload.actor,
+                route_kind="decision",
+                target_ref=decision_id,
+            )
             try:
                 decision_row = decisions.transition(
                     connection,

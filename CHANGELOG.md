@@ -2,6 +2,19 @@
 
 All notable changes to BOSS are documented in this file.
 
+## Unreleased — Gap Phase 3 workstream D (comms robustness)
+
+### Added
+
+- Inbox acknowledgment ledger (`ack_state` table): every inbound advances `received → parsed →
+  routed → actioned | deadlettered | acknowledged` with full transition history and a terminal
+  flag. `GET /v1/comms/inbox/ack-state?pending_only=` is the durable "no silent drops" view.
+- Email command contracts: structured subject tokens `[org:][ws:][proj:][thread:]`, deterministic
+  thread IDs (stable across Re:/Fwd:), and malformed-command deadletter carrying a remediation hint.
+- Slack shaping (`slack_comms.py`): `department_channel` mapping, persona prefix/signature rendering
+  (`POST /v1/comms/slack/render`), and digest batching that collapses many draft Slack outbox
+  messages into one digest per channel (`POST /v1/comms/slack/digest`).
+
 ## Unreleased — Gap Phase 2 (earned autonomy & controlled self-improvement)
 
 ### Added

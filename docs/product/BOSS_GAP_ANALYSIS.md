@@ -119,10 +119,17 @@ Goal: the dogfooding loop is demonstrably end-to-end with the guarantees proven.
 **Phase 2 complete.** Remaining router work (live provider API ping vs. config-derived health) and a
 real ≥2-lane fallback exercise are deferred to when multiple model lanes are credentialed.
 
-### Phase 3 — Comms robustness + meetings + factory scale  (multi-agent org at volume)
-1. Inbox PARSED/ROUTED + ack_state; email command contracts; Slack dept channels/persona/digest.
-2. Meeting vote/quorum/timeout/per-phase budgets.
-3. Software factory: WIP limits, lint stage, CI-green gate, confidence gating, second-model cross-check, spec→chunk planner.
+### Phase 3 — Comms robustness + meetings + factory scale  (multi-agent org at volume)  🟡 IN PROGRESS (branch `feat/gap-phase3-comms`)
+1. ✅ **Comms robustness** (workstream D) —
+   - Inbox lifecycle `received → parsed → routed → actioned | deadlettered | acknowledged` + a durable
+     `ack_state` ledger (one row per inbound, transition history, terminal flag) — the "no silent drops"
+     proof: `GET /v1/comms/inbox/ack-state?pending_only=` surfaces anything not yet terminal.
+   - Email command contracts — structured subject tokens `[org:][ws:][proj:][thread:]`, deterministic
+     thread IDs (stable across Re:/Fwd:), and malformed-command deadletter with a remediation message.
+   - Slack — `department_channel` mapping, persona prefix/signature rendering (`POST /v1/comms/slack/render`),
+     and digest batching that collapses many draft Slack messages into one per channel (`POST /v1/comms/slack/digest`).
+2. ⬜ Meeting vote/quorum/timeout/per-phase budgets.
+3. ⬜ Software factory: WIP limits, lint stage, CI-green gate, confidence gating, second-model cross-check, spec→chunk planner.
 
 ### Phase 4 — Observability, testing depth, enterprise  (scale + GTM)
 1. Real-time dashboards + streaming.
