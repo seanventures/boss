@@ -7269,6 +7269,44 @@ def anomalies_scan(payload: AnomalyScanRequest) -> dict:
     return anomaly_detector.scan(engine, settings, payload.project_id, auto_lite=payload.auto_lite)
 
 
+@app.get("/v1/trace")
+def trace_run(run_id: str) -> dict:
+    """Reconstruct a code-task run's full timeline — the run + its fail-closed quality gate + every
+    event referencing it (jobs, model/tool calls, receipts, decisions). The 'why did we do that'
+    trace (spec §26 replay/observability), assembled from existing links — no per-call threading."""
+    with begin(engine) as connection:
+        run = connection.execute(
+            text(
+                "SELECT id, project_id, task_id, status, phase, title, state, pull_request_url, "
+                "decision_id, error, created_at, updated_at FROM code_task_runs WHERE id = :r"
+            ),
+            {"r": run_id},
+        ).mappings().first()
+        if not run:
+            raise HTTPException(status_code=404, detail=f"run {run_id} not found")
+        gate = connection.execute(
+            text(
+                "SELECT id, status, gates_passed, gates_failed, evidence, created_at "
+                "FROM quality_gates WHERE code_task_run_id = :r"
+            ),
+            {"r": run_id},
+        ).mappings().first()
+        timeline = connection.execute(
+            text(
+                "SELECT event_type, actor, entity_type, entity_id, data, created_at FROM events "
+                "WHERE project_id = :p AND (entity_id = :r OR data::text LIKE :like) "
+                "ORDER BY created_at ASC"
+            ),
+            {"p": run["project_id"], "r": run_id, "like": f"%{run_id}%"},
+        ).mappings().all()
+    return {
+        "run": dict(run),
+        "quality_gate": dict(gate) if gate else None,
+        "timeline": [dict(e) for e in timeline],
+        "event_count": len(timeline),
+    }
+
+
 @app.get("/v1/policy-evals")
 def policy_evals_list(project_id: str, limit: int = 50, decision: Optional[str] = None) -> dict:
     """The policy-evaluation audit trail (allow/deny/defer at every enforcement boundary)."""
