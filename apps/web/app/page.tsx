@@ -71,6 +71,30 @@ import { fetchBudgetStatus, fetchBudgetIntensity } from "../lib/budget-status";
 import { BudgetIntensitySlider } from "./budget-intensity-ui";
 import { fetchLatestCanary } from "../lib/canaries";
 import { CanaryCard } from "./canary-ui";
+import { fetchDashboard } from "../lib/dashboard";
+import { DashboardPanel } from "./dashboard-ui";
+import { fetchPolicyEvals, fetchRunTrace } from "../lib/safety";
+import { PolicyEvalList, AnomalyScanCard, RunTraceViewer } from "./safety-ui";
+import { fetchLatestEval } from "../lib/evals";
+import { fetchSkillInvocations } from "../lib/skill-invocations";
+import {
+  SelfImprovementRuntime,
+  EvalHarnessCard,
+  AutonomyEvaluateCard,
+  RouterHealthCard,
+  SkillInvokeCard,
+} from "./phase2-ui";
+import { fetchAckState } from "../lib/comms-ack";
+import { fetchWipStatus } from "../lib/factory";
+import {
+  InboxAckCard,
+  SlackToolsCard,
+  MeetingConsensusCard,
+  FactoryScaleCard,
+} from "./phase3-ui";
+import { fetchChaosRuns } from "../lib/chaos";
+import { fetchCommitmentReconciliations } from "../lib/finops";
+import { ChaosCard, FinopsCard, Soc2Card } from "./phase4-ui";
 import { fetchPlans } from "../lib/plans";
 import { PlansCard } from "./plans-ui";
 import { fetchBreakGlassGrantFeed } from "../lib/break-glass";
@@ -340,6 +364,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
   const metatronTaskId = getParam(resolvedSearchParams?.task_id);
   const metatronDecisionId = getParam(resolvedSearchParams?.decision_id);
   const requestedActorId = getParam(resolvedSearchParams?.actor);
+  const traceRunId = getParam(resolvedSearchParams?.trace_run);
   const routingProviderFilter = getParam(resolvedSearchParams?.route_provider);
   const routingBudgetFilter = getParam(resolvedSearchParams?.route_budget);
   const routingBoundaryParam = getParam(resolvedSearchParams?.route_boundary);
@@ -423,6 +448,15 @@ export default async function HomePage({ searchParams }: HomePageProps) {
     codeTasksFeed,
     sandboxFeed,
     pipelineData,
+    dashboardSnapshot,
+    policyEvals,
+    runTrace,
+    latestEval,
+    skillInvocations,
+    ackState,
+    wipStatus,
+    chaosRuns,
+    commitmentRecons,
   ] =
     await Promise.all([
       fetchStatus(activeProjectId),
@@ -485,6 +519,15 @@ export default async function HomePage({ searchParams }: HomePageProps) {
       fetchCodeTasksFeed(activeProjectId),
       fetchSandboxFeed(),
       fetchPipelineData(activeProjectId),
+      fetchDashboard(activeProjectId),
+      fetchPolicyEvals(activeProjectId),
+      fetchRunTrace(traceRunId),
+      fetchLatestEval(activeProjectId),
+      fetchSkillInvocations(activeProjectId),
+      fetchAckState(activeProjectId),
+      fetchWipStatus(activeProjectId),
+      fetchChaosRuns(activeProjectId),
+      fetchCommitmentReconciliations(activeProjectId),
     ]);
 
   const deadletterCount = deadletters.items.length;
@@ -532,6 +575,16 @@ export default async function HomePage({ searchParams }: HomePageProps) {
       initialArea={requestedArea}
     >
       <div className="frame">
+        <section className="panel-stack" data-area="dashboard" aria-label="Live dashboard">
+          <div className="section-head">
+            <div>
+              <span className="eyebrow">Live Dashboard</span>
+              <h2>Cross-phase control snapshot</h2>
+            </div>
+          </div>
+          <DashboardPanel snapshot={dashboardSnapshot} />
+        </section>
+
         <section className="ov-header" data-area="overview" aria-label="Overview header">
           <div className="ov-header-copy">
             <span className="eyebrow">Business Operating System Sentinel</span>
@@ -1315,6 +1368,21 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               </>
             )}
           </article>
+        </section>
+
+        <section className="panel-stack" data-area="budget" aria-label="FinOps reconciler">
+          <div className="section-head">
+            <div>
+              <span className="eyebrow">FinOps · Commitments &amp; Initiatives</span>
+              <h2>Reconcile committed spend and gate big initiatives.</h2>
+            </div>
+            <p className="status-meta">
+              Commitment utilization vs actual usage, and tier-2+ initiative budget approval.
+            </p>
+          </div>
+          <div className="stack-grid">
+            <FinopsCard projectId={activeProjectId} reconciliations={commitmentRecons} />
+          </div>
         </section>
 
         <section className="panel-stack">
@@ -2664,6 +2732,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             </div>
           </div>
           <CanaryCard projectId={activeProjectId} run={canaryRun} />
+          <EvalHarnessCard projectId={activeProjectId} actor={activeActorId} run={latestEval} />
           <WorkflowHealth
             jobStatusCounts={opsQueue.jobStatusCounts}
             jobKindCounts={opsQueue.jobKindCounts}
@@ -2821,6 +2890,59 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                 </div>
               )}
             </article>
+          </div>
+        </section>
+
+        <section className="panel-stack" data-area="ops" aria-label="Safety & policy">
+          <div className="section-head">
+            <div>
+              <span className="eyebrow">Safety &amp; Policy</span>
+              <h2>The trust moat — every boundary decision, on the record.</h2>
+            </div>
+            <p className="status-meta">
+              Policy-eval audit trail, cost-anomaly scanning with auto-lite, and run tracing.
+            </p>
+          </div>
+          <div className="stack-grid">
+            <PolicyEvalList items={policyEvals} />
+            <AnomalyScanCard projectId={activeProjectId} actor={activeActorId} />
+            <RunTraceViewer trace={runTrace} initialRunId={traceRunId} />
+          </div>
+        </section>
+
+        <section className="panel-stack" data-area="ops" aria-label="Autonomy, router & skills">
+          <div className="section-head">
+            <div>
+              <span className="eyebrow">Autonomy · Router · Skills</span>
+              <h2>Earned autonomy and the model/skill runtime.</h2>
+            </div>
+            <p className="status-meta">
+              Evidence-based autonomy evaluation, router health + rationale, and mock skill invocation.
+            </p>
+          </div>
+          <div className="stack-grid">
+            <AutonomyEvaluateCard projectId={activeProjectId} actor={activeActorId} />
+            <RouterHealthCard
+              projectId={activeProjectId}
+              actor={activeActorId}
+              providerHealth={dashboardSnapshot?.providerHealth}
+            />
+            <SkillInvokeCard projectId={activeProjectId} invocations={skillInvocations} />
+          </div>
+        </section>
+
+        <section className="panel-stack" data-area="ops" aria-label="Resilience">
+          <div className="section-head">
+            <div>
+              <span className="eyebrow">Resilience</span>
+              <h2>Chaos &amp; load — prove recovery, not assume it.</h2>
+            </div>
+            <p className="status-meta">
+              Inject controlled faults against the live primitives and record how the system recovers.
+            </p>
+          </div>
+          <div className="stack-grid">
+            <ChaosCard projectId={activeProjectId} runs={chaosRuns} />
           </div>
         </section>
 
@@ -3109,6 +3231,11 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                             : proposal.statusNote ?? proposal.summary}
                         </p>
                       </div>
+                      <SelfImprovementRuntime
+                        proposal={proposal}
+                        projectId={activeProjectId}
+                        actor={activeActorId}
+                      />
                       {proposal.status === "canary_approved" ? (
                         <div className="button-stack">
                           <form action={recordSelfImprovementCanaryAction} className="composer compact">
@@ -3279,6 +3406,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
           </div>
 
           <div className="stack-grid">
+            <InboxAckCard items={ackState} />
+            <SlackToolsCard projectId={activeProjectId} />
             <article className="stack-card">
               <h3>Draft outbound message</h3>
               <form action={submitOutboxDraftAction} className="composer compact">
@@ -3603,6 +3732,22 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                 </div>
               )}
             </article>
+          </div>
+        </section>
+
+        <section className="panel-stack" data-area="enterprise" aria-label="SOC2 evidence">
+          <div className="section-head">
+            <div>
+              <span className="eyebrow">Compliance · SOC2</span>
+              <h2>Auditor-ready evidence, generated from live data.</h2>
+            </div>
+            <p className="status-meta">
+              Trust Services Common-Criteria controls mapped to BOSS’s audit, policy-eval,
+              break-glass, change-management, and verification records.
+            </p>
+          </div>
+          <div className="stack-grid">
+            <Soc2Card projectId={activeProjectId} />
           </div>
         </section>
 
@@ -5837,6 +5982,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             tasks={tasks.items.map((t) => ({ id: t.id, title: t.title }))}
             apiReachable={meetingRooms.apiReachable}
           />
+          <div className="stack-grid" style={{ marginTop: 14 }}>
+            <MeetingConsensusCard projectId={activeProjectId} actor={activeActorId} />
+          </div>
         </section>
 
         <section className="panel-stack" data-area="code_tasks" aria-label="Code tasks">
@@ -5862,6 +6010,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             </div>
           </div>
           <PipelineView data={pipelineData} />
+          <div className="stack-grid" style={{ marginTop: 14 }}>
+            <FactoryScaleCard wip={wipStatus} />
+          </div>
         </section>
 
         <section className="panel-stack" data-area="sandboxes" aria-label="Sandboxes">

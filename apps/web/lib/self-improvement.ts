@@ -20,6 +20,7 @@ export type SelfImprovementFeedItem = {
   canaryArtifactId?: string;
   rolloutArtifactId?: string;
   rollbackArtifactId?: string;
+  rolloutState?: Record<string, unknown>;
   createdBy: string;
   createdAt: string;
   updatedAt: string;
@@ -50,6 +51,9 @@ function mapProposal(
     canaryArtifactId: payload.canary_artifact_id,
     rolloutArtifactId: payload.rollout_artifact_id,
     rollbackArtifactId: payload.rollback_artifact_id,
+    rolloutState:
+      (payload as SelfImprovementProposalSummary & { rollout_state?: Record<string, unknown> })
+        .rollout_state ?? undefined,
     createdBy: payload.created_by,
     createdAt: payload.created_at,
     updatedAt: payload.updated_at,

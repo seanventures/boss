@@ -27,6 +27,233 @@ export async function runCanariesAction(formData: FormData): Promise<void> {
   revalidatePath("/");
 }
 
+export async function scanAnomaliesAction(formData: FormData): Promise<void> {
+  const projectId = getProjectId(formData);
+  await fetch(`${API_URL}/v1/anomalies/scan`, {
+    method: "POST",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify({ project_id: projectId, auto_lite: true }),
+  });
+  revalidatePath("/");
+}
+
+// ---- Phase 2: self-improvement runtime, evals, autonomy, router, skills ----
+
+async function postJson(path: string, body: Record<string, unknown>): Promise<void> {
+  await fetch(`${API_URL}${path}`, {
+    method: "POST",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify(body),
+  });
+  revalidatePath("/");
+}
+
+export async function runSelfImprovementCanaryAction(formData: FormData): Promise<void> {
+  const id = String(formData.get("proposal_id") ?? "").trim();
+  if (!id) return;
+  await postJson(`/v1/self-improvement/proposals/${encodeURIComponent(id)}/run-canary`, {
+    actor: getActor(formData),
+  });
+}
+
+export async function startSelfImprovementRolloutAction(formData: FormData): Promise<void> {
+  const id = String(formData.get("proposal_id") ?? "").trim();
+  if (!id) return;
+  await postJson(`/v1/self-improvement/proposals/${encodeURIComponent(id)}/rollout/start`, {
+    actor: getActor(formData),
+  });
+}
+
+export async function advanceSelfImprovementRolloutAction(formData: FormData): Promise<void> {
+  const id = String(formData.get("proposal_id") ?? "").trim();
+  if (!id) return;
+  const health = String(formData.get("health") ?? "healthy").trim();
+  const observation: Record<string, unknown> = { health };
+  const errorRate = String(formData.get("error_rate") ?? "").trim();
+  if (errorRate) observation.error_rate = Number(errorRate);
+  await postJson(`/v1/self-improvement/proposals/${encodeURIComponent(id)}/rollout/advance`, {
+    actor: getActor(formData),
+    observation,
+  });
+}
+
+export async function runEvalsAction(formData: FormData): Promise<void> {
+  await postJson(`/v1/evals/run`, { project_id: getProjectId(formData), actor: getActor(formData) });
+}
+
+export async function evaluateAutonomyAction(formData: FormData): Promise<void> {
+  const roleKey = String(formData.get("role_key") ?? "").trim();
+  if (!roleKey) return;
+  await postJson(`/v1/roles/${encodeURIComponent(roleKey)}/autonomy/evaluate`, {
+    project_id: getProjectId(formData),
+    actor: getActor(formData),
+  });
+}
+
+export async function pollProviderHealthAction(formData: FormData): Promise<void> {
+  await postJson(`/v1/provider-health/poll`, { project_id: getProjectId(formData), actor: getActor(formData) });
+}
+
+export async function recordRouterRationaleAction(formData: FormData): Promise<void> {
+  await postJson(`/v1/router/rationale`, { project_id: getProjectId(formData), actor: getActor(formData) });
+}
+
+export async function invokeSkillAction(formData: FormData): Promise<void> {
+  const skillId = String(formData.get("skill_id") ?? "").trim();
+  const caller = String(formData.get("caller") ?? "").trim();
+  if (!skillId || !caller) return;
+  await postJson(`/v1/skills/${encodeURIComponent(skillId)}/invoke`, {
+    project_id: getProjectId(formData),
+    caller,
+    inputs: {},
+    mock: true,
+  });
+}
+
+// ---- Phase 3: result-returning actions (useActionState) for compute/preview endpoints ----
+
+export type ActionResult = { ok: boolean; data?: Record<string, unknown>; error?: string };
+
+async function postJsonReturn(path: string, body: Record<string, unknown>): Promise<ActionResult> {
+  try {
+    const r = await fetch(`${API_URL}${path}`, {
+      method: "POST",
+      headers: authHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify(body),
+    });
+    if (!r.ok) {
+      let detail = "";
+      try {
+        detail = String((await r.json()).detail ?? "");
+      } catch {}
+      return { ok: false, error: detail || `HTTP ${r.status}` };
+    }
+    return { ok: true, data: await r.json() };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : "request failed" };
+  }
+}
+
+export async function tallyVotesAction(_prev: ActionResult | null, formData: FormData): Promise<ActionResult> {
+  const approve = Math.max(0, Number(formData.get("approve") ?? 0));
+  const reject = Math.max(0, Number(formData.get("reject") ?? 0));
+  const abstain = Math.max(0, Number(formData.get("abstain") ?? 0));
+  const eligibleRaw = String(formData.get("eligible") ?? "").trim();
+  const quorumRaw = String(formData.get("quorum") ?? "").trim();
+  const votes = [
+    ...Array.from({ length: approve }, (_v, i) => ({ voter: `a${i}`, vote: "approve" })),
+    ...Array.from({ length: reject }, (_v, i) => ({ voter: `r${i}`, vote: "reject" })),
+    ...Array.from({ length: abstain }, (_v, i) => ({ voter: `x${i}`, vote: "abstain" })),
+  ];
+  if (!votes.length) return { ok: false, error: "Enter at least one vote." };
+  return postJsonReturn(`/v1/meetings/tally`, {
+    votes,
+    eligible_count: eligibleRaw ? Number(eligibleRaw) : undefined,
+    quorum: quorumRaw ? Number(quorumRaw) : undefined,
+    vote_threshold: 0.5,
+  });
+}
+
+export async function sweepStalledMeetingsAction(_prev: ActionResult | null, formData: FormData): Promise<ActionResult> {
+  const res = await postJsonReturn(`/v1/meetings/sweep-stalled`, { actor: getActor(formData) });
+  revalidatePath("/");
+  return res;
+}
+
+export async function mergeCheckAction(_prev: ActionResult | null, formData: FormData): Promise<ActionResult> {
+  const checks = {
+    tests_passed: formData.get("tests_passed") === "on",
+    lint_passed: formData.get("lint_passed") === "on",
+    ci_green: formData.get("ci_green") === "on",
+    reviewer_independent: formData.get("reviewer_independent") === "on",
+    adversarial_verdict: formData.get("adversarial") === "on" ? "survived" : "not_run",
+  };
+  const minRaw = String(formData.get("min_confidence") ?? "").trim();
+  return postJsonReturn(`/v1/factory/merge-check`, {
+    checks,
+    min_confidence: minRaw ? Number(minRaw) : 0.8,
+  });
+}
+
+export async function chunkPlanAction(_prev: ActionResult | null, formData: FormData): Promise<ActionResult> {
+  const title = String(formData.get("title") ?? "change").trim() || "change";
+  const files = parseLines(formData.get("files"));
+  return postJsonReturn(`/v1/factory/chunk-plan`, {
+    spec: { title, files },
+    max_files_per_chunk: 3,
+  });
+}
+
+export async function slackRenderAction(_prev: ActionResult | null, formData: FormData): Promise<ActionResult> {
+  const persona = String(formData.get("persona") ?? "").trim();
+  const body = String(formData.get("body") ?? "").trim();
+  if (!persona || !body) return { ok: false, error: "Persona and body are required." };
+  return postJsonReturn(`/v1/comms/slack/render`, {
+    persona,
+    role: String(formData.get("role") ?? "").trim() || undefined,
+    subject: String(formData.get("subject") ?? "").trim() || undefined,
+    body,
+    department: String(formData.get("department") ?? "").trim() || undefined,
+  });
+}
+
+export async function slackDigestAction(_prev: ActionResult | null, formData: FormData): Promise<ActionResult> {
+  const res = await postJsonReturn(`/v1/comms/slack/digest`, {
+    project_id: getProjectId(formData),
+    actor: "system",
+  });
+  revalidatePath("/");
+  return res;
+}
+
+// ---- Phase 4: chaos, finops reconciler, SOC2 ----
+
+export async function runChaosAction(formData: FormData): Promise<void> {
+  const scenario = String(formData.get("scenario") ?? "").trim();
+  if (!scenario) return;
+  await postJson(`/v1/chaos/run`, {
+    project_id: getProjectId(formData),
+    scenario,
+    actor: "system",
+  });
+}
+
+export async function reconcileCommitmentsAction(formData: FormData): Promise<void> {
+  await postJson(`/v1/finops/reconcile-commitments`, {
+    project_id: getProjectId(formData),
+    actor: "system",
+  });
+}
+
+export async function requestInitiativeBudgetAction(
+  _prev: ActionResult | null,
+  formData: FormData,
+): Promise<ActionResult> {
+  const title = String(formData.get("title") ?? "").trim();
+  if (!title) return { ok: false, error: "Title is required." };
+  const res = await postJsonReturn(`/v1/finops/initiative-budget`, {
+    project_id: getProjectId(formData),
+    title,
+    tier: Number(formData.get("tier") ?? 2),
+    amount_usd_micros: Number(formData.get("amount_usd") ?? 0) * 1_000_000,
+    actor: "system",
+  });
+  revalidatePath("/");
+  return res;
+}
+
+export async function collectSoc2EvidenceAction(
+  _prev: ActionResult | null,
+  formData: FormData,
+): Promise<ActionResult> {
+  const res = await postJsonReturn(`/v1/enterprise/soc2-evidence`, {
+    project_id: getProjectId(formData),
+    actor: "system",
+  });
+  revalidatePath("/");
+  return res;
+}
+
 export async function dispatchPlanAction(formData: FormData): Promise<void> {
   const projectId = getProjectId(formData);
   const planId = String(formData.get("plan_id") ?? "").trim();

@@ -12,6 +12,7 @@ import {
 import { useRouter, useSearchParams } from "next/navigation";
 
 type AreaId =
+  | "dashboard"
   | "overview"
   | "decisions"
   | "work"
@@ -52,6 +53,7 @@ const I = (d: ReactNode) => (props: SVGProps<SVGSVGElement>) => (
 );
 
 const ICONS = {
+  dashboard: I(<><rect x="3" y="3" width="8" height="8" rx="1.5" /><rect x="13" y="3" width="8" height="5" rx="1.5" /><rect x="13" y="10" width="8" height="11" rx="1.5" /><rect x="3" y="13" width="8" height="8" rx="1.5" /></>),
   overview: I(<><path d="M3 12l9-8 9 8" /><path d="M5 10v10h14V10" /></>),
   decisions: I(<><circle cx="12" cy="12" r="9" /><path d="M8.5 12.5l2.5 2.5 4.5-5" /></>),
   work: I(<><rect x="3" y="4" width="18" height="6" rx="1.5" /><rect x="3" y="14" width="18" height="6" rx="1.5" /></>),
@@ -69,6 +71,7 @@ const ICONS = {
 } as const;
 
 const AREAS: AreaDef[] = [
+  { id: "dashboard", label: "Dashboard", sub: "Live cross-phase snapshot — budget, queue, proof, health", group: "Run", icon: ICONS.dashboard },
   { id: "overview", label: "Overview", sub: "What changed · top risks · next actions", group: "Run", icon: ICONS.overview },
   { id: "decisions", label: "Decisions", sub: "Explicit approvals before real effects", group: "Run", icon: ICONS.decisions },
   { id: "work", label: "Work", sub: "Tasks, artifacts, and the activity feed", group: "Run", icon: ICONS.work },
