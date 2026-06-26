@@ -1674,6 +1674,13 @@ CREATE TABLE IF NOT EXISTS quality_gates (
 );
 CREATE INDEX IF NOT EXISTS idx_quality_gates_run ON quality_gates(code_task_run_id);
 CREATE UNIQUE INDEX IF NOT EXISTS uq_quality_gates_run ON quality_gates(project_id, code_task_run_id);
+-- Phase 3 (factory scale-up): explicit lint + CI-green gates, second-model cross-check, a numeric
+-- merge-confidence score, and a stored review packet artifact.
+ALTER TABLE quality_gates ADD COLUMN IF NOT EXISTS lint_passed BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE quality_gates ADD COLUMN IF NOT EXISTS ci_green BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE quality_gates ADD COLUMN IF NOT EXISTS cross_check_agreement BOOLEAN;
+ALTER TABLE quality_gates ADD COLUMN IF NOT EXISTS confidence DOUBLE PRECISION NOT NULL DEFAULT 0;
+ALTER TABLE quality_gates ADD COLUMN IF NOT EXISTS review_packet_artifact_id TEXT;
 
 -- Custom pipeline cost/rigor profiles per project (presets live in code; these are overrides
 -- and customer-defined profiles). is_default marks the project's chosen profile.

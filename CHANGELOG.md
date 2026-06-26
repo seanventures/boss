@@ -2,6 +2,20 @@
 
 All notable changes to BOSS are documented in this file.
 
+## Unreleased — Gap Phase 3 workstream E-2 (software-factory scale-up)
+
+### Added
+
+- Factory scale-up (`factory_scale.py`): WIP limits + queue-depth gating (`GET /v1/factory/wip`)
+  so a new code task is admitted only when an in-flight slot is free.
+- Fail-closed quality gate with an explicit lint stage + CI-green check, a numeric merge-confidence
+  score, an optional second-model cross-check, and a stored review-packet artifact —
+  `POST /v1/factory/merge-check` (preview) and `POST /v1/factory/quality-gate` (persist). Merge is
+  allowed only when required gates pass AND confidence ≥ floor. New quality_gates columns:
+  lint_passed, ci_green, cross_check_agreement, confidence, review_packet_artifact_id.
+- Spec→chunk planner (`POST /v1/factory/chunk-plan`): splits a plan into small, independently
+  shippable PR chunks (by items or by files) instead of one giant PR.
+
 ## Unreleased — Gap Phase 3 workstream E-1 (meeting consensus)
 
 ### Added

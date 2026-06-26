@@ -211,6 +211,9 @@ from .schemas import (
     OpenAIPlanResponse,
     MeetingCreateRequest,
     MeetingListResponse,
+    FactoryChunkPlanRequest,
+    FactoryMergeCheckRequest,
+    FactoryQualityGateRequest,
     MeetingRunRequest,
     MeetingSweepRequest,
     MeetingTallyRequest,
@@ -425,6 +428,8 @@ from .services.slack_comms import (
     render_persona_message,
 )
 from .services import meeting_consensus
+from .services import factory_scale
+from .services.factory_scale import FactoryScaleService
 from .services.secret_refs import SecretRefNotFoundError, SecretRefService
 from .services.self_improvement import (
     InvalidSelfImprovementTransitionError,
@@ -467,6 +472,7 @@ autonomy_engine = AutonomyEngine(settings)
 router_health = RouterHealthService(settings)
 skill_runtime = SkillRuntimeService(settings)
 slack_comms = SlackCommsService(settings)
+factory_scale_service = FactoryScaleService(settings)
 members = MemberDirectoryService(settings)
 canonical = CanonicalObjectService()
 deadletter_remediation = DeadletterRemediationService(settings)
@@ -4847,6 +4853,50 @@ def sweep_stalled_meetings(payload: MeetingSweepRequest) -> dict:
     """Fail out meeting runs stalled past their phase timeout, opening an incident Decision for each
     (spec §D phase timeouts / stall prevention)."""
     return meeting_consensus.sweep_stalled_meeting_runs(engine, settings, actor=payload.actor)
+
+
+@app.get("/v1/factory/wip")
+def factory_wip(project_id: str, wip_limit: int = factory_scale.DEFAULT_WIP_LIMIT) -> dict:
+    """In-flight code tasks vs the per-project WIP limit; admit a new task only if a slot is free
+    (spec §E WIP limits + queue-depth gating)."""
+    if wip_limit < 1:
+        raise HTTPException(status_code=400, detail="wip_limit must be >= 1.")
+    with begin(engine) as connection:
+        return factory_scale.wip_status(connection, project_id, wip_limit=wip_limit)
+
+
+@app.post("/v1/factory/merge-check")
+def factory_merge_check(payload: FactoryMergeCheckRequest) -> dict:
+    """Preview the fail-closed quality gate + merge-confidence verdict (spec §E confidence-gated merge)."""
+    return factory_scale.evaluate_gate(payload.checks, min_confidence=payload.min_confidence)
+
+
+@app.post("/v1/factory/quality-gate", status_code=201)
+def factory_quality_gate(payload: FactoryQualityGateRequest) -> dict:
+    """Evaluate + persist a quality gate (explicit lint + CI-green, second-model cross-check,
+    confidence-gated merge) and store a review-packet artifact (spec §E)."""
+    with begin(engine) as connection:
+        require_project_actor(connection, payload.project_id, payload.actor, "task_create")
+        return factory_scale_service.record_quality_gate(
+            connection,
+            payload.project_id,
+            checks=payload.checks,
+            actor=payload.actor,
+            code_task_run_id=payload.code_task_run_id,
+            task_id=payload.task_id,
+            min_confidence=payload.min_confidence,
+            risk_tier=payload.risk_tier,
+        )
+
+
+@app.post("/v1/factory/chunk-plan")
+def factory_chunk_plan(payload: FactoryChunkPlanRequest) -> dict:
+    """Split a plan/spec into small, independently-shippable PR chunks (spec §E spec→chunk planner)."""
+    return factory_scale.chunk_spec(
+        payload.spec,
+        max_files_per_chunk=payload.max_files_per_chunk,
+        max_chunks=payload.max_chunks,
+    )
 
 
 @app.get("/v1/jobs", response_model=JobListResponse)

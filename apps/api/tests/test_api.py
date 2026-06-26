@@ -18208,3 +18208,110 @@ def test_meeting_sweep_stalled_runs_opens_incident(client, engine):
             text("SELECT status FROM meeting_runs WHERE id = 'mrun_sweep_test'")
         ).scalar_one()
     assert status == "failed"
+
+
+# --- Phase 3 (workstream E): software-factory scale-up ---
+
+
+def test_factory_wip_admits_then_gates(client, engine):
+    empty = client.get("/v1/factory/wip", params={"project_id": "boss-dogfood", "wip_limit": 2})
+    assert empty.status_code == 200
+    assert empty.json()["admit"] is True
+    assert empty.json()["available_slots"] == 2
+
+    with engine.begin() as connection:
+        for index in range(2):
+            connection.execute(
+                text(
+                    "INSERT INTO code_task_runs (id, project_id, status, phase, title) "
+                    "VALUES (:id, 'boss-dogfood', 'running', 'coding', 'wip task')"
+                ),
+                {"id": f"ctr_wip_{index}"},
+            )
+    full = client.get("/v1/factory/wip", params={"project_id": "boss-dogfood", "wip_limit": 2})
+    body = full.json()
+    assert body["in_flight"] == 2
+    assert body["admit"] is False
+    assert body["reason"] == "wip_limit_reached"
+
+
+def test_factory_merge_check_is_fail_closed_and_confidence_gated(client):
+    full = client.post(
+        "/v1/factory/merge-check",
+        json={"checks": {"tests_passed": True, "lint_passed": True, "ci_green": True,
+                         "reviewer_independent": True, "adversarial_verdict": "survived"}},
+    ).json()
+    assert full["status"] == "pass"
+    assert full["allow_merge"] is True
+
+    missing_ci = client.post(
+        "/v1/factory/merge-check",
+        json={"checks": {"tests_passed": True, "lint_passed": True, "reviewer_independent": True}},
+    ).json()
+    assert missing_ci["status"] == "fail"
+    assert missing_ci["allow_merge"] is False
+    assert "ci_green" in missing_ci["required_failed"]
+
+    low_conf = client.post(
+        "/v1/factory/merge-check",
+        json={"checks": {"tests_passed": True, "lint_passed": True, "ci_green": True,
+                         "reviewer_independent": True}, "min_confidence": 0.95},
+    ).json()
+    assert low_conf["status"] == "pass"  # required gates pass
+    assert low_conf["allow_merge"] is False  # but confidence below the floor
+
+
+def test_factory_quality_gate_persists_with_review_packet(client, engine):
+    response = client.post(
+        "/v1/factory/quality-gate",
+        json={
+            "project_id": "boss-dogfood",
+            "code_task_run_id": "ctr_gate_test",
+            "checks": {"tests_passed": True, "lint_passed": True, "ci_green": True,
+                       "reviewer_independent": True, "adversarial_verdict": "survived",
+                       "cross_check_agreement": True},
+        },
+    )
+    assert response.status_code == 201
+    payload = response.json()
+    assert payload["status"] == "pass"
+    assert payload["allow_merge"] is True
+    packet_id = payload["review_packet_artifact_id"]
+    assert packet_id
+
+    artifact = client.get(f"/v1/artifacts/{packet_id}")
+    assert artifact.status_code == 200
+    assert artifact.json()["artifact_type"] == "review_packet"
+
+    with engine.begin() as connection:
+        row = connection.execute(
+            text(
+                "SELECT status, confidence, lint_passed, ci_green "
+                "FROM quality_gates WHERE code_task_run_id = 'ctr_gate_test'"
+            )
+        ).mappings().one()
+    assert row["status"] == "pass"
+    assert row["lint_passed"] is True
+    assert row["ci_green"] is True
+    assert row["confidence"] >= 0.8
+
+
+def test_factory_chunk_plan_splits_items_and_files(client):
+    by_items = client.post(
+        "/v1/factory/chunk-plan",
+        json={"spec": {"title": "Feature", "items": [
+            {"title": "Part A", "files": ["a.py"]},
+            {"title": "Part B", "files": ["b.py"]},
+        ]}},
+    ).json()
+    assert by_items["strategy"] == "items"
+    assert by_items["chunk_count"] == 2
+    assert [c["title"] for c in by_items["chunks"]] == ["Part A", "Part B"]
+
+    by_files = client.post(
+        "/v1/factory/chunk-plan",
+        json={"spec": {"title": "Refactor", "files": ["a", "b", "c", "d", "e"]},
+              "max_files_per_chunk": 2},
+    ).json()
+    assert by_files["strategy"] == "files"
+    assert by_files["chunk_count"] == 3  # 2 + 2 + 1

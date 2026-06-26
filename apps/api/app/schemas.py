@@ -1225,6 +1225,33 @@ class SlackDigestBatchRequest(BaseModel):
     min_batch: int = Field(default=2, ge=1)
 
 
+class FactoryMergeCheckRequest(BaseModel):
+    checks: dict[str, Any]
+    min_confidence: float = Field(default=0.8, ge=0.0, le=1.0)
+
+
+class FactoryQualityGateRequest(BaseModel):
+    project_id: str
+    checks: dict[str, Any]
+    actor: str = "system"
+    code_task_run_id: Optional[str] = None
+    task_id: Optional[str] = None
+    min_confidence: float = Field(default=0.8, ge=0.0, le=1.0)
+    risk_tier: int = Field(default=2, ge=0, le=3)
+
+
+class FactoryChunkPlanRequest(BaseModel):
+    spec: dict[str, Any]
+    max_files_per_chunk: int = Field(default=3, ge=1)
+    max_chunks: int = Field(default=20, ge=1)
+
+    @model_validator(mode="after")
+    def validate_spec(self) -> "FactoryChunkPlanRequest":
+        if not self.spec:
+            raise ValueError("spec must be a non-empty object.")
+        return self
+
+
 class BudgetStatusResponse(BaseModel):
     scope_type: str
     scope_id: str

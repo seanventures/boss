@@ -10,7 +10,7 @@ Verdict: **the hard foundations are built (~75% overall); remaining work is brea
 |---|---|---|
 | Core primitives + execution engine + exactly-once | **~95%** | objects, durable job queue (state machine, SKIP-LOCKED leasing, TTL+heartbeat, reclaim, bounded retries, deadletters), receipts+dedupe — all live |
 | Policy + approval + budget/FinOps + elasticity | **~80%** | budget reserve→settle, hierarchical budgets, risk-tier approvals, break-glass, worker pools, autoscaler — live; gaps in anomaly detection + unified policy eval |
-| Comms (outbox/inbox) + meetings + Metatron | **~70%** | delivery backbone, meeting phase-machine, Metatron query+command — live; gaps in inbox states/ack, email/slack contracts, vote/quorum |
+| Comms (outbox/inbox) + meetings + Metatron | **~90%** | delivery backbone, meeting phase-machine, Metatron — live; Phase 3 added inbox ack-ledger (no silent drops), email command contracts, Slack dept/persona/digest, and meeting vote/quorum/timeout/stall-sweep |
 | Router + skills + autonomy + self-improvement + factory | **~80%** | router (budget-pressure modes), 16 typed skills, autonomy+trust, governed software factory — live; self-improvement runtime (auto-canary + staged rollout + auto-rollback), eval-harness, and evidence-based autonomy auto-upgrade/downgrade now live (Phase 2); skill-invocation mock mode remains |
 | UX + security + observability + public API | **~70%** | 10/10 MVP API endpoints, console, audit export+replay, break-glass — live; gaps in CEO command palette, PII redaction, tracing, dashboards |
 | **Overall** | **~75%** | foundations done; the gap is the trust/autonomy/proof layer |
@@ -119,7 +119,7 @@ Goal: the dogfooding loop is demonstrably end-to-end with the guarantees proven.
 **Phase 2 complete.** Remaining router work (live provider API ping vs. config-derived health) and a
 real ≥2-lane fallback exercise are deferred to when multiple model lanes are credentialed.
 
-### Phase 3 — Comms robustness + meetings + factory scale  (multi-agent org at volume)  🟡 IN PROGRESS (branch `feat/gap-phase3-comms`)
+### Phase 3 — Comms robustness + meetings + factory scale  (multi-agent org at volume)  ✅ COMPLETE (branch `feat/gap-phase3-comms`)
 1. ✅ **Comms robustness** (workstream D) —
    - Inbox lifecycle `received → parsed → routed → actioned | deadlettered | acknowledged` + a durable
      `ack_state` ledger (one row per inbound, transition history, terminal flag) — the "no silent drops"
@@ -135,7 +135,19 @@ real ≥2-lane fallback exercise are deferred to when multiple model lanes are c
    - Per-phase tool budgets + phase timeouts (pure config/helpers the phase-machine consults).
    - Stall prevention: `POST /v1/meetings/sweep-stalled` fails out runs past their phase timeout and
      opens an incident Decision for each — a silent stall becomes a visible, actionable item.
-3. ⬜ Software factory: WIP limits, lint stage, CI-green gate, confidence gating, second-model cross-check, spec→chunk planner.
+3. ✅ **Software-factory scale-up** (`factory_scale.py`) —
+   - WIP limits + queue-depth gating: `GET /v1/factory/wip` admits a new code task only when an
+     in-flight slot is free (throughput scales only when validation keeps up).
+   - Explicit lint stage + CI-green in the fail-closed gate, a numeric merge-confidence score, an
+     optional second-model cross-check, and a stored **review packet** artifact —
+     `POST /v1/factory/merge-check` (preview) + `POST /v1/factory/quality-gate` (persist). A merge is
+     allowed only when required gates pass AND confidence ≥ floor.
+   - Spec→chunk planner: `POST /v1/factory/chunk-plan` splits a plan into small, independently
+     shippable PR chunks (by items or by files) instead of one giant PR.
+
+**Phase 3 complete.** The LLM/GitHub-bound execution paths (live meeting phase-machine, real PR
+open/merge) remain gated on credentials; the consensus/gate/scale logic added here is pure +
+DB-tested and composes with those paths.
 
 ### Phase 4 — Observability, testing depth, enterprise  (scale + GTM)
 1. Real-time dashboards + streaming.

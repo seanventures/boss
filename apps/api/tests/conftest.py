@@ -87,6 +87,8 @@ def clean_tables(engine):
             "budget_reservations",
             "budget_allocations",
             "health_snapshots",
+            "quality_gates",
+            "code_task_runs",
             "meeting_runs",
             "ack_state",
             "inbox_messages",
