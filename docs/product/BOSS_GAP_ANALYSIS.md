@@ -1,8 +1,9 @@
 # BOSS — Gap Analysis vs. Target Spec (PRD + Tech Spec v1)
 
 Date: 2026-06-21. Source spec: BOSS PRD + Technical Specification v1 Draft (May 15, 2026).
-Verdict: **the hard foundations are built (~75% overall); remaining work is breadth, the
-"earned-autonomy / self-improvement" loops, the safety moat, and proof (canary/test suite).**
+Verdict: **the hard foundations are built; Phases 0–4 are now COMPLETE and merged to `main`
+(~90% overall). Remaining work is UI surfacing of the new backend capabilities, plus a few
+transport/breadth deferrals (WebSocket streaming, full SSO/IdP, live multi-worker chaos).**
 
 ## Coverage scorecard
 
@@ -13,7 +14,7 @@ Verdict: **the hard foundations are built (~75% overall); remaining work is brea
 | Comms (outbox/inbox) + meetings + Metatron | **~90%** | delivery backbone, meeting phase-machine, Metatron — live; Phase 3 added inbox ack-ledger (no silent drops), email command contracts, Slack dept/persona/digest, and meeting vote/quorum/timeout/stall-sweep |
 | Router + skills + autonomy + self-improvement + factory | **~80%** | router (budget-pressure modes), 16 typed skills, autonomy+trust, governed software factory — live; self-improvement runtime (auto-canary + staged rollout + auto-rollback), eval-harness, and evidence-based autonomy auto-upgrade/downgrade now live (Phase 2); skill-invocation mock mode remains |
 | UX + security + observability + public API | **~85%** | 10/10 MVP API endpoints, console, audit export+replay, break-glass, PII redaction + tracing (Phase 1), consolidated real-time dashboard + chaos harness + SOC2 evidence (Phase 4) — live; WebSocket streaming + full SSO are the remaining transport/breadth |
-| **Overall** | **~75%** | foundations done; the gap is the trust/autonomy/proof layer |
+| **Overall** | **~90%** | Phases 0–4 complete + merged to `main`; remaining gap is UI surfacing + transport/breadth deferrals |
 
 ## What's already built (don't rebuild)
 
@@ -91,7 +92,7 @@ Goal: the dogfooding loop is demonstrably end-to-end with the guarantees proven.
 6. ✅ **Data-boundary enforcement** — restricted/confidential tasks redact PII before every external model call + `[data_boundary]` policy eval.
 7. ✅ **Distributed tracing** — `GET /v1/trace?run_id` reconstructs a run's full timeline (run + gate + every referencing event).
 
-### Phase 2 — Earned autonomy & controlled self-improvement  (the moat / the "BOSS improves BOSS" story)  ✅ COMPLETE (branch `feat/gap-phase2-autonomy`)
+### Phase 2 — Earned autonomy & controlled self-improvement  (the moat / the "BOSS improves BOSS" story)  ✅ COMPLETE (merged to `main`)
 1. ✅ **Self-improvement runtime** — `run_canary` auto-runs the canary + eval-harness suites and
    records the outcome (no human reports it); staged rollout (`start`/`advance`, ship-narrow→widen)
    with **auto-rollback** when an observation breaches the thresholds. `rollout_state` JSONB +
@@ -119,7 +120,7 @@ Goal: the dogfooding loop is demonstrably end-to-end with the guarantees proven.
 **Phase 2 complete.** Remaining router work (live provider API ping vs. config-derived health) and a
 real ≥2-lane fallback exercise are deferred to when multiple model lanes are credentialed.
 
-### Phase 3 — Comms robustness + meetings + factory scale  (multi-agent org at volume)  ✅ COMPLETE (branch `feat/gap-phase3-comms`)
+### Phase 3 — Comms robustness + meetings + factory scale  (multi-agent org at volume)  ✅ COMPLETE (merged to `main`)
 1. ✅ **Comms robustness** (workstream D) —
    - Inbox lifecycle `received → parsed → routed → actioned | deadlettered | acknowledged` + a durable
      `ack_state` ledger (one row per inbound, transition history, terminal flag) — the "no silent drops"
@@ -149,7 +150,7 @@ real ≥2-lane fallback exercise are deferred to when multiple model lanes are c
 open/merge) remain gated on credentials; the consensus/gate/scale logic added here is pure +
 DB-tested and composes with those paths.
 
-### Phase 4 — Observability, testing depth, enterprise  (scale + GTM)  🟡 CORE COMPLETE (branch `feat/gap-phase4-observability`)
+### Phase 4 — Observability, testing depth, enterprise  (scale + GTM)  ✅ COMPLETE (merged to `main`)
 1. ✅ **Real-time dashboard** (`dashboard.py`) — `GET /v1/dashboard` consolidates budget/queue/workload/
    incidents + provider-health + latest canary/eval + spend run-rate + ack backlog, with a monotonic
    `cursor`; `GET /v1/dashboard/poll` is a bounded long-poll that returns when the cursor advances
