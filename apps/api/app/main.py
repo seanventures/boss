@@ -211,12 +211,16 @@ from .schemas import (
     OpenAIPlanResponse,
     MeetingCreateRequest,
     MeetingListResponse,
+    ChaosRunRequest,
+    CommitmentReconcileRequest,
     FactoryChunkPlanRequest,
     FactoryMergeCheckRequest,
     FactoryQualityGateRequest,
+    InitiativeBudgetRequest,
     MeetingRunRequest,
     MeetingSweepRequest,
     MeetingTallyRequest,
+    SOC2EvidenceRequest,
     MeetingSummary,
     OpsDigestRequest,
     OpsDigestResponse,
@@ -430,6 +434,9 @@ from .services.slack_comms import (
 from .services import meeting_consensus
 from .services import factory_scale
 from .services.factory_scale import FactoryScaleService
+from .services.dashboard import DashboardService
+from .services.finops_reconciler import FinopsReconcilerService
+from .services.soc2 import SOC2EvidenceService
 from .services.secret_refs import SecretRefNotFoundError, SecretRefService
 from .services.self_improvement import (
     InvalidSelfImprovementTransitionError,
@@ -473,6 +480,9 @@ router_health = RouterHealthService(settings)
 skill_runtime = SkillRuntimeService(settings)
 slack_comms = SlackCommsService(settings)
 factory_scale_service = FactoryScaleService(settings)
+dashboard_service = DashboardService(settings)
+finops_reconciler = FinopsReconcilerService(settings)
+soc2_evidence = SOC2EvidenceService(settings)
 members = MemberDirectoryService(settings)
 canonical = CanonicalObjectService()
 deadletter_remediation = DeadletterRemediationService(settings)
@@ -4853,6 +4863,81 @@ def sweep_stalled_meetings(payload: MeetingSweepRequest) -> dict:
     """Fail out meeting runs stalled past their phase timeout, opening an incident Decision for each
     (spec §D phase timeouts / stall prevention)."""
     return meeting_consensus.sweep_stalled_meeting_runs(engine, settings, actor=payload.actor)
+
+
+@app.post("/v1/enterprise/soc2-evidence", status_code=201)
+def collect_soc2_evidence(payload: SOC2EvidenceRequest) -> dict:
+    """Generate a SOC2 evidence bundle (Trust Services Common Criteria) from live audit/policy/
+    break-glass/change/proof data (spec §F enterprise SOC2 evidence collection)."""
+    with begin(engine) as connection:
+        require_project_actor(connection, payload.project_id, payload.actor, "audit_export")
+        return soc2_evidence.collect_evidence(connection, payload.project_id, actor=payload.actor)
+
+
+@app.post("/v1/finops/reconcile-commitments", status_code=201)
+def reconcile_commitments(payload: CommitmentReconcileRequest) -> dict:
+    """Reconcile active commitments vs actual usage → utilization + verdict + review decisions
+    (spec §F InfraCommitment reconciler)."""
+    with begin(engine) as connection:
+        require_project_actor(connection, payload.project_id, payload.actor, "budget_manage")
+    return finops_reconciler.reconcile_commitments(engine, payload.project_id, actor=payload.actor)
+
+
+@app.get("/v1/finops/commitment-reconciliations")
+def list_commitment_reconciliations(project_id: str, limit: int = 50) -> dict:
+    return {"items": finops_reconciler.list_reconciliations(engine, project_id, limit)}
+
+
+@app.post("/v1/finops/initiative-budget", status_code=201)
+def request_initiative_budget(payload: InitiativeBudgetRequest) -> dict:
+    """Tier-2+ initiative budget approval: above the threshold it requires a human Decision
+    (spec §F tier2+ initiative budget approval)."""
+    with begin(engine) as connection:
+        require_project_actor(connection, payload.project_id, payload.actor, "budget_manage")
+        return finops_reconciler.request_initiative_budget(
+            connection,
+            payload.project_id,
+            title=payload.title,
+            tier=payload.tier,
+            amount_usd_micros=payload.amount_usd_micros,
+            actor=payload.actor,
+        )
+
+
+@app.post("/v1/chaos/run", status_code=201)
+def chaos_run(payload: ChaosRunRequest) -> dict:
+    """Inject a controlled fault (lease_reclaim / worker_crash / deadletter_storm) and record whether
+    the system recovered/detected it (spec §F load + chaos testing)."""
+    from .services import chaos
+    with begin(engine) as connection:
+        require_project_actor(connection, payload.project_id, payload.actor, "health_refresh")
+    try:
+        return chaos.run_chaos(engine, settings, payload.project_id, payload.scenario, payload.actor)
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+
+
+@app.get("/v1/chaos")
+def chaos_list(project_id: str, limit: int = 20) -> dict:
+    from .services import chaos
+    return {"items": chaos.list_chaos_runs(engine, project_id, limit)}
+
+
+@app.get("/v1/dashboard")
+def get_dashboard(project_id: str) -> dict:
+    """Consolidated real-time dashboard snapshot with a monotonic cursor (spec §F). Clients re-render
+    only when the cursor advances."""
+    with begin(engine) as connection:
+        return dashboard_service.snapshot(connection, project_id)
+
+
+@app.get("/v1/dashboard/poll")
+def poll_dashboard(project_id: str, cursor: Optional[str] = None, timeout_ms: int = 5000) -> dict:
+    """Bounded long-poll: returns when the dashboard cursor advances past `cursor` or the timeout
+    elapses (spec §F real-time without a fixed-interval refresh)."""
+    if timeout_ms < 0 or timeout_ms > 25000:
+        raise HTTPException(status_code=400, detail="timeout_ms must be between 0 and 25000.")
+    return dashboard_service.poll(engine, project_id, cursor=cursor, timeout_ms=timeout_ms)
 
 
 @app.get("/v1/factory/wip")

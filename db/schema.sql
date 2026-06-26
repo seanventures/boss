@@ -1803,3 +1803,34 @@ CREATE TABLE IF NOT EXISTS ack_state (
 );
 CREATE INDEX IF NOT EXISTS idx_ack_state_project
   ON ack_state (project_id, state, updated_at DESC);
+
+-- Phase 4 (testing depth): chaos/load fault-injection runs. Each row records a controlled fault
+-- injected against the live primitives and whether the system recovered/detected it.
+CREATE TABLE IF NOT EXISTS chaos_runs (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  scenario TEXT NOT NULL,          -- lease_reclaim | worker_crash | deadletter_storm
+  injected BOOLEAN NOT NULL DEFAULT true,
+  recovered BOOLEAN NOT NULL DEFAULT false,
+  detail TEXT,
+  evidence JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_chaos_runs_project ON chaos_runs (project_id, created_at DESC);
+
+-- Phase 4 (finops): InfraCommitment reconciler output — committed spend vs actual usage per
+-- commitment period, with a verdict (on_track | under_utilized | over_utilized) and any review decision.
+CREATE TABLE IF NOT EXISTS commitment_reconciliations (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  commitment_id TEXT NOT NULL,
+  provider TEXT NOT NULL,
+  committed_usd_micros BIGINT NOT NULL,
+  actual_usd_micros BIGINT NOT NULL,
+  utilization DOUBLE PRECISION NOT NULL,
+  verdict TEXT NOT NULL,
+  decision_id TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_commitment_reconciliations_project
+  ON commitment_reconciliations (project_id, created_at DESC);

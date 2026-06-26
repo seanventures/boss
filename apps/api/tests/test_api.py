@@ -18315,3 +18315,131 @@ def test_factory_chunk_plan_splits_items_and_files(client):
     ).json()
     assert by_files["strategy"] == "files"
     assert by_files["chunk_count"] == 3  # 2 + 2 + 1
+
+
+# --- Phase 4 (workstream F): dashboard, chaos, reconciler, SOC2 ---
+
+
+def test_dashboard_snapshot_and_poll_cursor(client):
+    snap = client.get("/v1/dashboard", params={"project_id": "boss-dogfood"})
+    assert snap.status_code == 200
+    body = snap.json()
+    for key in ("cursor", "budget_state", "queue_state", "provider_health", "spend", "ack_backlog"):
+        assert key in body
+    cursor = body["cursor"]
+
+    # A stale cursor returns immediately as changed.
+    stale = client.get(
+        "/v1/dashboard/poll",
+        params={"project_id": "boss-dogfood", "cursor": "0:0", "timeout_ms": 200},
+    ).json()
+    assert stale["changed"] is True
+
+    # The current cursor with a short timeout reports no change...
+    same = client.get(
+        "/v1/dashboard/poll",
+        params={"project_id": "boss-dogfood", "cursor": cursor, "timeout_ms": 200},
+    ).json()
+    assert same["changed"] is False
+
+    # ...until a new event advances it.
+    client.post(
+        "/v1/comms/inbox/ingest",
+        json={"project_id": "boss-dogfood", "channel": "email:x", "body": "hi", "actor": "system"},
+    )
+    advanced = client.get(
+        "/v1/dashboard/poll",
+        params={"project_id": "boss-dogfood", "cursor": cursor, "timeout_ms": 200},
+    ).json()
+    assert advanced["changed"] is True
+
+
+def test_chaos_lease_reclaim_recovers(client):
+    response = client.post(
+        "/v1/chaos/run", json={"project_id": "boss-dogfood", "scenario": "lease_reclaim"}
+    )
+    assert response.status_code == 201
+    assert response.json()["recovered"] is True
+
+    listed = client.get("/v1/chaos", params={"project_id": "boss-dogfood"})
+    assert listed.status_code == 200
+    assert any(r["scenario"] == "lease_reclaim" for r in listed.json()["items"])
+
+
+def test_chaos_deadletter_storm_is_detected(client):
+    response = client.post(
+        "/v1/chaos/run", json={"project_id": "boss-dogfood", "scenario": "deadletter_storm"}
+    )
+    assert response.status_code == 201
+    assert response.json()["recovered"] is True  # detection == resilience here
+
+
+def test_chaos_unknown_scenario_rejected(client):
+    response = client.post(
+        "/v1/chaos/run", json={"project_id": "boss-dogfood", "scenario": "nope"}
+    )
+    assert response.status_code == 422
+
+
+def test_commitment_reconciler_flags_under_utilized(client, engine):
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                """
+                INSERT INTO commitments
+                  (id, project_id, provider, commitment_type, amount_usd_micros, period_start, period_end)
+                VALUES ('cmt_under_t', 'boss-dogfood', 'aws', 'savings_plan', 1000000,
+                        now() - interval '10 days', now() + interval '10 days')
+                """
+            )
+        )
+        connection.execute(
+            text(
+                "INSERT INTO cost_events (id, project_id, provider, category, amount_usd_micros, confidence) "
+                "VALUES ('ce_under_t', 'boss-dogfood', 'aws', 'compute', 100000, 'high')"
+            )
+        )
+    result = client.post(
+        "/v1/finops/reconcile-commitments", json={"project_id": "boss-dogfood"}
+    )
+    assert result.status_code == 201
+    payload = result.json()
+    target = next(r for r in payload["reconciliations"] if r["commitment_id"] == "cmt_under_t")
+    assert target["verdict"] == "under_utilized"
+    assert target["decision_id"]
+
+
+def test_initiative_budget_tier2_requires_approval(client):
+    big = client.post(
+        "/v1/finops/initiative-budget",
+        json={"project_id": "boss-dogfood", "title": "New cluster", "tier": 2,
+              "amount_usd_micros": 100_000_000},
+    ).json()
+    assert big["approval_required"] is True
+    assert big["status"] == "pending_approval"
+    assert big["decision_id"]
+
+    small = client.post(
+        "/v1/finops/initiative-budget",
+        json={"project_id": "boss-dogfood", "title": "Tiny", "tier": 1,
+              "amount_usd_micros": 100_000_000},
+    ).json()
+    assert small["approval_required"] is False
+    assert small["status"] == "auto_approved"
+
+
+def test_soc2_evidence_bundle_collects_controls(client):
+    # Make the continuous-verification control deterministic.
+    client.post("/v1/canaries/run", json={"project_id": "boss-dogfood"})
+    response = client.post(
+        "/v1/enterprise/soc2-evidence", json={"project_id": "boss-dogfood"}
+    )
+    assert response.status_code == 201
+    payload = response.json()
+    assert payload["summary"]["controls_total"] == 5
+    control_ids = {c["id"] for c in payload["controls"]}
+    assert {"CC4.1", "CC6.1", "CC6.8", "CC7.2", "CC8.1"} == control_ids
+
+    artifact = client.get(f"/v1/artifacts/{payload['artifact_id']}")
+    assert artifact.status_code == 200
+    assert artifact.json()["artifact_type"] == "soc2_evidence_bundle"

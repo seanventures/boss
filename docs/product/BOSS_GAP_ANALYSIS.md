@@ -12,7 +12,7 @@ Verdict: **the hard foundations are built (~75% overall); remaining work is brea
 | Policy + approval + budget/FinOps + elasticity | **~80%** | budget reserve→settle, hierarchical budgets, risk-tier approvals, break-glass, worker pools, autoscaler — live; gaps in anomaly detection + unified policy eval |
 | Comms (outbox/inbox) + meetings + Metatron | **~90%** | delivery backbone, meeting phase-machine, Metatron — live; Phase 3 added inbox ack-ledger (no silent drops), email command contracts, Slack dept/persona/digest, and meeting vote/quorum/timeout/stall-sweep |
 | Router + skills + autonomy + self-improvement + factory | **~80%** | router (budget-pressure modes), 16 typed skills, autonomy+trust, governed software factory — live; self-improvement runtime (auto-canary + staged rollout + auto-rollback), eval-harness, and evidence-based autonomy auto-upgrade/downgrade now live (Phase 2); skill-invocation mock mode remains |
-| UX + security + observability + public API | **~70%** | 10/10 MVP API endpoints, console, audit export+replay, break-glass — live; gaps in CEO command palette, PII redaction, tracing, dashboards |
+| UX + security + observability + public API | **~85%** | 10/10 MVP API endpoints, console, audit export+replay, break-glass, PII redaction + tracing (Phase 1), consolidated real-time dashboard + chaos harness + SOC2 evidence (Phase 4) — live; WebSocket streaming + full SSO are the remaining transport/breadth |
 | **Overall** | **~75%** | foundations done; the gap is the trust/autonomy/proof layer |
 
 ## What's already built (don't rebuild)
@@ -149,11 +149,26 @@ real ≥2-lane fallback exercise are deferred to when multiple model lanes are c
 open/merge) remain gated on credentials; the consensus/gate/scale logic added here is pure +
 DB-tested and composes with those paths.
 
-### Phase 4 — Observability, testing depth, enterprise  (scale + GTM)
-1. Real-time dashboards + streaming.
-2. Load + chaos test infrastructure.
-3. InfraCommitment reconciler + tier2+ initiative budget approval.
-4. RBAC/SSO/SOC2 evidence + sector packs.
+### Phase 4 — Observability, testing depth, enterprise  (scale + GTM)  🟡 CORE COMPLETE (branch `feat/gap-phase4-observability`)
+1. ✅ **Real-time dashboard** (`dashboard.py`) — `GET /v1/dashboard` consolidates budget/queue/workload/
+   incidents + provider-health + latest canary/eval + spend run-rate + ack backlog, with a monotonic
+   `cursor`; `GET /v1/dashboard/poll` is a bounded long-poll that returns when the cursor advances
+   (real-time without a fixed 7s refresh). WebSocket transport is the remaining (deferred) layer.
+2. ✅ **Load + chaos harness** (`chaos.py`) — `POST /v1/chaos/run` injects real faults against live
+   primitives: `lease_reclaim`/`worker_crash` (expire a lease → prove another worker reclaims) and
+   `deadletter_storm` (flood deadletters → prove the anomaly detector raises an incident); recorded to
+   `chaos_runs` with evidence.
+3. ✅ **InfraCommitment reconciler + tier2+ initiative approval** (`finops_reconciler.py`) —
+   `POST /v1/finops/reconcile-commitments` scores each commitment's utilization vs actual cost_events
+   (on_track/under/over → review decision); `POST /v1/finops/initiative-budget` requires a human
+   Decision for tier-2+ initiatives above the threshold.
+4. ✅ **SOC2 evidence collection** (`soc2.py`) — `POST /v1/enterprise/soc2-evidence` generates a Trust
+   Services Common-Criteria evidence bundle (audit logging, break-glass+postmortem, policy-eval trail,
+   canary/eval verification, change management) from live data as a stored artifact. RBAC/SSO and
+   sector packs (SAML/SCIM already exist) are the remaining enterprise breadth.
+
+**Phase 4 core complete.** Deferred: WebSocket streaming transport, full SSO/IdP onboarding, and
+chaos against a live multi-worker fleet — all transport/infra layers atop the tested logic here.
 
 ---
 

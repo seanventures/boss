@@ -2,6 +2,24 @@
 
 All notable changes to BOSS are documented in this file.
 
+## Unreleased — Gap Phase 4 (observability, testing depth, enterprise)
+
+### Added
+
+- Consolidated real-time dashboard (`dashboard.py`): `GET /v1/dashboard` aggregates
+  budget/queue/workload/incidents + provider-health + latest canary/eval + spend run-rate + ack
+  backlog with a monotonic cursor; `GET /v1/dashboard/poll` is a bounded long-poll that returns when
+  the cursor advances (real-time without a fixed-interval refresh).
+- Chaos/load fault-injection harness (`chaos.py` + `chaos_runs`): `POST /v1/chaos/run` injects real
+  faults — `lease_reclaim`/`worker_crash` (prove a crashed worker's job is reclaimed) and
+  `deadletter_storm` (prove the anomaly detector raises an incident). `GET /v1/chaos` lists runs.
+- InfraCommitment reconciler (`finops_reconciler.py` + `commitment_reconciliations`):
+  `POST /v1/finops/reconcile-commitments` scores commitment utilization vs actual cost
+  (on_track/under/over → review decision). `POST /v1/finops/initiative-budget` requires a human
+  Decision for tier-2+ initiatives above the approval threshold.
+- SOC2 evidence collection (`soc2.py`): `POST /v1/enterprise/soc2-evidence` generates a Trust
+  Services Common-Criteria evidence bundle from live audit/policy/break-glass/change/proof data.
+
 ## Unreleased — Gap Phase 3 workstream E-2 (software-factory scale-up)
 
 ### Added

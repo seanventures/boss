@@ -1240,6 +1240,35 @@ class FactoryQualityGateRequest(BaseModel):
     risk_tier: int = Field(default=2, ge=0, le=3)
 
 
+class ChaosRunRequest(BaseModel):
+    project_id: str
+    scenario: str
+    actor: str = "system"
+
+
+class CommitmentReconcileRequest(BaseModel):
+    project_id: str
+    actor: str = "system"
+
+
+class SOC2EvidenceRequest(BaseModel):
+    project_id: str
+    actor: str = "system"
+
+
+class InitiativeBudgetRequest(BaseModel):
+    project_id: str
+    title: str
+    tier: int = Field(default=2, ge=0, le=3)
+    amount_usd_micros: int = Field(ge=0)
+    actor: str = "system"
+
+    @model_validator(mode="after")
+    def validate_fields(self) -> "InitiativeBudgetRequest":
+        self.title = _require_text(self.title, "title")
+        return self
+
+
 class FactoryChunkPlanRequest(BaseModel):
     spec: dict[str, Any]
     max_files_per_chunk: int = Field(default=3, ge=1)
