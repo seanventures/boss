@@ -28,16 +28,17 @@ class DashboardService:
         self.budget = BudgetGovernor(settings)
 
     def cursor(self, connection: Connection, project_id: str) -> str:
-        """Monotonic change token for the project — advances whenever a new event is recorded."""
+        """Monotonic change token for the project — advances whenever a new event is recorded.
+        Stable (never time-varying) when there are no events, so an idle project polls cleanly."""
         row = connection.execute(
             text(
-                "SELECT count(*) AS n, COALESCE(MAX(created_at), now()) AS latest "
-                "FROM events WHERE project_id = :p"
+                "SELECT count(*) AS n, MAX(created_at) AS latest FROM events WHERE project_id = :p"
             ),
             {"p": project_id},
         ).mappings().one()
         latest = row["latest"]
-        return f"{int(row['n'])}:{latest.timestamp():.0f}"
+        ts = f"{latest.timestamp():.6f}" if latest is not None else "0"
+        return f"{int(row['n'])}:{ts}"
 
     def snapshot(self, connection: Connection, project_id: str) -> dict[str, Any]:
         health = self.health.current_state(connection, project_id)

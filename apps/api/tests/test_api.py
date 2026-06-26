@@ -18321,6 +18321,11 @@ def test_factory_chunk_plan_splits_items_and_files(client):
 
 
 def test_dashboard_snapshot_and_poll_cursor(client):
+    # Establish some activity so the cursor is non-trivial (not the idle "0:0").
+    client.post(
+        "/v1/comms/inbox/ingest",
+        json={"project_id": "boss-dogfood", "channel": "email:x", "body": "seed", "actor": "system"},
+    )
     snap = client.get("/v1/dashboard", params={"project_id": "boss-dogfood"})
     assert snap.status_code == 200
     body = snap.json()
@@ -18331,7 +18336,7 @@ def test_dashboard_snapshot_and_poll_cursor(client):
     # A stale cursor returns immediately as changed.
     stale = client.get(
         "/v1/dashboard/poll",
-        params={"project_id": "boss-dogfood", "cursor": "0:0", "timeout_ms": 200},
+        params={"project_id": "boss-dogfood", "cursor": "stale:0", "timeout_ms": 200},
     ).json()
     assert stale["changed"] is True
 
