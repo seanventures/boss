@@ -17642,3 +17642,804 @@ def test_secret_ref_crud_http_endpoints(client, engine):
     )
     assert revoked.status_code == 200
     assert revoked.json()["status"] == "revoked"
+
+
+# --- Phase 2: self-improvement runtime, eval-harness, evidence-based autonomy engine ---
+
+
+def _create_self_improvement_proposal(client, title="Phase2 runtime change"):
+    response = client.post(
+        "/v1/self-improvement/proposals",
+        json={
+            "project_id": "boss-dogfood",
+            "title": title,
+            "summary": "Phase 2 self-improvement runtime end-to-end coverage.",
+            "change_ref": "https://github.com/seanheiney/boss/pull/77",
+            "diff_summary": "Wire the self-improvement runtime and eval-harness gate.",
+            "expected_impact": ["Faster safe rollouts"],
+            "test_plan": ["Run canary + eval suites"],
+            "canary_scope": ["dogfood workspace only"],
+            "rollback_plan": ["Revert PR"],
+            "success_metrics": ["No regression in error rate"],
+            "actor": "vp_agents",
+            "risk_tier": 2,
+        },
+    )
+    assert response.status_code == 201
+    return response.json()
+
+
+def test_eval_harness_suite_runs_and_lists(client):
+    run = client.post("/v1/evals/run", json={"project_id": "boss-dogfood"})
+    assert run.status_code == 200
+    payload = run.json()
+    assert payload["status"] == "pass"
+    assert payload["failed"] == 0
+    eval_names = {result["eval"] for result in payload["results"]}
+    assert {
+        "routing_fallback_chain",
+        "policy_audit_roundtrip",
+        "factory_gate_fail_closed",
+        "autonomy_ladder_monotonic",
+    } <= eval_names
+
+    listed = client.get("/v1/evals", params={"project_id": "boss-dogfood"})
+    assert listed.status_code == 200
+    assert any(item["id"] == payload["id"] for item in listed.json()["items"])
+
+
+def test_self_improvement_runtime_auto_canary_and_staged_rollout(client):
+    proposal = _create_self_improvement_proposal(client, "Auto canary + staged rollout")
+    proposal_id = proposal["id"]
+
+    approve = client.post(
+        f"/v1/decisions/{proposal['current_decision_id']}/approve",
+        json={"actor": "ceo", "note": "Run the canary."},
+    )
+    assert approve.status_code == 200
+
+    # Runtime auto-runs the canary + eval suites and records the outcome (no human metrics).
+    run = client.post(
+        f"/v1/self-improvement/proposals/{proposal_id}/run-canary",
+        json={"actor": "release_manager"},
+    )
+    assert run.status_code == 200
+    run_payload = run.json()
+    assert run_payload["status"] == "canary_succeeded"
+    assert run_payload["canary_artifact_id"]
+    rollout_decision_id = run_payload["current_decision_id"]
+    assert rollout_decision_id
+
+    assert (
+        client.post(
+            f"/v1/decisions/{rollout_decision_id}/approve",
+            json={"actor": "ceo", "note": "Promote."},
+        ).status_code
+        == 200
+    )
+
+    started = client.post(
+        f"/v1/self-improvement/proposals/{proposal_id}/rollout/start",
+        json={"actor": "release_manager"},
+    )
+    assert started.status_code == 200
+    started_payload = started.json()
+    assert started_payload["status"] == "rolling_out"
+    stages = started_payload["rollout_state"]["stages"]
+    assert len(stages) == 3
+
+    final = None
+    for _ in stages:
+        advanced = client.post(
+            f"/v1/self-improvement/proposals/{proposal_id}/rollout/advance",
+            json={"actor": "release_manager", "observation": {"health": "healthy", "error_rate": 0.0}},
+        )
+        assert advanced.status_code == 200
+        final = advanced.json()
+    assert final["status"] == "rolled_out"
+    assert final["rollout_state"]["status"] == "completed"
+    assert final["rollout_artifact_id"]
+
+
+def test_self_improvement_runtime_auto_rollback_on_regression(client):
+    proposal = _create_self_improvement_proposal(client, "Auto rollback on regression")
+    proposal_id = proposal["id"]
+    client.post(
+        f"/v1/decisions/{proposal['current_decision_id']}/approve",
+        json={"actor": "ceo", "note": "Run the canary."},
+    )
+    run_payload = client.post(
+        f"/v1/self-improvement/proposals/{proposal_id}/run-canary",
+        json={"actor": "release_manager"},
+    ).json()
+    client.post(
+        f"/v1/decisions/{run_payload['current_decision_id']}/approve",
+        json={"actor": "ceo", "note": "Promote."},
+    )
+    client.post(
+        f"/v1/self-improvement/proposals/{proposal_id}/rollout/start",
+        json={"actor": "release_manager"},
+    )
+
+    # First stage healthy, then a regressing observation must auto-rollback.
+    healthy = client.post(
+        f"/v1/self-improvement/proposals/{proposal_id}/rollout/advance",
+        json={"actor": "release_manager", "observation": {"health": "healthy"}},
+    )
+    assert healthy.json()["status"] == "rolling_out"
+
+    rolled_back = client.post(
+        f"/v1/self-improvement/proposals/{proposal_id}/rollout/advance",
+        json={"actor": "release_manager", "observation": {"error_rate": 0.9}},
+    )
+    assert rolled_back.status_code == 200
+    rb_payload = rolled_back.json()
+    assert rb_payload["status"] == "rolled_back"
+    assert rb_payload["rollback_artifact_id"]
+    assert rb_payload["rollout_state"]["status"] == "rolled_back"
+
+    # No further advance is possible once rolled back.
+    blocked = client.post(
+        f"/v1/self-improvement/proposals/{proposal_id}/rollout/advance",
+        json={"actor": "release_manager", "observation": {"health": "healthy"}},
+    )
+    assert blocked.status_code == 409
+
+
+def test_autonomy_engine_recommends_upgrade_on_clean_evidence(client):
+    # metatron starts at autonomy level 1; accumulate clean allowed-action evidence.
+    for _ in range(30):
+        allowed = client.post(
+            "/v1/roles/metatron/autonomy/check",
+            json={"project_id": "boss-dogfood", "actor": "system", "action": "read", "risk_tier": 0},
+        )
+        assert allowed.json()["allowed"] is True
+
+    evaluation = client.post(
+        "/v1/roles/metatron/autonomy/evaluate",
+        json={"project_id": "boss-dogfood", "actor": "vp_agents"},
+    )
+    assert evaluation.status_code == 201
+    payload = evaluation.json()
+    assert payload["evidence"]["successful_runs"] >= 30
+    assert payload["evidence"]["policy_violations"] == 0
+    assert payload["recent_reviews"][0]["governance_outcome"] == "upgrade_recommended"
+    assert payload["pending_autonomy_change"]["change_type"] == "upgrade"
+    assert payload["pending_autonomy_change"]["status"] == "pending_decision"
+
+
+def test_autonomy_engine_auto_downgrades_on_denial_evidence(client):
+    # Denied authorization checks emit evidence without mutating the level in real time.
+    for _ in range(3):
+        denied = client.post(
+            "/v1/roles/metatron/autonomy/check",
+            json={"project_id": "boss-dogfood", "actor": "system", "action": "execute", "risk_tier": 3},
+        )
+        assert denied.json()["allowed"] is False
+
+    evaluation = client.post(
+        "/v1/roles/metatron/autonomy/evaluate",
+        json={"project_id": "boss-dogfood", "actor": "vp_agents"},
+    )
+    assert evaluation.status_code == 201
+    payload = evaluation.json()
+    assert payload["evidence"]["policy_violations"] == 3
+    assert payload["role"]["autonomy_level"] == 0
+    assert payload["recent_reviews"][0]["governance_outcome"] == "auto_downgraded"
+    assert payload["recent_autonomy_changes"][0]["change_type"] == "downgrade"
+    assert payload["recent_autonomy_changes"][0]["status"] == "applied"
+
+
+# --- Phase 2 (items 4-5): router fallback/health/rationale, skill-invocation framework ---
+
+
+def test_router_provider_health_poll_and_rationale_artifact(client):
+    poll = client.post("/v1/provider-health/poll", json={"project_id": "boss-dogfood"})
+    assert poll.status_code == 200
+    poll_payload = poll.json()
+    assert poll_payload["polled"] >= 1
+    assert poll_payload["healthy"] >= 1
+    assert all("status" in s and "provider" in s for s in poll_payload["snapshots"])
+
+    # Polled health is visible through the existing provider-health list endpoint.
+    listed = client.get("/v1/provider-health", params={"project_id": "boss-dogfood"})
+    assert listed.status_code == 200
+    assert len(listed.json()["items"]) >= 1
+
+    rationale = client.post("/v1/router/rationale", json={"project_id": "boss-dogfood"})
+    assert rationale.status_code == 201
+    payload = rationale.json()
+    assert payload["artifact_id"]
+    assert payload["rationale"]["route_decision_log_id"]
+    assert payload["rationale"]["selected_source_id"]
+    assert "fallback_order" in payload["rationale"]
+
+    artifact = client.get(f"/v1/artifacts/{payload['artifact_id']}")
+    assert artifact.status_code == 200
+    assert artifact.json()["artifact_type"] == "router_rationale"
+
+
+def test_router_rationale_rejects_unknown_skill(client):
+    response = client.post(
+        "/v1/router/rationale",
+        json={"project_id": "boss-dogfood", "skill_id": "model.does_not_exist"},
+    )
+    assert response.status_code == 404
+
+
+def test_skill_invocation_mock_allows_permitted_caller_without_side_effects(client, engine):
+    with engine.begin() as connection:
+        before = connection.execute(
+            text("SELECT count(*) FROM budget_reservations WHERE project_id = 'boss-dogfood'")
+        ).scalar()
+
+    response = client.post(
+        "/v1/skills/cloudflare.dns.record.upsert/invoke",
+        json={
+            "project_id": "boss-dogfood",
+            "caller": "resource_plane_kernel",
+            "inputs": {"zone_id": "z", "name": "n", "record_type": "TXT", "value": "v"},
+            "mock": True,
+        },
+    )
+    assert response.status_code == 201
+    payload = response.json()
+    assert payload["status"] == "succeeded"
+    assert payload["mode"] == "mock"
+    assert payload["permission_decision"] == "allow"
+    assert payload["reservation_id"] is None
+    assert payload["result"]["mock"] is True
+
+    with engine.begin() as connection:
+        after = connection.execute(
+            text("SELECT count(*) FROM budget_reservations WHERE project_id = 'boss-dogfood'")
+        ).scalar()
+    assert after == before  # mock mode created no budget reservation
+
+    listed = client.get("/v1/skills/invocations", params={"project_id": "boss-dogfood"})
+    assert listed.status_code == 200
+    assert any(item["id"] == payload["id"] for item in listed.json()["items"])
+
+
+def test_skill_invocation_mock_denies_unpermitted_caller(client):
+    response = client.post(
+        "/v1/skills/cloudflare.dns.record.upsert/invoke",
+        json={
+            "project_id": "boss-dogfood",
+            "caller": "random_intruder",
+            "inputs": {},
+            "mock": True,
+        },
+    )
+    assert response.status_code == 201
+    payload = response.json()
+    assert payload["status"] == "denied"
+    assert payload["permission_decision"] == "deny"
+    assert "allowed_callers" in payload["reason"]
+
+
+def test_skill_invocation_real_mode_rejected_via_api(client):
+    response = client.post(
+        "/v1/skills/cloudflare.dns.record.upsert/invoke",
+        json={
+            "project_id": "boss-dogfood",
+            "caller": "resource_plane_kernel",
+            "inputs": {},
+            "mock": False,
+        },
+    )
+    assert response.status_code == 400
+
+
+def test_skill_invocation_unknown_skill_returns_404(client):
+    response = client.post(
+        "/v1/skills/does.not.exist/invoke",
+        json={"project_id": "boss-dogfood", "caller": "resource_plane_kernel", "mock": True},
+    )
+    assert response.status_code == 404
+
+
+# --- Phase 3 (workstream D): inbox states + ack_state, email contracts, Slack ---
+
+
+def test_inbox_ack_state_tracks_command_through_terminal(client, engine):
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                """
+                INSERT INTO decisions (
+                    id, project_id, question, recommendation, options,
+                    risk_tier, cost_summary, deadline_at, default_action, status
+                )
+                VALUES (
+                    'dec_ack_state_flow', 'boss-dogfood', 'Approve from inbound?',
+                    '{"action":"approve"}'::jsonb,
+                    '[{"label":"Approve","action":"approve"}]'::jsonb,
+                    1, '{}'::jsonb, now() + interval '1 day', 'hold', 'pending'
+                )
+                """
+            )
+        )
+    inbox = client.post(
+        "/v1/comms/inbox/ingest",
+        json={
+            "project_id": "boss-dogfood",
+            "channel": "email:founder@example.com",
+            "subject": "[proj:boss] approve decision dec_ack_state_flow",
+            "body": "Approved.",
+            "raw_ref": "thread-ack-1",
+            "actor": "ceo",
+        },
+    )
+    assert inbox.status_code == 201
+    message_id = inbox.json()["id"]
+    assert inbox.json()["status"] == "actioned"
+
+    ack = client.get("/v1/comms/inbox/ack-state", params={"project_id": "boss-dogfood"})
+    assert ack.status_code == 200
+    row = next(a for a in ack.json()["items"] if a["inbox_message_id"] == message_id)
+    assert row["terminal"] is True
+    assert row["state"] == "actioned"
+    assert row["route_kind"] == "decision"
+    assert row["target_ref"] == "dec_ack_state_flow"
+    assert [h["state"] for h in row["history"]] == ["received", "parsed", "routed", "actioned"]
+
+
+def test_inbox_plain_message_is_acknowledged_terminal(client):
+    inbox = client.post(
+        "/v1/comms/inbox/ingest",
+        json={
+            "project_id": "boss-dogfood",
+            "channel": "email:founder@example.com",
+            "subject": "[proj:boss] FYI",
+            "body": "Just a heads up, nothing to action.",
+            "actor": "system",
+        },
+    )
+    assert inbox.status_code == 201
+    payload = inbox.json()
+    assert payload["status"] == "received"  # plain messages keep the received status
+    assert payload["parsed"]["command_context"]["project"] == "boss"
+    assert payload["parsed"]["command_context"]["thread_id"].startswith("thread_")
+
+    ack = client.get("/v1/comms/inbox/ack-state", params={"project_id": "boss-dogfood"})
+    row = next(a for a in ack.json()["items"] if a["inbox_message_id"] == payload["id"])
+    assert row["terminal"] is True
+    assert row["state"] == "acknowledged"
+    assert row["route_kind"] == "informational"
+
+
+def test_inbox_malformed_email_command_deadletters_with_remediation(client):
+    inbox = client.post(
+        "/v1/comms/inbox/ingest",
+        json={
+            "project_id": "boss-dogfood",
+            "channel": "email:founder@example.com",
+            "subject": "[org:acme][proj:boss] please handle this decision",
+            "body": "do something about the decision",
+            "actor": "system",
+        },
+    )
+    assert inbox.status_code == 201
+    payload = inbox.json()
+    assert payload["status"] == "deadlettered"
+    assert payload["parsed"]["command_context"]["org"] == "acme"
+
+    ack = client.get("/v1/comms/inbox/ack-state", params={"project_id": "boss-dogfood"})
+    row = next(a for a in ack.json()["items"] if a["inbox_message_id"] == payload["id"])
+    assert row["terminal"] is True
+    assert row["state"] == "deadlettered"
+    assert "approve, reject, revise, execute, delegate" in row["remediation"]
+
+
+def test_inbox_email_threads_are_stable_across_replies(client):
+    first = client.post(
+        "/v1/comms/inbox/ingest",
+        json={"project_id": "boss-dogfood", "channel": "email:a@x.com",
+              "subject": "Quarterly plan", "body": "draft", "actor": "system"},
+    ).json()
+    reply = client.post(
+        "/v1/comms/inbox/ingest",
+        json={"project_id": "boss-dogfood", "channel": "email:a@x.com",
+              "subject": "Re: Quarterly plan", "body": "more", "actor": "system"},
+    ).json()
+    assert (
+        first["parsed"]["command_context"]["thread_id"]
+        == reply["parsed"]["command_context"]["thread_id"]
+    )
+
+
+def test_slack_render_persona_and_department_channel(client):
+    response = client.post(
+        "/v1/comms/slack/render",
+        json={"persona": "Metatron", "role": "VP Agents",
+              "subject": "Status", "body": "All green.", "department": "Engineering"},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["channel"] == "#boss-engineering"
+    assert payload["text"].startswith("*[Metatron · VP Agents]*")
+    assert payload["text"].rstrip().endswith("— Metatron, VP Agents · BOSS")
+
+
+def test_slack_digest_batches_drafts_per_channel(client, engine):
+    for index in range(3):
+        client.post(
+            "/v1/comms/outbox",
+            json={"project_id": "boss-dogfood", "channel": "slack:#boss-eng",
+                  "subject": f"Update {index}", "body": f"body {index}",
+                  "dedupe_key": f"digest-src-{index}", "actor": "system"},
+        )
+    client.post(
+        "/v1/comms/outbox",
+        json={"project_id": "boss-dogfood", "channel": "slack:#boss-sales",
+              "subject": "Solo", "body": "only one", "dedupe_key": "digest-solo", "actor": "system"},
+    )
+
+    digest = client.post("/v1/comms/slack/digest", json={"project_id": "boss-dogfood"})
+    assert digest.status_code == 200
+    payload = digest.json()
+    assert payload["channels_batched"] == 1  # solo channel below min_batch is left alone
+    assert payload["messages_batched"] == 3
+    assert payload["digests"][0]["channel"] == "slack:#boss-eng"
+
+    with engine.begin() as connection:
+        batched = connection.execute(
+            text(
+                "SELECT count(*) FROM outbox_messages "
+                "WHERE project_id = 'boss-dogfood' AND status = 'batched'"
+            )
+        ).scalar_one()
+    assert batched == 3
+
+
+# --- Phase 3 (workstream E-1): meeting consensus — vote/quorum/timeout/budgets ---
+
+
+def test_meeting_vote_tally_preview_outcomes(client):
+    approved = client.post(
+        "/v1/meetings/tally",
+        json={"votes": [{"voter": "a", "vote": "approve"}, {"voter": "b", "vote": "approve"},
+                        {"voter": "c", "vote": "reject"}], "eligible_count": 3},
+    ).json()
+    assert approved["outcome"] == "approved"
+    assert approved["consensus_reached"] is True
+    assert approved["quorum_met"] is True
+
+    rejected = client.post(
+        "/v1/meetings/tally",
+        json={"votes": [{"voter": "a", "vote": "reject"}, {"voter": "b", "vote": "reject"},
+                        {"voter": "c", "vote": "approve"}], "eligible_count": 3},
+    ).json()
+    assert rejected["outcome"] == "rejected"
+    assert rejected["consensus_reached"] is False
+    assert len(rejected["dissent_records"]) == 2
+
+    no_quorum = client.post(
+        "/v1/meetings/tally",
+        json={"votes": [{"voter": "a", "vote": "approve"}], "eligible_count": 3, "quorum": 3},
+    ).json()
+    assert no_quorum["outcome"] == "no_quorum"
+    assert no_quorum["quorum_met"] is False
+    assert no_quorum["consensus_reached"] is False
+
+
+def test_meeting_run_with_votes_records_consensus(client):
+    meeting = client.post(
+        "/v1/meetings",
+        json={"project_id": "boss-dogfood", "title": "Vote run", "purpose": "decide",
+              "participants": ["ceo", "program_manager", "release_manager"],
+              "agenda": ["decision"], "actor": "ceo"},
+    ).json()
+    run = client.post(
+        f"/v1/meetings/{meeting['id']}/run",
+        json={
+            "actor": "ceo",
+            "transcript": [{"speaker": "ceo", "message": "let us vote", "phase": "vote"}],
+            "minutes": {"summary": "Voted on the proposal."},
+            "votes": [
+                {"voter": "ceo", "vote": "approve"},
+                {"voter": "program_manager", "vote": "approve"},
+                {"voter": "release_manager", "vote": "reject", "reason": "rollout risk"},
+            ],
+        },
+    )
+    assert run.status_code == 200
+    payload = run.json()
+    assert payload["status"] == "completed"
+    assert len(payload["dissent_records"]) == 1
+    assert payload["dissent_records"][0]["reason"] == "rollout risk"
+
+
+def test_meeting_run_without_quorum_is_blocked(client):
+    meeting = client.post(
+        "/v1/meetings",
+        json={"project_id": "boss-dogfood", "title": "No quorum", "purpose": "decide",
+              "participants": ["ceo", "program_manager", "release_manager", "qa"],
+              "agenda": ["decision"], "actor": "ceo"},
+    ).json()
+    run = client.post(
+        f"/v1/meetings/{meeting['id']}/run",
+        json={
+            "actor": "ceo",
+            "transcript": [{"speaker": "ceo", "message": "vote", "phase": "vote"}],
+            "minutes": {"summary": "Only one vote arrived."},
+            "votes": [{"voter": "ceo", "vote": "approve"}],
+            "quorum": 3,
+        },
+    )
+    assert run.status_code == 200
+    assert run.json()["status"] == "blocked"
+
+
+def test_meeting_phase_budget_and_timeout_helpers():
+    from apps.api.app.services import meeting_consensus as mc
+    from datetime import timedelta, timezone, datetime as _dt
+
+    assert mc.phase_within_budget("round1", 100_000) is True
+    assert mc.phase_within_budget("round1", 10_000_000) is False
+    now = _dt(2026, 6, 25, 12, 0, 0, tzinfo=timezone.utc)
+    fresh = now - timedelta(seconds=10)
+    stale = now - timedelta(seconds=mc.phase_timeout_seconds("round1") + 60)
+    assert mc.phase_timed_out("round1", fresh, now) is False
+    assert mc.phase_timed_out("round1", stale, now) is True
+
+
+def test_meeting_sweep_stalled_runs_opens_incident(client, engine):
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                """
+                INSERT INTO meeting_runs (id, project_id, status, phase, directive, updated_at)
+                VALUES ('mrun_sweep_test', 'boss-dogfood', 'running', 'round1', 'stalled run',
+                        now() - interval '2 hours')
+                """
+            )
+        )
+    sweep = client.post("/v1/meetings/sweep-stalled", json={})
+    assert sweep.status_code == 200
+    swept_ids = [r["run_id"] for r in sweep.json()["runs"]]
+    assert "mrun_sweep_test" in swept_ids
+    target = next(r for r in sweep.json()["runs"] if r["run_id"] == "mrun_sweep_test")
+    assert target["decision_id"].startswith("dec_")
+
+    with engine.begin() as connection:
+        status = connection.execute(
+            text("SELECT status FROM meeting_runs WHERE id = 'mrun_sweep_test'")
+        ).scalar_one()
+    assert status == "failed"
+
+
+# --- Phase 3 (workstream E): software-factory scale-up ---
+
+
+def test_factory_wip_admits_then_gates(client, engine):
+    empty = client.get("/v1/factory/wip", params={"project_id": "boss-dogfood", "wip_limit": 2})
+    assert empty.status_code == 200
+    assert empty.json()["admit"] is True
+    assert empty.json()["available_slots"] == 2
+
+    with engine.begin() as connection:
+        for index in range(2):
+            connection.execute(
+                text(
+                    "INSERT INTO code_task_runs (id, project_id, status, phase, title) "
+                    "VALUES (:id, 'boss-dogfood', 'running', 'coding', 'wip task')"
+                ),
+                {"id": f"ctr_wip_{index}"},
+            )
+    full = client.get("/v1/factory/wip", params={"project_id": "boss-dogfood", "wip_limit": 2})
+    body = full.json()
+    assert body["in_flight"] == 2
+    assert body["admit"] is False
+    assert body["reason"] == "wip_limit_reached"
+
+
+def test_factory_merge_check_is_fail_closed_and_confidence_gated(client):
+    full = client.post(
+        "/v1/factory/merge-check",
+        json={"checks": {"tests_passed": True, "lint_passed": True, "ci_green": True,
+                         "reviewer_independent": True, "adversarial_verdict": "survived"}},
+    ).json()
+    assert full["status"] == "pass"
+    assert full["allow_merge"] is True
+
+    missing_ci = client.post(
+        "/v1/factory/merge-check",
+        json={"checks": {"tests_passed": True, "lint_passed": True, "reviewer_independent": True}},
+    ).json()
+    assert missing_ci["status"] == "fail"
+    assert missing_ci["allow_merge"] is False
+    assert "ci_green" in missing_ci["required_failed"]
+
+    low_conf = client.post(
+        "/v1/factory/merge-check",
+        json={"checks": {"tests_passed": True, "lint_passed": True, "ci_green": True,
+                         "reviewer_independent": True}, "min_confidence": 0.95},
+    ).json()
+    assert low_conf["status"] == "pass"  # required gates pass
+    assert low_conf["allow_merge"] is False  # but confidence below the floor
+
+
+def test_factory_quality_gate_persists_with_review_packet(client, engine):
+    response = client.post(
+        "/v1/factory/quality-gate",
+        json={
+            "project_id": "boss-dogfood",
+            "code_task_run_id": "ctr_gate_test",
+            "checks": {"tests_passed": True, "lint_passed": True, "ci_green": True,
+                       "reviewer_independent": True, "adversarial_verdict": "survived",
+                       "cross_check_agreement": True},
+        },
+    )
+    assert response.status_code == 201
+    payload = response.json()
+    assert payload["status"] == "pass"
+    assert payload["allow_merge"] is True
+    packet_id = payload["review_packet_artifact_id"]
+    assert packet_id
+
+    artifact = client.get(f"/v1/artifacts/{packet_id}")
+    assert artifact.status_code == 200
+    assert artifact.json()["artifact_type"] == "review_packet"
+
+    with engine.begin() as connection:
+        row = connection.execute(
+            text(
+                "SELECT status, confidence, lint_passed, ci_green "
+                "FROM quality_gates WHERE code_task_run_id = 'ctr_gate_test'"
+            )
+        ).mappings().one()
+    assert row["status"] == "pass"
+    assert row["lint_passed"] is True
+    assert row["ci_green"] is True
+    assert row["confidence"] >= 0.8
+
+
+def test_factory_chunk_plan_splits_items_and_files(client):
+    by_items = client.post(
+        "/v1/factory/chunk-plan",
+        json={"spec": {"title": "Feature", "items": [
+            {"title": "Part A", "files": ["a.py"]},
+            {"title": "Part B", "files": ["b.py"]},
+        ]}},
+    ).json()
+    assert by_items["strategy"] == "items"
+    assert by_items["chunk_count"] == 2
+    assert [c["title"] for c in by_items["chunks"]] == ["Part A", "Part B"]
+
+    by_files = client.post(
+        "/v1/factory/chunk-plan",
+        json={"spec": {"title": "Refactor", "files": ["a", "b", "c", "d", "e"]},
+              "max_files_per_chunk": 2},
+    ).json()
+    assert by_files["strategy"] == "files"
+    assert by_files["chunk_count"] == 3  # 2 + 2 + 1
+
+
+# --- Phase 4 (workstream F): dashboard, chaos, reconciler, SOC2 ---
+
+
+def test_dashboard_snapshot_and_poll_cursor(client):
+    snap = client.get("/v1/dashboard", params={"project_id": "boss-dogfood"})
+    assert snap.status_code == 200
+    body = snap.json()
+    for key in ("cursor", "budget_state", "queue_state", "provider_health", "spend", "ack_backlog"):
+        assert key in body
+    cursor = body["cursor"]
+
+    # A stale cursor returns immediately as changed.
+    stale = client.get(
+        "/v1/dashboard/poll",
+        params={"project_id": "boss-dogfood", "cursor": "0:0", "timeout_ms": 200},
+    ).json()
+    assert stale["changed"] is True
+
+    # The current cursor with a short timeout reports no change...
+    same = client.get(
+        "/v1/dashboard/poll",
+        params={"project_id": "boss-dogfood", "cursor": cursor, "timeout_ms": 200},
+    ).json()
+    assert same["changed"] is False
+
+    # ...until a new event advances it.
+    client.post(
+        "/v1/comms/inbox/ingest",
+        json={"project_id": "boss-dogfood", "channel": "email:x", "body": "hi", "actor": "system"},
+    )
+    advanced = client.get(
+        "/v1/dashboard/poll",
+        params={"project_id": "boss-dogfood", "cursor": cursor, "timeout_ms": 200},
+    ).json()
+    assert advanced["changed"] is True
+
+
+def test_chaos_lease_reclaim_recovers(client):
+    response = client.post(
+        "/v1/chaos/run", json={"project_id": "boss-dogfood", "scenario": "lease_reclaim"}
+    )
+    assert response.status_code == 201
+    assert response.json()["recovered"] is True
+
+    listed = client.get("/v1/chaos", params={"project_id": "boss-dogfood"})
+    assert listed.status_code == 200
+    assert any(r["scenario"] == "lease_reclaim" for r in listed.json()["items"])
+
+
+def test_chaos_deadletter_storm_is_detected(client):
+    response = client.post(
+        "/v1/chaos/run", json={"project_id": "boss-dogfood", "scenario": "deadletter_storm"}
+    )
+    assert response.status_code == 201
+    assert response.json()["recovered"] is True  # detection == resilience here
+
+
+def test_chaos_unknown_scenario_rejected(client):
+    response = client.post(
+        "/v1/chaos/run", json={"project_id": "boss-dogfood", "scenario": "nope"}
+    )
+    assert response.status_code == 422
+
+
+def test_commitment_reconciler_flags_under_utilized(client, engine):
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                """
+                INSERT INTO commitments
+                  (id, project_id, provider, commitment_type, amount_usd_micros, period_start, period_end)
+                VALUES ('cmt_under_t', 'boss-dogfood', 'aws', 'savings_plan', 1000000,
+                        now() - interval '10 days', now() + interval '10 days')
+                """
+            )
+        )
+        connection.execute(
+            text(
+                "INSERT INTO cost_events (id, project_id, provider, category, amount_usd_micros, confidence) "
+                "VALUES ('ce_under_t', 'boss-dogfood', 'aws', 'compute', 100000, 'high')"
+            )
+        )
+    result = client.post(
+        "/v1/finops/reconcile-commitments", json={"project_id": "boss-dogfood"}
+    )
+    assert result.status_code == 201
+    payload = result.json()
+    target = next(r for r in payload["reconciliations"] if r["commitment_id"] == "cmt_under_t")
+    assert target["verdict"] == "under_utilized"
+    assert target["decision_id"]
+
+
+def test_initiative_budget_tier2_requires_approval(client):
+    big = client.post(
+        "/v1/finops/initiative-budget",
+        json={"project_id": "boss-dogfood", "title": "New cluster", "tier": 2,
+              "amount_usd_micros": 100_000_000},
+    ).json()
+    assert big["approval_required"] is True
+    assert big["status"] == "pending_approval"
+    assert big["decision_id"]
+
+    small = client.post(
+        "/v1/finops/initiative-budget",
+        json={"project_id": "boss-dogfood", "title": "Tiny", "tier": 1,
+              "amount_usd_micros": 100_000_000},
+    ).json()
+    assert small["approval_required"] is False
+    assert small["status"] == "auto_approved"
+
+
+def test_soc2_evidence_bundle_collects_controls(client):
+    # Make the continuous-verification control deterministic.
+    client.post("/v1/canaries/run", json={"project_id": "boss-dogfood"})
+    response = client.post(
+        "/v1/enterprise/soc2-evidence", json={"project_id": "boss-dogfood"}
+    )
+    assert response.status_code == 201
+    payload = response.json()
+    assert payload["summary"]["controls_total"] == 5
+    control_ids = {c["id"] for c in payload["controls"]}
+    assert {"CC4.1", "CC6.1", "CC6.8", "CC7.2", "CC8.1"} == control_ids
+
+    artifact = client.get(f"/v1/artifacts/{payload['artifact_id']}")
+    assert artifact.status_code == 200
+    assert artifact.json()["artifact_type"] == "soc2_evidence_bundle"

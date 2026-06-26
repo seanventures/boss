@@ -2,6 +2,87 @@
 
 All notable changes to BOSS are documented in this file.
 
+## Unreleased — Gap Phase 4 (observability, testing depth, enterprise)
+
+### Added
+
+- Consolidated real-time dashboard (`dashboard.py`): `GET /v1/dashboard` aggregates
+  budget/queue/workload/incidents + provider-health + latest canary/eval + spend run-rate + ack
+  backlog with a monotonic cursor; `GET /v1/dashboard/poll` is a bounded long-poll that returns when
+  the cursor advances (real-time without a fixed-interval refresh).
+- Chaos/load fault-injection harness (`chaos.py` + `chaos_runs`): `POST /v1/chaos/run` injects real
+  faults — `lease_reclaim`/`worker_crash` (prove a crashed worker's job is reclaimed) and
+  `deadletter_storm` (prove the anomaly detector raises an incident). `GET /v1/chaos` lists runs.
+- InfraCommitment reconciler (`finops_reconciler.py` + `commitment_reconciliations`):
+  `POST /v1/finops/reconcile-commitments` scores commitment utilization vs actual cost
+  (on_track/under/over → review decision). `POST /v1/finops/initiative-budget` requires a human
+  Decision for tier-2+ initiatives above the approval threshold.
+- SOC2 evidence collection (`soc2.py`): `POST /v1/enterprise/soc2-evidence` generates a Trust
+  Services Common-Criteria evidence bundle from live audit/policy/break-glass/change/proof data.
+
+## Unreleased — Gap Phase 3 workstream E-2 (software-factory scale-up)
+
+### Added
+
+- Factory scale-up (`factory_scale.py`): WIP limits + queue-depth gating (`GET /v1/factory/wip`)
+  so a new code task is admitted only when an in-flight slot is free.
+- Fail-closed quality gate with an explicit lint stage + CI-green check, a numeric merge-confidence
+  score, an optional second-model cross-check, and a stored review-packet artifact —
+  `POST /v1/factory/merge-check` (preview) and `POST /v1/factory/quality-gate` (persist). Merge is
+  allowed only when required gates pass AND confidence ≥ floor. New quality_gates columns:
+  lint_passed, ci_green, cross_check_agreement, confidence, review_packet_artifact_id.
+- Spec→chunk planner (`POST /v1/factory/chunk-plan`): splits a plan into small, independently
+  shippable PR chunks (by items or by files) instead of one giant PR.
+
+## Unreleased — Gap Phase 3 workstream E-1 (meeting consensus)
+
+### Added
+
+- Meeting consensus completeness (`meeting_consensus.py`): an explicit vote phase with
+  quorum/threshold/default rules. `tally_votes` decides approved / rejected / no_quorum and emits
+  dissent records; wired into `POST /v1/meetings/{id}/run` (supply `votes` → the engine derives
+  consensus/dissent; a no-quorum vote blocks the meeting) plus a `POST /v1/meetings/tally` preview.
+- Per-phase tool budgets + phase timeouts (pure config/helpers the LLM phase-machine consults).
+- Stall prevention: `POST /v1/meetings/sweep-stalled` fails out meeting runs stuck past their phase
+  timeout and opens an incident Decision for each — a silent stall becomes a visible item.
+
+## Unreleased — Gap Phase 3 workstream D (comms robustness)
+
+### Added
+
+- Inbox acknowledgment ledger (`ack_state` table): every inbound advances `received → parsed →
+  routed → actioned | deadlettered | acknowledged` with full transition history and a terminal
+  flag. `GET /v1/comms/inbox/ack-state?pending_only=` is the durable "no silent drops" view.
+- Email command contracts: structured subject tokens `[org:][ws:][proj:][thread:]`, deterministic
+  thread IDs (stable across Re:/Fwd:), and malformed-command deadletter carrying a remediation hint.
+- Slack shaping (`slack_comms.py`): `department_channel` mapping, persona prefix/signature rendering
+  (`POST /v1/comms/slack/render`), and digest batching that collapses many draft Slack outbox
+  messages into one digest per channel (`POST /v1/comms/slack/digest`).
+
+## Unreleased — Gap Phase 2 (earned autonomy & controlled self-improvement)
+
+### Added
+
+- Self-improvement runtime: `POST /v1/self-improvement/proposals/{id}/run-canary` auto-runs the
+  canary + eval-harness suites and records the outcome; `…/rollout/start` and `…/rollout/advance`
+  drive a staged rollout (ship-narrow→widen) with **auto-rollback** when a health observation
+  breaches the thresholds. New `rollout_state` column on `self_improvement_proposals`.
+- Eval-harness regression suites (`eval_harness.py`): routing fallback chain, policy audit
+  round-trip, software-factory fail-closed gate, and autonomy-ladder monotonicity — persisted to
+  the new `eval_runs` table; `POST /v1/evals/run` + `GET /v1/evals`.
+- Evidence-based autonomy engine (`autonomy_engine.py`): `POST /v1/roles/{role_key}/autonomy/evaluate`
+  gathers a role's allowed/denied/scope-violation events since its last review and runs a governance
+  review — auto-proposing an upgrade decision on clean evidence or auto-downgrading on a violation.
+- Router health + rationale (`router_health.py`): `POST /v1/provider-health/poll` snapshots every
+  model lane into `provider_health`; `POST /v1/router/rationale` persists the selected lane + ranked
+  fallback chain + rejected sources as a `router_rationale` artifact. The `router_fallback` canary is
+  now live (no longer skipped) and proves the chain is coherent before an incident.
+- Skill-invocation framework (`skill_runtime.py`): enforces per-skill permission (allowed_callers),
+  cost (budget reservation in the skill's category), and retry (retry.max_attempts), recording each
+  call to the new `skill_invocations` table. **Mock mode** runs the full gauntlet with no side
+  effects — `POST /v1/skills/{skill_id}/invoke` (API mock-only) + `GET /v1/skills/invocations`; a
+  `skill_mock_invocation` canary proves the no-side-effect guarantee.
+
 ## v0.6.0 - 2026-06-03
 
 Consolidation release restoring production API contracts and commercial services after bad merge conflict resolution on main.

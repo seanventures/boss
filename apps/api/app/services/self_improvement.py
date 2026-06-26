@@ -8,8 +8,14 @@ from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
 from ..config import Settings
+from ..db import begin
 from .core import create_artifact, emit_event, make_id, now_utc
 from .intake import CommandIntakeService
+
+# Default staged-rollout ladder for the self-improvement runtime: ship narrow, then widen, with a
+# health observation gating each step. Auto-rollback trips if an observation regresses past the cap.
+DEFAULT_ROLLOUT_STAGES = ["canary_10pct", "expand_50pct", "full_100pct"]
+DEFAULT_ROLLOUT_THRESHOLDS = {"max_error_rate": 0.05}
 
 
 class SelfImprovementProposalNotFoundError(RuntimeError):
@@ -35,7 +41,7 @@ class SelfImprovementService:
                        status, risk_tier, expected_impact, test_plan, canary_scope,
                        rollback_plan, success_metrics, status_note, proposal_artifact_id,
                        current_decision_id, canary_artifact_id, rollout_artifact_id,
-                       rollback_artifact_id, created_by, created_at, updated_at
+                       rollback_artifact_id, rollout_state, created_by, created_at, updated_at
                 FROM self_improvement_proposals
                 WHERE project_id = :project_id
                 ORDER BY created_at DESC
@@ -57,7 +63,7 @@ class SelfImprovementService:
                        status, risk_tier, expected_impact, test_plan, canary_scope,
                        rollback_plan, success_metrics, status_note, proposal_artifact_id,
                        current_decision_id, canary_artifact_id, rollout_artifact_id,
-                       rollback_artifact_id, created_by, created_at, updated_at
+                       rollback_artifact_id, rollout_state, created_by, created_at, updated_at
                 FROM self_improvement_proposals
                 WHERE id = :proposal_id
                 {lock_clause}
@@ -413,6 +419,256 @@ class SelfImprovementService:
         )
         return self.get_proposal(connection, proposal_id)
 
+    def run_canary(
+        self, engine, proposal_id: str, actor: str = "self_improvement_runtime"
+    ) -> dict[str, Any]:
+        """Self-improvement runtime: automatically execute the canary + eval-harness suites for an
+        approved proposal and record the result — no human needs to report the outcome. Success
+        opens the rollout decision; failure records a failed canary (spec §C self-improvement runtime)."""
+        from .canaries import run_canary_suite
+        from .eval_harness import run_eval_suite
+
+        with begin(engine) as connection:
+            proposal = self.get_proposal(connection, proposal_id)
+        if proposal["status"] != "canary_approved":
+            raise InvalidSelfImprovementTransitionError(
+                f"Proposal is {proposal['status']} and cannot run a canary "
+                "(needs an approved canary decision first)."
+            )
+        project_id = proposal["project_id"]
+        suite_actor = f"self_improvement:{proposal_id}"
+        canary = run_canary_suite(engine, self.settings, project_id, actor=suite_actor)
+        evals = run_eval_suite(engine, self.settings, project_id, actor=suite_actor)
+        outcome = (
+            "succeeded"
+            if canary["status"] == "pass" and evals["status"] == "pass"
+            else "failed"
+        )
+        summary = (
+            f"Auto-canary: canary suite {canary['status']} "
+            f"({canary['passed']} pass / {canary['failed']} fail), "
+            f"eval-harness {evals['status']} "
+            f"({evals['passed']} pass / {evals['failed']} fail)."
+        )
+        metrics = {
+            "canary_status": canary["status"],
+            "canary_passed": canary["passed"],
+            "canary_failed": canary["failed"],
+            "eval_status": evals["status"],
+            "eval_passed": evals["passed"],
+            "eval_failed": evals["failed"],
+        }
+        evidence_refs = [f"canary_run:{canary['id']}", f"eval_run:{evals['id']}"]
+        with begin(engine) as connection:
+            return self.record_canary_result(
+                connection, proposal_id, actor, outcome, summary, metrics, evidence_refs
+            )
+
+    def start_rollout(
+        self,
+        connection: Connection,
+        proposal_id: str,
+        actor: str,
+        stages: Optional[list[str]] = None,
+        thresholds: Optional[dict[str, Any]] = None,
+    ) -> dict[str, Any]:
+        """Begin a staged rollout (ship narrow → widen) for a proposal whose rollout was approved.
+        Each stage is then gated by an `advance_rollout` health observation; a regressing observation
+        auto-rolls-back. (spec §C self-improvement runtime: staged rollout + auto-rollback.)"""
+        actor = self._require_text(actor, "actor")
+        proposal = self.get_proposal(connection, proposal_id, for_update=True)
+        if proposal["status"] != "rollout_approved":
+            raise InvalidSelfImprovementTransitionError(
+                f"Proposal is {proposal['status']} and cannot begin a staged rollout."
+            )
+        stages = (
+            self._require_non_empty_string_list(stages, "stages")
+            if stages
+            else list(DEFAULT_ROLLOUT_STAGES)
+        )
+        thresholds = {**DEFAULT_ROLLOUT_THRESHOLDS, **(thresholds or {})}
+        rollout_state = {
+            "stages": stages,
+            "current_index": 0,
+            "status": "in_progress",
+            "thresholds": thresholds,
+            "history": [],
+        }
+        timestamp = now_utc()
+        connection.execute(
+            text(
+                """
+                UPDATE self_improvement_proposals
+                SET status = 'rolling_out',
+                    status_note = :status_note,
+                    rollout_state = CAST(:rollout_state AS JSONB),
+                    current_decision_id = NULL,
+                    updated_at = :updated_at
+                WHERE id = :proposal_id
+                """
+            ),
+            {
+                "status_note": f"Staged rollout started: {stages[0]}",
+                "rollout_state": json.dumps(rollout_state),
+                "updated_at": timestamp,
+                "proposal_id": proposal_id,
+            },
+        )
+        emit_event(
+            connection,
+            proposal["project_id"],
+            "self_improvement.rollout_started",
+            actor,
+            "self_improvement_proposal",
+            proposal_id,
+            {"stages": stages, "thresholds": thresholds, "stage": stages[0]},
+        )
+        return self.get_proposal(connection, proposal_id)
+
+    def advance_rollout(
+        self,
+        connection: Connection,
+        proposal_id: str,
+        actor: str,
+        observation: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Record a health observation for the current rollout stage. If it regresses past the
+        auto-rollback thresholds, roll back immediately; otherwise advance to the next stage (or
+        finalize the rollout when the last stage is healthy)."""
+        actor = self._require_text(actor, "actor")
+        observation = self._require_non_empty_mapping(observation, "observation")
+        proposal = self.get_proposal(connection, proposal_id, for_update=True)
+        if proposal["status"] != "rolling_out":
+            raise InvalidSelfImprovementTransitionError(
+                f"Proposal is {proposal['status']} and has no staged rollout in progress."
+            )
+        state = dict(proposal.get("rollout_state") or {})
+        stages = state.get("stages") or list(DEFAULT_ROLLOUT_STAGES)
+        index = int(state.get("current_index", 0))
+        thresholds = state.get("thresholds") or dict(DEFAULT_ROLLOUT_THRESHOLDS)
+        current_stage = stages[index] if index < len(stages) else stages[-1]
+        history = list(state.get("history") or [])
+        timestamp = now_utc()
+
+        regression = self._rollout_regression(observation, thresholds)
+        if regression is not None:
+            history.append(
+                {
+                    "stage": current_stage,
+                    "observation": observation,
+                    "result": "rolled_back",
+                    "reason": regression,
+                    "at": timestamp.isoformat(),
+                }
+            )
+            state["history"] = history
+            state["status"] = "rolled_back"
+            reason = f"Auto-rollback at stage {current_stage}: {regression}"
+            self._record_rollback(
+                connection,
+                proposal,
+                actor,
+                reason,
+                None,
+                {"observation": observation, "stage": current_stage, "trigger": regression},
+                [f"rollout_stage:{current_stage}"],
+                rollout_state=state,
+            )
+            emit_event(
+                connection,
+                proposal["project_id"],
+                "self_improvement.rollout_auto_rolled_back",
+                actor,
+                "self_improvement_proposal",
+                proposal_id,
+                {"stage": current_stage, "reason": regression, "observation": observation},
+            )
+            return self.get_proposal(connection, proposal_id)
+
+        history.append(
+            {
+                "stage": current_stage,
+                "observation": observation,
+                "result": "advanced",
+                "at": timestamp.isoformat(),
+            }
+        )
+        next_index = index + 1
+        state["history"] = history
+        if next_index >= len(stages):
+            state["current_index"] = len(stages)
+            state["status"] = "completed"
+            summary = f"Staged rollout completed ({len(stages)} stages, all healthy)."
+            self._finalize_rollout(
+                connection,
+                proposal,
+                actor,
+                summary,
+                None,
+                {"stages": stages, "observations": [h["observation"] for h in history]},
+                [f"rollout_stage:{stage}" for stage in stages],
+                rollout_state=state,
+            )
+            emit_event(
+                connection,
+                proposal["project_id"],
+                "self_improvement.rollout_completed",
+                actor,
+                "self_improvement_proposal",
+                proposal_id,
+                {"stages": stages},
+            )
+            return self.get_proposal(connection, proposal_id)
+
+        state["current_index"] = next_index
+        next_stage = stages[next_index]
+        connection.execute(
+            text(
+                """
+                UPDATE self_improvement_proposals
+                SET status_note = :status_note,
+                    rollout_state = CAST(:rollout_state AS JSONB),
+                    updated_at = :updated_at
+                WHERE id = :proposal_id
+                """
+            ),
+            {
+                "status_note": f"Staged rollout advanced to {next_stage}",
+                "rollout_state": json.dumps(state),
+                "updated_at": timestamp,
+                "proposal_id": proposal_id,
+            },
+        )
+        emit_event(
+            connection,
+            proposal["project_id"],
+            "self_improvement.rollout_advanced",
+            actor,
+            "self_improvement_proposal",
+            proposal_id,
+            {"from_stage": current_stage, "to_stage": next_stage, "observation": observation},
+        )
+        return self.get_proposal(connection, proposal_id)
+
+    def _rollout_regression(
+        self, observation: dict[str, Any], thresholds: dict[str, Any]
+    ) -> Optional[str]:
+        """Return a reason string if the observation breaches an auto-rollback threshold, else None."""
+        health = str(observation.get("health", "")).strip().lower()
+        if health in {"degraded", "unhealthy", "failing", "fail"}:
+            return f"health={health}"
+        if observation.get("regression") is True:
+            return "regression_flag"
+        error_rate = observation.get("error_rate")
+        max_error_rate = thresholds.get("max_error_rate")
+        if error_rate is not None and max_error_rate is not None:
+            try:
+                if float(error_rate) > float(max_error_rate):
+                    return f"error_rate {error_rate} > {max_error_rate}"
+            except (TypeError, ValueError):
+                pass
+        return None
+
     def record_rollout(
         self,
         connection: Connection,
@@ -436,7 +692,23 @@ class SelfImprovementService:
         evidence_refs = self._require_non_empty_string_list(
             evidence_refs, "evidence_refs"
         )
+        self._finalize_rollout(
+            connection, proposal, actor, summary, external_ref, metrics, evidence_refs
+        )
+        return self.get_proposal(connection, proposal_id)
 
+    def _finalize_rollout(
+        self,
+        connection: Connection,
+        proposal: dict[str, Any],
+        actor: str,
+        summary: str,
+        external_ref: Optional[str],
+        metrics: dict[str, Any],
+        evidence_refs: list[str],
+        rollout_state: Optional[dict[str, Any]] = None,
+    ) -> str:
+        proposal_id = proposal["id"]
         timestamp = now_utc()
         artifact_id = create_artifact(
             connection,
@@ -462,6 +734,7 @@ class SelfImprovementService:
                 SET status = 'rolled_out',
                     status_note = :status_note,
                     rollout_artifact_id = :rollout_artifact_id,
+                    rollout_state = COALESCE(CAST(:rollout_state AS JSONB), rollout_state),
                     current_decision_id = NULL,
                     updated_at = :updated_at
                 WHERE id = :proposal_id
@@ -470,6 +743,7 @@ class SelfImprovementService:
             {
                 "status_note": summary,
                 "rollout_artifact_id": artifact_id,
+                "rollout_state": json.dumps(rollout_state) if rollout_state is not None else None,
                 "updated_at": timestamp,
                 "proposal_id": proposal_id,
             },
@@ -503,7 +777,7 @@ class SelfImprovementService:
             proposal["task_id"],
             {"proposal_id": proposal_id, "phase": "rollout"},
         )
-        return self.get_proposal(connection, proposal_id)
+        return artifact_id
 
     def rollback(
         self,
@@ -528,7 +802,23 @@ class SelfImprovementService:
         evidence_refs = self._require_non_empty_string_list(
             evidence_refs, "evidence_refs"
         )
+        self._record_rollback(
+            connection, proposal, actor, reason, external_ref, metrics, evidence_refs
+        )
+        return self.get_proposal(connection, proposal_id)
 
+    def _record_rollback(
+        self,
+        connection: Connection,
+        proposal: dict[str, Any],
+        actor: str,
+        reason: str,
+        external_ref: Optional[str],
+        metrics: dict[str, Any],
+        evidence_refs: list[str],
+        rollout_state: Optional[dict[str, Any]] = None,
+    ) -> str:
+        proposal_id = proposal["id"]
         timestamp = now_utc()
         artifact_id = create_artifact(
             connection,
@@ -554,6 +844,8 @@ class SelfImprovementService:
                 SET status = 'rolled_back',
                     status_note = :status_note,
                     rollback_artifact_id = :rollback_artifact_id,
+                    rollout_state = COALESCE(CAST(:rollout_state AS JSONB), rollout_state),
+                    current_decision_id = NULL,
                     updated_at = :updated_at
                 WHERE id = :proposal_id
                 """
@@ -561,6 +853,7 @@ class SelfImprovementService:
             {
                 "status_note": reason,
                 "rollback_artifact_id": artifact_id,
+                "rollout_state": json.dumps(rollout_state) if rollout_state is not None else None,
                 "updated_at": timestamp,
                 "proposal_id": proposal_id,
             },
@@ -594,7 +887,7 @@ class SelfImprovementService:
             proposal["task_id"],
             {"proposal_id": proposal_id, "phase": "rollback"},
         )
-        return self.get_proposal(connection, proposal_id)
+        return artifact_id
 
     def _require_text(self, value: str, field_name: str) -> str:
         cleaned = value.strip()

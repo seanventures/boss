@@ -1170,6 +1170,117 @@ class AnomalyScanRequest(BaseModel):
     auto_lite: bool = True
 
 
+class EvalRunRequest(BaseModel):
+    project_id: str
+    actor: str = "eval_harness"
+    suite: str = "all"
+
+
+class ProviderHealthPollRequest(BaseModel):
+    project_id: str
+    actor: str = "router_health"
+
+
+class RouterRationaleRequest(BaseModel):
+    project_id: str
+    actor: str = "router_health"
+    skill_id: str = "model.generate_text"
+    task_kind: str = "code"
+    workload_class: str = "owner_sandbox"
+    risk_tier: int = Field(default=1, ge=0, le=3)
+
+
+class SkillInvokeRequest(BaseModel):
+    project_id: str
+    caller: str
+    inputs: dict[str, Any] = Field(default_factory=dict)
+    mock: bool = True
+    actor: Optional[str] = None
+
+    @model_validator(mode="after")
+    def validate_fields(self) -> "SkillInvokeRequest":
+        self.caller = _require_text(self.caller, "caller")
+        return self
+
+
+class SlackRenderRequest(BaseModel):
+    persona: str
+    role: Optional[str] = None
+    subject: Optional[str] = None
+    body: str
+    department: Optional[str] = None
+    signature: bool = True
+
+    @model_validator(mode="after")
+    def validate_fields(self) -> "SlackRenderRequest":
+        self.persona = _require_text(self.persona, "persona")
+        self.body = _require_text(self.body, "body")
+        return self
+
+
+class SlackDigestBatchRequest(BaseModel):
+    project_id: str
+    actor: str = "system"
+    channel: Optional[str] = None
+    min_batch: int = Field(default=2, ge=1)
+
+
+class FactoryMergeCheckRequest(BaseModel):
+    checks: dict[str, Any]
+    min_confidence: float = Field(default=0.8, ge=0.0, le=1.0)
+
+
+class FactoryQualityGateRequest(BaseModel):
+    project_id: str
+    checks: dict[str, Any]
+    actor: str = "system"
+    code_task_run_id: Optional[str] = None
+    task_id: Optional[str] = None
+    min_confidence: float = Field(default=0.8, ge=0.0, le=1.0)
+    risk_tier: int = Field(default=2, ge=0, le=3)
+
+
+class ChaosRunRequest(BaseModel):
+    project_id: str
+    scenario: str
+    actor: str = "system"
+
+
+class CommitmentReconcileRequest(BaseModel):
+    project_id: str
+    actor: str = "system"
+
+
+class SOC2EvidenceRequest(BaseModel):
+    project_id: str
+    actor: str = "system"
+
+
+class InitiativeBudgetRequest(BaseModel):
+    project_id: str
+    title: str
+    tier: int = Field(default=2, ge=0, le=3)
+    amount_usd_micros: int = Field(ge=0)
+    actor: str = "system"
+
+    @model_validator(mode="after")
+    def validate_fields(self) -> "InitiativeBudgetRequest":
+        self.title = _require_text(self.title, "title")
+        return self
+
+
+class FactoryChunkPlanRequest(BaseModel):
+    spec: dict[str, Any]
+    max_files_per_chunk: int = Field(default=3, ge=1)
+    max_chunks: int = Field(default=20, ge=1)
+
+    @model_validator(mode="after")
+    def validate_spec(self) -> "FactoryChunkPlanRequest":
+        if not self.spec:
+            raise ValueError("spec must be a non-empty object.")
+        return self
+
+
 class BudgetStatusResponse(BaseModel):
     scope_type: str
     scope_id: str
@@ -2006,6 +2117,12 @@ class MeetingRunRequest(BaseModel):
     consensus_reached: bool = True
     dissent_records: list[dict[str, Any]] = Field(default_factory=list)
     blocked_state: Optional[dict[str, Any]] = None
+    # Explicit vote phase: when votes are supplied, the consensus engine tallies them under
+    # quorum/threshold rules and derives consensus_reached/dissent/outcome itself.
+    votes: list[dict[str, Any]] = Field(default_factory=list)
+    quorum: Optional[int] = Field(default=None, ge=1)
+    vote_threshold: float = Field(default=0.5, gt=0.0, le=1.0)
+    default_action: str = "hold"
 
     @model_validator(mode="after")
     def validate_meeting_outputs(self) -> "MeetingRunRequest":
@@ -2015,9 +2132,28 @@ class MeetingRunRequest(BaseModel):
             raise ValueError("minutes must be a non-empty object.")
         if self.outcome_status == "blocked" and not self.blocked_state:
             raise ValueError("blocked_state is required when outcome_status is blocked.")
-        if not self.consensus_reached and not self.dissent_records:
+        # When votes drive the outcome, the tally supplies dissent — skip the manual requirement.
+        if not self.votes and not self.consensus_reached and not self.dissent_records:
             raise ValueError("dissent_records are required when consensus_reached is false.")
         return self
+
+
+class MeetingTallyRequest(BaseModel):
+    votes: list[dict[str, Any]]
+    eligible_count: Optional[int] = Field(default=None, ge=0)
+    quorum: Optional[int] = Field(default=None, ge=1)
+    vote_threshold: float = Field(default=0.5, gt=0.0, le=1.0)
+    default_action: str = "hold"
+
+    @model_validator(mode="after")
+    def validate_votes(self) -> "MeetingTallyRequest":
+        if not self.votes:
+            raise ValueError("votes must contain at least one entry.")
+        return self
+
+
+class MeetingSweepRequest(BaseModel):
+    actor: str = "meeting_watchdog"
 
 
 class MeetingListResponse(BaseModel):
@@ -2085,6 +2221,7 @@ class SelfImprovementProposalSummary(BaseModel):
     canary_artifact_id: Optional[str] = None
     rollout_artifact_id: Optional[str] = None
     rollback_artifact_id: Optional[str] = None
+    rollout_state: dict[str, Any] = Field(default_factory=dict)
     created_by: str
     created_at: str
     updated_at: str
@@ -2157,6 +2294,39 @@ class SelfImprovementRollbackRequest(BaseModel):
         self.evidence_refs = _require_non_empty_string_list(
             self.evidence_refs, "evidence_refs"
         )
+        return self
+
+
+class SelfImprovementRunCanaryRequest(BaseModel):
+    actor: str = "release_manager"
+
+    @model_validator(mode="after")
+    def validate_actor(self) -> "SelfImprovementRunCanaryRequest":
+        self.actor = _require_text(self.actor, "actor")
+        return self
+
+
+class SelfImprovementStartRolloutRequest(BaseModel):
+    actor: str = "release_manager"
+    stages: Optional[list[str]] = None
+    thresholds: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def validate_fields(self) -> "SelfImprovementStartRolloutRequest":
+        self.actor = _require_text(self.actor, "actor")
+        if self.stages is not None:
+            self.stages = _require_non_empty_string_list(self.stages, "stages")
+        return self
+
+
+class SelfImprovementAdvanceRolloutRequest(BaseModel):
+    actor: str = "release_manager"
+    observation: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def validate_fields(self) -> "SelfImprovementAdvanceRolloutRequest":
+        self.actor = _require_text(self.actor, "actor")
+        self.observation = _require_non_empty_mapping(self.observation, "observation")
         return self
 
 
@@ -2616,6 +2786,16 @@ class RoleReviewRequest(BaseModel):
         return self
 
 
+class AutonomyEvaluateRequest(BaseModel):
+    project_id: str
+    actor: str = "vp_agents"
+
+    @model_validator(mode="after")
+    def validate_fields(self) -> "AutonomyEvaluateRequest":
+        self.actor = _require_text(self.actor, "actor")
+        return self
+
+
 class RoleAutonomyCheckRequest(BaseModel):
     project_id: str
     actor: str = "system"
@@ -2727,6 +2907,7 @@ class RoleGovernanceDetail(BaseModel):
     pending_autonomy_change: Optional[AutonomyChangeSummary] = None
     recent_reviews: list[RoleReviewSummary] = Field(default_factory=list)
     recent_autonomy_changes: list[AutonomyChangeSummary] = Field(default_factory=list)
+    evidence: Optional[dict[str, Any]] = None
 
 
 class PackSummary(BaseModel):

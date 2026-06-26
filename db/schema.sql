@@ -1674,6 +1674,13 @@ CREATE TABLE IF NOT EXISTS quality_gates (
 );
 CREATE INDEX IF NOT EXISTS idx_quality_gates_run ON quality_gates(code_task_run_id);
 CREATE UNIQUE INDEX IF NOT EXISTS uq_quality_gates_run ON quality_gates(project_id, code_task_run_id);
+-- Phase 3 (factory scale-up): explicit lint + CI-green gates, second-model cross-check, a numeric
+-- merge-confidence score, and a stored review packet artifact.
+ALTER TABLE quality_gates ADD COLUMN IF NOT EXISTS lint_passed BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE quality_gates ADD COLUMN IF NOT EXISTS ci_green BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE quality_gates ADD COLUMN IF NOT EXISTS cross_check_agreement BOOLEAN;
+ALTER TABLE quality_gates ADD COLUMN IF NOT EXISTS confidence DOUBLE PRECISION NOT NULL DEFAULT 0;
+ALTER TABLE quality_gates ADD COLUMN IF NOT EXISTS review_packet_artifact_id TEXT;
 
 -- Custom pipeline cost/rigor profiles per project (presets live in code; these are overrides
 -- and customer-defined profiles). is_default marks the project's chosen profile.
@@ -1732,3 +1739,98 @@ CREATE TABLE IF NOT EXISTS policy_eval_log (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_policy_eval_log_project ON policy_eval_log (project_id, created_at DESC);
+
+-- Phase 2: eval-harness regression suites (routing/policy/factory/autonomy quality). Run on demand
+-- or nightly; results gate self-improvement rollouts. Mirrors canary_runs but carries a suite label.
+CREATE TABLE IF NOT EXISTS eval_runs (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  suite TEXT NOT NULL,             -- regression suite name (e.g. 'all', 'routing', 'policy')
+  status TEXT NOT NULL,            -- pass | fail
+  results JSONB NOT NULL,          -- per-eval {eval, status, detail, metrics}
+  passed INTEGER NOT NULL,
+  failed INTEGER NOT NULL,
+  skipped INTEGER NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_eval_runs_project ON eval_runs (project_id, created_at DESC);
+
+-- Phase 2: staged rollout state for the self-improvement runtime (stages, current index, history,
+-- auto-rollback thresholds). Empty {} until a staged rollout begins.
+ALTER TABLE self_improvement_proposals
+  ADD COLUMN IF NOT EXISTS rollout_state JSONB NOT NULL DEFAULT '{}'::jsonb;
+
+-- Phase 2: skill-invocation framework records. Every invocation through the runtime (mock or real)
+-- records the permission decision, cost estimate, retry attempts, and outcome. Mock mode runs the
+-- full governance gauntlet with no real side effects (used by canaries).
+CREATE TABLE IF NOT EXISTS skill_invocations (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  skill_id TEXT NOT NULL,
+  caller TEXT NOT NULL,
+  mode TEXT NOT NULL,                       -- mock | real
+  status TEXT NOT NULL,                     -- succeeded | denied | failed
+  permission_decision TEXT NOT NULL,        -- allow | deny
+  attempts INTEGER NOT NULL DEFAULT 0,
+  max_attempts INTEGER NOT NULL DEFAULT 1,
+  cost_estimate_usd_micros BIGINT NOT NULL DEFAULT 0,
+  reservation_id TEXT,
+  reason TEXT,
+  result JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_skill_invocations_project
+  ON skill_invocations (project_id, created_at DESC);
+
+-- Phase 3 (comms robustness): inbound acknowledgment ledger — one row per inbox message, advanced
+-- through received → parsed → routed → (actioned | deadlettered | acknowledged). The durable proof
+-- of "no silent drops": every inbound reaches a terminal ack state, with the full transition history.
+CREATE TABLE IF NOT EXISTS ack_state (
+  id TEXT PRIMARY KEY,
+  project_id TEXT REFERENCES projects(id),
+  inbox_message_id TEXT NOT NULL,
+  channel TEXT NOT NULL,
+  state TEXT NOT NULL,             -- received | parsed | routed | actioned | deadlettered | acknowledged
+  terminal BOOLEAN NOT NULL DEFAULT false,
+  route_kind TEXT,                 -- decision | informational | ...
+  target_ref TEXT,                 -- e.g. decision_id the command routed to
+  reason TEXT,
+  remediation TEXT,
+  history JSONB NOT NULL DEFAULT '[]'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(inbox_message_id)
+);
+CREATE INDEX IF NOT EXISTS idx_ack_state_project
+  ON ack_state (project_id, state, updated_at DESC);
+
+-- Phase 4 (testing depth): chaos/load fault-injection runs. Each row records a controlled fault
+-- injected against the live primitives and whether the system recovered/detected it.
+CREATE TABLE IF NOT EXISTS chaos_runs (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  scenario TEXT NOT NULL,          -- lease_reclaim | worker_crash | deadletter_storm
+  injected BOOLEAN NOT NULL DEFAULT true,
+  recovered BOOLEAN NOT NULL DEFAULT false,
+  detail TEXT,
+  evidence JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_chaos_runs_project ON chaos_runs (project_id, created_at DESC);
+
+-- Phase 4 (finops): InfraCommitment reconciler output — committed spend vs actual usage per
+-- commitment period, with a verdict (on_track | under_utilized | over_utilized) and any review decision.
+CREATE TABLE IF NOT EXISTS commitment_reconciliations (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  commitment_id TEXT NOT NULL,
+  provider TEXT NOT NULL,
+  committed_usd_micros BIGINT NOT NULL,
+  actual_usd_micros BIGINT NOT NULL,
+  utilization DOUBLE PRECISION NOT NULL,
+  verdict TEXT NOT NULL,
+  decision_id TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_commitment_reconciliations_project
+  ON commitment_reconciliations (project_id, created_at DESC);

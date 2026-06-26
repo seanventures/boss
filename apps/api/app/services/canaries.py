@@ -97,15 +97,67 @@ def _canary_budget_reserve_release(engine, settings, project_id):
     return ok, f"reservation {rid} → {row['status'] if row else 'MISSING'} (reserve→release)"
 
 
+def _canary_router_fallback(engine, settings, project_id):
+    """Router fallback chain is coherent: provider health is polled, the route is logged and
+    resolves to a healthy source (or a structured denial), and every fallback lane is itself
+    currently eligible — so failover would actually work, validated *before* an incident."""
+    from .router_health import RouterHealthService
+    rh = RouterHealthService(settings)
+    with begin(engine) as c:
+        poll = rh.poll_provider_health(c, project_id, actor="canary")
+        rationale = rh.record_rationale(c, project_id, actor="canary")
+    r = rationale["rationale"]
+    healthy_providers = {s["provider"] for s in poll["snapshots"] if s["api_available"]}
+    if not r.get("route_decision_log_id"):
+        return False, "route decision was not logged"
+    if not r.get("selected_source_id"):
+        # No lane available — acceptable only if the router said so explicitly (no silent dead-end).
+        return bool(r.get("denial_reason")), f"no source selected; denial={r.get('denial_reason')}"
+    selected_healthy = r.get("selected_provider") in healthy_providers
+    eligible_ids = {s.get("source_id") for s in r.get("eligible_sources") or []}
+    fallback = r.get("fallback_order") or []
+    fallback_coherent = all(fid in eligible_ids for fid in fallback)
+    ok = selected_healthy and fallback_coherent
+    return ok, (
+        f"selected={r['selected_source_id']} healthy={selected_healthy} "
+        f"fallback_depth={len(fallback)} fallback_coherent={fallback_coherent} "
+        f"healthy_providers={len(healthy_providers)}"
+    )
+
+
+def _canary_skill_mock_invocation(engine, settings, project_id):
+    """Mock-mode skill invocation runs the full governance gauntlet with zero side effects:
+    no budget reservation is created and the invocation is recorded as mock/succeeded."""
+    from .skill_runtime import SkillRuntimeService
+    sr = SkillRuntimeService(settings)
+    with begin(engine) as c:
+        before = c.execute(
+            text("SELECT count(*) FROM budget_reservations WHERE project_id = :p"),
+            {"p": project_id}).scalar() or 0
+        inv = sr.invoke(
+            c, project_id, "cloudflare.dns.record.upsert", "resource_plane_kernel",
+            {"zone_id": "z", "name": "canary", "record_type": "TXT", "value": "v"},
+            mock=True, actor="canary")
+        after = c.execute(
+            text("SELECT count(*) FROM budget_reservations WHERE project_id = :p"),
+            {"p": project_id}).scalar() or 0
+    no_side_effect = int(before) == int(after)
+    ok = (inv["status"] == "succeeded" and inv["mode"] == "mock"
+          and inv["permission_decision"] == "allow" and no_side_effect)
+    return ok, (f"mock invoke status={inv['status']} reservations_delta={int(after) - int(before)} "
+                f"(no_side_effects={no_side_effect})")
+
+
 CANARIES = [
     ("exactly_once", _canary_exactly_once),
     ("no_drop_outbox", _canary_no_drop_outbox),
     ("job_lifecycle", _canary_job_lifecycle),
     ("budget_reserve_release", _canary_budget_reserve_release),
+    ("router_fallback", _canary_router_fallback),
+    ("skill_mock_invocation", _canary_skill_mock_invocation),
 ]
 SKIPPED = [
     ("software_factory", "needs live model + GitHub creds — run against staging / mock mode"),
-    ("router_fallback", "needs ≥2 model lanes configured to exercise the fallback chain"),
 ]
 
 

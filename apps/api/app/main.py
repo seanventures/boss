@@ -73,7 +73,13 @@ from .schemas import (
     BudgetSetIntensityRequest,
     AnomalyScanRequest,
     CanaryRunRequest,
+    EvalRunRequest,
     PlanDispatchRequest,
+    ProviderHealthPollRequest,
+    RouterRationaleRequest,
+    SkillInvokeRequest,
+    SlackDigestBatchRequest,
+    SlackRenderRequest,
     BudgetStatusResponse,
     BudgetReserveRequest,
     BudgetReserveResponse,
@@ -205,7 +211,16 @@ from .schemas import (
     OpenAIPlanResponse,
     MeetingCreateRequest,
     MeetingListResponse,
+    ChaosRunRequest,
+    CommitmentReconcileRequest,
+    FactoryChunkPlanRequest,
+    FactoryMergeCheckRequest,
+    FactoryQualityGateRequest,
+    InitiativeBudgetRequest,
     MeetingRunRequest,
+    MeetingSweepRequest,
+    MeetingTallyRequest,
+    SOC2EvidenceRequest,
     MeetingSummary,
     OpsDigestRequest,
     OpsDigestResponse,
@@ -276,6 +291,7 @@ from .schemas import (
     ResourceSyncRequest,
     ResourceSyncResponse,
     ResourceSyncRunSummary,
+    AutonomyEvaluateRequest,
     RoleAutonomyCheckRequest,
     RoleAutonomyCheckResponse,
     RoleGovernanceDetail,
@@ -301,8 +317,11 @@ from .schemas import (
     SelfImprovementProposalDetail,
     SelfImprovementProposalListResponse,
     SelfImprovementProposalSummary,
+    SelfImprovementAdvanceRolloutRequest,
     SelfImprovementRollbackRequest,
     SelfImprovementRolloutRequest,
+    SelfImprovementRunCanaryRequest,
+    SelfImprovementStartRolloutRequest,
     ScalePlanListResponse,
     ScalePlanRunRequest,
     ScalePlanRunResponse,
@@ -400,7 +419,24 @@ from .services.resource_plane import (
     ProviderAccountNotFoundError,
     ResourcePlaneService,
 )
+from .services.autonomy_engine import AutonomyEngine
 from .services.role_governance import RoleGovernanceService
+from .services.router_health import RouterHealthService
+from .services.skill_runtime import (
+    SkillPermissionError,
+    SkillRuntimeService,
+)
+from .services.slack_comms import (
+    SlackCommsService,
+    department_channel,
+    render_persona_message,
+)
+from .services import meeting_consensus
+from .services import factory_scale
+from .services.factory_scale import FactoryScaleService
+from .services.dashboard import DashboardService
+from .services.finops_reconciler import FinopsReconcilerService
+from .services.soc2 import SOC2EvidenceService
 from .services.secret_refs import SecretRefNotFoundError, SecretRefService
 from .services.self_improvement import (
     InvalidSelfImprovementTransitionError,
@@ -439,6 +475,14 @@ self_improvement = SelfImprovementService(settings)
 health_snapshots = HealthSnapshotService(settings)
 metatron = MetatronService(settings)
 role_governance = RoleGovernanceService(settings)
+autonomy_engine = AutonomyEngine(settings)
+router_health = RouterHealthService(settings)
+skill_runtime = SkillRuntimeService(settings)
+slack_comms = SlackCommsService(settings)
+factory_scale_service = FactoryScaleService(settings)
+dashboard_service = DashboardService(settings)
+finops_reconciler = FinopsReconcilerService(settings)
+soc2_evidence = SOC2EvidenceService(settings)
 members = MemberDirectoryService(settings)
 canonical = CanonicalObjectService()
 deadletter_remediation = DeadletterRemediationService(settings)
@@ -1164,6 +1208,7 @@ def self_improvement_summary_from_row(row) -> SelfImprovementProposalSummary:
         canary_artifact_id=row.get("canary_artifact_id"),
         rollout_artifact_id=row.get("rollout_artifact_id"),
         rollback_artifact_id=row.get("rollback_artifact_id"),
+        rollout_state=row.get("rollout_state") or {},
         created_by=row["created_by"],
         created_at=row["created_at"].isoformat(),
         updated_at=row["updated_at"].isoformat(),
@@ -4740,7 +4785,7 @@ def create_meeting(payload: MeetingCreateRequest) -> MeetingSummary:
 def run_meeting(meeting_id: str, payload: MeetingRunRequest) -> MeetingSummary:
     with begin(engine) as connection:
         row = connection.execute(
-            text("SELECT project_id FROM meetings WHERE id = :meeting_id"),
+            text("SELECT project_id, participants FROM meetings WHERE id = :meeting_id"),
             {"meeting_id": meeting_id},
         ).mappings().first()
         if not row:
@@ -4751,6 +4796,32 @@ def run_meeting(meeting_id: str, payload: MeetingRunRequest) -> MeetingSummary:
             payload.actor,
             "task_create",
         )
+
+        minutes = payload.minutes
+        dissent_records = payload.dissent_records
+        consensus_reached = payload.consensus_reached
+        outcome_status = payload.outcome_status
+        blocked_state = payload.blocked_state
+        # Explicit vote phase: tally supplied votes under quorum/threshold rules and let the
+        # consensus engine derive the outcome (spec §D meeting consensus completeness).
+        if payload.votes:
+            eligible = len(row["participants"] or []) or len(payload.votes)
+            tally = meeting_consensus.tally_votes(
+                payload.votes,
+                eligible_count=eligible,
+                quorum=payload.quorum,
+                threshold=payload.vote_threshold,
+                default_action=payload.default_action,
+            )
+            minutes = {**payload.minutes, "vote_tally": tally}
+            consensus_reached = tally["consensus_reached"]
+            dissent_records = list(payload.dissent_records) + tally["dissent_records"]
+            if tally["outcome"] == "no_quorum":
+                outcome_status = "blocked"
+                blocked_state = blocked_state or {
+                    "reason": "quorum_not_met",
+                    "vote_tally": tally,
+                }
         try:
             result = canonical.run_meeting(
                 connection,
@@ -4758,13 +4829,13 @@ def run_meeting(meeting_id: str, payload: MeetingRunRequest) -> MeetingSummary:
                 meeting_id=meeting_id,
                 actor=payload.actor,
                 transcript=[item.model_dump() for item in payload.transcript],
-                minutes=payload.minutes,
+                minutes=minutes,
                 action_items=[item.model_dump() for item in payload.action_items],
                 decision_items=[item.model_dump() for item in payload.decision_items],
-                dissent_records=payload.dissent_records,
-                blocked_state=payload.blocked_state,
-                outcome_status=payload.outcome_status,
-                consensus_reached=payload.consensus_reached,
+                dissent_records=dissent_records,
+                blocked_state=blocked_state,
+                outcome_status=outcome_status,
+                consensus_reached=consensus_reached,
             )
         except ValueError as error:
             detail = str(error)
@@ -4772,6 +4843,145 @@ def run_meeting(meeting_id: str, payload: MeetingRunRequest) -> MeetingSummary:
                 raise HTTPException(status_code=409, detail=detail) from error
             raise HTTPException(status_code=400, detail=detail) from error
         return MeetingSummary(**result)
+
+
+@app.post("/v1/meetings/tally")
+def tally_meeting_votes(payload: MeetingTallyRequest) -> dict:
+    """Preview a vote tally under quorum/threshold rules (spec §D explicit vote phase)."""
+    eligible = payload.eligible_count if payload.eligible_count is not None else len(payload.votes)
+    return meeting_consensus.tally_votes(
+        payload.votes,
+        eligible_count=eligible,
+        quorum=payload.quorum,
+        threshold=payload.vote_threshold,
+        default_action=payload.default_action,
+    )
+
+
+@app.post("/v1/meetings/sweep-stalled")
+def sweep_stalled_meetings(payload: MeetingSweepRequest) -> dict:
+    """Fail out meeting runs stalled past their phase timeout, opening an incident Decision for each
+    (spec §D phase timeouts / stall prevention)."""
+    return meeting_consensus.sweep_stalled_meeting_runs(engine, settings, actor=payload.actor)
+
+
+@app.post("/v1/enterprise/soc2-evidence", status_code=201)
+def collect_soc2_evidence(payload: SOC2EvidenceRequest) -> dict:
+    """Generate a SOC2 evidence bundle (Trust Services Common Criteria) from live audit/policy/
+    break-glass/change/proof data (spec §F enterprise SOC2 evidence collection)."""
+    with begin(engine) as connection:
+        require_project_actor(connection, payload.project_id, payload.actor, "audit_export")
+        return soc2_evidence.collect_evidence(connection, payload.project_id, actor=payload.actor)
+
+
+@app.post("/v1/finops/reconcile-commitments", status_code=201)
+def reconcile_commitments(payload: CommitmentReconcileRequest) -> dict:
+    """Reconcile active commitments vs actual usage → utilization + verdict + review decisions
+    (spec §F InfraCommitment reconciler)."""
+    with begin(engine) as connection:
+        require_project_actor(connection, payload.project_id, payload.actor, "budget_manage")
+    return finops_reconciler.reconcile_commitments(engine, payload.project_id, actor=payload.actor)
+
+
+@app.get("/v1/finops/commitment-reconciliations")
+def list_commitment_reconciliations(project_id: str, limit: int = 50) -> dict:
+    return {"items": finops_reconciler.list_reconciliations(engine, project_id, limit)}
+
+
+@app.post("/v1/finops/initiative-budget", status_code=201)
+def request_initiative_budget(payload: InitiativeBudgetRequest) -> dict:
+    """Tier-2+ initiative budget approval: above the threshold it requires a human Decision
+    (spec §F tier2+ initiative budget approval)."""
+    with begin(engine) as connection:
+        require_project_actor(connection, payload.project_id, payload.actor, "budget_manage")
+        return finops_reconciler.request_initiative_budget(
+            connection,
+            payload.project_id,
+            title=payload.title,
+            tier=payload.tier,
+            amount_usd_micros=payload.amount_usd_micros,
+            actor=payload.actor,
+        )
+
+
+@app.post("/v1/chaos/run", status_code=201)
+def chaos_run(payload: ChaosRunRequest) -> dict:
+    """Inject a controlled fault (lease_reclaim / worker_crash / deadletter_storm) and record whether
+    the system recovered/detected it (spec §F load + chaos testing)."""
+    from .services import chaos
+    with begin(engine) as connection:
+        require_project_actor(connection, payload.project_id, payload.actor, "health_refresh")
+    try:
+        return chaos.run_chaos(engine, settings, payload.project_id, payload.scenario, payload.actor)
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+
+
+@app.get("/v1/chaos")
+def chaos_list(project_id: str, limit: int = 20) -> dict:
+    from .services import chaos
+    return {"items": chaos.list_chaos_runs(engine, project_id, limit)}
+
+
+@app.get("/v1/dashboard")
+def get_dashboard(project_id: str) -> dict:
+    """Consolidated real-time dashboard snapshot with a monotonic cursor (spec §F). Clients re-render
+    only when the cursor advances."""
+    with begin(engine) as connection:
+        return dashboard_service.snapshot(connection, project_id)
+
+
+@app.get("/v1/dashboard/poll")
+def poll_dashboard(project_id: str, cursor: Optional[str] = None, timeout_ms: int = 5000) -> dict:
+    """Bounded long-poll: returns when the dashboard cursor advances past `cursor` or the timeout
+    elapses (spec §F real-time without a fixed-interval refresh)."""
+    if timeout_ms < 0 or timeout_ms > 25000:
+        raise HTTPException(status_code=400, detail="timeout_ms must be between 0 and 25000.")
+    return dashboard_service.poll(engine, project_id, cursor=cursor, timeout_ms=timeout_ms)
+
+
+@app.get("/v1/factory/wip")
+def factory_wip(project_id: str, wip_limit: int = factory_scale.DEFAULT_WIP_LIMIT) -> dict:
+    """In-flight code tasks vs the per-project WIP limit; admit a new task only if a slot is free
+    (spec §E WIP limits + queue-depth gating)."""
+    if wip_limit < 1:
+        raise HTTPException(status_code=400, detail="wip_limit must be >= 1.")
+    with begin(engine) as connection:
+        return factory_scale.wip_status(connection, project_id, wip_limit=wip_limit)
+
+
+@app.post("/v1/factory/merge-check")
+def factory_merge_check(payload: FactoryMergeCheckRequest) -> dict:
+    """Preview the fail-closed quality gate + merge-confidence verdict (spec §E confidence-gated merge)."""
+    return factory_scale.evaluate_gate(payload.checks, min_confidence=payload.min_confidence)
+
+
+@app.post("/v1/factory/quality-gate", status_code=201)
+def factory_quality_gate(payload: FactoryQualityGateRequest) -> dict:
+    """Evaluate + persist a quality gate (explicit lint + CI-green, second-model cross-check,
+    confidence-gated merge) and store a review-packet artifact (spec §E)."""
+    with begin(engine) as connection:
+        require_project_actor(connection, payload.project_id, payload.actor, "task_create")
+        return factory_scale_service.record_quality_gate(
+            connection,
+            payload.project_id,
+            checks=payload.checks,
+            actor=payload.actor,
+            code_task_run_id=payload.code_task_run_id,
+            task_id=payload.task_id,
+            min_confidence=payload.min_confidence,
+            risk_tier=payload.risk_tier,
+        )
+
+
+@app.post("/v1/factory/chunk-plan")
+def factory_chunk_plan(payload: FactoryChunkPlanRequest) -> dict:
+    """Split a plan/spec into small, independently-shippable PR chunks (spec §E spec→chunk planner)."""
+    return factory_scale.chunk_spec(
+        payload.spec,
+        max_files_per_chunk=payload.max_files_per_chunk,
+        max_chunks=payload.max_chunks,
+    )
 
 
 @app.get("/v1/jobs", response_model=JobListResponse)
@@ -5029,6 +5239,107 @@ def rollback_self_improvement_proposal(
         return self_improvement_detail_from_row(row)
 
 
+@app.post(
+    "/v1/self-improvement/proposals/{proposal_id}/run-canary",
+    response_model=SelfImprovementProposalDetail,
+)
+def run_self_improvement_canary(
+    proposal_id: str, payload: SelfImprovementRunCanaryRequest
+) -> SelfImprovementProposalDetail:
+    """Self-improvement runtime: auto-run the canary + eval-harness suites and record the outcome."""
+    with begin(engine) as connection:
+        try:
+            proposal = self_improvement.get_proposal(connection, proposal_id)
+            require_project_actor(
+                connection,
+                proposal["project_id"],
+                payload.actor,
+                "self_improvement_manage",
+            )
+        except SelfImprovementProposalNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except (ProjectMemberNotFoundError, ProjectMemberPermissionError) as error:
+            raise_project_actor_error(error)
+    try:
+        row = self_improvement.run_canary(engine, proposal_id, payload.actor)
+    except SelfImprovementProposalNotFoundError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except InvalidSelfImprovementTransitionError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    return self_improvement_detail_from_row(row)
+
+
+@app.post(
+    "/v1/self-improvement/proposals/{proposal_id}/rollout/start",
+    response_model=SelfImprovementProposalDetail,
+)
+def start_self_improvement_rollout(
+    proposal_id: str, payload: SelfImprovementStartRolloutRequest
+) -> SelfImprovementProposalDetail:
+    """Begin a staged rollout (ship narrow → widen, each stage gated by a health observation)."""
+    with begin(engine) as connection:
+        try:
+            proposal = self_improvement.get_proposal(connection, proposal_id)
+            require_project_actor(
+                connection,
+                proposal["project_id"],
+                payload.actor,
+                "self_improvement_manage",
+            )
+            row = self_improvement.start_rollout(
+                connection,
+                proposal_id,
+                payload.actor,
+                stages=payload.stages,
+                thresholds=payload.thresholds,
+            )
+        except SelfImprovementProposalNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except InvalidSelfImprovementTransitionError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        except (ProjectMemberNotFoundError, ProjectMemberPermissionError) as error:
+            raise_project_actor_error(error)
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        return self_improvement_detail_from_row(row)
+
+
+@app.post(
+    "/v1/self-improvement/proposals/{proposal_id}/rollout/advance",
+    response_model=SelfImprovementProposalDetail,
+)
+def advance_self_improvement_rollout(
+    proposal_id: str, payload: SelfImprovementAdvanceRolloutRequest
+) -> SelfImprovementProposalDetail:
+    """Record a stage health observation; advance, finalize, or auto-rollback on regression."""
+    with begin(engine) as connection:
+        try:
+            proposal = self_improvement.get_proposal(connection, proposal_id)
+            require_project_actor(
+                connection,
+                proposal["project_id"],
+                payload.actor,
+                "self_improvement_manage",
+            )
+            row = self_improvement.advance_rollout(
+                connection,
+                proposal_id,
+                payload.actor,
+                payload.observation,
+            )
+        except SelfImprovementProposalNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except InvalidSelfImprovementTransitionError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        except (ProjectMemberNotFoundError, ProjectMemberPermissionError) as error:
+            raise_project_actor_error(error)
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        return self_improvement_detail_from_row(row)
+
+
 @app.get("/v1/health-snapshots", response_model=HealthSnapshotListResponse)
 def list_health_snapshots(
     project_id: str, limit: int = 25
@@ -5268,6 +5579,40 @@ def record_role_review(
         except ValueError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
         return role_governance_detail_from_service(detail)
+
+
+@app.post(
+    "/v1/roles/{role_key}/autonomy/evaluate",
+    response_model=RoleGovernanceDetail,
+    status_code=201,
+)
+def evaluate_role_autonomy(
+    role_key: str, request: AutonomyEvaluateRequest
+) -> RoleGovernanceDetail:
+    """Evidence-based autonomy engine: gather the role's allowed/denied/violation events since its
+    last review and run a governance review — auto-proposing an upgrade decision or auto-downgrading
+    on a detected violation (spec §C evidence-based autonomy auto-upgrade/downgrade)."""
+    with begin(engine) as connection:
+        try:
+            require_project_actor(
+                connection,
+                request.project_id,
+                request.actor,
+                "role_review",
+            )
+            detail = autonomy_engine.evaluate(
+                connection,
+                project_id=request.project_id,
+                role_key=role_key,
+                actor=request.actor,
+            )
+        except RoleNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        response = role_governance_detail_from_service(detail)
+        response.evidence = detail.get("evidence")
+        return response
 
 
 @app.get("/v1/packs", response_model=PackListResponse)
@@ -5613,6 +5958,42 @@ def list_skills() -> SkillListResponse:
     return SkillListResponse(
         items=[skill_summary_from_service(skill) for skill in entitlements.list_skills()]
     )
+
+
+@app.get("/v1/skills/invocations")
+def list_skill_invocations(project_id: str, limit: int = 50) -> dict:
+    with begin(engine) as connection:
+        return {"items": skill_runtime.list_invocations(connection, project_id, limit)}
+
+
+@app.post("/v1/skills/{skill_id}/invoke", status_code=201)
+def invoke_skill(skill_id: str, payload: SkillInvokeRequest) -> dict:
+    """Invoke a skill through the runtime (per-skill permission/cost/retry enforcement). The API
+    only drives mock mode — full governance gauntlet, no real side effects (spec §C). Real
+    invocation is driven by the worker runtime with a server-side executor."""
+    if not payload.mock:
+        raise HTTPException(
+            status_code=400,
+            detail="Real skill invocation must be driven by the worker runtime, not the API. "
+            "Use mock=true for a side-effect-free invocation.",
+        )
+    with begin(engine) as connection:
+        try:
+            return skill_runtime.invoke(
+                connection,
+                payload.project_id,
+                skill_id,
+                payload.caller,
+                payload.inputs,
+                mock=True,
+                actor=payload.actor or payload.caller,
+            )
+        except SkillNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except SkillPermissionError as error:
+            raise HTTPException(status_code=403, detail=str(error)) from error
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
 
 
 @app.get("/v1/model-adapters", response_model=ModelAdapterListResponse)
@@ -6982,6 +7363,52 @@ def list_inbox_messages(project_id: str, limit: int = 50) -> InboxMessageListRes
         )
 
 
+@app.get("/v1/comms/inbox/ack-state")
+def list_inbox_ack_state(project_id: str, limit: int = 50, pending_only: bool = False) -> dict:
+    """The no-silent-drops ledger: every inbound's acknowledgment state + transition history.
+    pending_only=true surfaces any inbound that has not yet reached a terminal ack (spec §D)."""
+    if limit < 1 or limit > 200:
+        raise HTTPException(status_code=400, detail="limit must be between 1 and 200.")
+    with begin(engine) as connection:
+        return {
+            "project_id": project_id,
+            "items": comms.list_ack_state(
+                connection, project_id, limit, pending_only=pending_only
+            ),
+        }
+
+
+@app.post("/v1/comms/slack/render")
+def render_slack_message(payload: SlackRenderRequest) -> dict:
+    """Render a Slack message with persona prefix/signature and resolve the department channel
+    (spec §D Slack per-department channels + persona rendering)."""
+    channel = department_channel(payload.department) if payload.department else None
+    rendered = render_persona_message(
+        payload.persona,
+        payload.role,
+        payload.subject,
+        payload.body,
+        signature=payload.signature,
+    )
+    return {"channel": channel, "text": rendered}
+
+
+@app.post("/v1/comms/slack/digest")
+def batch_slack_digests(payload: SlackDigestBatchRequest) -> dict:
+    """Collapse draft Slack outbox messages into one digest per channel (spec §D digest batching)."""
+    with begin(engine) as connection:
+        require_project_actor(
+            connection, payload.project_id, payload.actor, "comms_manage"
+        )
+        return slack_comms.batch_digests(
+            connection,
+            payload.project_id,
+            payload.actor,
+            channel=payload.channel,
+            min_batch=payload.min_batch,
+        )
+
+
 @app.post("/v1/comms/inbox/ingest", response_model=InboxMessageSummary, status_code=201)
 def ingest_inbox_message(payload: InboxMessageIngestRequest) -> InboxMessageSummary:
     with begin(engine) as connection:
@@ -7003,6 +7430,15 @@ def ingest_inbox_message(payload: InboxMessageIngestRequest) -> InboxMessageSumm
         )
         parsed = item.get("parsed") or {}
         if parsed.get("kind") == "decision_reply":
+            comms.advance_inbox(
+                connection,
+                payload.project_id,
+                item["id"],
+                status="parsed",
+                ack="parsed",
+                terminal=False,
+                actor=payload.actor,
+            )
             parse_error = parsed.get("parse_error")
             decision_id = parsed.get("decision_id")
             action = parsed.get("action")
@@ -7014,10 +7450,26 @@ def ingest_inbox_message(payload: InboxMessageIngestRequest) -> InboxMessageSumm
                     actor=payload.actor,
                     reason=str(parse_error or "decision_reply_missing_id_or_action"),
                     payload={"parsed": parsed},
+                    remediation=(
+                        parsed.get("remediation")
+                        if isinstance(parsed.get("remediation"), str)
+                        else None
+                    ),
                 )
                 return inbox_message_summary_from_row(
                     reload_inbox_message(connection, item["id"])
                 )
+            comms.advance_inbox(
+                connection,
+                payload.project_id,
+                item["id"],
+                status="routed",
+                ack="routed",
+                terminal=False,
+                actor=payload.actor,
+                route_kind="decision",
+                target_ref=decision_id,
+            )
             try:
                 decision_row = decisions.transition(
                     connection,
@@ -7260,6 +7712,50 @@ def canaries_run(payload: CanaryRunRequest) -> dict:
 def canaries_list(project_id: str, limit: int = 20) -> dict:
     from .services import canaries as canaries_svc
     return {"items": canaries_svc.list_canary_runs(engine, project_id, limit)}
+
+
+@app.post("/v1/evals/run")
+def evals_run(payload: EvalRunRequest) -> dict:
+    """Run the eval-harness regression suite (routing / policy / factory-gate / autonomy-ladder)
+    and persist results. Gates self-improvement rollouts (spec §C)."""
+    from .services import eval_harness
+    return eval_harness.run_eval_suite(
+        engine, settings, payload.project_id, payload.actor, payload.suite)
+
+
+@app.get("/v1/evals")
+def evals_list(project_id: str, limit: int = 20) -> dict:
+    from .services import eval_harness
+    return {"items": eval_harness.list_eval_runs(engine, project_id, limit)}
+
+
+@app.post("/v1/provider-health/poll")
+def provider_health_poll(payload: ProviderHealthPollRequest) -> dict:
+    """Live provider-health polling: snapshot every model lane's health into provider_health so the
+    router fallback chain can be validated before an incident (spec §C)."""
+    with begin(engine) as connection:
+        return router_health.poll_provider_health(connection, payload.project_id, payload.actor)
+
+
+@app.post("/v1/router/rationale", status_code=201)
+def router_rationale(payload: RouterRationaleRequest) -> dict:
+    """Persist the router's decision (selected lane + ranked fallback chain + rejected sources)
+    as a durable `router_rationale` artifact — the structured 'why this lane' (spec §C)."""
+    with begin(engine) as connection:
+        try:
+            return router_health.record_rationale(
+                connection,
+                payload.project_id,
+                skill_id=payload.skill_id,
+                task_kind=payload.task_kind,
+                workload_class=payload.workload_class,
+                risk_tier=payload.risk_tier,
+                actor=payload.actor,
+            )
+        except SkillNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
 
 
 @app.post("/v1/anomalies/scan")
