@@ -17,7 +17,7 @@ from sqlalchemy import text
 
 from .bootstrap import seed
 from .config import get_settings
-from .db import begin, database_is_reachable, get_engine
+from .db import begin, database_is_reachable, ensure_schema, get_engine
 from .schemas import (
     AgentModuleDetail,
     AgentModuleInstallRecordListResponse,
@@ -632,6 +632,14 @@ def _enforce_high_cost_rate_limit(
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     settings.artifact_root.mkdir(parents=True, exist_ok=True)
+    # Self-migrate on startup: schema.sql is fully idempotent (CREATE/ALTER … IF NOT EXISTS), so
+    # every deploy converges the managed Postgres to the shipped schema with no separate migration
+    # step. Guarded so a transient DB blip at boot can't crash-loop the API.
+    try:
+        ensure_schema(engine, settings)
+        print("[lifespan] ensure_schema applied (idempotent schema sync)")
+    except Exception as exc:  # noqa: BLE001
+        print(f"[lifespan] ensure_schema skipped — DB not ready or migration error: {exc}")
     yield
 
 
