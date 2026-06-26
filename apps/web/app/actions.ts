@@ -206,6 +206,54 @@ export async function slackDigestAction(_prev: ActionResult | null, formData: Fo
   return res;
 }
 
+// ---- Phase 4: chaos, finops reconciler, SOC2 ----
+
+export async function runChaosAction(formData: FormData): Promise<void> {
+  const scenario = String(formData.get("scenario") ?? "").trim();
+  if (!scenario) return;
+  await postJson(`/v1/chaos/run`, {
+    project_id: getProjectId(formData),
+    scenario,
+    actor: "system",
+  });
+}
+
+export async function reconcileCommitmentsAction(formData: FormData): Promise<void> {
+  await postJson(`/v1/finops/reconcile-commitments`, {
+    project_id: getProjectId(formData),
+    actor: "system",
+  });
+}
+
+export async function requestInitiativeBudgetAction(
+  _prev: ActionResult | null,
+  formData: FormData,
+): Promise<ActionResult> {
+  const title = String(formData.get("title") ?? "").trim();
+  if (!title) return { ok: false, error: "Title is required." };
+  const res = await postJsonReturn(`/v1/finops/initiative-budget`, {
+    project_id: getProjectId(formData),
+    title,
+    tier: Number(formData.get("tier") ?? 2),
+    amount_usd_micros: Number(formData.get("amount_usd") ?? 0) * 1_000_000,
+    actor: "system",
+  });
+  revalidatePath("/");
+  return res;
+}
+
+export async function collectSoc2EvidenceAction(
+  _prev: ActionResult | null,
+  formData: FormData,
+): Promise<ActionResult> {
+  const res = await postJsonReturn(`/v1/enterprise/soc2-evidence`, {
+    project_id: getProjectId(formData),
+    actor: "system",
+  });
+  revalidatePath("/");
+  return res;
+}
+
 export async function dispatchPlanAction(formData: FormData): Promise<void> {
   const projectId = getProjectId(formData);
   const planId = String(formData.get("plan_id") ?? "").trim();

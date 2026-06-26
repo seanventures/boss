@@ -92,6 +92,9 @@ import {
   MeetingConsensusCard,
   FactoryScaleCard,
 } from "./phase3-ui";
+import { fetchChaosRuns } from "../lib/chaos";
+import { fetchCommitmentReconciliations } from "../lib/finops";
+import { ChaosCard, FinopsCard, Soc2Card } from "./phase4-ui";
 import { fetchPlans } from "../lib/plans";
 import { PlansCard } from "./plans-ui";
 import { fetchBreakGlassGrantFeed } from "../lib/break-glass";
@@ -452,6 +455,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
     skillInvocations,
     ackState,
     wipStatus,
+    chaosRuns,
+    commitmentRecons,
   ] =
     await Promise.all([
       fetchStatus(activeProjectId),
@@ -521,6 +526,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
       fetchSkillInvocations(activeProjectId),
       fetchAckState(activeProjectId),
       fetchWipStatus(activeProjectId),
+      fetchChaosRuns(activeProjectId),
+      fetchCommitmentReconciliations(activeProjectId),
     ]);
 
   const deadletterCount = deadletters.items.length;
@@ -1361,6 +1368,21 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               </>
             )}
           </article>
+        </section>
+
+        <section className="panel-stack" data-area="budget" aria-label="FinOps reconciler">
+          <div className="section-head">
+            <div>
+              <span className="eyebrow">FinOps · Commitments &amp; Initiatives</span>
+              <h2>Reconcile committed spend and gate big initiatives.</h2>
+            </div>
+            <p className="status-meta">
+              Commitment utilization vs actual usage, and tier-2+ initiative budget approval.
+            </p>
+          </div>
+          <div className="stack-grid">
+            <FinopsCard projectId={activeProjectId} reconciliations={commitmentRecons} />
+          </div>
         </section>
 
         <section className="panel-stack">
@@ -2909,6 +2931,21 @@ export default async function HomePage({ searchParams }: HomePageProps) {
           </div>
         </section>
 
+        <section className="panel-stack" data-area="ops" aria-label="Resilience">
+          <div className="section-head">
+            <div>
+              <span className="eyebrow">Resilience</span>
+              <h2>Chaos &amp; load — prove recovery, not assume it.</h2>
+            </div>
+            <p className="status-meta">
+              Inject controlled faults against the live primitives and record how the system recovers.
+            </p>
+          </div>
+          <div className="stack-grid">
+            <ChaosCard projectId={activeProjectId} runs={chaosRuns} />
+          </div>
+        </section>
+
         <section className="panel-stack">
           <div className="section-head">
             <div>
@@ -3695,6 +3732,22 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                 </div>
               )}
             </article>
+          </div>
+        </section>
+
+        <section className="panel-stack" data-area="enterprise" aria-label="SOC2 evidence">
+          <div className="section-head">
+            <div>
+              <span className="eyebrow">Compliance · SOC2</span>
+              <h2>Auditor-ready evidence, generated from live data.</h2>
+            </div>
+            <p className="status-meta">
+              Trust Services Common-Criteria controls mapped to BOSS’s audit, policy-eval,
+              break-glass, change-management, and verification records.
+            </p>
+          </div>
+          <div className="stack-grid">
+            <Soc2Card projectId={activeProjectId} />
           </div>
         </section>
 
