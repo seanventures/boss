@@ -73,6 +73,8 @@ import { fetchLatestCanary } from "../lib/canaries";
 import { CanaryCard } from "./canary-ui";
 import { fetchDashboard } from "../lib/dashboard";
 import { DashboardPanel } from "./dashboard-ui";
+import { fetchPolicyEvals, fetchRunTrace } from "../lib/safety";
+import { PolicyEvalList, AnomalyScanCard, RunTraceViewer } from "./safety-ui";
 import { fetchPlans } from "../lib/plans";
 import { PlansCard } from "./plans-ui";
 import { fetchBreakGlassGrantFeed } from "../lib/break-glass";
@@ -342,6 +344,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
   const metatronTaskId = getParam(resolvedSearchParams?.task_id);
   const metatronDecisionId = getParam(resolvedSearchParams?.decision_id);
   const requestedActorId = getParam(resolvedSearchParams?.actor);
+  const traceRunId = getParam(resolvedSearchParams?.trace_run);
   const routingProviderFilter = getParam(resolvedSearchParams?.route_provider);
   const routingBudgetFilter = getParam(resolvedSearchParams?.route_budget);
   const routingBoundaryParam = getParam(resolvedSearchParams?.route_boundary);
@@ -426,6 +429,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
     sandboxFeed,
     pipelineData,
     dashboardSnapshot,
+    policyEvals,
+    runTrace,
   ] =
     await Promise.all([
       fetchStatus(activeProjectId),
@@ -489,6 +494,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
       fetchSandboxFeed(),
       fetchPipelineData(activeProjectId),
       fetchDashboard(activeProjectId),
+      fetchPolicyEvals(activeProjectId),
+      fetchRunTrace(traceRunId),
     ]);
 
   const deadletterCount = deadletters.items.length;
@@ -2835,6 +2842,23 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                 </div>
               )}
             </article>
+          </div>
+        </section>
+
+        <section className="panel-stack" data-area="ops" aria-label="Safety & policy">
+          <div className="section-head">
+            <div>
+              <span className="eyebrow">Safety &amp; Policy</span>
+              <h2>The trust moat — every boundary decision, on the record.</h2>
+            </div>
+            <p className="status-meta">
+              Policy-eval audit trail, cost-anomaly scanning with auto-lite, and run tracing.
+            </p>
+          </div>
+          <div className="stack-grid">
+            <PolicyEvalList items={policyEvals} />
+            <AnomalyScanCard projectId={activeProjectId} actor={activeActorId} />
+            <RunTraceViewer trace={runTrace} initialRunId={traceRunId} />
           </div>
         </section>
 

@@ -27,6 +27,16 @@ export async function runCanariesAction(formData: FormData): Promise<void> {
   revalidatePath("/");
 }
 
+export async function scanAnomaliesAction(formData: FormData): Promise<void> {
+  const projectId = getProjectId(formData);
+  await fetch(`${API_URL}/v1/anomalies/scan`, {
+    method: "POST",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify({ project_id: projectId, auto_lite: true }),
+  });
+  revalidatePath("/");
+}
+
 export async function dispatchPlanAction(formData: FormData): Promise<void> {
   const projectId = getProjectId(formData);
   const planId = String(formData.get("plan_id") ?? "").trim();
