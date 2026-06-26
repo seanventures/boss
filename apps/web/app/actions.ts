@@ -37,6 +37,79 @@ export async function scanAnomaliesAction(formData: FormData): Promise<void> {
   revalidatePath("/");
 }
 
+// ---- Phase 2: self-improvement runtime, evals, autonomy, router, skills ----
+
+async function postJson(path: string, body: Record<string, unknown>): Promise<void> {
+  await fetch(`${API_URL}${path}`, {
+    method: "POST",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify(body),
+  });
+  revalidatePath("/");
+}
+
+export async function runSelfImprovementCanaryAction(formData: FormData): Promise<void> {
+  const id = String(formData.get("proposal_id") ?? "").trim();
+  if (!id) return;
+  await postJson(`/v1/self-improvement/proposals/${encodeURIComponent(id)}/run-canary`, {
+    actor: getActor(formData),
+  });
+}
+
+export async function startSelfImprovementRolloutAction(formData: FormData): Promise<void> {
+  const id = String(formData.get("proposal_id") ?? "").trim();
+  if (!id) return;
+  await postJson(`/v1/self-improvement/proposals/${encodeURIComponent(id)}/rollout/start`, {
+    actor: getActor(formData),
+  });
+}
+
+export async function advanceSelfImprovementRolloutAction(formData: FormData): Promise<void> {
+  const id = String(formData.get("proposal_id") ?? "").trim();
+  if (!id) return;
+  const health = String(formData.get("health") ?? "healthy").trim();
+  const observation: Record<string, unknown> = { health };
+  const errorRate = String(formData.get("error_rate") ?? "").trim();
+  if (errorRate) observation.error_rate = Number(errorRate);
+  await postJson(`/v1/self-improvement/proposals/${encodeURIComponent(id)}/rollout/advance`, {
+    actor: getActor(formData),
+    observation,
+  });
+}
+
+export async function runEvalsAction(formData: FormData): Promise<void> {
+  await postJson(`/v1/evals/run`, { project_id: getProjectId(formData), actor: getActor(formData) });
+}
+
+export async function evaluateAutonomyAction(formData: FormData): Promise<void> {
+  const roleKey = String(formData.get("role_key") ?? "").trim();
+  if (!roleKey) return;
+  await postJson(`/v1/roles/${encodeURIComponent(roleKey)}/autonomy/evaluate`, {
+    project_id: getProjectId(formData),
+    actor: getActor(formData),
+  });
+}
+
+export async function pollProviderHealthAction(formData: FormData): Promise<void> {
+  await postJson(`/v1/provider-health/poll`, { project_id: getProjectId(formData), actor: getActor(formData) });
+}
+
+export async function recordRouterRationaleAction(formData: FormData): Promise<void> {
+  await postJson(`/v1/router/rationale`, { project_id: getProjectId(formData), actor: getActor(formData) });
+}
+
+export async function invokeSkillAction(formData: FormData): Promise<void> {
+  const skillId = String(formData.get("skill_id") ?? "").trim();
+  const caller = String(formData.get("caller") ?? "").trim();
+  if (!skillId || !caller) return;
+  await postJson(`/v1/skills/${encodeURIComponent(skillId)}/invoke`, {
+    project_id: getProjectId(formData),
+    caller,
+    inputs: {},
+    mock: true,
+  });
+}
+
 export async function dispatchPlanAction(formData: FormData): Promise<void> {
   const projectId = getProjectId(formData);
   const planId = String(formData.get("plan_id") ?? "").trim();

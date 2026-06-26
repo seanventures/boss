@@ -75,6 +75,15 @@ import { fetchDashboard } from "../lib/dashboard";
 import { DashboardPanel } from "./dashboard-ui";
 import { fetchPolicyEvals, fetchRunTrace } from "../lib/safety";
 import { PolicyEvalList, AnomalyScanCard, RunTraceViewer } from "./safety-ui";
+import { fetchLatestEval } from "../lib/evals";
+import { fetchSkillInvocations } from "../lib/skill-invocations";
+import {
+  SelfImprovementRuntime,
+  EvalHarnessCard,
+  AutonomyEvaluateCard,
+  RouterHealthCard,
+  SkillInvokeCard,
+} from "./phase2-ui";
 import { fetchPlans } from "../lib/plans";
 import { PlansCard } from "./plans-ui";
 import { fetchBreakGlassGrantFeed } from "../lib/break-glass";
@@ -431,6 +440,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
     dashboardSnapshot,
     policyEvals,
     runTrace,
+    latestEval,
+    skillInvocations,
   ] =
     await Promise.all([
       fetchStatus(activeProjectId),
@@ -496,6 +507,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
       fetchDashboard(activeProjectId),
       fetchPolicyEvals(activeProjectId),
       fetchRunTrace(traceRunId),
+      fetchLatestEval(activeProjectId),
+      fetchSkillInvocations(activeProjectId),
     ]);
 
   const deadletterCount = deadletters.items.length;
@@ -2685,6 +2698,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             </div>
           </div>
           <CanaryCard projectId={activeProjectId} run={canaryRun} />
+          <EvalHarnessCard projectId={activeProjectId} actor={activeActorId} run={latestEval} />
           <WorkflowHealth
             jobStatusCounts={opsQueue.jobStatusCounts}
             jobKindCounts={opsQueue.jobKindCounts}
@@ -2859,6 +2873,27 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             <PolicyEvalList items={policyEvals} />
             <AnomalyScanCard projectId={activeProjectId} actor={activeActorId} />
             <RunTraceViewer trace={runTrace} initialRunId={traceRunId} />
+          </div>
+        </section>
+
+        <section className="panel-stack" data-area="ops" aria-label="Autonomy, router & skills">
+          <div className="section-head">
+            <div>
+              <span className="eyebrow">Autonomy · Router · Skills</span>
+              <h2>Earned autonomy and the model/skill runtime.</h2>
+            </div>
+            <p className="status-meta">
+              Evidence-based autonomy evaluation, router health + rationale, and mock skill invocation.
+            </p>
+          </div>
+          <div className="stack-grid">
+            <AutonomyEvaluateCard projectId={activeProjectId} actor={activeActorId} />
+            <RouterHealthCard
+              projectId={activeProjectId}
+              actor={activeActorId}
+              providerHealth={dashboardSnapshot?.providerHealth}
+            />
+            <SkillInvokeCard projectId={activeProjectId} invocations={skillInvocations} />
           </div>
         </section>
 
@@ -3147,6 +3182,11 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                             : proposal.statusNote ?? proposal.summary}
                         </p>
                       </div>
+                      <SelfImprovementRuntime
+                        proposal={proposal}
+                        projectId={activeProjectId}
+                        actor={activeActorId}
+                      />
                       {proposal.status === "canary_approved" ? (
                         <div className="button-stack">
                           <form action={recordSelfImprovementCanaryAction} className="composer compact">
