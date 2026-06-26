@@ -84,6 +84,14 @@ import {
   RouterHealthCard,
   SkillInvokeCard,
 } from "./phase2-ui";
+import { fetchAckState } from "../lib/comms-ack";
+import { fetchWipStatus } from "../lib/factory";
+import {
+  InboxAckCard,
+  SlackToolsCard,
+  MeetingConsensusCard,
+  FactoryScaleCard,
+} from "./phase3-ui";
 import { fetchPlans } from "../lib/plans";
 import { PlansCard } from "./plans-ui";
 import { fetchBreakGlassGrantFeed } from "../lib/break-glass";
@@ -442,6 +450,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
     runTrace,
     latestEval,
     skillInvocations,
+    ackState,
+    wipStatus,
   ] =
     await Promise.all([
       fetchStatus(activeProjectId),
@@ -509,6 +519,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
       fetchRunTrace(traceRunId),
       fetchLatestEval(activeProjectId),
       fetchSkillInvocations(activeProjectId),
+      fetchAckState(activeProjectId),
+      fetchWipStatus(activeProjectId),
     ]);
 
   const deadletterCount = deadletters.items.length;
@@ -3357,6 +3369,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
           </div>
 
           <div className="stack-grid">
+            <InboxAckCard items={ackState} />
+            <SlackToolsCard projectId={activeProjectId} />
             <article className="stack-card">
               <h3>Draft outbound message</h3>
               <form action={submitOutboxDraftAction} className="composer compact">
@@ -5915,6 +5929,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             tasks={tasks.items.map((t) => ({ id: t.id, title: t.title }))}
             apiReachable={meetingRooms.apiReachable}
           />
+          <div className="stack-grid" style={{ marginTop: 14 }}>
+            <MeetingConsensusCard projectId={activeProjectId} actor={activeActorId} />
+          </div>
         </section>
 
         <section className="panel-stack" data-area="code_tasks" aria-label="Code tasks">
@@ -5940,6 +5957,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             </div>
           </div>
           <PipelineView data={pipelineData} />
+          <div className="stack-grid" style={{ marginTop: 14 }}>
+            <FactoryScaleCard wip={wipStatus} />
+          </div>
         </section>
 
         <section className="panel-stack" data-area="sandboxes" aria-label="Sandboxes">

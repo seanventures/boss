@@ -110,6 +110,102 @@ export async function invokeSkillAction(formData: FormData): Promise<void> {
   });
 }
 
+// ---- Phase 3: result-returning actions (useActionState) for compute/preview endpoints ----
+
+export type ActionResult = { ok: boolean; data?: Record<string, unknown>; error?: string };
+
+async function postJsonReturn(path: string, body: Record<string, unknown>): Promise<ActionResult> {
+  try {
+    const r = await fetch(`${API_URL}${path}`, {
+      method: "POST",
+      headers: authHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify(body),
+    });
+    if (!r.ok) {
+      let detail = "";
+      try {
+        detail = String((await r.json()).detail ?? "");
+      } catch {}
+      return { ok: false, error: detail || `HTTP ${r.status}` };
+    }
+    return { ok: true, data: await r.json() };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : "request failed" };
+  }
+}
+
+export async function tallyVotesAction(_prev: ActionResult | null, formData: FormData): Promise<ActionResult> {
+  const approve = Math.max(0, Number(formData.get("approve") ?? 0));
+  const reject = Math.max(0, Number(formData.get("reject") ?? 0));
+  const abstain = Math.max(0, Number(formData.get("abstain") ?? 0));
+  const eligibleRaw = String(formData.get("eligible") ?? "").trim();
+  const quorumRaw = String(formData.get("quorum") ?? "").trim();
+  const votes = [
+    ...Array.from({ length: approve }, (_v, i) => ({ voter: `a${i}`, vote: "approve" })),
+    ...Array.from({ length: reject }, (_v, i) => ({ voter: `r${i}`, vote: "reject" })),
+    ...Array.from({ length: abstain }, (_v, i) => ({ voter: `x${i}`, vote: "abstain" })),
+  ];
+  if (!votes.length) return { ok: false, error: "Enter at least one vote." };
+  return postJsonReturn(`/v1/meetings/tally`, {
+    votes,
+    eligible_count: eligibleRaw ? Number(eligibleRaw) : undefined,
+    quorum: quorumRaw ? Number(quorumRaw) : undefined,
+    vote_threshold: 0.5,
+  });
+}
+
+export async function sweepStalledMeetingsAction(_prev: ActionResult | null, formData: FormData): Promise<ActionResult> {
+  const res = await postJsonReturn(`/v1/meetings/sweep-stalled`, { actor: getActor(formData) });
+  revalidatePath("/");
+  return res;
+}
+
+export async function mergeCheckAction(_prev: ActionResult | null, formData: FormData): Promise<ActionResult> {
+  const checks = {
+    tests_passed: formData.get("tests_passed") === "on",
+    lint_passed: formData.get("lint_passed") === "on",
+    ci_green: formData.get("ci_green") === "on",
+    reviewer_independent: formData.get("reviewer_independent") === "on",
+    adversarial_verdict: formData.get("adversarial") === "on" ? "survived" : "not_run",
+  };
+  const minRaw = String(formData.get("min_confidence") ?? "").trim();
+  return postJsonReturn(`/v1/factory/merge-check`, {
+    checks,
+    min_confidence: minRaw ? Number(minRaw) : 0.8,
+  });
+}
+
+export async function chunkPlanAction(_prev: ActionResult | null, formData: FormData): Promise<ActionResult> {
+  const title = String(formData.get("title") ?? "change").trim() || "change";
+  const files = parseLines(formData.get("files"));
+  return postJsonReturn(`/v1/factory/chunk-plan`, {
+    spec: { title, files },
+    max_files_per_chunk: 3,
+  });
+}
+
+export async function slackRenderAction(_prev: ActionResult | null, formData: FormData): Promise<ActionResult> {
+  const persona = String(formData.get("persona") ?? "").trim();
+  const body = String(formData.get("body") ?? "").trim();
+  if (!persona || !body) return { ok: false, error: "Persona and body are required." };
+  return postJsonReturn(`/v1/comms/slack/render`, {
+    persona,
+    role: String(formData.get("role") ?? "").trim() || undefined,
+    subject: String(formData.get("subject") ?? "").trim() || undefined,
+    body,
+    department: String(formData.get("department") ?? "").trim() || undefined,
+  });
+}
+
+export async function slackDigestAction(_prev: ActionResult | null, formData: FormData): Promise<ActionResult> {
+  const res = await postJsonReturn(`/v1/comms/slack/digest`, {
+    project_id: getProjectId(formData),
+    actor: "system",
+  });
+  revalidatePath("/");
+  return res;
+}
+
 export async function dispatchPlanAction(formData: FormData): Promise<void> {
   const projectId = getProjectId(formData);
   const planId = String(formData.get("plan_id") ?? "").trim();
