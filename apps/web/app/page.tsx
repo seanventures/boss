@@ -71,6 +71,8 @@ import { fetchBudgetStatus, fetchBudgetIntensity } from "../lib/budget-status";
 import { BudgetIntensitySlider } from "./budget-intensity-ui";
 import { fetchLatestCanary } from "../lib/canaries";
 import { CanaryCard } from "./canary-ui";
+import { fetchDashboard } from "../lib/dashboard";
+import { DashboardPanel } from "./dashboard-ui";
 import { fetchPlans } from "../lib/plans";
 import { PlansCard } from "./plans-ui";
 import { fetchBreakGlassGrantFeed } from "../lib/break-glass";
@@ -423,6 +425,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
     codeTasksFeed,
     sandboxFeed,
     pipelineData,
+    dashboardSnapshot,
   ] =
     await Promise.all([
       fetchStatus(activeProjectId),
@@ -485,6 +488,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
       fetchCodeTasksFeed(activeProjectId),
       fetchSandboxFeed(),
       fetchPipelineData(activeProjectId),
+      fetchDashboard(activeProjectId),
     ]);
 
   const deadletterCount = deadletters.items.length;
@@ -532,6 +536,16 @@ export default async function HomePage({ searchParams }: HomePageProps) {
       initialArea={requestedArea}
     >
       <div className="frame">
+        <section className="panel-stack" data-area="dashboard" aria-label="Live dashboard">
+          <div className="section-head">
+            <div>
+              <span className="eyebrow">Live Dashboard</span>
+              <h2>Cross-phase control snapshot</h2>
+            </div>
+          </div>
+          <DashboardPanel snapshot={dashboardSnapshot} />
+        </section>
+
         <section className="ov-header" data-area="overview" aria-label="Overview header">
           <div className="ov-header-copy">
             <span className="eyebrow">Business Operating System Sentinel</span>
