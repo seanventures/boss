@@ -6,7 +6,18 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-RUN addgroup --system boss && adduser --system --ingroup boss boss
+RUN addgroup --system boss && adduser --system --ingroup boss --home /home/boss boss \
+    && mkdir -p /home/boss && chown -R boss:boss /home/boss
+ENV HOME=/home/boss
+
+# git: the governed code pipeline shallow-clones the target repo into an ephemeral sandbox.
+# Node + Claude Code CLI: the claude_code agent shells out to `claude -p` (headless, authed via
+# the CLAUDE_CODE_OAUTH_TOKEN env var) for the builder roles. Early, cacheable layer.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends git ca-certificates nodejs npm \
+    && npm install -g @anthropic-ai/claude-code \
+    && npm cache clean --force \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 COPY apps/api/requirements.txt /tmp/api-requirements.txt
 RUN pip install --no-cache-dir --upgrade pip \
