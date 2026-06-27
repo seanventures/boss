@@ -930,6 +930,23 @@ export type CodeTaskState = {
   tests?: CodeTaskTestResult[];
   cost_usd_micros?: number;
   turns?: number;
+  // Governed-pipeline evidence (Strict/Balanced): review + quality-gate detail
+  profile?: string;
+  risk_tier?: number;
+  qa_summary?: string;
+  impl_summary?: string;
+  review_summary?: string;
+  security_verdict?: string;
+  adversarial_verdict?: string;
+  consistency_verdict?: string;
+  regressions_ok?: boolean;
+  mutation_caught?: boolean;
+  reviewer_independent?: boolean;
+  test_author_independent?: boolean;
+  test_exit_code?: number;
+  test_command?: string;
+  impl_files?: string[];
+  test_files?: string[];
 };
 
 export type CodeTaskRun = {

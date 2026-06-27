@@ -102,9 +102,26 @@ function NewCodeTaskForm({ projectId, defaultOwner, defaultRepo }: {
   );
 }
 
+function GateRow({ label, ok, note }: { label: string; ok?: boolean; note?: string }) {
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13 }}>
+      <span style={{ color: ok ? "#3fb950" : "#f85149", fontWeight: 700, width: 14, textAlign: "center" }}>{ok ? "✓" : "✗"}</span>
+      <span style={{ color: "var(--ink)" }}>{label}</span>
+      {note ? <span className="detail">— {note}</span> : null}
+    </div>
+  );
+}
+
 function CodeTaskDetail({ run, onBack }: { run: CodeTaskRun; onBack: () => void }) {
   const st = run.state ?? {};
   const tests = st.tests ?? [];
+  const hasGateEvidence = Boolean(
+    st.review_summary || st.adversarial_verdict || st.security_verdict || st.qa_summary || st.impl_summary,
+  );
+  const gateTone =
+    run.status === "completed" ? "green" : run.status === "blocked" ? "amber" : run.status === "failed" ? "pink" : "muted";
+  const gateLabel =
+    run.status === "completed" ? "passed" : run.status === "blocked" ? "gated" : run.status === "failed" ? "failed" : run.status;
   return (
     <div className="ct-detail">
       <button className="mr-back" onClick={onBack}>← All code tasks</button>
@@ -122,7 +139,61 @@ function CodeTaskDetail({ run, onBack }: { run: CodeTaskRun; onBack: () => void 
 
       <Flow phase={run.phase} status={run.status} />
 
-      {run.error ? <div className="ct-error">⚠ {run.error}</div> : null}
+      {run.error ? (
+        <div className="ct-error">
+          ⚠ {/quality ?gate/i.test(run.error)
+            ? "Quality gate failed — the pipeline blocked the PR (fail-closed). See Review & quality gate below."
+            : run.error}
+        </div>
+      ) : null}
+
+      {hasGateEvidence ? (
+        <div className="ct-block">
+          <div className="ct-block-title">
+            Review &amp; quality gate{" "}
+            <span className={`cap-badge tone-${gateTone}`}>{gateLabel}</span>
+          </div>
+          <div style={{ display: "grid", gap: 6, margin: "8px 0" }}>
+            <GateRow label="Written tests pass" ok={st.tests_passed} note={st.test_exit_code != null ? `exit ${st.test_exit_code}` : undefined} />
+            <GateRow label="Code review (adversarial)" ok={st.adversarial_verdict === "survived"} note={st.adversarial_verdict} />
+            <GateRow label="Security clean" ok={st.security_verdict === "clean"} note={st.security_verdict} />
+            <GateRow label="No regressions" ok={st.regressions_ok} note={st.mutation_caught ? "mutation caught" : undefined} />
+            {st.consistency_verdict ? (
+              <GateRow label="Consistency" ok={["consistent", "pass", "survived"].includes(st.consistency_verdict)} note={st.consistency_verdict} />
+            ) : null}
+          </div>
+          <p className="detail">
+            Independent reviewer: {st.reviewer_independent ? "yes" : "no"} · Independent test author:{" "}
+            {st.test_author_independent ? "yes" : "no"}
+            {st.profile ? ` · profile: ${st.profile}` : ""}
+            {st.risk_tier != null ? ` · risk tier ${st.risk_tier}` : ""}
+          </p>
+          {st.review_summary ? (
+            <div className="ct-summary" style={{ marginTop: 8 }}>
+              <div className="ct-block-title" style={{ fontSize: 12.5 }}>🔎 Adversarial reviewer findings</div>
+              <Markdown text={st.review_summary} />
+            </div>
+          ) : null}
+          {st.qa_summary ? (
+            <details style={{ marginTop: 8 }}>
+              <summary className="detail" style={{ cursor: "pointer" }}>QA / test-author summary</summary>
+              <div className="ct-summary"><Markdown text={st.qa_summary} /></div>
+            </details>
+          ) : null}
+          {st.impl_summary ? (
+            <details style={{ marginTop: 6 }}>
+              <summary className="detail" style={{ cursor: "pointer" }}>Implementation summary</summary>
+              <div className="ct-summary"><Markdown text={st.impl_summary} /></div>
+            </details>
+          ) : null}
+          {(st.impl_files ?? st.test_files) ? (
+            <p className="detail" style={{ marginTop: 6 }}>
+              {st.test_files?.length ? `Test files: ${st.test_files.join(", ")}. ` : ""}
+              {st.impl_files?.length ? `Impl files: ${st.impl_files.join(", ")}.` : ""}
+            </p>
+          ) : null}
+        </div>
+      ) : null}
 
       {st.summary ? (
         <div className="ct-block">
