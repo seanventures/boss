@@ -13,7 +13,7 @@ from .redaction import redact as _redact
 _RETRYABLE = (RateLimitError, APITimeoutError, APIConnectionError)
 
 
-def _with_retry(call, *, tries: int = 5, base: float = 2.0):
+def _with_retry(call, *, tries: int = 8, base: float = 2.0):
     """Call an OpenAI request, retrying on 429 / transient errors with exponential backoff +
     jitter. Honours a Retry-After header when the provider supplies one."""
     for attempt in range(tries):
@@ -28,7 +28,7 @@ def _with_retry(call, *, tries: int = 5, base: float = 2.0):
                 delay = max(delay, float(retry_after.get("retry-after")))
             except (TypeError, ValueError):
                 pass
-            time.sleep(min(delay, 30.0))
+            time.sleep(min(delay, 45.0))
 
 # USD per 1,000,000 tokens: (input, output). Turns real token usage into a
 # dollar cost (micros) for budget settlement and reporting.
