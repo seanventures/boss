@@ -1444,6 +1444,10 @@ CREATE TABLE IF NOT EXISTS budget_policies (
   version INTEGER NOT NULL DEFAULT 1,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+-- Additive migration: operational_intensity post-dates the original budget_policies table.
+-- CREATE TABLE IF NOT EXISTS won't add columns to an existing table, so deployments created
+-- before this column need it backfilled here (matches the CREATE: nullable INTEGER, no default).
+ALTER TABLE budget_policies ADD COLUMN IF NOT EXISTS operational_intensity INTEGER;
 
 CREATE TABLE IF NOT EXISTS budget_allocations (
   id TEXT PRIMARY KEY,
