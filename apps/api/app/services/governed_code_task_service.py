@@ -340,7 +340,14 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
     token = app.token_for_repo(owner, repo) if app.configured else settings.github_token
 
     provider = LocalSubprocessProvider(settings)
-    agent = make_code_agent(settings)  # model-agnostic: claude_code | native (OpenAI/Azure)
+    agent = make_code_agent(settings)  # builder: model-agnostic claude_code | native (OpenAI/Azure)
+    # Adversary roles (review / security / consistency / mutation) run on a SEPARATE engine when
+    # configured — so the model that wrote the code isn't the one judging it (removes self-review
+    # bias). Empty config => same agent (single-model behaviour).
+    build_engine = (settings.code_agent_engine or "claude_code").lower()
+    review_engine = (settings.code_review_engine or "").lower()
+    reviewer = (make_code_agent(settings, engine=review_engine)
+                if review_engine and review_engine != build_engine else agent)
     # Data-boundary enforcement: restricted/confidential tasks redact PII before any external
     # model call (spec §7.4 / §25). The flag rides on the agent; each run_role honours it.
     data_boundary = spec.get("data_boundary", "internal")
@@ -467,14 +474,14 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
             lock = threading.Lock()
 
             def _do_review():
-                rr = agent.run_role(_review_prompt(title, criteria), root, read_only=True,
+                rr = reviewer.run_role(_review_prompt(title, criteria), root, read_only=True,
                                     model=_model_for("review_code"))
                 with lock:
                     panel_cost["v"] += int(rr.get("cost_usd_micros") or 0)
                 panel["review"] = (rr, _parse_verdict(rr.get("summary", "")))
 
             def _do_security():
-                rr = agent.run_role(_security_prompt(title), root, read_only=True,
+                rr = reviewer.run_role(_security_prompt(title), root, read_only=True,
                                     model=_model_for("security_check"))
                 with lock:
                     panel_cost["v"] += int(rr.get("cost_usd_micros") or 0)
@@ -484,7 +491,7 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
                 panel["full"] = bool(sandbox.run("python3 -m unittest discover -v").ok)
 
             def _do_consistency():
-                rr = agent.run_role(_consistency_prompt(title, criteria, design), root,
+                rr = reviewer.run_role(_consistency_prompt(title, criteria, design), root,
                                     read_only=True, model=_model_for("consistency_check"))
                 with lock:
                     panel_cost["v"] += int(rr.get("cost_usd_micros") or 0)
@@ -508,7 +515,7 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
             orig = {p: (root / p).read_text(errors="ignore")
                     for p in impl_files if (root / p).exists()}
             if orig:
-                r5 = agent.run_role(_mutate_prompt(list(orig.keys())), root,
+                r5 = reviewer.run_role(_mutate_prompt(list(orig.keys())), root,
                                     model=_model_for("check_tests"))
                 cost += int(r5.get("cost_usd_micros") or 0)
                 mut = sandbox.run(test_cmd)
@@ -563,7 +570,11 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
                 "review_code": (_model_for("review_code") or r3.get("model")) if do_review else None,
             },
             "engine": getattr(agent, "engine", "unknown"),
+            "build_engine": getattr(agent, "engine", build_engine),
+            "review_engine": getattr(reviewer, "engine", build_engine),
             "model": r2.get("model") or r2.get("usage", {}).get("model"),
+            "review_model": (r3.get("model") or r3.get("usage", {}).get("model")
+                             or r4.get("model") or r6.get("model")),
             "test_author_independent": do_separate_tests, "reviewer_independent": do_review,
             "tests_passed": tests_passed, "adversarial_verdict": verdict,
             "test_files": test_files, "impl_files": impl_files,

@@ -419,10 +419,12 @@ class NativeCodeAgent:
         )
 
 
-def make_code_agent(settings: Settings) -> CodeAgent:
-    engine = (settings.code_agent_engine or "claude_code").lower()
+def make_code_agent(settings: Settings, engine: Optional[str] = None) -> CodeAgent:
+    """Build a CodeAgent. ``engine`` overrides ``settings.code_agent_engine`` so the
+    governed pipeline can run builder roles on one model and adversary roles on another."""
+    engine = (engine or settings.code_agent_engine or "claude_code").lower()
     if engine == "claude_code":
         return ClaudeCodeAgent(settings)
     if engine in ("native", "openai", "azure"):
         return NativeCodeAgent(settings)
-    raise NotImplementedError(f"Unknown code_agent_engine: {settings.code_agent_engine!r}")
+    raise NotImplementedError(f"Unknown code_agent_engine: {engine!r}")

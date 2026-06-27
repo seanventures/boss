@@ -168,6 +168,16 @@ function CodeTaskDetail({ run, onBack }: { run: CodeTaskRun; onBack: () => void 
             {st.profile ? ` · profile: ${st.profile}` : ""}
             {st.risk_tier != null ? ` · risk tier ${st.risk_tier}` : ""}
           </p>
+          {(st.build_engine || st.review_engine) ? (
+            <p className="detail">
+              🧠 Builder: <b>{st.build_engine ?? "—"}</b>
+              {st.model ? ` (${st.model})` : ""} · Adversary: <b>{st.review_engine ?? st.build_engine ?? "—"}</b>
+              {st.review_model ? ` (${st.review_model})` : ""}
+              {st.review_engine && st.build_engine && st.review_engine !== st.build_engine
+                ? " — cross-model review (no self-grading)"
+                : " — same model builds + reviews"}
+            </p>
+          ) : null}
           {st.review_summary ? (
             <div className="ct-summary" style={{ marginTop: 8 }}>
               <div className="ct-block-title" style={{ fontSize: 12.5 }}>🔎 Adversarial reviewer findings</div>

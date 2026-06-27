@@ -346,6 +346,11 @@ class Settings(BaseSettings):
     #                 scoped to the ephemeral sandbox cwd (uses the Max plan).
     #   native      = (Phase 1) raw model API agent on the Agent SDK.
     code_agent_engine: str = Field(default="claude_code", alias="BOSS_CODE_AGENT_ENGINE")
+    # Engine for the ADVERSARY roles (code review / security / consistency / mutation) in the
+    # governed pipeline. Defaulting it to a DIFFERENT model than the builder removes self-review
+    # bias — the model that wrote the code isn't the one judging it. Empty = same as the builder
+    # (single-model). e.g. builder=claude_code, reviewer=native (Azure GPT).
+    code_review_engine: str = Field(default="", alias="BOSS_CODE_REVIEW_ENGINE")
     # Max agent turns inside the sandbox before we stop and take the diff.
     code_agent_max_turns: int = Field(default=40, alias="BOSS_CODE_AGENT_MAX_TURNS")
     # Wall-clock cap for a single CodeAgent invocation.

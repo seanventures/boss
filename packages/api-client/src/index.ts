@@ -933,6 +933,10 @@ export type CodeTaskState = {
   // Governed-pipeline evidence (Strict/Balanced): review + quality-gate detail
   profile?: string;
   risk_tier?: number;
+  model?: string;
+  build_engine?: string;
+  review_engine?: string;
+  review_model?: string;
   qa_summary?: string;
   impl_summary?: string;
   review_summary?: string;
