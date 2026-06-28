@@ -9,6 +9,7 @@ macOS where container host-networking is awkward. Containerized isolation is the
 """
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
