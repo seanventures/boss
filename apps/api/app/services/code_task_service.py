@@ -112,6 +112,56 @@ def start_code_task(
     return run_id
 
 
+def retry_code_task(engine, settings: Settings, jobs, run_id: str, *, fix_note: str = "") -> dict:
+    """Resume a failed/blocked code task as a NEW attempt in the same lineage — carrying the prior
+    attempt's findings forward as explicit feedback so the agent fixes the identified issues instead
+    of regenerating blind. History is preserved: each attempt links to its parent + root run, and
+    accumulates the findings it must address."""
+    with begin(engine) as c:
+        prev = load_code_task_run(c, run_id)
+    if prev is None:
+        raise ValueError(f"code task run not found: {run_id}")
+    spec = prev.get("spec") or {}
+    state = prev.get("state") or {}
+    fctx_prev = prev.get("finalize_ctx") or {}
+    attempt = int(fctx_prev.get("attempt", 1)) + 1
+    root = fctx_prev.get("root_run_id") or run_id
+
+    parts = []
+    if prev.get("error"):
+        parts.append(f"Outcome: {prev['error']}")
+    for label, key in (("Security review", "security_summary"),
+                       ("Code review", "review_summary"),
+                       ("Consistency review", "consistency_summary")):
+        if state.get(key):
+            parts.append(f"## {label} findings (previous attempt)\n{state[key]}")
+    feedback = "\n\n".join(parts) or "(no detailed findings were recorded on the previous attempt)"
+
+    augmented = (
+        (spec.get("instructions") or "")
+        + f"\n\n=== PREVIOUS ATTEMPT {attempt - 1} FEEDBACK — fix ONLY these issues; preserve everything that already passed ===\n"
+        + feedback
+        + (f"\n\nOperator note: {fix_note}" if fix_note else "")
+    )
+    base_title = (prev.get("title") or "Code task").split(" · retry")[0]
+    title = f"{base_title} · retry {attempt - 1}"
+
+    with begin(engine) as c:
+        new_id = start_code_task(
+            c, project_id=prev["project_id"], task_id=prev.get("task_id"), title=title,
+            instructions=augmented,
+            acceptance_criteria=spec.get("acceptance_criteria") or [],
+            test_commands=spec.get("test_commands") or [],
+            owner=spec.get("owner") or settings.target_github_owner,
+            repo=spec.get("repo") or settings.target_github_repo,
+            base_branch=spec.get("base_branch") or "main",
+            finalize_ctx={**fctx_prev, "parent_run_id": run_id, "root_run_id": root, "attempt": attempt},
+            jobs=jobs, profile=spec.get("profile"), risk_tier=spec.get("risk_tier"),
+        )
+    return {"status": "queued", "run_id": new_id, "attempt": attempt,
+            "parent_run_id": run_id, "root_run_id": root}
+
+
 def _release(sf, connection, project_id: str, reservation_id: Optional[str], reason: str) -> None:
     if not reservation_id:
         return

@@ -172,14 +172,19 @@ def _parse_verdict(summary: str) -> str:
 
 def _security_prompt(title):
     return (
-        "You are a security reviewer doing a constructive code review. Check that the change "
-        "follows security best practices: input validation, access control, safe handling of "
-        "secrets and user data, and safe parsing.\n\n"
+        "You are a security reviewer. Assess the change for EXPLOITABLE vulnerabilities — things an "
+        "attacker could actually use: injection (SQL / command / HTML-XSS), auth or access-control "
+        "bypass, unsafe secret/credential handling, unsafe deserialization or parsing, SSRF, path "
+        "traversal, or a denial-of-service vector reachable from untrusted input.\n\n"
         f"TASK UNDER REVIEW: {title}\n\n"
-        "Read the change and the implementation. Note any security concern you find. Do NOT edit "
-        "any files. End your response with EXACTLY one final line, either:\n"
-        "  VERDICT: CLEAN\n"
-        "  VERDICT: ISSUES\n"
+        "Read the change and the implementation. Classify each finding by severity "
+        "(CRITICAL / HIGH / MEDIUM / LOW / ADVISORY). Do NOT edit any files.\n\n"
+        "Calibrate the VERDICT by SEVERITY — not by whether further hardening is conceivable. A "
+        "thorough review can always suggest more defense-in-depth; that alone must NOT fail the gate:\n"
+        "  - VERDICT: ISSUES  -> ONLY if at least one CRITICAL or HIGH (exploitable) issue remains.\n"
+        "  - VERDICT: CLEAN   -> no exploitable issue; any MEDIUM/LOW/ADVISORY items are acceptable "
+        "(list them as recommendations — they do not block).\n\n"
+        "End your response with EXACTLY one final line: 'VERDICT: CLEAN' or 'VERDICT: ISSUES'."
     )
 
 
@@ -582,6 +587,8 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
             "qa_summary": r1.get("summary", "")[:400],
             "impl_summary": r2.get("summary", "")[:400],
             "review_summary": r3.get("summary", "")[:800],
+            "security_summary": r4.get("summary", "")[:4000],
+            "consistency_summary": r6.get("summary", "")[:1500],
         }
         with begin(engine) as c:
             c.execute(text("UPDATE code_task_runs SET state=CAST(:s AS JSONB), "

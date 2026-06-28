@@ -940,6 +940,8 @@ export type CodeTaskState = {
   qa_summary?: string;
   impl_summary?: string;
   review_summary?: string;
+  security_summary?: string;
+  consistency_summary?: string;
   security_verdict?: string;
   adversarial_verdict?: string;
   consistency_verdict?: string;
@@ -3957,6 +3959,19 @@ export function createBossApiClient(config: BossApiClientConfig) {
     },
     createCodeTask(payload: CodeTaskCreatePayload) {
       return request<{ status: string; run_id: string }>("POST", "/v1/code-tasks", { body: payload });
+    },
+    retryCodeTask(runId: string, fixNote?: string) {
+      return request<{ status: string; run_id: string; attempt: number }>(
+        "POST", `/v1/code-tasks/${encodeURIComponent(runId)}/retry`, { body: { fix_note: fixNote ?? "" } });
+    },
+    startPreview(runId: string, ttlMinutes?: number) {
+      return request<{ id: string; status: string; url?: string; error?: string }>(
+        "POST", `/v1/code-tasks/${encodeURIComponent(runId)}/preview`,
+        { body: { ttl_minutes: ttlMinutes ?? 60 } });
+    },
+    getPreviews(projectId: string, limit = 50) {
+      return request<{ previews: Array<Record<string, unknown>> }>(
+        "GET", "/v1/previews", { query: { project_id: projectId, limit } });
     },
     getSandboxes() {
       return request<SandboxesResponse>("GET", "/v1/sandboxes");

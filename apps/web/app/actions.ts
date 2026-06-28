@@ -1964,3 +1964,26 @@ export async function deleteMeetingRoleAction(formData: FormData): Promise<void>
   await client.deleteMeetingRole(roleKey, projectId);
   revalidatePath("/");
 }
+
+export async function retryCodeTaskAction(formData: FormData): Promise<void> {
+  const runId = String(formData.get("run_id") ?? "").trim();
+  if (!runId) return;
+  await client.retryCodeTask(runId, String(formData.get("fix_note") ?? "").trim() || undefined);
+  revalidatePath("/");
+}
+
+export async function startPreviewAction(
+  _prev: { url?: string; error?: string } | null,
+  formData: FormData,
+): Promise<{ url?: string; error?: string }> {
+  const runId = String(formData.get("run_id") ?? "").trim();
+  if (!runId) return { error: "missing run_id" };
+  try {
+    const res = await client.startPreview(runId);
+    revalidatePath("/");
+    if (res.status === "running" && res.url) return { url: res.url };
+    return { error: res.error || "preview failed to start" };
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : String(e) };
+  }
+}

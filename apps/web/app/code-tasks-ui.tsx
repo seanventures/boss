@@ -1,20 +1,59 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, useActionState } from "react";
+import { useRouter } from "next/navigation";
 import type { CodeTaskRun } from "@boss/api-client";
 
-import { createCodeTaskAction } from "./actions";
+import { createCodeTaskAction, retryCodeTaskAction, startPreviewAction } from "./actions";
 import { Markdown } from "./markdown";
 
-const PHASES = ["queued", "provisioning", "coding", "validating", "opening_pr", "done"];
+function PreviewControls({ runId }: { runId: string }) {
+  const [state, action, pending] = useActionState(startPreviewAction, null);
+  return (
+    <form action={action} style={{ display: "inline-flex", gap: 8, alignItems: "center" }}>
+      <input type="hidden" name="run_id" value={runId} />
+      <button className="cap-btn" disabled={pending}>{pending ? "Starting preview…" : "▶ Run preview"}</button>
+      {state?.url ? (
+        <a className="cap-btn primary" href={state.url} target="_blank" rel="noreferrer">Open {state.url} →</a>
+      ) : null}
+      {state?.error ? <span className="detail" style={{ color: "#f85149" }}>⚠ {state.error}</span> : null}
+    </form>
+  );
+}
+
+// Governed pipeline phases (in order). Older/simple-path phases are aliased so the stepper
+// still lights up. Each label says what the agent is actually doing in that phase.
+const PHASES = [
+  "queued", "provisioning", "design", "awaiting_plan_approval",
+  "write_tests", "implement", "run_tests", "review_panel", "check_tests", "done",
+];
 const PHASE_LABEL: Record<string, string> = {
   queued: "Queued",
-  provisioning: "Cloning",
+  provisioning: "Cloning repo",
+  design: "Designing plan",
+  awaiting_plan_approval: "Awaiting plan approval",
+  write_tests: "QA writing tests",
+  implement: "Engineer implementing",
+  run_tests: "Running tests",
+  review_panel: "Adversarial review",
+  check_tests: "Mutation check",
+  done: "Done",
+  // simple-path aliases
   coding: "Coding",
   validating: "Testing",
   opening_pr: "Opening PR",
-  done: "Done",
 };
+
+// Poll the server (router.refresh re-runs the server fetch) while any task is mid-flight,
+// so the phase/activity updates live instead of needing a manual refresh.
+function useLiveRefresh(active: boolean, intervalMs = 4000) {
+  const router = useRouter();
+  useEffect(() => {
+    if (!active) return;
+    const t = setInterval(() => router.refresh(), intervalMs);
+    return () => clearInterval(t);
+  }, [active, intervalMs, router]);
+}
 
 function statusTone(status: string): string {
   if (status === "completed") return "green";
@@ -115,6 +154,8 @@ function GateRow({ label, ok, note }: { label: string; ok?: boolean; note?: stri
 function CodeTaskDetail({ run, onBack }: { run: CodeTaskRun; onBack: () => void }) {
   const st = run.state ?? {};
   const tests = st.tests ?? [];
+  const live = run.status === "running" || run.status === "queued";
+  useLiveRefresh(live);
   const hasGateEvidence = Boolean(
     st.review_summary || st.adversarial_verdict || st.security_verdict || st.qa_summary || st.impl_summary,
   );
@@ -138,6 +179,14 @@ function CodeTaskDetail({ run, onBack }: { run: CodeTaskRun; onBack: () => void 
       </div>
 
       <Flow phase={run.phase} status={run.status} />
+
+      {live ? (
+        <div className="detail" style={{ margin: "8px 0", color: "#58a6ff", fontWeight: 600 }}>
+          <span style={{ animation: "pulse 1.5s infinite" }}>●</span>{" "}
+          {PHASE_LABEL[run.phase] ?? run.phase} — in progress…{" "}
+          <span className="detail" style={{ fontWeight: 400 }}>(auto‑refreshing every 4s)</span>
+        </div>
+      ) : null}
 
       {run.error ? (
         <div className="ct-error">
@@ -183,6 +232,20 @@ function CodeTaskDetail({ run, onBack }: { run: CodeTaskRun; onBack: () => void 
               <div className="ct-block-title" style={{ fontSize: 12.5 }}>🔎 Adversarial reviewer findings</div>
               <Markdown text={st.review_summary} />
             </div>
+          ) : null}
+          {st.security_summary ? (
+            <div className="ct-summary" style={{ marginTop: 8 }}>
+              <div className="ct-block-title" style={{ fontSize: 12.5 }}>
+                🔒 Security review {st.security_verdict ? `— ${st.security_verdict}` : ""}
+              </div>
+              <Markdown text={st.security_summary} />
+            </div>
+          ) : null}
+          {st.consistency_summary ? (
+            <details style={{ marginTop: 8 }}>
+              <summary className="detail" style={{ cursor: "pointer" }}>Consistency review</summary>
+              <div className="ct-summary"><Markdown text={st.consistency_summary} /></div>
+            </details>
           ) : null}
           {st.qa_summary ? (
             <details style={{ marginTop: 8 }}>
@@ -256,6 +319,23 @@ function CodeTaskDetail({ run, onBack }: { run: CodeTaskRun; onBack: () => void 
           ) : null}
         </div>
       </div>
+
+      <div className="ct-block">
+        <div className="ct-block-title">Run it / iterate</div>
+        <div className="ct-outcome" style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+          <PreviewControls runId={run.id} />
+          {(run.status === "failed" || run.status === "blocked") ? (
+            <form action={retryCodeTaskAction} style={{ display: "inline" }}>
+              <input type="hidden" name="run_id" value={run.id} />
+              <button className="cap-btn">↻ Retry (carry findings forward)</button>
+            </form>
+          ) : null}
+        </div>
+        <p className="detail" style={{ marginTop: 4 }}>
+          Preview runs the built app on a local URL (1‑box, auto‑expires). Retry resumes this task
+          as a new attempt with its prior findings as feedback.
+        </p>
+      </div>
     </div>
   );
 }
@@ -268,6 +348,9 @@ export function CodeTasksHome({ projectId, codeTasks, apiReachable }: {
 }) {
   const [selected, setSelected] = useState<string | null>(null);
   const [showNew, setShowNew] = useState(false);
+  // Live-refresh while any task is queued/running so phases update without a manual reload.
+  const anyLive = codeTasks.some((c) => c.status === "running" || c.status === "queued");
+  useLiveRefresh(anyLive);
 
   if (!apiReachable) {
     return <p className="detail">Code tasks unavailable — API unreachable.</p>;

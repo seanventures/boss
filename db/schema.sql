@@ -1838,3 +1838,24 @@ CREATE TABLE IF NOT EXISTS commitment_reconciliations (
 );
 CREATE INDEX IF NOT EXISTS idx_commitment_reconciliations_project
   ON commitment_reconciliations (project_id, created_at DESC);
+
+-- Tier-1 "1-box" app previews: ephemeral local runs of a code-task's built app, so an
+-- operator can see the working website before merge. Process-based, auto-expiring (TTL).
+CREATE TABLE IF NOT EXISTS app_previews (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  run_id TEXT,
+  repo TEXT,
+  branch TEXT,
+  command TEXT,
+  port INTEGER,
+  url TEXT,
+  pid INTEGER,
+  status TEXT NOT NULL DEFAULT 'starting',   -- starting|running|failed|stopped|expired
+  error TEXT,
+  log_path TEXT,
+  expires_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_app_previews_project ON app_previews (project_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_app_previews_run ON app_previews (run_id);

@@ -4140,6 +4140,53 @@ def run_code_task_step_endpoint(payload: dict):
     return run_code_task(engine, settings, jobs, payload["run_id"])
 
 
+@app.post("/v1/code-tasks/{run_id}/retry")
+def retry_code_task_endpoint(run_id: str, payload: Optional[dict] = None):
+    """Resume a failed/blocked code task as a new attempt in the same lineage, carrying its prior
+    findings forward so the agent fixes the identified issues instead of regenerating from scratch."""
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    from .services.code_task_service import retry_code_task
+    try:
+        return retry_code_task(engine, settings, jobs, run_id, fix_note=(payload or {}).get("fix_note", ""))
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
+@app.post("/v1/code-tasks/{run_id}/preview")
+def start_preview_endpoint(run_id: str, payload: Optional[dict] = None):
+    """Tier-1 1-box preview: run the code task's built app locally + return a live URL."""
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    from .services.preview_service import start_preview
+    try:
+        return start_preview(engine, settings, run_id,
+                             ttl_minutes=int((payload or {}).get("ttl_minutes", 60)))
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
+@app.get("/v1/previews")
+def list_previews_endpoint(project_id: str, limit: int = 50):
+    """List app previews for a project (reaps expired ones)."""
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    from .services.preview_service import list_previews
+    return {"previews": list_previews(engine, project_id, limit)}
+
+
+@app.post("/v1/previews/{preview_id}/stop")
+def stop_preview_endpoint(preview_id: str):
+    """Tear down a running preview."""
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    from .services.preview_service import stop_preview
+    try:
+        return stop_preview(engine, preview_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
 @app.get("/v1/code-tasks")
 def list_code_tasks_endpoint(project_id: str, limit: int = 50):
     """List code-task runs for a project (newest first) for the Code Tasks view."""
