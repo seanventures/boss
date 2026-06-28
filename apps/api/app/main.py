@@ -4210,6 +4210,18 @@ def list_previews_endpoint(project_id: str, limit: int = 50):
     return {"previews": list_previews(engine, project_id, limit)}
 
 
+@app.post("/v1/previews/{preview_id}/smoke")
+def smoke_preview_endpoint(preview_id: str, payload: Optional[dict] = None):
+    """Tier-3 smoke canary: assert the live preview actually works (key routes), record a receipt."""
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    from .services.preview_service import smoke_test
+    try:
+        return smoke_test(engine, preview_id, (payload or {}).get("checks"))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
 @app.post("/v1/previews/{preview_id}/stop")
 def stop_preview_endpoint(preview_id: str):
     """Tear down a running preview."""

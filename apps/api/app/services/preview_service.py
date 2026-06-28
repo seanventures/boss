@@ -306,6 +306,58 @@ def _kill(pid: Optional[int]) -> None:
             pass
 
 
+def smoke_test(engine, preview_id: str, checks: Optional[list[dict]] = None) -> dict:
+    """Tier-3 smoke canary: hit the live preview URL with a set of checks and assert each — proves
+    the deployed app actually works, not just that it serves a page. Records a receipt event.
+    Each check: {method, path, body?, expect_status?, expect_contains?}. Default: GET / -> 2xx."""
+    import urllib.request
+    with begin(engine) as c:
+        row = c.execute(text("SELECT project_id,url,status,run_id FROM app_previews WHERE id=:id"),
+                        {"id": preview_id}).mappings().first()
+    if row is None:
+        raise ValueError("preview not found")
+    if row["status"] != "running" or not row["url"]:
+        raise ValueError(f"preview not running (status={row['status']})")
+    base = row["url"].rstrip("/")
+    checks = checks or [{"method": "GET", "path": "/", "expect_status": 200}]
+    results, passed = [], 0
+    for chk in checks:
+        method = (chk.get("method") or "GET").upper()
+        path = chk.get("path") or "/"
+        want_status = chk.get("expect_status")
+        want_contains = chk.get("expect_contains")
+        data = json.dumps(chk["body"]).encode() if chk.get("body") is not None else None
+        req = urllib.request.Request(base + path, data=data, method=method,
+                                     headers={"Content-Type": "application/json"} if data else {})
+        ok, status, detail = False, None, ""
+        try:
+            resp = urllib.request.urlopen(req, timeout=8)
+            status = resp.status
+            text_body = resp.read(8000).decode("utf-8", "ignore")
+        except urllib.error.HTTPError as e:
+            status = e.code
+            text_body = (e.read(2000).decode("utf-8", "ignore") if hasattr(e, "read") else "")
+        except Exception as e:  # noqa: BLE001
+            detail = str(e)[:160]
+            text_body = ""
+        if status is not None:
+            ok = ((want_status is None or status == want_status)
+                  and (want_contains is None or want_contains in text_body))
+            if not ok and not detail:
+                detail = (f"status {status}" + (f" != {want_status}" if want_status and status != want_status else "")
+                          + ("; missing expected text" if want_contains and want_contains not in text_body else ""))
+        results.append({"method": method, "path": path, "status": status, "ok": ok, "detail": detail})
+        if ok:
+            passed += 1
+    all_ok = passed == len(checks)
+    with begin(engine) as c:
+        emit_event(c, row["project_id"], "app_preview.smoke", "operator", "app_preview", preview_id,
+                   {"run_id": row["run_id"], "passed": passed, "total": len(checks),
+                    "ok": all_ok, "results": results})
+    return {"preview_id": preview_id, "url": base, "ok": all_ok,
+            "passed": passed, "total": len(checks), "results": results}
+
+
 def _teardown(row) -> None:
     if row.get("mode") == "docker":
         _docker_rm(row.get("container_id"))
