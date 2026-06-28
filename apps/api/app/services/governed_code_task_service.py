@@ -586,7 +586,7 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
             "test_command": test_cmd, "test_exit_code": test_result.exit_code,
             "qa_summary": r1.get("summary", "")[:400],
             "impl_summary": r2.get("summary", "")[:400],
-            "review_summary": r3.get("summary", "")[:800],
+            "review_summary": r3.get("summary", "")[:4000],
             "security_summary": r4.get("summary", "")[:4000],
             "consistency_summary": r6.get("summary", "")[:1500],
         }
@@ -601,11 +601,23 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
                 evidence=evidence, gates=gates)
 
         if qg_status != "pass":
+            failing = [k for k, v in gates.items() if not v]
+            # Human escape hatch: preserve the produced diff so an operator can WAIVE the failing
+            # gate(s) and open the PR without a re-run. Governance is kept — gates the human does
+            # NOT waive still block, and the PR still carries its own merge-gate Decision.
+            pending = [{"path": fc.path, "content": fc.content} for fc in sandbox.diff()]
             with begin(engine) as c:
                 _release(sf, c, project_id, reservation_id, f"quality gate failed: {qg_id}")
-                return _fail(c, run_id, project_id,
-                             f"QualityGate FAIL ({qg_id}); failing gates: "
-                             f"{[k for k,v in gates.items() if not v]}")
+                ctx = {**fctx, "pending_diff": pending, "failing_gates": failing,
+                       "quality_gate_id": qg_id, "pr_summary": r2.get("summary", "")[:600]}
+                c.execute(text(
+                    "UPDATE code_task_runs SET status='blocked', phase='awaiting_gate_override', "
+                    "error=:e, finalize_ctx=CAST(:fc AS JSONB), updated_at=now() WHERE id=:id"),
+                    {"e": f"QualityGate FAIL ({qg_id}); failing gates: {failing}. "
+                          f"A human can waive these + open the PR via /override.",
+                     "fc": json.dumps(ctx), "id": run_id})
+            return {"status": "blocked", "done": True, "awaiting_gate_override": True,
+                    "quality_gate_id": qg_id, "failing_gates": failing}
 
         # GATE PASSED — open the PR via the existing software-factory path.
         with begin(engine) as c:

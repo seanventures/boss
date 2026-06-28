@@ -79,6 +79,15 @@ def list_code_task_runs(connection, project_id: str, limit: int = 50) -> list[di
     return [_row_to_run(r) for r in rows]
 
 
+_DEPLOYABILITY_NOTE = (
+    "\n\nDEPLOYABILITY (required for any network service): bind the host from the HOST env var "
+    "(default 0.0.0.0) and the port from the PORT env var, with sensible fallbacks. Do NOT hardcode "
+    "127.0.0.1 or a fixed port for the running server — it must run in a container / behind a proxy. "
+    "(Unit tests may still bind loopback + an ephemeral port.) Binding 0.0.0.0 here is expected for a "
+    "containerized internal tool behind the platform proxy — it is not a vulnerability."
+)
+
+
 def start_code_task(
     connection, *, project_id: str, task_id: Optional[str], title: str,
     instructions: str, acceptance_criteria: list[str], test_commands: list[str],
@@ -88,7 +97,7 @@ def start_code_task(
     """Create the durable run row and enqueue the single `code.task` job."""
     run_id = make_id("crun")
     spec = {
-        "instructions": instructions,
+        "instructions": instructions + _DEPLOYABILITY_NOTE,
         "acceptance_criteria": acceptance_criteria or [],
         "test_commands": test_commands or [],
         "owner": owner, "repo": repo, "base_branch": base_branch,
@@ -160,6 +169,66 @@ def retry_code_task(engine, settings: Settings, jobs, run_id: str, *, fix_note: 
         )
     return {"status": "queued", "run_id": new_id, "attempt": attempt,
             "parent_run_id": run_id, "root_run_id": root}
+
+
+def override_code_task(engine, settings: Settings, jobs, run_id: str, *,
+                       waive_gates: list[str], actor: str = "operator", reason: str = "") -> dict:
+    """Human gate override: waive the named failed gate(s) and open the PR from the diff that was
+    preserved at gate-failure time — NO re-run. Gates the human does NOT waive still block, and the
+    opened PR keeps its own merge-gate Decision (this opens, it does not merge)."""
+    from ..schemas import FileChange
+    with begin(engine) as c:
+        run = load_code_task_run(c, run_id)
+    if run is None:
+        raise ValueError(f"code task run not found: {run_id}")
+    if run.get("pull_request_url"):
+        return {"status": "completed", "pull_request_url": run["pull_request_url"], "already_open": True}
+    fctx = run.get("finalize_ctx") or {}
+    failing = fctx.get("failing_gates") or []
+    pending = fctx.get("pending_diff")
+    if not pending:
+        raise ValueError("no preserved diff — only runs blocked at 'awaiting_gate_override' can be overridden.")
+    waive = list(waive_gates or [])
+    if "*" in waive or "all" in waive:
+        waive = list(failing)
+    not_waived = [g for g in failing if g not in waive]
+    if not_waived:
+        raise ValueError(f"refused: failing gates not waived: {not_waived}. "
+                         "Waive them explicitly to proceed (or leave them to keep blocking).")
+    waive_gates = waive
+    files = [FileChange(path=f["path"], content=f["content"]) for f in pending]
+    sf = SoftwareFactoryService(settings)
+    project_id = run["project_id"]
+    task_id = run.get("task_id")
+    qg = fctx.get("quality_gate_id")
+    with begin(engine) as c:
+        reservation = sf.budget.reserve(c, project_id, category="code_task",
+            amount_usd_micros=200_000, reason=f"gate-override PR {run_id[:12]}", expires_in_minutes=15)
+        _set_phase(c, run_id, "opening_pr")
+        proposal = sf.propose_pull_request(
+            c, project_id, task_id, reservation_id=reservation.get("reservation_id"),
+            dedupe_key=f"code:task:{run_id}", title=run["title"],
+            branch_name=f"boss/code/{run_id}",
+            summary=(f"⚠️ GATE OVERRIDE by {actor}: waived {waive_gates} (QualityGate {qg}).\n"
+                     f"Reason: {reason or '(none given)'}\n\n{fctx.get('pr_summary', '')}"),
+            files=files, created_by_job_id=fctx.get("created_by_job_id"))
+    status = proposal.get("status")
+    if status not in ("created", "succeeded"):
+        return {"status": "error", "detail": f"PR not created: {status}", **proposal}
+    with begin(engine) as c:
+        c.execute(text("UPDATE code_task_runs SET status='completed', phase='done', "
+                       "pull_request_url=:u, pull_request_number=:n, decision_id=:d, error=:e, "
+                       "updated_at=now() WHERE id=:id"),
+                  {"u": proposal.get("pull_request_url"), "n": proposal.get("pull_request_number"),
+                   "d": proposal.get("decision_id"),
+                   "e": f"Gate {qg} OVERRIDDEN by {actor}: waived {waive_gates}.", "id": run_id})
+        emit_event(c, project_id, "code_task.gate_overridden", actor, "code_task_run", run_id,
+                   {"waived_gates": waive_gates, "reason": reason, "quality_gate_id": qg,
+                    "pull_request_url": proposal.get("pull_request_url")})
+    return {"status": "completed", "run_id": run_id, "waived_gates": waive_gates,
+            "pull_request_url": proposal.get("pull_request_url"),
+            "pull_request_number": proposal.get("pull_request_number"),
+            "decision_id": proposal.get("decision_id")}
 
 
 def _release(sf, connection, project_id: str, reservation_id: Optional[str], reason: str) -> None:

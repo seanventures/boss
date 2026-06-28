@@ -4,8 +4,26 @@ import { useState, useEffect, useActionState } from "react";
 import { useRouter } from "next/navigation";
 import type { CodeTaskRun } from "@boss/api-client";
 
-import { createCodeTaskAction, retryCodeTaskAction, startPreviewAction } from "./actions";
+import { createCodeTaskAction, retryCodeTaskAction, startPreviewAction, overrideCodeTaskAction } from "./actions";
 import { Markdown } from "./markdown";
+
+function OverrideControls({ runId }: { runId: string }) {
+  const [state, action, pending] = useActionState(overrideCodeTaskAction, null);
+  return (
+    <form action={action} style={{ display: "inline-flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+      <input type="hidden" name="run_id" value={runId} />
+      <input name="reason" placeholder="Reason for override (recorded)" className="cap-input"
+             style={{ minWidth: 220 }} />
+      <button className="cap-btn" disabled={pending}>
+        {pending ? "Overriding…" : "⚖ Waive failing gates & open PR"}
+      </button>
+      {state?.url ? (
+        <a className="cap-btn primary" href={state.url} target="_blank" rel="noreferrer">PR opened →</a>
+      ) : null}
+      {state?.error ? <span className="detail" style={{ color: "#f85149" }}>⚠ {state.error}</span> : null}
+    </form>
+  );
+}
 
 function PreviewControls({ runId }: { runId: string }) {
   const [state, action, pending] = useActionState(startPreviewAction, null);
@@ -331,6 +349,15 @@ function CodeTaskDetail({ run, onBack }: { run: CodeTaskRun; onBack: () => void 
             </form>
           ) : null}
         </div>
+        {(run.status === "failed" || run.status === "blocked") ? (
+          <div style={{ marginTop: 8 }}>
+            <OverrideControls runId={run.id} />
+            <p className="detail" style={{ marginTop: 4 }}>
+              ⚖ Human override: accept the failing finding(s) and open the PR from the work already
+              produced — no re‑run. The PR still carries its own merge gate.
+            </p>
+          </div>
+        ) : null}
         <p className="detail" style={{ marginTop: 4 }}>
           Preview runs the built app on a local URL (1‑box, auto‑expires). Retry resumes this task
           as a new attempt with its prior findings as feedback.

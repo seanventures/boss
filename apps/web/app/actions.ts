@@ -1987,3 +1987,20 @@ export async function startPreviewAction(
     return { error: e instanceof Error ? e.message : String(e) };
   }
 }
+
+export async function overrideCodeTaskAction(
+  _prev: { url?: string; error?: string } | null,
+  formData: FormData,
+): Promise<{ url?: string; error?: string }> {
+  const runId = String(formData.get("run_id") ?? "").trim();
+  const reason = String(formData.get("reason") ?? "").trim();
+  if (!runId) return { error: "missing run_id" };
+  try {
+    const res = await client.overrideCodeTask(runId, ["*"], reason);
+    revalidatePath("/");
+    if (res.pull_request_url) return { url: res.pull_request_url };
+    return { error: "override did not open a PR" };
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : String(e) };
+  }
+}

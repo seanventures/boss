@@ -4153,17 +4153,38 @@ def retry_code_task_endpoint(run_id: str, payload: Optional[dict] = None):
         raise HTTPException(status_code=404, detail=str(exc))
 
 
-@app.post("/v1/code-tasks/{run_id}/preview")
-def start_preview_endpoint(run_id: str, payload: Optional[dict] = None):
-    """Tier-1 1-box preview: run the code task's built app locally + return a live URL."""
+@app.post("/v1/code-tasks/{run_id}/override")
+def override_code_task_endpoint(run_id: str, payload: dict):
+    """Human gate override: waive the named failed gate(s) + open the PR from the preserved diff
+    (no re-run). Gates not waived still block; the PR keeps its own merge-gate Decision."""
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
-    from .services.preview_service import start_preview
+    from .services.code_task_service import override_code_task
     try:
-        return start_preview(engine, settings, run_id,
-                             ttl_minutes=int((payload or {}).get("ttl_minutes", 60)))
+        return override_code_task(engine, settings, jobs, run_id,
+            waive_gates=payload.get("waive_gates") or [],
+            actor=payload.get("actor") or "operator", reason=payload.get("reason") or "")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.post("/v1/code-tasks/{run_id}/preview")
+def start_preview_endpoint(run_id: str, payload: Optional[dict] = None):
+    """1-box preview of a code task's built app. mode=docker (default) builds + runs a dev
+    container; mode=process runs it as a managed host process. Returns a live URL."""
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    p = payload or {}
+    mode = str(p.get("mode", "docker")).lower()
+    ttl = int(p.get("ttl_minutes", 60))
+    from .services.preview_service import start_preview, start_container_preview
+    fn = start_container_preview if mode == "docker" else start_preview
+    try:
+        return fn(engine, settings, run_id, ttl_minutes=ttl)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
+    except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
 
 @app.get("/v1/previews")

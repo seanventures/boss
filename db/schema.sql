@@ -1851,6 +1851,8 @@ CREATE TABLE IF NOT EXISTS app_previews (
   port INTEGER,
   url TEXT,
   pid INTEGER,
+  mode TEXT NOT NULL DEFAULT 'process',       -- process | docker
+  container_id TEXT,                           -- docker container id (mode=docker)
   status TEXT NOT NULL DEFAULT 'starting',   -- starting|running|failed|stopped|expired
   error TEXT,
   log_path TEXT,

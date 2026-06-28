@@ -3964,6 +3964,11 @@ export function createBossApiClient(config: BossApiClientConfig) {
       return request<{ status: string; run_id: string; attempt: number }>(
         "POST", `/v1/code-tasks/${encodeURIComponent(runId)}/retry`, { body: { fix_note: fixNote ?? "" } });
     },
+    overrideCodeTask(runId: string, waiveGates: string[], reason?: string) {
+      return request<{ status: string; pull_request_url?: string; pull_request_number?: number }>(
+        "POST", `/v1/code-tasks/${encodeURIComponent(runId)}/override`,
+        { body: { waive_gates: waiveGates, reason: reason ?? "" } });
+    },
     startPreview(runId: string, ttlMinutes?: number) {
       return request<{ id: string; status: string; url?: string; error?: string }>(
         "POST", `/v1/code-tasks/${encodeURIComponent(runId)}/preview`,
