@@ -341,7 +341,11 @@ function CodeTaskDetail({ run, onBack }: { run: CodeTaskRun; onBack: () => void 
       <div className="ct-block">
         <div className="ct-block-title">Run it / iterate</div>
         <div className="ct-outcome" style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
-          <PreviewControls runId={run.id} />
+          {run.pull_request_url ? (
+            <PreviewControls runId={run.id} />
+          ) : (
+            <span className="detail">▶ Preview available once a PR is open (a run must reach a green gate, or be overridden).</span>
+          )}
           {(run.status === "failed" || run.status === "blocked") ? (
             <form action={retryCodeTaskAction} style={{ display: "inline" }}>
               <input type="hidden" name="run_id" value={run.id} />

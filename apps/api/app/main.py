@@ -4175,16 +4175,30 @@ def start_preview_endpoint(run_id: str, payload: Optional[dict] = None):
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
     p = payload or {}
-    mode = str(p.get("mode", "docker")).lower()
+    mode = str(p.get("mode", "auto")).lower()
     ttl = int(p.get("ttl_minutes", 60))
     from .services.preview_service import start_preview, start_container_preview
-    fn = start_container_preview if mode == "docker" else start_preview
-    try:
-        return fn(engine, settings, run_id, ttl_minutes=ttl)
-    except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
-    except RuntimeError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+    # auto: containerize first (isolated), fall back to a host process (handles loopback-binding
+    # apps / no-docker). Explicit mode forces one path.
+    if mode == "process":
+        attempts = [start_preview]
+    elif mode == "docker":
+        attempts = [start_container_preview]
+    else:
+        attempts = [start_container_preview, start_preview]
+    last: Optional[dict] = None
+    for fn in attempts:
+        try:
+            res = fn(engine, settings, run_id, ttl_minutes=ttl)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc))
+        except RuntimeError as exc:
+            last = {"status": "failed", "error": str(exc)}
+            continue
+        if res.get("status") == "running":
+            return res
+        last = res
+    return last or {"status": "failed", "error": "preview could not start"}
 
 
 @app.get("/v1/previews")
