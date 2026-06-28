@@ -1802,7 +1802,7 @@ class WorkerPollRequest(BaseModel):
     worker_id: str
     capabilities: list[str]
     max_jobs: int = Field(default=1, ge=1, le=1)
-    lease_ttl_seconds: int = Field(default=60, ge=5, le=600)
+    lease_ttl_seconds: int = Field(default=60, ge=5, le=3600)
 
 
 class WorkerPollResponse(BaseModel):
@@ -1814,7 +1814,7 @@ class WorkerHeartbeatRequest(BaseModel):
     worker_id: str
     job_id: str
     lease_token: str
-    lease_ttl_seconds: int = Field(default=60, ge=5, le=600)
+    lease_ttl_seconds: int = Field(default=60, ge=5, le=3600)
 
 
 class WorkerHeartbeatResponse(BaseModel):
