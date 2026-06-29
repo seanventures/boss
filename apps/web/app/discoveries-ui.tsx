@@ -28,6 +28,15 @@ function statusTone(s: string): string {
   return "warn";
 }
 
+function VerdictBadge({ v }: { v?: string }) {
+  if (!v) return null;
+  if (v === "pursue") return <span className="cap-badge tone-ok">✓ pursue</span>;
+  if (v === "promising") {
+    return <span className="cap-badge" style={{ background: "#1f6feb33", color: "#58a6ff", borderColor: "#1f6feb66" }}>◆ promising</span>;
+  }
+  return <span className="cap-badge tone-warn">needs more research</span>;
+}
+
 function useLiveRefresh(active: boolean, intervalMs = 4000) {
   const router = useRouter();
   useEffect(() => {
@@ -91,11 +100,7 @@ export function DiscoveriesHome({ projectId, discoveries, apiReachable }: {
                 <div className="ct-card-title" style={{ fontWeight: 700, fontSize: 14, lineHeight: 1.3 }}>{d.title}</div>
                 <div className="ct-card-head" style={{ marginTop: 4 }}>
                   <span className={`cap-badge tone-${statusTone(d.status)}`}>{d.status}</span>
-                  {verdict ? (
-                    <span className={`cap-badge tone-${verdict === "pursue" ? "ok" : "warn"}`}>
-                      {verdict === "pursue" ? "✓ pursue" : "needs more research"}
-                    </span>
-                  ) : null}
+                  <VerdictBadge v={verdict} />
                 </div>
                 <div className="detail" style={{ marginTop: 4 }}>
                   {d.status === "running" ? `running — ${PHASE_LABEL[d.phase] ?? d.phase}` :
@@ -127,7 +132,7 @@ function DiscoveryDetail({ run, onBack }: { run: DiscoveryRun; onBack: () => voi
       <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
         <button className="cap-btn" onClick={onBack}>← Back</button>
         <span className={`cap-badge tone-${statusTone(run.status)}`}>{run.status}</span>
-        {gate?.verdict ? <span className={`cap-badge tone-${gate.verdict === "pursue" ? "ok" : "warn"}`}>{gate.verdict === "pursue" ? "✓ pursue" : "needs more research"}</span> : null}
+        <VerdictBadge v={gate?.verdict} />
         {run.usage?.cost_usd_micros != null ? <span className="detail">{fmtUsd(run.usage.cost_usd_micros)}</span> : null}
       </div>
 
@@ -155,7 +160,10 @@ function DiscoveryDetail({ run, onBack }: { run: DiscoveryRun; onBack: () => voi
       {/* Evidence gate */}
       {gate ? (
         <section className="panel" style={{ padding: 16 }}>
-          <div className="eyebrow">Evidence gate · {gate.verdict} · confidence {Math.round((gate.confidence ?? 0) * 100)}%</div>
+          <div className="eyebrow">
+            Evidence gate · {gate.verdict} · confidence {Math.round((gate.confidence ?? 0) * 100)}%
+            {gate.thesis_confidence != null ? ` (thesis ${Math.round(gate.thesis_confidence * 100)}% · best outcome ${Math.round((gate.best_outcome_confidence ?? 0) * 100)}%)` : ""}
+          </div>
           <div style={{ display: "grid", gap: 4, marginTop: 8 }}>
             {Object.entries(gate.checks ?? {}).map(([k, v]) => (
               <div key={k} className="detail">{v ? "✓" : "✗"} {k.replace(/_/g, " ")}</div>

@@ -1010,9 +1010,11 @@ export type DiscoveryDossier = {
   };
   candidate_outcomes?: DiscoveryOutcome[];
   gate?: {
-    verdict?: string; // pursue | needs_more_research
+    verdict?: string; // pursue | promising | needs_more_research
     checks?: Record<string, boolean>;
     confidence?: number;
+    thesis_confidence?: number;
+    best_outcome_confidence?: number;
     cited_sources?: number;
   };
 };

@@ -178,28 +178,61 @@ def _save(engine, run_id: str, dossier: dict, cost: int, model: Optional[str]) -
 # --------------------------------------------------------------------------- #
 #  Evidence gate                                                              #
 # --------------------------------------------------------------------------- #
+def _f(v) -> float:
+    try:
+        return float(v or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+# Evidence-gate thresholds (tunable).
+PURSUE_CONFIDENCE = 0.60      # strong, build-ready
+PROMISING_CONFIDENCE = 0.35   # weak literal idea but a viable pivot worth a pilot
+MIN_CITED_SOURCES = 4
+
+
 def _evaluate_gate(dossier: dict) -> dict:
-    """Fail-closed: an outcome is only worth pursuing with enough cited, vetted evidence."""
+    """Three-tier, fail-closed evidence gate.
+
+    Confidence blends the skeptic's verdict on the *original thesis* with the *best shaped
+    outcome's* confidence — so a weak basic idea that research pivots into a strong wedge can
+    still rank as 'promising' rather than being binary-rejected.
+      pursue              — build-ready: strong confidence + full structural evidence
+      promising           — a viable, cited outcome worth a pilot, but not yet a slam dunk
+      needs_more_research — thin evidence, or no viable outcome
+    """
     findings = dossier.get("signal_findings") or []
     cited = [f for f in findings if (f or {}).get("citation_url")]
     crit = dossier.get("critique") or {}
-    try:
-        conf = float(crit.get("overall_confidence_0_1") or 0)
-    except (TypeError, ValueError):
-        conf = 0.0
     outcomes = dossier.get("candidate_outcomes") or []
+
+    thesis_conf = _f(crit.get("overall_confidence_0_1"))
+    outcome_confs = [_f(o.get("confidence_0_1")) for o in outcomes if (o or {}).get("confidence_0_1") is not None]
+    best_outcome_conf = max(outcome_confs) if outcome_confs else 0.0
+    confidence = max(thesis_conf, best_outcome_conf)
+
     checks = {
-        "enough_cited_sources": len(cited) >= 4,
-        "confidence_meets_bar": conf >= 0.5,
+        "enough_cited_sources": len(cited) >= MIN_CITED_SOURCES,
         "has_outcome": len(outcomes) >= 1,
         "outcome_has_pilot": any((o or {}).get("target_pilot") for o in outcomes),
         "disconfirming_considered": len(crit.get("disconfirming_evidence") or []) >= 1,
+        "confidence_strong": confidence >= PURSUE_CONFIDENCE,
     }
-    passed = all(checks.values())
+    structural_ok = checks["enough_cited_sources"] and checks["has_outcome"] and checks["disconfirming_considered"]
+
+    if structural_ok and checks["outcome_has_pilot"] and confidence >= PURSUE_CONFIDENCE:
+        verdict = "pursue"
+    elif structural_ok and confidence >= PROMISING_CONFIDENCE:
+        verdict = "promising"
+    else:
+        verdict = "needs_more_research"
+
     return {
-        "verdict": "pursue" if passed else "needs_more_research",
+        "verdict": verdict,
         "checks": checks,
-        "confidence": conf,
+        "confidence": round(confidence, 2),
+        "thesis_confidence": round(thesis_conf, 2),
+        "best_outcome_confidence": round(best_outcome_conf, 2),
         "cited_sources": len(cited),
     }
 
