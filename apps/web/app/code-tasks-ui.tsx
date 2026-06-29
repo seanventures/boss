@@ -415,24 +415,40 @@ export function CodeTasksHome({ projectId, codeTasks, apiReachable }: {
         <div className="ct-grid">
           {codeTasks.map((c) => {
             const st = c.state ?? {};
+            const failing = (c.error ?? "").match(/failing gates: (\[[^\]]*\])/)?.[1];
+            // One-line outcome so the card says what happened, not just the status.
+            let outcome: string;
+            if (c.status === "completed") {
+              const gp = [
+                st.tests_passed ? "tests ✓" : null,
+                st.adversarial_verdict === "survived" ? "review ✓" : null,
+                st.security_verdict === "clean" ? "security ✓" : null,
+                st.mutation_caught ? "mutation ✓" : null,
+              ].filter(Boolean).join(" · ");
+              outcome = gp || "all gates passed";
+            } else if (c.status === "blocked" && c.phase === "awaiting_gate_override") {
+              outcome = `⚖ gate blocked — ${failing ? `failing: ${failing}` : "needs override/retry"}`;
+            } else if (c.status === "failed" || c.status === "blocked") {
+              outcome = failing ? `✗ failing: ${failing}` : (c.error ?? c.status).slice(0, 80);
+            } else {
+              outcome = `running — ${PHASE_LABEL[c.phase] ?? c.phase}`;
+            }
             return (
               <button key={c.id} className="ct-card" onClick={() => setSelected(c.id)}>
                 <div className="ct-card-head">
                   <span className={`cap-badge tone-${statusTone(c.status)}`}>{c.status}</span>
-                  <span className="ct-card-phase">{PHASE_LABEL[c.phase] ?? c.phase}</span>
+                  {st.profile ? <span className="ct-card-phase">{st.profile}{st.risk_tier != null ? ` · t${st.risk_tier}` : ""}</span> : null}
+                  {c.pull_request_url ? <span className="ct-card-pr">PR #{c.pull_request_number}</span> : null}
                 </div>
                 <div className="ct-card-title">{c.title}</div>
-                <div className="ct-card-repo">{c.spec?.owner}/{c.spec?.repo}</div>
+                <div className="ct-card-repo">{c.spec?.owner}/{c.spec?.repo}{c.spec?.base_branch && c.spec.base_branch !== "main" ? ` @ ${c.spec.base_branch}` : ""}</div>
+                <div className="detail" style={{ marginTop: 4 }}>{outcome}</div>
                 <div className="ct-card-foot">
-                  {c.pull_request_url ? (
-                    <span className="ct-card-pr">PR #{c.pull_request_number}</span>
-                  ) : <span className="detail">no PR</span>}
                   {typeof st.files_changed === "number" ? (
                     <span className="detail">{st.files_changed} files · +{st.additions ?? 0}/−{st.deletions ?? 0}</span>
                   ) : null}
-                  <span className={`ct-card-tests ${st.tests_passed ? "ok" : ""}`}>
-                    {st.tests_passed ? "tests ✓" : ""}
-                  </span>
+                  {(st.cost_usd_micros != null) ? <span className="detail">{fmtUsd(st.cost_usd_micros)}</span> : null}
+                  {st.engine ? <span className="detail">{st.engine}</span> : null}
                 </div>
               </button>
             );
