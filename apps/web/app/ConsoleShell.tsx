@@ -16,6 +16,7 @@ type AreaId =
   | "overview"
   | "decisions"
   | "work"
+  | "discovery"
   | "meetings"
   | "code_tasks"
   | "reports"
@@ -67,6 +68,7 @@ const ICONS = {
   capabilities: I(<><path d="M14.7 6.3a4 4 0 0 0-5.4 5.4L3 18v3h3l6.3-6.3a4 4 0 0 0 5.4-5.4l-2.3 2.3-2-2 2.3-2.3Z" /></>),
   meetings: I(<><circle cx="8" cy="9" r="2.4" /><circle cx="16" cy="9" r="2.4" /><path d="M3.5 19a4.5 4.5 0 0 1 9 0" /><path d="M12.5 18.5a4.5 4.5 0 0 1 8-2.6" /></>),
   code_tasks: I(<><path d="M8 9l-3 3 3 3" /><path d="M16 9l3 3-3 3" /><path d="M13 5l-2 14" /></>),
+  discovery: I(<><circle cx="11" cy="11" r="7" /><path d="M21 21l-4.3-4.3" /><path d="M11 8v6M8 11h6" /></>),
   sandboxes: I(<><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M3 9h18" /><path d="M7 6.5h.01M10 6.5h.01" /><path d="M7 13l2 2-2 2" /><path d="M12 17h4" /></>),
 } as const;
 
@@ -75,6 +77,7 @@ const AREAS: AreaDef[] = [
   { id: "overview", label: "Overview", sub: "What changed · top risks · next actions", group: "Run", icon: ICONS.overview },
   { id: "decisions", label: "Decisions", sub: "Explicit approvals before real effects", group: "Run", icon: ICONS.decisions },
   { id: "work", label: "Work", sub: "Tasks, artifacts, and the activity feed", group: "Run", icon: ICONS.work },
+  { id: "discovery", label: "Discovery", sub: "Research a signal — cited dossier & candidate outcomes", group: "Run", icon: ICONS.discovery },
   { id: "meetings", label: "Meetings", sub: "Cross-functional agent panels — debate to a PRD", group: "Run", icon: ICONS.meetings },
   { id: "code_tasks", label: "Code Tasks", sub: "Agent edits code in a sandbox — tested, gated PRs", group: "Run", icon: ICONS.code_tasks },
   { id: "reports", label: "Reports", sub: "Throughput, cost, and agent scorecards", group: "Run", icon: ICONS.reports },

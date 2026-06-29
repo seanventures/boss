@@ -1914,6 +1914,27 @@ export async function createCodeTaskAction(formData: FormData): Promise<void> {
   revalidatePath("/");
 }
 
+export async function startDiscoveryAction(
+  _prev: { runId?: string; error?: string } | null,
+  formData: FormData,
+): Promise<{ runId?: string; error?: string }> {
+  const projectId = getProjectId(formData);
+  const seed = String(formData.get("seed") ?? "").trim();
+  if (!seed) return { error: "Enter an idea / problem / signal to research." };
+  try {
+    const res = await client.startDiscovery({
+      project_id: projectId,
+      seed,
+      title: String(formData.get("title") ?? "").trim() || undefined,
+      context: String(formData.get("context") ?? "").trim() || undefined,
+    });
+    revalidatePath("/");
+    return { runId: res.run_id };
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
 // ---- Onboard a new organization (admin) ----
 
 export async function onboardOrgAction(formData: FormData): Promise<void> {

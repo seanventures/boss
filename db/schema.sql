@@ -1861,3 +1861,21 @@ CREATE TABLE IF NOT EXISTS app_previews (
 );
 CREATE INDEX IF NOT EXISTS idx_app_previews_project ON app_previews (project_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_app_previews_run ON app_previews (run_id);
+
+-- Discovery pipeline: research-driven outcome discovery (signal sweep -> synthesize -> vet ->
+-- shape -> evidence gate). state holds the cited Discovery Dossier + candidate outcomes.
+CREATE TABLE IF NOT EXISTS discovery_runs (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'running',   -- running | completed | failed
+    phase TEXT NOT NULL DEFAULT 'queued',     -- queued|signal_sweep|synthesize|vet|shape|gate|done
+    title TEXT NOT NULL,
+    seed TEXT,                                 -- the raw idea / problem / signal
+    context TEXT,                              -- operator context (ICP, market, constraints)
+    state JSONB NOT NULL DEFAULT '{}',         -- the Discovery Dossier (brief/findings/analysis/critique/outcomes/gate)
+    usage JSONB,
+    error TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_discovery_runs_project ON discovery_runs (project_id, created_at DESC);

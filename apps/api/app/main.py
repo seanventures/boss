@@ -4257,6 +4257,49 @@ def get_code_task_endpoint(run_id: str):
     return run
 
 
+# --- Discovery pipeline: research-driven outcome discovery -------------------
+@app.post("/v1/discoveries")
+def start_discovery_endpoint(payload: dict):
+    """Kick off a Discovery run: research a seed (idea/problem/signal) via web search and
+    produce a cited dossier + candidate outcomes. Returns run_id; progress polls discovery_runs."""
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    seed = (payload.get("seed") or payload.get("scope") or "").strip()
+    title = (payload.get("title") or seed[:120] or "Discovery").strip()
+    if not seed:
+        raise HTTPException(status_code=400, detail="seed (the idea/problem to research) is required")
+    project_id = payload.get("project_id") or "boss-dogfood"
+    from .services.discovery_service import start_discovery
+    run_id = start_discovery(
+        project_id=project_id, title=title, seed=seed,
+        context=(payload.get("context") or "").strip(), settings=settings,
+    )
+    return {"status": "running", "run_id": run_id}
+
+
+@app.get("/v1/discoveries")
+def list_discoveries_endpoint(project_id: str, limit: int = 50):
+    """List discovery runs for a project (newest first) for the Discovery view."""
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    from .services.discovery_service import list_discovery_runs
+    with begin(engine) as c:
+        return {"discoveries": list_discovery_runs(c, project_id, limit)}
+
+
+@app.get("/v1/discoveries/{run_id}")
+def get_discovery_endpoint(run_id: str):
+    """Fetch a single discovery run (status, phase, dossier, candidate outcomes, gate)."""
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    from .services.discovery_service import load_discovery_run
+    with begin(engine) as c:
+        run = load_discovery_run(c, run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="discovery run not found")
+    return run
+
+
 # --- Execution plane: governed sandbox visibility + console ------------------
 @app.get("/v1/sandboxes")
 def list_sandboxes_endpoint():

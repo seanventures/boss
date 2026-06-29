@@ -981,6 +981,57 @@ export type CodeTaskRun = {
 
 export type CodeTasksResponse = { code_tasks: CodeTaskRun[] };
 
+// --- Discovery pipeline (research-driven outcome discovery) ----------------
+export type DiscoveryFinding = {
+  angle?: string;
+  finding?: string;
+  evidence?: string;
+  citation_url?: string;
+};
+export type DiscoveryOutcome = {
+  outcome?: string;
+  wedge?: string;
+  target_pilot?: string;
+  first_prototype_slice?: string;
+  validation_plan?: string;
+  rationale?: string;
+  confidence_0_1?: number;
+  supporting_signals?: string[];
+};
+export type DiscoveryDossier = {
+  research_brief?: { hypothesis?: string; questions?: string[]; sources_consulted?: string[] };
+  signal_findings?: DiscoveryFinding[];
+  market_analysis?: Record<string, unknown>;
+  critique?: {
+    claims?: { claim?: string; verdict?: string; reason?: string }[];
+    disconfirming_evidence?: string[];
+    overall_confidence_0_1?: number;
+    biggest_risk?: string;
+  };
+  candidate_outcomes?: DiscoveryOutcome[];
+  gate?: {
+    verdict?: string; // pursue | needs_more_research
+    checks?: Record<string, boolean>;
+    confidence?: number;
+    cited_sources?: number;
+  };
+};
+export type DiscoveryRun = {
+  id: string;
+  project_id: string;
+  status: string; // running | completed | failed
+  phase: string;  // queued|signal_sweep|synthesize|vet|shape|gate|done
+  title: string;
+  seed?: string | null;
+  context?: string | null;
+  state: DiscoveryDossier;
+  usage?: { cost_usd_micros?: number; model?: string } | null;
+  error?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+};
+export type DiscoveriesResponse = { discoveries: DiscoveryRun[] };
+
 export type SandboxSummary = {
   sandbox_id: string;
   tenant_id: string;
@@ -3953,6 +4004,17 @@ export function createBossApiClient(config: BossApiClientConfig) {
       return request<CodeTasksResponse>("GET", "/v1/code-tasks", {
         query: { project_id: projectId, limit },
       });
+    },
+    getDiscoveries(projectId: string, limit = 50) {
+      return request<DiscoveriesResponse>("GET", "/v1/discoveries", {
+        query: { project_id: projectId, limit },
+      });
+    },
+    getDiscovery(runId: string) {
+      return request<DiscoveryRun>("GET", `/v1/discoveries/${encodeURIComponent(runId)}`);
+    },
+    startDiscovery(payload: { project_id: string; seed: string; title?: string; context?: string }) {
+      return request<{ status: string; run_id: string }>("POST", "/v1/discoveries", { body: payload });
     },
     getCodeTask(runId: string) {
       return request<CodeTaskRun>("GET", `/v1/code-tasks/${encodeURIComponent(runId)}`);

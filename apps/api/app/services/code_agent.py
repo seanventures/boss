@@ -153,12 +153,17 @@ class ClaudeCodeAgent:
         )
 
     def _invoke(
-        self, prompt: str, cwd: Path, *, read_only: bool = False, model: Optional[str] = None
+        self, prompt: str, cwd: Path, *, read_only: bool = False, model: Optional[str] = None,
+        allowed_tools: Optional[str] = None,
     ) -> dict:
         timeout = int(self.settings.code_agent_timeout_seconds or 900)
         # Review stages run read-only (no Edit/Write tools, no auto-accept) so a reviewer
-        # cannot mutate the change it is judging.
-        allowed = "Read,Grep,Glob,Bash" if read_only else self.settings.code_agent_allowed_tools
+        # cannot mutate the change it is judging. `allowed_tools` lets non-coding callers
+        # (e.g. the Discovery research pipeline) opt into WebSearch/WebFetch instead.
+        if allowed_tools is not None:
+            allowed = allowed_tools
+        else:
+            allowed = "Read,Grep,Glob,Bash" if read_only else self.settings.code_agent_allowed_tools
         permission = "default" if read_only else "acceptEdits"
         cmd = [
             self._claude_bin(),
@@ -236,6 +241,25 @@ class ClaudeCodeAgent:
         usage, cost_micros = self._usage(data, self.settings)
         return {
             "summary": _as_text(data.get("result")).strip() or "(no summary returned)",
+            "usage": usage,
+            "cost_usd_micros": cost_micros,
+            "turns": int(data.get("num_turns") or 0),
+            "model": model or usage.get("model"),
+        }
+
+    def run_research(self, prompt: str, *, model: Optional[str] = None) -> dict:
+        """Web-enabled, read-only research invocation: `claude -p` with WebSearch/WebFetch
+        (no repo, no edits). Used by the Discovery pipeline to gather real market signals.
+        Returns {summary, usage, cost_usd_micros, turns, model}."""
+        import tempfile
+        work = Path(tempfile.gettempdir())
+        data = self._invoke(
+            prompt, work, read_only=True, model=model,
+            allowed_tools="WebSearch,WebFetch,Read,Grep,Glob",
+        )
+        usage, cost_micros = self._usage(data, self.settings)
+        return {
+            "summary": _as_text(data.get("result")).strip() or "",
             "usage": usage,
             "cost_usd_micros": cost_micros,
             "turns": int(data.get("num_turns") or 0),

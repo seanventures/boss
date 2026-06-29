@@ -120,6 +120,8 @@ import { fetchMeetingRooms } from "../lib/meeting-rooms";
 import { MeetingsHome } from "./meeting-room-ui";
 import { fetchCodeTasksFeed } from "../lib/code-tasks";
 import { CodeTasksHome } from "./code-tasks-ui";
+import { fetchDiscoveriesFeed } from "../lib/discoveries";
+import { DiscoveriesHome } from "./discoveries-ui";
 import { fetchPipelineData } from "../lib/pipeline-profiles";
 import { PipelineView } from "./pipeline-ui";
 import { fetchSandboxFeed } from "../lib/sandboxes";
@@ -446,6 +448,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
     meetingRooms,
     approvalRules,
     codeTasksFeed,
+    discoveryFeed,
     sandboxFeed,
     pipelineData,
     dashboardSnapshot,
@@ -517,6 +520,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
       fetchMeetingRooms(activeProjectId),
       fetchApprovalRules(activeProjectId),
       fetchCodeTasksFeed(activeProjectId),
+      fetchDiscoveriesFeed(activeProjectId),
       fetchSandboxFeed(),
       fetchPipelineData(activeProjectId),
       fetchDashboard(activeProjectId),
@@ -5999,6 +6003,21 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             orgId={activeOrgId}
             codeTasks={codeTasksFeed.items}
             apiReachable={codeTasksFeed.apiReachable}
+          />
+        </section>
+
+        <section className="panel-stack" data-area="discovery" aria-label="Discovery">
+          <div className="section-head">
+            <div>
+              <span className="eyebrow">Discovery</span>
+              <h2>Feed a signal — BOSS researches the market, vets the thesis, and proposes evidence‑backed outcomes.</h2>
+            </div>
+          </div>
+          <DiscoveriesHome
+            projectId={activeProjectId}
+            orgId={activeOrgId}
+            discoveries={discoveryFeed.items}
+            apiReachable={discoveryFeed.apiReachable}
           />
         </section>
 
