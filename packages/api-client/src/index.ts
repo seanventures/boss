@@ -4024,6 +4024,10 @@ export function createBossApiClient(config: BossApiClientConfig) {
         "POST", `/v1/discoveries/${encodeURIComponent(runId)}/promote`,
         { body: { outcome_index: outcomeIndex } });
     },
+    deepenDiscovery(runId: string) {
+      return request<{ status: string; run_id: string; deep: boolean }>(
+        "POST", `/v1/discoveries/${encodeURIComponent(runId)}/deepen`);
+    },
     getCodeTask(runId: string) {
       return request<CodeTaskRun>("GET", `/v1/code-tasks/${encodeURIComponent(runId)}`);
     },

@@ -1951,6 +1951,21 @@ export async function promoteOutcomeAction(
   }
 }
 
+export async function deepenDiscoveryAction(
+  _prev: { runId?: string; error?: string } | null,
+  formData: FormData,
+): Promise<{ runId?: string; error?: string }> {
+  const runId = String(formData.get("run_id") ?? "").trim();
+  if (!runId) return { error: "missing run_id" };
+  try {
+    const res = await client.deepenDiscovery(runId);
+    revalidatePath("/");
+    return { runId: res.run_id };
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
 // ---- Onboard a new organization (admin) ----
 
 export async function onboardOrgAction(formData: FormData): Promise<void> {

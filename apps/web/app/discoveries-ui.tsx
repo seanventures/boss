@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 
 import type { DiscoveryRun, DiscoveryFinding, DiscoveryOutcome } from "@boss/api-client";
 
-import { startDiscoveryAction, promoteOutcomeAction } from "./actions";
+import { startDiscoveryAction, promoteOutcomeAction, deepenDiscoveryAction } from "./actions";
 
 const PHASE_LABEL: Record<string, string> = {
   queued: "Queued",
@@ -40,6 +40,20 @@ function PromoteOutcome({ runId, idx, orgId, promotedTaskId }: { runId: string; 
       <input type="hidden" name="run_id" value={runId} />
       <input type="hidden" name="outcome_index" value={idx} />
       <button className="cap-btn primary" disabled={pending}>{pending ? "Convening…" : "→ Send to PRD meeting"}</button>
+      {state?.error ? <span className="detail" style={{ color: "#f85149" }}>⚠ {state.error}</span> : null}
+    </form>
+  );
+}
+
+function DeepenButton({ runId }: { runId: string }) {
+  const [state, action, pending] = useActionState(deepenDiscoveryAction, null);
+  if (state?.runId) return <span className="detail" style={{ color: "#3fb950" }}>⏬ Deeper pass started ({state.runId.slice(0, 9)}…) — see the list</span>;
+  return (
+    <form action={action} style={{ display: "inline-flex" }}>
+      <input type="hidden" name="run_id" value={runId} />
+      <button className="cap-btn" disabled={pending} title="Run a multi-source parallel scout sweep for a richer, more-cited dossier">
+        {pending ? "Deepening…" : "⏬ Deepen research"}
+      </button>
       {state?.error ? <span className="detail" style={{ color: "#f85149" }}>⚠ {state.error}</span> : null}
     </form>
   );
@@ -151,7 +165,10 @@ function DiscoveryDetail({ run, orgId, onBack }: { run: DiscoveryRun; orgId?: st
         <button className="cap-btn" onClick={onBack}>← Back</button>
         <span className={`cap-badge tone-${statusTone(run.status)}`}>{run.status}</span>
         <VerdictBadge v={gate?.verdict} />
+        {(d as { deep?: boolean }).deep ? <span className="cap-badge">deep sweep</span> : null}
         {run.usage?.cost_usd_micros != null ? <span className="detail">{fmtUsd(run.usage.cost_usd_micros)}</span> : null}
+        <span style={{ flex: 1 }} />
+        {run.status === "completed" ? <DeepenButton runId={run.id} /> : null}
       </div>
 
       <div>

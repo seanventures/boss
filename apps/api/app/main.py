@@ -4351,6 +4351,25 @@ def promote_discovery_outcome_endpoint(run_id: str, payload: dict):
     return {"status": "convened", "task_id": task_id, "meeting_run_id": meeting_run_id}
 
 
+@app.post("/v1/discoveries/{run_id}/deepen")
+def deepen_discovery_endpoint(run_id: str):
+    """Spawn a deeper second pass on a discovery's seed: a multi-source parallel scout sweep
+    (competitor/pain/demand/timing) for a richer, more-cited dossier. Returns the new run_id."""
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    from .services.discovery_service import load_discovery_run, start_discovery
+    with begin(engine) as c:
+        parent = load_discovery_run(c, run_id)
+    if parent is None:
+        raise HTTPException(status_code=404, detail="discovery run not found")
+    new_id = start_discovery(
+        project_id=parent["project_id"], title=f"[deep] {parent['title']}"[:300],
+        seed=parent["seed"] or "", context=parent["context"] or "",
+        settings=settings, deep=True, parent_run_id=run_id,
+    )
+    return {"status": "running", "run_id": new_id, "deep": True}
+
+
 # --- Execution plane: governed sandbox visibility + console ------------------
 @app.get("/v1/sandboxes")
 def list_sandboxes_endpoint():

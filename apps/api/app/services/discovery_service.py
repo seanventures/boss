@@ -32,22 +32,29 @@ PHASES = ["queued", "signal_sweep", "synthesize", "vet", "shape", "gate", "done"
 #  Public API                                                                 #
 # --------------------------------------------------------------------------- #
 def start_discovery(*, project_id: str, title: str, seed: str, context: str,
-                    settings: Settings) -> str:
-    """Create the durable run row and kick off the pipeline in a background thread."""
+                    settings: Settings, deep: bool = False, parent_run_id: Optional[str] = None) -> str:
+    """Create the durable run row and kick off the pipeline in a background thread.
+
+    deep=True runs a multi-source parallel scout sweep (competitor/pain/demand/timing) for a richer,
+    more cited dossier — the deeper second pass for a promising idea."""
     run_id = make_id("drun")
     engine = get_engine()
+    init_state = {"deep": deep}
+    if parent_run_id:
+        init_state["parent_run_id"] = parent_run_id
     with begin(engine) as c:
         c.execute(
             text("""
                 INSERT INTO discovery_runs (id, project_id, status, phase, title, seed, context, state)
-                VALUES (:id, :p, 'running', 'queued', :t, :s, :ctx, '{}')
+                VALUES (:id, :p, 'running', 'queued', :t, :s, :ctx, CAST(:st AS JSONB))
             """),
-            {"id": run_id, "p": project_id, "t": title[:300], "s": seed, "ctx": context or ""},
+            {"id": run_id, "p": project_id, "t": title[:300], "s": seed, "ctx": context or "",
+             "st": json.dumps(init_state)},
         )
         emit_event(c, project_id, "discovery.started", "boss", "discovery_run", run_id,
-                   {"title": title[:300]})
+                   {"title": title[:300], "deep": deep})
     threading.Thread(
-        target=_run_discovery, args=(run_id, project_id, seed, context, settings), daemon=True,
+        target=_run_discovery, args=(run_id, project_id, seed, context, settings, deep), daemon=True,
     ).start()
     return run_id
 
@@ -115,23 +122,29 @@ def _row_to_dict(r) -> dict:
 #  Pipeline                                                                    #
 # --------------------------------------------------------------------------- #
 def _run_discovery(run_id: str, project_id: str, seed: str, context: str,
-                   settings: Settings) -> None:
+                   settings: Settings, deep: bool = False) -> None:
     engine = get_engine()
     try:
         agent = make_code_agent(settings, engine="claude_code")
         if not hasattr(agent, "run_research"):
             raise RuntimeError("Discovery requires the claude_code engine (web research).")
-        dossier: dict = {}
+        dossier: dict = {"deep": deep}
         cost = 0
         model = None
 
-        # P1 — Signal sweep (web research)
+        # P1 — Signal sweep (web research). Deep mode fans out to parallel focused scouts.
         _phase(engine, run_id, "signal_sweep")
-        r = agent.run_research(_sweep_prompt(seed, context))
-        cost += r["cost_usd_micros"]; model = r.get("model")
-        sweep = _extract_json(r["summary"])
-        dossier["research_brief"] = sweep.get("brief", {})
-        dossier["signal_findings"] = sweep.get("findings", [])
+        if deep:
+            brief, findings, sweep_cost, model = _deep_sweep(agent, seed, context)
+            dossier["research_brief"] = brief
+            dossier["signal_findings"] = findings
+            cost += sweep_cost
+        else:
+            r = agent.run_research(_sweep_prompt(seed, context))
+            cost += r["cost_usd_micros"]; model = r.get("model")
+            sweep = _extract_json(r["summary"])
+            dossier["research_brief"] = sweep.get("brief", {})
+            dossier["signal_findings"] = sweep.get("findings", [])
         _save(engine, run_id, dossier, cost, model)
 
         # P2 — Synthesize
@@ -287,6 +300,54 @@ def _sweep_prompt(seed: str, context: str) -> str:
         '"evidence": "what the source shows", "citation_url": "https://..."}]}\n'
         "Include 6-12 findings, each with a real citation_url you visited."
     )
+
+
+_SCOUTS = {
+    "competitor": "competitors and existing alternatives — who they are, positioning, pricing, and where the gaps/unmet needs are",
+    "pain": "real user pain — communities, forums, reviews, and complaints; how FREQUENT and how SEVERE the pain is, with quotes",
+    "demand": "demand and interest signals — search trends, keyword interest, job posts, willingness-to-pay indicators; is anyone actively looking",
+    "timing": "why now — recent news, regulation, technology, funding, or behavior shifts that make this timely",
+}
+
+
+def _scout_prompt(angle: str, focus: str, seed: str, context: str) -> str:
+    return (
+        f"You are a market research scout focused ONLY on: {focus}.\n"
+        f"IDEA / SEED:\n{seed}\n\nOPERATOR CONTEXT: {context or '(none)'}\n\n"
+        "Use WebSearch and WebFetch to gather REAL, CITED evidence on your focus area only. Open "
+        "primary sources.\n\n"
+        f"{_JSON_ONLY}\n"
+        '{"findings": [{"angle": "' + angle + '", "finding": "concise fact", "evidence": '
+        '"what the source shows", "citation_url": "https://..."}]}\n'
+        "Return 3-6 findings, each with a real citation_url you visited."
+    )
+
+
+def _deep_sweep(agent, seed: str, context: str):
+    """Run the focused scouts in parallel and merge their cited findings — the deeper pass."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    def run_scout(item):
+        angle, focus = item
+        try:
+            r = agent.run_research(_scout_prompt(angle, focus, seed, context))
+            return r, _extract_json(r["summary"]).get("findings", [])
+        except Exception:  # noqa: BLE001 — a dead scout shouldn't sink the sweep
+            return {"cost_usd_micros": 0, "model": None}, []
+
+    findings: list = []
+    cost = 0
+    model = None
+    with ThreadPoolExecutor(max_workers=len(_SCOUTS)) as pool:
+        for r, fs in pool.map(run_scout, _SCOUTS.items()):
+            cost += r.get("cost_usd_micros", 0)
+            model = model or r.get("model")
+            findings.extend(fs)
+    brief = {"hypothesis": seed[:300],
+             "questions": ["Is the pain real, frequent, and severe?", "Who owns the market today?",
+                           "Is there demonstrated demand / willingness to pay?", "Why now?"],
+             "sources_consulted": [f.get("citation_url") for f in findings if f.get("citation_url")][:12]}
+    return brief, findings, cost, model
 
 
 def _synth_prompt(seed: str, context: str, findings: list) -> str:
