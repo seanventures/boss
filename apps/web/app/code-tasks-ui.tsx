@@ -435,12 +435,19 @@ export function CodeTasksHome({ projectId, codeTasks, apiReachable }: {
             }
             return (
               <button key={c.id} className="ct-card" onClick={() => setSelected(c.id)}>
-                <div className="ct-card-head">
+                <div className="ct-card-title" style={{ fontWeight: 700, fontSize: 14, lineHeight: 1.3 }}>
+                  {c.pull_request_url ? (
+                    <a href={c.pull_request_url} target="_blank" rel="noreferrer"
+                       onClick={(e) => e.stopPropagation()} style={{ color: "inherit" }}>
+                      {c.title} ↗
+                    </a>
+                  ) : c.title}
+                </div>
+                <div className="ct-card-head" style={{ marginTop: 4 }}>
                   <span className={`cap-badge tone-${statusTone(c.status)}`}>{c.status}</span>
                   {st.profile ? <span className="ct-card-phase">{st.profile}{st.risk_tier != null ? ` · t${st.risk_tier}` : ""}</span> : null}
                   {c.pull_request_url ? <span className="ct-card-pr">PR #{c.pull_request_number}</span> : null}
                 </div>
-                <div className="ct-card-title">{c.title}</div>
                 <div className="ct-card-repo">{c.spec?.owner}/{c.spec?.repo}{c.spec?.base_branch && c.spec.base_branch !== "main" ? ` @ ${c.spec.base_branch}` : ""}</div>
                 <div className="detail" style={{ marginTop: 4 }}>{outcome}</div>
                 <div className="ct-card-foot">
