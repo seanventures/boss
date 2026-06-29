@@ -71,6 +71,32 @@ def load_discovery_run(connection, run_id: str) -> Optional[dict]:
     return _row_to_dict(r) if r else None
 
 
+def build_promote_directive(run: dict, idx: int) -> tuple[str, str]:
+    """Turn a chosen candidate outcome + its dossier evidence into a PRD-meeting directive."""
+    state = run.get("state") or {}
+    o = (state.get("candidate_outcomes") or [])[idx]
+    crit = state.get("critique") or {}
+    findings = [f for f in (state.get("signal_findings") or []) if (f or {}).get("finding")][:4]
+    outcome = (o.get("outcome") or "").strip()
+    title = f"Build: {outcome[:80]}" if outcome else f"Build outcome from {run['id']}"
+    sig = "\n".join(f"- {f.get('finding')} [{f.get('citation_url', '')}]" for f in findings)
+    directive = (
+        "Produce a PRD for this evidence-backed opportunity, surfaced by BOSS Discovery research "
+        f"on the seed: \"{(run.get('seed') or '')[:200]}\".\n\n"
+        f"OUTCOME TO BUILD: {outcome}\n"
+        f"WEDGE: {o.get('wedge', '(n/a)')}\n"
+        f"TARGET PILOT: {o.get('target_pilot', '(n/a)')}\n"
+        f"FIRST PROTOTYPE SLICE: {o.get('first_prototype_slice', '(n/a)')}\n"
+        f"VALIDATION PLAN: {o.get('validation_plan', '(n/a)')}\n\n"
+        f"BIGGEST RISK (from adversarial vetting): {crit.get('biggest_risk', '(n/a)')}\n"
+        f"KEY MARKET SIGNALS:\n{sig or '- (none)'}\n\n"
+        "Scope the PRD to the FIRST PROTOTYPE SLICE only — the smallest thing we can pilot with the "
+        "target segment to validate real usage before investing further. Honor the validation plan "
+        "(pilot -> measure usage -> then monetize)."
+    )
+    return directive, title
+
+
 def _row_to_dict(r) -> dict:
     state = r["state"]
     state = json.loads(state) if isinstance(state, str) else (state or {})

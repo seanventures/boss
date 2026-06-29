@@ -4300,6 +4300,57 @@ def get_discovery_endpoint(run_id: str):
     return run
 
 
+@app.post("/v1/discoveries/{run_id}/promote")
+def promote_discovery_outcome_endpoint(run_id: str, payload: dict):
+    """Close the loop: turn a chosen candidate outcome into an Initiative + convene a PRD meeting
+    seeded with the outcome and the dossier evidence. Returns the meeting task_id."""
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    from .services.discovery_service import load_discovery_run, build_promote_directive
+    from .services.meeting_service import start_meeting_run
+    idx = int(payload.get("outcome_index") or 0)
+    with begin(engine) as connection:
+        run = load_discovery_run(connection, run_id)
+        if run is None:
+            raise HTTPException(status_code=404, detail="discovery run not found")
+        outcomes = (run.get("state") or {}).get("candidate_outcomes") or []
+        if idx < 0 or idx >= len(outcomes):
+            raise HTTPException(status_code=400, detail="outcome_index out of range")
+        directive, title = build_promote_directive(run, idx)
+        project_id = run["project_id"]
+        task = intake.create_task(
+            connection, project_id=project_id,
+            title=title, description=directive, dedupe_key=make_id("mtg"),
+            priority="p1", risk_tier=2,
+            inputs={"directive": directive, "discovery_run_id": run_id, "outcome_index": idx},
+            required_artifacts=["meeting_minutes"], data_boundary="internal",
+        )
+        task_id = task["task_id"]
+        reservation = budget.reserve(
+            connection, project_id, "model", settings.plan_budget_usd_micros * 4,
+            "PRD meeting promoted from Discovery.", 120,
+        )
+        reservation_id = reservation.get("reservation_id") if reservation.get("status") == "reserved" else None
+        meeting_run_id = start_meeting_run(
+            connection, project_id=project_id, task_id=task_id, directive=directive, url=None,
+            constraints={}, role_keys=None, finalize_ctx={"reservation_id": reservation_id},
+        )
+        jobs.create_job(connection, project_id=project_id, task_id=task_id,
+                        kind="meeting.step", priority=48, payload={"run_id": meeting_run_id})
+        # Link the promotion back onto the discovery run so the UI can show it.
+        state = run.get("state") or {}
+        promos = state.get("promotions") or []
+        promos.append({"outcome_index": idx, "task_id": task_id, "meeting_run_id": meeting_run_id})
+        state["promotions"] = promos
+        connection.execute(
+            text("UPDATE discovery_runs SET state=CAST(:s AS JSONB), updated_at=now() WHERE id=:id"),
+            {"s": json.dumps(state), "id": run_id},
+        )
+        emit_event(connection, project_id, "discovery.promoted", "operator", "discovery_run", run_id,
+                   {"task_id": task_id, "outcome_index": idx})
+    return {"status": "convened", "task_id": task_id, "meeting_run_id": meeting_run_id}
+
+
 # --- Execution plane: governed sandbox visibility + console ------------------
 @app.get("/v1/sandboxes")
 def list_sandboxes_endpoint():

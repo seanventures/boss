@@ -1935,6 +1935,22 @@ export async function startDiscoveryAction(
   }
 }
 
+export async function promoteOutcomeAction(
+  _prev: { taskId?: string; error?: string } | null,
+  formData: FormData,
+): Promise<{ taskId?: string; error?: string }> {
+  const runId = String(formData.get("run_id") ?? "").trim();
+  const idx = Number(formData.get("outcome_index") ?? "0");
+  if (!runId) return { error: "missing run_id" };
+  try {
+    const res = await client.promoteDiscoveryOutcome(runId, idx);
+    revalidatePath("/");
+    return { taskId: res.task_id };
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
 // ---- Onboard a new organization (admin) ----
 
 export async function onboardOrgAction(formData: FormData): Promise<void> {

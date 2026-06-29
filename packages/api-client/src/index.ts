@@ -1017,6 +1017,7 @@ export type DiscoveryDossier = {
     best_outcome_confidence?: number;
     cited_sources?: number;
   };
+  promotions?: { outcome_index: number; task_id: string; meeting_run_id: string }[];
 };
 export type DiscoveryRun = {
   id: string;
@@ -4017,6 +4018,11 @@ export function createBossApiClient(config: BossApiClientConfig) {
     },
     startDiscovery(payload: { project_id: string; seed: string; title?: string; context?: string }) {
       return request<{ status: string; run_id: string }>("POST", "/v1/discoveries", { body: payload });
+    },
+    promoteDiscoveryOutcome(runId: string, outcomeIndex: number) {
+      return request<{ status: string; task_id: string; meeting_run_id: string }>(
+        "POST", `/v1/discoveries/${encodeURIComponent(runId)}/promote`,
+        { body: { outcome_index: outcomeIndex } });
     },
     getCodeTask(runId: string) {
       return request<CodeTaskRun>("GET", `/v1/code-tasks/${encodeURIComponent(runId)}`);

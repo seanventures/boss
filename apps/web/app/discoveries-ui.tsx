@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 
 import type { DiscoveryRun, DiscoveryFinding, DiscoveryOutcome } from "@boss/api-client";
 
-import { startDiscoveryAction } from "./actions";
+import { startDiscoveryAction, promoteOutcomeAction } from "./actions";
 
 const PHASE_LABEL: Record<string, string> = {
   queued: "Queued",
@@ -26,6 +26,23 @@ function statusTone(s: string): string {
   if (s === "completed") return "ok";
   if (s === "failed") return "bad";
   return "warn";
+}
+
+function PromoteOutcome({ runId, idx, orgId, promotedTaskId }: { runId: string; idx: number; orgId?: string; promotedTaskId?: string }) {
+  const [state, action, pending] = useActionState(promoteOutcomeAction, null);
+  const taskId = promotedTaskId ?? state?.taskId;
+  if (taskId) {
+    const href = `/?org=${orgId ?? "org_boss"}&area=meetings&task=${taskId}`;
+    return <a className="cap-btn" href={href}>✓ PRD meeting convened — open in Meetings →</a>;
+  }
+  return (
+    <form action={action} style={{ display: "inline-flex", gap: 8, alignItems: "center", marginTop: 6 }}>
+      <input type="hidden" name="run_id" value={runId} />
+      <input type="hidden" name="outcome_index" value={idx} />
+      <button className="cap-btn primary" disabled={pending}>{pending ? "Convening…" : "→ Send to PRD meeting"}</button>
+      {state?.error ? <span className="detail" style={{ color: "#f85149" }}>⚠ {state.error}</span> : null}
+    </form>
+  );
 }
 
 function VerdictBadge({ v }: { v?: string }) {
@@ -69,7 +86,7 @@ function StartDiscovery({ projectId }: { projectId: string }) {
 }
 
 // --------------------------------------------------------------------------- //
-export function DiscoveriesHome({ projectId, discoveries, apiReachable }: {
+export function DiscoveriesHome({ projectId, orgId, discoveries, apiReachable }: {
   projectId: string;
   orgId?: string;
   discoveries: DiscoveryRun[];
@@ -80,7 +97,7 @@ export function DiscoveriesHome({ projectId, discoveries, apiReachable }: {
   useLiveRefresh(anyLive);
 
   const run = selected ? discoveries.find((d) => d.id === selected) : null;
-  if (run) return <DiscoveryDetail run={run} onBack={() => setSelected(null)} />;
+  if (run) return <DiscoveryDetail run={run} orgId={orgId} onBack={() => setSelected(null)} />;
 
   return (
     <div style={{ display: "grid", gap: 16 }}>
@@ -121,11 +138,12 @@ export function DiscoveriesHome({ projectId, discoveries, apiReachable }: {
 }
 
 // --------------------------------------------------------------------------- //
-function DiscoveryDetail({ run, onBack }: { run: DiscoveryRun; onBack: () => void }) {
+function DiscoveryDetail({ run, orgId, onBack }: { run: DiscoveryRun; orgId?: string; onBack: () => void }) {
   const live = run.status === "running";
   useLiveRefresh(live);
   const d = run.state ?? {};
   const gate = d.gate;
+  const buildable = gate?.verdict === "pursue" || gate?.verdict === "promising";
 
   return (
     <div style={{ display: "grid", gap: 16 }}>
@@ -184,6 +202,10 @@ function DiscoveryDetail({ run, onBack }: { run: DiscoveryRun; onBack: () => voi
               {o.first_prototype_slice ? <div className="detail"><b>First prototype:</b> {o.first_prototype_slice}</div> : null}
               {o.validation_plan ? <div className="detail"><b>Validation:</b> {o.validation_plan}</div> : null}
               {o.rationale ? <div className="detail">{o.rationale}</div> : null}
+              {buildable ? (
+                <PromoteOutcome runId={run.id} idx={i} orgId={orgId}
+                  promotedTaskId={(d.promotions ?? []).find((p) => p.outcome_index === i)?.task_id} />
+              ) : null}
             </div>
           ))}
         </section>
