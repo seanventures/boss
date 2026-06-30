@@ -180,3 +180,63 @@ gap is concentrated in (1) **proving** the guarantees (canary suite), (2) the **
 (PII/data-boundary/tracing), and (3) **closing the autonomy + self-improvement loops** — i.e. the
 parts that turn "it works" into "it earns trust and improves itself." Phase 0 makes the MVP
 demo-complete; Phases 1–2 build the moat.
+
+---
+
+## Re-audit (2026-06-30) — execution proven + remaining gaps for MVP launch
+
+Source re-read: `~/Documents/BOSS.pdf` = the same May-15 PRD+Tech-Spec this analysis was built on
+(confirmed). Appendix C (the CPO/CFO/CMO/SRE/… agent catalog) is **explicitly "a menu, not an MVP
+recommendation"** — a long-term pack roadmap, NOT pending MVP work. Since the original audit the
+credentialed execution paths it deferred are now LIVE + proven, and a re-read surfaced a few
+**earned-autonomy / scheduling** items that were only partially built.
+
+### Completed since (mark done)
+- **Real software-factory execution → gated PRs** — `claude_code` engine drives real edits+tests;
+  the governed pipeline (design→tests→implement→adversarial review→security→mutation→fail-closed
+  gate) opens **real PRs** (`paramg/boss-sandbox` #23–31). Was "gated on credentials."
+- **Deploy tiers + previews** — Tier-1 host preview, Tier-2 docker container, Tier-3 smoke canary;
+  **browser-reachable previews via an in-api reverse proxy** (works on remote/goldeneye); human
+  **gate-override** + **retry-with-history**.
+- **Governed prod deploy** — self-serve ops on goldeneye (`/secret`+`render`+`/deploy`), the
+  `deploy-goldeneye` skill; full stack (coding+discovery) deployed + validated on prod.
+- **(Beyond PRD) Discovery pipeline** — research-driven Outcome Discovery (web research → cited
+  dossier → 3-tier evidence gate → promote to a PRD meeting). Maps to App C "Innovation PM /
+  shadow-mode prototypes with ROI scoring."
+
+### Newly-identified gaps (the earned-autonomy + scheduling tail) — ❌ missing · ◑ partial
+- **G1 — Value-per-dollar / SLA-risk scheduling (§22.3)** ❌ — `jobs.claim_job` orders by static
+  `priority` only; under budget pressure the scheduler should prioritize by **value-per-dollar +
+  SLA risk** (YELLOW/ORANGE/RED). Not built.
+- **G2 — Trust-score → risk-tier gating (§20.3)** ◑ — `roles.trust_score` is computed (±adjusted),
+  `successful_runs` drives autonomy upgrade, and a **scorecard** exists (`reports.py`), but
+  trust_score is **not enforced as a gate on *allowed risk tiers*** at approval/execution time
+  ("trust score drives allowed autonomy AND allowed risk tiers").
+- **G3 — Full §20.3 weighted trust signals** ◑ — wire ALL signals (cost-estimate error,
+  deadletter frequency, spam/throttle, PR-green-no-rollback) into the score, not just violation
+  penalties + run counts.
+- **G4 — Routing Optimizer (outcome-data learning) (§18 / App C.2)** ❌ — router has budget-pressure
+  modes but doesn't tune routing policies from outcome data.
+- **G5 — Real (worker-driven) skill-invocation** ◑ — the `/v1/skills/{id}/invoke` API is mock-only;
+  the real worker-driven connector-execution path + breadth.
+- **G6 — Router live provider-health + real ≥2-lane fallback** ◑ — config-derived health only.
+- **G7–G10 (enterprise / transport — post-MVP)** — WebSocket streaming · full SSO/IdP + RBAC
+  expansion · live multi-worker chaos · sector packs.
+
+### Phases to complete for MVP launch
+- **Phase 5 — Earned-autonomy scoring & value-based scheduling**  ◀ recommended next (MVP)
+  Closes the PRD's "autonomy is earned" principle + FinOps prioritization. **G1 + G2 + G3.**
+  Deliverables: a **Trust Scoring Engine** that computes the §20.3 weighted score continuously,
+  **gates allowed risk-tiers/autonomy by it**, and surfaces it on the scorecard; **+ a
+  budget-pressure-aware scheduler** that orders the queue by value-per-dollar + SLA risk under
+  YELLOW/ORANGE/RED.
+- **Phase 6 — Execution breadth** (MVP-adjacent, now unblocked by real credentials): **G5** real
+  worker-driven skill-invocation + **G6** router live health/fallback. (**G4** routing optimizer is
+  optional / post-MVP.)
+- **Phase 7 — Enterprise & transport** (post-launch hardening): **G7** WebSocket · **G8** SSO/RBAC ·
+  **G9** live multi-worker chaos · **G10** sector packs.
+
+**MVP-launch bottom line:** the core loop is proven end-to-end on prod (outcome → governed code →
+gated PR → preview/deploy, plus discovery). The one MVP *principle* still partially open is
+**earned-autonomy scoring + value-based scheduling (Phase 5)** — the "good performers earn more
+autonomy/priority" behavior. Phases 6–7 are breadth/hardening for post-launch.
