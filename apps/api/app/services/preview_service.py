@@ -307,6 +307,62 @@ def _kill(pid: Optional[int]) -> None:
             pass
 
 
+def _inject_shim(html: bytes, prefix: str) -> bytes:
+    """Rewrite root-relative fetch()/form-action paths to the proxy prefix so a preview served
+    under /v1/previews/<id>/web/ works when the browser reaches it via the api's tailnet route."""
+    shim = (
+        "<script>(function(){var P=" + repr(prefix) + ";"
+        "var of=window.fetch;window.fetch=function(u,o){try{if(typeof u===\"string\"&&u.charAt(0)===\"/\"&&u.indexOf(P)!==0)u=P+u;}catch(e){}return of.call(this,u,o);};"
+        "document.addEventListener(\"submit\",function(e){var f=e.target;if(f&&f.getAttribute){var a=f.getAttribute(\"action\");if(a&&a.charAt(0)===\"/\"&&a.indexOf(P)!==0)f.setAttribute(\"action\",P+a);}},true);"
+        "})();</script>"
+    )
+    try:
+        s = html.decode("utf-8", "ignore")
+        if "<head>" in s:
+            s = s.replace("<head>", "<head>" + shim, 1)
+        elif "<html" in s:
+            s = re.sub(r"(<html[^>]*>)", lambda m: m.group(1) + shim, s, count=1)
+        else:
+            s = shim + s
+        return s.encode("utf-8")
+    except Exception:  # noqa: BLE001
+        return html
+
+
+def proxy_preview(engine, preview_id: str, subpath: str, method: str,
+                  query_string: str = "", body: Optional[bytes] = None,
+                  content_type: Optional[str] = None):
+    """Reverse-proxy a request to a running preview's loopback port → (status, content_type, bytes).
+    Only the api can reach the preview's 127.0.0.1 port, so this exposes it via the api's own
+    (tailnet-routed) URL. HTML responses get the root-relative path-rewrite shim."""
+    import urllib.error
+    with begin(engine) as c:
+        row = c.execute(text("SELECT url, status FROM app_previews WHERE id=:id"),
+                        {"id": preview_id}).mappings().first()
+    if row is None:
+        return 404, "text/plain", b"preview not found"
+    if row["status"] != "running" or not row["url"]:
+        return 409, "text/plain", f"preview not running (status={row['status']})".encode()
+    target = row["url"].rstrip("/") + "/" + (subpath or "")
+    if query_string:
+        target += "?" + query_string
+    req = urllib.request.Request(target, data=body or None, method=method)
+    if content_type:
+        req.add_header("Content-Type", content_type)
+    try:
+        resp = urllib.request.urlopen(req, timeout=25)
+        status = resp.status
+        ctype = resp.headers.get("Content-Type", "application/octet-stream")
+        data = resp.read()
+    except urllib.error.HTTPError as e:
+        status, ctype, data = e.code, e.headers.get("Content-Type", "text/plain"), e.read()
+    except Exception as e:  # noqa: BLE001
+        return 502, "text/plain", f"preview proxy error: {e}".encode()
+    if "text/html" in (ctype or ""):
+        data = _inject_shim(data, f"/v1/previews/{preview_id}/web")
+    return status, ctype, data
+
+
 def smoke_test(engine, preview_id: str, checks: Optional[list[dict]] = None) -> dict:
     """Tier-3 smoke canary: hit the live preview URL with a set of checks and assert each — proves
     the deployed app actually works, not just that it serves a page. Records a receipt event.

@@ -2033,7 +2033,11 @@ export async function startPreviewAction(
   try {
     const res = await client.startPreview(runId);
     revalidatePath("/");
-    if (res.status === "running" && res.url) return { url: res.url };
+    // Return the api-routed proxy URL — the preview's own 127.0.0.1 port isn't reachable from the
+    // browser on a remote box, so the api reverse-proxies to it. Works locally too.
+    if (res.status === "running" && res.id) {
+      return { url: `${API_URL}/v1/previews/${encodeURIComponent(res.id)}/web/` };
+    }
     return { error: res.error || "preview failed to start" };
   } catch (e) {
     return { error: e instanceof Error ? e.message : String(e) };

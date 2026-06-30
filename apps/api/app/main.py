@@ -11,7 +11,7 @@ from collections import defaultdict, deque
 from typing import Any, Optional
 from urllib.parse import parse_qs
 
-from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import FastAPI, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse, Response
 from sqlalchemy import text
 
@@ -681,7 +681,13 @@ async def require_transport_auth_for_v1(request: Request, call_next):
         or settings.oidc_enabled
         or settings.enterprise_saml_enabled
     )
-    if not request.url.path.startswith("/v1/") or not auth_required:
+    # The preview reverse-proxy (/v1/previews/<id>/web/...) is browser-facing and must work
+    # without the API key — it's gated by the unguessable preview id + the preview TTL.
+    _parts = request.url.path.split("/")
+    is_preview_web = (
+        len(_parts) >= 5 and _parts[1] == "v1" and _parts[2] == "previews" and _parts[4] == "web"
+    )
+    if not request.url.path.startswith("/v1/") or not auth_required or is_preview_web:
         principal_token = current_api_principal.set(None)
         authenticated_token = current_transport_authenticated.set(False)
         auth_method_token = current_auth_method.set(None)
@@ -4220,6 +4226,23 @@ def smoke_preview_endpoint(preview_id: str, payload: Optional[dict] = None):
         return smoke_test(engine, preview_id, (payload or {}).get("checks"))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.api_route("/v1/previews/{preview_id}/web", methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
+@app.api_route("/v1/previews/{preview_id}/web/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
+async def preview_web_proxy(preview_id: str, request: Request, path: str = ""):
+    """Browser-facing reverse proxy to a running preview's loopback port — lets a preview be opened
+    over the api's tailnet route (the preview's 127.0.0.1 port isn't reachable directly). Auth-exempt
+    (gated by the unguessable preview id + TTL) — see require_transport_auth_for_v1."""
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    from .services.preview_service import proxy_preview
+    body = await request.body()
+    status, ctype, data = proxy_preview(
+        engine, preview_id, path, request.method, request.url.query,
+        body or None, request.headers.get("content-type"),
+    )
+    return Response(content=data, status_code=status, media_type=ctype)
 
 
 @app.post("/v1/previews/{preview_id}/stop")

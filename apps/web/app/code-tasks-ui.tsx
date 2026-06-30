@@ -32,7 +32,7 @@ function PreviewControls({ runId }: { runId: string }) {
       <input type="hidden" name="run_id" value={runId} />
       <button className="cap-btn" disabled={pending}>{pending ? "Starting preview…" : "▶ Run preview"}</button>
       {state?.url ? (
-        <a className="cap-btn primary" href={state.url} target="_blank" rel="noreferrer">Open {state.url} →</a>
+        <a className="cap-btn primary" href={state.url} target="_blank" rel="noreferrer">Open preview ↗</a>
       ) : null}
       {state?.error ? <span className="detail" style={{ color: "#f85149" }}>⚠ {state.error}</span> : null}
     </form>
