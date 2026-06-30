@@ -120,20 +120,26 @@ export function DiscoveriesHome({ projectId, orgId, discoveries, apiReachable }:
       {discoveries.length === 0 ? (
         <div className="detail">No discovery runs yet. Feed an idea above and BOSS will research the market signal behind it.</div>
       ) : (
-        <div className="ct-list">
-          {discoveries.map((d) => {
+        <div style={{ display: "grid", gap: 10 }}>
+          {discoveries.map((d, i) => {
             const st = d.state ?? {};
             const verdict = st.gate?.verdict;
             const findings = st.signal_findings?.length ?? 0;
             const outcomes = st.candidate_outcomes?.length ?? 0;
+            const title = (d.seed && d.seed.trim()) || d.title || "(untitled)";
             return (
-              <button key={d.id} className="ct-card" onClick={() => setSelected(d.id)}>
-                <div className="ct-card-title" style={{ fontWeight: 700, fontSize: 14, lineHeight: 1.3 }}>{d.title}</div>
-                <div className="ct-card-head" style={{ marginTop: 4 }}>
-                  <span className={`cap-badge tone-${statusTone(d.status)}`}>{d.status}</span>
-                  <VerdictBadge v={verdict} />
+              <button key={d.id} className="ct-card" onClick={() => setSelected(d.id)} style={{ gap: 6 }}>
+                <div style={{ display: "flex", gap: 10, alignItems: "flex-start", justifyContent: "space-between" }}>
+                  <div style={{ fontWeight: 700, fontSize: 16, lineHeight: 1.35, color: "var(--ink)", flex: 1, minWidth: 0 }}>
+                    <span style={{ color: "var(--muted)", fontWeight: 600, marginRight: 8 }}>{i + 1}.</span>
+                    {title}
+                  </div>
+                  <span style={{ display: "flex", gap: 6, flexShrink: 0 }}>
+                    <span className={`cap-badge tone-${statusTone(d.status)}`}>{d.status}</span>
+                    <VerdictBadge v={verdict} />
+                  </span>
                 </div>
-                <div className="detail" style={{ marginTop: 4 }}>
+                <div className="detail">
                   {d.status === "running" ? `running — ${PHASE_LABEL[d.phase] ?? d.phase}` :
                    d.status === "failed" ? `✗ ${(d.error ?? "failed").slice(0, 80)}` :
                    `${findings} cited signals · ${outcomes} outcome${outcomes === 1 ? "" : "s"}`}

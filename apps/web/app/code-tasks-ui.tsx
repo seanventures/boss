@@ -412,11 +412,11 @@ export function CodeTasksHome({ projectId, codeTasks, apiReachable }: {
       {codeTasks.length === 0 ? (
         <p className="detail">No code tasks yet. Start one — the agent clones the repo, edits files, runs your tests, and opens a gated PR.</p>
       ) : (
-        <div className="ct-grid">
-          {codeTasks.map((c) => {
+        <div style={{ display: "grid", gap: 10 }}>
+          {codeTasks.map((c, i) => {
             const st = c.state ?? {};
             const failing = (c.error ?? "").match(/failing gates: (\[[^\]]*\])/)?.[1];
-            // One-line outcome so the card says what happened, not just the status.
+            // One-line outcome so the row says what happened, not just the status.
             let outcome: string;
             if (c.status === "completed") {
               const gp = [
@@ -434,28 +434,20 @@ export function CodeTasksHome({ projectId, codeTasks, apiReachable }: {
               outcome = `running — ${PHASE_LABEL[c.phase] ?? c.phase}`;
             }
             return (
-              <button key={c.id} className="ct-card" onClick={() => setSelected(c.id)}>
-                <div className="ct-card-title" style={{ fontWeight: 700, fontSize: 14, lineHeight: 1.3 }}>
-                  {c.pull_request_url ? (
-                    <a href={c.pull_request_url} target="_blank" rel="noreferrer"
-                       onClick={(e) => e.stopPropagation()} style={{ color: "inherit" }}>
-                      {c.title} ↗
-                    </a>
-                  ) : c.title}
+              <button key={c.id} className="ct-card" onClick={() => setSelected(c.id)} style={{ gap: 6 }}>
+                <div style={{ display: "flex", gap: 10, alignItems: "flex-start", justifyContent: "space-between" }}>
+                  <div style={{ fontWeight: 700, fontSize: 16, lineHeight: 1.35, color: "var(--ink)", flex: 1, minWidth: 0 }}>
+                    <span style={{ color: "var(--muted)", fontWeight: 600, marginRight: 8 }}>{i + 1}.</span>
+                    {c.title || "(untitled task)"}
+                  </div>
+                  <span className={`cap-badge tone-${statusTone(c.status)}`} style={{ flexShrink: 0 }}>{c.status}</span>
                 </div>
-                <div className="ct-card-head" style={{ marginTop: 4 }}>
-                  <span className={`cap-badge tone-${statusTone(c.status)}`}>{c.status}</span>
-                  {st.profile ? <span className="ct-card-phase">{st.profile}{st.risk_tier != null ? ` · t${st.risk_tier}` : ""}</span> : null}
-                  {c.pull_request_url ? <span className="ct-card-pr">PR #{c.pull_request_number}</span> : null}
-                </div>
-                <div className="ct-card-repo">{c.spec?.owner}/{c.spec?.repo}{c.spec?.base_branch && c.spec.base_branch !== "main" ? ` @ ${c.spec.base_branch}` : ""}</div>
-                <div className="detail" style={{ marginTop: 4 }}>{outcome}</div>
+                <div className="detail">{outcome}</div>
                 <div className="ct-card-foot">
-                  {typeof st.files_changed === "number" ? (
-                    <span className="detail">{st.files_changed} files · +{st.additions ?? 0}/−{st.deletions ?? 0}</span>
-                  ) : null}
+                  <span className="detail">{c.spec?.owner}/{c.spec?.repo}{c.spec?.base_branch && c.spec.base_branch !== "main" ? ` @ ${c.spec.base_branch}` : ""}</span>
+                  {st.profile ? <span className="detail">{st.profile}{st.risk_tier != null ? ` · t${st.risk_tier}` : ""}</span> : null}
+                  {c.pull_request_url ? <span className="ct-card-pr">PR #{c.pull_request_number}</span> : null}
                   {(st.cost_usd_micros != null) ? <span className="detail">{fmtUsd(st.cost_usd_micros)}</span> : null}
-                  {st.engine ? <span className="detail">{st.engine}</span> : null}
                 </div>
               </button>
             );
