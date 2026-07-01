@@ -640,6 +640,16 @@ async def lifespan(_: FastAPI):
         print("[lifespan] ensure_schema applied (idempotent schema sync)")
     except Exception as exc:  # noqa: BLE001
         print(f"[lifespan] ensure_schema skipped — DB not ready or migration error: {exc}")
+    # Previews are subprocess children of this api process — a restart/recreate kills them all, so
+    # any 'running' record is now stale (dead port → proxy would 'connection refused'). Clear them.
+    try:
+        from sqlalchemy import text as _text
+        with begin(engine) as _c:
+            n = _c.execute(_text("UPDATE app_previews SET status='stopped' WHERE status='running'")).rowcount
+        if n:
+            print(f"[lifespan] cleared {n} stale running preview(s) from a prior process")
+    except Exception as exc:  # noqa: BLE001
+        print(f"[lifespan] preview cleanup skipped: {exc}")
     yield
 
 

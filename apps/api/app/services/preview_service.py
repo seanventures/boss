@@ -356,8 +356,20 @@ def proxy_preview(engine, preview_id: str, subpath: str, method: str,
         data = resp.read()
     except urllib.error.HTTPError as e:
         status, ctype, data = e.code, e.headers.get("Content-Type", "text/plain"), e.read()
-    except Exception as e:  # noqa: BLE001
-        return 502, "text/plain", f"preview proxy error: {e}".encode()
+    except Exception as e:  # noqa: BLE001 — process gone (e.g. after an api restart): self-heal
+        try:
+            with begin(engine) as c2:
+                c2.execute(text("UPDATE app_previews SET status='stopped' WHERE id=:id AND status='running'"),
+                           {"id": preview_id})
+        except Exception:
+            pass
+        return 502, "text/html", (
+            "<div style=\"font-family:system-ui;padding:24px;max-width:520px\">"
+            "<h3>Preview is no longer running</h3>"
+            "<p>Its process ended (this happens after a redeploy). Go back to the code task and click "
+            "<b>Run preview</b> to regenerate it.</p>"
+            f"<p style=\"color:#888;font-size:12px\">{e}</p></div>"
+        ).encode()
     if "text/html" in (ctype or ""):
         data = _inject_shim(data, f"/v1/previews/{preview_id}/web")
     return status, ctype, data
