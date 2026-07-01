@@ -4183,7 +4183,18 @@ def start_preview_endpoint(run_id: str, payload: Optional[dict] = None):
     p = payload or {}
     mode = str(p.get("mode", "auto")).lower()
     ttl = int(p.get("ttl_minutes", 60))
-    from .services.preview_service import start_preview, start_container_preview
+    from .services.preview_service import start_preview, start_container_preview, stop_preview
+    # Replace (don't accumulate): stop any prior running preview for this run so there's one live
+    # preview per task — a fresh "Run preview" regenerates it.
+    with begin(engine) as _c:
+        prior = [r[0] for r in _c.execute(
+            text("SELECT id FROM app_previews WHERE run_id=:r AND status='running'"),
+            {"r": run_id}).fetchall()]
+    for _pid in prior:
+        try:
+            stop_preview(engine, _pid)
+        except Exception:  # noqa: BLE001 — best-effort cleanup
+            pass
     # auto: containerize first (isolated), fall back to a host process (handles loopback-binding
     # apps / no-docker). Explicit mode forces one path.
     if mode == "process":

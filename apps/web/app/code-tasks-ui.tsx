@@ -181,7 +181,11 @@ function GateRow({ label, ok, note }: { label: string; ok?: boolean; note?: stri
 function CodeTaskDetail({ run, previews = [], onBack }: { run: CodeTaskRun; previews?: PreviewRec[]; onBack: () => void }) {
   const st = run.state ?? {};
   const tests = st.tests ?? [];
-  const livePreviews = previews.filter((p) => p.run_id === run.id && p.status === "running");
+  // One link per task: the most-recent running preview for this run (dedupe).
+  const livePreviews = previews
+    .filter((p) => p.run_id === run.id && p.status === "running")
+    .sort((a, b) => (b.expires_at ?? "").localeCompare(a.expires_at ?? ""))
+    .slice(0, 1);
   const live = run.status === "running" || run.status === "queued";
   useLiveRefresh(live);
   const hasGateEvidence = Boolean(
