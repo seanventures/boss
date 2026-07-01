@@ -109,9 +109,15 @@ def _chat(spec, messages, timeout=180):
                    "Content-Type": "application/json"}
         body = {"messages": messages, "response_format": {"type": "json_object"}, "temperature": 0}
     else:
-        url = "https://api.openai.com/v1/chat/completions"
-        headers = {"Authorization": f"Bearer {spec.get('openai_api_key')}",
-                   "Content-Type": "application/json"}
+        # Any OpenAI-COMPATIBLE provider via a configurable base URL: OpenAI (default),
+        # xAI/Grok (https://api.x.ai/v1), Together, OpenRouter, a local server, etc.
+        # Swapping model/provider is config only (openai_base_url + openai_api_key + model) —
+        # no image rebuild, since they're all just this HTTP contract.
+        base = (spec.get("openai_base_url") or os.environ.get("OPENAI_BASE_URL")
+                or "https://api.openai.com/v1").rstrip("/")
+        key = spec.get("openai_api_key") or os.environ.get("OPENAI_API_KEY")
+        url = f"{base}/chat/completions"
+        headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
         body = {"model": spec.get("model") or "gpt-4o", "messages": messages,
                 "response_format": {"type": "json_object"}, "temperature": 0}
     req = urllib.request.Request(url, data=json.dumps(body).encode(), headers=headers)
@@ -185,6 +191,8 @@ def _run_agent(spec) -> str:
     if engine in ("openai", "native"):
         return _run_native_openai(spec)
     if engine == "claude_code":
+        if spec.get("claude_oauth_token"):
+            os.environ["CLAUDE_CODE_OAUTH_TOKEN"] = spec["claude_oauth_token"]
         instructions = spec.get("instructions", "")
         criteria = "\n".join(f"- {c}" for c in spec.get("acceptance_criteria", [])) or "- (none)"
         tests = "\n".join(f"- {c}" for c in spec.get("test_commands", [])) or "- (none)"

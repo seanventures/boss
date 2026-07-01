@@ -148,6 +148,12 @@ class Settings(BaseSettings):
         alias="BOSS_OIDC_SUBJECT_PRINCIPALS",
     )
     openai_model: str = Field(default="gpt-5.2-codex", alias="BOSS_OPENAI_MODEL")
+    # OpenAI-COMPATIBLE base URL — lets the guest agent target any such provider
+    # (OpenAI default, xAI/Grok https://api.x.ai/v1, Together, OpenRouter, local…)
+    # by config alone. Swapping the guest's model/provider needs no image rebuild.
+    openai_base_url: str = Field(default="", alias="OPENAI_BASE_URL")
+    # Headless Claude token for the claude_code guest engine (passed into the guest).
+    claude_code_oauth_token: str = Field(default="", alias="CLAUDE_CODE_OAUTH_TOKEN")
     openai_codex_oauth_enabled: bool = Field(
         default=False, alias="BOSS_OPENAI_CODEX_OAUTH_ENABLED"
     )

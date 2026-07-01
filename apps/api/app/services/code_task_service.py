@@ -327,6 +327,9 @@ def run_code_task(engine, settings: Settings, jobs, run_id: str) -> dict:
                 "test_commands": spec.get("test_commands", []),
                 "engine": settings.sandbox_guest_engine,
                 "openai_api_key": settings.openai_api_key, "model": settings.openai_model,
+                # provider-agnostic: base_url selects OpenAI/Grok/Together/etc.; claude token for claude_code
+                "openai_base_url": settings.openai_base_url,
+                "claude_oauth_token": settings.claude_code_oauth_token,
                 "azure_endpoint": settings.azure_openai_endpoint,
                 "azure_deployment": settings.azure_openai_deployment,
                 "azure_api_version": settings.azure_openai_api_version,
