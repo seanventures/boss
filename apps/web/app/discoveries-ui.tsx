@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState, useEffect, useState } from "react";
+import { useActionState, useEffect, useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 
 import type { DiscoveryRun, DiscoveryFinding, DiscoveryOutcome } from "@boss/api-client";
@@ -57,6 +57,34 @@ function DeepenButton({ runId }: { runId: string }) {
       {state?.error ? <span className="detail" style={{ color: "#f85149" }}>⚠ {state.error}</span> : null}
     </form>
   );
+}
+
+function Collapsible({ title, count, defaultOpen = false, children }: { title: string; count?: number | string; defaultOpen?: boolean; children: ReactNode }) {
+  return (
+    <details className="panel dx-collapse" open={defaultOpen}>
+      <summary>{title}{count != null && count !== "" ? <span className="detail" style={{ fontWeight: 400 }}> · {count}</span> : null}</summary>
+      <div>{children}</div>
+    </details>
+  );
+}
+
+// Render the market-analysis object as readable rows (handles nested objects + arrays) — not raw JSON.
+function AnalysisRows({ obj }: { obj: Record<string, unknown> }) {
+  const row = (label: string, val: unknown): ReactNode => {
+    if (val == null || val === "") return null;
+    const L = label.replace(/_0_5$/, "").replace(/_/g, " ");
+    if (Array.isArray(val)) return <div key={label} className="detail"><b>{L}:</b> {val.map((x) => String(x)).join("; ")}</div>;
+    if (typeof val === "object") {
+      return (
+        <div key={label} style={{ marginTop: 2 }}>
+          <div className="detail" style={{ fontWeight: 600 }}>{L}</div>
+          <div style={{ marginLeft: 12, display: "grid", gap: 2 }}>{Object.entries(val as Record<string, unknown>).map(([k, v]) => row(k, v))}</div>
+        </div>
+      );
+    }
+    return <div key={label} className="detail"><b>{L}:</b> {String(val)}</div>;
+  };
+  return <div style={{ display: "grid", gap: 4 }}>{Object.entries(obj).map(([k, v]) => row(k, v))}</div>;
 }
 
 function VerdictBadge({ v }: { v?: string }) {
@@ -183,31 +211,34 @@ function DiscoveryDetail({ run, orgId, onBack }: { run: DiscoveryRun; orgId?: st
         {run.context ? <div className="detail" style={{ marginTop: 4 }}>Context: {run.context}</div> : null}
       </div>
 
-      {/* progress rail */}
-      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-        {PHASE_ORDER.map((p) => {
-          const done = PHASE_ORDER.indexOf(p) < PHASE_ORDER.indexOf(run.phase);
-          const cur = p === run.phase;
-          return (
-            <span key={p} className="cap-badge" style={{ opacity: done || cur ? 1 : 0.4, background: cur ? "#1f6feb33" : undefined }}>
-              {done ? "✓ " : cur && live ? "● " : ""}{PHASE_LABEL[p]}
-            </span>
-          );
-        })}
-      </div>
+      {/* progress rail — only while running */}
+      {live ? (
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+          {PHASE_ORDER.map((p) => {
+            const done = PHASE_ORDER.indexOf(p) < PHASE_ORDER.indexOf(run.phase);
+            const cur = p === run.phase;
+            return (
+              <span key={p} className="cap-badge" style={{ opacity: done || cur ? 1 : 0.4, background: cur ? "#1f6feb33" : undefined }}>
+                {done ? "✓ " : cur ? "● " : ""}{PHASE_LABEL[p]}
+              </span>
+            );
+          })}
+        </div>
+      ) : null}
 
       {run.error ? <div className="panel" style={{ padding: 12, color: "#f85149" }}>⚠ {run.error}</div> : null}
 
-      {/* Evidence gate */}
+      {/* Evidence gate — compact, always visible */}
       {gate ? (
-        <section className="panel" style={{ padding: 16 }}>
-          <div className="eyebrow">
-            Evidence gate · {gate.verdict} · confidence {Math.round((gate.confidence ?? 0) * 100)}%
-            {gate.thesis_confidence != null ? ` (thesis ${Math.round(gate.thesis_confidence * 100)}% · best outcome ${Math.round((gate.best_outcome_confidence ?? 0) * 100)}%)` : ""}
+        <section className="panel" style={{ padding: "12px 16px" }}>
+          <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 10 }}>
+            <span style={{ fontWeight: 600 }}>Evidence gate</span>
+            <VerdictBadge v={gate.verdict} />
+            <span className="detail">confidence {Math.round((gate.confidence ?? 0) * 100)}%{gate.thesis_confidence != null ? ` · thesis ${Math.round(gate.thesis_confidence * 100)}% · best outcome ${Math.round((gate.best_outcome_confidence ?? 0) * 100)}%` : ""}</span>
           </div>
-          <div style={{ display: "grid", gap: 4, marginTop: 8 }}>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 12, marginTop: 8 }}>
             {Object.entries(gate.checks ?? {}).map(([k, v]) => (
-              <div key={k} className="detail">{v ? "✓" : "✗"} {k.replace(/_/g, " ")}</div>
+              <span key={k} className="detail" style={{ color: v ? "#3fb950" : "#f85149" }}>{v ? "✓" : "✗"} {k.replace(/_/g, " ")}</span>
             ))}
           </div>
         </section>
@@ -216,15 +247,24 @@ function DiscoveryDetail({ run, orgId, onBack }: { run: DiscoveryRun; orgId?: st
       {/* Candidate outcomes */}
       {(d.candidate_outcomes?.length ?? 0) > 0 ? (
         <section style={{ display: "grid", gap: 10 }}>
-          <div className="eyebrow">Candidate outcomes</div>
+          <div className="eyebrow">Candidate outcomes ({d.candidate_outcomes!.length})</div>
           {d.candidate_outcomes!.map((o: DiscoveryOutcome, i) => (
-            <div key={i} className="panel" style={{ padding: 14, display: "grid", gap: 4 }}>
-              <div style={{ fontWeight: 700 }}>{o.outcome}{o.confidence_0_1 != null ? <span className="detail" style={{ fontWeight: 400 }}> · {Math.round((o.confidence_0_1) * 100)}% confidence</span> : null}</div>
-              {o.wedge ? <div className="detail"><b>Wedge:</b> {o.wedge}</div> : null}
-              {o.target_pilot ? <div className="detail"><b>Pilot with:</b> {o.target_pilot}</div> : null}
-              {o.first_prototype_slice ? <div className="detail"><b>First prototype:</b> {o.first_prototype_slice}</div> : null}
-              {o.validation_plan ? <div className="detail"><b>Validation:</b> {o.validation_plan}</div> : null}
-              {o.rationale ? <div className="detail">{o.rationale}</div> : null}
+            <div key={i} className="panel" style={{ padding: 14, display: "grid", gap: 8 }}>
+              <div style={{ fontWeight: 700, fontSize: 15, lineHeight: 1.35, color: "var(--ink)" }}>
+                {o.outcome}{o.confidence_0_1 != null ? <span className="detail" style={{ fontWeight: 400 }}> · {Math.round(o.confidence_0_1 * 100)}% confidence</span> : null}
+              </div>
+              {(o.wedge || o.target_pilot || o.first_prototype_slice || o.validation_plan || o.rationale) ? (
+                <details className="dx-collapse dx-inline">
+                  <summary>details</summary>
+                  <div style={{ display: "grid", gap: 4, marginTop: 6 }}>
+                    {o.wedge ? <div className="detail"><b>Wedge:</b> {o.wedge}</div> : null}
+                    {o.target_pilot ? <div className="detail"><b>Pilot with:</b> {o.target_pilot}</div> : null}
+                    {o.first_prototype_slice ? <div className="detail"><b>First prototype:</b> {o.first_prototype_slice}</div> : null}
+                    {o.validation_plan ? <div className="detail"><b>Validation:</b> {o.validation_plan}</div> : null}
+                    {o.rationale ? <div className="detail">{o.rationale}</div> : null}
+                  </div>
+                </details>
+              ) : null}
               {buildable ? (
                 <PromoteOutcome runId={run.id} idx={i} orgId={orgId}
                   promotedTaskId={(d.promotions ?? []).find((p) => p.outcome_index === i)?.task_id} />
@@ -234,11 +274,10 @@ function DiscoveryDetail({ run, orgId, onBack }: { run: DiscoveryRun; orgId?: st
         </section>
       ) : null}
 
-      {/* Adversarial critique */}
+      {/* Deep evidence — collapsed by default for skimmability */}
       {d.critique ? (
-        <section className="panel" style={{ padding: 16 }}>
-          <div className="eyebrow">Adversarial vetting{d.critique.overall_confidence_0_1 != null ? ` · confidence ${Math.round(d.critique.overall_confidence_0_1 * 100)}%` : ""}</div>
-          {d.critique.biggest_risk ? <div className="detail" style={{ marginTop: 6 }}><b>Biggest risk:</b> {d.critique.biggest_risk}</div> : null}
+        <Collapsible title="Adversarial vetting" count={d.critique.overall_confidence_0_1 != null ? `confidence ${Math.round(d.critique.overall_confidence_0_1 * 100)}%` : ""}>
+          {d.critique.biggest_risk ? <div className="detail"><b>Biggest risk:</b> {d.critique.biggest_risk}</div> : null}
           {(d.critique.claims?.length ?? 0) > 0 ? (
             <div style={{ display: "grid", gap: 4, marginTop: 8 }}>
               {d.critique.claims!.map((c, i) => (
@@ -254,40 +293,34 @@ function DiscoveryDetail({ run, orgId, onBack }: { run: DiscoveryRun; orgId?: st
               {d.critique.disconfirming_evidence!.map((x, i) => <div key={i} className="detail">• {x}</div>)}
             </div>
           ) : null}
-        </section>
+        </Collapsible>
       ) : null}
 
-      {/* Market analysis */}
       {d.market_analysis && Object.keys(d.market_analysis).length > 0 ? (
-        <section className="panel" style={{ padding: 16 }}>
-          <div className="eyebrow">Market analysis</div>
-          <pre style={{ whiteSpace: "pre-wrap", fontSize: 12, marginTop: 8 }}>{JSON.stringify(d.market_analysis, null, 2)}</pre>
-        </section>
+        <Collapsible title="Market analysis"><AnalysisRows obj={d.market_analysis} /></Collapsible>
       ) : null}
 
-      {/* Cited signals */}
       {(d.signal_findings?.length ?? 0) > 0 ? (
-        <section style={{ display: "grid", gap: 8 }}>
-          <div className="eyebrow">Cited market signals ({d.signal_findings!.length})</div>
-          {d.signal_findings!.map((f: DiscoveryFinding, i) => (
-            <div key={i} className="panel" style={{ padding: 12, display: "grid", gap: 2 }}>
-              <div className="detail"><span className="cap-badge">{f.angle}</span> {f.finding}</div>
-              {f.evidence ? <div className="detail">{f.evidence}</div> : null}
-              {f.citation_url ? <a className="detail" href={f.citation_url} target="_blank" rel="noreferrer" style={{ color: "#58a6ff" }}>{f.citation_url} ↗</a> : null}
-            </div>
-          ))}
-        </section>
+        <Collapsible title="Cited market signals" count={d.signal_findings!.length}>
+          <div style={{ display: "grid", gap: 10 }}>
+            {d.signal_findings!.map((f: DiscoveryFinding, i) => (
+              <div key={i} style={{ display: "grid", gap: 2 }}>
+                <div className="detail"><span className="cap-badge">{f.angle}</span> {f.finding}</div>
+                {f.evidence ? <div className="detail">{f.evidence}</div> : null}
+                {f.citation_url ? <a className="detail" href={f.citation_url} target="_blank" rel="noreferrer" style={{ color: "#58a6ff" }}>{f.citation_url} ↗</a> : null}
+              </div>
+            ))}
+          </div>
+        </Collapsible>
       ) : null}
 
-      {/* Research brief */}
       {d.research_brief?.hypothesis ? (
-        <section className="panel" style={{ padding: 16 }}>
-          <div className="eyebrow">Research brief</div>
-          <div className="detail" style={{ marginTop: 6 }}><b>Hypothesis:</b> {d.research_brief.hypothesis}</div>
+        <Collapsible title="Research brief">
+          <div className="detail"><b>Hypothesis:</b> {d.research_brief.hypothesis}</div>
           {(d.research_brief.questions?.length ?? 0) > 0 ? (
             <ul style={{ margin: "6px 0 0 18px" }}>{d.research_brief.questions!.map((q, i) => <li key={i} className="detail">{q}</li>)}</ul>
           ) : null}
-        </section>
+        </Collapsible>
       ) : null}
     </div>
   );

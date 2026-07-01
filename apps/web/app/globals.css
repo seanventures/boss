@@ -2078,6 +2078,17 @@ select.input:focus {
 .ct-card-pr { color: var(--accent); font-weight: 600; }
 .ct-card-tests.ok { color: #22c55e; font-weight: 600; }
 
+/* Collapsible detail sections (Discovery detail page) */
+.dx-collapse > summary { cursor: pointer; padding: 12px 16px; font-weight: 600; font-size: 13px; list-style: none; display: flex; align-items: center; gap: 8px; color: var(--ink); }
+.dx-collapse > summary::-webkit-details-marker { display: none; }
+.dx-collapse > summary::before { content: "\25B8"; color: var(--muted); font-size: 11px; transition: transform .12s ease; }
+.dx-collapse[open] > summary::before { transform: rotate(90deg); }
+.dx-collapse > summary:hover { color: var(--accent); }
+.dx-collapse > div { padding: 0 16px 14px; }
+.dx-collapse.dx-inline { background: none; border: none; padding: 0; border-radius: 0; }
+.dx-collapse.dx-inline > summary { padding: 0; font-size: 12px; font-weight: 500; color: var(--muted); }
+.dx-collapse.dx-inline > div { padding: 0; }
+
 .ct-detail { display: grid; gap: 16px; }
 .ct-detail-head { display: flex; align-items: center; gap: 12px; }
 .ct-detail-head h3 { margin: 0; }
