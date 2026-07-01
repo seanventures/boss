@@ -503,18 +503,22 @@ export async function resolveDecisionAction(formData: FormData): Promise<void> {
         ? externalRef.trim()
         : undefined,
   };
-  if (action === "approve") {
-    await client.approveDecision(decisionId, payload);
-  } else if (action === "reject") {
-    await client.rejectDecision(decisionId, payload);
-  } else if (action === "revise") {
-    await client.reviseDecision(decisionId, payload);
-  } else if (action === "delegate") {
-    await client.delegateDecision(decisionId, payload);
-  } else {
-    await client.executeDecision(decisionId, payload);
+  try {
+    if (action === "approve") {
+      await client.approveDecision(decisionId, payload);
+    } else if (action === "reject") {
+      await client.rejectDecision(decisionId, payload);
+    } else if (action === "revise") {
+      await client.reviseDecision(decisionId, payload);
+    } else if (action === "delegate") {
+      await client.delegateDecision(decisionId, payload);
+    } else {
+      await client.executeDecision(decisionId, payload);
+    }
+  } catch (e) {
+    // Don't crash the whole page on an API error — surface it and move on.
+    console.error("decision action failed", e);
   }
-
   revalidatePath("/");
 }
 

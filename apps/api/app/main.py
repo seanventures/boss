@@ -8336,6 +8336,9 @@ def approve_decision(
     decision_id: str, payload: DecisionActionRequest
 ) -> DecisionCard:
     with begin(engine) as connection:
+        # Act as your authenticated identity: an API-key principal is authoritative, so a claimed
+        # actor from the console (e.g. "executive_console") yields to it instead of 403-ing.
+        payload.actor = current_api_principal.get() or payload.actor
         require_decision_actor_binding(connection, decision_id, payload.actor)
         try:
             row = decisions.transition(
@@ -8361,6 +8364,9 @@ def reject_decision(
     decision_id: str, payload: DecisionActionRequest
 ) -> DecisionCard:
     with begin(engine) as connection:
+        # Act as your authenticated identity: an API-key principal is authoritative, so a claimed
+        # actor from the console (e.g. "executive_console") yields to it instead of 403-ing.
+        payload.actor = current_api_principal.get() or payload.actor
         require_decision_actor_binding(connection, decision_id, payload.actor)
         try:
             row = decisions.transition(
@@ -8386,6 +8392,9 @@ def revise_decision(
     decision_id: str, payload: DecisionActionRequest
 ) -> DecisionCard:
     with begin(engine) as connection:
+        # Act as your authenticated identity: an API-key principal is authoritative, so a claimed
+        # actor from the console (e.g. "executive_console") yields to it instead of 403-ing.
+        payload.actor = current_api_principal.get() or payload.actor
         require_decision_actor_binding(connection, decision_id, payload.actor)
         try:
             row = decisions.transition(
@@ -8413,6 +8422,9 @@ def delegate_decision(
     decision_id: str, payload: DecisionActionRequest
 ) -> DecisionCard:
     with begin(engine) as connection:
+        # Act as your authenticated identity: an API-key principal is authoritative, so a claimed
+        # actor from the console (e.g. "executive_console") yields to it instead of 403-ing.
+        payload.actor = current_api_principal.get() or payload.actor
         require_decision_actor_binding(connection, decision_id, payload.actor)
         try:
             row = decisions.transition(
@@ -8440,6 +8452,9 @@ def execute_decision(
     decision_id: str, payload: DecisionActionRequest
 ) -> DecisionCard:
     with begin(engine) as connection:
+        # Act as your authenticated identity: an API-key principal is authoritative, so a claimed
+        # actor from the console (e.g. "executive_console") yields to it instead of 403-ing.
+        payload.actor = current_api_principal.get() or payload.actor
         require_decision_actor_binding(connection, decision_id, payload.actor)
         try:
             row = decisions.transition(
