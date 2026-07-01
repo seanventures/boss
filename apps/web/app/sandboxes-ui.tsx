@@ -276,7 +276,22 @@ export function SandboxesHome({ sandboxes, apiReachable, unavailable }: {
 }) {
   const [selected, setSelected] = useState<string | null>(null);
   if (!apiReachable) return <p className="detail">Execution plane unavailable — API unreachable.</p>;
-  if (unavailable) return <p className="detail">Sandbox host unreachable: {unavailable}</p>;
+  if (unavailable) {
+    return (
+      <div className="panel" style={{ padding: 20, display: "grid", gap: 8 }}>
+        <div style={{ fontWeight: 700, fontSize: 15, color: "var(--ink)" }}>No micro‑VM sandbox host connected</div>
+        <p className="detail" style={{ margin: 0 }}>
+          This deployment runs coding tasks via the <b>Claude Code engine in‑process</b> — no separate
+          micro‑VM execution host is required, so there are no sandboxes to inspect here. This is expected,
+          not an error.
+        </p>
+        <p className="detail" style={{ margin: 0 }}>
+          To use this view, connect a sandbox execution host (the micro‑VM provider) to the control plane.
+        </p>
+        <p className="detail" style={{ margin: 0, opacity: 0.6, fontSize: 12 }}>Host status: {unavailable}</p>
+      </div>
+    );
+  }
 
   const active = selected ? sandboxes.find((s) => s.sandbox_id === selected) : null;
   if (active) {
