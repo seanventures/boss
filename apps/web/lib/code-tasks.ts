@@ -1,6 +1,14 @@
-import { BossApiError, type CodeTaskRun } from "@boss/api-client";
+import { BossApiError, type CodeTaskRun, type PreviewRec } from "@boss/api-client";
 
 import { client, PROJECT_ID, resolveProjectId } from "./client";
+
+export async function fetchPreviews(projectId = PROJECT_ID): Promise<PreviewRec[]> {
+  try {
+    return (await client.getPreviews(resolveProjectId(projectId))).previews ?? [];
+  } catch {
+    return [];
+  }
+}
 
 export type CodeTaskFeed = {
   projectId: string;

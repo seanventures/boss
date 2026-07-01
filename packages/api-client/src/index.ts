@@ -981,6 +981,18 @@ export type CodeTaskRun = {
 
 export type CodeTasksResponse = { code_tasks: CodeTaskRun[] };
 
+export type PreviewRec = {
+  id: string;
+  run_id?: string | null;
+  status: string; // running | stopped | failed | expired
+  url?: string | null;
+  mode?: string | null;
+  branch?: string | null;
+  repo?: string | null;
+  error?: string | null;
+  expires_at?: string | null;
+};
+
 // --- Discovery pipeline (research-driven outcome discovery) ----------------
 export type DiscoveryFinding = {
   angle?: string;
@@ -4049,7 +4061,7 @@ export function createBossApiClient(config: BossApiClientConfig) {
         { body: { ttl_minutes: ttlMinutes ?? 60 } });
     },
     getPreviews(projectId: string, limit = 50) {
-      return request<{ previews: Array<Record<string, unknown>> }>(
+      return request<{ previews: PreviewRec[] }>(
         "GET", "/v1/previews", { query: { project_id: projectId, limit } });
     },
     getSandboxes() {

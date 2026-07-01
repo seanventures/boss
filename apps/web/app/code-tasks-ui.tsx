@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useActionState } from "react";
 import { useRouter } from "next/navigation";
-import type { CodeTaskRun } from "@boss/api-client";
+import type { CodeTaskRun, PreviewRec } from "@boss/api-client";
 
 import { createCodeTaskAction, retryCodeTaskAction, startPreviewAction, overrideCodeTaskAction } from "./actions";
 import { Markdown } from "./markdown";
@@ -25,17 +25,26 @@ function OverrideControls({ runId }: { runId: string }) {
   );
 }
 
-function PreviewControls({ runId }: { runId: string }) {
+const PREVIEW_API = process.env.NEXT_PUBLIC_BOSS_API_URL ?? "";
+
+function PreviewControls({ runId, livePreviews = [] }: { runId: string; livePreviews?: PreviewRec[] }) {
   const [state, action, pending] = useActionState(startPreviewAction, null);
   return (
-    <form action={action} style={{ display: "inline-flex", gap: 8, alignItems: "center" }}>
-      <input type="hidden" name="run_id" value={runId} />
-      <button className="cap-btn" disabled={pending}>{pending ? "Starting preview…" : "▶ Run preview"}</button>
-      {state?.url ? (
+    <span style={{ display: "inline-flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+      <form action={action} style={{ display: "inline-flex", gap: 8, alignItems: "center" }}>
+        <input type="hidden" name="run_id" value={runId} />
+        <button className="cap-btn" disabled={pending}>{pending ? "Starting preview…" : "▶ Run preview"}</button>
+      </form>
+      {/* Persistent link(s) from the durable preview record — survive the console's auto-refresh */}
+      {livePreviews.map((p) => (
+        <a key={p.id} className="cap-btn primary" href={`${PREVIEW_API}/v1/previews/${encodeURIComponent(p.id)}/web/`} target="_blank" rel="noreferrer">Open preview ↗</a>
+      ))}
+      {/* Freshly-started link (shows instantly, before the record is re-fetched) */}
+      {state?.url && livePreviews.length === 0 ? (
         <a className="cap-btn primary" href={state.url} target="_blank" rel="noreferrer">Open preview ↗</a>
       ) : null}
       {state?.error ? <span className="detail" style={{ color: "#f85149" }}>⚠ {state.error}</span> : null}
-    </form>
+    </span>
   );
 }
 
@@ -169,9 +178,10 @@ function GateRow({ label, ok, note }: { label: string; ok?: boolean; note?: stri
   );
 }
 
-function CodeTaskDetail({ run, onBack }: { run: CodeTaskRun; onBack: () => void }) {
+function CodeTaskDetail({ run, previews = [], onBack }: { run: CodeTaskRun; previews?: PreviewRec[]; onBack: () => void }) {
   const st = run.state ?? {};
   const tests = st.tests ?? [];
+  const livePreviews = previews.filter((p) => p.run_id === run.id && p.status === "running");
   const live = run.status === "running" || run.status === "queued";
   useLiveRefresh(live);
   const hasGateEvidence = Boolean(
@@ -342,7 +352,7 @@ function CodeTaskDetail({ run, onBack }: { run: CodeTaskRun; onBack: () => void 
         <div className="ct-block-title">Run it / iterate</div>
         <div className="ct-outcome" style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
           {run.pull_request_url ? (
-            <PreviewControls runId={run.id} />
+            <PreviewControls runId={run.id} livePreviews={livePreviews} />
           ) : (
             <span className="detail">▶ Preview available once a PR is open (a run must reach a green gate, or be overridden).</span>
           )}
@@ -371,11 +381,12 @@ function CodeTaskDetail({ run, onBack }: { run: CodeTaskRun; onBack: () => void 
   );
 }
 
-export function CodeTasksHome({ projectId, codeTasks, apiReachable }: {
+export function CodeTasksHome({ projectId, codeTasks, apiReachable, previews = [] }: {
   projectId: string;
   orgId?: string;
   codeTasks: CodeTaskRun[];
   apiReachable: boolean;
+  previews?: PreviewRec[];
 }) {
   const [selected, setSelected] = useState<string | null>(null);
   const [showNew, setShowNew] = useState(false);
@@ -389,7 +400,7 @@ export function CodeTasksHome({ projectId, codeTasks, apiReachable }: {
 
   const active = selected ? codeTasks.find((c) => c.id === selected) : null;
   if (active) {
-    return <CodeTaskDetail run={active} onBack={() => setSelected(null)} />;
+    return <CodeTaskDetail run={active} previews={previews} onBack={() => setSelected(null)} />;
   }
 
   const lastRepo = codeTasks[0]?.spec;

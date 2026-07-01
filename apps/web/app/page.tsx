@@ -118,7 +118,7 @@ import { fetchCapabilities } from "../lib/capabilities";
 import { CapabilitiesView } from "./capabilities-ui";
 import { fetchMeetingRooms } from "../lib/meeting-rooms";
 import { MeetingsHome } from "./meeting-room-ui";
-import { fetchCodeTasksFeed } from "../lib/code-tasks";
+import { fetchCodeTasksFeed, fetchPreviews } from "../lib/code-tasks";
 import { CodeTasksHome } from "./code-tasks-ui";
 import { fetchDiscoveriesFeed } from "../lib/discoveries";
 import { DiscoveriesHome } from "./discoveries-ui";
@@ -449,6 +449,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
     approvalRules,
     codeTasksFeed,
     discoveryFeed,
+    previewFeed,
     sandboxFeed,
     pipelineData,
     dashboardSnapshot,
@@ -521,6 +522,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
       fetchApprovalRules(activeProjectId),
       fetchCodeTasksFeed(activeProjectId),
       fetchDiscoveriesFeed(activeProjectId),
+      fetchPreviews(activeProjectId),
       fetchSandboxFeed(),
       fetchPipelineData(activeProjectId),
       fetchDashboard(activeProjectId),
@@ -6003,6 +6005,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             orgId={activeOrgId}
             codeTasks={codeTasksFeed.items}
             apiReachable={codeTasksFeed.apiReachable}
+            previews={previewFeed}
           />
         </section>
 
