@@ -21,11 +21,26 @@ def _base(settings: Settings) -> str:
     return (settings.sandbox_agent_url or "").rstrip("/")
 
 
+def _auth_headers(settings: Settings) -> dict:
+    return {"X-Sandbox-Token": settings.sandbox_token} if settings.sandbox_token else {}
+
+
 def list_sandboxes(settings: Settings) -> dict:
-    with httpx.Client(timeout=20) as c:
-        r = c.get(f"{_base(settings)}/v1/sandboxes")
-    r.raise_for_status()
-    return r.json()
+    """Report the connected micro-VM execution host. Sean's Firecracker service exposes
+    /v1/sandbox/health (VMs are single-tenant, ephemeral & isolated by design — no browse/
+    exec API), so we surface the host status as proof the control plane is wired to it."""
+    base = _base(settings)
+    try:
+        with httpx.Client(timeout=10) as c:
+            r = c.get(f"{base}/v1/sandbox/health", headers=_auth_headers(settings))
+        r.raise_for_status()
+        h = r.json()
+        return {"sandboxes": [], "host": {
+            "connected": bool(h.get("ok")), "kind": "Firecracker micro-VM",
+            "capacity": h.get("capacity"), "available": h.get("available"),
+            "running": h.get("running"), "url": base}}
+    except Exception as e:  # noqa: BLE001
+        return {"sandboxes": [], "host": {"connected": False}, "unavailable": str(e)[:200]}
 
 
 def list_helpers(settings: Settings) -> dict:

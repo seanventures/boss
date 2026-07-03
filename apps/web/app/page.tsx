@@ -6048,6 +6048,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             sandboxes={sandboxFeed.items}
             apiReachable={sandboxFeed.apiReachable}
             unavailable={sandboxFeed.unavailable}
+            host={sandboxFeed.host}
           />
         </section>
 

@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import type { SandboxSummary, SandboxExecResult, SandboxStats } from "@boss/api-client";
+import type { SandboxSummary, SandboxExecResult, SandboxStats, SandboxHost } from "@boss/api-client";
 
 // Same-origin proxies (Next route handlers) — the browser never calls the
 // control-plane API directly (avoids CORS + keeps the API off the browser).
@@ -269,29 +269,48 @@ function SandboxDetail({ sb, onBack, onDestroyed }: {
   );
 }
 
-export function SandboxesHome({ sandboxes, apiReachable, unavailable }: {
+export function SandboxesHome({ sandboxes, apiReachable, unavailable, host }: {
   sandboxes: SandboxSummary[];
   apiReachable: boolean;
   unavailable?: string;
+  host?: SandboxHost;
 }) {
   const [selected, setSelected] = useState<string | null>(null);
   if (!apiReachable) return <p className="detail">Execution plane unavailable — API unreachable.</p>;
-  if (unavailable) {
+
+  if (!host?.connected) {
     return (
       <div className="panel" style={{ padding: 20, display: "grid", gap: 8 }}>
         <div style={{ fontWeight: 700, fontSize: 15, color: "var(--ink)" }}>No micro‑VM sandbox host connected</div>
         <p className="detail" style={{ margin: 0 }}>
-          This deployment runs coding tasks via the <b>Claude Code engine in‑process</b> — no separate
-          micro‑VM execution host is required, so there are no sandboxes to inspect here. This is expected,
-          not an error.
+          The control plane isn&apos;t wired to a micro‑VM execution host right now, so coding tasks run via
+          the in‑process engine. Connect the micro‑VM provider to run tasks in isolated Firecracker VMs.
         </p>
-        <p className="detail" style={{ margin: 0 }}>
-          To use this view, connect a sandbox execution host (the micro‑VM provider) to the control plane.
-        </p>
-        <p className="detail" style={{ margin: 0, opacity: 0.6, fontSize: 12 }}>Host status: {unavailable}</p>
+        <p className="detail" style={{ margin: 0, opacity: 0.6, fontSize: 12 }}>Host status: {unavailable ?? "not connected"}</p>
       </div>
     );
   }
+
+  // Connected micro-VM host — show it as proof + live capacity/running.
+  const hostBanner = (
+    <div className="panel" style={{ padding: 16, display: "grid", gap: 8, marginBottom: 12 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+        <span className="cap-badge tone-green">● connected</span>
+        <span style={{ fontWeight: 700, fontSize: 15, color: "var(--ink)" }}>{host?.kind ?? "micro‑VM"} execution host</span>
+        {host?.url ? <code className="detail" style={{ fontSize: 12 }}>{host.url}</code> : null}
+      </div>
+      <div className="detail" style={{ display: "flex", gap: 18, flexWrap: "wrap", fontSize: 14 }}>
+        <span><b style={{ color: "var(--ink)" }}>{host?.running ?? 0}</b> running</span>
+        <span><b style={{ color: "var(--ink)" }}>{host?.available ?? "—"}</b> available</span>
+        <span><b style={{ color: "var(--ink)" }}>{host?.capacity ?? "—"}</b> capacity</span>
+      </div>
+      <p className="detail" style={{ margin: 0 }}>
+        Code tasks run <b>inside single‑tenant Firecracker micro‑VMs</b> here — jailed, cgroup‑capped,
+        internet‑only egress, destroyed after each task. VMs are ephemeral &amp; isolated by design (not
+        browsable); the <b>running</b> count rises while a code task executes.
+      </p>
+    </div>
+  );
 
   const active = selected ? sandboxes.find((s) => s.sandbox_id === selected) : null;
   if (active) {

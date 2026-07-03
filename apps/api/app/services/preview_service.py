@@ -120,7 +120,10 @@ def start_preview(engine, settings: Settings, run_id: str, *, ttl_minutes: int =
     spec = run.get("spec") or {}
     owner = spec.get("owner") or settings.target_github_owner
     repo = spec.get("repo") or settings.target_github_repo
-    branch = (run.get("finalize_ctx") or {}).get("work_branch") or f"boss/code/{run_id}"
+    # Iterations reuse the ROOT run's branch (boss/code/{root_run_id}); a run's own
+    # id may have no branch. Prefer an explicit work_branch, else the root-derived one.
+    _fctx = run.get("finalize_ctx") or {}
+    branch = _fctx.get("work_branch") or f"boss/code/{_fctx.get('root_run_id') or run_id}"
     project_id = run["project_id"]
     preview_id = make_id("prev")
 
@@ -221,7 +224,10 @@ def start_container_preview(engine, settings: Settings, run_id: str, *, ttl_minu
     spec = run.get("spec") or {}
     owner = spec.get("owner") or settings.target_github_owner
     repo = spec.get("repo") or settings.target_github_repo
-    branch = (run.get("finalize_ctx") or {}).get("work_branch") or f"boss/code/{run_id}"
+    # Iterations reuse the ROOT run's branch (boss/code/{root_run_id}); a run's own
+    # id may have no branch. Prefer an explicit work_branch, else the root-derived one.
+    _fctx = run.get("finalize_ctx") or {}
+    branch = _fctx.get("work_branch") or f"boss/code/{_fctx.get('root_run_id') or run_id}"
     project_id = run["project_id"]
     preview_id = make_id("prev")
     tag = f"boss-prev-{preview_id.replace('_', '-').lower()}"

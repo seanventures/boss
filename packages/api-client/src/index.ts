@@ -1070,7 +1070,15 @@ export type SandboxSummary = {
   snapshot_image?: string;
 };
 
-export type SandboxesResponse = { sandboxes: SandboxSummary[]; unavailable?: string };
+export type SandboxHost = {
+  connected: boolean;
+  kind?: string;
+  capacity?: number;
+  available?: number;
+  running?: number;
+  url?: string;
+};
+export type SandboxesResponse = { sandboxes: SandboxSummary[]; unavailable?: string; host?: SandboxHost };
 
 export type SandboxStats = {
   sandbox_id: string;
