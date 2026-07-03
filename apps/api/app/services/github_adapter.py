@@ -119,6 +119,17 @@ class GitHubAdapter:
         )
         return default_branch, ref["object"]["sha"]
 
+    def branch_exists(self, branch_name: str) -> bool:
+        """True if the branch already exists on the remote (used to clone prior work
+        when a feedback-iteration reuses an existing task branch)."""
+        try:
+            self._request(
+                "GET", f"/repos/{self.repository_full_name}/git/ref/heads/{branch_name}"
+            )
+            return True
+        except httpx.HTTPStatusError:
+            return False
+
     def ensure_branch(self, branch_name: str) -> str:
         try:
             ref = self._request(
@@ -173,6 +184,28 @@ class GitHubAdapter:
         self, branch_name: str, title: str, body: str
     ) -> PullRequestResult:
         default_branch, _ = self.default_branch_sha()
+        # Idempotent for feedback-iterations that reuse a branch: if a PR is already open
+        # for this head, refresh its body and return it — GitHub would otherwise 422 on a
+        # duplicate head. Lets the same task iterate on one branch + one PR.
+        owner = self.repository_full_name.split("/")[0]
+        try:
+            existing = self._request(
+                "GET",
+                f"/repos/{self.repository_full_name}/pulls?state=open&head={owner}:{branch_name}",
+            )
+        except httpx.HTTPStatusError:
+            existing = []
+        if existing:
+            pr = existing[0]
+            try:
+                self._request(
+                    "PATCH",
+                    f"/repos/{self.repository_full_name}/pulls/{pr['number']}",
+                    {"body": body},
+                )
+            except httpx.HTTPStatusError:
+                pass
+            return PullRequestResult(url=pr["html_url"], number=pr["number"])
         response = self._request(
             "POST",
             f"/repos/{self.repository_full_name}/pulls",

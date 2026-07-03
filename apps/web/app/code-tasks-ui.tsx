@@ -48,6 +48,27 @@ function PreviewControls({ runId, livePreviews = [] }: { runId: string; livePrev
   );
 }
 
+// Retry / iterate: re-runs the SAME task on its existing code (same branch + PR),
+// feeding the operator's feedback + any prior findings to the model so it builds on
+// prior work instead of starting fresh. Available on any terminal state.
+function RetryControls({ runId, status }: { runId: string; status: string }) {
+  const completed = status === "completed";
+  return (
+    <form action={retryCodeTaskAction}
+          style={{ display: "flex", gap: 6, flexDirection: "column", maxWidth: 560 }}>
+      <input type="hidden" name="run_id" value={runId} />
+      <textarea name="fix_note" className="cap-input" rows={2}
+        placeholder={completed
+          ? "What should BOSS fix or improve? (bugs, missing features, tweaks) — it iterates on the SAME code with this feedback"
+          : "Optional extra guidance for the retry (prior findings are carried forward automatically)"}
+        style={{ minWidth: 320, resize: "vertical" }} />
+      <button className="cap-btn" style={{ alignSelf: "flex-start" }}>
+        {completed ? "↻ Iterate with feedback" : "↻ Retry with feedback"}
+      </button>
+    </form>
+  );
+}
+
 // Governed pipeline phases (in order). Older/simple-path phases are aliased so the stepper
 // still lights up. Each label says what the agent is actually doing in that phase.
 const PHASES = [
@@ -354,19 +375,20 @@ function CodeTaskDetail({ run, previews = [], onBack }: { run: CodeTaskRun; prev
 
       <div className="ct-block">
         <div className="ct-block-title">Run it / iterate</div>
+        {/* Row: preview the built app */}
         <div className="ct-outcome" style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
           {run.pull_request_url ? (
             <PreviewControls runId={run.id} livePreviews={livePreviews} />
           ) : (
             <span className="detail">▶ Preview available once a PR is open (a run must reach a green gate, or be overridden).</span>
           )}
-          {(run.status === "failed" || run.status === "blocked") ? (
-            <form action={retryCodeTaskAction} style={{ display: "inline" }}>
-              <input type="hidden" name="run_id" value={run.id} />
-              <button className="cap-btn">↻ Retry (carry findings forward)</button>
-            </form>
-          ) : null}
         </div>
+        {/* Separate row: iterate on the same task with feedback */}
+        {(run.status === "completed" || run.status === "failed" || run.status === "blocked") ? (
+          <div style={{ marginTop: 12, paddingTop: 12, borderTop: "1px solid rgba(255,255,255,0.09)" }}>
+            <RetryControls runId={run.id} status={run.status} />
+          </div>
+        ) : null}
         {(run.status === "failed" || run.status === "blocked") ? (
           <div style={{ marginTop: 8 }}>
             <OverrideControls runId={run.id} />
@@ -377,8 +399,9 @@ function CodeTaskDetail({ run, previews = [], onBack }: { run: CodeTaskRun; prev
           </div>
         ) : null}
         <p className="detail" style={{ marginTop: 4 }}>
-          Preview runs the built app on a local URL (1‑box, auto‑expires). Retry resumes this task
-          as a new attempt with its prior findings as feedback.
+          Preview runs the built app on a local URL (1‑box, auto‑expires). Retry / iterate re‑runs
+          this task <strong>on its existing code</strong> (same branch &amp; PR) — the model builds on
+          prior work, adding your feedback and any prior findings, so context isn&apos;t lost.
         </p>
       </div>
     </div>

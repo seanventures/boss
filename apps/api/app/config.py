@@ -382,6 +382,10 @@ class Settings(BaseSettings):
     # The Sandbox Agent (host service) the microvm provider dispatches tasks to.
     sandbox_agent_url: str = Field(default="http://127.0.0.1:8088", alias="BOSS_SANDBOX_AGENT_URL")
     sandbox_agent_timeout_seconds: int = Field(default=1500, alias="BOSS_SANDBOX_AGENT_TIMEOUT_SECONDS")
+    # Shared bearer for the sandbox-service (sent as X-Sandbox-Token). Empty => no auth header.
+    sandbox_token: str = Field(default="", alias="BOSS_SANDBOX_TOKEN")
+    # Poll cadence while waiting on an async micro-VM task (§2 submit -> poll -> release).
+    sandbox_poll_interval_seconds: int = Field(default=5, alias="BOSS_SANDBOX_POLL_INTERVAL_SECONDS")
     # Coding-agent engine that runs INSIDE the sandbox (echo | openai | claude_code).
     # openai = native agent on the raw model API (no CLI/keychain — works headless).
     sandbox_guest_engine: str = Field(default="openai", alias="BOSS_SANDBOX_GUEST_ENGINE")

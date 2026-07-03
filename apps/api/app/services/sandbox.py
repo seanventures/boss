@@ -128,7 +128,11 @@ class EphemeralSandbox:
         self.base_sha = self._git(["rev-parse", "HEAD"]).strip()
 
         self.work_branch = work_branch or f"boss/{self.task_id}"
-        self._git(["checkout", "-b", self.work_branch])
+        # A feedback-iteration clones its own accumulated branch (base_branch == work_branch),
+        # so it is already checked out — `checkout -b` would fail on an existing branch. In
+        # that case stay on it (diff() is relative to HEAD, so we produce only the new delta).
+        if self.work_branch != base_branch:
+            self._git(["checkout", "-b", self.work_branch])
         return self.path
 
     # Common build/test artifacts a coding agent's test run can generate — kept

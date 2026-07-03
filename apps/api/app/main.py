@@ -2117,6 +2117,154 @@ def get_edition(project_id: str) -> EditionStatusResponse:
         )
 
 
+@app.get("/v1/diag/sandbox-roundtrip")
+def diag_sandbox_roundtrip() -> dict:
+    """Run a submit->poll round-trip to the sandbox-service FROM INSIDE this container,
+    so we can tell (API, not SSH) whether the control plane can actually reach + drive
+    the micro-VM service. Submits a throwaway echo task; polls up to ~40s."""
+    import time as _time
+
+    import httpx as _httpx
+
+    base = (settings.sandbox_agent_url or "").rstrip("/")
+    headers = {}
+    if settings.sandbox_token:
+        headers["X-Sandbox-Token"] = settings.sandbox_token
+    out: dict = {"url": base, "token_set": bool(settings.sandbox_token),
+                 "provider": settings.sandbox_provider}
+    body = {
+        "task_id": "diag-roundtrip", "tenant_id": "boss-dogfood",
+        "repo": {"owner": settings.target_github_owner, "name": settings.target_github_repo,
+                 "base_branch": "main", "work_branch": "boss/diag-roundtrip"},
+        "git_token": settings.github_token or "",
+        "instructions": "diag", "acceptance_criteria": [], "test_commands": [],
+        "engine": "echo", "engine_env": {}, "run_mutation": False,
+        "resources": {"vcpu": 1, "mem_mb": 1024, "disk_gb": 4, "timeout_s": 180},
+    }
+    t0 = _time.monotonic()
+    try:
+        with _httpx.Client(timeout=15.0) as client:
+            r = client.post(f"{base}/v1/sandbox/tasks", json=body, headers=headers)
+            out["submit_http"] = r.status_code
+            out["submit_body"] = r.text[:200]
+            r.raise_for_status()
+            sid = r.json().get("sandbox_task_id")
+            out["sid"] = sid
+            last = None
+            for _ in range(20):  # ~40s
+                _time.sleep(2)
+                pr = client.get(f"{base}/v1/sandbox/tasks/{sid}", headers=headers)
+                pr.raise_for_status()
+                last = pr.json()
+                if last.get("status") in ("done", "failed", "timeout"):
+                    break
+            out["final_status"] = (last or {}).get("status")
+            out["final_phase"] = (last or {}).get("phase")
+            res = (last or {}).get("result") or {}
+            out["result_diff_files"] = [f.get("path") for f in res.get("diff", [])]
+            out["reached"] = True
+    except Exception as exc:  # noqa: BLE001
+        out["reached"] = False
+        out["error"] = f"{type(exc).__name__}: {exc}"[:400]
+    out["elapsed_s"] = round(_time.monotonic() - t0, 1)
+    return out
+
+
+@app.get("/v1/diag/host-capabilities")
+def diag_host_capabilities() -> dict:
+    """Introspect what THIS container (boss-api) can do on the host, so we can tell
+    empirically — API, not SSH — whether it can create micro-VMs / containers.
+    Read-only except one guarded, throwaway container-launch attempt."""
+    import os as _os
+    import platform as _platform
+    import shutil as _shutil
+    import subprocess as _subprocess
+
+    def _run(cmd: list[str], timeout: float = 8.0) -> dict:
+        try:
+            p = _subprocess.run(
+                cmd, capture_output=True, text=True, timeout=timeout, check=False
+            )
+            out = ((p.stdout or "") + (p.stderr or "")).strip()
+            return {"rc": p.returncode, "out": out[:600]}
+        except FileNotFoundError:
+            return {"rc": None, "out": "binary-not-found"}
+        except Exception as exc:  # timeout, permission, etc.
+            return {"rc": None, "out": f"{type(exc).__name__}: {exc}"[:600]}
+
+    # Effective capabilities — decode CapEff bitmask; CAP_SYS_ADMIN = bit 21.
+    cap_eff = None
+    has_sys_admin = None
+    try:
+        with open("/proc/self/status", "r", encoding="utf-8") as fh:
+            for line in fh:
+                if line.startswith("CapEff:"):
+                    cap_eff = line.split()[1]
+                    has_sys_admin = bool(int(cap_eff, 16) & (1 << 21))
+                    break
+    except Exception:
+        pass
+
+    # /dev/kvm — the gate for real Firecracker/Kata micro-VMs.
+    kvm = {"exists": _os.path.exists("/dev/kvm")}
+    if kvm["exists"]:
+        kvm["readable"] = _os.access("/dev/kvm", _os.R_OK)
+        kvm["writable"] = _os.access("/dev/kvm", _os.W_OK)
+        try:
+            fd = _os.open("/dev/kvm", _os.O_RDWR)
+            _os.close(fd)
+            kvm["openable_rw"] = True
+        except Exception as exc:
+            kvm["openable_rw"] = False
+            kvm["open_error"] = f"{type(exc).__name__}: {exc}"
+
+    docker_sock = "/var/run/docker.sock"
+    sock_present = _os.path.exists(docker_sock)
+    docker_cli = _shutil.which("docker")
+    result: dict = {
+        "identity": {"uid": _os.getuid(), "gid": _os.getgid(), "euid": _os.geteuid()},
+        "capabilities": {"cap_eff": cap_eff, "has_CAP_SYS_ADMIN": has_sys_admin},
+        "kernel": {
+            "system": _platform.system(),
+            "release": _platform.release(),
+            "machine": _platform.machine(),
+        },
+        "kvm": kvm,
+        "docker": {
+            "sock_present": sock_present,
+            "cli_present": bool(docker_cli),
+        },
+        "virt_runtimes": {
+            "firecracker": bool(_shutil.which("firecracker")),
+            "kata_runtime": bool(_shutil.which("kata-runtime")),
+            "runsc_gvisor": bool(_shutil.which("runsc")),
+            "qemu_kvm": bool(_shutil.which("qemu-system-x86_64")),
+        },
+    }
+    # Guarded, real attempt to actually create a container via the socket.
+    if sock_present and docker_cli:
+        result["docker"]["info"] = _run([docker_cli, "info", "--format", "{{.ServerVersion}}"])
+        result["docker"]["launch_attempt"] = _run(
+            [docker_cli, "run", "--rm", "hello-world"], timeout=30.0
+        )
+
+    # Bottom-line verdicts.
+    can_container_now = bool(sock_present and docker_cli)
+    can_microvm_now = bool(kvm.get("openable_rw") and has_sys_admin)
+    result["verdict"] = {
+        "can_launch_containers_now": can_container_now,
+        "can_launch_microvms_now": can_microvm_now,
+        "kvm_device_present": bool(kvm["exists"]),
+        "note": (
+            "boss-api can create sandboxes from inside its own container only if the "
+            "host passes through the relevant privilege: docker.sock for containers, "
+            "or /dev/kvm + CAP_SYS_ADMIN for micro-VMs. Missing => needs a compose "
+            "grant from the platform (device/socket/cap), not a code change."
+        ),
+    }
+    return result
+
+
 @app.get("/v1/entitlements", response_model=LicenseEntitlementListResponse)
 def list_license_entitlements(
     project_id: str,

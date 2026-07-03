@@ -341,6 +341,13 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
     owner = spec.get("owner") or settings.target_github_owner
     repo = spec.get("repo") or settings.target_github_repo
     base_branch = spec.get("base_branch") or "main"
+    # Feedback-iteration: attempts after the first share ONE branch derived from the root
+    # run and clone the prior attempt's code, so the model builds ON prior work instead of
+    # regenerating from base. The PR on that branch is reused (see create_pull_request).
+    root_run = fctx.get("root_run_id") or run_id
+    work_branch = f"boss/code/{root_run}"
+    if root_run != run_id and sf.github.branch_exists(work_branch):
+        base_branch = work_branch  # prior attempt's code is present in the clone
     app = GitHubAppAdapter(settings)
     token = app.token_for_repo(owner, repo) if app.configured else settings.github_token
 
@@ -369,7 +376,7 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
         with begin(engine) as c:
             _set_phase(c, run_id, "provisioning")
         sandbox.provision(owner, repo, base_branch=base_branch,
-                          work_branch=f"boss/code/{run_id}", token=token)
+                          work_branch=work_branch, token=token)
         root = sandbox.path
 
         # Which steps run is set by the risk tier (the cost dial): tier 0 = one agent writes
@@ -625,7 +632,7 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
             proposal = sf.propose_pull_request(
                 c, project_id, task_id, reservation_id=reservation_id,
                 dedupe_key=f"code:task:{run_id}", title=title,
-                branch_name=f"boss/code/{run_id}",
+                branch_name=work_branch,
                 summary=(f"Governed pipeline: tests by qa, impl by SE, adversarial review SURVIVED. "
                          f"QualityGate {qg_id} PASS.\n\n{r2.get('summary','')}"),
                 files=sandbox.diff(), created_by_job_id=job_id, actual_usd_micros=cost)

@@ -23,6 +23,7 @@ no-op (idempotent).
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from typing import Optional
 
 from sqlalchemy import text
@@ -136,24 +137,57 @@ def retry_code_task(engine, settings: Settings, jobs, run_id: str, *, fix_note: 
     attempt = int(fctx_prev.get("attempt", 1)) + 1
     root = fctx_prev.get("root_run_id") or run_id
 
-    parts = []
-    if prev.get("error"):
-        parts.append(f"Outcome: {prev['error']}")
-    for label, key in (("Security review", "security_summary"),
-                       ("Code review", "review_summary"),
-                       ("Consistency review", "consistency_summary")):
-        if state.get(key):
-            parts.append(f"## {label} findings (previous attempt)\n{state[key]}")
-    feedback = "\n\n".join(parts) or "(no detailed findings were recorded on the previous attempt)"
+    work_branch = f"boss/code/{root}"
+    pr_url = prev.get("pull_request_url")
 
-    augmented = (
-        (spec.get("instructions") or "")
-        + f"\n\n=== PREVIOUS ATTEMPT {attempt - 1} FEEDBACK — fix ONLY these issues; preserve everything that already passed ===\n"
-        + feedback
-        + (f"\n\nOperator note: {fix_note}" if fix_note else "")
-    )
+    # Prior adversarial findings — only meaningful when the previous attempt did NOT
+    # complete (a completed attempt's reviews passed; carrying them as "findings" would
+    # be misleading — for a completed task the operator's feedback drives the iteration).
+    findings = []
+    if prev.get("status") != "completed":
+        if prev.get("error"):
+            findings.append(f"Outcome of previous attempt: {prev['error']}")
+        for label, key in (("Security review", "security_summary"),
+                           ("Code review", "review_summary"),
+                           ("Consistency review", "consistency_summary")):
+            if state.get(key):
+                findings.append(f"## {label} findings (previous attempt)\n{state[key]}")
+
+    # The KEY context is that the prior attempt's code is ALREADY in the working tree
+    # (the governed run clones the iteration branch) — so the model iterates on real
+    # code instead of regenerating from scratch. Feedback drives WHAT to change.
+    fb = [
+        f"You are ITERATING on this task (attempt {attempt}). The previous attempt's code is "
+        f"ALREADY PRESENT in your working tree on branch `{work_branch}`"
+        + (f" (open PR: {pr_url})" if pr_url else "")
+        + ". DO NOT rebuild from scratch — modify the existing code to address the feedback below "
+        "and preserve everything that already works."
+    ]
+    if fix_note:
+        fb.append(f"## Feedback to address (from the operator)\n{fix_note}")
+    if findings:
+        fb.append("\n\n".join(findings))
+    if not fix_note and not findings:
+        fb.append("(No specific feedback was provided — review the code for correctness, fix any "
+                  "bugs, and improve robustness.)")
+    feedback_block = "\n\n".join(fb)
+
+    # Keep the prompt bounded across repeated iterations: strip the deployability note
+    # and any prior ITERATION-FEEDBACK block, then re-append the latest. Full history is
+    # retained in finalize_ctx.feedback_history, and the prior CODE lives on the branch.
+    base_instr = (spec.get("instructions") or "")
+    base_instr = base_instr.split("\n\n=== ITERATION FEEDBACK")[0]
+    base_instr = base_instr.split(_DEPLOYABILITY_NOTE)[0]
+    augmented = f"{base_instr}\n\n=== ITERATION FEEDBACK (attempt {attempt}) ===\n{feedback_block}"
+
     base_title = (prev.get("title") or "Code task").split(" · retry")[0]
     title = f"{base_title} · retry {attempt - 1}"
+
+    history = list(fctx_prev.get("feedback_history") or [])
+    history.append({
+        "attempt": attempt, "parent_run_id": run_id, "prev_status": prev.get("status"),
+        "fix_note": fix_note or "", "at": datetime.now(timezone.utc).isoformat(),
+    })
 
     with begin(engine) as c:
         new_id = start_code_task(
@@ -164,7 +198,8 @@ def retry_code_task(engine, settings: Settings, jobs, run_id: str, *, fix_note: 
             owner=spec.get("owner") or settings.target_github_owner,
             repo=spec.get("repo") or settings.target_github_repo,
             base_branch=spec.get("base_branch") or "main",
-            finalize_ctx={**fctx_prev, "parent_run_id": run_id, "root_run_id": root, "attempt": attempt},
+            finalize_ctx={"parent_run_id": run_id, "root_run_id": root, "attempt": attempt,
+                          "feedback_history": history},
             jobs=jobs, profile=spec.get("profile"), risk_tier=spec.get("risk_tier"),
         )
     return {"status": "queued", "run_id": new_id, "attempt": attempt,
@@ -205,10 +240,13 @@ def override_code_task(engine, settings: Settings, jobs, run_id: str, *,
         reservation = sf.budget.reserve(c, project_id, category="code_task",
             amount_usd_micros=200_000, reason=f"gate-override PR {run_id[:12]}", expires_in_minutes=15)
         _set_phase(c, run_id, "opening_pr")
+        # Use the root-run branch so a waived iteration lands on the SAME branch/PR the
+        # iteration chain has been accumulating (create_pull_request reuses the open PR).
+        root_run = fctx.get("root_run_id") or run_id
         proposal = sf.propose_pull_request(
             c, project_id, task_id, reservation_id=reservation.get("reservation_id"),
             dedupe_key=f"code:task:{run_id}", title=run["title"],
-            branch_name=f"boss/code/{run_id}",
+            branch_name=f"boss/code/{root_run}",
             summary=(f"⚠️ GATE OVERRIDE by {actor}: waived {waive_gates} (QualityGate {qg}).\n"
                      f"Reason: {reason or '(none given)'}\n\n{fctx.get('pr_summary', '')}"),
             files=files, created_by_job_id=fctx.get("created_by_job_id"))
@@ -310,6 +348,14 @@ def run_code_task(engine, settings: Settings, jobs, run_id: str) -> dict:
     app = GitHubAppAdapter(settings)
     token = app.token_for_repo(owner, repo) if app.configured else settings.github_token
 
+    # Feedback-iteration: reuse the ROOT run's branch and clone its accumulated code so the
+    # model builds ON prior work (not from base), and update the SAME PR. Mirrors the governed
+    # path so iteration preserves context regardless of substrate (local OR micro-VM).
+    root_run = fctx.get("root_run_id") or run_id
+    work_branch = f"boss/code/{root_run}"
+    if root_run != run_id and sf.github.branch_exists(work_branch):
+        base_branch = work_branch  # clone the prior attempt's code
+
     # The provider decides the substrate + WHERE the agent runs.
     #  - microVM/container provider: the whole pipeline runs guest-side; we send a
     #    spec and collect the result (run_code_task).
@@ -321,6 +367,7 @@ def run_code_task(engine, settings: Settings, jobs, run_id: str) -> dict:
             with begin(engine) as c:
                 _set_phase(c, run_id, "coding")
             guest_spec = {
+                "task_id": run_id, "work_branch": work_branch,
                 "owner": owner, "repo": repo, "base_branch": base_branch,
                 "title": run["title"], "instructions": spec.get("instructions", ""),
                 "acceptance_criteria": spec.get("acceptance_criteria", []),
@@ -342,7 +389,7 @@ def run_code_task(engine, settings: Settings, jobs, run_id: str) -> dict:
             with begin(engine) as c:
                 _set_phase(c, run_id, "provisioning")
             sandbox.provision(owner, repo, base_branch=base_branch,
-                              work_branch=f"boss/code/{run_id}", token=token)
+                              work_branch=work_branch, token=token)
             with begin(engine) as c:
                 _set_phase(c, run_id, "coding")
             agent = make_code_agent(settings)
@@ -384,7 +431,7 @@ def run_code_task(engine, settings: Settings, jobs, run_id: str) -> dict:
                 reservation_id=reservation_id,
                 dedupe_key=f"code:task:{run_id}",
                 title=f"{run['title']}",
-                branch_name=f"boss/code/{run_id}",
+                branch_name=work_branch,
                 summary=result.summary,
                 files=result.diff,
                 created_by_job_id=fctx.get("created_by_job_id"),
