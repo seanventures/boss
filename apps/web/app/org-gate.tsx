@@ -7,6 +7,35 @@ import { onboardOrgAction } from "./actions";
 
 const ORG_KEY = "boss.org";
 
+/** Shown instead of the org picker when the URL names an org but the control plane
+ * didn't answer. Falling back to the picker on a transient API blip silently threw
+ * the operator out of their session (the "console resets" bug) — this keeps the URL
+ * (org/area/deep links intact) and retries until the API answers again. */
+export function OrgReconnect({ orgId, reason }: { orgId: string; reason?: string }) {
+  const router = useRouter();
+  useEffect(() => {
+    const id = setInterval(() => router.refresh(), 5000);
+    return () => clearInterval(id);
+  }, [router]);
+  return (
+    <div className="org-gate">
+      <div className="org-gate-inner">
+        <div className="org-gate-brand">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src="/BOSS-logo.png" alt="BOSS" className="org-gate-logo" />
+          <span className="org-gate-tag">Autonomous System</span>
+        </div>
+        <h1 className="org-gate-title">Reconnecting to the control plane…</h1>
+        <p className="org-gate-sub">
+          The API didn&apos;t answer just now{reason ? ` (${reason})` : ""}. Your session for{" "}
+          <span className="mono">{orgId}</span> is preserved — this page retries automatically
+          and will drop you back exactly where you were.
+        </p>
+      </div>
+    </div>
+  );
+}
+
 export function OrgGate({ orgs }: { orgs: OrgSummary[] }) {
   const router = useRouter();
   const params = useSearchParams();

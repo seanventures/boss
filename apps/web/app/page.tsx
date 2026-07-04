@@ -129,7 +129,7 @@ import { SandboxesHome } from "./sandboxes-ui";
 import { AreaLink } from "./area-link";
 import { Suspense } from "react";
 import { fetchOrgs } from "../lib/orgs";
-import { OrgGate } from "./org-gate";
+import { OrgGate, OrgReconnect } from "./org-gate";
 import { fetchApprovalRules } from "../lib/approval-rules";
 import { ApprovalRulesView } from "./approval-rules-ui";
 import { fetchMcpServers } from "../lib/mcp";
@@ -391,6 +391,16 @@ export default async function HomePage({ searchParams }: HomePageProps) {
     ? orgs.items.find((o) => o.org_id === requestedOrgId)
     : undefined;
   if (!selectedOrg) {
+    // A transient API failure must NOT dump an in-session operator back to the org
+    // picker (it destroys their console state mid-work). URL names an org + the org
+    // list didn't load => hold the session and retry, don't re-gate.
+    if (requestedOrgId && !orgs.apiReachable) {
+      return (
+        <Suspense fallback={null}>
+          <OrgReconnect orgId={requestedOrgId} reason={orgs.blockedReason} />
+        </Suspense>
+      );
+    }
     return (
       <Suspense fallback={null}>
         <OrgGate orgs={orgs.items} />

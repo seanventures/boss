@@ -6,6 +6,7 @@ import {
   useMemo,
   useRef,
   useState,
+  useTransition,
   type ReactNode,
   type SVGProps,
 } from "react";
@@ -135,16 +136,23 @@ export default function ConsoleShell({ status, scope, org, initialArea, children
   // Live auto-refresh: re-fetch server data on an interval so async worker
   // changes (new decisions, budget moves, events) appear without manual reload.
   // Skips while the user is typing or the palette is open so nothing is interrupted.
+  // Guardrails (the console SSR fans out ~55 API calls per refresh and takes
+  // multiple seconds — an unguarded 7s loop stacked refreshes and starved the
+  // boss-api healthcheck, 502ing the console mid-session):
+  //  - never stack refreshes: skip while the previous one is still rendering
+  //  - never refresh a hidden tab: a console left open in a background tab
+  //    must not keep hammering boss-api all day
+  const [refreshPending, startRefresh] = useTransition();
   useEffect(() => {
     if (!live) return;
     const id = setInterval(() => {
-      if (paletteOpen) return;
+      if (paletteOpen || refreshPending || document.hidden) return;
       const tag = document.activeElement?.tagName;
       if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
-      router.refresh();
-    }, 7000);
+      startRefresh(() => router.refresh());
+    }, 15000);
     return () => clearInterval(id);
-  }, [live, paletteOpen, router]);
+  }, [live, paletteOpen, refreshPending, router]);
 
   // Depend on the query STRING (stable across router.refresh(), changes on real
   // navigation) so the area syncs from the URL on deep links like "View in Work →"
