@@ -151,19 +151,21 @@ def _poll(args, launched: list[dict]) -> None:
 
 def _report(args, batch_id: str) -> int:
     database_url = os.environ.get("DATABASE_URL")
-    if not database_url:
-        print("DATABASE_URL is required to aggregate (the report reads llm_calls/quality_gates).",
-              file=sys.stderr)
-        return 2
-    from sqlalchemy import create_engine
+    if database_url:
+        from sqlalchemy import create_engine
 
-    engine = create_engine(database_url, future=True)
-    with engine.begin() as connection:
-        report = aggregate_batch(connection, batch_id)
+        engine = create_engine(database_url, future=True)
+        with engine.begin() as connection:
+            report = aggregate_batch(connection, batch_id)
+        markdown = render_markdown(report)
+    else:
+        # No direct DB access (e.g. against goldeneye, where DATABASE_URL is not
+        # operator-visible) — the api aggregates server-side.
+        report = _http("GET", f"{args.api}/v1/bakeoff/{batch_id}/report", args.api_key)
+        markdown = report.pop("markdown", "") or render_markdown(report)
     out_dir = Path(args.out) / batch_id
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "report.json").write_text(json.dumps(report, indent=2, default=str))
-    markdown = render_markdown(report)
     (out_dir / "report.md").write_text(markdown)
     print(f"\n{markdown}\nwritten to {out_dir}/")
     return 0

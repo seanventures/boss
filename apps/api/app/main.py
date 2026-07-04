@@ -4451,6 +4451,21 @@ def get_code_task_endpoint(run_id: str):
     return run
 
 
+@app.get("/v1/bakeoff/{batch_id}/report")
+def bakeoff_report_endpoint(batch_id: str):
+    """Aggregate a VAG bake-off batch (spec §8) server-side: gate pass-rate, retries,
+    wall-clock, $/verified-outcome and false-pass per model config, from
+    code_task_runs ⋈ quality_gates ⋈ llm_calls. Lets the driver report without
+    direct DB access (goldeneye's DATABASE_URL is not exposed to operators)."""
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    from .services.bakeoff import aggregate_batch, render_markdown
+    with begin(engine) as c:
+        report = aggregate_batch(c, batch_id)
+    report["markdown"] = render_markdown(report)
+    return report
+
+
 # --- Discovery pipeline: research-driven outcome discovery -------------------
 @app.post("/v1/discoveries")
 def start_discovery_endpoint(payload: dict):

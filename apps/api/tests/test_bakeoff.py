@@ -148,3 +148,20 @@ def test_render_markdown_smoke(engine):
     with engine.begin() as c:
         md = render_markdown(aggregate_batch(c, batch_id))
     assert batch_id in md and "claude_baseline" in md and "$1.00" in md
+
+
+def test_report_endpoint_aggregates_server_side(client, engine):
+    """GET /v1/bakeoff/{batch}/report — the driver's no-DB-access path (goldeneye)."""
+    project_id = get_settings().default_project_id
+    batch_id = f"bake_{uuid.uuid4().hex[:8]}"
+    with engine.begin() as c:
+        _seed_run(c, project_id, batch_id, "claude_baseline", gate={"status": "pass"},
+                  llm_costs=[(1_000_000, 0, False)])
+    resp = client.get(f"/v1/bakeoff/{batch_id}/report")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["configs"]["claude_baseline"]["gate_pass"] == 1
+    assert "claude_baseline" in body["markdown"]
+    # unknown batch: empty but well-formed, not an error
+    empty = client.get("/v1/bakeoff/bake_nonexistent/report").json()
+    assert empty["total_runs"] == 0 and empty["configs"] == {}
