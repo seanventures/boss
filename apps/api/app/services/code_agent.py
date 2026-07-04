@@ -481,4 +481,20 @@ def make_code_agent(settings: Settings, engine: Optional[str] = None) -> CodeAge
         return ClaudeCodeAgent(settings)
     if engine in ("native", "openai", "azure"):
         return NativeCodeAgent(settings)
+    if engine == "openrouter":
+        # A NativeCodeAgent bound to the DEDICATED OpenRouter credentials — never the
+        # platform-managed OPENAI_* pair, and never Azure precedence. This is the VAG
+        # cheap-model lane: route steps with e.g. "openrouter:deepseek/deepseek-chat".
+        if not settings.openrouter_api_key:
+            raise RuntimeError("OPENROUTER_API_KEY is not configured.")
+        bound = settings.model_copy(update={
+            "openai_api_key": settings.openrouter_api_key,
+            "openai_base_url": settings.openrouter_base_url,
+            "azure_openai_key": None,
+            "azure_openai_endpoint": None,
+            "azure_openai_deployment": None,
+        })
+        agent = NativeCodeAgent(bound)
+        agent.engine = "openrouter"
+        return agent
     raise NotImplementedError(f"Unknown code_agent_engine: {engine!r}")

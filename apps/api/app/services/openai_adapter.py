@@ -46,6 +46,8 @@ PRICE_PER_MTOK: dict[str, tuple[float, float]] = {
     "deepseek-chat": (0.27, 1.10),
     "deepseek-reasoner": (0.55, 2.19),
     "qwen2.5-coder-32b-instruct": (0.90, 0.90),
+    "qwen-2.5-coder-32b-instruct": (0.90, 0.90),  # OpenRouter's spelling (qwen/qwen-2.5-…)
+    "deepseek-chat:free": (0.0, 0.0),  # OpenRouter free variant — genuinely $0
 }
 DEFAULT_PRICE = (2.50, 10.00)
 

@@ -70,6 +70,35 @@ def test_model_override_flows_through(monkeypatch):
     assert captured["model"] == "deepseek/deepseek-chat"
 
 
+def test_openrouter_engine_binds_dedicated_credentials(monkeypatch):
+    """VAG cheap-model lane: engine 'openrouter' uses OPENROUTER_* creds — never the
+    platform-managed OPENAI_* pair, and Azure precedence is disabled on its adapter."""
+    import pytest
+
+    from apps.api.app.config import Settings
+    from apps.api.app.services.code_agent import make_code_agent
+
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    monkeypatch.delenv("OPENROUTER_BASE_URL", raising=False)
+    settings = Settings(
+        OPENROUTER_API_KEY="sk-or-test",
+        OPENAI_API_KEY="sk-platform-DO-NOT-USE",
+        AZURE_OPENAI_KEY="azkey", AZURE_OPENAI_ENDPOINT="https://x.azure.com",
+        AZURE_OPENAI_DEPLOYMENT="gpt-4o",
+    )
+    agent = make_code_agent(settings, engine="openrouter")
+    assert agent.engine == "openrouter"
+    bound = agent.settings
+    assert bound.openai_api_key == "sk-or-test"
+    assert bound.openai_base_url == "https://openrouter.ai/api/v1"
+    assert not (bound.azure_openai_key or bound.azure_openai_deployment)  # no Azure precedence
+    # the original settings object is untouched (platform lane unaffected)
+    assert settings.openai_api_key == "sk-platform-DO-NOT-USE"
+
+    with pytest.raises(RuntimeError, match="OPENROUTER_API_KEY"):
+        make_code_agent(Settings(OPENROUTER_API_KEY=""), engine="openrouter")
+
+
 def test_azure_precedence_ignores_base_url(monkeypatch):
     used = {"azure": False}
 

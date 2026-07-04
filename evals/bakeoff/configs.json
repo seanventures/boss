@@ -1,5 +1,5 @@
 {
-  "_readme": "Model configs for the VAG bake-off. Each config = one competitor: a name, an optional pipeline profile, and a model_config injected per run (VAG B2 routing — no env flips or redeploys between configs). Cheap-model configs need the deployment's OPENAI_BASE_URL pointed at the chosen provider (OpenRouter/Fireworks/DeepSeek direct) with a matching OPENAI_API_KEY, and BOSS_MODEL_PRICES_JSON entries for accurate $/verified-outcome.",
+  "_readme": "Model configs for the VAG bake-off. Each config = one competitor: a name, an optional pipeline profile, and a model_config injected per run (VAG B2 routing — no env flips or redeploys between configs). Cheap configs use the dedicated 'openrouter' engine (OPENROUTER_API_KEY in the secret store — deliberately separate from the platform-managed OPENAI_* pair). Keep BOSS_MODEL_PRICES_JSON entries current for accurate $/verified-outcome.",
   "configs": [
     {
       "name": "claude_baseline",
@@ -9,15 +9,15 @@
     },
     {
       "name": "deepseek_all",
-      "notes": "Everything on DeepSeek V3 — the naive all-cheap datapoint.",
+      "notes": "Everything on DeepSeek V3 via OpenRouter — the naive all-cheap datapoint.",
       "profile": "strict",
-      "model_config": {"default": "native:deepseek-chat"}
+      "model_config": {"default": "openrouter:deepseek/deepseek-chat"}
     },
     {
       "name": "qwen_all",
-      "notes": "Everything on Qwen2.5-Coder — second cheap generator.",
+      "notes": "Everything on Qwen2.5-Coder via OpenRouter — second cheap generator.",
       "profile": "strict",
-      "model_config": {"default": "native:qwen2.5-coder-32b-instruct"}
+      "model_config": {"default": "openrouter:qwen/qwen-2.5-coder-32b-instruct"}
     },
     {
       "name": "vag_junior_senior",
@@ -25,8 +25,15 @@
       "profile": "strict",
       "model_config": {
         "default": "strong",
-        "steps": {"implement": "native:deepseek-chat", "standards": "native:deepseek-chat"}
+        "steps": {"implement": "openrouter:deepseek/deepseek-chat",
+                  "standards": "openrouter:deepseek/deepseek-chat"}
       }
+    },
+    {
+      "name": "deepseek_free_smoke",
+      "notes": "Zero-cost wiring smoke on OpenRouter's :free variant (heavily rate-limited; run with --only deepseek_free_smoke against a single task).",
+      "profile": "strict",
+      "model_config": {"default": "openrouter:deepseek/deepseek-chat:free"}
     }
   ]
 }

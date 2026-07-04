@@ -158,6 +158,13 @@ class Settings(BaseSettings):
     # Together, OpenRouter, DeepSeek, local…) by config alone. No image rebuild needed.
     # Ignored when Azure creds are configured (Azure keeps precedence in OpenAIAdapter).
     openai_base_url: str = Field(default="", alias="OPENAI_BASE_URL")
+    # Dedicated OpenRouter lane (VAG cheap models). A SEPARATE credential pair from
+    # OPENAI_* on purpose: on managed deployments OPENAI_API_KEY is a broker-shared,
+    # platform-managed credential — the 'openrouter' engine must not redirect it.
+    openrouter_api_key: str = Field(default="", alias="OPENROUTER_API_KEY")
+    openrouter_base_url: str = Field(
+        default="https://openrouter.ai/api/v1", alias="OPENROUTER_BASE_URL"
+    )
     # Headless Claude token for the claude_code guest engine (passed into the guest).
     claude_code_oauth_token: str = Field(default="", alias="CLAUDE_CODE_OAUTH_TOKEN")
     openai_codex_oauth_enabled: bool = Field(
