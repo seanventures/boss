@@ -285,6 +285,19 @@ def _set_phase(connection, run_id: str, phase: str) -> None:
     )
 
 
+def _persist_sandbox_id(connection, run_id: str, sbx_id: Optional[str]) -> None:
+    """Record the micro-VM's sandbox-service task id on the run so the console can
+    inspect the retained VM after a failure (browse /work/repo, view logs, hold)."""
+    if not sbx_id:
+        return
+    connection.execute(
+        text("UPDATE code_task_runs SET finalize_ctx = COALESCE(finalize_ctx, '{}'::jsonb) "
+             "|| jsonb_build_object('sandbox_task_id', CAST(:s AS text)), updated_at = now() "
+             "WHERE id = :id"),
+        {"s": sbx_id, "id": run_id},
+    )
+
+
 def _fail(connection, run_id: str, project_id: str, reason: str, *, status: str = "failed") -> dict:
     connection.execute(
         text("UPDATE code_task_runs SET status=:st, phase='done', error=:e, updated_at=now() WHERE id=:id"),
@@ -411,6 +424,8 @@ def run_code_task(engine, settings: Settings, jobs, run_id: str) -> dict:
                 {"s": json.dumps(result.to_metadata()), "cost": int(result.cost_usd_micros or 0),
                  "m": result.usage.get("model"), "id": run_id},
             )
+            # Record the micro-VM id so a failed/incomplete run can be inspected later.
+            _persist_sandbox_id(c, run_id, getattr(provider, "last_sandbox_task_id", None))
 
         if not result.diff:
             with begin(engine) as c:
@@ -458,11 +473,16 @@ def run_code_task(engine, settings: Settings, jobs, run_id: str) -> dict:
             emit_event(c, project_id, "code_task.pr_opened", "boss", "code_task_run", run_id,
                        {"pull_request_url": proposal.get("pull_request_url"),
                         "decision_id": proposal.get("decision_id")})
+        # Success — release the micro-VM to free capacity (failures are retained).
+        if hasattr(provider, "release"):
+            provider.release(getattr(provider, "last_sandbox_task_id", None))
         return {"status": "completed", "done": True, **proposal}
 
     except (SandboxError, RuntimeError) as exc:
         with begin(engine) as c:
             _release(sf, c, project_id, reservation_id, f"code task error: {exc}")
+            # Retain + record the micro-VM so the failure can be root-caused in the console.
+            _persist_sandbox_id(c, run_id, getattr(provider, "last_sandbox_task_id", None))
             return _fail(c, run_id, project_id, str(exc))
     finally:
         if sandbox is not None:

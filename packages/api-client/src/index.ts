@@ -4096,6 +4096,14 @@ export function createBossApiClient(config: BossApiClientConfig) {
     getSandboxStats(sandboxId: string) {
       return request<SandboxStats>("GET", `/v1/sandboxes/${encodeURIComponent(sandboxId)}/stats`);
     },
+    getSandboxLogs(sandboxId: string) {
+      return request<{ serial_tail?: string; agent_log?: string; unavailable?: string }>(
+        "GET", `/v1/sandboxes/${encodeURIComponent(sandboxId)}/logs`);
+    },
+    holdSandbox(sandboxId: string, hours = 2) {
+      return request<Record<string, unknown>>("POST", `/v1/sandboxes/${encodeURIComponent(sandboxId)}/preserve`,
+        { body: { hours } });
+    },
     preserveSandbox(sandboxId: string, reason: string, actor = "operator") {
       return request<SandboxSummary>("POST", `/v1/sandboxes/${encodeURIComponent(sandboxId)}/preserve`,
         { body: { reason, actor } });

@@ -82,6 +82,25 @@ class MicroVMProvider:
 
     def __init__(self, settings: Settings):
         self.settings = settings
+        # Set to the sandbox-service task id once submitted, so the control plane can
+        # persist it (to inspect a retained VM later) and release it on success.
+        self.last_sandbox_task_id: Optional[str] = None
+
+    def _headers(self) -> dict:
+        return {"X-Sandbox-Token": self.settings.sandbox_token} if self.settings.sandbox_token else {}
+
+    def release(self, sandbox_task_id: Optional[str]) -> None:
+        """Destroy a VM (best-effort). Called on SUCCESS to free capacity; failed VMs
+        are intentionally NOT released so the service retains the rootfs for inspection."""
+        if not sandbox_task_id:
+            return
+        base = (self.settings.sandbox_agent_url or "").rstrip("/")
+        try:
+            import httpx
+            with httpx.Client(timeout=15.0) as client:
+                client.delete(f"{base}/v1/sandbox/tasks/{sandbox_task_id}", headers=self._headers())
+        except Exception:  # noqa: BLE001
+            pass
 
     def acquire(self, *, task_id: str, tenant_id: Optional[str] = None) -> Sandbox:
         raise NotImplementedError(
@@ -163,23 +182,20 @@ class MicroVMProvider:
             sid = r.json().get("sandbox_task_id")
             if not sid:
                 raise RuntimeError("sandbox-service did not return a sandbox_task_id")
+            self.last_sandbox_task_id = sid  # expose so the control plane can retain/inspect
             deadline = time.monotonic() + timeout_s
-            try:
-                while time.monotonic() < deadline:
-                    time.sleep(poll)
-                    pr = client.get(f"{base}/v1/sandbox/tasks/{sid}", headers=headers)
-                    pr.raise_for_status()
-                    pdata = pr.json()
-                    last_status = pdata.get("status")
-                    if last_status in ("done", "failed", "timeout"):
-                        data = pdata
-                        break
-            finally:
-                # Release/destroy the VM regardless of outcome (best-effort).
-                try:
-                    client.delete(f"{base}/v1/sandbox/tasks/{sid}", headers=headers)
-                except Exception:  # noqa: BLE001
-                    pass
+            while time.monotonic() < deadline:
+                time.sleep(poll)
+                pr = client.get(f"{base}/v1/sandbox/tasks/{sid}", headers=headers)
+                pr.raise_for_status()
+                pdata = pr.json()
+                last_status = pdata.get("status")
+                if last_status in ("done", "failed", "timeout"):
+                    data = pdata
+                    break
+            # NOTE: we do NOT release the VM here. The control plane releases it on
+            # SUCCESS (to free capacity) and RETAINS it on any failure so the service
+            # keeps the rootfs (~2h) for inspection. See code_task_service.
 
         if data is None:
             raise RuntimeError(

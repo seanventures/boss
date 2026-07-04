@@ -4565,12 +4565,40 @@ def deepen_discovery_endpoint(run_id: str):
 # --- Execution plane: governed sandbox visibility + console ------------------
 @app.get("/v1/sandboxes")
 def list_sandboxes_endpoint():
-    """List live sandboxes on the execution plane (visibility)."""
+    """The connected micro-VM host + the inspectable (retained) VMs. A failed or
+    incomplete code task leaves its rootfs held ~2h; those show here for root-cause."""
     from .services import sandbox_console
     try:
-        return sandbox_console.list_sandboxes(settings)
-    except Exception as e:  # sandbox agent unreachable
-        return {"sandboxes": [], "unavailable": str(e)[:200]}
+        result = sandbox_console.list_sandboxes(settings)  # host status
+    except Exception as e:  # sandbox service unreachable
+        result = {"sandboxes": [], "host": {"connected": False}, "unavailable": str(e)[:200]}
+    cards = []
+    try:
+        with begin(engine) as c:
+            rows = c.execute(text(
+                "SELECT id, title, project_id, status, spec, state, finalize_ctx, "
+                "EXTRACT(EPOCH FROM (now()-updated_at))::int AS age "
+                "FROM code_task_runs WHERE status IN ('failed','blocked') "
+                "AND finalize_ctx->>'sandbox_task_id' IS NOT NULL "
+                "AND updated_at > now() - interval '115 minutes' "
+                "ORDER BY updated_at DESC LIMIT 30")).mappings().all()
+        for r in rows:
+            def _j(v):
+                return v if isinstance(v, dict) else (json.loads(v) if v else {})
+            spec, state, fctx = _j(r["spec"]), _j(r["state"]), _j(r["finalize_ctx"])
+            cards.append({
+                "sandbox_id": fctx.get("sandbox_task_id"), "status": "failed",
+                "title": r["title"], "tenant_id": r["project_id"],
+                "repo": f"{spec.get('owner', '')}/{spec.get('repo', '')}",
+                "age_seconds": int(r["age"] or 0), "preserved": False,
+                "meta": {"engine": state.get("engine"), "run_id": r["id"],
+                         "diff_summary": state.get("diff_summary"),
+                         "tests_passed": state.get("tests_passed")},
+            })
+    except Exception:  # noqa: BLE001
+        pass
+    result["sandboxes"] = cards
+    return result
 
 
 @app.get("/v1/sandboxes/helpers")
@@ -4620,19 +4648,25 @@ def sandbox_stats_endpoint(sandbox_id: str):
     return sandbox_console.get_stats(settings, sandbox_id)
 
 
-@app.post("/v1/sandboxes/{sandbox_id}/preserve")
-def sandbox_preserve_endpoint(sandbox_id: str, payload: dict):
-    """Quarantine + snapshot a sandbox for a customer escalation — requires a
-    reason, excluded from the reaper, audited (sandbox.preserved)."""
+@app.get("/v1/sandboxes/{sandbox_id}/logs")
+def sandbox_logs_endpoint(sandbox_id: str):
+    """Guest serial console + code-agent log from a retained micro-VM (root-cause)."""
     from .services import sandbox_console
     try:
-        with begin(engine) as c:
-            return sandbox_console.preserve(
-                c, settings, sandbox_id, reason=payload.get("reason", ""),
-                actor=payload.get("actor", "operator"),
-            )
-    except ValueError as e:
-        raise HTTPException(status_code=422, detail=str(e))
+        return sandbox_console.get_logs(settings, sandbox_id)
+    except Exception as e:  # noqa: BLE001
+        return {"serial_tail": "", "agent_log": "", "unavailable": str(e)[:200]}
+
+
+@app.post("/v1/sandboxes/{sandbox_id}/preserve")
+def sandbox_preserve_endpoint(sandbox_id: str, payload: dict):
+    """Hold a retained micro-VM longer for investigation (extends the reaper window)."""
+    from .services import sandbox_console
+    with begin(engine) as c:
+        return sandbox_console.hold(
+            c, settings, sandbox_id, hours=int(payload.get("hours", 2)),
+            actor=payload.get("actor", "operator"),
+        )
 
 
 @app.delete("/v1/sandboxes/{sandbox_id}")

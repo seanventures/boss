@@ -27,6 +27,10 @@ async function apiStats(id: string): Promise<SandboxStats> {
   const r = await fetch(`/api/sandboxes/${encodeURIComponent(id)}/stats`);
   return r.json();
 }
+async function apiLogs(id: string): Promise<{ serial_tail?: string; agent_log?: string; unavailable?: string }> {
+  const r = await fetch(`/api/sandboxes/${encodeURIComponent(id)}/logs`);
+  return r.json();
+}
 type HelperCatalog = { categories: Record<string, string[]>; commands: string[]; unavailable?: string };
 async function apiHelpers(): Promise<HelperCatalog> {
   const r = await fetch(`/api/sandboxes/helpers`);
@@ -182,6 +186,31 @@ function Telemetry({ sandboxId }: { sandboxId: string }) {
   );
 }
 
+function LogsPanel({ sandboxId }: { sandboxId: string }) {
+  const [logs, setLogs] = useState<{ serial_tail?: string; agent_log?: string; unavailable?: string } | null>(null);
+  const [tab, setTab] = useState<"agent" | "serial">("agent");
+  const [busy, setBusy] = useState(false);
+  const load = useCallback(async () => {
+    setBusy(true);
+    try { setLogs(await apiLogs(sandboxId)); } catch { /* ignore */ } finally { setBusy(false); }
+  }, [sandboxId]);
+  useEffect(() => { load(); }, [load]);
+  const text = tab === "agent" ? (logs?.agent_log ?? "") : (logs?.serial_tail ?? "");
+  return (
+    <div className="sbx-console">
+      <div className="sbx-console-bar" style={{ gap: 8 }}>
+        <button className={`cap-btn${tab === "agent" ? " primary" : ""}`} onClick={() => setTab("agent")}>Agent log</button>
+        <button className={`cap-btn${tab === "serial" ? " primary" : ""}`} onClick={() => setTab("serial")}>Guest console</button>
+        <button className="cap-btn" onClick={load} disabled={busy} style={{ marginLeft: "auto" }}>{busy ? "…" : "↻"}</button>
+      </div>
+      {logs?.unavailable ? <p className="detail" style={{ color: "#f85149" }}>⚠ {logs.unavailable}</p> : null}
+      <pre className="sbx-out-text" style={{ maxHeight: 340, overflow: "auto", whiteSpace: "pre-wrap" }}>
+        {text || (busy ? "loading…" : "(empty)")}
+      </pre>
+    </div>
+  );
+}
+
 function SandboxDetail({ sb, onBack, onDestroyed }: {
   sb: SandboxSummary; onBack: () => void; onDestroyed: () => void;
 }) {
@@ -217,35 +246,31 @@ function SandboxDetail({ sb, onBack, onDestroyed }: {
         </div>
         <div className="sbx-detail-actions">
           <span className={`cap-badge tone-${statusTone(status)}`}>{status}</span>
-          {!preserved ? (
-            <button className="cap-btn" onClick={() => setShowPreserve((v) => !v)}>Preserve for investigation</button>
-          ) : <span className="detail">🔒 preserved &amp; snapshotted</span>}
+          <button className="cap-btn" title="Extend the retention window on this VM"
+            onClick={async () => { await apiPreserve(sb.sandbox_id, "hold"); setStatus("held +2h"); }}>
+            ⏱ Hold 2h more
+          </button>
           <button className="cap-btn" onClick={async () => { await apiDestroy(sb.sandbox_id); onDestroyed(); }}>
-            Destroy
+            Release
           </button>
         </div>
       </div>
 
-      {showPreserve ? (
-        <div className="sbx-preserve">
-          <input className="sbx-reason" value={reason} onChange={(e) => setReason(e.target.value)}
-            placeholder="Reason / escalation ref (required — quarantines + snapshots the VM, audited)" />
-          <button className="cap-btn primary" onClick={doPreserve}>Quarantine + snapshot</button>
-        </div>
-      ) : null}
+      <p className="detail" style={{ marginTop: -4 }}>
+        Retained micro‑VM rootfs of a failed/incomplete task (read‑only, auto‑reaped ~2h). Browse the
+        working tree, read files, and check the logs to find the root cause.
+      </p>
 
       <div className="sbx-meta">
         <span><b>Engine</b> {sb.meta?.engine ?? "—"}</span>
         <span><b>Diff</b> {ds ? `${ds.files_changed} files · +${ds.additions}/−${ds.deletions}` : "—"}</span>
-        <span><b>Tests</b> <span className={`cap-badge tone-${sb.meta?.tests_passed ? "green" : "muted"}`}>{sb.meta?.tests_passed ? "passed" : "—"}</span></span>
+        <span><b>Tests</b> <span className={`cap-badge tone-${sb.meta?.tests_passed ? "green" : "muted"}`}>{sb.meta?.tests_passed ? "passed" : "failed / —"}</span></span>
         <span><b>Age</b> {Math.round(sb.age_seconds / 60)}m</span>
       </div>
 
-      <Telemetry sandboxId={sb.sandbox_id} />
-
       <div className="sbx-browser">
         <div className="sbx-tree">
-          <div className="sbx-tree-head">Working tree</div>
+          <div className="sbx-tree-head">Working tree (/work/repo)</div>
           {tree.length === 0 ? <p className="detail">empty / loading…</p> : (
             <ul className="sbx-tree-list">
               {tree.filter((t) => !t.endsWith("/")).map((t) => (
@@ -263,8 +288,8 @@ function SandboxDetail({ sb, onBack, onDestroyed }: {
         </div>
       </div>
 
-      <div className="sbx-block-title">Console <span className="detail">— governed exec into this sandbox</span></div>
-      <Console sandboxId={sb.sandbox_id} />
+      <div className="sbx-block-title">Logs <span className="detail">— code‑agent log + guest boot console from the retained VM</span></div>
+      <LogsPanel sandboxId={sb.sandbox_id} />
     </div>
   );
 }
