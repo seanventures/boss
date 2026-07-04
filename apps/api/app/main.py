@@ -4234,6 +4234,8 @@ def start_code_task_endpoint(payload: dict):
             jobs=jobs,
             profile=payload.get("profile"),
             risk_tier=payload.get("risk_tier"),
+            model_config=payload.get("model_config"),
+            open_pr=payload.get("open_pr"),
         )
     return {"status": "queued", "run_id": run_id}
 

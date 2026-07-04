@@ -13,10 +13,13 @@ from .redaction import redact as _redact
 _RETRYABLE = (RateLimitError, APITimeoutError, APIConnectionError)
 
 
-def _with_retry(call, *, tries: int = 8, base: float = 2.0):
+def _with_retry(call, *, tries: int = 8, base: float = 2.0, stats: Optional[dict] = None):
     """Call an OpenAI request, retrying on 429 / transient errors with exponential backoff +
-    jitter. Honours a Retry-After header when the provider supplies one."""
+    jitter. Honours a Retry-After header when the provider supplies one. ``stats`` (when
+    given) receives {"retries": n} — how many retries the call needed (0 = first try)."""
     for attempt in range(tries):
+        if stats is not None:
+            stats["retries"] = attempt
         try:
             return call()
         except _RETRYABLE as exc:
@@ -31,15 +34,54 @@ def _with_retry(call, *, tries: int = 8, base: float = 2.0):
             time.sleep(min(delay, 45.0))
 
 # USD per 1,000,000 tokens: (input, output). Turns real token usage into a
-# dollar cost (micros) for budget settlement and reporting.
+# dollar cost (micros) for budget settlement and reporting. Extend/correct per
+# deployment via BOSS_MODEL_PRICES_JSON (a {"model": [in, out]} JSON object) —
+# open-model prices vary by host (DeepSeek direct vs OpenRouter vs Fireworks).
 PRICE_PER_MTOK: dict[str, tuple[float, float]] = {
     "gpt-4o": (2.50, 10.00),
     "gpt-4o-mini": (0.15, 0.60),
     "gpt-4.1": (2.00, 8.00),
     "gpt-4.1-mini": (0.40, 1.60),
     "gpt-5.2-codex": (2.50, 10.00),
+    "deepseek-chat": (0.27, 1.10),
+    "deepseek-reasoner": (0.55, 2.19),
+    "qwen2.5-coder-32b-instruct": (0.90, 0.90),
 }
 DEFAULT_PRICE = (2.50, 10.00)
+
+
+def _price_overrides() -> dict[str, tuple[float, float]]:
+    from ..config import get_settings
+
+    raw = (get_settings().model_prices_json or "").strip()
+    if not raw:
+        return {}
+    if raw != _price_overrides_cache.get("raw"):
+        try:
+            import json as _json
+
+            parsed = {
+                str(k): (float(v[0]), float(v[1]))
+                for k, v in _json.loads(raw).items()
+            }
+        except Exception:  # noqa: BLE001 — a bad override must not break cost accounting
+            parsed = {}
+        _price_overrides_cache.update({"raw": raw, "parsed": parsed})
+    return _price_overrides_cache.get("parsed", {})
+
+
+_price_overrides_cache: dict = {}
+
+
+def price_for_model(model: str) -> tuple[float, float, bool]:
+    """(input_$/Mtok, output_$/Mtok, known). Overrides win; provider-prefixed names
+    (OpenRouter's "deepseek/deepseek-chat") also match on their basename. known=False
+    means the DEFAULT_PRICE fallback was used — treat that cost as an estimate."""
+    table = {**PRICE_PER_MTOK, **_price_overrides()}
+    for key in (model, model.rsplit("/", 1)[-1]):
+        if key in table:
+            return (*table[key], True)
+    return (*DEFAULT_PRICE, False)
 
 
 def estimate_cost_usd_micros(usage: dict) -> int:
@@ -49,8 +91,7 @@ def estimate_cost_usd_micros(usage: dict) -> int:
     total_cost_usd per call), honor that instead of the token price table."""
     if usage.get("cost_usd_micros") is not None:
         return int(usage["cost_usd_micros"])
-    model = str(usage.get("model") or "")
-    inp, out = PRICE_PER_MTOK.get(model, DEFAULT_PRICE)
+    inp, out, _ = price_for_model(str(usage.get("model") or ""))
     prompt = int(usage.get("prompt_tokens") or 0)
     completion = int(usage.get("completion_tokens") or 0)
     return int(round(prompt * inp + completion * out))
@@ -82,6 +123,17 @@ class OpenAIAdapter:
             and self.settings.azure_openai_deployment
         )
 
+    def _openai_client(self) -> OpenAI:
+        """Plain-OpenAI client honoring OPENAI_BASE_URL, so the HOST-side native engine can
+        target any OpenAI-compatible provider (OpenRouter/Fireworks/DeepSeek/local) — the
+        same knob the guest path already honors. Empty base_url => SDK default (api.openai.com).
+        Azure keeps precedence via _azure_enabled(); base_url is ignored when Azure is configured."""
+        kwargs: dict = {"api_key": self.settings.openai_api_key}
+        base = (self.settings.openai_base_url or "").strip()
+        if base:
+            kwargs["base_url"] = base
+        return OpenAI(**kwargs)
+
     def create_text_response(
         self,
         prompt: str,
@@ -103,23 +155,33 @@ class OpenAIAdapter:
                 messages.append({"role": "system", "content": system_prompt})
             messages.append({"role": "user", "content": prompt})
             deployment = self.settings.azure_openai_deployment or "gpt-4o"
+            stats: dict = {}
             response = _with_retry(
-                lambda: client.chat.completions.create(model=deployment, messages=messages)
+                lambda: client.chat.completions.create(model=deployment, messages=messages),
+                stats=stats,
             )
             text = response.choices[0].message.content or ""
-            return response.id, text, _usage_from_response(response, deployment)
+            usage = _usage_from_response(response, deployment)
+            usage["retries"] = stats.get("retries", 0)
+            return response.id, text, usage
 
         if not self.settings.openai_api_key:
             raise IntegrationConfigurationError("OPENAI_API_KEY is not configured.")
 
-        client = OpenAI(api_key=self.settings.openai_api_key)
+        # NOTE: the Responses API below is OpenAI-specific — most OpenAI-compatible hosts
+        # (DeepSeek/OpenRouter/Fireworks) only implement chat.completions. The coding
+        # pipeline (NativeCodeAgent) uses create_chat_completion, which is portable.
+        client = self._openai_client()
         used_model = model or self.settings.openai_model
+        stats = {}
         response = _with_retry(lambda: client.responses.create(
             model=used_model,
             instructions=system_prompt,
             input=prompt,
-        ))
-        return response.id, response.output_text, _usage_from_response(response, used_model)
+        ), stats=stats)
+        usage = _usage_from_response(response, used_model)
+        usage["retries"] = stats.get("retries", 0)
+        return response.id, response.output_text, usage
 
     def create_chat_completion(
         self,
@@ -147,7 +209,7 @@ class OpenAIAdapter:
             )
             model = self.settings.azure_openai_deployment or "gpt-4o"
         elif self.settings.openai_api_key:
-            client = OpenAI(api_key=self.settings.openai_api_key)
+            client = self._openai_client()
             model = self.settings.openai_model
         else:
             raise IntegrationConfigurationError("OPENAI_API_KEY is not configured.")
@@ -158,7 +220,8 @@ class OpenAIAdapter:
         if tools:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = tool_choice
-        response = _with_retry(lambda: client.chat.completions.create(**kwargs))
+        stats: dict = {}
+        response = _with_retry(lambda: client.chat.completions.create(**kwargs), stats=stats)
         msg = response.choices[0].message
         tool_calls = None
         if getattr(msg, "tool_calls", None):
@@ -175,4 +238,6 @@ class OpenAIAdapter:
             "tool_calls": tool_calls,
             "raw": msg.model_dump(exclude_none=True),
         }
-        return normalized, _usage_from_response(response, model)
+        usage = _usage_from_response(response, model)
+        usage["retries"] = stats.get("retries", 0)
+        return normalized, usage

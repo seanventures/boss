@@ -148,9 +148,15 @@ class Settings(BaseSettings):
         alias="BOSS_OIDC_SUBJECT_PRINCIPALS",
     )
     openai_model: str = Field(default="gpt-5.2-codex", alias="BOSS_OPENAI_MODEL")
-    # OpenAI-COMPATIBLE base URL — lets the guest agent target any such provider
-    # (OpenAI default, xAI/Grok https://api.x.ai/v1, Together, OpenRouter, local…)
-    # by config alone. Swapping the guest's model/provider needs no image rebuild.
+    # Extend/correct the token price table (openai_adapter.PRICE_PER_MTOK) per deployment:
+    # a JSON object {"model": [input_usd_per_mtok, output_usd_per_mtok]}. Open-model prices
+    # vary by host (DeepSeek direct vs OpenRouter vs Fireworks), so accurate
+    # $/verified-outcome accounting (VAG Phase 0) needs deployment-specific overrides.
+    model_prices_json: str = Field(default="", alias="BOSS_MODEL_PRICES_JSON")
+    # OpenAI-COMPATIBLE base URL — lets BOTH the guest agent and the host-side native
+    # engine target any such provider (OpenAI default, xAI/Grok https://api.x.ai/v1,
+    # Together, OpenRouter, DeepSeek, local…) by config alone. No image rebuild needed.
+    # Ignored when Azure creds are configured (Azure keeps precedence in OpenAIAdapter).
     openai_base_url: str = Field(default="", alias="OPENAI_BASE_URL")
     # Headless Claude token for the claude_code guest engine (passed into the guest).
     claude_code_oauth_token: str = Field(default="", alias="CLAUDE_CODE_OAUTH_TOKEN")
@@ -344,6 +350,11 @@ class Settings(BaseSettings):
     # engine's default model for every step (routing is a safe no-op until configured).
     code_agent_low_cost_model: str = Field(default="", alias="BOSS_CODE_AGENT_LOW_COST_MODEL")
     code_agent_strong_model: str = Field(default="", alias="BOSS_CODE_AGENT_STRONG_MODEL")
+    # VAG B2: bind a model CLASS to an ENGINE, so "low_cost" can mean a different provider
+    # entirely (e.g. low_cost=native/deepseek-chat while strong stays claude_code). Empty =
+    # the step's lane engine (build vs review) — exactly the pre-B2 behavior.
+    code_agent_low_cost_engine: str = Field(default="", alias="BOSS_CODE_AGENT_LOW_COST_ENGINE")
+    code_agent_strong_engine: str = Field(default="", alias="BOSS_CODE_AGENT_STRONG_ENGINE")
     # Lane capacity for the review panel: how many read-only checks run concurrently. Extra checks
     # queue for a free slot (the entitlement broker authorises which model lane each one uses).
     code_agent_max_concurrency: int = Field(default=3, alias="BOSS_CODE_AGENT_MAX_CONCURRENCY")

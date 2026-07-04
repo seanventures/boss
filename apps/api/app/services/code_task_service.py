@@ -33,6 +33,7 @@ from ..db import begin
 from .code_agent import CodeTaskSpec, RepoContext, make_code_agent
 from .core import emit_event, make_id
 from .github_app_adapter import GitHubAppAdapter
+from .llm_telemetry import clear_llm_context, record_llm_call, set_llm_context
 from .sandbox import SandboxError
 from .sandbox_provider import make_sandbox_provider
 from .software_factory import SoftwareFactoryService
@@ -94,6 +95,7 @@ def start_code_task(
     instructions: str, acceptance_criteria: list[str], test_commands: list[str],
     owner: str, repo: str, base_branch: str, finalize_ctx: Optional[dict],
     jobs, profile: Optional[str] = None, risk_tier: Optional[int] = None,
+    model_config: Optional[dict] = None, open_pr: Optional[bool] = None,
 ) -> str:
     """Create the durable run row and enqueue the single `code.task` job."""
     run_id = make_id("crun")
@@ -107,6 +109,10 @@ def start_code_task(
         spec["profile"] = profile
     if isinstance(risk_tier, int):
         spec["risk_tier"] = risk_tier
+    if model_config:  # VAG B2: per-run (engine, model) routing — see route_for_step
+        spec["model_config"] = model_config
+    if open_pr is False:  # eval/bake-off runs: verify via the gate, do not open a PR
+        spec["open_pr"] = False
     connection.execute(
         text("""
             INSERT INTO code_task_runs (id, project_id, task_id, status, phase, title, spec, finalize_ctx)
@@ -201,6 +207,7 @@ def retry_code_task(engine, settings: Settings, jobs, run_id: str, *, fix_note: 
             finalize_ctx={"parent_run_id": run_id, "root_run_id": root, "attempt": attempt,
                           "feedback_history": history},
             jobs=jobs, profile=spec.get("profile"), risk_tier=spec.get("risk_tier"),
+            model_config=spec.get("model_config"), open_pr=spec.get("open_pr"),
         )
     return {"status": "queued", "run_id": new_id, "attempt": attempt,
             "parent_run_id": run_id, "root_run_id": root}
@@ -397,6 +404,15 @@ def run_code_task(engine, settings: Settings, jobs, run_id: str) -> dict:
                 "token": token, "timeout": settings.code_agent_timeout_seconds,
             }
             result = provider.run_code_task(guest_spec, tenant_id=project_id)
+            # The guest reports ONE aggregate usage for its whole edit/test loop — record it
+            # as a single llm_calls row so micro-VM runs still count toward $/verified-outcome
+            # (VAG Phase 0). Per-call detail inside the guest needs guest support (later).
+            set_llm_context(db_engine=engine, project_id=project_id, run_id=run_id)
+            record_llm_call(engine_name=f"guest:{settings.sandbox_guest_engine}",
+                            usage=result.usage,
+                            cost_usd_micros=int(result.cost_usd_micros or 0),
+                            turns=int(result.turns or 0), stage="guest",
+                            ok=bool(result.diff))
         else:
             sandbox = provider.acquire(task_id=run_id, tenant_id=project_id)
             with begin(engine) as c:
@@ -405,6 +421,8 @@ def run_code_task(engine, settings: Settings, jobs, run_id: str) -> dict:
                               work_branch=work_branch, token=token)
             with begin(engine) as c:
                 _set_phase(c, run_id, "coding")
+            # VAG Phase 0: attribute the host agent's model calls to this run.
+            set_llm_context(db_engine=engine, project_id=project_id, run_id=run_id, stage="solo")
             agent = make_code_agent(settings)
             code_spec = CodeTaskSpec(
                 task_id=run_id, title=run["title"],
@@ -485,5 +503,8 @@ def run_code_task(engine, settings: Settings, jobs, run_id: str) -> dict:
             _persist_sandbox_id(c, run_id, getattr(provider, "last_sandbox_task_id", None))
             return _fail(c, run_id, project_id, str(exc))
     finally:
+        # Request/worker threads are pooled — a stale run_id here would mis-attribute
+        # the next job's (or run_research's) llm_calls rows.
+        clear_llm_context()
         if sandbox is not None:
             sandbox.teardown()

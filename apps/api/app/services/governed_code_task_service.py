@@ -34,8 +34,9 @@ from .code_agent import make_code_agent
 from .code_task_service import _fail, _release, _set_phase, load_code_task_run
 from .core import create_blocking_decision, emit_event, make_id, record_policy_eval
 from .github_app_adapter import GitHubAppAdapter
+from .llm_telemetry import clear_llm_context, set_llm_context
 from .pipeline_profile_service import resolve_for_run
-from .pipeline_profiles import infer_risk_tier, model_for_step
+from .pipeline_profiles import infer_risk_tier, materialize_route, route_for_step
 from .sandbox_provider import LocalSubprocessProvider
 from .software_factory import SoftwareFactoryService
 
@@ -309,6 +310,9 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
     spec = run["spec"]
     fctx = run["finalize_ctx"] or {}
     job_id = fctx.get("created_by_job_id")
+    # VAG Phase 0: publish the run's identity so every run_role call below records an
+    # llm_calls row with the right attribution (stage is set before each step).
+    set_llm_context(db_engine=engine, project_id=project_id, run_id=run_id)
     sf = SoftwareFactoryService(settings)
     test_cmd = (spec.get("test_commands") or [_DEFAULT_TEST_CMD])[0]
     title = run["title"]
@@ -352,23 +356,49 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
     token = app.token_for_repo(owner, repo) if app.configured else settings.github_token
 
     provider = LocalSubprocessProvider(settings)
-    agent = make_code_agent(settings)  # builder: model-agnostic claude_code | native (OpenAI/Azure)
-    # Adversary roles (review / security / consistency / mutation) run on a SEPARATE engine when
-    # configured — so the model that wrote the code isn't the one judging it (removes self-review
-    # bias). Empty config => same agent (single-model behaviour).
+    # Lane defaults: builder engine for design/tests/implement, adversary engine for
+    # review/security/consistency/mutation — the model that wrote the code isn't the one
+    # judging it (removes self-review bias). VAG B2 layers per-STEP (engine, model) routing
+    # on top: profile model_routing or spec["model_config"] may pin any step to any engine
+    # (route_for_step), so e.g. implement runs native/deepseek while review stays claude_code.
     build_engine = (settings.code_agent_engine or "claude_code").lower()
-    review_engine = (settings.code_review_engine or "").lower()
-    reviewer = (make_code_agent(settings, engine=review_engine)
-                if review_engine and review_engine != build_engine else agent)
+    review_engine = (settings.code_review_engine or "").lower() or build_engine
     # Data-boundary enforcement: restricted/confidential tasks redact PII before any external
-    # model call (spec §7.4 / §25). The flag rides on the agent; each run_role honours it.
+    # model call (spec §7.4 / §25). The flag rides on EVERY agent; each run_role honours it.
     data_boundary = spec.get("data_boundary", "internal")
-    if data_boundary in ("restricted", "confidential"):
-        agent.redact = True
+    redact_external = data_boundary in ("restricted", "confidential")
+    if redact_external:
         with begin(engine) as c:
             record_policy_eval(c, project_id, "data_boundary", "allow", action="redact_external",
                                reason=f"{data_boundary} task — PII redacted before external model calls",
                                detail={"run_id": run_id, "data_boundary": data_boundary})
+
+    agents: dict[str, object] = {}  # one CodeAgent per engine name, reused across steps
+    stage_routes: dict[str, dict] = {}  # step -> {"engine", "model"} resolved (evidence)
+
+    def _agent_for(engine_name: str):
+        a = agents.get(engine_name)
+        if a is None:
+            a = make_code_agent(settings, engine=engine_name)
+            if redact_external:
+                a.redact = True
+            agents[engine_name] = a
+        return a
+
+    def _route(step: str):
+        """Resolve a step to (agent, model). Precedence: spec model_config > profile
+        routing > class defaults; engine falls back to the step's lane default. Call
+        from the MAIN thread only (the agent cache is not locked)."""
+        r = route_for_step(profile, step, spec.get("model_config"))
+        eng, model = materialize_route(
+            r, build_engine=build_engine, review_engine=review_engine,
+            strong_engine=settings.code_agent_strong_engine,
+            low_cost_engine=settings.code_agent_low_cost_engine,
+            strong_model=settings.code_agent_strong_model,
+            low_cost_model=settings.code_agent_low_cost_model)
+        stage_routes[step] = {"engine": eng, "model": model}
+        return _agent_for(eng), model
+
     sandbox = None
     cost = 0
     try:
@@ -384,12 +414,6 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
         do_separate_tests = risk_tier >= 1
         do_review = risk_tier >= 2
 
-        def _model_for(step):
-            cls = model_for_step(profile, step)
-            picked = (settings.code_agent_strong_model if cls == "strong"
-                      else settings.code_agent_low_cost_model)
-            return picked or None  # None => the engine's default model
-
         # DESIGN PHASE (tier >= 2): standards -> spec -> plan -> review plan, BEFORE any code.
         # Spec-driven: the refined spec + plan are fed into the downstream coding steps. (The human
         # approve-plan gate is Wire-Phase 2b; for now review plan records a PLAN: OK/REVISE note.)
@@ -403,14 +427,21 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
         elif do_design:
             with begin(engine) as c:
                 _set_phase(c, run_id, "design")
-            d1 = agent.run_role(_standards_prompt(), root, read_only=True,
-                                model=_model_for("standards"))
-            d2 = agent.run_role(_spec_prompt(title, instructions, criteria), root, read_only=True,
-                                model=_model_for("spec"))
-            d3 = agent.run_role(_plan_prompt(title, d2.get("summary", "")), root, read_only=True,
-                                model=_model_for("plan"))
-            d4 = agent.run_role(_review_plan_prompt(title, d3.get("summary", "")), root,
-                                read_only=True, model=_model_for("review_plan"))
+            set_llm_context(stage="standards")
+            a, m = _route("standards")
+            d1 = a.run_role(_standards_prompt(), root, read_only=True, model=m)
+            set_llm_context(stage="spec")
+            a, m = _route("spec")
+            d2 = a.run_role(_spec_prompt(title, instructions, criteria), root, read_only=True,
+                            model=m)
+            set_llm_context(stage="plan")
+            a, m = _route("plan")
+            d3 = a.run_role(_plan_prompt(title, d2.get("summary", "")), root, read_only=True,
+                            model=m)
+            set_llm_context(stage="review_plan")
+            a, m = _route("review_plan")
+            d4 = a.run_role(_review_plan_prompt(title, d3.get("summary", "")), root,
+                            read_only=True, model=m)
             for d in (d1, d2, d3, d4):
                 cost += int(d.get("cost_usd_micros") or 0)
             plan_ok = "REVISE" not in d4.get("summary", "").upper()
@@ -434,8 +465,9 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
             # STEP write tests (qa), tests only.
             with begin(engine) as c:
                 _set_phase(c, run_id, "write_tests")
-            r1 = agent.run_role(_qa_prompt(title, instructions, criteria, test_cmd), root,
-                                model=_model_for("write_tests"))
+            set_llm_context(stage="write_tests")
+            a, m = _route("write_tests")
+            r1 = a.run_role(_qa_prompt(title, instructions, criteria, test_cmd), root, model=m)
             cost += int(r1.get("cost_usd_micros") or 0)
             test_files = [fc.path for fc in sandbox.diff() if _is_test_path(fc.path)]
             if not test_files:
@@ -449,7 +481,9 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
             _set_phase(c, run_id, "implement")
         impl_prompt = (_impl_prompt(title, instructions, test_files, test_cmd) if do_separate_tests
                        else _solo_prompt(title, instructions, criteria, test_cmd))
-        r2 = agent.run_role(impl_prompt, root, model=_model_for("implement"))
+        set_llm_context(stage="implement" if do_separate_tests else "solo")
+        a, m = _route("implement")
+        r2 = a.run_role(impl_prompt, root, model=m)
         cost += int(r2.get("cost_usd_micros") or 0)
         if do_separate_tests:
             tests_untouched = tests_before == _hash_files(root, test_files)
@@ -485,16 +519,28 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
             panel_cost = {"v": 0}
             lock = threading.Lock()
 
+            # Pre-resolve routes on the MAIN thread (the agent cache is not locked); the
+            # closures only call run_role. Each check runs in a pool thread, and a NEW
+            # thread starts with an EMPTY ContextVar context — the run identity set above
+            # does not propagate. Each closure re-publishes it (plus its own stage) first.
+            review_agent, review_model = _route("review_code")
+            security_agent, security_model = _route("security_check")
+            consistency_agent, consistency_model = _route("consistency_check")
+
             def _do_review():
-                rr = reviewer.run_role(_review_prompt(title, criteria), root, read_only=True,
-                                    model=_model_for("review_code"))
+                set_llm_context(db_engine=engine, project_id=project_id, run_id=run_id,
+                                stage="review_code")
+                rr = review_agent.run_role(_review_prompt(title, criteria), root,
+                                           read_only=True, model=review_model)
                 with lock:
                     panel_cost["v"] += int(rr.get("cost_usd_micros") or 0)
                 panel["review"] = (rr, _parse_verdict(rr.get("summary", "")))
 
             def _do_security():
-                rr = reviewer.run_role(_security_prompt(title), root, read_only=True,
-                                    model=_model_for("security_check"))
+                set_llm_context(db_engine=engine, project_id=project_id, run_id=run_id,
+                                stage="security_check")
+                rr = security_agent.run_role(_security_prompt(title), root, read_only=True,
+                                             model=security_model)
                 with lock:
                     panel_cost["v"] += int(rr.get("cost_usd_micros") or 0)
                 panel["security"] = (rr, _parse_security(rr.get("summary", "")))
@@ -503,8 +549,10 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
                 panel["full"] = bool(sandbox.run("python3 -m unittest discover -v").ok)
 
             def _do_consistency():
-                rr = reviewer.run_role(_consistency_prompt(title, criteria, design), root,
-                                    read_only=True, model=_model_for("consistency_check"))
+                set_llm_context(db_engine=engine, project_id=project_id, run_id=run_id,
+                                stage="consistency_check")
+                rr = consistency_agent.run_role(_consistency_prompt(title, criteria, design),
+                                                root, read_only=True, model=consistency_model)
                 with lock:
                     panel_cost["v"] += int(rr.get("cost_usd_micros") or 0)
                 panel["consistency"] = (rr, _parse_consistency(rr.get("summary", "")))
@@ -527,8 +575,9 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
             orig = {p: (root / p).read_text(errors="ignore")
                     for p in impl_files if (root / p).exists()}
             if orig:
-                r5 = reviewer.run_role(_mutate_prompt(list(orig.keys())), root,
-                                    model=_model_for("check_tests"))
+                set_llm_context(stage="check_tests")
+                a, m = _route("check_tests")
+                r5 = a.run_role(_mutate_prompt(list(orig.keys())), root, model=m)
                 cost += int(r5.get("cost_usd_micros") or 0)
                 mut = sandbox.run(test_cmd)
                 mutation_caught = not bool(mut.ok)  # a real suite FAILS on the planted bug
@@ -576,14 +625,18 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
             "panel_parallel": panel_parallel,
             "design": design,
             "plan_ok": design.get("plan_ok") if do_design else None,
+            # Resolved per-step routing (VAG B2): model=None means the engine's default ran —
+            # fall back to what the step actually reported.
             "stage_models": {
-                "write_tests": (_model_for("write_tests") or r1.get("model")) if do_separate_tests else None,
-                "implement": _model_for("implement") or r2.get("model"),
-                "review_code": (_model_for("review_code") or r3.get("model")) if do_review else None,
+                s: r.get("model") or {"write_tests": r1, "implement": r2, "review_code": r3,
+                                      "security_check": r4, "check_tests": r5,
+                                      "consistency_check": r6}.get(s, {}).get("model")
+                for s, r in stage_routes.items()
             },
-            "engine": getattr(agent, "engine", "unknown"),
-            "build_engine": getattr(agent, "engine", build_engine),
-            "review_engine": getattr(reviewer, "engine", build_engine),
+            "stage_engines": {s: r.get("engine") for s, r in stage_routes.items()},
+            "engine": stage_routes.get("implement", {}).get("engine", build_engine),
+            "build_engine": build_engine,
+            "review_engine": review_engine,
             "model": r2.get("model") or r2.get("usage", {}).get("model"),
             "review_model": (r3.get("model") or r3.get("usage", {}).get("model")
                              or r4.get("model") or r6.get("model")),
@@ -627,6 +680,19 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
                     "quality_gate_id": qg_id, "failing_gates": failing}
 
         # GATE PASSED — open the PR via the existing software-factory path.
+        if spec.get("open_pr", True) is False:
+            # Eval/bake-off runs measure the gate, not the delivery — record the verified
+            # outcome without opening a PR on the target repo (VAG spec §8).
+            with begin(engine) as c:
+                _release(sf, c, project_id, reservation_id,
+                         "gate passed; PR suppressed (open_pr=false)")
+                c.execute(text("UPDATE code_task_runs SET status='completed', phase='done', "
+                               "updated_at=now() WHERE id=:id"), {"id": run_id})
+                emit_event(c, project_id, "code_task.completed_no_pr", "boss",
+                           "code_task_run", run_id, {"quality_gate_id": qg_id})
+            return {"status": "completed", "done": True, "quality_gate_id": qg_id,
+                    "pr_suppressed": True}
+
         with begin(engine) as c:
             _set_phase(c, run_id, "opening_pr")
             proposal = sf.propose_pull_request(
@@ -660,5 +726,8 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
             _release(sf, c, project_id, reservation_id, f"governed code task error: {exc}")
             return _fail(c, run_id, project_id, str(exc))
     finally:
+        # Request/worker threads are pooled — a stale run_id here would mis-attribute
+        # the next job's (or run_research's) llm_calls rows.
+        clear_llm_context()
         if sandbox is not None:
             sandbox.teardown()

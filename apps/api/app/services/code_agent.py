@@ -18,10 +18,12 @@ from dataclasses import dataclass, field
 import json
 from pathlib import Path
 import subprocess
+import time
 from typing import Optional, Protocol
 
 from ..config import Settings
 from ..schemas import FileChange
+from .llm_telemetry import record_llm_call
 from .redaction import redact as _redact_pii
 from .sandbox import CommandResult, DiffSummary, EphemeralSandbox
 
@@ -237,13 +239,24 @@ class ClaudeCodeAgent:
         with no shared session state between roles. `model` routes low-cost vs strong."""
         if getattr(self, "redact", False):  # data-boundary: mask PII for restricted tasks
             prompt = _redact_pii(prompt)[0]
-        data = self._invoke(prompt, cwd, read_only=read_only, model=model)
+        started = time.monotonic()
+        try:
+            data = self._invoke(prompt, cwd, read_only=read_only, model=model)
+        except Exception as exc:
+            failed_model = model or getattr(self.settings, "claude_cli_model", None) or ""
+            record_llm_call(engine_name=self.engine, usage={"model": failed_model},
+                            latency_ms=int((time.monotonic() - started) * 1000),
+                            ok=False, error=str(exc))
+            raise
         usage, cost_micros = self._usage(data, self.settings)
+        turns = int(data.get("num_turns") or 0)
+        record_llm_call(engine_name=self.engine, usage=usage, cost_usd_micros=cost_micros,
+                        latency_ms=int((time.monotonic() - started) * 1000), turns=turns)
         return {
             "summary": _as_text(data.get("result")).strip() or "(no summary returned)",
             "usage": usage,
             "cost_usd_micros": cost_micros,
-            "turns": int(data.get("num_turns") or 0),
+            "turns": turns,
             "model": model or usage.get("model"),
         }
 
@@ -253,11 +266,15 @@ class ClaudeCodeAgent:
         Returns {summary, usage, cost_usd_micros, turns, model}."""
         import tempfile
         work = Path(tempfile.gettempdir())
+        started = time.monotonic()
         data = self._invoke(
             prompt, work, read_only=True, model=model,
             allowed_tools="WebSearch,WebFetch,Read,Grep,Glob",
         )
         usage, cost_micros = self._usage(data, self.settings)
+        record_llm_call(engine_name=self.engine, usage=usage, cost_usd_micros=cost_micros,
+                        latency_ms=int((time.monotonic() - started) * 1000),
+                        turns=int(data.get("num_turns") or 0), stage="research")
         return {
             "summary": _as_text(data.get("result")).strip() or "",
             "usage": usage,
@@ -272,10 +289,13 @@ class ClaudeCodeAgent:
         if sandbox.path is None:
             raise RuntimeError("Sandbox must be provisioned before running the agent.")
         prompt = self._build_prompt(spec, repo)
+        started = time.monotonic()
         data = self._invoke(prompt, sandbox.path)
         usage, cost_micros = self._usage(data, self.settings)
         summary = _as_text(data.get("result")).strip() or "(no summary returned)"
         turns = int(data.get("num_turns") or 0)
+        record_llm_call(engine_name=self.engine, usage=usage, cost_usd_micros=cost_micros,
+                        latency_ms=int((time.monotonic() - started) * 1000), turns=turns)
 
         # Authoritative verification: BOSS re-runs the test commands itself.
         tests = [sandbox.run(cmd) for cmd in spec.test_commands]
@@ -385,19 +405,29 @@ class NativeCodeAgent:
         from .openai_adapter import estimate_cost_usd_micros
 
         system = self._REVIEW_SYS if read_only else self._EDIT_SYS
-        msg, usage = self._llm.create_chat_completion(
-            [{"role": "system", "content": system},
-             {"role": "user", "content": f"{prompt}\n\n{self._repo_context(cwd)}"}],
-            model_override=model or None,
-            redact=getattr(self, "redact", False),  # data-boundary: mask PII for restricted tasks
-        )
+        started = time.monotonic()
+        try:
+            msg, usage = self._llm.create_chat_completion(
+                [{"role": "system", "content": system},
+                 {"role": "user", "content": f"{prompt}\n\n{self._repo_context(cwd)}"}],
+                model_override=model or None,
+                redact=getattr(self, "redact", False),  # data-boundary: mask PII for restricted tasks
+            )
+        except Exception as exc:
+            record_llm_call(engine_name=self.engine, usage={"model": model or ""},
+                            latency_ms=int((time.monotonic() - started) * 1000),
+                            ok=False, error=str(exc))
+            raise
+        cost_micros = estimate_cost_usd_micros(usage)
+        record_llm_call(engine_name=self.engine, usage=usage, cost_usd_micros=cost_micros,
+                        latency_ms=int((time.monotonic() - started) * 1000), turns=1)
         data = self._safe_json(msg.get("content") or "")
         if not read_only:
             self._apply_files(cwd, data.get("files", []))
         return {
             "summary": _as_text(data.get("summary")).strip() or "(no summary)",
             "usage": usage,
-            "cost_usd_micros": estimate_cost_usd_micros(usage),
+            "cost_usd_micros": cost_micros,
             "turns": 1,
             "model": usage.get("model"),
         }

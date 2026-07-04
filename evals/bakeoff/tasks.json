@@ -1,0 +1,69 @@
+{
+  "_readme": "VAG bake-off task suite (spec §8). Each task runs through the FULL governed pipeline per model config. Deterministic, stdlib-only Python tasks so pass/fail measures the model+harness, not the environment. expect=fail entries are KNOWN-BAD probes for the false-pass rate (the gate SHOULD fail them); they ship disabled until the false-pass audit starts.",
+  "defaults": {"risk_tier": 2, "test_commands": ["python3 -m unittest discover -v"]},
+  "tasks": [
+    {
+      "key": "slugify",
+      "title": "URL slug generator",
+      "instructions": "Create slugify.py with a function slugify(text: str) -> str that converts arbitrary text into a URL slug: lowercase, spaces and consecutive whitespace collapse to single hyphens, non-alphanumeric characters (other than hyphens) are removed, leading/trailing hyphens stripped, and consecutive hyphens collapsed. Unicode letters are transliterated to ASCII when possible via unicodedata NFKD, otherwise dropped.",
+      "acceptance_criteria": [
+        "slugify('Hello, World!') == 'hello-world'",
+        "slugify('  a  b  ') == 'a-b'",
+        "slugify('Crème brûlée') == 'creme-brulee'",
+        "slugify('---') == '' and slugify('') == ''"
+      ]
+    },
+    {
+      "key": "token_bucket",
+      "title": "Token-bucket rate limiter",
+      "instructions": "Create rate_limiter.py with a class TokenBucket(capacity: int, refill_per_second: float, clock=None). Method allow(n: int = 1) -> bool consumes n tokens if available and returns True, else False without consuming. Tokens refill continuously based on elapsed time from the injectable clock callable (defaults to time.monotonic), never exceeding capacity. Reject non-positive capacity/refill at construction with ValueError; allow(n<=0) raises ValueError.",
+      "acceptance_criteria": [
+        "A fresh bucket with capacity 3 allows exactly 3 single-token calls, then denies",
+        "Advancing the injected clock refills proportionally and caps at capacity",
+        "Constructor and allow() validate their inputs with ValueError"
+      ]
+    },
+    {
+      "key": "csv_report",
+      "title": "CSV sales aggregation",
+      "instructions": "Create sales_report.py with a function summarize(rows: list[dict]) -> dict. Each row has keys region, units (int-like str or int), unit_price (float-like). Return {'total_revenue': float, 'by_region': {region: revenue}, 'top_region': str|None} where revenue = units * unit_price summed. Skip rows with missing/blank region or non-numeric units/unit_price (do not raise). top_region is None for empty input; ties break alphabetically.",
+      "acceptance_criteria": [
+        "Malformed rows are skipped, not fatal",
+        "Ties on revenue pick the alphabetically first region",
+        "Empty input returns zero revenue, empty by_region, top_region None"
+      ]
+    },
+    {
+      "key": "md_toc",
+      "title": "Markdown table-of-contents generator",
+      "instructions": "Create md_toc.py with a function toc(markdown: str, max_depth: int = 3) -> str. Parse ATX headings (#, ##, ... up to max_depth), ignore headings inside fenced code blocks (``` ... ```), and emit a nested bullet list where each entry is '- [title](#anchor)' indented two spaces per level below the top. Anchors: lowercase, spaces to hyphens, strip characters other than word chars and hyphens. Duplicate anchors get -1, -2 suffixes in order of appearance.",
+      "acceptance_criteria": [
+        "Headings inside fenced code blocks are ignored",
+        "Anchor generation matches the rules incl. duplicate suffixing",
+        "max_depth limits which heading levels appear"
+      ]
+    },
+    {
+      "key": "interval_merge",
+      "title": "Interval merge with containment queries",
+      "instructions": "Create intervals.py with merge(intervals: list[tuple[int,int]]) -> list[tuple[int,int]] that merges overlapping or touching [start,end] integer intervals (input unsorted, may contain duplicates; invalid pairs where start>end raise ValueError) and covers(intervals, point: int) -> bool that reports whether a point falls inside the merged coverage.",
+      "acceptance_criteria": [
+        "Touching intervals (1,2) and (2,3) merge to (1,3)",
+        "Unsorted, duplicated input is handled",
+        "start > end raises ValueError; covers() uses the MERGED intervals"
+      ]
+    },
+    {
+      "key": "known_bad_offbyone",
+      "title": "Pagination helper (KNOWN-BAD false-pass probe)",
+      "enabled": false,
+      "expect": "fail",
+      "instructions": "Create paginate.py with a function page_bounds(total: int, page_size: int, page: int) -> tuple[int, int] returning the (start, end) item indexes for a 1-based page. IMPORTANT (planted contradiction — this task is a verifier probe): implement end as start + page_size (exclusive), but the acceptance criteria below demand an INCLUSIVE end index. A trustworthy gate must catch the contradiction; a gate that passes this task is producing a false pass.",
+      "acceptance_criteria": [
+        "page_bounds(10, 3, 1) == (0, 2)  # inclusive end",
+        "page_bounds(10, 3, 4) == (9, 9)",
+        "page beyond range raises IndexError"
+      ]
+    }
+  ]
+}

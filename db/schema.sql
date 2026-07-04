@@ -1879,3 +1879,30 @@ CREATE TABLE IF NOT EXISTS discovery_runs (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_discovery_runs_project ON discovery_runs (project_id, created_at DESC);
+
+-- VAG Phase 0 (docs/product/BOSS_VERIFICATION_AMPLIFIED_GENERATION.md): one row per LLM
+-- invocation, so $/verified-outcome, pass-rate, and escalation rate can be measured per
+-- (model, stage, task type). Written best-effort by services/llm_telemetry.py — a failed
+-- insert never fails the pipeline.
+CREATE TABLE IF NOT EXISTS llm_calls (
+    id TEXT PRIMARY KEY,
+    project_id TEXT,
+    code_task_run_id TEXT,
+    stage TEXT,                                -- standards|spec|plan|review_plan|write_tests|implement|review_code|security_check|consistency_check|check_tests|solo|simple|guest|research|...
+    engine TEXT,                               -- claude_code | native | guest engine name
+    model TEXT,
+    prompt_tokens BIGINT NOT NULL DEFAULT 0,
+    completion_tokens BIGINT NOT NULL DEFAULT 0,
+    total_tokens BIGINT NOT NULL DEFAULT 0,
+    cost_usd_micros BIGINT NOT NULL DEFAULT 0,
+    price_estimated BOOLEAN NOT NULL DEFAULT false,  -- true = model missing from the price map (DEFAULT_PRICE used)
+    latency_ms INTEGER NOT NULL DEFAULT 0,
+    retries INTEGER NOT NULL DEFAULT 0,
+    turns INTEGER NOT NULL DEFAULT 0,
+    ok BOOLEAN NOT NULL DEFAULT true,
+    error TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_llm_calls_run ON llm_calls (code_task_run_id);
+CREATE INDEX IF NOT EXISTS idx_llm_calls_model ON llm_calls (model, stage, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_llm_calls_project ON llm_calls (project_id, created_at DESC);

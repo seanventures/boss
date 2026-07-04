@@ -1,0 +1,32 @@
+{
+  "_readme": "Model configs for the VAG bake-off. Each config = one competitor: a name, an optional pipeline profile, and a model_config injected per run (VAG B2 routing — no env flips or redeploys between configs). Cheap-model configs need the deployment's OPENAI_BASE_URL pointed at the chosen provider (OpenRouter/Fireworks/DeepSeek direct) with a matching OPENAI_API_KEY, and BOSS_MODEL_PRICES_JSON entries for accurate $/verified-outcome.",
+  "configs": [
+    {
+      "name": "claude_baseline",
+      "notes": "The number to beat (VAG Phase 0 exit): everything on the deployment's default engines/models.",
+      "profile": "strict",
+      "model_config": {}
+    },
+    {
+      "name": "deepseek_all",
+      "notes": "Everything on DeepSeek V3 — the naive all-cheap datapoint.",
+      "profile": "strict",
+      "model_config": {"default": "native:deepseek-chat"}
+    },
+    {
+      "name": "qwen_all",
+      "notes": "Everything on Qwen2.5-Coder — second cheap generator.",
+      "profile": "strict",
+      "model_config": {"default": "native:qwen2.5-coder-32b-instruct"}
+    },
+    {
+      "name": "vag_junior_senior",
+      "notes": "The VAG thesis: cheap implementer, frontier design + verification.",
+      "profile": "strict",
+      "model_config": {
+        "default": "strong",
+        "steps": {"implement": "native:deepseek-chat", "standards": "native:deepseek-chat"}
+      }
+    }
+  ]
+}
