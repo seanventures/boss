@@ -42,6 +42,9 @@ from apps.api.app.services.bakeoff import (  # noqa: E402
 TERMINAL = {"completed", "failed", "blocked"}
 
 
+_SSL_CONTEXT = None  # set by main() when --insecure (private-CA deployments like goldeneye)
+
+
 def _http(method: str, url: str, api_key: str, body: dict | None = None) -> dict:
     import urllib.request
 
@@ -50,7 +53,7 @@ def _http(method: str, url: str, api_key: str, body: dict | None = None) -> dict
     if api_key:
         req.add_header("Authorization", f"Bearer {api_key}")
     data = json.dumps(body).encode() if body is not None else None
-    with urllib.request.urlopen(req, data=data, timeout=120) as resp:
+    with urllib.request.urlopen(req, data=data, timeout=120, context=_SSL_CONTEXT) as resp:
         return json.loads(resp.read().decode() or "{}")
 
 
@@ -75,7 +78,15 @@ def main() -> int:
     ap.add_argument("--out", default=str(REPO_ROOT / "evals/bakeoff/results"))
     ap.add_argument("--report", default="", metavar="BATCH_ID",
                     help="re-aggregate an existing batch (needs DATABASE_URL); launches nothing")
+    ap.add_argument("--insecure", action="store_true",
+                    help="skip TLS verification (private-CA deployments, e.g. *.local.sean.network)")
     args = ap.parse_args()
+
+    if args.insecure:
+        import ssl
+
+        global _SSL_CONTEXT
+        _SSL_CONTEXT = ssl._create_unverified_context()
 
     if args.report:
         return _report(args, args.report)
