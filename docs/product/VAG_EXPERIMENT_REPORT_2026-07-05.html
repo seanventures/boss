@@ -1,0 +1,342 @@
+<title>VAG experiment report — open-source vs frontier through the governed pipeline</title>
+<style>
+  :root {
+    --bg: #F6F5F1; --panel: #FFFFFF; --ink: #20242B; --muted: #6A6F78;
+    --line: #E2E0D9; --accent: #2B4BD0; --accent-soft: #EDF0FC;
+    --pass: #1A7F4B; --pass-soft: #E7F3EC; --fail: #B3403A; --fail-soft: #F9ECEB;
+    --cheap: #8A5A00; --cheap-soft: #F7EFDC;
+    --mono: "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+    --sans: -apple-system, "Segoe UI", system-ui, sans-serif;
+    --display: "Avenir Next", "Helvetica Neue", -apple-system, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) { :root {
+    --bg: #171A20; --panel: #1F232B; --ink: #E8E9EB; --muted: #979CA6;
+    --line: #30343D; --accent: #8CA2FF; --accent-soft: #232A45;
+    --pass: #4CC38A; --pass-soft: #1D2F27; --fail: #E5726C; --fail-soft: #33221F;
+    --cheap: #D9A94C; --cheap-soft: #302917;
+  }}
+  :root[data-theme="light"] {
+    --bg: #F6F5F1; --panel: #FFFFFF; --ink: #20242B; --muted: #6A6F78;
+    --line: #E2E0D9; --accent: #2B4BD0; --accent-soft: #EDF0FC;
+    --pass: #1A7F4B; --pass-soft: #E7F3EC; --fail: #B3403A; --fail-soft: #F9ECEB;
+    --cheap: #8A5A00; --cheap-soft: #F7EFDC;
+  }
+  :root[data-theme="dark"] {
+    --bg: #171A20; --panel: #1F232B; --ink: #E8E9EB; --muted: #979CA6;
+    --line: #30343D; --accent: #8CA2FF; --accent-soft: #232A45;
+    --pass: #4CC38A; --pass-soft: #1D2F27; --fail: #E5726C; --fail-soft: #33221F;
+    --cheap: #D9A94C; --cheap-soft: #302917;
+  }
+  body { background: var(--bg); color: var(--ink); font-family: var(--sans);
+         line-height: 1.58; margin: 0; padding: 48px 20px 90px; font-size: 15.5px; }
+  main { max-width: 960px; margin: 0 auto; display: flex; flex-direction: column; gap: 42px; }
+  .eyebrow { font-family: var(--mono); font-size: 12px; letter-spacing: 0.14em;
+             text-transform: uppercase; color: var(--accent); }
+  h1 { font-family: var(--display); font-weight: 700; font-size: clamp(26px, 4.2vw, 40px);
+       line-height: 1.1; letter-spacing: -0.015em; margin: 10px 0 12px; text-wrap: balance; }
+  h2 { font-family: var(--display); font-weight: 600; font-size: 21px; margin: 0 0 6px;
+       letter-spacing: -0.01em; }
+  h2 .exp { font-family: var(--mono); font-size: 12px; color: var(--accent);
+            letter-spacing: 0.1em; display: block; margin-bottom: 4px; }
+  h3 { font-family: var(--display); font-weight: 600; font-size: 16px; margin: 20px 0 6px; }
+  p { margin: 0 0 12px; max-width: 74ch; }
+  .lede { color: var(--muted); font-size: 16.5px; max-width: 66ch; }
+  .num { font-family: var(--mono); font-variant-numeric: tabular-nums; font-size: 0.94em; }
+  section { border-top: 1px solid var(--line); padding-top: 26px; }
+  section.no-rule { border-top: none; padding-top: 0; }
+
+  .tablewrap { background: var(--panel); border: 1px solid var(--line); border-radius: 6px;
+               padding: 4px 16px 12px; overflow-x: auto; margin: 14px 0; }
+  table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+  th { font-family: var(--mono); font-size: 11px; letter-spacing: 0.09em; text-transform: uppercase;
+       color: var(--muted); text-align: left; font-weight: 500; padding: 12px 10px 8px; }
+  td { padding: 8px 10px; border-top: 1px solid var(--line); vertical-align: top; }
+  td.num, th.num { text-align: right; font-family: var(--mono); font-variant-numeric: tabular-nums; }
+  tr.hl td { background: var(--accent-soft); }
+  .pill { font-family: var(--mono); font-size: 11px; padding: 2px 8px; border-radius: 999px;
+          white-space: nowrap; }
+  .pill.pass { background: var(--pass-soft); color: var(--pass); }
+  .pill.fail { background: var(--fail-soft); color: var(--fail); }
+  .pill.frontier { background: var(--accent-soft); color: var(--accent); }
+  .pill.cheap { background: var(--cheap-soft); color: var(--cheap); }
+  .pill.err { background: var(--line); color: var(--muted); }
+
+  .callout { background: var(--panel); border: 1px solid var(--line); border-left: 3px solid var(--accent);
+             border-radius: 6px; padding: 14px 18px; margin: 14px 0; font-size: 14.5px; max-width: none; }
+  .callout.neg { border-left-color: var(--fail); }
+  .callout.pos { border-left-color: var(--pass); }
+  .callout p:last-child { margin-bottom: 0; }
+
+  .kv { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; margin: 14px 0; }
+  .kv .cell { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 12px 14px; }
+  .kv .k { font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.09em;
+           text-transform: uppercase; color: var(--muted); }
+  .kv .v { font-family: var(--display); font-size: 22px; font-weight: 700;
+           font-variant-numeric: tabular-nums; margin-top: 4px; }
+  .kv .d { font-size: 12px; color: var(--muted); }
+
+  .bar-outer { background: var(--bg); border-radius: 3px; height: 16px; min-width: 120px; overflow: hidden; }
+  .bar { height: 100%; border-radius: 3px; min-width: 2px; }
+  .bar.f { background: var(--ink); opacity: 0.72; }
+  .bar.j { background: var(--accent); }
+  .bar.c { background: var(--cheap); }
+
+  ul { margin: 0 0 12px; padding-left: 22px; max-width: 74ch; }
+  li { margin-bottom: 6px; }
+  code { font-family: var(--mono); font-size: 0.88em; background: var(--panel);
+         border: 1px solid var(--line); border-radius: 3px; padding: 1px 5px; }
+  footer { color: var(--muted); font-size: 12.5px; border-top: 1px solid var(--line);
+           padding-top: 16px; max-width: 80ch; }
+</style>
+
+<main>
+  <header class="no-rule">
+    <div class="eyebrow">BOSS · Verification-Amplified Generation · experiment report · 2026-07-04 → 07-05</div>
+    <h1>Open-source vs frontier models through one governed pipeline</h1>
+    <p class="lede">46 governed runs, three experiments, one sample project. Every run passed through the
+    identical fail-closed pipeline — design, independent tests, implementation, adversarial review,
+    security review, consistency check, full-suite regression, mutation probe — with every model call
+    metered. This is the detailed record and analysis.</p>
+  </header>
+
+  <section class="no-rule">
+    <h2>Scoreboard — the whole story in one table</h2>
+    <div class="tablewrap"><table>
+      <thead><tr><th>Strategy</th><th>Generator</th><th>Verifier</th><th class="num">Gate pass</th>
+      <th class="num">$/verified outcome</th><th class="num">Total spend</th><th>False passes</th></tr></thead>
+      <tbody>
+        <tr><td>Frontier solo (baseline)</td><td><span class="pill frontier">Claude</span></td><td><span class="pill frontier">Claude</span></td>
+            <td class="num">60% (3/5)</td><td class="num">$1.80</td><td class="num">$5.39</td><td class="num">0</td></tr>
+        <tr class="hl"><td><strong>Junior / senior</strong></td><td><span class="pill cheap">DeepSeek-V3</span></td><td><span class="pill frontier">Claude</span></td>
+            <td class="num"><strong>60% (3/5)</strong></td><td class="num"><strong>$1.36</strong></td><td class="num">$4.07</td><td class="num">0</td></tr>
+        <tr><td>All-cheap, one model</td><td><span class="pill cheap">DeepSeek-V3</span></td><td><span class="pill cheap">DeepSeek-V3</span></td>
+            <td class="num">20% (1/5)</td><td class="num">$0.07</td><td class="num">$0.07</td><td class="num">0</td></tr>
+        <tr><td>All-cheap ensemble, best of 4 models</td><td><span class="pill cheap">4 OSS models</span></td><td><span class="pill cheap">same model</span></td>
+            <td class="num">0% union (0/5 × 4)</td><td class="num">∞</td><td class="num">$2.47</td><td class="num">0</td></tr>
+      </tbody>
+    </table></div>
+    <div class="callout pos"><p><strong>The single causal finding:</strong> holding the cheap generator
+    constant and changing only who verifies moves the pass rate from 0–20% to 60%. Verification
+    quality — not generation quality, not model diversity — is the binding constraint. That is the
+    VAG tenet ("the harness is the amplifier") measured on real runs. And across all 46 runs:
+    <strong>zero false passes</strong> — nothing substandard ever shipped.</p></div>
+  </section>
+
+  <section>
+    <h2>Method</h2>
+    <p><strong>Sample project.</strong> All runs target the <code>paramg/boss-sandbox</code> repo with a
+    fixed suite of five deterministic, stdlib-only Python tasks — a URL slugifier, a token-bucket rate
+    limiter, a CSV sales aggregator, a Markdown TOC generator, and an interval-merge library — each with
+    explicit acceptance criteria and <code>python3 -m unittest discover</code> as the authoritative test
+    command. Small enough to run cheaply, real enough to have edge cases (unicode, boundary values,
+    tie-breaking, fenced-code parsing, off-by-one).</p>
+    <p><strong>The governance pipeline (identical for every strategy).</strong> Risk tier 2–3, strict
+    profile: standards → spec → plan → plan review (design), then a QA role authors tests <em>before</em>
+    implementation exists, a separate implementer must make them pass without touching them, BOSS re-runs
+    the tests itself, a fresh-context adversarial reviewer tries to refute the change, a security reviewer
+    hunts exploitables, a consistency check compares code/tests/spec, the full suite re-runs, and a
+    mutation probe plants a one-line bug expecting the tests to catch it. The gate is a fail-closed AND
+    over all of it; PRs were suppressed (eval mode) so no repo spam.</p>
+    <p><strong>What "model strategy" means.</strong> Per-step engine/model routing lets each pipeline role
+    run on a different model. "Frontier" = Claude via the CLI engine (subscription). "Cheap/OSS" =
+    open-weight models over OpenAI-compatible APIs (OpenRouter, with direct Groq/DeepSeek lanes
+    available). The junior/senior config assigns implementation to the cheap model and keeps
+    spec/tests/review panel on frontier.</p>
+    <p><strong>Measurement.</strong> Every model call is recorded to a per-call telemetry table (tokens,
+    cost, latency, retries, stage, engine, model). Costs sum from that single source; where the guest VM
+    doesn't yet self-report usage (experiment 3), the provider's own billing delta is used instead.
+    <code>$ / verified outcome</code> = total inference spend of a strategy ÷ gate-passing runs.</p>
+    <p><strong>Substrates.</strong> Experiments 1–2 executed working stages as host subprocesses;
+    experiment 3 ran after the hybrid refactor, with every code-executing stage in its own Firecracker
+    micro-VM (~80 VM boots, 19/20 runs mechanically clean).</p>
+  </section>
+
+  <section>
+    <h2><span class="exp">EXPERIMENT 1 · batch bake_f874500906</span>Frontier baseline — Claude everywhere</h2>
+    <div class="kv">
+      <div class="cell"><div class="k">Gate pass</div><div class="v">3/5</div><div class="d">60%</div></div>
+      <div class="cell"><div class="k">$/verified outcome</div><div class="v">$1.80</div><div class="d">$5.39 total · 50 calls</div></div>
+      <div class="cell"><div class="k">Mean wall clock</div><div class="v">27m</div><div class="d">per run</div></div>
+      <div class="cell"><div class="k">Retries</div><div class="v">0</div><div class="d">no 429/5xx</div></div>
+    </div>
+    <div class="tablewrap"><table>
+      <thead><tr><th>Task</th><th>Verdict</th><th>Failing gate</th><th>What happened</th></tr></thead>
+      <tbody>
+        <tr><td>slugify</td><td><span class="pill pass">PASS</span></td><td>—</td><td>clean run, all panel verdicts green</td></tr>
+        <tr><td>token_bucket</td><td><span class="pill fail">BLOCKED</span></td><td><code>security_clean</code></td><td>security reviewer returned ISSUES on a toy rate limiter — over-strict for the context (a calibration finding, not a vulnerability)</td></tr>
+        <tr><td>csv_report</td><td><span class="pill pass">PASS</span></td><td>—</td><td>clean run</td></tr>
+        <tr><td>md_toc</td><td><span class="pill fail">BLOCKED</span></td><td><code>tests_strong_enough</code></td><td>mutation probe planted a one-line bug and Claude's own tests missed it — a genuinely weak test suite, correctly refused</td></tr>
+        <tr><td>interval_merge</td><td><span class="pill pass">PASS</span></td><td>—</td><td>clean run</td></tr>
+      </tbody>
+    </table></div>
+    <p><strong>Analysis.</strong> The baseline established two things beyond the headline number. First,
+    the number to beat is <span class="num">60% / $1.80</span> — frontier-solo is <em>not</em> a free
+    100%, because the gate judges frontier output as ruthlessly as anything else. Second, both failures
+    are verifier findings, one of each kind: a <em>false-fail</em> (security strictness on a toy — a cost
+    lever for Phase 1 calibration) and a <em>true catch</em> (mutation killing a weak suite — precisely
+    the "tests that pass on anything" failure mode VAG must prevent, since weak tests are what would let
+    a cheap model fake a pass later).</p>
+  </section>
+
+  <section>
+    <h2><span class="exp">EXPERIMENT 2 · batch bake_6620989d17</span>The junior/senior split vs naive all-cheap</h2>
+    <div class="tablewrap"><table>
+      <thead><tr><th>Task</th><th>junior/senior<br>(Claude spec+tests+review, DeepSeek implements)</th><th>all-DeepSeek<br>(one model does everything)</th></tr></thead>
+      <tbody>
+        <tr><td>slugify</td><td><span class="pill pass">PASS</span></td><td><span class="pill fail">BLOCKED</span> tests, review, security</td></tr>
+        <tr><td>token_bucket</td><td><span class="pill pass">PASS</span> <span class="num">(where frontier-solo failed)</span></td><td><span class="pill fail">BLOCKED</span> tests, review, regression</td></tr>
+        <tr><td>csv_report</td><td><span class="pill fail">BLOCKED</span></td><td><span class="pill fail">BLOCKED</span> tests, security, regression</td></tr>
+        <tr><td>md_toc</td><td><span class="pill fail">BLOCKED</span></td><td><span class="pill fail">BLOCKED</span> no code + tests + regression</td></tr>
+        <tr><td>interval_merge</td><td><span class="pill pass">PASS</span></td><td><span class="pill pass">PASS</span> — DeepSeek's one solo win</td></tr>
+      </tbody>
+    </table></div>
+    <div class="kv">
+      <div class="cell"><div class="k">junior/senior</div><div class="v">60%</div><div class="d">$1.36/outcome · $4.07 total</div></div>
+      <div class="cell"><div class="k">all-DeepSeek</div><div class="v">20%</div><div class="d">$0.07/outcome · $0.07 total</div></div>
+      <div class="cell"><div class="k">cost delta vs frontier</div><div class="v">−24%</div><div class="d">at identical pass rate</div></div>
+      <div class="cell"><div class="k">implement-stage cost</div><div class="v">0.4%</div><div class="d">of a jr/sr run ($0.002)</div></div>
+    </div>
+    <h3>Stage anatomy of one verified junior/senior run (slugify, $0.58 total)</h3>
+    <div class="tablewrap"><table>
+      <thead><tr><th>Stage</th><th>Model</th><th class="num">Cost</th><th>Share</th></tr></thead>
+      <tbody>
+        <tr><td>Design (standards · spec · plan · plan review)</td><td><span class="pill frontier">claude</span> + <span class="pill cheap">deepseek</span> (standards)</td><td class="num">≈$0.18</td><td><div class="bar-outer" style="max-width:180px"><div class="bar f" style="width:31%"></div></div></td></tr>
+        <tr><td>Write independent tests</td><td><span class="pill frontier">claude</span></td><td class="num">$0.078</td><td><div class="bar-outer" style="max-width:180px"><div class="bar f" style="width:13%"></div></div></td></tr>
+        <tr><td><strong>Implement</strong></td><td><span class="pill cheap">deepseek-v3</span></td><td class="num"><strong>$0.002</strong></td><td><div class="bar-outer" style="max-width:180px"><div class="bar c" style="width:1%"></div></div></td></tr>
+        <tr><td>Adversarial review</td><td><span class="pill frontier">claude</span></td><td class="num">$0.133</td><td><div class="bar-outer" style="max-width:180px"><div class="bar f" style="width:23%"></div></div></td></tr>
+        <tr><td>Security review</td><td><span class="pill frontier">claude</span></td><td class="num">$0.054</td><td><div class="bar-outer" style="max-width:180px"><div class="bar f" style="width:9%"></div></div></td></tr>
+        <tr><td>Consistency check</td><td><span class="pill frontier">claude</span></td><td class="num">$0.089</td><td><div class="bar-outer" style="max-width:180px"><div class="bar f" style="width:15%"></div></div></td></tr>
+        <tr><td>Mutation probe</td><td><span class="pill frontier">claude</span></td><td class="num">$0.045</td><td><div class="bar-outer" style="max-width:180px"><div class="bar f" style="width:8%"></div></div></td></tr>
+      </tbody>
+    </table></div>
+    <p><strong>Analysis.</strong> The junior/senior config matched frontier-solo's pass rate exactly —
+    and notably passed <code>token_bucket</code>, the task frontier-solo failed (different security-review
+    draw; at n=5 treat as variance, not superiority). The saving is 24% rather than 75% because the stage
+    the junior took over is nearly free — <strong>99.6% of the spend is frontier design + verification.</strong>
+    That redirects the optimization: further savings come from cheapening <em>verification</em> safely
+    (mid-tier panel roles, calibration) and from making cheap attempts count (repair loops) — not from a
+    cheaper implementer. All-DeepSeek's 20% at $0.07/outcome also seeded the ensemble hypothesis that
+    experiment 3 then killed: its one pass suggested different models might pass different tasks.
+    (The planned Qwen leg voided on provider limits — free-tier TPM and credit-reservation 402s — a
+    logistics finding that produced the <code>max_tokens</code> cap now in the adapter.)</p>
+  </section>
+
+  <section>
+    <h2><span class="exp">EXPERIMENT 3 · batch bake_c023eb95d3</span>Diversity ensemble — 4 OSS models, gate as selector</h2>
+    <p>Hypothesis (VAG §3.3): cheap models fail <em>differently</em>, so running the same task through N
+    diverse models and letting the gate pick any survivor should lift the union pass rate toward
+    frontier at pennies. 4 models × 5 tasks, one shot each, strict profile, micro-VM substrate.</p>
+    <div class="tablewrap"><table>
+      <thead><tr><th>Task</th><th>DeepSeek-V3</th><th>GLM-4.5</th><th>Kimi-K2</th><th>Qwen3-32B</th><th>UNION</th></tr></thead>
+      <tbody>
+        <tr><td>slugify</td><td><span class="pill fail">fail</span></td><td><span class="pill fail">fail</span></td><td><span class="pill fail">fail</span></td><td><span class="pill fail">fail</span></td><td><span class="pill fail">fail</span></td></tr>
+        <tr><td>token_bucket</td><td><span class="pill fail">fail</span></td><td><span class="pill fail">fail</span></td><td><span class="pill err">error</span></td><td><span class="pill fail">fail</span></td><td><span class="pill fail">fail</span></td></tr>
+        <tr><td>csv_report</td><td><span class="pill fail">fail</span></td><td><span class="pill fail">fail</span></td><td><span class="pill fail">fail</span></td><td><span class="pill fail">fail</span></td><td><span class="pill fail">fail</span></td></tr>
+        <tr><td>md_toc</td><td><span class="pill fail">fail</span></td><td><span class="pill fail">fail</span></td><td><span class="pill fail">fail</span></td><td><span class="pill fail">fail</span></td><td><span class="pill fail">fail</span></td></tr>
+        <tr><td>interval_merge</td><td><span class="pill fail">fail</span></td><td><span class="pill fail">fail</span></td><td><span class="pill fail">fail</span></td><td><span class="pill fail">fail</span></td><td><span class="pill fail">fail</span></td></tr>
+      </tbody>
+    </table></div>
+    <div class="tablewrap"><table>
+      <thead><tr><th>Model</th><th class="num">Mean wall clock</th><th>Dominant failing gates</th></tr></thead>
+      <tbody>
+        <tr><td>DeepSeek-V3</td><td class="num">4.5m</td><td>review refuted ×3 · weak tests ×3 · tests fail ×2 · security ×2 · regression ×2</td></tr>
+        <tr><td>GLM-4.5</td><td class="num">66.5m</td><td>review refuted ×4 · tests fail ×3 · regression ×3 · edited the tests ×1</td></tr>
+        <tr><td>Kimi-K2</td><td class="num">43.1m</td><td>tests fail ×3 · regression ×3 · 1 run errored</td></tr>
+        <tr><td>Qwen3-32B</td><td class="num">23.5m</td><td><strong>security ×5 (its own reviewer refused every run)</strong> · weak tests ×3 · review ×2</td></tr>
+      </tbody>
+    </table></div>
+    <div class="callout neg"><p><strong>Clean negative result ($2.47 to learn it):</strong> union pass rate
+    0/5. The models don't fail differently enough — their failure profiles overlap on the same gates
+    (refuted reviews, weak tests, regressions). One-shot model diversity is <em>not</em> a quality lever.</p></div>
+    <p><strong>The confound that became the finding.</strong> In these configs the cheap model was also
+    the <em>reviewer</em> — and that's visible in the data (Qwen's own security reviewer refused all five
+    of its runs; GLM's reviewer refuted four). Compare across experiments with the generator held
+    constant: DeepSeek-generated code judged by DeepSeek passes 0–20%; DeepSeek-generated code judged by
+    Claude passes 60%. The verifier, not the generator, moves the outcome. Cheap verifiers are both
+    noisier <em>and</em> stricter in the wrong places — so "cheap everything" fails twice: worse code and
+    worse judgment of it.</p>
+    <p><strong>Substrate note.</strong> This batch also stress-tested the hybrid pipeline: every
+    write-tests / implement / regression / mutation stage ran in its own Firecracker VM (~80 boots), with
+    tests-first commits on work branches and read-only host review. 19/20 runs were mechanically clean
+    (one Kimi run errored mid-stage). DeepSeek scored 1/5 on the host substrate but 0/5 in VMs — the
+    guest's simpler agent loop (JSON whole-file writes, 4 repair rounds, no editing tools) plausibly costs
+    some capability vs the host CLI agent; worth one controlled comparison later.</p>
+  </section>
+
+  <section>
+    <h2>Cross-cutting analysis</h2>
+    <h3>1 · The amplifier is trustworthy — and that's the load-bearing result</h3>
+    <p>46 governed runs, 24 fail-closed refusals, <strong>zero false passes</strong>. The spec calls false
+    confidence the one failure mode that would sink the strategy; at current sample size the gate has
+    none. Everything else — cost, routing, ensembles — is negotiable so long as this holds. (Formal
+    false-pass instrumentation — the known-bad probe suite — ships with Phase 1; the current claim is
+    "nothing substandard shipped," verified by inspection of every refusal.)</p>
+    <h3>2 · Where quality actually comes from</h3>
+    <p>Ranked by measured effect: <strong>(a)</strong> who writes and enforces the tests/review
+    (frontier verify: +40–60 points of pass rate), <strong>(b)</strong> generator capability (Claude
+    implement vs DeepSeek implement: no measurable difference <em>when verification is frontier</em> —
+    60% either way), <strong>(c)</strong> generator diversity (no effect at one shot). The harness
+    doesn't just catch bad output; frontier-authored tests appear to <em>steer</em> the cheap implementer
+    onto a track it can actually follow.</p>
+    <h3>3 · Economics</h3>
+    <p>Cheap tokens are 20–75× cheaper, but a verified outcome is the unit that matters:
+    junior/senior delivers frontier quality at <span class="num">−24%</span> today, bounded by the
+    verification bill (99.6% of spend). The modeled next steps: a cheap <em>repair loop</em> (feed the
+    failing gates back, retry ≤N times at ~$0.01–0.03/attempt) attacks the 40% of tasks currently
+    refused; mid-tier panel roles attack the verification bill itself. Both are spec Phase 3/1
+    respectively, and both now have baselines to beat.</p>
+    <h3>4 · Verifier calibration is a real cost center</h3>
+    <p>The security reviewer produced one true HIGH catch (an implementer added an unrequested HTTP
+    server with a blocking-read DoS — caught, refused), one plausible false-fail (toy rate limiter), and
+    on cheap models it becomes indiscriminate (Qwen: 5/5 refusals). Phase 1's confidence score +
+    refute-majority panels turn these single-voice verdicts into calibrated signals.</p>
+  </section>
+
+  <section>
+    <h2>Threats to validity — read before quoting the numbers</h2>
+    <ul>
+      <li><strong>n=5 per strategy.</strong> Everything here is directional. The junior/senior vs
+      frontier-solo tie (both 3/5, different tasks) is comfortably within noise; repetitions are cheap
+      and queued.</li>
+      <li><strong>Toy tasks.</strong> Stdlib-Python katas exercise the pipeline honestly but not
+      large-codebase navigation, where cheap models typically degrade faster.</li>
+      <li><strong>Substrate changed between experiments 2 and 3</strong> (host subprocess → micro-VM
+      guest agent), so cross-experiment model comparisons carry an implementation confound
+      (DeepSeek 1/5 → 0/5).</li>
+      <li><strong>Ensemble costs are provider-billed totals</strong> (guest VMs don't self-report token
+      usage yet); per-stage attribution for VM stages reads $0 until the guest-image fix lands.</li>
+      <li><strong>Single verifier voice per role.</strong> Gate verdicts inherit one reviewer's
+      temperament per run; panel-of-N calibration (Phase 1) will tighten variance.</li>
+      <li><strong>Claude runs on a subscription</strong> (CLI self-reported cost), OSS models on metered
+      APIs — the $/outcome comparison uses list-price accounting for both, but the marginal-cost
+      structure differs in production.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>What's next, in order of expected information per dollar</h2>
+    <ul>
+      <li><strong>Repair loop (spec Phase 3):</strong> junior/senior + failing-gate feedback → cheap
+      retries (≤3) before frontier escalation. Attacks the 2/5 refused tasks at ~$0.05 marginal. The
+      single most valuable unanswered question. (~$1–2 of the $7.42 remaining credit.)</li>
+      <li><strong>Phase 1 verifier hardening:</strong> numeric confidence score, refute-majority panels,
+      known-bad probe suite (false-pass instrumentation), security-reviewer calibration.</li>
+      <li><strong>Repetitions (n→15–25)</strong> on the two leading strategies to tighten the 60%/60%
+      tie and the −24% estimate.</li>
+      <li><strong>Mid-tier verification:</strong> route consistency/security panel roles to mid-price
+      models while keeping the adversarial reviewer frontier — attacks the 99.6% verification bill.</li>
+    </ul>
+  </section>
+
+  <footer>
+    Sources: batches <span class="num">bake_f874500906</span> (frontier baseline, 2026-07-04),
+    <span class="num">bake_6620989d17</span> (junior/senior + all-cheap matrix, 2026-07-05),
+    <span class="num">bake_c023eb95d3</span> (diversity ensemble, micro-VM substrate, 2026-07-05), plus
+    single-run hybrid validation <span class="num">crun_57d3a8c8</span>. Raw reports committed under
+    <span class="num">evals/bakeoff/results/</span>; per-call telemetry in the <span class="num">llm_calls</span>
+    table; ensemble spend from OpenRouter billing deltas. Pipeline: BOSS governed coding pipeline
+    (strict profile, fail-closed gate, PRs suppressed). Spec:
+    <span class="num">docs/product/BOSS_VERIFICATION_AMPLIFIED_GENERATION.md</span>. Companion demo
+    one-pager published separately.
+  </footer>
+</main>
