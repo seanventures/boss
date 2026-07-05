@@ -132,7 +132,14 @@ def main() -> int:
 
     if not args.drive:
         _poll(args, launched)
-    return _report(args, batch_id)
+    rc = _report(args, batch_id)
+    summary = _ensemble_summary(launched)
+    if summary:
+        out_dir = Path(args.out) / batch_id
+        out_dir.mkdir(parents=True, exist_ok=True)
+        (out_dir / "ensemble.md").write_text(summary)
+        print(summary)
+    return rc
 
 
 def _drive(args, run_id: str) -> None:
@@ -154,10 +161,38 @@ def _poll(args, launched: list[dict]) -> None:
             status = (run.get("run") or run).get("status")
             if status in TERMINAL:
                 r = pending.pop(run_id)
+                r["status"] = status
                 print(f"  done  {r['config']} / {r['task']}: {status} ({len(pending)} left)")
     if pending:
         print(f"WARNING: {len(pending)} runs still not terminal after the poll timeout; "
               f"the report will show them as incomplete.", file=sys.stderr)
+
+
+def _ensemble_summary(launched: list[dict]) -> str:
+    """Task × config pass/fail grid + the UNION row — the gate-as-selector metric
+    (VAG §3.3): a task counts as ensemble-passed if ANY config's run cleared the gate.
+    'completed' = gate pass (PRs may be suppressed); 'blocked' = fail-closed; 'failed'
+    = run error. Only meaningful when several configs ran the same task set."""
+    configs = sorted({r["config"] for r in launched})
+    tasks = sorted({r["task"] for r in launched})
+    if len(configs) < 2:
+        return ""
+    mark = {"completed": "PASS", "blocked": "fail", "failed": "err"}
+    by = {(r["config"], r["task"]): mark.get(r.get("status", ""), "?") for r in launched}
+    lines = ["", "## Ensemble matrix (gate as selector)", "",
+             "| task | " + " | ".join(configs) + " | UNION |",
+             "|---|" + "---|" * (len(configs) + 1)]
+    union_pass = 0
+    for t in tasks:
+        row = [by.get((c, t), "—") for c in configs]
+        u = "PASS" if "PASS" in row else "fail"
+        union_pass += u == "PASS"
+        lines.append(f"| {t} | " + " | ".join(row) + f" | **{u}** |")
+    per = " · ".join(
+        f"{c}: {sum(1 for t in tasks if by.get((c, t)) == 'PASS')}/{len(tasks)}"
+        for c in configs)
+    lines += ["", f"**Union pass rate: {union_pass}/{len(tasks)}** ({per})", ""]
+    return "\n".join(lines)
 
 
 def _report(args, batch_id: str) -> int:

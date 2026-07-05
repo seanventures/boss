@@ -15,9 +15,21 @@
     },
     {
       "name": "qwen_all",
-      "notes": "Everything on Qwen3-32B via Groq's free tier (direct engine) — second cheap generator. (qwen2.5-coder is no longer served; model change noted in reports.)",
+      "notes": "Everything on Qwen3-32B via OpenRouter. (Groq free tier's 6k TPM can't carry pipeline prompts; qwen2.5-coder no longer served anywhere reachable.)",
       "profile": "strict",
-      "model_config": {"default": "groq:qwen/qwen3-32b"}
+      "model_config": {"default": "openrouter:qwen/qwen3-32b"}
+    },
+    {
+      "name": "kimi_all",
+      "notes": "Everything on Kimi-K2 (Moonshot) via OpenRouter — ensemble pool member.",
+      "profile": "strict",
+      "model_config": {"default": "openrouter:moonshotai/kimi-k2"}
+    },
+    {
+      "name": "glm_all",
+      "notes": "Everything on GLM-4.5 (Zhipu) via OpenRouter — ensemble pool member.",
+      "profile": "strict",
+      "model_config": {"default": "openrouter:z-ai/glm-4.5"}
     },
     {
       "name": "vag_junior_senior",
