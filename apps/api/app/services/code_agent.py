@@ -473,6 +473,18 @@ class NativeCodeAgent:
         )
 
 
+# Direct-provider lanes: each is a NativeCodeAgent bound to that provider's DEDICATED
+# credential pair — never the platform-managed OPENAI_* pair (broker-owned on managed
+# deployments), and never Azure precedence. These are the VAG cheap-model lanes: route
+# steps with e.g. "openrouter:deepseek/deepseek-chat" or "groq:qwen/qwen3-32b".
+_PROVIDER_LANES: dict[str, tuple[str, str]] = {
+    # engine name -> (api-key settings field, base-url settings field)
+    "openrouter": ("openrouter_api_key", "openrouter_base_url"),
+    "groq": ("groq_api_key", "groq_base_url"),
+    "deepseek": ("deepseek_api_key", "deepseek_base_url"),
+}
+
+
 def make_code_agent(settings: Settings, engine: Optional[str] = None) -> CodeAgent:
     """Build a CodeAgent. ``engine`` overrides ``settings.code_agent_engine`` so the
     governed pipeline can run builder roles on one model and adversary roles on another."""
@@ -481,20 +493,19 @@ def make_code_agent(settings: Settings, engine: Optional[str] = None) -> CodeAge
         return ClaudeCodeAgent(settings)
     if engine in ("native", "openai", "azure"):
         return NativeCodeAgent(settings)
-    if engine == "openrouter":
-        # A NativeCodeAgent bound to the DEDICATED OpenRouter credentials — never the
-        # platform-managed OPENAI_* pair, and never Azure precedence. This is the VAG
-        # cheap-model lane: route steps with e.g. "openrouter:deepseek/deepseek-chat".
-        if not settings.openrouter_api_key:
-            raise RuntimeError("OPENROUTER_API_KEY is not configured.")
+    if engine in _PROVIDER_LANES:
+        key_field, url_field = _PROVIDER_LANES[engine]
+        api_key = getattr(settings, key_field)
+        if not api_key:
+            raise RuntimeError(f"{key_field.upper()} is not configured.")
         bound = settings.model_copy(update={
-            "openai_api_key": settings.openrouter_api_key,
-            "openai_base_url": settings.openrouter_base_url,
+            "openai_api_key": api_key,
+            "openai_base_url": getattr(settings, url_field),
             "azure_openai_key": None,
             "azure_openai_endpoint": None,
             "azure_openai_deployment": None,
         })
         agent = NativeCodeAgent(bound)
-        agent.engine = "openrouter"
+        agent.engine = engine
         return agent
     raise NotImplementedError(f"Unknown code_agent_engine: {engine!r}")

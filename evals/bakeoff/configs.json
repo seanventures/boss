@@ -15,9 +15,9 @@
     },
     {
       "name": "qwen_all",
-      "notes": "Everything on Qwen2.5-Coder via OpenRouter — second cheap generator.",
+      "notes": "Everything on Qwen3-32B via Groq's free tier (direct engine) — second cheap generator. (qwen2.5-coder is no longer served; model change noted in reports.)",
       "profile": "strict",
-      "model_config": {"default": "openrouter:qwen/qwen-2.5-coder-32b-instruct"}
+      "model_config": {"default": "groq:qwen/qwen3-32b"}
     },
     {
       "name": "vag_junior_senior",

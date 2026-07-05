@@ -165,6 +165,23 @@ class Settings(BaseSettings):
     openrouter_base_url: str = Field(
         default="https://openrouter.ai/api/v1", alias="OPENROUTER_BASE_URL"
     )
+    # Direct provider lanes (same dedicated-credential principle as OpenRouter above):
+    # groq = free-tier fast serving of open models; deepseek = first-party API (data
+    # residency: China-hosted — fine for toy/eval workloads, mind it for customer code).
+    groq_api_key: str = Field(default="", alias="GROQ_API_KEY")
+    groq_base_url: str = Field(
+        default="https://api.groq.com/openai/v1", alias="GROQ_BASE_URL"
+    )
+    deepseek_api_key: str = Field(default="", alias="DEEPSEEK_API_KEY")
+    deepseek_base_url: str = Field(
+        default="https://api.deepseek.com/v1", alias="DEEPSEEK_BASE_URL"
+    )
+    # Output-token cap for native chat-API calls. Metered gateways (OpenRouter) RESERVE
+    # credits for the requested maximum — an uncapped request can 402 on reservation
+    # alone even when the actual completion would be affordable. 0 disables the cap.
+    native_max_output_tokens: int = Field(
+        default=8192, alias="BOSS_NATIVE_MAX_OUTPUT_TOKENS"
+    )
     # Headless Claude token for the claude_code guest engine (passed into the guest).
     claude_code_oauth_token: str = Field(default="", alias="CLAUDE_CODE_OAUTH_TOKEN")
     openai_codex_oauth_enabled: bool = Field(

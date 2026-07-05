@@ -70,33 +70,66 @@ def test_model_override_flows_through(monkeypatch):
     assert captured["model"] == "deepseek/deepseek-chat"
 
 
-def test_openrouter_engine_binds_dedicated_credentials(monkeypatch):
-    """VAG cheap-model lane: engine 'openrouter' uses OPENROUTER_* creds — never the
-    platform-managed OPENAI_* pair, and Azure precedence is disabled on its adapter."""
+def test_provider_lane_engines_bind_dedicated_credentials(monkeypatch):
+    """VAG cheap-model lanes: openrouter/groq/deepseek engines use their OWN credential
+    pair — never the platform-managed OPENAI_* pair, and Azure precedence is disabled."""
     import pytest
 
     from apps.api.app.config import Settings
     from apps.api.app.services.code_agent import make_code_agent
 
-    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
-    monkeypatch.delenv("OPENROUTER_BASE_URL", raising=False)
-    settings = Settings(
-        OPENROUTER_API_KEY="sk-or-test",
-        OPENAI_API_KEY="sk-platform-DO-NOT-USE",
-        AZURE_OPENAI_KEY="azkey", AZURE_OPENAI_ENDPOINT="https://x.azure.com",
-        AZURE_OPENAI_DEPLOYMENT="gpt-4o",
-    )
-    agent = make_code_agent(settings, engine="openrouter")
-    assert agent.engine == "openrouter"
-    bound = agent.settings
-    assert bound.openai_api_key == "sk-or-test"
-    assert bound.openai_base_url == "https://openrouter.ai/api/v1"
-    assert not (bound.azure_openai_key or bound.azure_openai_deployment)  # no Azure precedence
-    # the original settings object is untouched (platform lane unaffected)
-    assert settings.openai_api_key == "sk-platform-DO-NOT-USE"
+    lanes = [
+        ("openrouter", "OPENROUTER_API_KEY", "https://openrouter.ai/api/v1"),
+        ("groq", "GROQ_API_KEY", "https://api.groq.com/openai/v1"),
+        ("deepseek", "DEEPSEEK_API_KEY", "https://api.deepseek.com/v1"),
+    ]
+    for env in ("OPENROUTER_API_KEY", "OPENROUTER_BASE_URL", "GROQ_API_KEY",
+                "GROQ_BASE_URL", "DEEPSEEK_API_KEY", "DEEPSEEK_BASE_URL"):
+        monkeypatch.delenv(env, raising=False)
+    for engine_name, key_alias, default_url in lanes:
+        settings = Settings(**{
+            key_alias: f"sk-{engine_name}-test",
+            "OPENAI_API_KEY": "sk-platform-DO-NOT-USE",
+            "AZURE_OPENAI_KEY": "azkey",
+            "AZURE_OPENAI_ENDPOINT": "https://x.azure.com",
+            "AZURE_OPENAI_DEPLOYMENT": "gpt-4o",
+        })
+        agent = make_code_agent(settings, engine=engine_name)
+        assert agent.engine == engine_name
+        bound = agent.settings
+        assert bound.openai_api_key == f"sk-{engine_name}-test", engine_name
+        assert bound.openai_base_url == default_url, engine_name
+        assert not (bound.azure_openai_key or bound.azure_openai_deployment), engine_name
+        # the original settings object is untouched (platform lane unaffected)
+        assert settings.openai_api_key == "sk-platform-DO-NOT-USE"
 
-    with pytest.raises(RuntimeError, match="OPENROUTER_API_KEY"):
-        make_code_agent(Settings(OPENROUTER_API_KEY=""), engine="openrouter")
+        with pytest.raises(RuntimeError, match=key_alias):
+            make_code_agent(Settings(**{key_alias: ""}), engine=engine_name)
+
+
+def test_native_max_output_tokens_cap_passed(monkeypatch):
+    """Metered gateways reserve credits for the requested max — the adapter caps it."""
+    captured: dict = {}
+
+    class _Capture(_FakeOpenAI):
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            inner = self.chat.completions.create
+
+            def create(**kw):
+                captured.update(kw)
+                return inner(**kw)
+
+            self.chat.completions.create = create
+
+    monkeypatch.setattr(openai_adapter, "OpenAI", _Capture)
+    adapter = OpenAIAdapter(_settings(native_max_output_tokens=8192))
+    adapter.create_chat_completion([{"role": "user", "content": "hi"}])
+    assert captured["max_tokens"] == 8192
+    captured.clear()
+    adapter = OpenAIAdapter(_settings(native_max_output_tokens=0))  # 0 disables
+    adapter.create_chat_completion([{"role": "user", "content": "hi"}])
+    assert "max_tokens" not in captured
 
 
 def test_azure_precedence_ignores_base_url(monkeypatch):

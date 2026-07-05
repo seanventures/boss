@@ -48,6 +48,7 @@ PRICE_PER_MTOK: dict[str, tuple[float, float]] = {
     "qwen2.5-coder-32b-instruct": (0.90, 0.90),
     "qwen-2.5-coder-32b-instruct": (0.90, 0.90),  # OpenRouter's spelling (qwen/qwen-2.5-…)
     "deepseek-chat:free": (0.0, 0.0),  # OpenRouter free variant — genuinely $0
+    "qwen3-32b": (0.29, 0.59),  # Groq serving (groq:qwen/qwen3-32b)
 }
 DEFAULT_PRICE = (2.50, 10.00)
 
@@ -219,6 +220,11 @@ class OpenAIAdapter:
         if model_override:
             model = model_override
         kwargs: dict = {"model": model, "messages": messages}
+        # Cap the completion size: metered gateways (OpenRouter) reserve credits for the
+        # requested MAXIMUM, so an uncapped request can 402 on reservation alone.
+        max_out = int(getattr(self.settings, "native_max_output_tokens", 0) or 0)
+        if max_out > 0:
+            kwargs["max_tokens"] = max_out
         if tools:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = tool_choice
