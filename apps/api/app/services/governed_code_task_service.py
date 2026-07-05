@@ -30,14 +30,21 @@ from sqlalchemy import text
 
 from ..config import Settings
 from ..db import begin
+from ..schemas import FileChange
 from .code_agent import make_code_agent
-from .code_task_service import _fail, _release, _set_phase, load_code_task_run
+from .code_task_service import (
+    _fail,
+    _persist_sandbox_id,
+    _release,
+    _set_phase,
+    load_code_task_run,
+)
 from .core import create_blocking_decision, emit_event, make_id, record_policy_eval
 from .github_app_adapter import GitHubAppAdapter
-from .llm_telemetry import clear_llm_context, set_llm_context
+from .llm_telemetry import clear_llm_context, record_llm_call, set_llm_context
 from .pipeline_profile_service import resolve_for_run
 from .pipeline_profiles import infer_risk_tier, materialize_route, route_for_step
-from .sandbox_provider import LocalSubprocessProvider
+from .sandbox_provider import LocalSubprocessProvider, MicroVMProvider
 from .software_factory import SoftwareFactoryService
 
 _DEFAULT_TEST_CMD = "python3 -m unittest discover -v"
@@ -264,6 +271,35 @@ def _parse_consistency(summary: str) -> str:
     return "consistent" if m[-1] == "YES" else "drift"
 
 
+def _guest_engine_fields(settings: Settings, engine_name: str, model) -> dict:
+    """Map a routed engine lane onto guest_spec credential fields (hybrid substrate).
+    OpenAI-compatible lanes (openrouter/groq/deepseek) run as the guest 'openai' engine
+    pointed at the lane's base_url; claude_code rides the OAuth token; echo = no agent
+    (clone + run test_commands only, used for the regression stage)."""
+    if engine_name == "echo":
+        return {"engine": "echo"}
+    if engine_name == "claude_code":
+        return {"engine": "claude_code",
+                "claude_oauth_token": settings.claude_code_oauth_token}
+    if engine_name == "openrouter":
+        return {"engine": "openai", "openai_api_key": settings.openrouter_api_key,
+                "openai_base_url": settings.openrouter_base_url, "model": model}
+    if engine_name == "groq":
+        return {"engine": "openai", "openai_api_key": settings.groq_api_key,
+                "openai_base_url": settings.groq_base_url, "model": model}
+    if engine_name == "deepseek":
+        return {"engine": "openai", "openai_api_key": settings.deepseek_api_key,
+                "openai_base_url": settings.deepseek_base_url, "model": model}
+    # native/openai/azure -> the platform lane, same env the simple path sends
+    return {"engine": "openai", "openai_api_key": settings.openai_api_key,
+            "openai_base_url": settings.openai_base_url,
+            "model": model or settings.openai_model,
+            "azure_endpoint": settings.azure_openai_endpoint,
+            "azure_deployment": settings.azure_openai_deployment,
+            "azure_api_version": settings.azure_openai_api_version,
+            "azure_key": settings.azure_openai_key}
+
+
 def _requires_plan_approval(risk_tier: int) -> bool:
     # Top-risk changes pause for a human to sign off the plan BEFORE any code is written.
     return risk_tier >= 3
@@ -399,7 +435,84 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
         stage_routes[step] = {"engine": eng, "model": model}
         return _agent_for(eng), model
 
+    def _route_names(step: str):
+        """Like _route but returns (engine_name, model) without building a host agent —
+        the micro-VM substrate maps the route onto guest engine env instead."""
+        r = route_for_step(profile, step, spec.get("model_config"))
+        eng, model = materialize_route(
+            r, build_engine=build_engine, review_engine=review_engine,
+            strong_engine=settings.code_agent_strong_engine,
+            low_cost_engine=settings.code_agent_low_cost_engine,
+            strong_model=settings.code_agent_strong_model,
+            low_cost_model=settings.code_agent_low_cost_model)
+        stage_routes[step] = {"engine": eng, "model": model}
+        return eng, model
+
+    # ---- Hybrid substrate (VAG / sandbox spec §2): the governed pipeline's WORKING
+    # stages (write tests / implement / regression / mutation — the ones that EXECUTE
+    # generated code) can run each in its own micro-VM, with git as the state carrier:
+    # the control plane commits each stage's returned diff to the work branch and the
+    # next stage's VM clones it. Judgment (design, review panel, gates, PR) stays here.
+    # Constraint honored: the sandbox-service contract is one-shot submit->poll->release
+    # (no live exec), and the guest never pushes — only the control plane writes git.
+    use_microvm = (settings.governed_sandbox_provider or "local").lower() in (
+        "microvm", "firecracker")
+    mv = MicroVMProvider(settings) if use_microvm else None
+    guest_vm_ids: list[str] = []          # for release-on-success / retain-on-failure
+    accumulated: dict[str, str] = {}      # path -> content committed so far (the PR diff)
+    guest_base = base_branch              # advances to work_branch once commits exist
+
+    def _guest_stage(step: str, stage_name: str, prompt: str, *, test_cmds: list[str],
+                     stage_title: str, engine_override: str = ""):
+        """Run one working stage in its own micro-VM and return the CodeAgentResult.
+        The guest clones `guest_base` (base branch, or the work branch once stages have
+        committed) and never pushes; its diff comes back for the control plane to judge."""
+        nonlocal cost
+        if engine_override:
+            eng_name, model = engine_override, None
+        else:
+            eng_name, model = _route_names(step)
+        guest_spec = {
+            "task_id": f"{run_id}-{step}", "owner": owner, "repo": repo,
+            "base_branch": guest_base, "work_branch": work_branch,
+            "title": stage_title,
+            "instructions": (f"{prompt}\n\nWhen your role's work is complete, set done=true "
+                             "in your JSON reply."),
+            "acceptance_criteria": [], "test_commands": test_cmds,
+            "token": token, "timeout": settings.code_agent_timeout_seconds,
+            **_guest_engine_fields(settings, eng_name, model),
+        }
+        set_llm_context(stage=stage_name)
+        res = mv.run_code_task(guest_spec, tenant_id=project_id)
+        if mv.last_sandbox_task_id:
+            guest_vm_ids.append(mv.last_sandbox_task_id)
+        cost += int(res.cost_usd_micros or 0)
+        record_llm_call(engine_name=f"guest:{eng_name}", usage=res.usage,
+                        cost_usd_micros=int(res.cost_usd_micros or 0),
+                        turns=int(res.turns or 0))
+        return res
+
+    def _commit_stage(files, message: str) -> None:
+        """Commit a stage's returned files to the work branch (control-plane-only git;
+        requires the task repo to be the deployment's configured target repo)."""
+        nonlocal guest_base
+        if not files:
+            return
+        sf.github.ensure_branch(work_branch)
+        for fc in files:
+            sf.github.upsert_file(work_branch, fc.path, fc.content, message)
+            accumulated[fc.path] = fc.content
+        guest_base = work_branch
+
+    def _finish_vms(success: bool) -> None:
+        """Release stage VMs on success (free capacity); RETAIN them all on failure so
+        the sandbox-service keeps the rootfs (~2h) for inspection via the console."""
+        if use_microvm and mv and success:
+            for sid in guest_vm_ids:
+                mv.release(sid)
+
     sandbox = None
+    review_sandbox = None
     cost = 0
     try:
         sandbox = provider.acquire(task_id=run_id, tenant_id=project_id)
@@ -465,37 +578,74 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
             # STEP write tests (qa), tests only.
             with begin(engine) as c:
                 _set_phase(c, run_id, "write_tests")
-            set_llm_context(stage="write_tests")
-            a, m = _route("write_tests")
-            r1 = a.run_role(_qa_prompt(title, instructions, criteria, test_cmd), root, model=m)
-            cost += int(r1.get("cost_usd_micros") or 0)
-            test_files = [fc.path for fc in sandbox.diff() if _is_test_path(fc.path)]
+            if use_microvm:
+                res1 = _guest_stage("write_tests", "write_tests",
+                                    _qa_prompt(title, instructions, criteria, test_cmd),
+                                    test_cmds=[], stage_title=f"QA: author tests — {title}")
+                r1 = {"cost_usd_micros": res1.cost_usd_micros, "summary": res1.summary,
+                      "usage": res1.usage, "model": stage_routes["write_tests"]["model"]}
+                test_changes = [fc for fc in res1.diff if _is_test_path(fc.path)]
+                test_files = [fc.path for fc in test_changes]
+                # Commit ONLY test files — anything else the QA role wrote is discarded,
+                # which is the micro-VM equivalent of the tests-first separation.
+                _commit_stage(test_changes, f"governed: tests-first (qa) — {title[:60]}")
+            else:
+                set_llm_context(stage="write_tests")
+                a, m = _route("write_tests")
+                r1 = a.run_role(_qa_prompt(title, instructions, criteria, test_cmd), root, model=m)
+                cost += int(r1.get("cost_usd_micros") or 0)
+                test_files = [fc.path for fc in sandbox.diff() if _is_test_path(fc.path)]
             if not test_files:
                 with begin(engine) as c:
                     _release(sf, c, project_id, reservation_id, "no independent tests authored")
                     return _fail(c, run_id, project_id, "Gate fail: test author produced no test files.")
-            tests_before = _hash_files(root, test_files)
+            if not use_microvm:
+                tests_before = _hash_files(root, test_files)
 
         # STEP implement.
         with begin(engine) as c:
             _set_phase(c, run_id, "implement")
         impl_prompt = (_impl_prompt(title, instructions, test_files, test_cmd) if do_separate_tests
                        else _solo_prompt(title, instructions, criteria, test_cmd))
-        set_llm_context(stage="implement" if do_separate_tests else "solo")
-        a, m = _route("implement")
-        r2 = a.run_role(impl_prompt, root, model=m)
-        cost += int(r2.get("cost_usd_micros") or 0)
-        if do_separate_tests:
-            tests_untouched = tests_before == _hash_files(root, test_files)
-        else:  # tier 0: the implementer wrote the tests too
-            test_files = [fc.path for fc in sandbox.diff() if _is_test_path(fc.path)]
-        impl_files = [fc.path for fc in sandbox.diff() if not _is_test_path(fc.path)]
+        if use_microvm:
+            res2 = _guest_stage("implement", "implement" if do_separate_tests else "solo",
+                                impl_prompt, test_cmds=[test_cmd],
+                                stage_title=f"SE: implement — {title}")
+            r2 = {"cost_usd_micros": res2.cost_usd_micros, "summary": res2.summary,
+                  "usage": res2.usage, "model": stage_routes["implement"]["model"]}
+            if do_separate_tests:
+                # The guest cloned the committed tests: any test file in ITS diff means
+                # the implementer edited a test — the tamper condition.
+                tests_untouched = not any(_is_test_path(fc.path) for fc in res2.diff)
+                impl_changes = [fc for fc in res2.diff if not _is_test_path(fc.path)]
+            else:  # tier 0: one agent wrote code + tests, commit both
+                test_files = [fc.path for fc in res2.diff if _is_test_path(fc.path)]
+                impl_changes = list(res2.diff)
+            impl_files = [fc.path for fc in impl_changes if not _is_test_path(fc.path)]
+            _commit_stage(impl_changes, f"governed: implement (SE) — {title[:60]}")
+            # Authoritative verification: the guest RUNNER (our code, in-VM) executed the
+            # test command after the agent stopped — that in-VM result is the verdict.
+            with begin(engine) as c:
+                _set_phase(c, run_id, "run_tests")
+            tests_passed = bool(res2.tests_passed)
+            test_exit_code = res2.tests[0].exit_code if res2.tests else None
+        else:
+            set_llm_context(stage="implement" if do_separate_tests else "solo")
+            a, m = _route("implement")
+            r2 = a.run_role(impl_prompt, root, model=m)
+            cost += int(r2.get("cost_usd_micros") or 0)
+            if do_separate_tests:
+                tests_untouched = tests_before == _hash_files(root, test_files)
+            else:  # tier 0: the implementer wrote the tests too
+                test_files = [fc.path for fc in sandbox.diff() if _is_test_path(fc.path)]
+            impl_files = [fc.path for fc in sandbox.diff() if not _is_test_path(fc.path)]
 
-        # Authoritative verification — BOSS runs the tests itself.
-        with begin(engine) as c:
-            _set_phase(c, run_id, "run_tests")
-        test_result = sandbox.run(test_cmd)
-        tests_passed = bool(test_result.ok)
+            # Authoritative verification — BOSS runs the tests itself.
+            with begin(engine) as c:
+                _set_phase(c, run_id, "run_tests")
+            test_result = sandbox.run(test_cmd)
+            tests_passed = bool(test_result.ok)
+            test_exit_code = test_result.exit_code
 
         # REVIEW PANEL (tier >= 2). The read-only checks — adversarial review, security review, and
         # the full-suite regression run — are independent, so they run CONCURRENTLY, bounded by
@@ -519,6 +669,17 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
             panel_cost = {"v": 0}
             lock = threading.Lock()
 
+            # Micro-VM substrate: the working tree the reviewers judge is the WORK BRANCH
+            # (the committed guest diffs), materialized as a fresh read-only host clone.
+            # Reviewers only READ it — all execution of the generated code stays in VMs.
+            review_root = root
+            if use_microvm:
+                review_sandbox = provider.acquire(task_id=f"{run_id}-review",
+                                                  tenant_id=project_id)
+                review_sandbox.provision(owner, repo, base_branch=guest_base,
+                                         work_branch=work_branch, token=token)
+                review_root = review_sandbox.path
+
             # Pre-resolve routes on the MAIN thread (the agent cache is not locked); the
             # closures only call run_role. Each check runs in a pool thread, and a NEW
             # thread starts with an EMPTY ContextVar context — the run identity set above
@@ -530,7 +691,7 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
             def _do_review():
                 set_llm_context(db_engine=engine, project_id=project_id, run_id=run_id,
                                 stage="review_code")
-                rr = review_agent.run_role(_review_prompt(title, criteria), root,
+                rr = review_agent.run_role(_review_prompt(title, criteria), review_root,
                                            read_only=True, model=review_model)
                 with lock:
                     panel_cost["v"] += int(rr.get("cost_usd_micros") or 0)
@@ -539,20 +700,32 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
             def _do_security():
                 set_llm_context(db_engine=engine, project_id=project_id, run_id=run_id,
                                 stage="security_check")
-                rr = security_agent.run_role(_security_prompt(title), root, read_only=True,
-                                             model=security_model)
+                rr = security_agent.run_role(_security_prompt(title), review_root,
+                                             read_only=True, model=security_model)
                 with lock:
                     panel_cost["v"] += int(rr.get("cost_usd_micros") or 0)
                 panel["security"] = (rr, _parse_security(rr.get("summary", "")))
 
             def _do_full():
-                panel["full"] = bool(sandbox.run("python3 -m unittest discover -v").ok)
+                if use_microvm:
+                    # Full-suite regression runs in its OWN VM (echo engine = no agent,
+                    # just clone the work branch and execute the suite).
+                    set_llm_context(db_engine=engine, project_id=project_id, run_id=run_id,
+                                    stage="regression")
+                    rr = _guest_stage("run_all_tests", "regression", "Run the full test suite.",
+                                      test_cmds=["python3 -m unittest discover -v"],
+                                      stage_title=f"Regression — {title}",
+                                      engine_override="echo")
+                    panel["full"] = bool(rr.tests_passed)
+                else:
+                    panel["full"] = bool(sandbox.run("python3 -m unittest discover -v").ok)
 
             def _do_consistency():
                 set_llm_context(db_engine=engine, project_id=project_id, run_id=run_id,
                                 stage="consistency_check")
                 rr = consistency_agent.run_role(_consistency_prompt(title, criteria, design),
-                                                root, read_only=True, model=consistency_model)
+                                                review_root, read_only=True,
+                                                model=consistency_model)
                 with lock:
                     panel_cost["v"] += int(rr.get("cost_usd_micros") or 0)
                 panel["consistency"] = (rr, _parse_consistency(rr.get("summary", "")))
@@ -568,21 +741,36 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
             r6, cons_verdict = panel["consistency"]
             regressions_ok = panel["full"]
 
-            # check tests (mutation) — serial: it edits the workdir, then restores it so the PR diff
-            # is unchanged. snapshot impl, plant one bug, expect the tests to FAIL, restore.
+            # check tests (mutation) — plant one bug, expect the tests to FAIL. In the
+            # micro-VM substrate the mutation runs in ITS OWN VM against the committed
+            # work branch and its diff is simply never committed — nothing to restore.
             with begin(engine) as c:
                 _set_phase(c, run_id, "check_tests")
-            orig = {p: (root / p).read_text(errors="ignore")
-                    for p in impl_files if (root / p).exists()}
-            if orig:
-                set_llm_context(stage="check_tests")
-                a, m = _route("check_tests")
-                r5 = a.run_role(_mutate_prompt(list(orig.keys())), root, model=m)
-                cost += int(r5.get("cost_usd_micros") or 0)
-                mut = sandbox.run(test_cmd)
-                mutation_caught = not bool(mut.ok)  # a real suite FAILS on the planted bug
-                for p, content in orig.items():
-                    (root / p).write_text(content, encoding="utf-8")
+            if use_microvm:
+                if impl_files:
+                    res5 = _guest_stage("check_tests", "check_tests",
+                                        _mutate_prompt(impl_files), test_cmds=[test_cmd],
+                                        stage_title=f"Mutation probe — {title}")
+                    r5 = {"cost_usd_micros": res5.cost_usd_micros,
+                          "summary": res5.summary, "model": stage_routes["check_tests"]["model"]}
+                    # A real suite FAILS on the planted bug. Only meaningful if the
+                    # mutator actually changed an implementation file.
+                    mutated = any(not _is_test_path(fc.path) for fc in res5.diff)
+                    mutation_caught = (not bool(res5.tests_passed)) if mutated else None
+            else:
+                # serial: it edits the workdir, then restores it so the PR diff is
+                # unchanged. snapshot impl, plant one bug, restore after.
+                orig = {p: (root / p).read_text(errors="ignore")
+                        for p in impl_files if (root / p).exists()}
+                if orig:
+                    set_llm_context(stage="check_tests")
+                    a, m = _route("check_tests")
+                    r5 = a.run_role(_mutate_prompt(list(orig.keys())), root, model=m)
+                    cost += int(r5.get("cost_usd_micros") or 0)
+                    mut = sandbox.run(test_cmd)
+                    mutation_caught = not bool(mut.ok)
+                    for p, content in orig.items():
+                        (root / p).write_text(content, encoding="utf-8")
 
         # FINAL GATE — fail-closed; only the checks that apply at this tier.
         gates = {
@@ -640,10 +828,12 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
             "model": r2.get("model") or r2.get("usage", {}).get("model"),
             "review_model": (r3.get("model") or r3.get("usage", {}).get("model")
                              or r4.get("model") or r6.get("model")),
+            "substrate": "microvm" if use_microvm else "local",
+            "sandbox_task_ids": guest_vm_ids,
             "test_author_independent": do_separate_tests, "reviewer_independent": do_review,
             "tests_passed": tests_passed, "adversarial_verdict": verdict,
             "test_files": test_files, "impl_files": impl_files,
-            "test_command": test_cmd, "test_exit_code": test_result.exit_code,
+            "test_command": test_cmd, "test_exit_code": test_exit_code,
             "qa_summary": r1.get("summary", "")[:400],
             "impl_summary": r2.get("summary", "")[:400],
             "review_summary": r3.get("summary", "")[:4000],
@@ -662,14 +852,18 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
 
         if qg_status != "pass":
             failing = [k for k, v in gates.items() if not v]
+            _finish_vms(success=False)  # retain the stage VMs for inspection
             # Human escape hatch: preserve the produced diff so an operator can WAIVE the failing
             # gate(s) and open the PR without a re-run. Governance is kept — gates the human does
             # NOT waive still block, and the PR still carries its own merge-gate Decision.
-            pending = [{"path": fc.path, "content": fc.content} for fc in sandbox.diff()]
+            pending = ([{"path": p, "content": content} for p, content in accumulated.items()]
+                       if use_microvm else
+                       [{"path": fc.path, "content": fc.content} for fc in sandbox.diff()])
             with begin(engine) as c:
                 _release(sf, c, project_id, reservation_id, f"quality gate failed: {qg_id}")
                 ctx = {**fctx, "pending_diff": pending, "failing_gates": failing,
-                       "quality_gate_id": qg_id, "pr_summary": r2.get("summary", "")[:600]}
+                       "quality_gate_id": qg_id, "pr_summary": r2.get("summary", "")[:600],
+                       **({"sandbox_task_id": guest_vm_ids[-1]} if guest_vm_ids else {})}
                 c.execute(text(
                     "UPDATE code_task_runs SET status='blocked', phase='awaiting_gate_override', "
                     "error=:e, finalize_ctx=CAST(:fc AS JSONB), updated_at=now() WHERE id=:id"),
@@ -680,6 +874,7 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
                     "quality_gate_id": qg_id, "failing_gates": failing}
 
         # GATE PASSED — open the PR via the existing software-factory path.
+        _finish_vms(success=True)
         if spec.get("open_pr", True) is False:
             # Eval/bake-off runs measure the gate, not the delivery — record the verified
             # outcome without opening a PR on the target repo (VAG spec §8).
@@ -701,7 +896,9 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
                 branch_name=work_branch,
                 summary=(f"Governed pipeline: tests by qa, impl by SE, adversarial review SURVIVED. "
                          f"QualityGate {qg_id} PASS.\n\n{r2.get('summary','')}"),
-                files=sandbox.diff(), created_by_job_id=job_id, actual_usd_micros=cost)
+                files=([FileChange(path=p, content=content) for p, content in accumulated.items()]
+                       if use_microvm else sandbox.diff()),
+                created_by_job_id=job_id, actual_usd_micros=cost)
 
         status = proposal.get("status")
         if status not in ("created", "succeeded"):
@@ -722,8 +919,11 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
         return {"status": "completed", "done": True, "quality_gate_id": qg_id, **proposal}
 
     except Exception as exc:  # noqa: BLE001 — fail the run gracefully on any agent/model error
+        _finish_vms(success=False)  # retain stage VMs for root-causing via the console
         with begin(engine) as c:
             _release(sf, c, project_id, reservation_id, f"governed code task error: {exc}")
+            if guest_vm_ids:
+                _persist_sandbox_id(c, run_id, guest_vm_ids[-1])
             return _fail(c, run_id, project_id, str(exc))
     finally:
         # Request/worker threads are pooled — a stale run_id here would mis-attribute
@@ -731,3 +931,5 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
         clear_llm_context()
         if sandbox is not None:
             sandbox.teardown()
+        if review_sandbox is not None:
+            review_sandbox.teardown()

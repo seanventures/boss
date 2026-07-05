@@ -409,6 +409,16 @@ class Settings(BaseSettings):
     code_task_budget_usd_micros: int = Field(
         default=2_000_000, alias="BOSS_CODE_TASK_BUDGET_USD_MICROS"
     )
+    # Execution substrate for the GOVERNED pipeline's working stages (write_tests /
+    # implement / regression / mutation — the stages that EXECUTE generated code):
+    #   local   = host-side EphemeralSandbox subprocesses (pre-hybrid behavior)
+    #   microvm = each working stage runs in its own Firecracker VM via the
+    #             sandbox-service; the control plane commits each stage's diff to the
+    #             work branch (git is the state carrier) and keeps ALL judgment —
+    #             design, review panel, gates, Decision, PR — host-side.
+    governed_sandbox_provider: str = Field(
+        default="local", alias="BOSS_GOVERNED_SANDBOX_PROVIDER"
+    )
     # Which SandboxProvider supplies the execution substrate:
     #   local   = per-task EphemeralSandbox as a local subprocess + temp clone (Phase 0/1)
     #   microvm = single-tenant sandbox on a Sandbox Host (container stand-in now,
