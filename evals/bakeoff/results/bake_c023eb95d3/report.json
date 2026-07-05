@@ -1,0 +1,89 @@
+{
+  "batch_id": "bake_c023eb95d3",
+  "total_runs": 20,
+  "configs": {
+    "qwen_all": {
+      "runs": 5,
+      "gate_pass": 0,
+      "false_pass": 0,
+      "known_bad_runs": 0,
+      "total_cost_usd_micros": 79262,
+      "retries": 0,
+      "llm_calls": 55,
+      "price_estimated_calls": 0,
+      "failure_breakdown": {
+        "security_clean": 5,
+        "written_tests_pass": 2,
+        "code_review_passed": 2,
+        "nothing_broke": 2,
+        "tests_strong_enough": 3,
+        "consistent": 1
+      },
+      "mean_wall_clock_s": 1409.2,
+      "pass_rate": 0.0,
+      "cost_per_verified_outcome_usd_micros": null
+    },
+    "deepseek_all": {
+      "runs": 5,
+      "gate_pass": 0,
+      "false_pass": 0,
+      "known_bad_runs": 0,
+      "total_cost_usd_micros": 46427,
+      "retries": 0,
+      "llm_calls": 55,
+      "price_estimated_calls": 0,
+      "failure_breakdown": {
+        "code_review_passed": 3,
+        "tests_strong_enough": 3,
+        "written_tests_pass": 2,
+        "security_clean": 2,
+        "nothing_broke": 2
+      },
+      "mean_wall_clock_s": 271.8,
+      "pass_rate": 0.0,
+      "cost_per_verified_outcome_usd_micros": null
+    },
+    "glm_all": {
+      "runs": 5,
+      "gate_pass": 0,
+      "false_pass": 0,
+      "known_bad_runs": 0,
+      "total_cost_usd_micros": 873580,
+      "retries": 0,
+      "llm_calls": 55,
+      "price_estimated_calls": 35,
+      "failure_breakdown": {
+        "written_tests_pass": 3,
+        "coder_did_not_edit_tests": 1,
+        "code_review_passed": 4,
+        "nothing_broke": 3,
+        "security_clean": 2,
+        "consistent": 1,
+        "tests_strong_enough": 1
+      },
+      "mean_wall_clock_s": 3992.5,
+      "pass_rate": 0.0,
+      "cost_per_verified_outcome_usd_micros": null
+    },
+    "kimi_all": {
+      "runs": 5,
+      "gate_pass": 0,
+      "false_pass": 0,
+      "known_bad_runs": 0,
+      "total_cost_usd_micros": 576137,
+      "retries": 0,
+      "llm_calls": 49,
+      "price_estimated_calls": 32,
+      "failure_breakdown": {
+        "written_tests_pass": 3,
+        "nothing_broke": 3,
+        "run:failed": 1,
+        "code_review_passed": 1,
+        "tests_strong_enough": 1
+      },
+      "mean_wall_clock_s": 2588.4,
+      "pass_rate": 0.0,
+      "cost_per_verified_outcome_usd_micros": null
+    }
+  }
+}
