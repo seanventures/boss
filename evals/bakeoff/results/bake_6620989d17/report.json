@@ -1,0 +1,62 @@
+{
+  "batch_id": "bake_6620989d17",
+  "total_runs": 15,
+  "configs": {
+    "deepseek_all": {
+      "runs": 5,
+      "gate_pass": 1,
+      "false_pass": 0,
+      "known_bad_runs": 0,
+      "total_cost_usd_micros": 71798,
+      "retries": 0,
+      "llm_calls": 49,
+      "price_estimated_calls": 0,
+      "failure_breakdown": {
+        "written_tests_pass": 4,
+        "security_clean": 2,
+        "nothing_broke": 4,
+        "code_review_passed": 2,
+        "code_written": 1
+      },
+      "mean_wall_clock_s": 299.8,
+      "pass_rate": 0.2,
+      "cost_per_verified_outcome_usd_micros": 71798
+    },
+    "vag_junior_senior": {
+      "runs": 5,
+      "gate_pass": 3,
+      "false_pass": 0,
+      "known_bad_runs": 0,
+      "total_cost_usd_micros": 4065371,
+      "retries": 0,
+      "llm_calls": 49,
+      "price_estimated_calls": 0,
+      "failure_breakdown": {
+        "code_review_passed": 1,
+        "code_written": 1,
+        "written_tests_pass": 1,
+        "nothing_broke": 1,
+        "consistent": 1
+      },
+      "mean_wall_clock_s": 1775.8,
+      "pass_rate": 0.6,
+      "cost_per_verified_outcome_usd_micros": 1355123
+    },
+    "qwen_all": {
+      "runs": 5,
+      "gate_pass": 0,
+      "false_pass": 0,
+      "known_bad_runs": 0,
+      "total_cost_usd_micros": 18158,
+      "retries": 0,
+      "llm_calls": 10,
+      "price_estimated_calls": 0,
+      "failure_breakdown": {
+        "run:failed": 5
+      },
+      "mean_wall_clock_s": 565.0,
+      "pass_rate": 0.0,
+      "cost_per_verified_outcome_usd_micros": null
+    }
+  }
+}

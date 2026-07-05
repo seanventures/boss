@@ -1,0 +1,24 @@
+{
+  "batch_id": "bake_15a9c8e1f7",
+  "total_runs": 1,
+  "configs": {
+    "deepseek_all": {
+      "runs": 1,
+      "gate_pass": 0,
+      "false_pass": 0,
+      "known_bad_runs": 0,
+      "total_cost_usd_micros": 14225,
+      "retries": 0,
+      "llm_calls": 10,
+      "price_estimated_calls": 0,
+      "failure_breakdown": {
+        "written_tests_pass": 1,
+        "code_review_passed": 1,
+        "nothing_broke": 1
+      },
+      "mean_wall_clock_s": 66.8,
+      "pass_rate": 0.0,
+      "cost_per_verified_outcome_usd_micros": null
+    }
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "batch_id": "bake_f874500906",
+  "total_runs": 5,
+  "configs": {
+    "claude_baseline": {
+      "runs": 5,
+      "gate_pass": 3,
+      "false_pass": 0,
+      "known_bad_runs": 0,
+      "total_cost_usd_micros": 5386753,
+      "retries": 0,
+      "llm_calls": 50,
+      "price_estimated_calls": 0,
+      "failure_breakdown": {
+        "security_clean": 1,
+        "tests_strong_enough": 1
+      },
+      "mean_wall_clock_s": 1608.5,
+      "pass_rate": 0.6,
+      "cost_per_verified_outcome_usd_micros": 1795584
+    }
+  }
+}
