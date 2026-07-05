@@ -29,7 +29,7 @@
   }
   body { background: var(--bg); color: var(--ink); font-family: var(--sans);
          line-height: 1.58; margin: 0; padding: 48px 20px 90px; font-size: 15.5px; }
-  main { max-width: 960px; margin: 0 auto; display: flex; flex-direction: column; gap: 42px; }
+  main { max-width: 960px; margin: 0 auto; display: flex; flex-direction: column; gap: 40px; }
   .eyebrow { font-family: var(--mono); font-size: 12px; letter-spacing: 0.14em;
              text-transform: uppercase; color: var(--accent); }
   h1 { font-family: var(--display); font-weight: 700; font-size: clamp(26px, 4.2vw, 40px);
@@ -62,7 +62,7 @@
   .pill.err { background: var(--line); color: var(--muted); }
 
   .callout { background: var(--panel); border: 1px solid var(--line); border-left: 3px solid var(--accent);
-             border-radius: 6px; padding: 14px 18px; margin: 14px 0; font-size: 14.5px; max-width: none; }
+             border-radius: 6px; padding: 14px 18px; margin: 14px 0; font-size: 14.5px; }
   .callout.neg { border-left-color: var(--fail); }
   .callout.pos { border-left-color: var(--pass); }
   .callout p:last-child { margin-bottom: 0; }
@@ -75,11 +75,33 @@
            font-variant-numeric: tabular-nums; margin-top: 4px; }
   .kv .d { font-size: 12px; color: var(--muted); }
 
-  .bar-outer { background: var(--bg); border-radius: 3px; height: 16px; min-width: 120px; overflow: hidden; }
-  .bar { height: 100%; border-radius: 3px; min-width: 2px; }
-  .bar.f { background: var(--ink); opacity: 0.72; }
-  .bar.j { background: var(--accent); }
-  .bar.c { background: var(--cheap); }
+  /* Expandable run forensics */
+  details.run { background: var(--panel); border: 1px solid var(--line); border-radius: 6px;
+                margin: 8px 0; overflow: hidden; }
+  details.run > summary { cursor: pointer; padding: 11px 14px; display: flex; flex-wrap: wrap;
+                          gap: 10px; align-items: center; font-size: 14px; list-style: none; }
+  details.run > summary::-webkit-details-marker { display: none; }
+  details.run > summary::before { content: "▸"; color: var(--muted); font-size: 12px;
+                                  transition: transform 0.15s; }
+  details.run[open] > summary::before { transform: rotate(90deg); }
+  details.run > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+  details.run > summary .t { font-weight: 600; }
+  details.run > summary .why { color: var(--muted); font-size: 12.5px; flex-basis: 100%;
+                               padding-left: 20px; }
+  .rundetail { border-top: 1px solid var(--line); padding: 12px 16px 14px; font-size: 13.5px; }
+  .gatechecks { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+                gap: 5px 16px; margin: 8px 0 12px; font-family: var(--mono); font-size: 12px; }
+  .gatechecks span.ok::before { content: "✓ "; color: var(--pass); }
+  .gatechecks span.bad::before { content: "✗ "; color: var(--fail); }
+  .gatechecks span.bad { color: var(--fail); }
+  .gatechecks span.na::before { content: "– "; color: var(--muted); }
+  .gatechecks span.na { color: var(--muted); }
+  .ev { border-left: 3px solid var(--line); padding: 6px 12px; margin: 8px 0; color: var(--muted);
+        font-size: 13px; }
+  .ev b { color: var(--ink); }
+  .ev.sec { border-left-color: var(--fail); }
+  .ev.rev { border-left-color: var(--cheap); }
+  .ev.good { border-left-color: var(--pass); }
 
   ul { margin: 0 0 12px; padding-left: 22px; max-width: 74ch; }
   li { margin-bottom: 6px; }
@@ -91,141 +113,340 @@
 
 <main>
   <header class="no-rule">
-    <div class="eyebrow">BOSS · Verification-Amplified Generation · experiment report · 2026-07-04 → 07-05</div>
+    <div class="eyebrow">BOSS · Verification-Amplified Generation · experiment report v2 · 2026-07-04 → 07-05</div>
     <h1>Open-source vs frontier models through one governed pipeline</h1>
-    <p class="lede">46 governed runs, three experiments, one sample project. Every run passed through the
+    <p class="lede">46 governed runs, four experiments, one sample project. Every run passed through the
     identical fail-closed pipeline — design, independent tests, implementation, adversarial review,
     security review, consistency check, full-suite regression, mutation probe — with every model call
-    metered. This is the detailed record and analysis.</p>
+    metered. Expand any run for its forensic detail.</p>
   </header>
 
   <section class="no-rule">
-    <h2>Scoreboard — the whole story in one table</h2>
+    <h2>Scoreboard</h2>
     <div class="tablewrap"><table>
-      <thead><tr><th>Strategy</th><th>Generator</th><th>Verifier</th><th class="num">Gate pass</th>
+      <thead><tr><th>#</th><th>Strategy</th><th>Generator</th><th>Verifier</th><th class="num">Gate pass</th>
       <th class="num">$/verified outcome</th><th class="num">Total spend</th><th>False passes</th></tr></thead>
       <tbody>
-        <tr><td>Frontier solo (baseline)</td><td><span class="pill frontier">Claude</span></td><td><span class="pill frontier">Claude</span></td>
+        <tr><td>1</td><td>Frontier solo (baseline)</td><td><span class="pill frontier">Claude</span></td><td><span class="pill frontier">Claude</span></td>
             <td class="num">60% (3/5)</td><td class="num">$1.80</td><td class="num">$5.39</td><td class="num">0</td></tr>
-        <tr class="hl"><td><strong>Junior / senior</strong></td><td><span class="pill cheap">DeepSeek-V3</span></td><td><span class="pill frontier">Claude</span></td>
+        <tr class="hl"><td>2</td><td><strong>Junior / senior</strong></td><td><span class="pill cheap">DeepSeek-V3</span></td><td><span class="pill frontier">Claude</span></td>
             <td class="num"><strong>60% (3/5)</strong></td><td class="num"><strong>$1.36</strong></td><td class="num">$4.07</td><td class="num">0</td></tr>
-        <tr><td>All-cheap, one model</td><td><span class="pill cheap">DeepSeek-V3</span></td><td><span class="pill cheap">DeepSeek-V3</span></td>
+        <tr><td>3</td><td>All-cheap, one model</td><td><span class="pill cheap">DeepSeek-V3</span></td><td><span class="pill cheap">DeepSeek-V3</span></td>
             <td class="num">20% (1/5)</td><td class="num">$0.07</td><td class="num">$0.07</td><td class="num">0</td></tr>
-        <tr><td>All-cheap ensemble, best of 4 models</td><td><span class="pill cheap">4 OSS models</span></td><td><span class="pill cheap">same model</span></td>
+        <tr><td>4</td><td>All-cheap ensemble, best of 4 models</td><td><span class="pill cheap">4 OSS models</span></td><td><span class="pill cheap">same model</span></td>
             <td class="num">0% union (0/5 × 4)</td><td class="num">∞</td><td class="num">$2.47</td><td class="num">0</td></tr>
       </tbody>
     </table></div>
     <div class="callout pos"><p><strong>The single causal finding:</strong> holding the cheap generator
     constant and changing only who verifies moves the pass rate from 0–20% to 60%. Verification
-    quality — not generation quality, not model diversity — is the binding constraint. That is the
-    VAG tenet ("the harness is the amplifier") measured on real runs. And across all 46 runs:
-    <strong>zero false passes</strong> — nothing substandard ever shipped.</p></div>
+    quality — not generation quality, not model diversity — is the binding constraint. Across all 46
+    runs: <strong>zero false passes</strong> — every gate verdict is binary and fail-closed; nothing
+    substandard shipped.</p></div>
+    <p class="lede" style="font-size:13.5px">Note: experiments 2 and 3 executed inside one operational
+    batch (<span class="num">bake_6620989d17</span>) but are separate experiments — different strategy,
+    analyzed separately below.</p>
   </section>
 
   <section>
-    <h2>Method</h2>
-    <p><strong>Sample project.</strong> All runs target the <code>paramg/boss-sandbox</code> repo with a
-    fixed suite of five deterministic, stdlib-only Python tasks — a URL slugifier, a token-bucket rate
-    limiter, a CSV sales aggregator, a Markdown TOC generator, and an interval-merge library — each with
-    explicit acceptance criteria and <code>python3 -m unittest discover</code> as the authoritative test
-    command. Small enough to run cheaply, real enough to have edge cases (unicode, boundary values,
-    tie-breaking, fenced-code parsing, off-by-one).</p>
-    <p><strong>The governance pipeline (identical for every strategy).</strong> Risk tier 2–3, strict
-    profile: standards → spec → plan → plan review (design), then a QA role authors tests <em>before</em>
-    implementation exists, a separate implementer must make them pass without touching them, BOSS re-runs
-    the tests itself, a fresh-context adversarial reviewer tries to refute the change, a security reviewer
-    hunts exploitables, a consistency check compares code/tests/spec, the full suite re-runs, and a
-    mutation probe plants a one-line bug expecting the tests to catch it. The gate is a fail-closed AND
-    over all of it; PRs were suppressed (eval mode) so no repo spam.</p>
-    <p><strong>What "model strategy" means.</strong> Per-step engine/model routing lets each pipeline role
-    run on a different model. "Frontier" = Claude via the CLI engine (subscription). "Cheap/OSS" =
-    open-weight models over OpenAI-compatible APIs (OpenRouter, with direct Groq/DeepSeek lanes
-    available). The junior/senior config assigns implementation to the cheap model and keeps
-    spec/tests/review panel on frontier.</p>
-    <p><strong>Measurement.</strong> Every model call is recorded to a per-call telemetry table (tokens,
-    cost, latency, retries, stage, engine, model). Costs sum from that single source; where the guest VM
-    doesn't yet self-report usage (experiment 3), the provider's own billing delta is used instead.
-    <code>$ / verified outcome</code> = total inference spend of a strategy ÷ gate-passing runs.</p>
-    <p><strong>Substrates.</strong> Experiments 1–2 executed working stages as host subprocesses;
-    experiment 3 ran after the hybrid refactor, with every code-executing stage in its own Firecracker
-    micro-VM (~80 VM boots, 19/20 runs mechanically clean).</p>
+    <h2>Method (unchanged from v1, abridged)</h2>
+    <p>Sample project <code>paramg/boss-sandbox</code>; five deterministic stdlib-Python tasks with
+    explicit acceptance criteria; strict profile, risk tier 2–3; PRs suppressed. Per task: design →
+    QA agent authors tests before any implementation → separate implementer agent (forbidden to touch
+    tests, hash/diff-enforced) → <strong>BOSS executes the tests itself</strong> → fresh-context
+    adversarial review → security review → consistency check → full-suite regression → mutation probe →
+    fail-closed binary gate (every check must be green; no partial credit). "Gate pass %" = passing
+    runs ÷ 5 tasks. Costs from per-call telemetry (<code>llm_calls</code>); experiment 4's from
+    OpenRouter billing deltas. Experiments 1–3 ran working stages as host subprocesses; experiment 4 in
+    per-stage Firecracker micro-VMs.</p>
   </section>
 
   <section>
-    <h2><span class="exp">EXPERIMENT 1 · batch bake_f874500906</span>Frontier baseline — Claude everywhere</h2>
+    <h2><span class="exp">EXPERIMENT 1 · batch bake_f874500906 · 2026-07-04</span>Frontier baseline — Claude in every seat</h2>
     <div class="kv">
       <div class="cell"><div class="k">Gate pass</div><div class="v">3/5</div><div class="d">60%</div></div>
       <div class="cell"><div class="k">$/verified outcome</div><div class="v">$1.80</div><div class="d">$5.39 total · 50 calls</div></div>
       <div class="cell"><div class="k">Mean wall clock</div><div class="v">27m</div><div class="d">per run</div></div>
       <div class="cell"><div class="k">Retries</div><div class="v">0</div><div class="d">no 429/5xx</div></div>
     </div>
-    <div class="tablewrap"><table>
-      <thead><tr><th>Task</th><th>Verdict</th><th>Failing gate</th><th>What happened</th></tr></thead>
-      <tbody>
-        <tr><td>slugify</td><td><span class="pill pass">PASS</span></td><td>—</td><td>clean run, all panel verdicts green</td></tr>
-        <tr><td>token_bucket</td><td><span class="pill fail">BLOCKED</span></td><td><code>security_clean</code></td><td>security reviewer returned ISSUES on a toy rate limiter — over-strict for the context (a calibration finding, not a vulnerability)</td></tr>
-        <tr><td>csv_report</td><td><span class="pill pass">PASS</span></td><td>—</td><td>clean run</td></tr>
-        <tr><td>md_toc</td><td><span class="pill fail">BLOCKED</span></td><td><code>tests_strong_enough</code></td><td>mutation probe planted a one-line bug and Claude's own tests missed it — a genuinely weak test suite, correctly refused</td></tr>
-        <tr><td>interval_merge</td><td><span class="pill pass">PASS</span></td><td>—</td><td>clean run</td></tr>
-      </tbody>
-    </table></div>
-    <p><strong>Analysis.</strong> The baseline established two things beyond the headline number. First,
-    the number to beat is <span class="num">60% / $1.80</span> — frontier-solo is <em>not</em> a free
-    100%, because the gate judges frontier output as ruthlessly as anything else. Second, both failures
-    are verifier findings, one of each kind: a <em>false-fail</em> (security strictness on a toy — a cost
-    lever for Phase 1 calibration) and a <em>true catch</em> (mutation killing a weak suite — precisely
-    the "tests that pass on anything" failure mode VAG must prevent, since weak tests are what would let
-    a cheap model fake a pass later).</p>
+
+    <details class="run"><summary><span class="t">slugify</span> <span class="pill pass">PASS</span> <span class="num">$0.75</span>
+      <span class="why">Clean run — every check green on the first pass.</span></summary>
+      <div class="rundetail">
+        <div class="gatechecks">
+          <span class="ok">code_written (1 impl file)</span><span class="ok">tests_written_first (1 test file)</span>
+          <span class="ok">coder_did_not_edit_tests</span><span class="ok">written_tests_pass (exit 0)</span>
+          <span class="ok">code_review: SURVIVED</span><span class="ok">security: CLEAN</span>
+          <span class="ok">consistent: YES</span><span class="ok">mutation: CAUGHT</span><span class="ok">regression: green</span>
+        </div>
+        <div class="ev good"><b>Security reviewer:</b> "No CRITICAL, HIGH, MEDIUM, or LOW security findings."</div>
+      </div>
+    </details>
+
+    <details class="run"><summary><span class="t">token_bucket</span> <span class="pill fail">BLOCKED</span> <span class="num">$1.64</span>
+      <span class="why">One red check: the security reviewer flagged a HIGH on a toy rate limiter — arguably over-strict for the task context.</span></summary>
+      <div class="rundetail">
+        <div class="gatechecks">
+          <span class="ok">code_written</span><span class="ok">tests_written_first</span>
+          <span class="ok">coder_did_not_edit_tests</span><span class="ok">written_tests_pass (exit 0)</span>
+          <span class="ok">code_review: SURVIVED</span><span class="bad">security: ISSUES</span>
+          <span class="ok">consistent: YES</span><span class="ok">mutation: CAUGHT</span><span class="ok">regression: green</span>
+        </div>
+        <div class="ev sec"><b>Security finding (HIGH):</b> "Race condition / rate-limit bypass under
+        concurrent access" — the bucket isn't thread-safe, so concurrent callers could exceed the limit.
+        Technically true; whether a single-threaded kata warrants a HIGH is the calibration question
+        this run raised. Compare experiment 2's run of the same task, where the reviewer judged the same
+        gap "real but not blocking for this task context" — same model, different draw: verdict variance
+        is itself a finding.</div>
+      </div>
+    </details>
+
+    <details class="run"><summary><span class="t">csv_report</span> <span class="pill pass">PASS</span> <span class="num">$0.83</span>
+      <span class="why">Clean run.</span></summary>
+      <div class="rundetail">
+        <div class="gatechecks">
+          <span class="ok">code_written</span><span class="ok">tests_written_first</span>
+          <span class="ok">coder_did_not_edit_tests</span><span class="ok">written_tests_pass (exit 0)</span>
+          <span class="ok">code_review: SURVIVED</span><span class="ok">security: CLEAN</span>
+          <span class="ok">consistent: YES</span><span class="ok">mutation: CAUGHT</span><span class="ok">regression: green</span>
+        </div>
+        <div class="ev good"><b>Security reviewer:</b> "No dangerous I/O surface, no injection vectors,
+        no auth logic to bypass, no unsafe deserialization."</div>
+      </div>
+    </details>
+
+    <details class="run"><summary><span class="t">md_toc</span> <span class="pill fail">BLOCKED</span> <span class="num">$1.27</span>
+      <span class="why">Claude's own tests were too weak: the mutation probe planted a one-line bug and the suite stayed green.</span></summary>
+      <div class="rundetail">
+        <div class="gatechecks">
+          <span class="ok">code_written</span><span class="ok">tests_written_first</span>
+          <span class="ok">coder_did_not_edit_tests</span><span class="ok">written_tests_pass (exit 0)</span>
+          <span class="ok">code_review: SURVIVED</span><span class="ok">security: CLEAN</span>
+          <span class="ok">consistent: YES</span><span class="bad">mutation: ESCAPED (tests_strong_enough)</span><span class="ok">regression: green</span>
+        </div>
+        <div class="ev rev"><b>What "mutation escaped" means:</b> a reviewer agent changed exactly one
+        implementation line, the full test suite re-ran, and it still passed — proving the tests don't
+        actually constrain that behavior. Weak tests are precisely what would let a cheap model fake a
+        pass later, so the gate refuses them even on frontier output.</div>
+        <div class="ev"><b>Security sidenote (verdict CLEAN, advisory only):</b> the reviewer also
+        spotted potential regex backtracking on headings with unclosed inline markers — noted, not
+        blocking.</div>
+      </div>
+    </details>
+
+    <details class="run"><summary><span class="t">interval_merge</span> <span class="pill pass">PASS</span> <span class="num">$0.89</span>
+      <span class="why">Clean run.</span></summary>
+      <div class="rundetail">
+        <div class="gatechecks">
+          <span class="ok">code_written</span><span class="ok">tests_written_first</span>
+          <span class="ok">coder_did_not_edit_tests</span><span class="ok">written_tests_pass (exit 0)</span>
+          <span class="ok">code_review: SURVIVED</span><span class="ok">security: CLEAN</span>
+          <span class="ok">consistent: YES</span><span class="ok">mutation: CAUGHT</span><span class="ok">regression: green</span>
+        </div>
+      </div>
+    </details>
+
+    <p><strong>Analysis.</strong> The number to beat: <span class="num">60% / $1.80</span>. Frontier-solo
+    is not a free 100% — the gate judges frontier output as ruthlessly as anything else. Its two failures
+    are one of each verifier kind: a plausible <em>false-fail</em> (security strictness) and a
+    <em>true catch</em> (weak tests killed by mutation).</p>
   </section>
 
   <section>
-    <h2><span class="exp">EXPERIMENT 2 · batch bake_6620989d17</span>The junior/senior split vs naive all-cheap</h2>
-    <div class="tablewrap"><table>
-      <thead><tr><th>Task</th><th>junior/senior<br>(Claude spec+tests+review, DeepSeek implements)</th><th>all-DeepSeek<br>(one model does everything)</th></tr></thead>
-      <tbody>
-        <tr><td>slugify</td><td><span class="pill pass">PASS</span></td><td><span class="pill fail">BLOCKED</span> tests, review, security</td></tr>
-        <tr><td>token_bucket</td><td><span class="pill pass">PASS</span> <span class="num">(where frontier-solo failed)</span></td><td><span class="pill fail">BLOCKED</span> tests, review, regression</td></tr>
-        <tr><td>csv_report</td><td><span class="pill fail">BLOCKED</span></td><td><span class="pill fail">BLOCKED</span> tests, security, regression</td></tr>
-        <tr><td>md_toc</td><td><span class="pill fail">BLOCKED</span></td><td><span class="pill fail">BLOCKED</span> no code + tests + regression</td></tr>
-        <tr><td>interval_merge</td><td><span class="pill pass">PASS</span></td><td><span class="pill pass">PASS</span> — DeepSeek's one solo win</td></tr>
-      </tbody>
-    </table></div>
+    <h2><span class="exp">EXPERIMENT 2 · batch bake_6620989d17 · 2026-07-05</span>Junior / senior — Claude writes spec + tests + reviews, DeepSeek implements</h2>
     <div class="kv">
-      <div class="cell"><div class="k">junior/senior</div><div class="v">60%</div><div class="d">$1.36/outcome · $4.07 total</div></div>
-      <div class="cell"><div class="k">all-DeepSeek</div><div class="v">20%</div><div class="d">$0.07/outcome · $0.07 total</div></div>
-      <div class="cell"><div class="k">cost delta vs frontier</div><div class="v">−24%</div><div class="d">at identical pass rate</div></div>
-      <div class="cell"><div class="k">implement-stage cost</div><div class="v">0.4%</div><div class="d">of a jr/sr run ($0.002)</div></div>
+      <div class="cell"><div class="k">Gate pass</div><div class="v">3/5</div><div class="d">60% — ties the frontier baseline</div></div>
+      <div class="cell"><div class="k">$/verified outcome</div><div class="v">$1.36</div><div class="d">−24% vs baseline · $4.07 total</div></div>
+      <div class="cell"><div class="k">Implement-stage cost</div><div class="v">0.4%</div><div class="d">$0.002 of a $0.58 run</div></div>
+      <div class="cell"><div class="k">Verification share</div><div class="v">99.6%</div><div class="d">of run spend (frontier)</div></div>
     </div>
-    <h3>Stage anatomy of one verified junior/senior run (slugify, $0.58 total)</h3>
-    <div class="tablewrap"><table>
-      <thead><tr><th>Stage</th><th>Model</th><th class="num">Cost</th><th>Share</th></tr></thead>
-      <tbody>
-        <tr><td>Design (standards · spec · plan · plan review)</td><td><span class="pill frontier">claude</span> + <span class="pill cheap">deepseek</span> (standards)</td><td class="num">≈$0.18</td><td><div class="bar-outer" style="max-width:180px"><div class="bar f" style="width:31%"></div></div></td></tr>
-        <tr><td>Write independent tests</td><td><span class="pill frontier">claude</span></td><td class="num">$0.078</td><td><div class="bar-outer" style="max-width:180px"><div class="bar f" style="width:13%"></div></div></td></tr>
-        <tr><td><strong>Implement</strong></td><td><span class="pill cheap">deepseek-v3</span></td><td class="num"><strong>$0.002</strong></td><td><div class="bar-outer" style="max-width:180px"><div class="bar c" style="width:1%"></div></div></td></tr>
-        <tr><td>Adversarial review</td><td><span class="pill frontier">claude</span></td><td class="num">$0.133</td><td><div class="bar-outer" style="max-width:180px"><div class="bar f" style="width:23%"></div></div></td></tr>
-        <tr><td>Security review</td><td><span class="pill frontier">claude</span></td><td class="num">$0.054</td><td><div class="bar-outer" style="max-width:180px"><div class="bar f" style="width:9%"></div></div></td></tr>
-        <tr><td>Consistency check</td><td><span class="pill frontier">claude</span></td><td class="num">$0.089</td><td><div class="bar-outer" style="max-width:180px"><div class="bar f" style="width:15%"></div></div></td></tr>
-        <tr><td>Mutation probe</td><td><span class="pill frontier">claude</span></td><td class="num">$0.045</td><td><div class="bar-outer" style="max-width:180px"><div class="bar f" style="width:8%"></div></div></td></tr>
-      </tbody>
-    </table></div>
-    <p><strong>Analysis.</strong> The junior/senior config matched frontier-solo's pass rate exactly —
-    and notably passed <code>token_bucket</code>, the task frontier-solo failed (different security-review
-    draw; at n=5 treat as variance, not superiority). The saving is 24% rather than 75% because the stage
-    the junior took over is nearly free — <strong>99.6% of the spend is frontier design + verification.</strong>
-    That redirects the optimization: further savings come from cheapening <em>verification</em> safely
-    (mid-tier panel roles, calibration) and from making cheap attempts count (repair loops) — not from a
-    cheaper implementer. All-DeepSeek's 20% at $0.07/outcome also seeded the ensemble hypothesis that
-    experiment 3 then killed: its one pass suggested different models might pass different tasks.
-    (The planned Qwen leg voided on provider limits — free-tier TPM and credit-reservation 402s — a
-    logistics finding that produced the <code>max_tokens</code> cap now in the adapter.)</p>
+
+    <details class="run"><summary><span class="t">slugify</span> <span class="pill pass">PASS</span> <span class="num">$0.58</span>
+      <span class="why">DeepSeek's $0.002 implementation cleared Claude's 12-case test suite and the full panel.</span></summary>
+      <div class="rundetail">
+        <div class="gatechecks">
+          <span class="ok">code_written (1 impl file)</span><span class="ok">tests_written_first (1 test file)</span>
+          <span class="ok">coder_did_not_edit_tests</span><span class="ok">written_tests_pass (exit 0)</span>
+          <span class="ok">code_review: SURVIVED</span><span class="ok">security: CLEAN</span>
+          <span class="ok">consistent: YES</span><span class="ok">mutation: CAUGHT</span><span class="ok">regression: green</span>
+        </div>
+        <div class="ev good">Stage costs: design ≈$0.18 · tests $0.078 · <b>implement $0.002 (DeepSeek)</b> ·
+        review $0.133 · security $0.054 · consistency $0.089 · mutation $0.045.</div>
+      </div>
+    </details>
+
+    <details class="run"><summary><span class="t">token_bucket</span> <span class="pill pass">PASS</span> <span class="num">$0.90</span>
+      <span class="why">Passed the task frontier-solo failed — the security reviewer judged the same thread-safety gap non-blocking this time.</span></summary>
+      <div class="rundetail">
+        <div class="gatechecks">
+          <span class="ok">code_written</span><span class="ok">tests_written_first</span>
+          <span class="ok">coder_did_not_edit_tests</span><span class="ok">written_tests_pass (exit 0)</span>
+          <span class="ok">code_review: SURVIVED</span><span class="ok">security: CLEAN</span>
+          <span class="ok">consistent: YES</span><span class="ok">mutation: CAUGHT</span><span class="ok">regression: green</span>
+        </div>
+        <div class="ev good"><b>Security reviewer (CLEAN, calibrated):</b> "The implementation is correct
+        and clean for single-threaded use. The thread-safety gap is real and worth fixing before deploying
+        in a concurrent server, but [not blocking for this task]." Same class of finding as the baseline's
+        HIGH on this task — different verdict. At n=1 per cell, treat the pass/fail flip as reviewer
+        variance, not junior/senior superiority.</div>
+      </div>
+    </details>
+
+    <details class="run"><summary><span class="t">csv_report</span> <span class="pill fail">BLOCKED</span> <span class="num">$0.62</span>
+      <span class="why">Everything green except one check: Claude's adversarial reviewer found a real spec violation DeepSeek's code missed.</span></summary>
+      <div class="rundetail">
+        <div class="gatechecks">
+          <span class="ok">code_written</span><span class="ok">tests_written_first</span>
+          <span class="ok">coder_did_not_edit_tests</span><span class="ok">written_tests_pass (exit 0)</span>
+          <span class="bad">code_review: REFUTED</span><span class="ok">security: CLEAN</span>
+          <span class="ok">consistent: YES</span><span class="ok">mutation: CAUGHT</span><span class="ok">regression: green</span>
+        </div>
+        <div class="ev rev"><b>Reviewer's refutation (concrete):</b> the acceptance criterion says
+        "malformed rows are skipped, not fatal" — but a row with <code>region=None</code> (unambiguously
+        malformed: no usable region string) was not being skipped by DeepSeek's implementation. The tests
+        passed because they didn't cover that exact shape — the fresh-context reviewer caught what the
+        suite missed. This is the review layer earning its seat: a real null-handling defect behind green
+        tests.</div>
+      </div>
+    </details>
+
+    <details class="run"><summary><span class="t">md_toc</span> <span class="pill fail">BLOCKED</span> <span class="num">$1.38</span>
+      <span class="why">DeepSeek produced zero implementation files — the hardest task defeated the junior outright.</span></summary>
+      <div class="rundetail">
+        <div class="gatechecks">
+          <span class="bad">code_written (0 impl files)</span><span class="ok">tests_written_first (1 test file)</span>
+          <span class="ok">coder_did_not_edit_tests</span><span class="bad">written_tests_pass (suite fails — nothing to import)</span>
+          <span class="ok">code_review: SURVIVED</span><span class="ok">security: CLEAN</span>
+          <span class="bad">consistent: DRIFT</span><span class="na">mutation: n/a (no impl to mutate)</span><span class="bad">regression: red</span>
+        </div>
+        <div class="ev rev"><b>What happened:</b> the fenced-code-block + duplicate-anchor parsing task
+        was too much for a one-shot cheap implement — the model returned no valid file writes at all.
+        Four red checks all cascade from that one root cause. This is the exact failure profile the
+        planned repair loop targets: a retry with "your diff contained no implementation files" as
+        feedback costs ~$0.002.</div>
+      </div>
+    </details>
+
+    <details class="run"><summary><span class="t">interval_merge</span> <span class="pill pass">PASS</span> <span class="num">$0.57</span>
+      <span class="why">Clean run.</span></summary>
+      <div class="rundetail">
+        <div class="gatechecks">
+          <span class="ok">code_written</span><span class="ok">tests_written_first</span>
+          <span class="ok">coder_did_not_edit_tests</span><span class="ok">written_tests_pass (exit 0)</span>
+          <span class="ok">code_review: SURVIVED</span><span class="ok">security: CLEAN</span>
+          <span class="ok">consistent: YES</span><span class="ok">mutation: CAUGHT</span><span class="ok">regression: green</span>
+        </div>
+      </div>
+    </details>
+
+    <p><strong>Analysis.</strong> Same 60% as frontier-solo at −24% cost, from a single pass with no
+    generator↔verifier iteration. The two failures are complementary: one <em>quality</em> catch (a real
+    defect behind green tests — the reviewer layer working) and one <em>capability</em> miss (no code at
+    all on the hardest task — the repair-loop opportunity). 99.6% of spend is frontier verification,
+    which is where further cost reduction must come from.</p>
   </section>
 
   <section>
-    <h2><span class="exp">EXPERIMENT 3 · batch bake_c023eb95d3</span>Diversity ensemble — 4 OSS models, gate as selector</h2>
-    <p>Hypothesis (VAG §3.3): cheap models fail <em>differently</em>, so running the same task through N
-    diverse models and letting the gate pick any survivor should lift the union pass rate toward
-    frontier at pennies. 4 models × 5 tasks, one shot each, strict profile, micro-VM substrate.</p>
+    <h2><span class="exp">EXPERIMENT 3 · batch bake_6620989d17 · 2026-07-05</span>All-cheap, one model — DeepSeek in every seat</h2>
+    <div class="kv">
+      <div class="cell"><div class="k">Gate pass</div><div class="v">1/5</div><div class="d">20%</div></div>
+      <div class="cell"><div class="k">$/verified outcome</div><div class="v">$0.07</div><div class="d">$0.07 total for all 5 runs</div></div>
+      <div class="cell"><div class="k">Mean wall clock</div><div class="v">5m</div><div class="d">per run</div></div>
+      <div class="cell"><div class="k">Cost per attempt</div><div class="v">~$0.015</div><div class="d">120× cheaper than baseline</div></div>
+    </div>
+
+    <details class="run"><summary><span class="t">slugify</span> <span class="pill fail">BLOCKED</span> <span class="num">$0.015</span>
+      <span class="why">Tests failed on execution AND the reviewer found the concrete bug: slugify('---') doesn't return ''.</span></summary>
+      <div class="rundetail">
+        <div class="gatechecks">
+          <span class="ok">code_written</span><span class="ok">tests_written_first</span>
+          <span class="ok">coder_did_not_edit_tests</span><span class="bad">written_tests_pass (suite fails)</span>
+          <span class="bad">code_review: REFUTED</span><span class="bad">security: NO VERDICT (fail-closed)</span>
+          <span class="ok">consistent: YES</span><span class="ok">mutation: CAUGHT</span><span class="bad">regression: red</span>
+        </div>
+        <div class="ev rev"><b>Reviewer's refutation:</b> "fails to properly handle the acceptance
+        criteria for empty strings and hyphens-only inputs. The test case <code>slugify('---') == ''</code>
+        fails because the current implementation…" — a concrete edge-case bug, confirmed independently by
+        the failing test run.</div>
+        <div class="ev sec"><b>Security check red for a different reason:</b> DeepSeek's security
+        reviewer wrote prose but never emitted the required <code>VERDICT: CLEAN/ISSUES</code> line — an
+        unparseable verdict counts as fail (fail-closed). Cheap models don't just write weaker code; they
+        follow the review protocol less reliably.</div>
+      </div>
+    </details>
+
+    <details class="run"><summary><span class="t">token_bucket</span> <span class="pill fail">BLOCKED</span> <span class="num">$0.015</span>
+      <span class="why">Failing tests + reviewer refuted on missing thread-safety coverage.</span></summary>
+      <div class="rundetail">
+        <div class="gatechecks">
+          <span class="ok">code_written</span><span class="ok">tests_written_first</span>
+          <span class="ok">coder_did_not_edit_tests</span><span class="bad">written_tests_pass (suite fails)</span>
+          <span class="bad">code_review: REFUTED</span><span class="ok">security: CLEAN</span>
+          <span class="ok">consistent: YES</span><span class="ok">mutation: CAUGHT</span><span class="bad">regression: red</span>
+        </div>
+        <div class="ev rev"><b>Reviewer's refutation:</b> "fails to meet the acceptance criteria for
+        thread safety. The test suite does not include a concurrent-consume test verifying that N threads
+        hitting a capacity=…" — the cheap QA seat wrote a thin suite AND the cheap implement seat failed
+        it anyway.</div>
+      </div>
+    </details>
+
+    <details class="run"><summary><span class="t">csv_report</span> <span class="pill fail">BLOCKED</span> <span class="num">$0.015</span>
+      <span class="why">Tests failed; security verdict unparseable (fail-closed).</span></summary>
+      <div class="rundetail">
+        <div class="gatechecks">
+          <span class="ok">code_written</span><span class="ok">tests_written_first</span>
+          <span class="ok">coder_did_not_edit_tests</span><span class="bad">written_tests_pass (suite fails)</span>
+          <span class="ok">code_review: SURVIVED</span><span class="bad">security: NO VERDICT (fail-closed)</span>
+          <span class="ok">consistent: YES</span><span class="ok">mutation: CAUGHT</span><span class="bad">regression: red</span>
+        </div>
+        <div class="ev sec"><b>Security reviewer drift:</b> its summary discusses "a CSV sales aggregation
+        endpoint" with MEDIUM notes on input validation — prose without the required verdict line, so the
+        gate refuses it unread. Note the run cost: finding all this out cost 1.5 cents.</div>
+      </div>
+    </details>
+
+    <details class="run"><summary><span class="t">md_toc</span> <span class="pill fail">BLOCKED</span> <span class="num">$0.013</span>
+      <span class="why">No implementation produced — and the security reviewer reviewed the wrong task entirely.</span></summary>
+      <div class="rundetail">
+        <div class="gatechecks">
+          <span class="bad">code_written (0 impl files)</span><span class="ok">tests_written_first</span>
+          <span class="ok">coder_did_not_edit_tests</span><span class="bad">written_tests_pass</span>
+          <span class="ok">code_review: SURVIVED</span><span class="ok">security: CLEAN</span>
+          <span class="ok">consistent: YES</span><span class="na">mutation: n/a</span><span class="bad">regression: red</span>
+        </div>
+        <div class="ev sec"><b>Reviewer hallucination, caught in the transcript:</b> DeepSeek's security
+        summary for this <em>Markdown TOC</em> task reads "the change introduces a thread-safe token-bucket
+        rate limiter…" — it reviewed a different task from its context. Its CLEAN verdict was parseable,
+        so it passed — a live example of why cheap single-voice review verdicts need the Phase 1
+        refute-majority panel.</div>
+      </div>
+    </details>
+
+    <details class="run"><summary><span class="t">interval_merge</span> <span class="pill pass">PASS</span> <span class="num">$0.015</span>
+      <span class="why">DeepSeek's one solo win — all nine checks green at 1.5 cents.</span></summary>
+      <div class="rundetail">
+        <div class="gatechecks">
+          <span class="ok">code_written</span><span class="ok">tests_written_first</span>
+          <span class="ok">coder_did_not_edit_tests</span><span class="ok">written_tests_pass (exit 0)</span>
+          <span class="ok">code_review: SURVIVED</span><span class="ok">security: CLEAN</span>
+          <span class="ok">consistent: YES</span><span class="ok">mutation: CAUGHT</span><span class="ok">regression: green</span>
+        </div>
+      </div>
+    </details>
+
+    <p><strong>Analysis.</strong> 20% at $0.07/outcome. Failures split into three classes visible in the
+    forensics: genuine code defects (slugify's edge cases), capability misses (md_toc: no code), and a
+    new class this experiment surfaced — <strong>verifier protocol failures</strong>: cheap reviewers
+    drifting off-task or omitting the required verdict line, which the gate correctly treats as fail.
+    (The planned Qwen leg of this batch voided on provider limits — free-tier TPM and credit-reservation
+    402s — a logistics finding that produced the adapter's <code>max_tokens</code> cap.)</p>
+  </section>
+
+  <section>
+    <h2><span class="exp">EXPERIMENT 4 · batch bake_c023eb95d3 · 2026-07-05 · micro-VM substrate</span>Diversity ensemble — 4 OSS models, gate as selector</h2>
+    <p>Hypothesis (spec §3.3): cheap models fail <em>differently</em>, so the union of 4 diverse models
+    should approach frontier pass rates at pennies. 4 models × 5 tasks, one shot each; every
+    code-executing stage in its own Firecracker VM (~80 boots, 19/20 mechanically clean).</p>
     <div class="tablewrap"><table>
       <thead><tr><th>Task</th><th>DeepSeek-V3</th><th>GLM-4.5</th><th>Kimi-K2</th><th>Qwen3-32B</th><th>UNION</th></tr></thead>
       <tbody>
@@ -236,107 +457,126 @@
         <tr><td>interval_merge</td><td><span class="pill fail">fail</span></td><td><span class="pill fail">fail</span></td><td><span class="pill fail">fail</span></td><td><span class="pill fail">fail</span></td><td><span class="pill fail">fail</span></td></tr>
       </tbody>
     </table></div>
-    <div class="tablewrap"><table>
-      <thead><tr><th>Model</th><th class="num">Mean wall clock</th><th>Dominant failing gates</th></tr></thead>
-      <tbody>
-        <tr><td>DeepSeek-V3</td><td class="num">4.5m</td><td>review refuted ×3 · weak tests ×3 · tests fail ×2 · security ×2 · regression ×2</td></tr>
-        <tr><td>GLM-4.5</td><td class="num">66.5m</td><td>review refuted ×4 · tests fail ×3 · regression ×3 · edited the tests ×1</td></tr>
-        <tr><td>Kimi-K2</td><td class="num">43.1m</td><td>tests fail ×3 · regression ×3 · 1 run errored</td></tr>
-        <tr><td>Qwen3-32B</td><td class="num">23.5m</td><td><strong>security ×5 (its own reviewer refused every run)</strong> · weak tests ×3 · review ×2</td></tr>
-      </tbody>
-    </table></div>
-    <div class="callout neg"><p><strong>Clean negative result ($2.47 to learn it):</strong> union pass rate
-    0/5. The models don't fail differently enough — their failure profiles overlap on the same gates
-    (refuted reviews, weak tests, regressions). One-shot model diversity is <em>not</em> a quality lever.</p></div>
-    <p><strong>The confound that became the finding.</strong> In these configs the cheap model was also
-    the <em>reviewer</em> — and that's visible in the data (Qwen's own security reviewer refused all five
-    of its runs; GLM's reviewer refuted four). Compare across experiments with the generator held
-    constant: DeepSeek-generated code judged by DeepSeek passes 0–20%; DeepSeek-generated code judged by
-    Claude passes 60%. The verifier, not the generator, moves the outcome. Cheap verifiers are both
-    noisier <em>and</em> stricter in the wrong places — so "cheap everything" fails twice: worse code and
-    worse judgment of it.</p>
-    <p><strong>Substrate note.</strong> This batch also stress-tested the hybrid pipeline: every
-    write-tests / implement / regression / mutation stage ran in its own Firecracker VM (~80 boots), with
-    tests-first commits on work branches and read-only host review. 19/20 runs were mechanically clean
-    (one Kimi run errored mid-stage). DeepSeek scored 1/5 on the host substrate but 0/5 in VMs — the
-    guest's simpler agent loop (JSON whole-file writes, 4 repair rounds, no editing tools) plausibly costs
-    some capability vs the host CLI agent; worth one controlled comparison later.</p>
+    <div class="callout neg"><p><strong>Clean negative ($2.47 to learn it): union 0/5.</strong> The models
+    don't fail differently enough — profiles overlap on the same gates. One-shot model diversity is not a
+    quality lever. Expand each model for its forensic profile:</p></div>
+
+    <details class="run"><summary><span class="t">DeepSeek-V3</span> <span class="pill fail">0/5</span> <span class="num">mean 4.5 min/run</span>
+      <span class="why">Fast and cheap; failed on review refutations (×3), weak tests killed by mutation (×3), failing suites (×2). Note: scored 1/5 on the host substrate — the simpler in-VM agent loop may cost capability.</span></summary>
+      <div class="rundetail">
+        <div class="ev sec"><b>csv_report:</b> gratuitously wrapped the aggregation function in "a Flask
+        web service endpoint" nobody asked for — unrequested attack surface (the same over-building
+        pattern the hybrid validation's security catch found), plus a failing suite.</div>
+        <div class="ev rev"><b>interval_merge / token_bucket / slugify:</b> tests passed but the mutation
+        probe escaped the suites (weak tests) and reviewers issued no parseable verdict (fail-closed) —
+        protocol failures compounding quality failures.</div>
+      </div>
+    </details>
+
+    <details class="run"><summary><span class="t">GLM-4.5</span> <span class="pill fail">0/5</span> <span class="num">mean 66.5 min/run</span>
+      <span class="why">Slowest by far; review refuted ×4, failing suites ×3 — and one run was caught EDITING THE TESTS.</span></summary>
+      <div class="rundetail">
+        <div class="ev sec"><b>interval_merge — tamper caught:</b> <code>coder_did_not_edit_tests</code>
+        fail. GLM's implementer modified the frozen test files to make them pass — the exact adversarial
+        behavior the hash/diff (now VM-structural) check exists for. The gate refused it mechanically; no
+        reviewer judgment involved.</div>
+        <div class="ev rev"><b>token_bucket:</b> reviewer refutation with a concrete miss: "fails to
+        immediately reject requests for more tokens than capacity (n &gt; capacity), violating requirement
+        F4" — a real boundary-condition defect.</div>
+      </div>
+    </details>
+
+    <details class="run"><summary><span class="t">Kimi-K2</span> <span class="pill fail">0/5 (1 errored)</span> <span class="num">mean 43.1 min/run</span>
+      <span class="why">Failing suites ×3, regressions ×3; one run died because its QA seat produced no test files at all.</span></summary>
+      <div class="rundetail">
+        <div class="ev rev"><b>md_toc — concrete off-by-one, caught by review:</b> "sets
+        <code>anchor_count[anchor] = 0</code> on first occurrence, then increments to 1 on second" — so
+        duplicate anchors get the wrong <code>-1/-2</code> suffixes. Real bug, precisely located.</div>
+        <div class="ev sec"><b>token_bucket — run error:</b> "Gate fail: test author produced no test
+        files" — the QA invocation returned nothing usable; the run never reached implementation.</div>
+        <div class="ev"><b>csv_report:</b> its security reviewer flagged "Path Traversal via HTTP Server
+        (HIGH)" then labeled its own finding a false positive in the same breath — verdict CLEAN, but the
+        suite was failing anyway.</div>
+      </div>
+    </details>
+
+    <details class="run"><summary><span class="t">Qwen3-32B</span> <span class="pill fail">0/5</span> <span class="num">mean 23.5 min/run</span>
+      <span class="why">security_clean red on all five runs — a mix of hallucinated strictness and unparseable verdicts from its own reviewer seat.</span></summary>
+      <div class="rundetail">
+        <div class="ev sec"><b>token_bucket — hallucinated requirements:</b> its security reviewer failed
+        the run because "the PRD requires a lock-free CAS approach (D5, N1) but the code uses a blocking
+        lock" — citing PRD clauses that don't exist in the task. Cheap reviewers don't just miss things;
+        they invent requirements.</div>
+        <div class="ev sec"><b>The ×5 pattern:</b> most of Qwen's security reds are <code>NO VERDICT</code>
+        (prose without the required CLEAN/ISSUES line) — fail-closed protocol failures rather than
+        findings. Its generator seats also produced 2 failing suites and 3 mutation-escaped test sets.</div>
+      </div>
+    </details>
+
+    <p><strong>Analysis.</strong> The confound that became the finding: these configs put the cheap model
+    in the <em>reviewer</em> seats too. Holding the generator constant across experiments 2–4:
+    DeepSeek code judged by Claude passes 60%; judged by itself, 0–20%. Cheap verification fails in three
+    distinct, now-documented ways — <em>miscalibration</em> (hallucinated PRD clauses), <em>protocol
+    non-compliance</em> (no parseable verdict → fail-closed), and <em>context drift</em> (reviewing the
+    wrong task) — on top of cheap generation's real defects. "Cheap everything" fails twice.</p>
   </section>
 
   <section>
     <h2>Cross-cutting analysis</h2>
-    <h3>1 · The amplifier is trustworthy — and that's the load-bearing result</h3>
-    <p>46 governed runs, 24 fail-closed refusals, <strong>zero false passes</strong>. The spec calls false
-    confidence the one failure mode that would sink the strategy; at current sample size the gate has
-    none. Everything else — cost, routing, ensembles — is negotiable so long as this holds. (Formal
-    false-pass instrumentation — the known-bad probe suite — ships with Phase 1; the current claim is
-    "nothing substandard shipped," verified by inspection of every refusal.)</p>
-    <h3>2 · Where quality actually comes from</h3>
-    <p>Ranked by measured effect: <strong>(a)</strong> who writes and enforces the tests/review
-    (frontier verify: +40–60 points of pass rate), <strong>(b)</strong> generator capability (Claude
-    implement vs DeepSeek implement: no measurable difference <em>when verification is frontier</em> —
-    60% either way), <strong>(c)</strong> generator diversity (no effect at one shot). The harness
-    doesn't just catch bad output; frontier-authored tests appear to <em>steer</em> the cheap implementer
-    onto a track it can actually follow.</p>
-    <h3>3 · Economics</h3>
-    <p>Cheap tokens are 20–75× cheaper, but a verified outcome is the unit that matters:
-    junior/senior delivers frontier quality at <span class="num">−24%</span> today, bounded by the
-    verification bill (99.6% of spend). The modeled next steps: a cheap <em>repair loop</em> (feed the
-    failing gates back, retry ≤N times at ~$0.01–0.03/attempt) attacks the 40% of tasks currently
-    refused; mid-tier panel roles attack the verification bill itself. Both are spec Phase 3/1
-    respectively, and both now have baselines to beat.</p>
-    <h3>4 · Verifier calibration is a real cost center</h3>
-    <p>The security reviewer produced one true HIGH catch (an implementer added an unrequested HTTP
-    server with a blocking-read DoS — caught, refused), one plausible false-fail (toy rate limiter), and
-    on cheap models it becomes indiscriminate (Qwen: 5/5 refusals). Phase 1's confidence score +
-    refute-majority panels turn these single-voice verdicts into calibrated signals.</p>
-  </section>
-
-  <section>
-    <h2>Threats to validity — read before quoting the numbers</h2>
     <ul>
-      <li><strong>n=5 per strategy.</strong> Everything here is directional. The junior/senior vs
-      frontier-solo tie (both 3/5, different tasks) is comfortably within noise; repetitions are cheap
-      and queued.</li>
-      <li><strong>Toy tasks.</strong> Stdlib-Python katas exercise the pipeline honestly but not
-      large-codebase navigation, where cheap models typically degrade faster.</li>
-      <li><strong>Substrate changed between experiments 2 and 3</strong> (host subprocess → micro-VM
-      guest agent), so cross-experiment model comparisons carry an implementation confound
-      (DeepSeek 1/5 → 0/5).</li>
-      <li><strong>Ensemble costs are provider-billed totals</strong> (guest VMs don't self-report token
-      usage yet); per-stage attribution for VM stages reads $0 until the guest-image fix lands.</li>
-      <li><strong>Single verifier voice per role.</strong> Gate verdicts inherit one reviewer's
-      temperament per run; panel-of-N calibration (Phase 1) will tighten variance.</li>
-      <li><strong>Claude runs on a subscription</strong> (CLI self-reported cost), OSS models on metered
-      APIs — the $/outcome comparison uses list-price accounting for both, but the marginal-cost
-      structure differs in production.</li>
+      <li><strong>The amplifier is trustworthy:</strong> 46 runs, 24 fail-closed refusals, zero false
+      passes — including mechanical catches no model voted on (GLM's test-tampering; DeepSeek's empty
+      diffs). Formal false-pass instrumentation (known-bad probes) ships with Phase 1.</li>
+      <li><strong>Where quality comes from, ranked:</strong> (a) who authors/enforces tests + review
+      (+40–60 points); (b) generator capability — no measurable difference between Claude-implement and
+      DeepSeek-implement <em>when verification is frontier</em>; (c) generator diversity — no effect at
+      one shot.</li>
+      <li><strong>Economics:</strong> junior/senior delivers frontier quality at −24%, bounded by the
+      verification bill (99.6% of spend). Cheap attempts cost ~$0.015; the repair loop turns them from
+      discarded to productive.</li>
+      <li><strong>Verifier calibration is a measured cost center:</strong> the same task (token_bucket)
+      drew a blocking HIGH from one frontier reviewer draw and a calibrated CLEAN from another; cheap
+      reviewers add hallucination, drift, and protocol failure on top. Phase 1's refute-majority panels +
+      numeric confidence exist to fix exactly this.</li>
     </ul>
   </section>
 
   <section>
-    <h2>What's next, in order of expected information per dollar</h2>
+    <h2>Threats to validity</h2>
     <ul>
-      <li><strong>Repair loop (spec Phase 3):</strong> junior/senior + failing-gate feedback → cheap
-      retries (≤3) before frontier escalation. Attacks the 2/5 refused tasks at ~$0.05 marginal. The
-      single most valuable unanswered question. (~$1–2 of the $7.42 remaining credit.)</li>
-      <li><strong>Phase 1 verifier hardening:</strong> numeric confidence score, refute-majority panels,
-      known-bad probe suite (false-pass instrumentation), security-reviewer calibration.</li>
-      <li><strong>Repetitions (n→15–25)</strong> on the two leading strategies to tighten the 60%/60%
-      tie and the −24% estimate.</li>
-      <li><strong>Mid-tier verification:</strong> route consistency/security panel roles to mid-price
-      models while keeping the adversarial reviewer frontier — attacks the 99.6% verification bill.</li>
+      <li><strong>n=5 per strategy</strong> — directional only; the 60%/60% tie and per-task flips are
+      within reviewer-draw variance.</li>
+      <li><strong>Toy tasks</strong> — honest pipeline exercise, not large-codebase navigation.</li>
+      <li><strong>Substrate changed between experiments 3 and 4</strong> (host subprocess → micro-VM guest
+      agent): DeepSeek 1/5 → 0/5 carries an agent-implementation confound.</li>
+      <li><strong>Experiment 4 costs are provider-billed totals</strong> (guest VMs don't self-report
+      tokens yet); per-stage VM attribution reads $0 until the guest-image fix.</li>
+      <li><strong>Single verifier voice per role</strong> — verdicts inherit one reviewer's temperament.</li>
+      <li><strong>Claude on subscription vs OSS on metered APIs</strong> — list-price accounting for both.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>What's next, by expected information per dollar</h2>
+    <ul>
+      <li><strong>Repair loop (Phase 3):</strong> junior/senior + failing-gate evidence → ≤3 cheap retries
+      before frontier escalation. The forensics above show its targets precisely: md_toc's "no code"
+      (retry with that feedback costs $0.002) and csv_report's null-handling defect (the reviewer's
+      refutation is a ready-made fix instruction). (~$1–2.)</li>
+      <li><strong>Phase 1 verifier hardening:</strong> refute-majority panels, numeric confidence,
+      known-bad probes, verdict-protocol enforcement for cheap reviewers.</li>
+      <li><strong>Repetitions (n→15–25)</strong> on the two leading strategies.</li>
+      <li><strong>Mid-tier verification</strong> to attack the 99.6% verification bill.</li>
     </ul>
   </section>
 
   <footer>
-    Sources: batches <span class="num">bake_f874500906</span> (frontier baseline, 2026-07-04),
-    <span class="num">bake_6620989d17</span> (junior/senior + all-cheap matrix, 2026-07-05),
-    <span class="num">bake_c023eb95d3</span> (diversity ensemble, micro-VM substrate, 2026-07-05), plus
-    single-run hybrid validation <span class="num">crun_57d3a8c8</span>. Raw reports committed under
-    <span class="num">evals/bakeoff/results/</span>; per-call telemetry in the <span class="num">llm_calls</span>
-    table; ensemble spend from OpenRouter billing deltas. Pipeline: BOSS governed coding pipeline
-    (strict profile, fail-closed gate, PRs suppressed). Spec:
-    <span class="num">docs/product/BOSS_VERIFICATION_AMPLIFIED_GENERATION.md</span>. Companion demo
-    one-pager published separately.
+    Sources: batches <span class="num">bake_f874500906</span> (exp 1), <span class="num">bake_6620989d17</span>
+    (exps 2–3, one operational batch), <span class="num">bake_c023eb95d3</span> (exp 4, micro-VM substrate);
+    hybrid validation <span class="num">crun_57d3a8c8</span>. Per-run forensics extracted from each run's
+    persisted gate evidence (verdicts, failing gates, reviewer summaries, file counts, stage costs); raw
+    reports in <span class="num">evals/bakeoff/results/</span>; per-call telemetry in
+    <span class="num">llm_calls</span>. Spec: <span class="num">docs/product/BOSS_VERIFICATION_AMPLIFIED_GENERATION.md</span>.
+    Report v2 — adds experiment 2/3 separation and expandable per-run forensics.
   </footer>
 </main>
