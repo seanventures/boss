@@ -64,6 +64,12 @@ What is genuinely *missing* (net-new):
 4. **Adoption surfaces:** #71 docs agent, #77 orchestration agent, #83 GitHub agent.
 5. **Enterprise reach:** #57 CI/CD and #64 IaC.
 
+## Open strategic decision (resolve before the OSS split)
+
+- [DECISION — How much of BOSS goes open source (fork #1)](DECISION-oss-licensing-strategy.md) —
+  engine-only OSS vs whole Community control plane (AGPL) vs the recommended middle; must be
+  answered (product + legal) before #25's `main.py` router split is cut.
+
 ## Specs in this directory
 
 - [00 — Reactive event + webhook foundation](00-event-and-webhook-foundation.md)
