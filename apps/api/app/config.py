@@ -505,6 +505,19 @@ class Settings(BaseSettings):
     # bias — the model that wrote the code isn't the one judging it. Empty = same as the builder
     # (single-model). e.g. builder=claude_code, reviewer=native (Azure GPT).
     code_review_engine: str = Field(default="", alias="BOSS_CODE_REVIEW_ENGINE")
+    # VAG Phase 1 (verifier hardening / #9): the adversarial code-review stage runs as an
+    # N-member REFUTE PANEL — k independent reviewers, each with fresh context, each trying to
+    # refute the change. The panel verdict is by quorum and yields a CONFIDENCE score
+    # (fraction of reviewers that could NOT refute). Fail-closed: below quorum -> refuted -> gate
+    # fails. Ng "Agentic Design Patterns: Reflection" + self-consistency: a single critic is
+    # noisy; independent votes de-noise and expose blind spots one critic shares with itself.
+    #   panel_size = 1  -> identical to the pre-#9 single-reviewer behavior.
+    #   quorum     = min survived-fraction to pass (0.5 = simple majority).
+    #   panel_engines = optional comma list of engines to spread reviewers across for MODEL
+    #                   DIVERSITY (perspective-diverse verify); empty = all use code_review_engine.
+    code_review_panel_size: int = Field(default=1, alias="BOSS_CODE_REVIEW_PANEL_SIZE")
+    code_review_panel_quorum: float = Field(default=0.5, alias="BOSS_CODE_REVIEW_PANEL_QUORUM")
+    code_review_panel_engines: str = Field(default="", alias="BOSS_CODE_REVIEW_PANEL_ENGINES")
     # Max agent turns inside the sandbox before we stop and take the diff.
     code_agent_max_turns: int = Field(default=40, alias="BOSS_CODE_AGENT_MAX_TURNS")
     # Wall-clock cap for a single CodeAgent invocation.

@@ -193,6 +193,24 @@ def _parse_verdict(summary: str) -> str:
     return "survived" if m[-1] == "SURVIVED" else "refuted"
 
 
+def _aggregate_panel(verdicts: list[str], quorum: float) -> tuple[str, float]:
+    """Combine an N-member refute panel into one verdict + a confidence score (#9).
+
+    Each element of ``verdicts`` is 'survived' | 'refuted' | 'not_run' (only the first two
+    count as a cast vote). ``confidence`` is the fraction of *cast* votes that SURVIVED —
+    i.e. how many independent adversarial reviewers could NOT refute the change. The panel
+    SURVIVES only if confidence >= ``quorum`` (fail-closed: a tie below quorum, or no votes
+    at all, refutes). At panel_size 1 with quorum 0.5 this is exactly the pre-#9 behavior:
+    one 'survived' -> (survived, 1.0); one 'refuted' -> (refuted, 0.0).
+    """
+    cast = [v for v in verdicts if v in ("survived", "refuted")]
+    if not cast:
+        return "not_run", 0.0
+    survived = sum(1 for v in cast if v == "survived")
+    confidence = survived / len(cast)
+    return ("survived" if confidence >= quorum else "refuted"), confidence
+
+
 def _security_prompt(title):
     return (
         "You are a security reviewer. Assess the change for EXPLOITABLE vulnerabilities — things an "
@@ -761,6 +779,9 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
         verdict = "skipped"
         sec_verdict = "skipped"
         cons_verdict = "skipped"
+        review_confidence = None  # #9: fraction of the refute panel that could not refute
+        panel_size = 1
+        review_cost = 0
         mutation_caught = None
         regressions_ok = None
         panel_parallel = False
@@ -790,14 +811,35 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
             security_agent, security_model = _route("security_check")
             consistency_agent, consistency_model = _route("consistency_check")
 
-            def _do_review():
-                set_llm_context(db_engine=engine, project_id=project_id, run_id=run_id,
-                                stage="review_code")
-                rr = review_agent.run_role(_review_prompt(title, criteria), review_root,
-                                           read_only=True, model=review_model)
-                with lock:
-                    panel_cost["v"] += int(rr.get("cost_usd_micros") or 0)
-                panel["review"] = (rr, _parse_verdict(rr.get("summary", "")))
+            # REFUTE PANEL (#9): k independent adversarial reviewers, each fresh-context and
+            # read-only, each trying to refute the change. Members can be spread across
+            # engines (code_review_panel_engines) for model diversity; otherwise they share
+            # the review lane (independent samples still de-noise a single critic). Aggregated
+            # by quorum into one verdict + a confidence score. panel_size 1 == pre-#9 behavior.
+            panel_size = max(1, int(getattr(settings, "code_review_panel_size", 1) or 1))
+            review_quorum = float(getattr(settings, "code_review_panel_quorum", 0.5) or 0.5)
+            panel_engines = [e.strip() for e in
+                             (settings.code_review_panel_engines or "").split(",") if e.strip()]
+            review_members = []  # (agent, model) per panel seat
+            for i in range(panel_size):
+                if panel_engines:
+                    review_members.append((_agent_for(panel_engines[i % len(panel_engines)]), None))
+                else:
+                    review_members.append((review_agent, review_model))
+            panel["review_votes"] = [None] * panel_size
+
+            def _make_review(seat, seat_agent, seat_model):
+                def _run():
+                    set_llm_context(db_engine=engine, project_id=project_id, run_id=run_id,
+                                    stage="review_code")
+                    rr = seat_agent.run_role(_review_prompt(title, criteria), review_root,
+                                             read_only=True, model=seat_model)
+                    with lock:
+                        panel_cost["v"] += int(rr.get("cost_usd_micros") or 0)
+                    panel["review_votes"][seat] = (rr, _parse_verdict(rr.get("summary", "")))
+                return _run
+
+            review_checks = [_make_review(i, a, m) for i, (a, m) in enumerate(review_members)]
 
             def _do_security():
                 set_llm_context(db_engine=engine, project_id=project_id, run_id=run_id,
@@ -832,13 +874,20 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
                     panel_cost["v"] += int(rr.get("cost_usd_micros") or 0)
                 panel["consistency"] = (rr, _parse_consistency(rr.get("summary", "")))
 
-            checks = [_do_review, _do_security, _do_full, _do_consistency]
+            checks = review_checks + [_do_security, _do_full, _do_consistency]
             max_workers = min(max(1, settings.code_agent_max_concurrency), len(checks))
             panel_parallel = max_workers > 1
             with ThreadPoolExecutor(max_workers=max_workers) as pool:
                 list(pool.map(lambda fn: fn(), checks))
             cost += panel_cost["v"]
-            r3, verdict = panel["review"]
+            # Aggregate the refute panel -> (verdict, confidence). Keep a representative
+            # reviewer result for the evidence/summary — prefer a refuting seat so a human
+            # sees the concrete defect that sank the gate.
+            votes = [v for v in panel["review_votes"] if v]
+            verdict, review_confidence = _aggregate_panel([vd for _, vd in votes], review_quorum)
+            r3 = next((rr for rr, vd in votes if vd == "refuted"),
+                      votes[0][0] if votes else r3)
+            review_cost = sum(int(rr.get("cost_usd_micros") or 0) for rr, _ in votes)
             r4, sec_verdict = panel["security"]
             r6, cons_verdict = panel["consistency"]
             regressions_ok = panel["full"]
@@ -903,11 +952,17 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
             "stage_costs": {
                 "write_tests": int(r1.get("cost_usd_micros") or 0),
                 "implement": int(r2.get("cost_usd_micros") or 0),
-                "review_code": int(r3.get("cost_usd_micros") or 0),
+                # #9: whole refute panel (all seats), not just the representative seat r3.
+                "review_code": review_cost or int(r3.get("cost_usd_micros") or 0),
                 "security_check": int(r4.get("cost_usd_micros") or 0),
                 "check_tests": int(r5.get("cost_usd_micros") or 0),
                 "consistency_check": int(r6.get("cost_usd_micros") or 0),
             },
+            # #9 refute-panel verifier hardening: how many independent adversarial reviewers
+            # judged, and the confidence (fraction that could NOT refute). None => single-pass
+            # legacy path (panel disabled / not run).
+            "review_panel_size": panel_size,
+            "review_confidence": review_confidence,
             "security_verdict": sec_verdict,
             "consistency_verdict": cons_verdict,
             "mutation_caught": mutation_caught,
