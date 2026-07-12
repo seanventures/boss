@@ -40,6 +40,12 @@ The full design for each lives in the linked spec — written to be picked up by
 Plus a foundational enabler surfaced during triage — **#19 Reactive event + webhook foundation**
 ([00](00-event-and-webhook-foundation.md)) — which unblocks asks 1, 2 and 3.
 
+And a scale enabler surfaced when reviewing the engine language — **#97 Go concurrency services for
+high-scale task execution** ([10](10-go-concurrency-services.md), module *Runtime & Concurrency (Go
+services)*): the engine stays Python (I/O-bound orchestration), while the resource-bound **execution
+substrate** (Firecracker sandbox, gateway, high-fanout dispatcher) goes to **Go** for 100s of concurrent
+tasks — polyglot **by layer**, not a rewrite.
+
 ## Key triage finding: most asks are *extend*, not *build*
 
 Ground-truth codebase research (not assumptions) reshaped the estimates. What already exists:
@@ -82,3 +88,4 @@ What is genuinely *missing* (net-new):
 - [07 — Orchestration agent](07-orchestration-agent.md)
 - [08 — GitHub community agent](08-github-community-agent.md)
 - [09 — First-time output quality](09-first-time-output-quality.md)
+- [10 — Runtime & Concurrency: Go services for high-scale task execution](10-go-concurrency-services.md)
