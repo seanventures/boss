@@ -491,7 +491,20 @@ def make_code_agent(settings: Settings, engine: Optional[str] = None) -> CodeAge
     engine = (engine or settings.code_agent_engine or "claude_code").lower()
     if engine == "claude_code":
         return ClaudeCodeAgent(settings)
-    if engine in ("native", "openai", "azure"):
+    if engine == "azure":
+        # Explicit Azure OpenAI frontier lane — interchangeable with claude_code as the
+        # gate/verifier (VAG). NativeCodeAgent -> OpenAIAdapter routes to the AzureOpenAI
+        # client whenever the AZURE_OPENAI_* creds are present; require them here so a
+        # misrouted `azure` step fails loud instead of silently falling to a non-Azure host.
+        if not (settings.azure_openai_key and settings.azure_openai_endpoint
+                and settings.azure_openai_deployment):
+            raise RuntimeError(
+                "azure engine requires AZURE_OPENAI_KEY, AZURE_OPENAI_ENDPOINT and "
+                "AZURE_OPENAI_DEPLOYMENT to be configured.")
+        agent = NativeCodeAgent(settings)
+        agent.engine = "azure"
+        return agent
+    if engine in ("native", "openai"):
         return NativeCodeAgent(settings)
     if engine in _PROVIDER_LANES:
         key_field, url_field = _PROVIDER_LANES[engine]

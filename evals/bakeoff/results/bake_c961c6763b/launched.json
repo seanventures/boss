@@ -1,0 +1,152 @@
+[
+  {
+    "run_id": "crun_037dd97ecfe94a098806",
+    "config": "full_claude_repair3",
+    "task": "slugify",
+    "status": "completed"
+  },
+  {
+    "run_id": "crun_6dc4ea1d13f74e97840b",
+    "config": "full_claude_repair3",
+    "task": "token_bucket",
+    "status": "completed"
+  },
+  {
+    "run_id": "crun_b383dbbef46d47e0806d",
+    "config": "full_claude_repair3",
+    "task": "csv_report",
+    "status": "completed"
+  },
+  {
+    "run_id": "crun_8a2400f6bc1943d28483",
+    "config": "full_claude_repair3",
+    "task": "md_toc",
+    "status": "blocked"
+  },
+  {
+    "run_id": "crun_35f5f160e721499aad1f",
+    "config": "full_claude_repair3",
+    "task": "interval_merge",
+    "status": "completed"
+  },
+  {
+    "run_id": "crun_e81b4bbb9f9a4b4cb9fb",
+    "config": "hybrid_claude_norepair",
+    "task": "slugify",
+    "status": "completed"
+  },
+  {
+    "run_id": "crun_d9a7fad3dafa48d2bc00",
+    "config": "hybrid_claude_norepair",
+    "task": "token_bucket",
+    "status": "completed"
+  },
+  {
+    "run_id": "crun_50893e97f5fe47c2b746",
+    "config": "hybrid_claude_norepair",
+    "task": "csv_report",
+    "status": "completed"
+  },
+  {
+    "run_id": "crun_4a380d9e15fe4d46b479",
+    "config": "hybrid_claude_norepair",
+    "task": "md_toc",
+    "status": "blocked"
+  },
+  {
+    "run_id": "crun_4c5dfe3ca8b94e62b8d8",
+    "config": "hybrid_claude_norepair",
+    "task": "interval_merge",
+    "status": "completed"
+  },
+  {
+    "run_id": "crun_7790bf0ddc6a47b58324",
+    "config": "hybrid_claude_repair3",
+    "task": "slugify",
+    "status": "completed"
+  },
+  {
+    "run_id": "crun_479fccaf937949c582c4",
+    "config": "hybrid_claude_repair3",
+    "task": "token_bucket",
+    "status": "completed"
+  },
+  {
+    "run_id": "crun_8e787c08fdae474f816e",
+    "config": "hybrid_claude_repair3",
+    "task": "csv_report",
+    "status": "completed"
+  },
+  {
+    "run_id": "crun_d6029fa8ccc74220a618",
+    "config": "hybrid_claude_repair3",
+    "task": "md_toc",
+    "status": "blocked"
+  },
+  {
+    "run_id": "crun_96b3768f240e495aa280",
+    "config": "hybrid_claude_repair3",
+    "task": "interval_merge",
+    "status": "completed"
+  },
+  {
+    "run_id": "crun_2e06b180b3e444759d1e",
+    "config": "full_azure_repair3",
+    "task": "slugify",
+    "status": "blocked"
+  },
+  {
+    "run_id": "crun_4c916b6894b5447e983c",
+    "config": "full_azure_repair3",
+    "task": "token_bucket",
+    "status": "blocked"
+  },
+  {
+    "run_id": "crun_6bc6229d3ad24bb9bed0",
+    "config": "full_azure_repair3",
+    "task": "csv_report",
+    "status": "blocked"
+  },
+  {
+    "run_id": "crun_93b6e3b22bb3462b98dc",
+    "config": "full_azure_repair3",
+    "task": "md_toc",
+    "status": "blocked"
+  },
+  {
+    "run_id": "crun_a1d8e36d6e1443498be7",
+    "config": "full_azure_repair3",
+    "task": "interval_merge",
+    "status": "blocked"
+  },
+  {
+    "run_id": "crun_642da01845494b76bf04",
+    "config": "hybrid_azure_repair3",
+    "task": "slugify",
+    "status": "completed"
+  },
+  {
+    "run_id": "crun_f47dc54fbeab4580a174",
+    "config": "hybrid_azure_repair3",
+    "task": "token_bucket",
+    "status": "blocked"
+  },
+  {
+    "run_id": "crun_41a2a17c42c04b8aa881",
+    "config": "hybrid_azure_repair3",
+    "task": "csv_report",
+    "status": "completed"
+  },
+  {
+    "run_id": "crun_ac1a71ac82ce4a35b6c8",
+    "config": "hybrid_azure_repair3",
+    "task": "md_toc",
+    "status": "failed"
+  },
+  {
+    "run_id": "crun_6fcf6127c6b6457aa2cb",
+    "config": "hybrid_azure_repair3",
+    "task": "interval_merge",
+    "status": "blocked"
+  }
+]

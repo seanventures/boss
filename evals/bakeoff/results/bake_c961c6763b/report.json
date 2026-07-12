@@ -1,0 +1,165 @@
+{
+  "batch_id": "bake_c961c6763b",
+  "total_runs": 25,
+  "configs": {
+    "full_claude_repair3": {
+      "runs": 5,
+      "gate_pass": 4,
+      "false_pass": 0,
+      "known_bad_runs": 0,
+      "total_cost_usd_micros": 8956914,
+      "retries": 0,
+      "llm_calls": 50,
+      "price_estimated_calls": 0,
+      "failure_breakdown": {
+        "security_clean": 1
+      },
+      "repair_hist": {
+        "0": 5
+      },
+      "mean_wall_clock_s": 1122.0,
+      "median_wall_clock_s": 1110.3,
+      "p90_wall_clock_s": 1872.6,
+      "total_wall_clock_s": 5609.8,
+      "pass_rate": 0.8,
+      "cost_per_verified_outcome_usd_micros": 2239228,
+      "wall_clock_per_verified_s": 1402.5
+    },
+    "hybrid_claude_norepair": {
+      "runs": 5,
+      "gate_pass": 4,
+      "false_pass": 0,
+      "known_bad_runs": 0,
+      "total_cost_usd_micros": 6870383,
+      "retries": 0,
+      "llm_calls": 49,
+      "price_estimated_calls": 0,
+      "failure_breakdown": {
+        "code_written": 1,
+        "written_tests_pass": 1,
+        "code_review_passed": 1,
+        "nothing_broke": 1,
+        "consistent": 1
+      },
+      "repair_hist": {
+        "0": 5
+      },
+      "mean_wall_clock_s": 2826.1,
+      "median_wall_clock_s": 2814.5,
+      "p90_wall_clock_s": 3468.4,
+      "total_wall_clock_s": 14130.4,
+      "pass_rate": 0.8,
+      "cost_per_verified_outcome_usd_micros": 1717595,
+      "wall_clock_per_verified_s": 3532.6
+    },
+    "full_azure_repair3": {
+      "runs": 5,
+      "gate_pass": 0,
+      "false_pass": 0,
+      "known_bad_runs": 0,
+      "total_cost_usd_micros": 1011820,
+      "retries": 0,
+      "llm_calls": 65,
+      "price_estimated_calls": 0,
+      "failure_breakdown": {
+        "written_tests_pass": 5,
+        "nothing_broke": 5
+      },
+      "repair_hist": {
+        "3": 5
+      },
+      "mean_wall_clock_s": 6145.4,
+      "median_wall_clock_s": 6148.4,
+      "p90_wall_clock_s": 6923.6,
+      "total_wall_clock_s": 30727.2,
+      "pass_rate": 0.0,
+      "cost_per_verified_outcome_usd_micros": null,
+      "wall_clock_per_verified_s": null
+    },
+    "hybrid_claude_repair3": {
+      "runs": 5,
+      "gate_pass": 4,
+      "false_pass": 0,
+      "known_bad_runs": 0,
+      "total_cost_usd_micros": 6688382,
+      "retries": 0,
+      "llm_calls": 53,
+      "price_estimated_calls": 0,
+      "failure_breakdown": {
+        "code_written": 1,
+        "written_tests_pass": 1,
+        "code_review_passed": 1,
+        "nothing_broke": 1,
+        "consistent": 1
+      },
+      "repair_hist": {
+        "0": 3,
+        "3": 1,
+        "1": 1
+      },
+      "mean_wall_clock_s": 4419.5,
+      "median_wall_clock_s": 4376.2,
+      "p90_wall_clock_s": 5056.5,
+      "total_wall_clock_s": 22097.7,
+      "pass_rate": 0.8,
+      "cost_per_verified_outcome_usd_micros": 1672095,
+      "wall_clock_per_verified_s": 5524.4
+    },
+    "hybrid_azure_repair3": {
+      "runs": 5,
+      "gate_pass": 2,
+      "false_pass": 0,
+      "known_bad_runs": 0,
+      "total_cost_usd_micros": 523271,
+      "retries": 0,
+      "llm_calls": 48,
+      "price_estimated_calls": 0,
+      "failure_breakdown": {
+        "written_tests_pass": 1,
+        "code_review_passed": 2,
+        "nothing_broke": 1,
+        "run:failed": 1
+      },
+      "repair_hist": {
+        "3": 1,
+        "0": 4
+      },
+      "mean_wall_clock_s": 7536.1,
+      "median_wall_clock_s": 7583.5,
+      "p90_wall_clock_s": 7908.0,
+      "total_wall_clock_s": 37680.5,
+      "pass_rate": 0.4,
+      "cost_per_verified_outcome_usd_micros": 261635,
+      "wall_clock_per_verified_s": 18840.2
+    }
+  },
+  "models": {
+    "claude-opus-4-8[1m]": {
+      "calls": 128,
+      "avg_latency_ms": 37726,
+      "p90_latency_ms": 58279,
+      "total_latency_ms": 4828902,
+      "total_cost_usd_micros": 22464017,
+      "avg_cost_usd_micros": 175500,
+      "errors": 0
+    },
+    "deepseek/deepseek-chat": {
+      "calls": 36,
+      "avg_latency_ms": 8243,
+      "p90_latency_ms": 13375,
+      "total_latency_ms": 296745,
+      "total_cost_usd_micros": 71153,
+      "avg_cost_usd_micros": 1976,
+      "errors": 0
+    },
+    "gpt-4o": {
+      "calls": 101,
+      "avg_latency_ms": 27122,
+      "p90_latency_ms": 36556,
+      "total_latency_ms": 2739326,
+      "total_cost_usd_micros": 1515600,
+      "avg_cost_usd_micros": 15005,
+      "errors": 0
+    }
+  }
+}

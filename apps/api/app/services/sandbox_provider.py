@@ -218,7 +218,9 @@ class MicroVMProvider:
         tests = [
             CommandResult(command=t.get("command", ""), argv=[], exit_code=t.get("exit_code"),
                           duration_ms=t.get("duration_ms", 0), timed_out=t.get("timed_out", False),
-                          stdout="", stderr="")
+                          # The guest's captured test output IS the repair-loop evidence —
+                          # concrete failures fed back to the implementer on retry.
+                          stdout=(t.get("output") or "")[-4000:], stderr="")
             for t in result.get("tests", [])
         ]
         return CodeAgentResult(

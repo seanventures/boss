@@ -405,6 +405,14 @@ class Settings(BaseSettings):
         default="Read,Edit,MultiEdit,Write,Glob,Grep,Bash,TodoWrite",
         alias="BOSS_CODE_AGENT_ALLOWED_TOOLS",
     )
+    # VAG Phase 3 repair loop: after a failed gate check, feed the CONCRETE evidence
+    # (failing test output, review refutation, security finding) back to the implementer
+    # and retry, up to this many times. The verification bar never moves — tests and the
+    # review panel stay frozen/independent — so retries can only earn passes, never
+    # soften the gate. 0 = off (single-pass, pre-Phase-3 behavior). Executable checks
+    # re-run per retry (cheap); the frontier panel re-judges only candidates whose tests
+    # pass. Per-run override: spec["repair_retries"].
+    code_repair_max_retries: int = Field(default=0, alias="BOSS_CODE_REPAIR_MAX_RETRIES")
     # Per-task budget cap for a code task (model spend), reserved before work.
     code_task_budget_usd_micros: int = Field(
         default=2_000_000, alias="BOSS_CODE_TASK_BUDGET_USD_MICROS"

@@ -35,8 +35,17 @@ def test_build_run_request_shape():
     assert "#2" in payload["title"] and payload["owner"] == "paramg"
 
 
+def test_build_run_request_carries_repair_retries():
+    # per-config override wins; else the suite default; else omitted entirely.
+    cfg = {**CONFIG, "repair_retries": 3}
+    assert build_run_request(TASK, cfg, "bake_x", 1, {"project_id": "p"})["repair_retries"] == 3
+    assert build_run_request(TASK, CONFIG, "bake_x", 1,
+                             {"project_id": "p", "repair_retries": 2})["repair_retries"] == 2
+    assert "repair_retries" not in build_run_request(TASK, CONFIG, "bake_x", 1, {"project_id": "p"})
+
+
 def _seed_run(connection, project_id, batch_id, config, *, gate=None, expect="pass",
-              llm_costs=(), run_status="completed", usage_cost=None):
+              llm_costs=(), run_status="completed", usage_cost=None, repair_attempts=None):
     run_id = f"crun_{uuid.uuid4().hex[:16]}"
     connection.execute(
         text("""INSERT INTO code_task_runs (id, project_id, status, phase, title, spec, usage,
@@ -51,11 +60,14 @@ def _seed_run(connection, project_id, batch_id, config, *, gate=None, expect="pa
     if gate is not None:
         connection.execute(
             text("""INSERT INTO quality_gates (id, project_id, code_task_run_id, status,
-                                               gates_passed, gates_failed)
-                    VALUES (:id, :p, :run, :st, '[]'::jsonb, CAST(:gf AS JSONB))"""),
+                                               gates_passed, gates_failed, evidence)
+                    VALUES (:id, :p, :run, :st, '[]'::jsonb, CAST(:gf AS JSONB),
+                            CAST(:ev AS JSONB))"""),
             {"id": f"qg_{uuid.uuid4().hex[:16]}", "p": project_id, "run": run_id,
              "st": gate.get("status", "pass"),
-             "gf": json.dumps(gate.get("failed", []))},
+             "gf": json.dumps(gate.get("failed", [])),
+             "ev": json.dumps({"repair_attempts": repair_attempts}
+                              if repair_attempts is not None else {})},
         )
     for cost, retries, estimated in llm_costs:
         connection.execute(
@@ -96,6 +108,59 @@ def test_aggregate_batch_metrics(engine):
     assert a["mean_wall_clock_s"] is not None and a["mean_wall_clock_s"] > 0
     assert (b["runs"], b["gate_pass"], b["pass_rate"]) == (2, 1, 0.5)
     assert b["failure_breakdown"] == {"security_clean": 1}
+
+
+def test_aggregate_repair_histogram(engine):
+    """The repair loop's attempt count (quality_gates.evidence.repair_attempts) aggregates
+    into a per-config histogram: how many runs used 0 / 1 / 2 / ... evidence-fed retries."""
+    project_id = get_settings().default_project_id
+    batch_id = f"bake_{uuid.uuid4().hex[:8]}"
+    with engine.begin() as c:
+        _seed_run(c, project_id, batch_id, "hy", gate={"status": "pass"}, repair_attempts=0,
+                  llm_costs=[(100, 0, False)])
+        _seed_run(c, project_id, batch_id, "hy", gate={"status": "pass"}, repair_attempts=2,
+                  llm_costs=[(100, 0, False)])
+        _seed_run(c, project_id, batch_id, "hy",
+                  gate={"status": "fail", "failed": ["written_tests_pass"]},
+                  run_status="blocked", repair_attempts=3, llm_costs=[(100, 0, False)])
+    with engine.begin() as c:
+        report = aggregate_batch(c, batch_id)
+    hist = report["configs"]["hy"]["repair_hist"]
+    assert hist == {0: 1, 2: 1, 3: 1}
+    md = render_markdown(report)
+    assert "repairs used" in md and "2×1" in md  # non-zero repairs surfaced in the table
+
+
+def test_aggregate_latency_and_time_per_verified(engine):
+    """Time axis: per-config wall-clock -> s/verified, and per-model latency (avg/p90)."""
+    project_id = get_settings().default_project_id
+    batch_id = f"bake_{uuid.uuid4().hex[:8]}"
+    with engine.begin() as c:
+        # two passing runs; wall_clock ~90s each (seeded in _seed_run)
+        r1 = _seed_run(c, project_id, batch_id, "hy", gate={"status": "pass"},
+                       llm_costs=[(100, 0, False)])
+        r2 = _seed_run(c, project_id, batch_id, "hy", gate={"status": "pass"},
+                       llm_costs=[(100, 0, False)])
+        # explicit per-model latency: a fast cheap model + a slow frontier one
+        for run in (r1, r2):
+            for model, lat, cost in (("deepseek/deepseek-chat", 4000, 200),
+                                     ("claude-opus-4-8", 40000, 90000)):
+                c.execute(text("""INSERT INTO llm_calls (id, project_id, code_task_run_id, stage,
+                                     engine, model, cost_usd_micros, latency_ms, retries, ok)
+                                  VALUES (:id,:p,:run,'implement','x',:m,:c,:l,0,true)"""),
+                          {"id": f"llmc_{uuid.uuid4().hex[:16]}", "p": project_id, "run": run,
+                           "m": model, "c": cost, "l": lat})
+    with engine.begin() as c:
+        report = aggregate_batch(c, batch_id)
+    hy = report["configs"]["hy"]
+    assert hy["gate_pass"] == 2
+    assert hy["wall_clock_per_verified_s"] is not None and hy["wall_clock_per_verified_s"] > 0
+    assert hy["p90_wall_clock_s"] is not None
+    models = report["models"]
+    assert models["deepseek/deepseek-chat"]["avg_latency_ms"] == 4000
+    assert models["claude-opus-4-8"]["avg_latency_ms"] == 40000  # frontier is the slow lane
+    md = render_markdown(report)
+    assert "s/verified" in md and "Per-model latency" in md and "deepseek/deepseek-chat" in md
 
 
 def test_aggregate_zero_pass_cost_is_none(engine):

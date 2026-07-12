@@ -34,6 +34,9 @@ def build_run_request(task: dict, config: dict, batch_id: str, iteration: int,
         "risk_tier": task.get("risk_tier", d.get("risk_tier")),
         "profile": config.get("profile") or task.get("profile"),
         "model_config": config.get("model_config") or {},
+        # VAG Phase 3: per-config repair-loop budget (evidence-fed cheap retries). Falls
+        # back to the deployment's BOSS_CODE_REPAIR_MAX_RETRIES when the config omits it.
+        "repair_retries": config.get("repair_retries", d.get("repair_retries")),
         # Bake-offs measure the gate, not delivery — suppress the PR unless asked.
         "open_pr": bool(d.get("open_pr", False)),
         "finalize_ctx": {"bakeoff": {
@@ -61,7 +64,8 @@ def aggregate_batch(connection, batch_id: str) -> dict:
             SELECT r.id, r.status, r.error,
                    EXTRACT(EPOCH FROM (r.updated_at - r.created_at)) AS wall_clock_s,
                    r.finalize_ctx->'bakeoff' AS bk,
-                   q.status AS gate_status, q.gates_failed
+                   q.status AS gate_status, q.gates_failed,
+                   q.evidence->>'repair_attempts' AS repair_attempts
               FROM code_task_runs r
               LEFT JOIN quality_gates q ON q.code_task_run_id = r.id
              WHERE r.finalize_ctx->'bakeoff'->>'batch_id' = :b
@@ -94,7 +98,14 @@ def aggregate_batch(connection, batch_id: str) -> dict:
             "runs": 0, "gate_pass": 0, "false_pass": 0, "known_bad_runs": 0,
             "total_cost_usd_micros": 0, "retries": 0, "llm_calls": 0,
             "price_estimated_calls": 0, "wall_clock_s": [], "failure_breakdown": {},
+            # VAG Phase 3 repair-loop attempts used per run (a histogram: n_retries -> count).
+            "repair_hist": {},
         })
+        try:
+            ra = int(r["repair_attempts"]) if r["repair_attempts"] is not None else 0
+        except (TypeError, ValueError):
+            ra = 0
+        c["repair_hist"][ra] = c["repair_hist"].get(ra, 0) + 1
         cost = costs.get(r["id"], {})
         c["total_cost_usd_micros"] += int(cost.get("cost") or 0)
         c["retries"] += int(cost.get("retries") or 0)
@@ -120,13 +131,68 @@ def aggregate_batch(connection, batch_id: str) -> dict:
                 c["failure_breakdown"][gate] = c["failure_breakdown"].get(gate, 0) + 1
 
     for c in configs.values():
-        wall = c.pop("wall_clock_s")
+        wall = sorted(c.pop("wall_clock_s"))
         c["mean_wall_clock_s"] = round(sum(wall) / len(wall), 1) if wall else None
+        # Latency spread matters as much as the mean for an SLA — a p90 tail is what a
+        # user actually waits on. total = wall-clock a config's whole task set consumed.
+        c["median_wall_clock_s"] = round(_pct(wall, 0.5), 1) if wall else None
+        c["p90_wall_clock_s"] = round(_pct(wall, 0.9), 1) if wall else None
+        c["total_wall_clock_s"] = round(sum(wall), 1) if wall else None
         c["pass_rate"] = round(c["gate_pass"] / c["runs"], 3) if c["runs"] else None
         c["cost_per_verified_outcome_usd_micros"] = (
             int(c["total_cost_usd_micros"] / c["gate_pass"]) if c["gate_pass"] else None
         )
-    return {"batch_id": batch_id, "total_runs": len(runs), "configs": configs}
+        # Time-per-verified-outcome: the wall-clock a config spends per PASSING run —
+        # the time analogue of $/verified-outcome (the third decision axis).
+        c["wall_clock_per_verified_s"] = (
+            round(c["total_wall_clock_s"] / c["gate_pass"], 1)
+            if c["gate_pass"] and c["total_wall_clock_s"] is not None else None
+        )
+    models = _aggregate_models(connection, run_ids) if run_ids else {}
+    return {"batch_id": batch_id, "total_runs": len(runs), "configs": configs, "models": models}
+
+
+def _pct(sorted_vals: list, q: float) -> float:
+    """Nearest-rank percentile of an already-sorted list (q in [0,1])."""
+    if not sorted_vals:
+        return 0.0
+    idx = min(len(sorted_vals) - 1, max(0, int(round(q * (len(sorted_vals) - 1)))))
+    return float(sorted_vals[idx])
+
+
+def _aggregate_models(connection, run_ids: list) -> dict:
+    """Per-MODEL latency + cost across the batch — the raw time-vs-budget signal for
+    deciding offerings. latency_ms is per LLM call (a repair loop makes MORE calls, so a
+    model's total time = avg_latency × calls scales with iterations). p90 flags tail risk.
+    """
+    rows = connection.execute(
+        text("""
+            SELECT COALESCE(model, '(unknown)') AS model,
+                   COUNT(*) AS calls,
+                   ROUND(AVG(latency_ms)) AS avg_latency_ms,
+                   PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY latency_ms) AS p90_latency_ms,
+                   COALESCE(SUM(latency_ms), 0) AS total_latency_ms,
+                   COALESCE(SUM(cost_usd_micros), 0) AS total_cost_usd_micros,
+                   COALESCE(SUM(CASE WHEN ok THEN 0 ELSE 1 END), 0) AS errors
+              FROM llm_calls
+             WHERE code_task_run_id = ANY(:ids)
+             GROUP BY COALESCE(model, '(unknown)')
+        """),
+        {"ids": run_ids},
+    ).mappings().all()
+    out: dict = {}
+    for r in rows:
+        calls = int(r["calls"]) or 1
+        out[r["model"]] = {
+            "calls": int(r["calls"]),
+            "avg_latency_ms": int(r["avg_latency_ms"] or 0),
+            "p90_latency_ms": int(r["p90_latency_ms"] or 0),
+            "total_latency_ms": int(r["total_latency_ms"]),
+            "total_cost_usd_micros": int(r["total_cost_usd_micros"]),
+            "avg_cost_usd_micros": int(int(r["total_cost_usd_micros"]) / calls),
+            "errors": int(r["errors"]),
+        }
+    return out
 
 
 def render_markdown(report: dict) -> str:
@@ -138,20 +204,41 @@ def render_markdown(report: dict) -> str:
         "($1 = 1,000,000 micros); `est. calls` counts calls priced via the DEFAULT_PRICE "
         "fallback — add BOSS_MODEL_PRICES_JSON entries if it is non-zero.",
         "",
-        "| config | runs | pass rate | $/verified outcome | total $ | retries | mean wall clock | false pass | est. calls |",
+        "The three decision axes: **quality** (pass rate), **budget** ($/verified), "
+        "**time** (s/verified = wall-clock per passing run; p90 = tail latency a user waits on).",
+        "",
+        "| config | runs | pass rate | $/verified | s/verified | mean/p90 wall | repairs used | total $ | false pass |",
         "|---|---|---|---|---|---|---|---|---|",
     ]
     def _usd(micros):
         return f"${micros / 1_000_000:.2f}" if micros is not None else "—"
+    def _s(v):
+        return f"{v:.0f}s" if v is not None else "—"
+    def _hist(h):  # repair-attempt histogram: "n×count", omitting the all-zero common case
+        h = {k: v for k, v in (h or {}).items() if k}
+        return ", ".join(f"{n}×{cnt}" for n, cnt in sorted(h.items())) if h else "0"
     for name, c in sorted(report["configs"].items()):
         lines.append(
             f"| {name} | {c['runs']} | "
             f"{('%.0f%%' % (c['pass_rate'] * 100)) if c['pass_rate'] is not None else '—'} | "
             f"{_usd(c['cost_per_verified_outcome_usd_micros'])} | "
-            f"{_usd(c['total_cost_usd_micros'])} | {c['retries']} | "
-            f"{str(c['mean_wall_clock_s']) + 's' if c['mean_wall_clock_s'] is not None else '—'} | "
-            f"{c['false_pass']}/{c['known_bad_runs']} | {c['price_estimated_calls']} |"
+            f"{_s(c.get('wall_clock_per_verified_s'))} | "
+            f"{_s(c['mean_wall_clock_s'])}/{_s(c.get('p90_wall_clock_s'))} | "
+            f"{_hist(c.get('repair_hist'))} | {_usd(c['total_cost_usd_micros'])} | "
+            f"{c['false_pass']}/{c['known_bad_runs']} |"
         )
+    # Per-model latency × budget — the raw offering signal (a repair loop makes more calls,
+    # so a slow model's total time compounds with each iteration).
+    models = report.get("models") or {}
+    if models:
+        lines += ["", "### Per-model latency & cost (all calls in the batch)", "",
+                  "| model | calls | avg latency | p90 latency | avg $/call | total $ | errors |",
+                  "|---|---|---|---|---|---|---|"]
+        for m, d in sorted(models.items(), key=lambda kv: -kv[1]["total_latency_ms"]):
+            lines.append(
+                f"| {m} | {d['calls']} | {d['avg_latency_ms'] / 1000:.1f}s | "
+                f"{d['p90_latency_ms'] / 1000:.1f}s | {_usd(d['avg_cost_usd_micros'])} | "
+                f"{_usd(d['total_cost_usd_micros'])} | {d['errors']} |")
     lines.append("")
     for name, c in sorted(report["configs"].items()):
         if c["failure_breakdown"]:

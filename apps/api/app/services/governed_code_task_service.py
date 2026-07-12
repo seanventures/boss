@@ -137,6 +137,21 @@ def _impl_prompt(title, instructions, test_files, test_cmd):
     )
 
 
+def _repair_prompt(base_prompt: str, evidence: str, attempt: int) -> str:
+    """VAG Phase 3: re-issue the implement prompt with CONCRETE failing evidence appended.
+    The bar is frozen — QA's tests are the spec and must not be touched; the frontier review
+    panel still judges independently after this. The implementer's only job is to fix the
+    implementation so BOSS's authoritative check passes."""
+    return (
+        f"{base_prompt}\n\n"
+        f"--- REPAIR ATTEMPT {attempt} ---\n"
+        "Your previous attempt did NOT pass BOSS's authoritative check (BOSS ran the tests "
+        "itself; the agent's self-report is not trusted). The tests are FROZEN and correct — "
+        "do NOT edit, delete, or weaken any test file. Fix ONLY the implementation. Concrete "
+        f"evidence from the failed check:\n{evidence}\n"
+    )
+
+
 def _solo_prompt(title, instructions, criteria, test_cmd):
     crit = "\n".join(f"- {c}" for c in criteria) or "- (none specified)"
     return (
@@ -290,6 +305,13 @@ def _guest_engine_fields(settings: Settings, engine_name: str, model) -> dict:
     if engine_name == "deepseek":
         return {"engine": "openai", "openai_api_key": settings.deepseek_api_key,
                 "openai_base_url": settings.deepseek_base_url, "model": model}
+    if engine_name == "azure":
+        # Explicit Azure frontier lane in a guest VM. A routed model (azure:<deploy>)
+        # overrides the default deployment; no openai_base_url so the guest can't misroute.
+        return {"engine": "openai", "azure_endpoint": settings.azure_openai_endpoint,
+                "azure_deployment": model or settings.azure_openai_deployment,
+                "azure_api_version": settings.azure_openai_api_version,
+                "azure_key": settings.azure_openai_key}
     # native/openai/azure -> the platform lane, same env the simple path sends
     return {"engine": "openai", "openai_api_key": settings.openai_api_key,
             "openai_base_url": settings.openai_base_url,
@@ -601,51 +623,112 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
                     return _fail(c, run_id, project_id, "Gate fail: test author produced no test files.")
             if not use_microvm:
                 tests_before = _hash_files(root, test_files)
+                # Snapshot the frozen tests so a tamper-then-retry starts from clean tests
+                # (the repair loop restores them before re-invoking the implementer).
+                tests_orig = {p: (root / p).read_text(errors="ignore") for p in test_files
+                              if (root / p).exists()}
 
-        # STEP implement.
+        # STEP implement — with an optional evidence-fed REPAIR LOOP (VAG Phase 3).
+        # The verification bar is FROZEN: QA's tests are never edited, and the frontier
+        # review panel below still judges independently. Each retry re-runs only the cheap
+        # executable check (the test command) and feeds the implementer the CONCRETE failure
+        # (failing test output, a tamper notice, or "no implementation"). Retries can earn a
+        # pass but never soften the gate. 0 retries == the pre-Phase-3 single pass.
         with begin(engine) as c:
             _set_phase(c, run_id, "implement")
-        impl_prompt = (_impl_prompt(title, instructions, test_files, test_cmd) if do_separate_tests
-                       else _solo_prompt(title, instructions, criteria, test_cmd))
-        if use_microvm:
-            res2 = _guest_stage("implement", "implement" if do_separate_tests else "solo",
-                                impl_prompt, test_cmds=[test_cmd],
-                                stage_title=f"SE: implement — {title}")
-            r2 = {"cost_usd_micros": res2.cost_usd_micros, "summary": res2.summary,
-                  "usage": res2.usage, "model": stage_routes["implement"]["model"]}
-            if do_separate_tests:
-                # The guest cloned the committed tests: any test file in ITS diff means
-                # the implementer edited a test — the tamper condition.
-                tests_untouched = not any(_is_test_path(fc.path) for fc in res2.diff)
-                impl_changes = [fc for fc in res2.diff if not _is_test_path(fc.path)]
-            else:  # tier 0: one agent wrote code + tests, commit both
-                test_files = [fc.path for fc in res2.diff if _is_test_path(fc.path)]
-                impl_changes = list(res2.diff)
-            impl_files = [fc.path for fc in impl_changes if not _is_test_path(fc.path)]
-            _commit_stage(impl_changes, f"governed: implement (SE) — {title[:60]}")
-            # Authoritative verification: the guest RUNNER (our code, in-VM) executed the
-            # test command after the agent stopped — that in-VM result is the verdict.
-            with begin(engine) as c:
-                _set_phase(c, run_id, "run_tests")
-            tests_passed = bool(res2.tests_passed)
-            test_exit_code = res2.tests[0].exit_code if res2.tests else None
-        else:
-            set_llm_context(stage="implement" if do_separate_tests else "solo")
-            a, m = _route("implement")
-            r2 = a.run_role(impl_prompt, root, model=m)
-            cost += int(r2.get("cost_usd_micros") or 0)
-            if do_separate_tests:
-                tests_untouched = tests_before == _hash_files(root, test_files)
-            else:  # tier 0: the implementer wrote the tests too
-                test_files = [fc.path for fc in sandbox.diff() if _is_test_path(fc.path)]
-            impl_files = [fc.path for fc in sandbox.diff() if not _is_test_path(fc.path)]
+        base_impl_prompt = (_impl_prompt(title, instructions, test_files, test_cmd)
+                            if do_separate_tests
+                            else _solo_prompt(title, instructions, criteria, test_cmd))
+        max_repair = max(0, min(5, int(
+            spec.get("repair_retries", settings.code_repair_max_retries) or 0)))
+        repair_attempts = 0
+        repair_log: list[dict] = []
+        evidence_text = ""
+        r2 = {"cost_usd_micros": 0, "summary": "", "usage": {}, "model": None}
+        impl_files: list[str] = []
+        tests_passed = False
+        test_exit_code = None
+        for attempt in range(max_repair + 1):
+            impl_prompt = (base_impl_prompt if attempt == 0
+                           else _repair_prompt(base_impl_prompt, evidence_text, attempt))
+            if use_microvm:
+                res2 = _guest_stage(
+                    "implement", "implement" if do_separate_tests else "solo", impl_prompt,
+                    test_cmds=[test_cmd],
+                    stage_title=f"SE: implement — {title}" + (f" (repair {attempt})" if attempt else ""))
+                r2 = {"cost_usd_micros": res2.cost_usd_micros, "summary": res2.summary,
+                      "usage": res2.usage, "model": stage_routes["implement"]["model"]}
+                if do_separate_tests:
+                    # The guest cloned the committed tests: any test file in ITS diff means
+                    # the implementer edited a test — the tamper condition.
+                    tests_untouched = not any(_is_test_path(fc.path) for fc in res2.diff)
+                    impl_changes = [fc for fc in res2.diff if not _is_test_path(fc.path)]
+                    tampered = [fc.path for fc in res2.diff if _is_test_path(fc.path)]
+                else:  # tier 0: one agent wrote code + tests, commit both
+                    test_files = [fc.path for fc in res2.diff if _is_test_path(fc.path)]
+                    impl_changes = list(res2.diff)
+                    tampered = []
+                # Commit ONLY non-test changes (tamper edits are discarded); the next retry
+                # VM re-clones the frozen tests + this attempt's committed impl from the branch.
+                _commit_stage(impl_changes, f"governed: implement (SE) — {title[:60]}"
+                              + (f" [repair {attempt}]" if attempt else ""))
+                impl_files = [p for p in accumulated if not _is_test_path(p)]
+                # Authoritative verification: the guest RUNNER (our code, in-VM) executed the
+                # test command after the agent stopped — that in-VM result is the verdict.
+                with begin(engine) as c:
+                    _set_phase(c, run_id, "run_tests")
+                tests_passed = bool(res2.tests_passed)
+                test_exit_code = res2.tests[0].exit_code if res2.tests else None
+                fail_output = (res2.tests[0].stdout if res2.tests else "") or ""
+            else:
+                set_llm_context(stage="implement" if do_separate_tests else "solo")
+                a, m = _route("implement")
+                r2 = a.run_role(impl_prompt, root, model=m)
+                cost += int(r2.get("cost_usd_micros") or 0)
+                if do_separate_tests:
+                    tests_untouched = tests_before == _hash_files(root, test_files)
+                    tampered = [p for p in test_files
+                                if _hash_files(root, [p])[p] != tests_before.get(p)]
+                else:  # tier 0: the implementer wrote the tests too
+                    test_files = [fc.path for fc in sandbox.diff() if _is_test_path(fc.path)]
+                    tampered = []
+                impl_files = [fc.path for fc in sandbox.diff() if not _is_test_path(fc.path)]
+                # Authoritative verification — BOSS runs the tests itself.
+                with begin(engine) as c:
+                    _set_phase(c, run_id, "run_tests")
+                test_result = sandbox.run(test_cmd)
+                tests_passed = bool(test_result.ok)
+                test_exit_code = test_result.exit_code
+                fail_output = ((test_result.stdout or "") + (test_result.stderr or ""))
 
-            # Authoritative verification — BOSS runs the tests itself.
-            with begin(engine) as c:
-                _set_phase(c, run_id, "run_tests")
-            test_result = sandbox.run(test_cmd)
-            tests_passed = bool(test_result.ok)
-            test_exit_code = test_result.exit_code
+            # Executable gate for handing this attempt to the frontier panel: an
+            # implementation exists, the tests were untouched, and they pass. Anything else
+            # is repairable with concrete feedback (a plain test failure, a tamper, or an
+            # empty implementation) — the mutation/review panel is NOT re-run per retry.
+            ok = tests_passed and tests_untouched and bool(impl_files)
+            repair_log.append({"attempt": attempt, "tests_passed": tests_passed,
+                               "tests_untouched": tests_untouched,
+                               "impl_files": len(impl_files),
+                               "cost_usd_micros": int(r2.get("cost_usd_micros") or 0)})
+            if ok or attempt == max_repair:
+                break
+            repair_attempts += 1
+            if not impl_files:
+                evidence_text = ("No implementation file was produced. You must create or modify "
+                                 "implementation source file(s) (never the test files) so the "
+                                 "frozen tests can pass.")
+            elif not tests_untouched:
+                evidence_text = (
+                    f"You modified FROZEN test file(s): {', '.join(tampered) or '(a test file)'}. "
+                    "The tests are the spec and must stay byte-for-byte unchanged. Implement "
+                    "against them as written; do not touch them.")
+                # Local substrate keeps one working tree across retries — restore the tests
+                # to their authored content so the next attempt starts from the real spec.
+                if not use_microvm:
+                    for p, content in tests_orig.items():
+                        (root / p).write_text(content, encoding="utf-8")
+            else:
+                evidence_text = f"$ {test_cmd} (exit {test_exit_code})\n{fail_output[-3000:]}"
 
         # REVIEW PANEL (tier >= 2). The read-only checks — adversarial review, security review, and
         # the full-suite regression run — are independent, so they run CONCURRENTLY, bounded by
@@ -834,6 +917,10 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
             "tests_passed": tests_passed, "adversarial_verdict": verdict,
             "test_files": test_files, "impl_files": impl_files,
             "test_command": test_cmd, "test_exit_code": test_exit_code,
+            # VAG Phase 3 repair loop: how many evidence-fed retries the implementer used
+            # (0 = passed/failed first try) and the per-attempt outcome trail.
+            "repair_attempts": repair_attempts, "repair_max": max_repair,
+            "repair_log": repair_log,
             "qa_summary": r1.get("summary", "")[:400],
             "impl_summary": r2.get("summary", "")[:400],
             "review_summary": r3.get("summary", "")[:4000],

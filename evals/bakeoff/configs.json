@@ -46,6 +46,54 @@
       "notes": "Zero-cost wiring smoke on OpenRouter's :free variant (heavily rate-limited; run with --only deepseek_free_smoke against a single task).",
       "profile": "strict",
       "model_config": {"default": "openrouter:deepseek/deepseek-chat:free"}
+    },
+
+    {
+      "name": "full_claude_repair3",
+      "notes": "FULL mode (frontier-only): Claude implements AND holds the gate, BOSS harness iterates the implementer up to 3x on concrete failing evidence. The quality ceiling; the price to beat.",
+      "profile": "strict",
+      "repair_retries": 3,
+      "model_config": {}
+    },
+    {
+      "name": "hybrid_claude_norepair",
+      "notes": "HYBRID control (repair OFF): DeepSeek implements, Claude holds the frozen gate (tests + review + security), single pass. Baseline for measuring what the repair loop buys.",
+      "profile": "strict",
+      "repair_retries": 0,
+      "model_config": {
+        "default": "strong",
+        "steps": {"implement": "openrouter:deepseek/deepseek-chat",
+                  "standards": "openrouter:deepseek/deepseek-chat"}
+      }
+    },
+    {
+      "name": "hybrid_claude_repair3",
+      "notes": "HYBRID mode: DeepSeek implements, Claude holds the FROZEN gate (spec/tests/review/security). BOSS harness feeds DeepSeek concrete failing evidence and retries up to 3x (NOT a standing Claude agent). The VAG price/quality bet.",
+      "profile": "strict",
+      "repair_retries": 3,
+      "model_config": {
+        "default": "strong",
+        "steps": {"implement": "openrouter:deepseek/deepseek-chat",
+                  "standards": "openrouter:deepseek/deepseek-chat"}
+      }
+    },
+    {
+      "name": "full_azure_repair3",
+      "notes": "FULL mode with Azure OpenAI as the frontier (interchangeable with Claude). Requires AZURE_OPENAI_* in the secret store; 'azure:' uses AZURE_OPENAI_DEPLOYMENT. Add a BOSS_MODEL_PRICES_JSON entry for the deployment name if it is not 'gpt-4o'.",
+      "profile": "strict",
+      "repair_retries": 3,
+      "model_config": {"default": "azure:"}
+    },
+    {
+      "name": "hybrid_azure_repair3",
+      "notes": "HYBRID mode with Azure OpenAI as the frontier gate, DeepSeek implementing, repair 3x. Mirror of hybrid_claude_repair3 with the frontier swapped Claude->Azure to compare verifiers.",
+      "profile": "strict",
+      "repair_retries": 3,
+      "model_config": {
+        "default": "azure:",
+        "steps": {"implement": "openrouter:deepseek/deepseek-chat",
+                  "standards": "openrouter:deepseek/deepseek-chat"}
+      }
     }
   ]
 }
