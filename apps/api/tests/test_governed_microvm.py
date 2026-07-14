@@ -4,7 +4,7 @@ stage in its own VM, git as the state carrier, judgment host-side)."""
 import pytest
 
 from apps.api.app.config import Settings
-from apps.api.app.services.code_agent import NativeCodeAgent, make_code_agent
+from apps.api.app.services.code_agent import NativeCodeAgent, PacedCodeAgent, make_code_agent
 from apps.api.app.services.governed_code_task_service import (
     _guest_engine_fields,
     _repair_prompt,
@@ -77,7 +77,9 @@ def test_make_code_agent_azure_requires_creds():
     with pytest.raises(RuntimeError, match="azure engine requires"):
         make_code_agent(no_azure, engine="azure")
     agent = make_code_agent(_azure_settings(), engine="azure")
-    assert isinstance(agent, NativeCodeAgent) and agent.engine == "azure"
+    # make_code_agent now paces the agent (#111); unwrap to check the azure routing intent.
+    inner = agent._inner if isinstance(agent, PacedCodeAgent) else agent
+    assert isinstance(inner, NativeCodeAgent) and agent.engine == "azure"
 
 
 def test_repair_prompt_appends_frozen_bar_and_evidence():

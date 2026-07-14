@@ -24,6 +24,12 @@ from typing import Optional, Protocol
 from ..config import Settings
 from ..schemas import FileChange
 from .llm_telemetry import record_llm_call
+from .model_rate_limiter import (
+    NullRateLimiter,
+    get_rate_limiter,
+    is_rate_limit_error,
+    provider_of,
+)
 from .redaction import redact as _redact_pii
 from .sandbox import CommandResult, DiffSummary, EphemeralSandbox
 
@@ -493,9 +499,53 @@ _PROVIDER_LANES: dict[str, tuple[str, str]] = {
 }
 
 
+class PacedCodeAgent:
+    """Wraps a CodeAgent so every model invocation goes through the rate limiter (#111):
+    bounded concurrency + pacing + adaptive backoff, keyed by the agent's provider. Delegates
+    every other attribute to the wrapped agent, so it's a transparent stand-in."""
+
+    def __init__(self, inner: "CodeAgent", limiter):
+        self._inner = inner
+        self._limiter = limiter
+        self.engine = getattr(inner, "engine", None)
+        self._provider = provider_of(self.engine)
+
+    def __getattr__(self, name):  # delegate anything not overridden (called only on miss)
+        return getattr(self._inner, name)
+
+    def _paced(self, fn, *args, **kwargs):
+        with self._limiter.slot(self._provider):
+            try:
+                out = fn(*args, **kwargs)
+            except Exception as exc:  # noqa: BLE001 — classify then re-raise unchanged
+                if is_rate_limit_error(exc):
+                    self._limiter.report_rate_limited(self._provider)
+                raise
+            self._limiter.report_ok(self._provider)
+            return out
+
+    def run_role(self, *args, **kwargs):
+        return self._paced(self._inner.run_role, *args, **kwargs)
+
+    def run_research(self, *args, **kwargs):
+        return self._paced(self._inner.run_research, *args, **kwargs)
+
+
+def _wrap_paced(agent: "CodeAgent", settings: Settings) -> "CodeAgent":
+    limiter = get_rate_limiter(settings)
+    if isinstance(limiter, NullRateLimiter):  # burst mode: no wrapper overhead
+        return agent
+    return PacedCodeAgent(agent, limiter)
+
+
 def make_code_agent(settings: Settings, engine: Optional[str] = None) -> CodeAgent:
     """Build a CodeAgent. ``engine`` overrides ``settings.code_agent_engine`` so the
-    governed pipeline can run builder roles on one model and adversary roles on another."""
+    governed pipeline can run builder roles on one model and adversary roles on another.
+    The returned agent is paced by the model rate limiter (#111) unless burst mode is on."""
+    return _wrap_paced(_build_code_agent(settings, engine), settings)
+
+
+def _build_code_agent(settings: Settings, engine: Optional[str] = None) -> CodeAgent:
     engine = (engine or settings.code_agent_engine or "claude_code").lower()
     if engine == "claude_code":
         return ClaudeCodeAgent(settings)

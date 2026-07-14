@@ -495,6 +495,18 @@ class Settings(BaseSettings):
     # Lane capacity for the review panel: how many read-only checks run concurrently. Extra checks
     # queue for a free slot (the entitlement broker authorises which model lane each one uses).
     code_agent_max_concurrency: int = Field(default=3, alias="BOSS_CODE_AGENT_MAX_CONCURRENCY")
+    # Rate-limit-aware model-call pacing (#111) — backpressure on the model lane so a burst
+    # can't trip a provider's rolling rate limit (e.g. Anthropic's 5-hour cap) or overflow to
+    # paid usage credits. Default PACED; flip burst_mode on to run wide-open (customers who
+    # don't care about usage limits). See services/model_rate_limiter.py.
+    #   burst_mode        = true -> no limiting at all (NullRateLimiter).
+    #   max_concurrency   = global cap on IN-FLIGHT model calls per provider (AIMD ceiling).
+    #   min_interval_ms   = minimum spacing between call STARTS per provider (0 = concurrency-only).
+    #   rate_backoff_secs = default backoff after a rate/usage-limit signal (Retry-After wins).
+    model_burst_mode: bool = Field(default=False, alias="BOSS_MODEL_BURST_MODE")
+    model_max_concurrency: int = Field(default=3, alias="BOSS_MODEL_MAX_CONCURRENCY")
+    model_min_interval_ms: int = Field(default=0, alias="BOSS_MODEL_MIN_INTERVAL_MS")
+    model_rate_backoff_seconds: int = Field(default=30, alias="BOSS_MODEL_RATE_BACKOFF_SECONDS")
     # Which CodeAgent implementation runs the edit/test loop:
     #   claude_code = wrap `claude -p` headless WITH its file/bash tools enabled,
     #                 scoped to the ephemeral sandbox cwd (uses the Max plan).
