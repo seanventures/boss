@@ -223,6 +223,40 @@ export function PipelineView({ data }: { data: PipelineData }) {
         <b style={{ color: "var(--accent-text)", textTransform: "capitalize" }}>{data.defaultProfile}</b>.
       </p>
 
+      <div
+        style={{
+          border: "1px solid var(--accent-line)",
+          background: "var(--accent-soft)",
+          borderRadius: 12,
+          padding: "14px 16px",
+          margin: "0 0 20px",
+          maxWidth: 820,
+        }}
+      >
+        <div style={{ fontSize: 13.5, fontWeight: 700, color: "var(--accent-text)", marginBottom: 6 }}>
+          Why it&apos;s built this way — Verification-Amplified Generation (VAG)
+        </div>
+        <p style={{ margin: 0, fontSize: 12.5, lineHeight: 1.65, color: "var(--ink-soft)" }}>
+          BOSS bets that{" "}
+          <b style={{ color: "var(--ink)" }}>verification, not generation, is the bottleneck</b>. So
+          cheap models do the writing and strong models do the judging: a separate agent{" "}
+          <b style={{ color: "var(--ink)" }}>freezes the tests first</b>, a low-cost model implements and
+          repairs against them, then an independent{" "}
+          <b style={{ color: "var(--ink)" }}>adversarial refute panel</b> — plus security, consistency,
+          regression and mutation checks — tries to <i>break</i> the change. Only if none can does a{" "}
+          <b style={{ color: "var(--ink)" }}>fail-closed gate</b> open the PR. The reviewers never wrote
+          the code, so they can&apos;t rubber-stamp it — and because a weak verifier is the one thing that
+          collapses quality, the judging always runs on the strong model.
+        </p>
+        <p style={{ margin: "8px 0 0", fontSize: 12.5, lineHeight: 1.65, color: "var(--muted)" }}>
+          The refute panel votes, and its{" "}
+          <b style={{ color: "var(--ink-soft)" }}>confidence score</b> is the share of independent
+          reviewers that couldn&apos;t break the change — a pass backed by three reviewers is stronger than
+          one backed by one. Higher-rigor profiles below simply add more independent verifiers: you&apos;re
+          buying verification, not generation.
+        </p>
+      </div>
+
       <div style={{ display: "flex", flexWrap: "wrap", gap: 12 }}>
         {data.profiles.map((p) => (
           <ProfileCard key={p.name} p={p} projectId={data.projectId} isDefault={p.name === data.defaultProfile} />

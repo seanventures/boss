@@ -94,7 +94,7 @@ const AREAS: AreaDef[] = [
   { id: "code_tasks", label: "Code Tasks", sub: "Agent edits code in a sandbox — tested, gated PRs", group: "Run", icon: ICONS.code_tasks },
   { id: "reports", label: "Evidence", sub: "Throughput, receipts, cost, and agent scorecards", group: "Run", icon: ICONS.reports },
   { id: "budget", label: "Budget", sub: "Live spend, reservations, and cap pressure", group: "Govern", icon: ICONS.budget },
-  { id: "pipeline", label: "Coding Pipeline", sub: "Cost vs rigor — profiles, tiers, and run costs", group: "Govern", icon: ICONS.pipeline },
+  { id: "pipeline", label: "Coding Pipeline", sub: "VAG — cheap models build, frontier models verify · profiles, tiers & run costs", group: "Govern", icon: ICONS.pipeline },
   { id: "comms", label: "Communications", sub: "Outbox discipline before external sends", group: "Govern", icon: ICONS.comms },
   { id: "ops", label: "Operations", sub: "Health, audit, replay, and self-improvement", group: "Govern", icon: ICONS.ops },
   { id: "org", label: "Agent Roster", sub: "Actors, access, packs, and agent modules", group: "Govern", icon: ICONS.org },

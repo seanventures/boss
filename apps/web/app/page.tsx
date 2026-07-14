@@ -6138,8 +6138,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
         <section className="panel-stack" data-area="pipeline" aria-label="Coding pipeline">
           <div className="section-head">
             <div>
-              <span className="eyebrow">Coding Pipeline</span>
-              <h2>Tune cost vs. rigor — pick a profile, see what runs per tier, compare run costs.</h2>
+              <span className="eyebrow">Coding Pipeline · VAG</span>
+              <h2>Verification-Amplified Generation — cheap models write, frontier models verify. Tune cost vs. rigor per tier and compare run costs.</h2>
             </div>
           </div>
           <PipelineView data={pipelineData} />
