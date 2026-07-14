@@ -96,7 +96,7 @@ def start_code_task(
     owner: str, repo: str, base_branch: str, finalize_ctx: Optional[dict],
     jobs, profile: Optional[str] = None, risk_tier: Optional[int] = None,
     model_config: Optional[dict] = None, open_pr: Optional[bool] = None,
-    repair_retries: Optional[int] = None,
+    repair_retries: Optional[int] = None, review_panel_size: Optional[int] = None,
 ) -> str:
     """Create the durable run row and enqueue the single `code.task` job."""
     run_id = make_id("crun")
@@ -114,6 +114,8 @@ def start_code_task(
         spec["model_config"] = model_config
     if isinstance(repair_retries, int):  # VAG Phase 3: per-run repair-loop budget override
         spec["repair_retries"] = repair_retries
+    if isinstance(review_panel_size, int):  # VAG Phase 1 (#9): per-run refute-panel size override
+        spec["review_panel_size"] = review_panel_size
     if open_pr is False:  # eval/bake-off runs: verify via the gate, do not open a PR
         spec["open_pr"] = False
     connection.execute(

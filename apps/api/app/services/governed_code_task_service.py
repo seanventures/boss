@@ -816,8 +816,13 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
             # engines (code_review_panel_engines) for model diversity; otherwise they share
             # the review lane (independent samples still de-noise a single critic). Aggregated
             # by quorum into one verdict + a confidence score. panel_size 1 == pre-#9 behavior.
-            panel_size = max(1, int(getattr(settings, "code_review_panel_size", 1) or 1))
-            review_quorum = float(getattr(settings, "code_review_panel_quorum", 0.5) or 0.5)
+            # Per-run overrides (spec) take precedence over the deployment default — lets a
+            # bake-off vary panel size across configs in ONE batch (mirrors repair_retries).
+            panel_size = max(1, int(
+                spec.get("review_panel_size", getattr(settings, "code_review_panel_size", 1)) or 1))
+            review_quorum = float(
+                spec.get("review_panel_quorum", getattr(settings, "code_review_panel_quorum", 0.5))
+                or 0.5)
             panel_engines = [e.strip() for e in
                              (settings.code_review_panel_engines or "").split(",") if e.strip()]
             review_members = []  # (agent, model) per panel seat

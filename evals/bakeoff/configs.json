@@ -1,5 +1,5 @@
 {
-  "_readme": "Model configs for the VAG bake-off. Each config = one competitor: a name, an optional pipeline profile, and a model_config injected per run (VAG B2 routing — no env flips or redeploys between configs). Cheap configs use the dedicated 'openrouter' engine (OPENROUTER_API_KEY in the secret store — deliberately separate from the platform-managed OPENAI_* pair). Keep BOSS_MODEL_PRICES_JSON entries current for accurate $/verified-outcome.",
+  "_readme": "Model configs for the VAG bake-off. Each config = one competitor: a name, an optional pipeline profile, and a model_config injected per run (VAG B2 routing \u2014 no env flips or redeploys between configs). Cheap configs use the dedicated 'openrouter' engine (OPENROUTER_API_KEY in the secret store \u2014 deliberately separate from the platform-managed OPENAI_* pair). Keep BOSS_MODEL_PRICES_JSON entries current for accurate $/verified-outcome.",
   "configs": [
     {
       "name": "claude_baseline",
@@ -9,27 +9,35 @@
     },
     {
       "name": "deepseek_all",
-      "notes": "Everything on DeepSeek V3 via OpenRouter — the naive all-cheap datapoint.",
+      "notes": "Everything on DeepSeek V3 via OpenRouter \u2014 the naive all-cheap datapoint.",
       "profile": "strict",
-      "model_config": {"default": "openrouter:deepseek/deepseek-chat"}
+      "model_config": {
+        "default": "openrouter:deepseek/deepseek-chat"
+      }
     },
     {
       "name": "qwen_all",
       "notes": "Everything on Qwen3-32B via OpenRouter. (Groq free tier's 6k TPM can't carry pipeline prompts; qwen2.5-coder no longer served anywhere reachable.)",
       "profile": "strict",
-      "model_config": {"default": "openrouter:qwen/qwen3-32b"}
+      "model_config": {
+        "default": "openrouter:qwen/qwen3-32b"
+      }
     },
     {
       "name": "kimi_all",
-      "notes": "Everything on Kimi-K2 (Moonshot) via OpenRouter — ensemble pool member.",
+      "notes": "Everything on Kimi-K2 (Moonshot) via OpenRouter \u2014 ensemble pool member.",
       "profile": "strict",
-      "model_config": {"default": "openrouter:moonshotai/kimi-k2"}
+      "model_config": {
+        "default": "openrouter:moonshotai/kimi-k2"
+      }
     },
     {
       "name": "glm_all",
-      "notes": "Everything on GLM-4.5 (Zhipu) via OpenRouter — ensemble pool member.",
+      "notes": "Everything on GLM-4.5 (Zhipu) via OpenRouter \u2014 ensemble pool member.",
       "profile": "strict",
-      "model_config": {"default": "openrouter:z-ai/glm-4.5"}
+      "model_config": {
+        "default": "openrouter:z-ai/glm-4.5"
+      }
     },
     {
       "name": "vag_junior_senior",
@@ -37,17 +45,20 @@
       "profile": "strict",
       "model_config": {
         "default": "strong",
-        "steps": {"implement": "openrouter:deepseek/deepseek-chat",
-                  "standards": "openrouter:deepseek/deepseek-chat"}
+        "steps": {
+          "implement": "openrouter:deepseek/deepseek-chat",
+          "standards": "openrouter:deepseek/deepseek-chat"
+        }
       }
     },
     {
       "name": "deepseek_free_smoke",
       "notes": "Zero-cost wiring smoke on OpenRouter's :free variant (heavily rate-limited; run with --only deepseek_free_smoke against a single task).",
       "profile": "strict",
-      "model_config": {"default": "openrouter:deepseek/deepseek-chat:free"}
+      "model_config": {
+        "default": "openrouter:deepseek/deepseek-chat:free"
+      }
     },
-
     {
       "name": "full_claude_repair3",
       "notes": "FULL mode (frontier-only): Claude implements AND holds the gate, BOSS harness iterates the implementer up to 3x on concrete failing evidence. The quality ceiling; the price to beat.",
@@ -62,8 +73,10 @@
       "repair_retries": 0,
       "model_config": {
         "default": "strong",
-        "steps": {"implement": "openrouter:deepseek/deepseek-chat",
-                  "standards": "openrouter:deepseek/deepseek-chat"}
+        "steps": {
+          "implement": "openrouter:deepseek/deepseek-chat",
+          "standards": "openrouter:deepseek/deepseek-chat"
+        }
       }
     },
     {
@@ -73,8 +86,10 @@
       "repair_retries": 3,
       "model_config": {
         "default": "strong",
-        "steps": {"implement": "openrouter:deepseek/deepseek-chat",
-                  "standards": "openrouter:deepseek/deepseek-chat"}
+        "steps": {
+          "implement": "openrouter:deepseek/deepseek-chat",
+          "standards": "openrouter:deepseek/deepseek-chat"
+        }
       }
     },
     {
@@ -82,7 +97,9 @@
       "notes": "FULL mode with Azure OpenAI as the frontier (interchangeable with Claude). Requires AZURE_OPENAI_* in the secret store; 'azure:' uses AZURE_OPENAI_DEPLOYMENT. Add a BOSS_MODEL_PRICES_JSON entry for the deployment name if it is not 'gpt-4o'.",
       "profile": "strict",
       "repair_retries": 3,
-      "model_config": {"default": "azure:"}
+      "model_config": {
+        "default": "azure:"
+      }
     },
     {
       "name": "hybrid_azure_repair3",
@@ -91,9 +108,47 @@
       "repair_retries": 3,
       "model_config": {
         "default": "azure:",
-        "steps": {"implement": "openrouter:deepseek/deepseek-chat",
-                  "standards": "openrouter:deepseek/deepseek-chat"}
+        "steps": {
+          "implement": "openrouter:deepseek/deepseek-chat",
+          "standards": "openrouter:deepseek/deepseek-chat"
+        }
       }
+    },
+    {
+      "name": "hybrid_panel1",
+      "notes": "VAG P1 baseline: cheap DeepSeek impl + Claude verify, single reviewer (panel=1), repair 3.",
+      "profile": "strict",
+      "model_config": {
+        "default": "strong",
+        "steps": {
+          "implement": "openrouter:deepseek/deepseek-chat",
+          "standards": "openrouter:deepseek/deepseek-chat"
+        }
+      },
+      "repair_retries": 3,
+      "review_panel_size": 1
+    },
+    {
+      "name": "hybrid_panel3",
+      "notes": "VAG P1 treatment: same hybrid, 3-member refute panel (panel=3). Only the panel size differs vs hybrid_panel1.",
+      "profile": "strict",
+      "model_config": {
+        "default": "strong",
+        "steps": {
+          "implement": "openrouter:deepseek/deepseek-chat",
+          "standards": "openrouter:deepseek/deepseek-chat"
+        }
+      },
+      "repair_retries": 3,
+      "review_panel_size": 3
+    },
+    {
+      "name": "full_claude_panel3",
+      "notes": "Frontier-only with a 3-member refute panel \u2014 quality-ceiling datapoint.",
+      "profile": "strict",
+      "model_config": {},
+      "repair_retries": 3,
+      "review_panel_size": 3
     }
   ]
 }

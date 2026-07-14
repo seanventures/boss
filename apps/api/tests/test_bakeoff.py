@@ -44,6 +44,16 @@ def test_build_run_request_carries_repair_retries():
     assert "repair_retries" not in build_run_request(TASK, CONFIG, "bake_x", 1, {"project_id": "p"})
 
 
+def test_build_run_request_carries_review_panel_size():
+    # #9 refute-panel sweep: per-config panel size wins; else suite default; else omitted.
+    cfg = {**CONFIG, "review_panel_size": 3}
+    assert build_run_request(TASK, cfg, "bake_x", 1, {"project_id": "p"})["review_panel_size"] == 3
+    assert build_run_request(TASK, CONFIG, "bake_x", 1,
+                             {"project_id": "p", "review_panel_size": 5})["review_panel_size"] == 5
+    assert "review_panel_size" not in build_run_request(TASK, CONFIG, "bake_x", 1,
+                                                        {"project_id": "p"})
+
+
 def _seed_run(connection, project_id, batch_id, config, *, gate=None, expect="pass",
               llm_costs=(), run_status="completed", usage_cost=None, repair_attempts=None):
     run_id = f"crun_{uuid.uuid4().hex[:16]}"

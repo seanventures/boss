@@ -37,6 +37,9 @@ def build_run_request(task: dict, config: dict, batch_id: str, iteration: int,
         # VAG Phase 3: per-config repair-loop budget (evidence-fed cheap retries). Falls
         # back to the deployment's BOSS_CODE_REPAIR_MAX_RETRIES when the config omits it.
         "repair_retries": config.get("repair_retries", d.get("repair_retries")),
+        # VAG Phase 1 (#9): per-config refute-panel size — lets one batch compare panel=1 vs
+        # panel=3 apples-to-apples. Falls back to the deployment's BOSS_CODE_REVIEW_PANEL_SIZE.
+        "review_panel_size": config.get("review_panel_size", d.get("review_panel_size")),
         # Bake-offs measure the gate, not delivery — suppress the PR unless asked.
         "open_pr": bool(d.get("open_pr", False)),
         "finalize_ctx": {"bakeoff": {

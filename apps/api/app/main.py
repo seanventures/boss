@@ -4657,6 +4657,7 @@ def start_code_task_endpoint(payload: dict):
             model_config=payload.get("model_config"),
             open_pr=payload.get("open_pr"),
             repair_retries=payload.get("repair_retries"),
+            review_panel_size=payload.get("review_panel_size"),
         )
     return {"status": "queued", "run_id": run_id}
 
