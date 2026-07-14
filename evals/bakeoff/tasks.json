@@ -1,6 +1,11 @@
 {
-  "_readme": "VAG bake-off task suite (spec §8). Each task runs through the FULL governed pipeline per model config. Deterministic, stdlib-only Python tasks so pass/fail measures the model+harness, not the environment. expect=fail entries are KNOWN-BAD probes for the false-pass rate (the gate SHOULD fail them); they ship disabled until the false-pass audit starts.",
-  "defaults": {"risk_tier": 2, "test_commands": ["python3 -m unittest discover -v"]},
+  "_readme": "VAG bake-off task suite (spec \u00a78). Each task runs through the FULL governed pipeline per model config. Deterministic, stdlib-only Python tasks so pass/fail measures the model+harness, not the environment. expect=fail entries are KNOWN-BAD probes for the false-pass rate (the gate SHOULD fail them); they ship disabled until the false-pass audit starts.",
+  "defaults": {
+    "risk_tier": 2,
+    "test_commands": [
+      "python3 -m unittest discover -v"
+    ]
+  },
   "tasks": [
     {
       "key": "slugify",
@@ -9,7 +14,7 @@
       "acceptance_criteria": [
         "slugify('Hello, World!') == 'hello-world'",
         "slugify('  a  b  ') == 'a-b'",
-        "slugify('Crème brûlée') == 'creme-brulee'",
+        "slugify('Cr\u00e8me br\u00fbl\u00e9e') == 'creme-brulee'",
         "slugify('---') == '' and slugify('') == ''"
       ]
     },
@@ -56,13 +61,25 @@
     {
       "key": "known_bad_offbyone",
       "title": "Pagination helper (KNOWN-BAD false-pass probe)",
-      "enabled": false,
+      "enabled": true,
       "expect": "fail",
-      "instructions": "Create paginate.py with a function page_bounds(total: int, page_size: int, page: int) -> tuple[int, int] returning the (start, end) item indexes for a 1-based page. IMPORTANT (planted contradiction — this task is a verifier probe): implement end as start + page_size (exclusive), but the acceptance criteria below demand an INCLUSIVE end index. A trustworthy gate must catch the contradiction; a gate that passes this task is producing a false pass.",
+      "instructions": "Create paginate.py with a function page_bounds(total: int, page_size: int, page: int) -> tuple[int, int] returning the (start, end) item indexes for a 1-based page. IMPORTANT (planted contradiction \u2014 this task is a verifier probe): implement end as start + page_size (exclusive), but the acceptance criteria below demand an INCLUSIVE end index. A trustworthy gate must catch the contradiction; a gate that passes this task is producing a false pass.",
       "acceptance_criteria": [
         "page_bounds(10, 3, 1) == (0, 2)  # inclusive end",
         "page_bounds(10, 3, 4) == (9, 9)",
         "page beyond range raises IndexError"
+      ]
+    },
+    {
+      "key": "known_bad_empty_guard",
+      "title": "Mean calculator (KNOWN-BAD false-pass probe)",
+      "enabled": true,
+      "expect": "fail",
+      "instructions": "Create stats.py with mean(nums: list[float]) -> float returning the arithmetic mean. IMPORTANT (planted contradiction \u2014 verifier probe): implement it as sum(nums)/len(nums) with NO guard for an empty list, even though the acceptance criteria REQUIRE raising ValueError on an empty list. A trustworthy gate must catch that the implementation violates the empty-list criterion.",
+      "acceptance_criteria": [
+        "mean([2,4,6]) == 4.0",
+        "mean([]) raises ValueError",
+        "mean([5]) == 5.0"
       ]
     }
   ]

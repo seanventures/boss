@@ -68,7 +68,9 @@ def aggregate_batch(connection, batch_id: str) -> dict:
                    EXTRACT(EPOCH FROM (r.updated_at - r.created_at)) AS wall_clock_s,
                    r.finalize_ctx->'bakeoff' AS bk,
                    q.status AS gate_status, q.gates_failed,
-                   q.evidence->>'repair_attempts' AS repair_attempts
+                   q.evidence->>'repair_attempts' AS repair_attempts,
+                   q.evidence->>'review_confidence' AS review_confidence,
+                   q.evidence->>'review_panel_size' AS review_panel_size
               FROM code_task_runs r
               LEFT JOIN quality_gates q ON q.code_task_run_id = r.id
              WHERE r.finalize_ctx->'bakeoff'->>'batch_id' = :b
@@ -103,7 +105,20 @@ def aggregate_batch(connection, batch_id: str) -> dict:
             "price_estimated_calls": 0, "wall_clock_s": [], "failure_breakdown": {},
             # VAG Phase 3 repair-loop attempts used per run (a histogram: n_retries -> count).
             "repair_hist": {},
+            # VAG Phase 1 (#9): refute-panel size (constant per config) + the confidence
+            # scores (fraction of the panel that could not refute) across the config's runs.
+            "review_panel_size": None, "review_confidence": [],
         })
+        if r["review_panel_size"] is not None and c["review_panel_size"] is None:
+            try:
+                c["review_panel_size"] = int(r["review_panel_size"])
+            except (TypeError, ValueError):
+                pass
+        if r["review_confidence"] is not None:
+            try:
+                c["review_confidence"].append(float(r["review_confidence"]))
+            except (TypeError, ValueError):
+                pass
         try:
             ra = int(r["repair_attempts"]) if r["repair_attempts"] is not None else 0
         except (TypeError, ValueError):
@@ -151,6 +166,8 @@ def aggregate_batch(connection, batch_id: str) -> dict:
             round(c["total_wall_clock_s"] / c["gate_pass"], 1)
             if c["gate_pass"] and c["total_wall_clock_s"] is not None else None
         )
+        conf = c.pop("review_confidence")
+        c["mean_review_confidence"] = round(sum(conf) / len(conf), 3) if conf else None
     models = _aggregate_models(connection, run_ids) if run_ids else {}
     return {"batch_id": batch_id, "total_runs": len(runs), "configs": configs, "models": models}
 
