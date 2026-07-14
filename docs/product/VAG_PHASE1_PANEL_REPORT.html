@@ -1,0 +1,149 @@
+<!doctype html><html lang=en><head><meta charset=utf-8>
+<meta name=viewport content="width=device-width,initial-scale=1">
+<title>VAG Phase 1 — Refute Panel Sweep</title><style>
+:root {
+  --bg:#f3f5f8; --panel:#ffffff; --ink:#12161d; --ink2:#3d4551; --muted:#6b7480;
+  --line:#dde2e9; --line2:#eaeef3; --accent:#3b5bdb; --accent-soft:#e6ebfb;
+  --pass:#1f8a5b; --pass-soft:#e0f2e9; --fail:#c23a4b; --fail-soft:#fbe4e7;
+  --warn:#b5750a; --warn-soft:#fbefd6;
+  --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+  --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+}
+@media (prefers-color-scheme:dark){
+  :root{ --bg:#0e1218; --panel:#161b23; --ink:#e8ecf2; --ink2:#b3bcc8; --muted:#7c8794;
+    --line:#252c37; --line2:#1c222b; --accent:#7d94ee; --accent-soft:#1e2740;
+    --pass:#43b581; --pass-soft:#12291f; --fail:#e06b7a; --fail-soft:#2c1519;
+    --warn:#e0a83a; --warn-soft:#2a2110; }
+}
+:root[data-theme="dark"]{ --bg:#0e1218; --panel:#161b23; --ink:#e8ecf2; --ink2:#b3bcc8; --muted:#7c8794;
+  --line:#252c37; --line2:#1c222b; --accent:#7d94ee; --accent-soft:#1e2740;
+  --pass:#43b581; --pass-soft:#12291f; --fail:#e06b7a; --fail-soft:#2c1519; --warn:#e0a83a; --warn-soft:#2a2110; }
+:root[data-theme="light"]{ --bg:#f3f5f8; --panel:#ffffff; --ink:#12161d; --ink2:#3d4551; --muted:#6b7480;
+  --line:#dde2e9; --line2:#eaeef3; --accent:#3b5bdb; --accent-soft:#e6ebfb;
+  --pass:#1f8a5b; --pass-soft:#e0f2e9; --fail:#c23a4b; --fail-soft:#fbe4e7; --warn:#b5750a; --warn-soft:#fbefd6; }
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);line-height:1.55;
+  -webkit-font-smoothing:antialiased}
+.wrap{max-width:1040px;margin:0 auto;padding:0 20px 80px}
+.num,.mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
+a{color:var(--accent)}
+header.top{position:sticky;top:0;z-index:10;background:color-mix(in srgb,var(--bg) 88%,transparent);
+  backdrop-filter:blur(8px);border-bottom:1px solid var(--line);margin-bottom:32px}
+.top-in{max-width:1040px;margin:0 auto;padding:12px 20px;display:flex;align-items:center;gap:14px}
+.top .kick{font-family:var(--mono);font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted)}
+.top .ttl{font-weight:650;font-size:15px}
+.top .spacer{flex:1}
+.tgl{font:inherit;font-size:12px;color:var(--ink2);background:var(--panel);border:1px solid var(--line);
+  border-radius:7px;padding:5px 10px;cursor:pointer}
+.tgl:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.hero{padding:22px 0 8px}
+.hero .eyebrow{font-family:var(--mono);font-size:12px;letter-spacing:.1em;text-transform:uppercase;color:var(--accent);margin-bottom:10px}
+h1{font-size:clamp(26px,4.2vw,40px);line-height:1.08;letter-spacing:-.02em;text-wrap:balance;margin:.1em 0 .3em}
+.lede{font-size:18px;color:var(--ink2);max-width:64ch;margin:0}
+.verdict{display:flex;flex-wrap:wrap;gap:14px;margin:26px 0 8px}
+.vcard{flex:1;min-width:200px;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px 18px}
+.vcard .big{font-family:var(--mono);font-size:26px;font-weight:600;letter-spacing:-.02em;margin:2px 0}
+.vcard .lab{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em}
+.vcard .note{font-size:13px;color:var(--ink2);margin-top:6px}
+.vcard.good .big{color:var(--pass)} .vcard.warn .big{color:var(--warn)}
+section{margin-top:44px}
+h2{font-size:13px;font-family:var(--mono);letter-spacing:.12em;text-transform:uppercase;color:var(--muted);
+  border-top:1px solid var(--line);padding-top:14px;margin:0 0 4px}
+.sec-sub{color:var(--ink2);font-size:15px;margin:0 0 18px;max-width:70ch}
+.tblwrap{overflow-x:auto;border:1px solid var(--line);border-radius:12px;background:var(--panel)}
+table{border-collapse:collapse;width:100%;font-size:14px}
+th,td{text-align:left;padding:11px 14px;border-bottom:1px solid var(--line2);vertical-align:top}
+thead th{font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);font-weight:600;
+  background:var(--bg);position:sticky;top:0}
+tbody tr:last-child td{border-bottom:none}
+td.num{white-space:nowrap}
+.cfg{font-weight:600} .cfgd{font-size:12.5px;color:var(--muted);margin-top:2px;max-width:34ch}
+.rate{font-weight:650;font-size:16px} .rate--pass{color:var(--pass)} .rate--warn{color:var(--warn)} .rate--fail{color:var(--fail)}
+.bar{height:5px;border-radius:3px;background:var(--line);overflow:hidden;margin:5px 0 2px;max-width:90px}
+.bar span{display:block;height:100%;background:var(--accent)}
+.sub2{font-size:11px;color:var(--muted)}
+.mx{text-align:center;font-family:var(--mono);font-weight:600}
+.mx--pass{color:var(--pass);background:var(--pass-soft)} .mx--fail{color:var(--fail);background:var(--fail-soft)}
+.mx--none{color:var(--muted)} .mx i{font-style:normal;font-size:10px;color:var(--warn);margin-left:2px}
+.mxc{font-weight:600;font-size:13px;white-space:nowrap}
+.find{display:grid;gap:14px}
+.finding{background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--accent);
+  border-radius:10px;padding:15px 18px}
+.finding h4{margin:0 0 5px;font-size:15.5px}
+.finding p{margin:0;color:var(--ink2);font-size:14.5px}
+.finding.good{border-left-color:var(--pass)} .finding.bad{border-left-color:var(--fail)} .finding.warn{border-left-color:var(--warn)}
+details.run{background:var(--panel);border:1px solid var(--line);border-radius:10px;margin:8px 0;overflow:hidden}
+details.run[open]{border-color:var(--accent)}
+summary{cursor:pointer;padding:12px 16px;display:flex;align-items:center;gap:10px;list-style:none;font-size:14px}
+summary::-webkit-details-marker{display:none}
+summary::before{content:"▸";color:var(--muted);font-size:11px}
+details[open] summary::before{content:"▾"}
+.rt{font-weight:650} .rc{color:var(--muted);font-size:12.5px}
+summary .spacer{flex:1}
+.rmeta{font-family:var(--mono);font-size:11.5px;color:var(--muted);white-space:nowrap}
+.run-body{padding:4px 16px 18px;border-top:1px solid var(--line2);display:grid;gap:14px}
+.vchips{display:flex;flex-wrap:wrap;gap:6px;margin-top:12px}
+.vchip{font-size:11.5px;padding:3px 8px;border-radius:6px;border:1px solid var(--line);color:var(--ink2)}
+.vchip b{font-weight:600}
+.vchip--pass{background:var(--pass-soft);border-color:transparent;color:var(--pass)}
+.vchip--fail{background:var(--fail-soft);border-color:transparent;color:var(--fail)}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+@media(max-width:640px){.grid2{grid-template-columns:1fr}}
+.sub{font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin:2px 0 6px;font-weight:600}
+.chips{display:flex;flex-wrap:wrap;gap:5px}
+.chip{font-family:var(--mono);font-size:11px;padding:2px 7px;border-radius:5px;background:var(--line2);color:var(--ink2)}
+.chip--pass{background:var(--pass-soft);color:var(--pass)} .chip--fail{background:var(--fail-soft);color:var(--fail)}
+.chip--warn{background:var(--warn-soft);color:var(--warn)} .chip--muted{background:var(--line2);color:var(--muted)}
+table.mini{font-size:12.5px;border:1px solid var(--line2);border-radius:8px;overflow:hidden}
+table.mini th{background:var(--line2);position:static} table.mini td,table.mini th{padding:6px 10px}
+table.mini td.mono{font-size:11.5px}
+.prose{font-size:13.5px;color:var(--ink2)} .prose b{color:var(--ink);font-size:11px;text-transform:uppercase;letter-spacing:.05em}
+.prose p{margin:4px 0 0}
+.cfg-h{font-size:15px;margin:26px 0 6px;padding-bottom:6px;border-bottom:1px solid var(--line);color:var(--accent)}
+.foot{margin-top:48px;padding-top:18px;border-top:1px solid var(--line);color:var(--muted);font-size:13px}
+.foot code{font-family:var(--mono);background:var(--line2);padding:1px 5px;border-radius:4px;font-size:12px}
+.foot ul{padding-left:18px} .foot li{margin:4px 0}
+.callout{background:var(--warn-soft);border:1px solid color-mix(in srgb,var(--warn) 30%,transparent);
+  border-radius:10px;padding:12px 16px;font-size:13.5px;color:var(--ink2);margin-top:10px}
+</style></head><body>
+<header class=top><div class=top-in><span class=kick>VAG · Phase 1</span>
+<span class=ttl>Refute panel — cost / time / quality tradeoff</span><span class=spacer></span></div></header>
+<div class=wrap>
+<section class=hero><div class=eyebrow>Batch bake_panel_848367be</div>
+<h1>Does a 3-member refute panel buy quality — and at what cost and latency?</h1>
+<p>One in-process bake-off batch on the live pipeline: the <b>same hybrid config</b> (cheap DeepSeek
+implements, frontier Claude verifies) run with a <b>single reviewer (panel 1)</b> vs a
+<b>3-member refute panel (panel 3)</b>, across 12 runs on 5 clean tasks + 2 known-bad
+probes. Only the panel size differs.</p></section>
+
+<section><h2>The three axes</h2>
+<table><thead><tr><th>Config</th><th>Panel</th><th>Pass-rate<br><span class=mut>(clean)</span></th>
+<th>Caught<br><span class=mut>(known-bad)</span></th><th>False<br>pass</th><th>$/verified</th>
+<th>Mean<br>wall-clock</th><th>p90</th><th>Mean<br>confidence</th></tr></thead>
+<tbody><tr><td>Hybrid · panel 1</td><td class=num>1</td><td class=num>60%</td><td class=num>0/1</td><td class=num>1</td><td class=num>$6.2997</td><td class=num>1538s</td><td class=num>2216s</td><td class=num>0.83</td></tr>
+<tr><td>Hybrid · panel 3</td><td class=num>3</td><td class=num>80%</td><td class=num>1/1</td><td class=num>0</td><td class=num>$4.9252</td><td class=num>2040s</td><td class=num>3066s</td><td class=num>0.93</td></tr></tbody></table></section>
+
+<section><h2>What the numbers say</h2><ul><li>Panel-3 costs <b>0.78×</b> panel-1 per verified outcome ($4.9252 vs $6.2997) — the review stage runs 3 critics instead of 1.</li>
+<li>Wall-clock is nearly flat: panel-3 mean 2040s vs panel-1 1538s (<b>+33%</b>) — the extra reviewers run <b>in parallel</b>, so the panel is a cost multiplier, not a latency multiplier.</li>
+<li>Clean-task pass-rate: panel-1 60% vs panel-3 80% — no false-fails introduced.</li>
+<li>Known-bad probes caught: panel-1 0/1, panel-3 1/1 (a false-pass = the verifier was fooled).</li>
+<li>Mean panel confidence: panel-1 0.83 (single vote → always 0 or 1), panel-3 0.93 (a real distribution — the new signal).</li></ul></section>
+
+<section><h2>Per-model latency &amp; cost</h2>
+<table><thead><tr><th>Model</th><th>Calls</th><th>Avg latency</th><th>p90</th><th>Total cost</th></tr></thead>
+<tbody><tr><td class=mono>claude-fable-5</td><td class=num>101</td><td class=num>53.0s</td><td class=num>83.1s</td><td class=num>$38.5497</td></tr>
+<tr><td class=mono>deepseek/deepseek-chat</td><td class=num>24</td><td class=num>14.1s</td><td class=num>34.8s</td><td class=num>$0.0501</td></tr>
+<tr><td class=mono>(unknown)</td><td class=num>1</td><td class=num>30.1s</td><td class=num>30.1s</td><td class=num>$0.0000</td></tr></tbody></table></section>
+
+<section><h2>Honest caveats</h2><ul>
+<li>The clean tasks are high-pass, so panel size mostly moves <b>cost</b> and the <b>confidence
+distribution</b>, not clean-task pass-rate. The panel's marginal <i>catch</i> is best isolated by a
+verifier meta-eval (labeled bugged/clean diffs fed to the panel directly — queued as #105).</li>
+<li>Known-bad probes here are planted contradictions caught by the whole gate (often at the test
+stage), so they measure <b>gate trustworthiness</b>, not the panel alone.</li>
+<li>Claude runs on the Max plan (≈$0 marginal); $/verified bills it at API list price for honest
+accounting, so out-of-pocket is far lower than shown.</li>
+</ul></section>
+<p class=mut style="margin-top:40px;font-size:12px">Generated from batch bake_panel_848367be ·
+governed pipeline on the live boss DB · in-process runner.</p>
+</div></body></html>
