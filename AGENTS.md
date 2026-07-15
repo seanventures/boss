@@ -4,6 +4,25 @@
 
 Build BOSS, the Business Operating System Sentinel: a financially controlled autonomous company OS that can dogfood itself. BOSS must turn CEO commands into auditable tasks, plans, decisions, budget-gated jobs, validated PRs, receipts, and event history.
 
+## Plane system of record
+
+Plane is mandatory for this project. Track every task, bug, feature, PRD, roadmap
+item, and in-progress change in workspace `goldeneye`, project
+`cc97d5cc-e8c6-4893-ac14-7f646c37f3d7` at
+`https://plane.local.sean.network`. The API base is
+`https://plane.local.sean.network/api/v1` and uses the `X-API-Key` header.
+
+At the start of every session, read this rule and, before beginning work:
+
+1. Fetch `PLANE_API_KEY` from the platform secret store with
+   `GET $OPS_BASE_URL/secret?key=PLANE_API_KEY` using `X-Ops-Token`.
+2. Deduplicate against existing Plane issues and ensure an issue exists.
+3. Move the issue through Backlog, Todo, In Progress, and Done as work advances.
+4. Link relevant specs, commits, and pull requests in the issue.
+
+Ops `/requests` are automatically filed as Plane issues; never duplicate them.
+Never commit or print Plane or ops credentials.
+
 ## Read first
 
 Before architecture or feature work, read:

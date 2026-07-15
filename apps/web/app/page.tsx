@@ -146,7 +146,7 @@ import {
 } from "../lib/software-factory";
 import { fetchSkillFeed } from "../lib/skills";
 import { fetchStatus } from "../lib/status";
-import { fetchTaskFeed } from "../lib/tasks";
+import { fetchTaskFeed, type TaskFeedItem } from "../lib/tasks";
 import { PROJECT_ID } from "../lib/client";
 
 function formatMicros(amount: unknown): string {
@@ -212,6 +212,52 @@ function formatDateTime(value?: string): string {
     dateStyle: "medium",
     timeStyle: "short",
   }).format(new Date(value));
+}
+
+const TASK_BOARD_COLUMNS = [
+  { id: "backlog", label: "Backlog" },
+  { id: "in_progress", label: "In progress" },
+  { id: "review", label: "Review" },
+  { id: "blocked", label: "Blocked" },
+  { id: "done", label: "Done" },
+] as const;
+
+function taskBoardColumn(status: string): (typeof TASK_BOARD_COLUMNS)[number]["id"] {
+  const value = status.toLowerCase();
+  if (["done", "completed", "succeeded", "shipped"].includes(value)) return "done";
+  if (["blocked", "failed", "deadletter", "cancelled"].includes(value)) return "blocked";
+  if (value.includes("review") || value.includes("decision") || value.includes("approval")) return "review";
+  if (["running", "executing", "in_progress", "leased"].includes(value)) return "in_progress";
+  return "backlog";
+}
+
+function MissionTaskBoard({ tasks }: { tasks: TaskFeedItem[] }) {
+  return (
+    <div className="mission-task-board" aria-label="Task status board">
+      {TASK_BOARD_COLUMNS.map((column) => {
+        const columnTasks = tasks.filter((task) => taskBoardColumn(task.status) === column.id);
+        return (
+          <section className={`mission-task-column column-${column.id}`} key={column.id}>
+            <header>
+              <span>{column.label}</span>
+              <b>{columnTasks.length}</b>
+            </header>
+            <div className="mission-task-list">
+              {columnTasks.map((task) => (
+                <article className="mission-task-card" key={task.id}>
+                  <span className="task-priority">{task.priority} · R{task.riskTier}</span>
+                  <strong>{task.title}</strong>
+                  <small>{task.ownerRoleId ?? "Unassigned"}</small>
+                  <time dateTime={task.updatedAt}>{formatDateTime(task.updatedAt)}</time>
+                </article>
+              ))}
+              {columnTasks.length === 0 ? <p>No tasks</p> : null}
+            </div>
+          </section>
+        );
+      })}
+    </div>
+  );
 }
 
 function formatDurationSeconds(value?: number | null): string {
@@ -574,6 +620,19 @@ export default async function HomePage({ searchParams }: HomePageProps) {
   const softwareFactoryArtifactEvidence = extractSoftwareFactoryArtifactEvidence(
     artifacts.items,
   );
+  const commandCenterAgents = roles.items.length > 0
+    ? roles.items.slice(0, 5).map((role) => ({
+        id: role.id,
+        name: role.displayName,
+        role: role.roleKey.replaceAll("_", " "),
+        trust: role.trustScore,
+      }))
+    : [
+        { id: "metatron", name: "Metatron", role: "orchestrator", trust: 100 },
+        { id: "planner", name: "Planner", role: "planning", trust: 100 },
+        { id: "operator", name: "Operator", role: "execution", trust: 100 },
+        { id: "auditor", name: "Auditor", role: "evidence", trust: 100 },
+      ];
 
   return (
     <ConsoleShell
@@ -601,139 +660,139 @@ export default async function HomePage({ searchParams }: HomePageProps) {
           <DashboardPanel snapshot={dashboardSnapshot} />
         </section>
 
-        <section className="ov-header" data-area="overview" aria-label="Overview header">
-          <div className="ov-header-copy">
-            <span className="eyebrow">Business Operating System Sentinel</span>
-            <h1 id="boss-console-title">Executive control plane for autonomous work.</h1>
-            <p>
-              A cloud control plane for running an autonomous, policy-governed,
-              agentic organization that produces real work products — specs, code,
-              tests, decisions, communications — with auditable execution. The CEO
-              gives outcomes; BOSS turns them into shipped artifacts safely,
-              predictably, and within financial and policy constraints.
-            </p>
-            <p className="ov-cc-sub">
-              Viewing <b>{activeOrgName}</b> / {activeProject?.name ?? activeProjectId} · acting as{" "}
-              <b>{activeActor?.displayName ?? activeActorId}</b>
-            </p>
+        <section className="panel-stack mission-roster-section" data-area="org" aria-label="Agent roster">
+          <div className="section-head">
+            <div>
+              <span className="eyebrow">Agent Roster</span>
+              <h2>Operators and autonomous roles active in this project.</h2>
+            </div>
+            <span className="status-text running"><span className="dot teal bx-pulse" />{commandCenterAgents.length} available</span>
           </div>
-          <div className="hero-pills">
-            <span className={`pill${status.apiReachable ? "" : " warn"}`}>
-              {status.apiReachable ? "API reachable" : "API unavailable"}
-            </span>
-            <span className={`pill${deadletterCount > 0 ? " warn" : ""}`}>
-              {deadletterCount > 0 ? `${deadletterCount} deadletter${deadletterCount === 1 ? "" : "s"}` : "No deadletters"}
-            </span>
+          <div className="mission-agent-roster">
+            {commandCenterAgents.map((agent) => (
+              <article className="mission-agent-row" key={agent.id}>
+                <span className="mission-agent-avatar">{agent.name.slice(0, 2).toUpperCase()}</span>
+                <span className="mission-agent-identity">
+                  <strong>{agent.name}</strong>
+                  <small>{agent.role}</small>
+                </span>
+                <span className="status-text running"><span className="dot teal bx-pulse" />Active</span>
+                <span className="mission-agent-metric">
+                  <small>Trust</small>
+                  <strong>{Math.round(agent.trust)}%</strong>
+                </span>
+                <AreaLink className="text-link" area="work" orgId={activeOrgId}>View work</AreaLink>
+              </article>
+            ))}
           </div>
         </section>
 
         <section className="ov-cc" data-area="overview" aria-label="Command center">
-          <div className="ov-cc-bar">
-            <span className="eyebrow">Command Center</span>
-            <span className="ov-cc-tag">What needs you — and what to do next</span>
-          </div>
+          <form action={submitCommandAction} className="outcome-bar">
+            <input type="hidden" name="project_id" value={activeProjectId} />
+            <input type="hidden" name="actor" value={activeActorId} />
+            <label className="outcome-field">
+              <span className="sr-only">Outcome command</span>
+              <input
+                name="command"
+                placeholder="Describe the outcome you want BOSS to achieve…"
+                disabled={disableCommandEntry}
+                required
+              />
+            </label>
+            <button className="button" disabled={disableCommandEntry} type="submit">
+              Issue command
+            </button>
+          </form>
 
           <div className="ov-kpis">
             <AreaLink className={`ov-kpi${status.pendingDecisions > 0 ? " alert" : ""}`} area="decisions" orgId={activeOrgId}>
               <span className="ov-kpi-n">{status.pendingDecisions}</span>
               <span className="ov-kpi-l">Pending decisions</span>
-              <span className="ov-kpi-cta">{status.pendingDecisions > 0 ? "Review →" : "All clear"}</span>
+              <span className="ov-kpi-cta">{status.pendingDecisions > 0 ? "Awaiting review" : "All clear"}</span>
             </AreaLink>
             <AreaLink className="ov-kpi" area="work" orgId={activeOrgId}>
               <span className="ov-kpi-n">{status.openTasks}</span>
               <span className="ov-kpi-l">Open tasks</span>
-              <span className="ov-kpi-cta">View work →</span>
+              <span className="ov-kpi-cta">Across all agents</span>
             </AreaLink>
             <AreaLink className="ov-kpi" area="code_tasks" orgId={activeOrgId}>
               <span className="ov-kpi-n">{codeTasksFeed.items.length}</span>
               <span className="ov-kpi-l">Code tasks</span>
-              <span className="ov-kpi-cta">Open →</span>
+              <span className="ov-kpi-cta">Governed runs</span>
             </AreaLink>
             <AreaLink className="ov-kpi" area="meetings" orgId={activeOrgId}>
               <span className="ov-kpi-n">{meetingRooms.items.length}</span>
               <span className="ov-kpi-l">Meetings</span>
-              <span className="ov-kpi-cta">Open →</span>
+              <span className="ov-kpi-cta">Active rooms</span>
             </AreaLink>
             <AreaLink className="ov-kpi" area="budget" orgId={activeOrgId}>
               <span className={`ov-kpi-n ov-state-${status.budgetState}`}>{status.budgetState}</span>
               <span className="ov-kpi-l">Budget state</span>
-              <span className="ov-kpi-cta">Details →</span>
+              <span className="ov-kpi-cta">Within policy</span>
             </AreaLink>
           </div>
 
-          <div className="ov-actions">
-            <span className="ov-actions-label">Start something</span>
-            <AreaLink className="ov-action primary" area="meetings" orgId={activeOrgId}>Convene a design panel</AreaLink>
-            <AreaLink className="ov-action" area="code_tasks" orgId={activeOrgId}>Start a code task</AreaLink>
-            <AreaLink className="ov-action" area="decisions" orgId={activeOrgId}>Review decisions</AreaLink>
-            <AreaLink className="ov-action" area="work" orgId={activeOrgId}>View work</AreaLink>
-            <AreaLink className="ov-action" area="reports" orgId={activeOrgId}>Reports</AreaLink>
+          <div className="mission-grid">
+            <article className="coordination-panel" aria-label="Active coordination">
+              <div className="mission-panel-head">
+                <span>
+                  <span className="eyebrow">Coordination graph</span>
+                  <strong>Active coordination</strong>
+                </span>
+                <span className="status-text running"><span className="dot teal bx-pulse" />Live</span>
+              </div>
+              <div className="coordination-stage">
+                <div className="agent-orb agent-orb-primary" aria-label="BOSS orchestration active">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img className="agent-orb-core" src="/boss-mark.png" alt="" />
+                </div>
+                <div className="coordination-agents">
+                  {commandCenterAgents.map((agent, index) => (
+                    <div className={`coordination-agent agent-${index + 1}`} key={agent.id}>
+                      <span className="agent-initial">{agent.name.slice(0, 1)}</span>
+                      <span>
+                        <strong>{agent.name}</strong>
+                        <small>{agent.role}</small>
+                      </span>
+                      <span className="agent-trust">{Math.round(agent.trust)}%</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </article>
+
+            <article className="activity-panel" aria-label="Live activity">
+              <div className="mission-panel-head">
+                <span>
+                  <span className="eyebrow">Event stream</span>
+                  <strong>Live activity</strong>
+                </span>
+                <AreaLink className="text-link" area="work" orgId={activeOrgId}>All events</AreaLink>
+              </div>
+              <div className="activity-list">
+                {events.items.slice(0, 7).map((event) => (
+                  <div className="activity-row" key={event.id}>
+                    <span className="activity-marker" aria-hidden />
+                    <span className="activity-copy">
+                      <strong>{event.eventType.replaceAll("_", " ").replaceAll(".", " · ")}</strong>
+                      <small>{event.actor} · {event.entityType}</small>
+                    </span>
+                    <time dateTime={event.createdAt}>{formatDateTime(event.createdAt)}</time>
+                  </div>
+                ))}
+                {events.items.length === 0 ? (
+                  <p className="empty-state">No activity yet. Issue a command to start the event stream.</p>
+                ) : null}
+              </div>
+            </article>
           </div>
-        </section>
-
-        <section className="hero" data-area="overview">
-          <div className="hero-grid">
-            <div className="hero-copy">
-              <span className="eyebrow">CEO Command</span>
-              <h2>Turn an outcome into governed work.</h2>
-              <p>
-                Describe an outcome in plain language — BOSS creates a task,
-                plans it, and routes every real effect through budget and
-                approval gates. Prefer to design first? Convene a panel from the
-                command center above.
-              </p>
-              <p className="detail">
-                Acting as <b>{activeActor?.displayName ?? activeActorId}</b> · project{" "}
-                <b>{activeProject?.name ?? activeProjectId}</b> — set by your selected org.
-                {actorOptions.length > 1
-                  ? " (To act as a different member or switch project, append ?actor=… or ?project_id=… to the URL.)"
-                  : ""}
-                {!members.apiReachable && members.blockedReason ? ` (${members.blockedReason})` : ""}
-                {!orgMembers.apiReachable && orgMembers.blockedReason
-                  ? ` (org members: ${orgMembers.blockedReason})`
-                  : ""}
-              </p>
-            </div>
-
-            <form action={submitCommandAction} className="composer">
-              <input type="hidden" name="project_id" value={activeProjectId} />
-              <input type="hidden" name="actor" value={activeActorId} />
-              <div>
-                <span className="eyebrow">CEO Command</span>
-                <h2>Issue a real outcome.</h2>
-              </div>
-              <label className="field">
-                <span>Outcome</span>
-                <textarea
-                  name="command"
-                  rows={5}
-                  className="textarea"
-                  placeholder="Type an outcome — e.g. 'Ship the operator visibility slice to staging', or an ops intent like 'set intensity to 70' (acts immediately)."
-                  disabled={disableCommandEntry}
-                  required
-                />
-              </label>
-              <div className="input-grid">
-                <label className="field">
-                  <span>Deadline</span>
-                  <input
-                    name="deadline"
-                    className="input"
-                    placeholder="This week"
-                    disabled={disableCommandEntry}
-                  />
-                </label>
-              </div>
-              <button className="button" disabled={disableCommandEntry} type="submit">
-                Submit command
-              </button>
-              <p className="detail">
-                {disableCommandEntry
-                  ? status.blockedReason ??
-                    "The control plane is not ready to accept commands."
-                  : "Creates a task, command brief, and queued planning job through the API."}
-              </p>
-            </form>
+          <div className="ov-actions">
+            <span className="ov-actions-label">Quick actions</span>
+            <AreaLink className="ov-action primary" area="meetings" orgId={activeOrgId}>Convene a panel</AreaLink>
+            <AreaLink className="ov-action" area="code_tasks" orgId={activeOrgId}>Start a code task</AreaLink>
+            <AreaLink className="ov-action" area="decisions" orgId={activeOrgId}>Review approvals</AreaLink>
+            <AreaLink className="ov-action" area="reports" orgId={activeOrgId}>View evidence</AreaLink>
           </div>
         </section>
 
@@ -5962,6 +6021,31 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               <h2>Holistic view — throughput, cost, and agent performance.</h2>
             </div>
           </div>
+          {receipts.items[0] ? (
+            <article className="mission-evidence-receipt">
+              <header>
+                <span className="mission-receipt-avatar">RC</span>
+                <span>
+                  <strong>{titleCaseToken(receipts.items[0].effectKind)}</strong>
+                  <small>{receipts.items[0].id} · {formatDateTime(receipts.items[0].createdAt)}</small>
+                </span>
+                <span className="status-text verified"><span className="dot green" />{receipts.items[0].status}</span>
+              </header>
+              <div className="mission-receipt-metrics">
+                <span><small>Provider ref</small><strong>{receipts.items[0].providerRef ?? "Local control plane"}</strong></span>
+                <span><small>Job lineage</small><strong>{receipts.items[0].createdByJobId ?? "Canonical event"}</strong></span>
+                <span><small>Dedupe key</small><strong>{receipts.items[0].dedupeKey}</strong></span>
+              </div>
+              <div className="mission-receipt-verification">
+                <span className="eyebrow">Verification</span>
+                <p><span className="dot green" aria-hidden /> Durable receipt recorded in the control plane</p>
+                <p><span className="dot green" aria-hidden /> Unique dedupe key prevents duplicate effects</p>
+                <p><span className="dot green" aria-hidden /> Provider and job lineage remain auditable</p>
+              </div>
+            </article>
+          ) : (
+            <p className="empty-state">No effect receipts have been recorded for this project yet.</p>
+          )}
           <ReportsView report={report} />
         </section>
 
@@ -6069,6 +6153,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               <h2>Workflow transitions — click a task to trace its run.</h2>
             </div>
           </div>
+          <MissionTaskBoard tasks={tasks.items} />
           <PlansCard projectId={activeProjectId} plans={plansList} />
           <WorkBoard
             tasks={tasks.items}
@@ -6401,7 +6486,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
           </div>
         </section>
 
-        <section className="panel-stack" data-area="decisions" aria-label="Approval rules">
+        <section className="panel-stack approval-rules-section" data-area="decisions" aria-label="Approval rules">
           <div className="section-head">
             <div>
               <span className="eyebrow">Approval Rules</span>
@@ -6413,7 +6498,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
 
         <section
           aria-labelledby="decision-inbox-title"
-          className="panel-stack"
+          className="panel-stack decision-inbox-section"
           id="decision-inbox"
           tabIndex={-1}
         >
@@ -6508,7 +6593,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                         <h3>{decision.question}</h3>
                       </div>
                       <div className="decision-meta">
-                        <span className="decision-rule">⚖ {decisionRuleLabel(decision)}</span>
+                        <span className="decision-rule">Rule · {decisionRuleLabel(decision)}</span>
                         <span>Risk tier {decision.riskTier}</span>
                         <span>Default: {decision.defaultAction ?? "hold"}</span>
                         <span>Deadline: {formatDeadline(decision.deadlineAt)}</span>

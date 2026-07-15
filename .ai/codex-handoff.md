@@ -1,5 +1,20 @@
 # Codex Handoff
 
+## Active Codex slice — 2026-07-15
+
+- Plane: `BOSS-112` (`f5b2a54d-3378-4597-a12d-8905d2eb5196`), In Progress.
+- Branch: `ai/codex/boss-112-design-system`, based on current `origin/main`.
+- Scope: approved screenshot-driven mission-control design system for `apps/web`.
+- Files: new design token/component layer, supplied BOSS mark, Phosphor icons,
+  command center, five-state task board, agent roster, approval ordering,
+  evidence receipt, responsive/reduced-motion behavior, tests, and docs.
+- Coordination: no overlap with PRs #9, #11, or #13. PR #12 touches one nav
+  description and two Coding Pipeline copy lines in files changed here; its VAG
+  feature is not absorbed, and merge order may require a localized copy rebase.
+  No external provider behavior, schema, budget, receipt, or worker logic changed.
+- Plane is now the mandatory system of record in `AGENTS.md`; future sessions
+  must deduplicate/start/update a Plane issue before implementation.
+
 Last updated: 2026-06-05T17:30Z (5 agents managed + integrated + validate green: DevOps AUTO-004 Closed 990d00e + .env full + full-validate target + release script; Security rate 013 Closed 5083391 in-mem + tests; Arch pag 014 Closed 4dd031c; PM audit dcd5fc8 + GAP-PRD-AUDIT-001 P3; QA e2e tests a374f4a (killed long run); .ai/ + commit/push/PR#3; only 1 P3 local + external blocked)
 
 ## Current Overall Product Status
