@@ -45,6 +45,28 @@ Use focused branches:
 Every PR should include requirement IDs, relationship to parallel agent work,
 tests run, risks, and handoff notes.
 
+## Plane work tracking — mandatory system of record
+
+Plane is the mandatory system of record for this project. Track every task,
+bug, feature, PRD/spec, roadmap item, and in-progress change as an issue in the
+`goldeneye` workspace, BOSS project
+`cc97d5cc-e8c6-4893-ac14-7f646c37f3d7`, at
+`https://plane.local.sean.network`.
+
+- API base: `https://plane.local.sean.network/api/v1`.
+- Authenticate with `X-API-Key`; never commit the key. Fetch it from the ops
+  secret store as `PLANE_API_KEY` with
+  `GET $OPS_BASE_URL/secret?key=PLANE_API_KEY` and header
+  `X-Ops-Token: $OPS_TOKEN` (or the equivalent injected ops-token variable).
+- Before starting work, deduplicate against existing Plane issues and ensure an
+  issue exists. Keep it current through Backlog → Todo → In Progress → Done;
+  close it only when shipped.
+- Link specs, commits, pull requests, validation evidence, risks, and blockers
+  from the issue so Plane mirrors reality.
+- Ops `/requests` are auto-filed as Plane issues; do not duplicate them.
+
+Re-read this section at the start of every BOSS session before taking work.
+
 ## Build order
 
 Implement the smallest vertical slice first:
