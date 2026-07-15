@@ -4527,6 +4527,177 @@ paths:
       responses:
         '204': { description: Event subscription deleted }
         '404': { description: Event subscription not found in project }
+  /v1/webhook-endpoints:
+    get:
+      summary: List project-scoped outbound webhook endpoints
+      parameters:
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Webhook endpoint list }
+    post:
+      summary: Register an outbound webhook endpoint using a secret reference
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id, url, secret_ref]
+              properties:
+                project_id: { type: string }
+                url: { type: string, format: uri }
+                secret_ref: { type: string, example: 'env:BOSS_OUTBOUND_WEBHOOK_SECRET' }
+                description: { type: string }
+                data_boundary: { type: string, enum: [public, internal, confidential, restricted, local-only], default: internal }
+                enabled: { type: boolean, default: true }
+                actor: { type: string, default: system }
+      responses:
+        '201': { description: Webhook endpoint created }
+        '422': { description: Invalid URL, secret reference, or boundary }
+  /v1/webhook-endpoints/{endpoint_id}:
+    patch:
+      summary: Update an outbound webhook endpoint
+      parameters:
+        - name: endpoint_id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id]
+              properties:
+                project_id: { type: string }
+                url: { type: string, format: uri }
+                secret_ref: { type: string }
+                description: { type: string }
+                data_boundary: { type: string, enum: [public, internal, confidential, restricted, local-only] }
+                enabled: { type: boolean }
+                actor: { type: string, default: system }
+      responses:
+        '200': { description: Webhook endpoint updated }
+        '404': { description: Webhook endpoint not found }
+        '422': { description: Invalid endpoint update }
+    delete:
+      summary: Soft-delete an outbound webhook endpoint
+      parameters:
+        - name: endpoint_id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+        - name: actor
+          in: query
+          required: false
+          schema: { type: string, default: system }
+      responses:
+        '204': { description: Webhook endpoint deleted }
+        '404': { description: Webhook endpoint not found }
+  /v1/webhook-endpoints/{endpoint_id}/deliver:
+    post:
+      summary: Queue a durable outbound webhook delivery
+      parameters:
+        - name: endpoint_id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id, event_type, dedupe_key]
+              properties:
+                project_id: { type: string }
+                event_type: { type: string }
+                payload: { type: object, additionalProperties: true }
+                dedupe_key: { type: string }
+                data_boundary: { type: string, enum: [public, internal, confidential, restricted, local-only], default: internal }
+                priority: { type: integer, default: 100 }
+                max_attempts: { type: integer, minimum: 1, maximum: 20, default: 3 }
+                actor: { type: string, default: system }
+      responses:
+        '201': { description: Delivery and leased job queued, or existing deduplicated delivery returned }
+        '404': { description: Enabled endpoint not found }
+        '422': { description: Boundary or payload validation failed }
+  /v1/webhook-deliveries:
+    get:
+      summary: List durable outbound webhook deliveries
+      parameters:
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 500, default: 100 }
+      responses:
+        '200': { description: Webhook delivery list }
+  /v1/webhook-deliveries/{delivery_id}/deliver:
+    post:
+      summary: Execute a delivery owned by a leased webhook worker job
+      parameters:
+        - name: delivery_id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id, created_by_job_id, worker_id, lease_token]
+              properties:
+                project_id: { type: string }
+                created_by_job_id: { type: string }
+                worker_id: { type: string }
+                lease_token: { type: string, writeOnly: true }
+      responses:
+        '200': { description: Delivery attempt result with Receipt linkage }
+        '404': { description: Delivery not found }
+        '422': { description: Active worker lease does not own the delivery }
+  /v1/webhooks/inbound/{source}:
+    post:
+      security: []
+      summary: Receive a raw-body signed provider webhook
+      parameters:
+        - name: source
+          in: path
+          required: true
+          schema: { type: string, example: github }
+        - name: X-Hub-Signature-256
+          in: header
+          required: true
+          schema: { type: string }
+        - name: X-GitHub-Delivery
+          in: header
+          required: true
+          schema: { type: string }
+        - name: X-GitHub-Event
+          in: header
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: true }
+      responses:
+        '202': { description: Accepted, duplicate, or unrouted delivery }
+        '400': { description: Invalid signed payload or missing delivery identifier }
+        '401': { description: Missing or invalid signature; rejection metadata audited }
 components:
   securitySchemes:
     BossBearerAuth:

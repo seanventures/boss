@@ -6,6 +6,13 @@ All notable changes to BOSS are documented in this file.
 
 ### Added
 
+- Added project-scoped outbound webhook endpoints and durable deliveries with env-only secret
+  references, exact-body HMAC-SHA256 signing, Receipt-backed attempts, lease retries/backoff,
+  deterministic dedupe, boundary gates, delivery observability, and deadletter state.
+- Added an auth-exempt signed inbound webhook receiver with raw-body constant-time verification,
+  durable GitHub delivery idempotency, repository routing, `pull_request`/`check_suite`/
+  `issue_comment` normalization, rejection/unrouted audit events, and reactive job dispatch.
+
 - Consolidated real-time dashboard (`dashboard.py`): `GET /v1/dashboard` aggregates
   budget/queue/workload/incidents + provider-health + latest canary/eval + spend run-rate + ack
   backlog with a monotonic cursor; `GET /v1/dashboard/poll` is a bounded long-poll that returns when

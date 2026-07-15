@@ -116,6 +116,35 @@ def dispatch_event(
                 },
             )
             continue
+        config = subscription.get("config") or {}
+        dedupe_hash = hashlib.sha256(
+            f"{subscription['id']}:{event_id}".encode("utf-8")
+        ).hexdigest()
+        if subscription["sink_kind"] == "webhook_out":
+            # Local imports avoid a module cycle through jobs -> core -> dispatcher.
+            from ..config import get_settings
+            from .webhooks import WebhookService
+
+            delivery = WebhookService(get_settings()).enqueue_delivery(
+                connection,
+                project_id,
+                subscription["sink_ref"],
+                event_type,
+                {
+                    "actor": actor,
+                    "entity_type": entity_type,
+                    "entity_id": entity_id,
+                    "event_data": data,
+                },
+                f"event-dispatch:{dedupe_hash}",
+                event_id=event_id,
+                data_boundary=sink_boundary,
+                priority=int(config.get("priority", 100)),
+                max_attempts=int(config.get("max_attempts", 3)),
+                actor="event-dispatcher",
+            )
+            enqueued.append(delivery)
+            continue
         if subscription["sink_kind"] != "job":
             logger.warning(
                 "event_dispatch.unsupported_sink",
@@ -128,10 +157,6 @@ def dispatch_event(
             )
             continue
 
-        config = subscription.get("config") or {}
-        dedupe_hash = hashlib.sha256(
-            f"{subscription['id']}:{event_id}".encode("utf-8")
-        ).hexdigest()
         task_id = data.get("task_id")
         job = enqueue_job(
             connection,

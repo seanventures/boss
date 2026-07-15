@@ -18,8 +18,10 @@ class FakeControlPlaneClient:
     def __init__(self, leased_job=None):
         self.leased_job = leased_job
         self.calls = []
+        self.worker_id = None
 
     def poll(self, worker_id, capabilities, lease_ttl_seconds):
+        self.worker_id = worker_id
         self.calls.append(("poll", worker_id, tuple(capabilities), lease_ttl_seconds))
         return self.leased_job
 
@@ -134,6 +136,16 @@ class FakeControlPlaneClient:
             "provider_ref": "slack-webhook:slack:#ops",
         }
 
+    def deliver_webhook(self, delivery_id, payload):
+        self.calls.append(("deliver_webhook", delivery_id, payload))
+        if delivery_id == "whdel_fail":
+            return {"status": "failed", "message": "endpoint unavailable"}
+        return {
+            "status": "delivered",
+            "id": delivery_id,
+            "receipt_id": "rcpt_webhook",
+        }
+
     def sync_provider_resources(self, payload):
         self.calls.append(("sync_provider_resources", payload))
         if payload.get("provider_account_id") == "prov_fail":
@@ -206,6 +218,7 @@ def test_worker_capabilities_include_infra_job_kinds():
     assert "agent.model_spend_analyst.model_spend_brief" in supported
     assert "enterprise.marketplace.validate" in supported
     assert "providerops.sync.readonly" in supported
+    assert "webhook.outbound.deliver" in supported
 
 
 def test_agent_work_product_strategies_cover_initial_agent_capabilities():
@@ -662,6 +675,67 @@ def test_run_worker_cycle_executes_queued_outbox_delivery_job():
         "deliver_outbox_message",
         "complete",
     ]
+
+
+def test_run_worker_cycle_executes_queued_webhook_delivery_job():
+    leased_job = LeasedJob(
+        id="job_webhook",
+        project_id="boss-dogfood",
+        task_id=None,
+        kind="webhook.outbound.deliver",
+        payload={"delivery_id": "whdel_ok"},
+        attempt=1,
+        max_attempts=3,
+        lease_token="lease_token",
+        lease_expires_at="future",
+    )
+    client = FakeControlPlaneClient(leased_job)
+    settings = SimpleNamespace(worker_id="worker-test", lease_ttl_seconds=60)
+
+    assert run_worker_cycle(client, settings) is True
+    assert [call[0] for call in client.calls] == [
+        "poll",
+        "heartbeat",
+        "deliver_webhook",
+        "complete",
+    ]
+    assert client.calls[2][1:] == (
+        "whdel_ok",
+        {
+            "project_id": "boss-dogfood",
+            "created_by_job_id": "job_webhook",
+            "worker_id": "worker-test",
+            "lease_token": "lease_token",
+        },
+    )
+
+
+def test_webhook_failure_uses_retryable_exponential_backoff():
+    leased_job = LeasedJob(
+        id="job_webhook_fail",
+        project_id="boss-dogfood",
+        task_id=None,
+        kind="webhook.outbound.deliver",
+        payload={"delivery_id": "whdel_fail"},
+        attempt=3,
+        max_attempts=5,
+        lease_token="lease_token",
+        lease_expires_at="future",
+    )
+    client = FakeControlPlaneClient(leased_job)
+    settings = SimpleNamespace(worker_id="worker-test", lease_ttl_seconds=60)
+
+    assert run_worker_cycle(client, settings) is True
+    assert [call[0] for call in client.calls] == [
+        "poll",
+        "heartbeat",
+        "deliver_webhook",
+        "fail",
+    ]
+    failure = client.calls[-1]
+    assert failure[4]["message"] == "endpoint unavailable"
+    assert failure[5] is True
+    assert failure[6] == 20
 
 
 def test_run_worker_cycle_executes_queued_pr_merge_job():

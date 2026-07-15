@@ -25,6 +25,7 @@ class ControlPlaneClient:
         self, base_url: str, timeout: float = 30.0, api_key: Optional[str] = None
     ):
         self.base_url = base_url.rstrip("/")
+        self.worker_id: Optional[str] = None
         headers = {"Accept": "application/json"}
         if api_key and api_key.strip():
             headers["Authorization"] = f"Bearer {api_key.strip()}"
@@ -46,6 +47,7 @@ class ControlPlaneClient:
         capabilities: list[str],
         lease_ttl_seconds: int,
     ) -> Optional[LeasedJob]:
+        self.worker_id = worker_id
         response = self._client.post(
             "/v1/worker/poll",
             json={
@@ -154,6 +156,15 @@ class ControlPlaneClient:
     ) -> dict[str, Any]:
         response = self._client.post(
             f"/v1/comms/outbox/{message_id}/deliver", json=payload
+        )
+        response.raise_for_status()
+        return response.json()
+
+    def deliver_webhook(
+        self, delivery_id: str, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        response = self._client.post(
+            f"/v1/webhook-deliveries/{delivery_id}/deliver", json=payload
         )
         response.raise_for_status()
         return response.json()

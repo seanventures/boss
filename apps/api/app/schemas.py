@@ -1401,6 +1401,99 @@ class EventSubscriptionListResponse(BaseModel):
     items: list[EventSubscriptionSummary]
 
 
+class WebhookEndpointCreateRequest(BaseModel):
+    project_id: str
+    url: str
+    secret_ref: str
+    description: Optional[str] = None
+    data_boundary: DataBoundary = "internal"
+    enabled: bool = True
+    actor: str = "system"
+
+
+class WebhookEndpointUpdateRequest(BaseModel):
+    project_id: str
+    url: Optional[str] = None
+    secret_ref: Optional[str] = None
+    description: Optional[str] = None
+    data_boundary: Optional[DataBoundary] = None
+    enabled: Optional[bool] = None
+    actor: str = "system"
+
+
+class WebhookEndpointSummary(BaseModel):
+    id: str
+    project_id: str
+    url: str
+    secret_ref: str
+    description: Optional[str] = None
+    data_boundary: DataBoundary
+    enabled: bool
+    created_at: str
+    updated_at: str
+
+
+class WebhookEndpointListResponse(BaseModel):
+    project_id: str
+    items: list[WebhookEndpointSummary]
+
+
+class WebhookDeliveryCreateRequest(BaseModel):
+    project_id: str
+    event_type: str
+    payload: dict[str, Any] = Field(default_factory=dict)
+    dedupe_key: str
+    data_boundary: DataBoundary = "internal"
+    priority: int = 100
+    max_attempts: int = Field(default=3, ge=1, le=20)
+    actor: str = "system"
+
+
+class WebhookDeliveryExecuteRequest(BaseModel):
+    project_id: str
+    created_by_job_id: str
+    worker_id: str
+    lease_token: str
+
+
+class WebhookDeliverySummary(BaseModel):
+    id: str
+    project_id: str
+    endpoint_id: str
+    event_id: Optional[str] = None
+    event_type: str
+    status: str
+    dedupe_key: str
+    request_body: dict[str, Any]
+    response: Optional[dict[str, Any]] = None
+    last_error: Optional[dict[str, Any]] = None
+    receipt_id: Optional[str] = None
+    attempt_count: int
+    data_boundary: DataBoundary
+    next_attempt_at: Optional[str] = None
+    delivered_at: Optional[str] = None
+    created_at: str
+    updated_at: str
+    job_id: Optional[str] = None
+    created: Optional[bool] = None
+    message: Optional[str] = None
+
+
+class WebhookDeliveryListResponse(BaseModel):
+    project_id: str
+    items: list[WebhookDeliverySummary]
+
+
+class InboundWebhookResponse(BaseModel):
+    status: str
+    source: str
+    delivery_id: Optional[str] = None
+    inbound_webhook_id: Optional[str] = None
+    event_id: Optional[str] = None
+    project_id: Optional[str] = None
+    duplicate: bool = False
+
+
 class OpenAIPlanRequest(BaseModel):
     project_id: str
     reservation_id: str

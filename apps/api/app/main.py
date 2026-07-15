@@ -176,6 +176,15 @@ from .schemas import (
     EventSubscriptionListResponse,
     EventSubscriptionSummary,
     EventSubscriptionUpdateRequest,
+    InboundWebhookResponse,
+    WebhookDeliveryCreateRequest,
+    WebhookDeliveryExecuteRequest,
+    WebhookDeliveryListResponse,
+    WebhookDeliverySummary,
+    WebhookEndpointCreateRequest,
+    WebhookEndpointListResponse,
+    WebhookEndpointSummary,
+    WebhookEndpointUpdateRequest,
     ExternalResourceListResponse,
     ExternalResourceSummary,
     HealthResponse,
@@ -392,6 +401,12 @@ from .services.event_subscription_service import (
     list_event_subscriptions,
     update_event_subscription,
 )
+from .services.webhooks import (
+    InboundWebhookService,
+    WebhookDeliveryNotFoundError,
+    WebhookEndpointNotFoundError,
+    WebhookService,
+)
 from .services.infrastructure import (
     InfraResourceNotFoundError,
     InfrastructureService,
@@ -471,6 +486,8 @@ intake = CommandIntakeService(settings)
 jobs = JobLeaseService(settings)
 secret_refs = SecretRefService()
 receipts = ReceiptService()
+webhooks = WebhookService(settings)
+inbound_webhooks = InboundWebhookService(settings)
 software_factory = SoftwareFactoryService(settings)
 decisions = DecisionService(settings)
 specpack = SpecPackService(settings)
@@ -707,7 +724,18 @@ async def require_transport_auth_for_v1(request: Request, call_next):
     is_preview_web = (
         len(_parts) >= 5 and _parts[1] == "v1" and _parts[2] == "previews" and _parts[4] == "web"
     )
-    if not request.url.path.startswith("/v1/") or not auth_required or is_preview_web:
+    is_inbound_webhook = (
+        len(_parts) >= 5
+        and _parts[1] == "v1"
+        and _parts[2] == "webhooks"
+        and _parts[3] == "inbound"
+    )
+    if (
+        not request.url.path.startswith("/v1/")
+        or not auth_required
+        or is_preview_web
+        or is_inbound_webhook
+    ):
         principal_token = current_api_principal.set(None)
         authenticated_token = current_transport_authenticated.set(False)
         auth_method_token = current_auth_method.set(None)
@@ -3974,6 +4002,194 @@ def delete_event_subscription_route(
         if not deleted:
             raise HTTPException(status_code=404, detail="Event subscription not found.")
     return Response(status_code=204)
+
+
+@app.get("/v1/webhook-endpoints", response_model=WebhookEndpointListResponse)
+def list_webhook_endpoints(project_id: str) -> WebhookEndpointListResponse:
+    with begin(engine) as connection:
+        return WebhookEndpointListResponse(
+            project_id=project_id,
+            items=webhooks.list_endpoints(connection, project_id),
+        )
+
+
+@app.post(
+    "/v1/webhook-endpoints",
+    response_model=WebhookEndpointSummary,
+    status_code=201,
+)
+def create_webhook_endpoint(
+    payload: WebhookEndpointCreateRequest,
+) -> WebhookEndpointSummary:
+    with begin(engine) as connection:
+        try:
+            require_project_actor(
+                connection,
+                payload.project_id,
+                payload.actor,
+                "comms_manage",
+            )
+            item = webhooks.create_endpoint(
+                connection,
+                payload.project_id,
+                payload.url,
+                payload.secret_ref,
+                description=payload.description,
+                data_boundary=payload.data_boundary,
+                enabled=payload.enabled,
+                actor=payload.actor,
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        return WebhookEndpointSummary(**item)
+
+
+@app.patch(
+    "/v1/webhook-endpoints/{endpoint_id}",
+    response_model=WebhookEndpointSummary,
+)
+def update_webhook_endpoint(
+    endpoint_id: str,
+    payload: WebhookEndpointUpdateRequest,
+) -> WebhookEndpointSummary:
+    with begin(engine) as connection:
+        try:
+            require_project_actor(
+                connection,
+                payload.project_id,
+                payload.actor,
+                "comms_manage",
+            )
+            item = webhooks.update_endpoint(
+                connection,
+                payload.project_id,
+                endpoint_id,
+                url=payload.url,
+                secret_ref=payload.secret_ref,
+                description=payload.description,
+                data_boundary=payload.data_boundary,
+                enabled=payload.enabled,
+                actor=payload.actor,
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        if item is None:
+            raise HTTPException(status_code=404, detail="Webhook endpoint not found.")
+        return WebhookEndpointSummary(**item)
+
+
+@app.delete("/v1/webhook-endpoints/{endpoint_id}", status_code=204)
+def delete_webhook_endpoint(
+    endpoint_id: str,
+    project_id: str,
+    actor: str = "system",
+):
+    with begin(engine) as connection:
+        require_project_actor(connection, project_id, actor, "comms_manage")
+        if not webhooks.delete_endpoint(
+            connection, project_id, endpoint_id, actor=actor
+        ):
+            raise HTTPException(status_code=404, detail="Webhook endpoint not found.")
+    return Response(status_code=204)
+
+
+@app.post(
+    "/v1/webhook-endpoints/{endpoint_id}/deliver",
+    response_model=WebhookDeliverySummary,
+    status_code=201,
+)
+def queue_webhook_delivery(
+    endpoint_id: str,
+    payload: WebhookDeliveryCreateRequest,
+) -> WebhookDeliverySummary:
+    with begin(engine) as connection:
+        try:
+            require_project_actor(
+                connection,
+                payload.project_id,
+                payload.actor,
+                "comms_manage",
+            )
+            item = webhooks.enqueue_delivery(
+                connection,
+                payload.project_id,
+                endpoint_id,
+                payload.event_type,
+                payload.payload,
+                payload.dedupe_key,
+                data_boundary=payload.data_boundary,
+                priority=payload.priority,
+                max_attempts=payload.max_attempts,
+                actor=payload.actor,
+            )
+        except WebhookEndpointNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        return WebhookDeliverySummary(**item)
+
+
+@app.get("/v1/webhook-deliveries", response_model=WebhookDeliveryListResponse)
+def list_webhook_deliveries(
+    project_id: str, limit: int = 100
+) -> WebhookDeliveryListResponse:
+    if limit < 1 or limit > 500:
+        raise HTTPException(status_code=400, detail="limit must be between 1 and 500.")
+    with begin(engine) as connection:
+        return WebhookDeliveryListResponse(
+            project_id=project_id,
+            items=webhooks.list_deliveries(connection, project_id, limit),
+        )
+
+
+@app.post(
+    "/v1/webhook-deliveries/{delivery_id}/deliver",
+    response_model=WebhookDeliverySummary,
+)
+def execute_webhook_delivery(
+    delivery_id: str,
+    payload: WebhookDeliveryExecuteRequest,
+) -> WebhookDeliverySummary:
+    with begin(engine) as connection:
+        try:
+            item = webhooks.deliver(
+                connection,
+                payload.project_id,
+                delivery_id,
+                payload.created_by_job_id,
+                payload.worker_id,
+                payload.lease_token,
+            )
+        except WebhookDeliveryNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        return WebhookDeliverySummary(**item)
+
+
+@app.post(
+    "/v1/webhooks/inbound/{source}",
+    response_model=InboundWebhookResponse,
+    status_code=202,
+)
+async def receive_inbound_webhook(
+    source: str,
+    request: Request,
+) -> InboundWebhookResponse:
+    raw_body = await request.body()
+    headers = {key.lower(): value for key, value in request.headers.items()}
+    with begin(engine) as connection:
+        result = inbound_webhooks.ingest(
+            connection,
+            source,
+            raw_body,
+            headers,
+        )
+    if result["status"] == "rejected":
+        raise HTTPException(status_code=401, detail="Invalid webhook signature.")
+    if result["status"] == "invalid":
+        raise HTTPException(status_code=400, detail="Invalid webhook payload.")
+    return InboundWebhookResponse(**result)
 
 
 @app.get("/v1/mcp/servers")

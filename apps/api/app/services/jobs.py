@@ -1210,6 +1210,28 @@ class JobLeaseService:
     def _mark_related_message_retrying(
         self, connection: Connection, row, retry_delay_seconds: int
     ) -> None:
+        if row["kind"] == "webhook.outbound.deliver":
+            delivery_id = (row["payload"] or {}).get("delivery_id")
+            if delivery_id:
+                connection.execute(
+                    text(
+                        """
+                        UPDATE webhook_deliveries
+                        SET status = 'retrying',
+                            next_attempt_at = :next_attempt_at,
+                            updated_at = :updated_at
+                        WHERE id = :delivery_id AND project_id = :project_id
+                        """
+                    ),
+                    {
+                        "delivery_id": str(delivery_id),
+                        "project_id": row["project_id"],
+                        "next_attempt_at": now_utc()
+                        + timedelta(seconds=retry_delay_seconds),
+                        "updated_at": now_utc(),
+                    },
+                )
+            return
         if row["kind"] != "comms.outbox.deliver":
             return
         payload = row["payload"] or {}
@@ -1226,6 +1248,28 @@ class JobLeaseService:
     def _mark_related_message_deadlettered(
         self, connection: Connection, row, deadletter_id: str
     ) -> None:
+        if row["kind"] == "webhook.outbound.deliver":
+            delivery_id = (row["payload"] or {}).get("delivery_id")
+            if delivery_id:
+                connection.execute(
+                    text(
+                        """
+                        UPDATE webhook_deliveries
+                        SET status = 'deadlettered', next_attempt_at = NULL,
+                            last_error = COALESCE(last_error, '{}'::jsonb)
+                                || CAST(:deadletter AS JSONB),
+                            updated_at = :updated_at
+                        WHERE id = :delivery_id AND project_id = :project_id
+                        """
+                    ),
+                    {
+                        "delivery_id": str(delivery_id),
+                        "project_id": row["project_id"],
+                        "deadletter": json.dumps({"deadletter_id": deadletter_id}),
+                        "updated_at": now_utc(),
+                    },
+                )
+            return
         if row["kind"] != "comms.outbox.deliver":
             return
         payload = row["payload"] or {}

@@ -1,10 +1,10 @@
 # BOSS Autonomous Delivery Status
 
-**Last updated**: 2026-07-15 (Codex OSS-readiness batch BOSS-20/BOSS-21/BOSS-72 implemented; validation complete; draft PR #15 open)
+**Last updated**: 2026-07-15 (Codex webhook batch BOSS-22/BOSS-23 implemented and validated; stacked draft PR preparation in progress)
 **Repo root**: /Volumes/DataSSD1/test/boss
 **Git remote**: https://github.com/seanheiney/boss
-**Current branch**: ai/codex/oss-reactive-docs-foundation (based on origin/main `44b985b`)
-**Base branch**: main (origin/HEAD)
+**Current branch**: ai/codex/webhook-foundation (stacked on `ai/codex/oss-reactive-docs-foundation`, draft PR #15)
+**Base branch**: ai/codex/oss-reactive-docs-foundation until PR #15 merges
 **Product**: BOSS v0.4.1 target (Business Operating System Sentinel)
 **Mission**: Complete product to production-grade, tested, documented, pushed, Codex-coordinated, ready for real users. Grind until all discovered PRD/spec features satisfy world-class DoD or truly blocked.
 
@@ -14,6 +14,7 @@
 - GitHub: 0 open issues; 2 open cursor PRs (on main); no open grok/codex PRs visible.
 
 ## Overall Product Status
+- OSS webhook foundation advanced on 2026-07-15: Plane BOSS-22/BOSS-23 now provide Receipt-backed signed outbound delivery with leased retries/deadletters and a raw-body-verified, idempotent inbound GitHub receiver that routes into the reactive event dispatcher. Ten focused API/integration tests, seven foundation regressions, and twenty-five worker tests pass.
 - OSS-readiness foundation advanced on 2026-07-15: transactional allowlisted event dispatch, project subscription registry/CRUD/defaults, and TRACEABILITY-derived feature catalog are implemented for Plane BOSS-20, BOSS-21, and BOSS-72. Downstream webhook and docs-agent consumers remain separate Plane tickets.
 - Current validation: 7 new acceptance tests + 5 representative legacy job tests pass on fresh Postgres; schema reapplication, focused lint/compile, diff checks, and OpenAPI YAML parsing pass. Full API baseline remains 241 passed/38 failed; selected failures reproduce unchanged on pristine origin/main.
 - Coordination: open PR #14 is frontend-only and non-overlapping; open PR #9 overlaps `main.py`/API-test regions and needs normal rebase conflict care.

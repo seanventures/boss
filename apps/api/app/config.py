@@ -213,6 +213,18 @@ class Settings(BaseSettings):
     target_github_repo: str = Field(
         default="boss-sandbox", alias="BOSS_TARGET_GITHUB_REPO"
     )
+    webhook_timeout_seconds: float = Field(
+        default=10.0, alias="BOSS_WEBHOOK_TIMEOUT_SECONDS", gt=0
+    )
+    webhook_inbound_secret: str = Field(
+        default="", alias="BOSS_WEBHOOK_INBOUND_SECRET"
+    )
+    webhook_inbound_secrets_json: str = Field(
+        default="", alias="BOSS_WEBHOOK_INBOUND_SECRETS_JSON"
+    )
+    webhook_project_map_json: str = Field(
+        default="", alias="BOSS_WEBHOOK_PROJECT_MAP_JSON"
+    )
     default_org_id: str = Field(default="org_boss", alias="BOSS_DEFAULT_ORG_ID")
     default_workspace_id: str = Field(
         default="ws_boss", alias="BOSS_DEFAULT_WORKSPACE_ID"
