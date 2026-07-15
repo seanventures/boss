@@ -429,6 +429,21 @@ class Settings(BaseSettings):
     code_task_budget_usd_micros: int = Field(
         default=2_000_000, alias="BOSS_CODE_TASK_BUDGET_USD_MICROS"
     )
+    # Reactive documentation work is deliberately bounded to one small drafting call.
+    # The handler reserves this envelope before invoking a model or writing to GitHub.
+    docs_update_budget_usd_micros: int = Field(
+        default=75_000, alias="BOSS_DOCS_UPDATE_BUDGET_USD_MICROS"
+    )
+    docs_trigger_events: str = Field(
+        default=(
+            "code_task.pr_opened,software_factory.pull_request_merged,"
+            "discovery.completed"
+        ),
+        alias="BOSS_DOCS_TRIGGER_EVENTS",
+    )
+    docs_debounce_seconds: int = Field(
+        default=300, alias="BOSS_DOCS_DEBOUNCE_SECONDS"
+    )
     # Execution substrate for the GOVERNED pipeline's working stages (write_tests /
     # implement / regression / mutation — the stages that EXECUTE generated code):
     #   local   = host-side EphemeralSandbox subprocesses (pre-hybrid behavior)

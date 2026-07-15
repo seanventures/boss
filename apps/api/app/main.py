@@ -138,6 +138,8 @@ from .schemas import (
     DeadletterRequeueResponse,
     DriftReportListResponse,
     DriftReportSummary,
+    DocsUpdateExecuteRequest,
+    DocsUpdateRequest,
     EntitlementSourceConnectRequest,
     EntitlementSourceDisconnectRequest,
     EntitlementSourceListResponse,
@@ -379,6 +381,7 @@ from .services.commercial import (
 from .services.core import emit_event, make_id
 from .services.core import emit_event
 from .services.deadletters import DeadletterRemediationService
+from .services.docs_agent import DocsUpdateService
 from .services.decisions import (
     DecisionNotFoundError,
     DecisionService,
@@ -484,6 +487,7 @@ LOGGER = logging.getLogger("boss.api")
 budget = BudgetGovernor(settings)
 intake = CommandIntakeService(settings)
 jobs = JobLeaseService(settings)
+docs_updates = DocsUpdateService(settings)
 secret_refs = SecretRefService()
 receipts = ReceiptService()
 webhooks = WebhookService(settings)
@@ -8294,6 +8298,51 @@ def ingest_inbox_message(payload: InboxMessageIngestRequest) -> InboxMessageSumm
                 reload_inbox_message(connection, item["id"])
             )
         return inbox_message_summary_from_row(item)
+
+
+@app.post("/v1/docs/update", response_model=JobSummary, status_code=201)
+def enqueue_docs_update(payload: DocsUpdateRequest) -> JobSummary:
+    """Manually enqueue the same bounded job used by completion-event triggers."""
+    with begin(engine) as connection:
+        try:
+            result = docs_updates.enqueue(
+                connection,
+                project_id=payload.project_id,
+                event_id=payload.event_id,
+                event_type=payload.event_type,
+                entity_type=payload.entity_type,
+                entity_id=payload.entity_id,
+                task_id=payload.task_id,
+                data_boundary=payload.data_boundary,
+                actor=payload.actor,
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        return JobSummary(**result)
+
+
+@app.post("/v1/docs/update/execute")
+def execute_docs_update(payload: DocsUpdateExecuteRequest) -> dict[str, Any]:
+    """Worker-only execution boundary for a leased ``docs.update`` job."""
+    with begin(engine) as connection:
+        try:
+            return docs_updates.run_update(
+                connection,
+                project_id=payload.project_id,
+                event_id=payload.event_id,
+                event_type=payload.event_type,
+                entity_type=payload.entity_type,
+                entity_id=payload.entity_id,
+                task_id=payload.task_id,
+                data_boundary=payload.data_boundary,
+                created_by_job_id=payload.created_by_job_id,
+            )
+        except ValueError as error:
+            return {
+                "status": "failed",
+                "retryable": False,
+                "message": str(error),
+            }
 
 
 @app.post("/v1/jobs", response_model=JobSummary, status_code=201)

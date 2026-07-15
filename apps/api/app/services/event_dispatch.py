@@ -102,6 +102,14 @@ def dispatch_event(
     for subscription in _enabled_subscriptions(connection, project_id):
         if not event_type_matches(subscription["event_type"], event_type):
             continue
+        if subscription["sink_ref"] == "docs.update":
+            # The docs consumer has a deliberately narrower, operator-configurable
+            # completion allowlist than the dispatcher as a whole.
+            from ..config import get_settings
+            from .docs_agent import docs_trigger_events
+
+            if event_type not in docs_trigger_events(get_settings()):
+                continue
         sink_boundary = normalize_data_boundary(subscription["data_boundary"])
         if not _can_cross_boundary(event_boundary, sink_boundary):
             logger.warning(
@@ -158,6 +166,27 @@ def dispatch_event(
             continue
 
         task_id = data.get("task_id")
+        if subscription["sink_ref"] == "docs.update":
+            from ..config import get_settings
+            from .docs_agent import enqueue_docs_update_job
+
+            job = enqueue_docs_update_job(
+                connection,
+                get_settings(),
+                project_id=project_id,
+                event_id=event_id,
+                event_type=event_type,
+                event_actor=actor,
+                entity_type=entity_type,
+                entity_id=entity_id,
+                task_id=task_id if isinstance(task_id, str) else None,
+                priority=int(config.get("priority", 100)),
+                max_attempts=int(config.get("max_attempts", 3)),
+                data_boundary=sink_boundary,
+                subscription_id=subscription["id"],
+            )
+            enqueued.append(job)
+            continue
         job = enqueue_job(
             connection,
             project_id,

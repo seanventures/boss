@@ -273,6 +273,7 @@ def capabilities() -> list[str]:
         "openai.plan",
         "meeting.step",
         "code.task",
+        "docs.update",
         "agent.resume",
         "software_factory.propose_pr",
         "github.pull_request.merge",
@@ -574,6 +575,25 @@ def execute_job(job: LeasedJob, client: ControlPlaneClient) -> dict[str, Any]:
         result = client.run_code_task({"run_id": job.payload["run_id"]})
         if result.get("status") == "failed":
             raise RuntimeError(result.get("error") or "Code task failed.")
+        return result
+    if job.kind == "docs.update":
+        result = client.run_docs_update(
+            {
+                "project_id": job.project_id,
+                "task_id": job.task_id,
+                "event_id": job.payload["event_id"],
+                "event_type": job.payload["event_type"],
+                "entity_type": job.payload["entity_type"],
+                "entity_id": job.payload["entity_id"],
+                "data_boundary": job.payload.get("data_boundary", job.data_boundary),
+                "created_by_job_id": job.id,
+            }
+        )
+        if result.get("status") in {"failed", "blocked"}:
+            error = result.get("message") or "Documentation update failed."
+            if result.get("retryable"):
+                raise RetryableJobError(error)
+            raise RuntimeError(error)
         return result
     if job.kind == "agent.resume":
         result = client.resume_agent_run({"run_id": job.payload["run_id"]})

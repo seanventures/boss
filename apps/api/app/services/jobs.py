@@ -707,6 +707,15 @@ class JobLeaseService:
                 ),
             }
 
+        if job_row["kind"] == "docs.update":
+            return {
+                "receipt_id": result.get("receipt_id"),
+                "pull_request_url": result.get("pull_request_url"),
+                "branch_name": result.get("branch_name"),
+                "feature_id": result.get("feature_id"),
+                "doc_path": result.get("doc_path"),
+            }
+
         if job_row["kind"] == "github.pull_request.merge":
             return {
                 "artifact_id": result.get("artifact_id"),

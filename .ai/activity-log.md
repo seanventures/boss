@@ -3,6 +3,15 @@
 All 15-min terminal updates and major milestones appended here. Chronological, newest at top.
 
 ---
+## 2026-07-15T16:10:00Z — Codex reactive docs-agent slice ready
+- Plane: moved BOSS-73/BOSS-74/BOSS-75 to In Progress before code work; paired the three dependency-ordered tickets so the handler could truthfully complete a budgeted, human-gated docs PR.
+- Implemented allowlisted/manual entity-debounced `docs.update` enqueue, latest-event coalescing, worker capability/control-plane execution, retry/deadletter propagation, and `docs.pr_opened` success evidence.
+- Added evidence assembly for code-task/discovery/plan/merge-artifact triggers, prior-branch Markdown reads, task artifacts, source PR references, a validated docs-writer RoleSpec, fixed Markdown template, safe `.md` paths, and managed markers that preserve human prose.
+- Added stable `boss/docs/<slug>` branch writes and idempotent draft PR creation behind BudgetReservation and provider Receipt gates; labelled features reconcile TRACEABILITY status/freshness and update catalog freshness. BOSS never merges the PR.
+- Validation: docs-agent 7 passed; reactive foundation 7 passed; worker 27 passed; focused Ruff/compile, OpenAPI + RoleSpec YAML, generator drift/unit, and strict MkDocs pass.
+- Coordination: isolated on `ai/codex/docs-agent`, stacked on PR #17; active contributor design/VAG/model-pacing branches remain non-overlapping. GitHub Community BOSS-85/BOSS-89 stay in a separate sibling PR.
+
+---
 ## 2026-07-15T14:48:45Z — Codex event operability + public docs slice ready
 - Plane: claimed BOSS-24 and BOSS-76, kept both In Progress pending merge; returned BOSS-73 to Backlog before code work after confirming DOC-3/DOC-4 are required for a truthful successful handler.
 - Implemented a persisted reactive-dispatch exactly-once canary using temporary enabled/disabled routes, canonical emit + exact replay, deterministic job reuse, route cleanup, and queued→leased→succeeded proof without external effects.

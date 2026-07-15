@@ -27,6 +27,8 @@ This document summarizes the currently implemented BOSS runtime surfaces in this
   - events
   - project-scoped event subscriptions and deduplicated reactive job dispatch
   - traceability-derived feature catalog with emergent-feature reconciliation
+  - leased, entity-debounced documentation updates with budget/Receipt gates
+  - evidence-grounded Markdown drafts and human-gated stable-branch docs PRs
   - deadletters
   - health snapshots
 - API-first control plane:

@@ -30,7 +30,14 @@ DEFAULT_EVENT_SUBSCRIPTIONS = (
         "config": {"consumer": "documentation"},
     },
     {
-        "event_type": "code_task.completed_no_pr",
+        "event_type": "software_factory.pull_request_merged",
+        "sink_kind": "job",
+        "sink_ref": "docs.update",
+        "data_boundary": "internal",
+        "config": {"consumer": "documentation"},
+    },
+    {
+        "event_type": "discovery.completed",
         "sink_kind": "job",
         "sink_ref": "docs.update",
         "data_boundary": "internal",

@@ -151,6 +151,22 @@ class GitHubAdapter:
             branch_name, path, content.encode("utf-8"), message
         )
 
+    def read_text_file(self, branch_name: str, path: str) -> Optional[str]:
+        """Read a UTF-8 repository file from a branch, returning ``None`` on 404."""
+        try:
+            payload = self._request(
+                "GET",
+                f"/repos/{self.repository_full_name}/contents/{path}?ref={branch_name}",
+            )
+        except httpx.HTTPStatusError as error:
+            if error.response.status_code == 404:
+                return None
+            raise
+        encoded = payload.get("content")
+        if not isinstance(encoded, str):
+            raise RuntimeError(f"GitHub did not return file content for {path}.")
+        return base64.b64decode(encoded).decode("utf-8")
+
     def upsert_binary_file(
         self, branch_name: str, path: str, data: bytes, message: str
     ) -> str:

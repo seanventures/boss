@@ -121,6 +121,11 @@ class ControlPlaneClient:
         response.raise_for_status()
         return response.json()
 
+    def run_docs_update(self, payload: dict[str, Any]) -> dict[str, Any]:
+        response = self._client.post("/v1/docs/update/execute", json=payload)
+        response.raise_for_status()
+        return response.json()
+
     def create_pull_request_proposal(self, payload: dict[str, Any]) -> dict[str, Any]:
         response = self._client.post("/v1/software-factory/proposals", json=payload)
         response.raise_for_status()

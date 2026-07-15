@@ -7,7 +7,7 @@ This catalog is generated from the canonical product traceability ledger. It is 
 <div class="feature-summary">
   <div>
     <span class="boss-status boss-status--implemented">Implemented</span>
-    <strong>68</strong>
+    <strong>71</strong>
   </div>
   <div>
     <span class="boss-status boss-status--partial">Partial</span>
@@ -43,6 +43,9 @@ This catalog is generated from the canonical product traceability ledger. It is 
 | [EVT-004 — Signed inbound webhooks](implemented.md#evt-004-signed-inbound-webhooks) | <span class="boss-status boss-status--implemented">Implemented</span> | OSS readiness spec 00; BOSS-23 |
 | [EVT-005 — Event/webhook operability](implemented.md#evt-005-event-webhook-operability) | <span class="boss-status boss-status--implemented">Implemented</span> | OSS readiness spec 00; BOSS-24 |
 | [DOC-001 — Feature documentation catalog](implemented.md#doc-001-feature-documentation-catalog) | <span class="boss-status boss-status--implemented">Implemented</span> | OSS readiness spec 06; BOSS-72 |
+| [DOC-002 — Reactive documentation jobs](implemented.md#doc-002-reactive-documentation-jobs) | <span class="boss-status boss-status--implemented">Implemented</span> | OSS readiness spec 06; BOSS-73 |
+| [DOC-003 — Evidence-grounded docs agent](implemented.md#doc-003-evidence-grounded-docs-agent) | <span class="boss-status boss-status--implemented">Implemented</span> | OSS readiness spec 06; BOSS-74 |
+| [DOC-004 — Human-gated docs PR reconciliation](implemented.md#doc-004-human-gated-docs-pr-reconciliation) | <span class="boss-status boss-status--implemented">Implemented</span> | OSS readiness spec 06; BOSS-75 |
 | [DOC-005 — Public documentation site and CI](implemented.md#doc-005-public-documentation-site-and-ci) | <span class="boss-status boss-status--implemented">Implemented</span> | OSS readiness spec 06; BOSS-76 |
 | [CAN-004 — Task hierarchy/dependencies/owners](implemented.md#can-004-task-hierarchy-dependencies-owners) | <span class="boss-status boss-status--implemented">Implemented</span> | PRD Canonical work system |
 | [BUD-001 — Budget policy caps](implemented.md#bud-001-budget-policy-caps) | <span class="boss-status boss-status--implemented">Implemented</span> | PRD Budget Governor |

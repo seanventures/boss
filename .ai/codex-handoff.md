@@ -1,6 +1,14 @@
 # Codex Handoff
 
-Last updated: 2026-07-15T14:54Z (Codex operability/docs-site batch: Plane BOSS-24/BOSS-76 implemented; mergeable stacked draft PR #17 open)
+Last updated: 2026-07-15T16:10Z (Codex docs-agent batch: Plane BOSS-73/BOSS-74/BOSS-75 implemented locally; publication pending)
+
+## 2026-07-15 reactive docs-agent handoff
+
+- Plane BOSS-73: `code_task.pr_opened`, `software_factory.pull_request_merged`, and `discovery.completed` now route into one entity/window-debounced leased `docs.update` job; coalescing retains the newest completion evidence. `POST /v1/docs/update` exposes the same path for manual testing, and worker failures use the existing bounded retry/deadletter state machine.
+- Plane BOSS-74: added a lazy `DocsAgent` using `CodeAgent.run_role`, a validated `docs_writer` RoleSpec, source-specific context for code-task/discovery/plan/merge-artifact records, task spec artifacts, source PR evidence, prior branch Markdown, and a fixed feature-page template. BOSS-managed markers update generated sections while preserving human prose outside them.
+- Plane BOSS-75: the handler reserves a small docs budget before model/provider work, creates a deduplicated provider Receipt, writes only relative `.md` files to `boss/docs/<feature-slug>`, opens/reuses a draft PR, reconciles labelled TRACEABILITY status/freshness, marks the feature documented, settles cost, and emits `docs.pr_opened`. No merge API is called.
+- Validation: docs-agent API/service 7/7; reactive foundation 7/7; worker 27/27; focused Ruff, Python compile, OpenAPI/RoleSpec YAML, generator drift/unit, and `mkdocs build --strict` pass. The docs writer RoleSpec loads through `SpecPackService`.
+- Coordination: branch `ai/codex/docs-agent` is stacked on draft PR #17. It intentionally does not include GitHub Community BOSS-85/BOSS-89, which will be published from a sibling branch based on PR #16 to avoid coupling those adapter changes to the docs stack.
 
 ## 2026-07-15 event operability + public docs handoff
 

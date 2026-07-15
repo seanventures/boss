@@ -2,7 +2,7 @@
 
 # Implemented features
 
-<span class="boss-status boss-status--implemented">Implemented</span> **68 features**
+<span class="boss-status boss-status--implemented">Implemented</span> **71 features**
 
 ## MET-001 — CEO command intake {#met-001-ceo-command-intake}
 
@@ -219,6 +219,42 @@
 **Automated evidence:** `apps/api/tests/test_oss_reactive_docs_foundation.py`
 
 **Ledger detail:** Implemented: TRACEABILITY-derived project catalog, code-task/discovery/plan resolution, emergent needs-label entries, source linkage, and last-documented idempotency
+
+## DOC-002 — Reactive documentation jobs {#doc-002-reactive-documentation-jobs}
+
+<span class="boss-status boss-status--implemented">Implemented</span>
+
+**Source:** OSS readiness spec 06; BOSS-73
+
+**Implementation:** `apps/api/app/services/docs_agent.py`, `apps/api/app/services/event_dispatch.py`, `apps/api/app/services/event_subscription_service.py`, `apps/api/app/main.py`, `apps/worker/boss_worker/runner.py`, `apps/worker/boss_worker/control_plane.py`
+
+**Automated evidence:** `apps/api/tests/test_docs_agent.py`, `apps/api/tests/test_oss_reactive_docs_foundation.py`, `apps/worker/tests/test_worker.py`
+
+**Ledger detail:** Implemented: allowlisted completion events and manual requests enqueue entity/window-debounced leased `docs.update` jobs; coalescing retains the latest evidence and failures use retry/deadletter handling
+
+## DOC-003 — Evidence-grounded docs agent {#doc-003-evidence-grounded-docs-agent}
+
+<span class="boss-status boss-status--implemented">Implemented</span>
+
+**Source:** OSS readiness spec 06; BOSS-74
+
+**Implementation:** `apps/api/app/services/docs_agent.py`, `packages/specpack/roles/docs_writer.yaml`, `apps/api/app/services/code_agent.py`
+
+**Automated evidence:** `apps/api/tests/test_docs_agent.py`
+
+**Ledger detail:** Implemented: bounded docs-writer role call assembles run/artifact/spec/prior-doc/catalog evidence, enforces Markdown-only templates, and preserves human prose outside managed markers
+
+## DOC-004 — Human-gated docs PR reconciliation {#doc-004-human-gated-docs-pr-reconciliation}
+
+<span class="boss-status boss-status--implemented">Implemented</span>
+
+**Source:** OSS readiness spec 06; BOSS-75
+
+**Implementation:** `apps/api/app/services/docs_agent.py`, `apps/api/app/services/github_adapter.py`, `apps/api/app/services/feature_catalog.py`, `apps/api/app/services/budget.py`, `apps/api/app/services/receipts.py`
+
+**Automated evidence:** `apps/api/tests/test_docs_agent.py`
+
+**Ledger detail:** Implemented: stable feature branch and idempotent draft PR path, budget reservation/settlement, provider Receipt, labelled TRACEABILITY reconciliation, feature freshness update, and no automatic merge
 
 ## DOC-005 — Public documentation site and CI {#doc-005-public-documentation-site-and-ci}
 

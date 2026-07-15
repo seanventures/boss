@@ -1849,6 +1849,21 @@ class JobCreateRequest(BaseModel):
     run_after_seconds: int = Field(default=0, ge=0, le=86_400)
 
 
+class DocsUpdateRequest(BaseModel):
+    project_id: str
+    event_id: str
+    event_type: str
+    entity_type: Literal["code_task_run", "discovery_run", "plan", "artifact"]
+    entity_id: str
+    task_id: Optional[str] = None
+    data_boundary: DataBoundary = "internal"
+    actor: str = "manual"
+
+
+class DocsUpdateExecuteRequest(DocsUpdateRequest):
+    created_by_job_id: Optional[str] = None
+
+
 class OpsQueueJobItem(BaseModel):
     id: str
     project_id: str

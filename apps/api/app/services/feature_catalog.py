@@ -360,14 +360,23 @@ class FeatureCatalog:
         entry_id: str,
         event_id: str,
         *,
+        status: Optional[str] = None,
         actor: str = "system",
     ) -> dict[str, Any]:
+        if status is not None and status not in {
+            "Implemented",
+            "Partial",
+            "Planned",
+            "Blocked",
+        }:
+            raise ValueError("Unsupported feature documentation status.")
         row = connection.execute(
             text(
                 f"""
                 UPDATE feature_catalog
                 SET last_documented_event_id = :event_id,
                     last_documented_at = now(),
+                    status = COALESCE(:status, status),
                     updated_at = now()
                 WHERE id = :entry_id AND project_id = :project_id
                 RETURNING {_RETURNING}
@@ -377,6 +386,7 @@ class FeatureCatalog:
                 "entry_id": entry_id,
                 "project_id": project_id,
                 "event_id": event_id,
+                "status": status,
             },
         ).mappings().first()
         if row is None:
@@ -388,7 +398,7 @@ class FeatureCatalog:
             actor,
             "feature_catalog_entry",
             entry_id,
-            {"event_id": event_id},
+            {"event_id": event_id, "status": status or row["status"]},
         )
         return _serialize(row)
 
@@ -421,11 +431,19 @@ class FeatureCatalog:
                 FROM plans
                 WHERE id = :entity_id AND project_id = :project_id
             """,
+            "artifact": """
+                SELECT a.title,
+                       concat_ws(' ', a.title, a.artifact_type, a.content::text,
+                                 t.title, t.description) AS searchable
+                FROM artifacts a
+                LEFT JOIN tasks t ON t.id = a.task_id AND t.project_id = a.project_id
+                WHERE a.id = :entity_id AND a.project_id = :project_id
+            """,
         }
         query = queries.get(entity_type)
         if query is None:
             raise ValueError(
-                "entity_type must be one of: code_task_run, discovery_run, plan."
+                "entity_type must be one of: code_task_run, discovery_run, plan, artifact."
             )
         row = connection.execute(
             text(query),

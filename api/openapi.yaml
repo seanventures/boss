@@ -3479,6 +3479,56 @@ paths:
         '404': { description: Decision not found }
         '409': { description: Invalid transition }
         '422': { description: Validation error }
+  /v1/docs/update:
+    post:
+      summary: Enqueue a bounded documentation update for an allowlisted completion event
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id, event_id, event_type, entity_type, entity_id]
+              properties:
+                project_id: { type: string }
+                event_id: { type: string }
+                event_type:
+                  type: string
+                  enum: [code_task.pr_opened, software_factory.pull_request_merged, discovery.completed]
+                entity_type:
+                  type: string
+                  enum: [code_task_run, discovery_run, plan, artifact]
+                entity_id: { type: string }
+                task_id: { type: string }
+                data_boundary:
+                  type: string
+                  enum: [public, internal, confidential, restricted, local-only]
+                  default: internal
+                actor: { type: string, default: manual }
+      responses:
+        '201': { description: Entity-debounced docs.update job queued or reused }
+        '400': { description: Event is not allowlisted or the request is invalid }
+  /v1/docs/update/execute:
+    post:
+      summary: Execute a leased docs.update job through the governed docs agent
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id, event_id, event_type, entity_type, entity_id]
+              properties:
+                project_id: { type: string }
+                event_id: { type: string }
+                event_type: { type: string }
+                entity_type: { type: string, enum: [code_task_run, discovery_run, plan, artifact] }
+                entity_id: { type: string }
+                task_id: { type: string }
+                data_boundary: { type: string, default: internal }
+                created_by_job_id: { type: string }
+      responses:
+        '200': { description: Docs PR result, retryable failure, or policy/budget block }
   /v1/jobs:
     get:
       summary: List jobs for a project
