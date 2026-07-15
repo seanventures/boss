@@ -1,6 +1,6 @@
 # BOSS Implementation Status
 
-Last updated: June 3, 2026
+Last updated: July 15, 2026
 Release target: `v0.4.0`
 
 This document summarizes the currently implemented BOSS runtime surfaces in this repository so the codebase, README, and product intent stay aligned.
@@ -25,6 +25,8 @@ This document summarizes the currently implemented BOSS runtime surfaces in this
   - receipts
   - budget reservations and cost receipts
   - events
+  - project-scoped event subscriptions and deduplicated reactive job dispatch
+  - traceability-derived feature catalog with emergent-feature reconciliation
   - deadletters
   - health snapshots
 - API-first control plane:
@@ -43,6 +45,7 @@ This document summarizes the currently implemented BOSS runtime surfaces in this
   - decision inbox and transitions
   - decision digest artifact creation with optional outbox draft handoff
   - artifact, receipt, event, and audit export access
+  - event-subscription list/create/update/delete APIs with exact or prefix matching, enabled-state filtering, OpenAPI contract coverage, and data-boundary enforcement
   - replay bundle creation
   - Metatron status query
   - comms inbox and outbox
@@ -60,6 +63,7 @@ This document summarizes the currently implemented BOSS runtime surfaces in this
   - project member directory and actor-scoped write authorization
 - Worker runtime:
   - pull-based Postgres leasing
+  - transactional event-to-job fan-out with per-subscription/event dedupe, a bounded event allowlist, and savepoint isolation so dispatcher failures never roll back canonical business events
   - heartbeat and TTL enforcement
   - completion, failure, retry, reclaim, and deadletter handling
   - leased infrastructure create/delete job kinds

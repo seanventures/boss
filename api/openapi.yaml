@@ -4422,6 +4422,111 @@ paths:
         '200': { description: New queued job created or existing requeue returned idempotently }
         '400': { description: Deadletter is not requeueable }
         '404': { description: Deadletter not found }
+  /v1/event-subscriptions:
+    get:
+      summary: List project-scoped reactive event subscriptions
+      parameters:
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+        - name: enabled_only
+          in: query
+          required: false
+          schema: { type: boolean, default: false }
+      responses:
+        '200':
+          description: Event subscription list
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [project_id, items]
+                properties:
+                  project_id: { type: string }
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/EventSubscription' }
+    post:
+      summary: Register a project-scoped reactive event subscription
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id, event_type, sink_ref]
+              properties:
+                project_id: { type: string }
+                event_type: { type: string, example: code_task.* }
+                sink_kind: { type: string, enum: [job, webhook_out], default: job }
+                sink_ref: { type: string, example: docs.update }
+                data_boundary:
+                  type: string
+                  enum: [public, internal, confidential, restricted, local-only]
+                  default: internal
+                enabled: { type: boolean, default: true }
+                config: { type: object, additionalProperties: true }
+                actor: { type: string, default: system }
+      responses:
+        '201':
+          description: Event subscription created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EventSubscription' }
+        '400': { description: Invalid or duplicate event subscription }
+  /v1/event-subscriptions/{subscription_id}:
+    patch:
+      summary: Update a project-scoped reactive event subscription
+      parameters:
+        - name: subscription_id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id]
+              properties:
+                project_id: { type: string }
+                event_type: { type: string }
+                sink_kind: { type: string, enum: [job, webhook_out] }
+                sink_ref: { type: string }
+                data_boundary:
+                  type: string
+                  enum: [public, internal, confidential, restricted, local-only]
+                enabled: { type: boolean }
+                config: { type: object, additionalProperties: true }
+                actor: { type: string, default: system }
+      responses:
+        '200':
+          description: Event subscription updated
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EventSubscription' }
+        '400': { description: Invalid event subscription update }
+        '404': { description: Event subscription not found in project }
+    delete:
+      summary: Delete a project-scoped reactive event subscription
+      parameters:
+        - name: subscription_id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+        - name: actor
+          in: query
+          required: false
+          schema: { type: string, default: system }
+      responses:
+        '204': { description: Event subscription deleted }
+        '404': { description: Event subscription not found in project }
 components:
   securitySchemes:
     BossBearerAuth:
@@ -4437,3 +4542,30 @@ components:
       type: http
       scheme: bearer
       description: Enterprise SCIM provisioning token configured through `BOSS_ENTERPRISE_SCIM_BEARER_TOKENS`; separate from normal BOSS API keys.
+  schemas:
+    EventSubscription:
+      type: object
+      required:
+        - id
+        - project_id
+        - event_type
+        - sink_kind
+        - sink_ref
+        - data_boundary
+        - enabled
+        - config
+        - created_at
+        - updated_at
+      properties:
+        id: { type: string }
+        project_id: { type: string }
+        event_type: { type: string }
+        sink_kind: { type: string, enum: [job, webhook_out] }
+        sink_ref: { type: string }
+        data_boundary:
+          type: string
+          enum: [public, internal, confidential, restricted, local-only]
+        enabled: { type: boolean }
+        config: { type: object, additionalProperties: true }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }

@@ -172,6 +172,10 @@ from .schemas import (
     EnterpriseSupportCaseUpdateRequest,
     EventFeedResponse,
     EventItem,
+    EventSubscriptionCreateRequest,
+    EventSubscriptionListResponse,
+    EventSubscriptionSummary,
+    EventSubscriptionUpdateRequest,
     ExternalResourceListResponse,
     ExternalResourceSummary,
     HealthResponse,
@@ -382,6 +386,12 @@ from .services.entitlements import (
 )
 from .services.enterprise import EnterpriseService
 from .services.health import HealthSnapshotService
+from .services.event_subscription_service import (
+    create_event_subscription,
+    delete_event_subscription,
+    list_event_subscriptions,
+    update_event_subscription,
+)
 from .services.infrastructure import (
     InfraResourceNotFoundError,
     InfrastructureService,
@@ -3873,6 +3883,97 @@ def resume_agent_run_endpoint(run_id: str):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
     with begin(engine) as connection:
         return software_factory.resume_plan_run(connection, run_id)
+
+
+@app.get(
+    "/v1/event-subscriptions",
+    response_model=EventSubscriptionListResponse,
+)
+def list_event_subscription_routes(
+    project_id: str, enabled_only: bool = False
+) -> EventSubscriptionListResponse:
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    with begin(engine) as connection:
+        return EventSubscriptionListResponse(
+            project_id=project_id,
+            items=list_event_subscriptions(
+                connection, project_id, enabled_only=enabled_only
+            ),
+        )
+
+
+@app.post(
+    "/v1/event-subscriptions",
+    response_model=EventSubscriptionSummary,
+    status_code=201,
+)
+def create_event_subscription_route(
+    payload: EventSubscriptionCreateRequest,
+) -> EventSubscriptionSummary:
+    with begin(engine) as connection:
+        try:
+            result = create_event_subscription(
+                connection,
+                payload.project_id,
+                payload.event_type,
+                payload.sink_kind,
+                payload.sink_ref,
+                data_boundary=payload.data_boundary,
+                enabled=payload.enabled,
+                config=payload.config,
+                actor=payload.actor,
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        return EventSubscriptionSummary(**result)
+
+
+@app.patch(
+    "/v1/event-subscriptions/{subscription_id}",
+    response_model=EventSubscriptionSummary,
+)
+def update_event_subscription_route(
+    subscription_id: str,
+    payload: EventSubscriptionUpdateRequest,
+) -> EventSubscriptionSummary:
+    with begin(engine) as connection:
+        try:
+            result = update_event_subscription(
+                connection,
+                payload.project_id,
+                subscription_id,
+                event_type=payload.event_type,
+                sink_kind=payload.sink_kind,
+                sink_ref=payload.sink_ref,
+                data_boundary=payload.data_boundary,
+                enabled=payload.enabled,
+                config=payload.config,
+                actor=payload.actor,
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        if result is None:
+            raise HTTPException(status_code=404, detail="Event subscription not found.")
+        return EventSubscriptionSummary(**result)
+
+
+@app.delete("/v1/event-subscriptions/{subscription_id}", status_code=204)
+def delete_event_subscription_route(
+    subscription_id: str,
+    project_id: str,
+    actor: str = "system",
+):
+    with begin(engine) as connection:
+        deleted = delete_event_subscription(
+            connection,
+            project_id,
+            subscription_id,
+            actor=actor,
+        )
+        if not deleted:
+            raise HTTPException(status_code=404, detail="Event subscription not found.")
+    return Response(status_code=204)
 
 
 @app.get("/v1/mcp/servers")

@@ -1361,6 +1361,46 @@ class McpServerRegisterRequest(BaseModel):
     actor: str = "system"
 
 
+class EventSubscriptionCreateRequest(BaseModel):
+    project_id: str
+    event_type: str
+    sink_kind: Literal["job", "webhook_out"] = "job"
+    sink_ref: str
+    data_boundary: DataBoundary = "internal"
+    enabled: bool = True
+    config: dict[str, Any] = Field(default_factory=dict)
+    actor: str = "system"
+
+
+class EventSubscriptionUpdateRequest(BaseModel):
+    project_id: str
+    event_type: Optional[str] = None
+    sink_kind: Optional[Literal["job", "webhook_out"]] = None
+    sink_ref: Optional[str] = None
+    data_boundary: Optional[DataBoundary] = None
+    enabled: Optional[bool] = None
+    config: Optional[dict[str, Any]] = None
+    actor: str = "system"
+
+
+class EventSubscriptionSummary(BaseModel):
+    id: str
+    project_id: str
+    event_type: str
+    sink_kind: Literal["job", "webhook_out"]
+    sink_ref: str
+    data_boundary: DataBoundary
+    enabled: bool
+    config: dict[str, Any] = Field(default_factory=dict)
+    created_at: str
+    updated_at: str
+
+
+class EventSubscriptionListResponse(BaseModel):
+    project_id: str
+    items: list[EventSubscriptionSummary]
+
+
 class OpenAIPlanRequest(BaseModel):
     project_id: str
     reservation_id: str

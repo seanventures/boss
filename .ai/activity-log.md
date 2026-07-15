@@ -3,6 +3,18 @@
 All 15-min terminal updates and major milestones appended here. Chronological, newest at top.
 
 ---
+=== CODEX OSS-READINESS REACTIVE/DOCS FOUNDATION 2026-07-15 ===
+Product: BOSS (Business Operating System Sentinel)
+Repo root: /Volumes/DataSSD1/test/boss
+Base: origin/main `44b985b`
+Branch: ai/codex/oss-reactive-docs-foundation
+Plane: BOSS-20, BOSS-21, BOSS-72 moved to In Progress before implementation; parents BOSS-19/BOSS-71 remain In Progress because later children remain.
+Completed: pure idempotent job enqueue; isolated allowlisted same-transaction event dispatcher; event subscription schema/service/cache/defaults/CRUD/OpenAPI; TRACEABILITY-derived feature catalog with labelled/emergent resolution and idempotency; product trace/status updates.
+Safety: no direct provider/model/GitHub/Slack effects; no raw secrets; no spend path; jobs retain lease-time budget enforcement; project scope and data boundaries enforced; failures visible through logs and events.
+Validation: new acceptance suite 7 passed; representative existing job lifecycle 5 passed; schema applied twice successfully on fresh Postgres; Ruff/compile/diff/OpenAPI YAML checks passed. Broad API suite 241 passed/38 failed; four representative failures also fail on detached pristine origin/main, establishing pre-existing baseline debt.
+Coordination: PR #14 has no overlap; PR #9 has localized main.py/test overlap. Draft PR pending commit/push. Remaining BOSS-22/23/24 and BOSS-73+ intentionally not included.
+
+---
 === QA / TEST FULL VALIDATION + E2E POLISH (P2) 2026-06-05 ===
 Product: BOSS (Business Operating System Sentinel)
 Repo root: /Volumes/DataSSD1/test/boss

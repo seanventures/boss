@@ -8,6 +8,8 @@ from .config import get_settings
 from .db import ensure_schema, get_engine
 from .services.core import make_id
 from .services.entitlements import EntitlementBrokerService
+from .services.event_subscription_service import seed_default_event_subscriptions
+from .services.feature_catalog import FeatureCatalog
 from .services.mcp_registry import ensure_mcp_server
 from .services.members import MemberDirectoryService
 from .services.specpack import SpecPackService
@@ -98,6 +100,8 @@ def seed_project_defaults(
             data_boundary=srv["data_boundary"],
             description=srv["description"],
         )
+    seed_default_event_subscriptions(connection, project_id)
+    FeatureCatalog(settings).seed_from_traceability(connection, project_id)
 
 
 def onboard_org(connection, settings, name, *, entitlements, members, specpack, slug=None):

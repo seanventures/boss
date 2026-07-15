@@ -1,6 +1,15 @@
 # Codex Handoff
 
-Last updated: 2026-06-05T17:30Z (5 agents managed + integrated + validate green: DevOps AUTO-004 Closed 990d00e + .env full + full-validate target + release script; Security rate 013 Closed 5083391 in-mem + tests; Arch pag 014 Closed 4dd031c; PM audit dcd5fc8 + GAP-PRD-AUDIT-001 P3; QA e2e tests a374f4a (killed long run); .ai/ + commit/push/PR#3; only 1 P3 local + external blocked)
+Last updated: 2026-07-15T22:30Z (Codex OSS-readiness batch: Plane BOSS-20, BOSS-21, BOSS-72 implemented and validated on `ai/codex/oss-reactive-docs-foundation`; draft PR pending publication)
+
+## 2026-07-15 OSS-readiness handoff
+
+- Plane BOSS-20: extracted a pure, idempotent `enqueue_job`, preserved the legacy `JobLeaseService.create_job` response contract, and wired an allowlisted same-transaction dispatcher into `emit_event`. Dispatch failures are isolated by savepoint, logged, and recorded as `job.dispatch_failed` without losing the canonical source event.
+- Plane BOSS-21: added project-scoped `event_subscriptions`, exact/suffix-glob matching, cache invalidation, default documentation/orchestration/GitHub routes, CRUD API/OpenAPI coverage, boundary gating, and deterministic `(subscription,event)` job dedupe.
+- Plane BOSS-72: added a project-scoped feature catalog seeded from `docs/product/TRACEABILITY.md`, labelled/emergent entity resolution for code-task/discovery/plan sources, source-reference preservation, and last-documented idempotency.
+- Validation: 7/7 new acceptance tests pass; 5/5 representative legacy job-lifecycle tests pass; fresh/existing schema application is idempotent; focused Ruff/compile/diff/OpenAPI YAML checks pass. The broad API suite reports 241 passed/38 failed; four representative failures reproduce unchanged on pristine `origin/main`, confirming baseline debt rather than this slice.
+- Coordination: based on `origin/main` at `44b985b`. PR #14 is frontend design-system work with no overlap. PR #9 has localized overlap in `main.py`/API tests and should be merged or rebased carefully; this slice does not absorb its unrelated lint fixes.
+- Remaining module work is intentionally separate: outbound/inbound webhooks (BOSS-22/23), operability/canary (BOSS-24), and the docs worker/agent/PR/site chain (BOSS-73+). Default reactive jobs are durable queue entries for those future consumers.
 
 ## Current Overall Product Status
 BOSS v0.4.1 target is in advanced local-dogfood state. Most PRD-v2.0 / TECH-SPEC-v2.0 requirements for core control plane, worker leases, budget governor (now full quote/reserve/consume/release/forecast), audit/no-silent-drops (with recent logging fixes), canonical objects (incl. recent KPI), roles/packs/agent-modules, Model Entitlement Broker, ProviderOps (local sync + real sandbox writes for CF/DO/Supabase), Software Factory (command->plan->PR->evidence->decision), Metatron/Mission Control console are Implemented and traced.
