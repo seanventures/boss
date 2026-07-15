@@ -138,6 +138,8 @@ from .schemas import (
     DeadletterRequeueResponse,
     DriftReportListResponse,
     DriftReportSummary,
+    DocsUpdateExecuteRequest,
+    DocsUpdateRequest,
     EntitlementSourceConnectRequest,
     EntitlementSourceDisconnectRequest,
     EntitlementSourceListResponse,
@@ -172,6 +174,19 @@ from .schemas import (
     EnterpriseSupportCaseUpdateRequest,
     EventFeedResponse,
     EventItem,
+    EventSubscriptionCreateRequest,
+    EventSubscriptionListResponse,
+    EventSubscriptionSummary,
+    EventSubscriptionUpdateRequest,
+    InboundWebhookResponse,
+    WebhookDeliveryCreateRequest,
+    WebhookDeliveryExecuteRequest,
+    WebhookDeliveryListResponse,
+    WebhookDeliverySummary,
+    WebhookEndpointCreateRequest,
+    WebhookEndpointListResponse,
+    WebhookEndpointSummary,
+    WebhookEndpointUpdateRequest,
     ExternalResourceListResponse,
     ExternalResourceSummary,
     HealthResponse,
@@ -366,6 +381,7 @@ from .services.commercial import (
 from .services.core import emit_event, make_id
 from .services.core import emit_event
 from .services.deadletters import DeadletterRemediationService
+from .services.docs_agent import DocsUpdateService
 from .services.decisions import (
     DecisionNotFoundError,
     DecisionService,
@@ -382,6 +398,18 @@ from .services.entitlements import (
 )
 from .services.enterprise import EnterpriseService
 from .services.health import HealthSnapshotService
+from .services.event_subscription_service import (
+    create_event_subscription,
+    delete_event_subscription,
+    list_event_subscriptions,
+    update_event_subscription,
+)
+from .services.webhooks import (
+    InboundWebhookService,
+    WebhookDeliveryNotFoundError,
+    WebhookEndpointNotFoundError,
+    WebhookService,
+)
 from .services.infrastructure import (
     InfraResourceNotFoundError,
     InfrastructureService,
@@ -459,8 +487,11 @@ LOGGER = logging.getLogger("boss.api")
 budget = BudgetGovernor(settings)
 intake = CommandIntakeService(settings)
 jobs = JobLeaseService(settings)
+docs_updates = DocsUpdateService(settings)
 secret_refs = SecretRefService()
 receipts = ReceiptService()
+webhooks = WebhookService(settings)
+inbound_webhooks = InboundWebhookService(settings)
 software_factory = SoftwareFactoryService(settings)
 decisions = DecisionService(settings)
 specpack = SpecPackService(settings)
@@ -697,7 +728,18 @@ async def require_transport_auth_for_v1(request: Request, call_next):
     is_preview_web = (
         len(_parts) >= 5 and _parts[1] == "v1" and _parts[2] == "previews" and _parts[4] == "web"
     )
-    if not request.url.path.startswith("/v1/") or not auth_required or is_preview_web:
+    is_inbound_webhook = (
+        len(_parts) >= 5
+        and _parts[1] == "v1"
+        and _parts[2] == "webhooks"
+        and _parts[3] == "inbound"
+    )
+    if (
+        not request.url.path.startswith("/v1/")
+        or not auth_required
+        or is_preview_web
+        or is_inbound_webhook
+    ):
         principal_token = current_api_principal.set(None)
         authenticated_token = current_transport_authenticated.set(False)
         auth_method_token = current_auth_method.set(None)
@@ -1298,6 +1340,9 @@ def deadletter_item_from_row(row) -> DeadletterItem:
         project_id=row["project_id"],
         source_kind=row["source_kind"],
         source_id=row["source_id"],
+        related_entity_type=row.get("related_entity_type"),
+        related_entity_id=row.get("related_entity_id"),
+        related_status=row.get("related_status"),
         reason=row["reason"],
         payload=row["payload"] or {},
         status=row.get("status") or "open",
@@ -3873,6 +3918,285 @@ def resume_agent_run_endpoint(run_id: str):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
     with begin(engine) as connection:
         return software_factory.resume_plan_run(connection, run_id)
+
+
+@app.get(
+    "/v1/event-subscriptions",
+    response_model=EventSubscriptionListResponse,
+)
+def list_event_subscription_routes(
+    project_id: str, enabled_only: bool = False
+) -> EventSubscriptionListResponse:
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    with begin(engine) as connection:
+        return EventSubscriptionListResponse(
+            project_id=project_id,
+            items=list_event_subscriptions(
+                connection, project_id, enabled_only=enabled_only
+            ),
+        )
+
+
+@app.post(
+    "/v1/event-subscriptions",
+    response_model=EventSubscriptionSummary,
+    status_code=201,
+)
+def create_event_subscription_route(
+    payload: EventSubscriptionCreateRequest,
+) -> EventSubscriptionSummary:
+    with begin(engine) as connection:
+        try:
+            result = create_event_subscription(
+                connection,
+                payload.project_id,
+                payload.event_type,
+                payload.sink_kind,
+                payload.sink_ref,
+                data_boundary=payload.data_boundary,
+                enabled=payload.enabled,
+                config=payload.config,
+                actor=payload.actor,
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        return EventSubscriptionSummary(**result)
+
+
+@app.patch(
+    "/v1/event-subscriptions/{subscription_id}",
+    response_model=EventSubscriptionSummary,
+)
+def update_event_subscription_route(
+    subscription_id: str,
+    payload: EventSubscriptionUpdateRequest,
+) -> EventSubscriptionSummary:
+    with begin(engine) as connection:
+        try:
+            result = update_event_subscription(
+                connection,
+                payload.project_id,
+                subscription_id,
+                event_type=payload.event_type,
+                sink_kind=payload.sink_kind,
+                sink_ref=payload.sink_ref,
+                data_boundary=payload.data_boundary,
+                enabled=payload.enabled,
+                config=payload.config,
+                actor=payload.actor,
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        if result is None:
+            raise HTTPException(status_code=404, detail="Event subscription not found.")
+        return EventSubscriptionSummary(**result)
+
+
+@app.delete("/v1/event-subscriptions/{subscription_id}", status_code=204)
+def delete_event_subscription_route(
+    subscription_id: str,
+    project_id: str,
+    actor: str = "system",
+):
+    with begin(engine) as connection:
+        deleted = delete_event_subscription(
+            connection,
+            project_id,
+            subscription_id,
+            actor=actor,
+        )
+        if not deleted:
+            raise HTTPException(status_code=404, detail="Event subscription not found.")
+    return Response(status_code=204)
+
+
+@app.get("/v1/webhook-endpoints", response_model=WebhookEndpointListResponse)
+def list_webhook_endpoints(project_id: str) -> WebhookEndpointListResponse:
+    with begin(engine) as connection:
+        return WebhookEndpointListResponse(
+            project_id=project_id,
+            items=webhooks.list_endpoints(connection, project_id),
+        )
+
+
+@app.post(
+    "/v1/webhook-endpoints",
+    response_model=WebhookEndpointSummary,
+    status_code=201,
+)
+def create_webhook_endpoint(
+    payload: WebhookEndpointCreateRequest,
+) -> WebhookEndpointSummary:
+    with begin(engine) as connection:
+        try:
+            require_project_actor(
+                connection,
+                payload.project_id,
+                payload.actor,
+                "comms_manage",
+            )
+            item = webhooks.create_endpoint(
+                connection,
+                payload.project_id,
+                payload.url,
+                payload.secret_ref,
+                description=payload.description,
+                data_boundary=payload.data_boundary,
+                enabled=payload.enabled,
+                actor=payload.actor,
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        return WebhookEndpointSummary(**item)
+
+
+@app.patch(
+    "/v1/webhook-endpoints/{endpoint_id}",
+    response_model=WebhookEndpointSummary,
+)
+def update_webhook_endpoint(
+    endpoint_id: str,
+    payload: WebhookEndpointUpdateRequest,
+) -> WebhookEndpointSummary:
+    with begin(engine) as connection:
+        try:
+            require_project_actor(
+                connection,
+                payload.project_id,
+                payload.actor,
+                "comms_manage",
+            )
+            item = webhooks.update_endpoint(
+                connection,
+                payload.project_id,
+                endpoint_id,
+                url=payload.url,
+                secret_ref=payload.secret_ref,
+                description=payload.description,
+                data_boundary=payload.data_boundary,
+                enabled=payload.enabled,
+                actor=payload.actor,
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        if item is None:
+            raise HTTPException(status_code=404, detail="Webhook endpoint not found.")
+        return WebhookEndpointSummary(**item)
+
+
+@app.delete("/v1/webhook-endpoints/{endpoint_id}", status_code=204)
+def delete_webhook_endpoint(
+    endpoint_id: str,
+    project_id: str,
+    actor: str = "system",
+):
+    with begin(engine) as connection:
+        require_project_actor(connection, project_id, actor, "comms_manage")
+        if not webhooks.delete_endpoint(
+            connection, project_id, endpoint_id, actor=actor
+        ):
+            raise HTTPException(status_code=404, detail="Webhook endpoint not found.")
+    return Response(status_code=204)
+
+
+@app.post(
+    "/v1/webhook-endpoints/{endpoint_id}/deliver",
+    response_model=WebhookDeliverySummary,
+    status_code=201,
+)
+def queue_webhook_delivery(
+    endpoint_id: str,
+    payload: WebhookDeliveryCreateRequest,
+) -> WebhookDeliverySummary:
+    with begin(engine) as connection:
+        try:
+            require_project_actor(
+                connection,
+                payload.project_id,
+                payload.actor,
+                "comms_manage",
+            )
+            item = webhooks.enqueue_delivery(
+                connection,
+                payload.project_id,
+                endpoint_id,
+                payload.event_type,
+                payload.payload,
+                payload.dedupe_key,
+                data_boundary=payload.data_boundary,
+                priority=payload.priority,
+                max_attempts=payload.max_attempts,
+                actor=payload.actor,
+            )
+        except WebhookEndpointNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        return WebhookDeliverySummary(**item)
+
+
+@app.get("/v1/webhook-deliveries", response_model=WebhookDeliveryListResponse)
+def list_webhook_deliveries(
+    project_id: str, limit: int = 100
+) -> WebhookDeliveryListResponse:
+    if limit < 1 or limit > 500:
+        raise HTTPException(status_code=400, detail="limit must be between 1 and 500.")
+    with begin(engine) as connection:
+        return WebhookDeliveryListResponse(
+            project_id=project_id,
+            items=webhooks.list_deliveries(connection, project_id, limit),
+        )
+
+
+@app.post(
+    "/v1/webhook-deliveries/{delivery_id}/deliver",
+    response_model=WebhookDeliverySummary,
+)
+def execute_webhook_delivery(
+    delivery_id: str,
+    payload: WebhookDeliveryExecuteRequest,
+) -> WebhookDeliverySummary:
+    with begin(engine) as connection:
+        try:
+            item = webhooks.deliver(
+                connection,
+                payload.project_id,
+                delivery_id,
+                payload.created_by_job_id,
+                payload.worker_id,
+                payload.lease_token,
+            )
+        except WebhookDeliveryNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        return WebhookDeliverySummary(**item)
+
+
+@app.post(
+    "/v1/webhooks/inbound/{source}",
+    response_model=InboundWebhookResponse,
+    status_code=202,
+)
+async def receive_inbound_webhook(
+    source: str,
+    request: Request,
+) -> InboundWebhookResponse:
+    raw_body = await request.body()
+    headers = {key.lower(): value for key, value in request.headers.items()}
+    with begin(engine) as connection:
+        result = inbound_webhooks.ingest(
+            connection,
+            source,
+            raw_body,
+            headers,
+        )
+    if result["status"] == "rejected":
+        raise HTTPException(status_code=401, detail="Invalid webhook signature.")
+    if result["status"] == "invalid":
+        raise HTTPException(status_code=400, detail="Invalid webhook payload.")
+    return InboundWebhookResponse(**result)
 
 
 @app.get("/v1/mcp/servers")
@@ -7976,6 +8300,51 @@ def ingest_inbox_message(payload: InboxMessageIngestRequest) -> InboxMessageSumm
         return inbox_message_summary_from_row(item)
 
 
+@app.post("/v1/docs/update", response_model=JobSummary, status_code=201)
+def enqueue_docs_update(payload: DocsUpdateRequest) -> JobSummary:
+    """Manually enqueue the same bounded job used by completion-event triggers."""
+    with begin(engine) as connection:
+        try:
+            result = docs_updates.enqueue(
+                connection,
+                project_id=payload.project_id,
+                event_id=payload.event_id,
+                event_type=payload.event_type,
+                entity_type=payload.entity_type,
+                entity_id=payload.entity_id,
+                task_id=payload.task_id,
+                data_boundary=payload.data_boundary,
+                actor=payload.actor,
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        return JobSummary(**result)
+
+
+@app.post("/v1/docs/update/execute")
+def execute_docs_update(payload: DocsUpdateExecuteRequest) -> dict[str, Any]:
+    """Worker-only execution boundary for a leased ``docs.update`` job."""
+    with begin(engine) as connection:
+        try:
+            return docs_updates.run_update(
+                connection,
+                project_id=payload.project_id,
+                event_id=payload.event_id,
+                event_type=payload.event_type,
+                entity_type=payload.entity_type,
+                entity_id=payload.entity_id,
+                task_id=payload.task_id,
+                data_boundary=payload.data_boundary,
+                created_by_job_id=payload.created_by_job_id,
+            )
+        except ValueError as error:
+            return {
+                "status": "failed",
+                "retryable": False,
+                "message": str(error),
+            }
+
+
 @app.post("/v1/jobs", response_model=JobSummary, status_code=201)
 def create_job(payload: JobCreateRequest) -> JobSummary:
     with begin(engine) as connection:
@@ -9083,13 +9452,29 @@ def list_deadletters(project_id: str, limit: int = 50) -> DeadletterListResponse
         rows = connection.execute(
             text(
                 """
-                SELECT id, project_id, source_kind, source_id, reason, payload,
-                       status, incident_task_id, incident_artifact_id,
-                       remediation_decision_id, requeued_job_id, resolved_by,
-                       resolved_at, created_at, updated_at
-                FROM deadletters
-                WHERE project_id = :project_id
-                ORDER BY created_at DESC
+                SELECT d.id, d.project_id, d.source_kind, d.source_id,
+                       CASE
+                         WHEN j.kind = 'webhook.outbound.deliver'
+                         THEN 'webhook_delivery'
+                       END AS related_entity_type,
+                       CASE
+                         WHEN j.kind = 'webhook.outbound.deliver'
+                         THEN j.payload->>'delivery_id'
+                       END AS related_entity_id,
+                       wd.status AS related_status,
+                       d.reason, d.payload, d.status, d.incident_task_id,
+                       d.incident_artifact_id, d.remediation_decision_id,
+                       d.requeued_job_id, d.resolved_by, d.resolved_at,
+                       d.created_at, d.updated_at
+                FROM deadletters d
+                LEFT JOIN jobs j
+                  ON d.source_kind = 'job' AND d.source_id = j.id
+                LEFT JOIN webhook_deliveries wd
+                  ON j.kind = 'webhook.outbound.deliver'
+                 AND wd.project_id = d.project_id
+                 AND wd.id = j.payload->>'delivery_id'
+                WHERE d.project_id = :project_id
+                ORDER BY d.created_at DESC
                 LIMIT :limit
                 """
             ),

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Union
 from uuid import uuid4
@@ -13,6 +14,7 @@ from ..config import Settings
 
 
 DATA_BOUNDARIES = {"public", "internal", "confidential", "restricted", "local-only"}
+logger = logging.getLogger(__name__)
 
 
 def now_utc() -> datetime:
@@ -46,7 +48,8 @@ def emit_event(
     entity_type: str,
     entity_id: str,
     data: dict,
-) -> None:
+) -> str:
+    event_id = make_id("evt")
     connection.execute(
         text(
             """
@@ -55,7 +58,7 @@ def emit_event(
             """
         ),
         {
-            "id": make_id("evt"),
+            "id": event_id,
             "project_id": project_id,
             "event_type": event_type,
             "actor": actor,
@@ -64,6 +67,79 @@ def emit_event(
             "data": json.dumps(data),
         },
     )
+    try:
+        # Imported lazily to keep the hot event writer source-compatible and to
+        # avoid a module cycle through jobs.enqueue_job -> core.emit_event.
+        from .event_dispatch import dispatch_event, is_dispatchable_event
+
+        if not is_dispatchable_event(event_type):
+            return event_id
+        # Isolate dispatcher SQL in a savepoint.  A broken subscription or
+        # enqueue must never poison the business transaction that wrote the
+        # canonical event.
+        with connection.begin_nested():
+            dispatch_event(
+                connection,
+                event_id=event_id,
+                project_id=project_id,
+                event_type=event_type,
+                actor=actor,
+                entity_type=entity_type,
+                entity_id=entity_id,
+                data=data,
+            )
+    except Exception as exc:  # noqa: BLE001 - fail open for the canonical write
+        logger.exception(
+            "event_dispatch.failed",
+            extra={
+                "project_id": project_id,
+                "event_id": event_id,
+                "event_type": event_type,
+                "entity_type": entity_type,
+                "entity_id": entity_id,
+            },
+        )
+        try:
+            with connection.begin_nested():
+                connection.execute(
+                    text(
+                        """
+                        INSERT INTO events (
+                            id, project_id, event_type, actor,
+                            entity_type, entity_id, data
+                        )
+                        VALUES (
+                            :id, :project_id, 'job.dispatch_failed', 'system',
+                            'event', :entity_id, CAST(:data AS JSONB)
+                        )
+                        """
+                    ),
+                    {
+                        "id": make_id("evt"),
+                        "project_id": project_id,
+                        "entity_id": event_id,
+                        "data": json.dumps(
+                            {
+                                "source_event_type": event_type,
+                                "source_entity_type": entity_type,
+                                "source_entity_id": entity_id,
+                                "error": str(exc),
+                            }
+                        ),
+                    },
+                )
+        except Exception:  # noqa: BLE001 - structured log is the last resort
+            logger.exception(
+                "event_dispatch.failure_event_write_failed",
+                extra={
+                    "project_id": project_id,
+                    "event_id": event_id,
+                    "event_type": event_type,
+                    "entity_type": entity_type,
+                    "entity_id": entity_id,
+                },
+            )
+    return event_id
 
 
 def record_policy_eval(

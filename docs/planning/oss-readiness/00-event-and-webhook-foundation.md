@@ -170,29 +170,29 @@ Everything above lives in the **engine layer** and imports only `core`, `db`, `c
 - [ ] New project bootstraps with default subscriptions for docs/orchestrator/github; dispatcher fans out to them end-to-end (integration test: emit `code_task.completed` → a `docs.refresh` job appears `queued`).
 
 ### Ticket 3 — Outbound webhook delivery — size M
-**Scope:** Signed outbound webhooks over the lease queue. Add `webhook_endpoints` + `webhook_deliveries` DDL; add `webhook_service.py` (create endpoint, enqueue delivery, HMAC sign); add `webhook.outbound.deliver` worker arm + `capabilities()` entry; add `/v1/webhook-endpoints` CRUD and a manual `POST /v1/webhook-endpoints/{id}/deliver`.
-**Key files:** `db/schema.sql`, new `apps/api/app/services/webhook_service.py`, `apps/worker/boss_worker/runner.py` (near :668), `apps/worker/boss_worker/runner.py:247` (`capabilities()`), `apps/api/app/main.py`.
-- [ ] Delivery signs body with `X-Hub-Signature-256: sha256=<hmac>` using the endpoint secret ref.
-- [ ] 2xx → `delivered`; non-2xx/timeout → job `fail(retryable=True)` → backoff → `deadlettered` after `max_attempts` (reuses existing queue retry, no bespoke loop).
-- [ ] Redelivery of the same `dedupe_key` is a no-op (UNIQUE-constraint enforced).
-- [ ] `data_boundary` on endpoint gates which events may target it; a `restricted` event cannot deliver to a `public` endpoint (test).
-- [ ] `webhook_service.py` imports none of `budget`, `entitlements`, `commercial`.
+**Scope:** Signed outbound webhooks over the lease queue. Add `webhook_endpoints` + `webhook_deliveries` DDL; add `webhooks.py` (create endpoint, enqueue delivery, HMAC sign); add `webhook.outbound.deliver` worker arm + `capabilities()` entry; add `/v1/webhook-endpoints` CRUD and a manual `POST /v1/webhook-endpoints/{id}/deliver`.
+**Key files:** `db/schema.sql`, `apps/api/app/services/webhooks.py`, `apps/worker/boss_worker/runner.py`, `apps/worker/boss_worker/control_plane.py`, `apps/api/app/main.py`.
+- [x] Delivery signs body with `X-Hub-Signature-256: sha256=<hmac>` using the endpoint secret ref.
+- [x] 2xx → `delivered`; non-2xx/timeout → job `fail(retryable=True)` → backoff → `deadlettered` after `max_attempts` (reuses existing queue retry, no bespoke loop).
+- [x] Redelivery of the same `dedupe_key` is a no-op (UNIQUE-constraint enforced).
+- [x] `data_boundary` on endpoint gates which events may target it; a `restricted` event cannot deliver to a `public` endpoint (test).
+- [x] `webhooks.py` imports none of `budget`, `entitlements`, `commercial`.
 
 ### Ticket 4 — Signed inbound webhook receiver — size M
 **Scope:** `POST /v1/webhooks/inbound/{source}` with HMAC verification, idempotent persistence, GitHub payload normalization, and re-emit into the dispatcher. Add `BOSS_WEBHOOK_INBOUND_SECRET` (+ per-source map) to config; add auth-exempt route; add GitHub event → canonical event mapping; emit `webhook.inbound.received`.
-**Key files:** `apps/api/app/config.py`, `apps/api/app/main.py`, new `apps/api/app/services/webhook_inbound.py`, `apps/api/app/services/github_adapter.py` (canonical mapping helpers).
-- [ ] Invalid/missing signature → `401`, zero side effects, `webhook.inbound.rejected` event recorded (constant-time compare test).
-- [ ] Valid GitHub `pull_request`/`check_suite`/`issue_comment` payloads normalize and emit `webhook.inbound.received` with `github_event`+`action` in `data`.
-- [ ] Duplicate `X-GitHub-Delivery` is idempotent (second POST creates no new event/job).
-- [ ] Unmapped repo → `202` + `webhook.inbound.unrouted` (never 5xx to the provider).
-- [ ] End-to-end: a signed inbound PR-opened webhook triggers a subscribed reactive job (proves inbound reuses the §3.2 path).
+**Key files:** `apps/api/app/config.py`, `apps/api/app/main.py`, `apps/api/app/services/webhooks.py`, `db/schema.sql`.
+- [x] Invalid/missing signature → `401`, zero business effects, `webhook.inbound.rejected` event recorded (constant-time compare test).
+- [x] Valid GitHub `pull_request`/`check_suite`/`issue_comment` payloads normalize and emit `webhook.inbound.received` with `github_event`+`action` in `data`.
+- [x] Duplicate `X-GitHub-Delivery` is idempotent (second POST creates no new event/job).
+- [x] Unmapped repo → `202` + `webhook.inbound.unrouted` (never 5xx to the provider).
+- [x] End-to-end: a signed inbound PR-opened webhook triggers a subscribed reactive job (proves inbound reuses the §3.2 path).
 
 ### Ticket 5 — Docs, canary & operability — size S
 **Scope:** Make the foundation observable and prove it under BOSS's own invariant harness. Add a delivery/dispatch view to `GET /v1/events` neighbors (or a `GET /v1/webhook-deliveries` list); add an exactly-once dispatch canary alongside the existing outbox canary; write operator docs (register a subscription, add an endpoint, verify a GitHub webhook).
 **Key files:** `apps/api/app/main.py`, `apps/api/app/services/canaries.py`, `docs/` (this folder).
-- [ ] Canary asserts: one emit of a dispatchable event → exactly one reactive job per enabled subscription (no dupes, no drops), consistent with the existing exactly-once/outbox canaries.
-- [ ] Deadlettered webhook deliveries surface in the existing `GET /v1/deadletters` view.
-- [ ] Operator doc covers inbound secret setup + subscription registration for all three asks.
+- [x] Canary asserts: one emit of a dispatchable event → exactly one reactive job per enabled subscription (no dupes, no drops), consistent with the existing exactly-once/outbox canaries.
+- [x] Deadlettered webhook deliveries surface in the existing `GET /v1/deadletters` view.
+- [x] Operator doc covers inbound secret setup + subscription registration for all three asks.
 
 ## 5. Dependencies, Sequencing & Priority
 

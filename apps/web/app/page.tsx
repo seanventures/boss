@@ -6340,6 +6340,15 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                             {deadletter.resolvedBy ?? "unknown"}
                           </p>
                         ) : null}
+                        {deadletter.relatedEntityId ? (
+                          <p className="muted">
+                            Related {deadletter.relatedEntityType ?? "entity"}: {" "}
+                            <code className="mono">{deadletter.relatedEntityId}</code>
+                            {deadletter.relatedStatus
+                              ? ` / ${deadletter.relatedStatus}`
+                              : ""}
+                          </p>
+                        ) : null}
                         <div className="inline-actions">
                           <form action={createDeadletterIncidentAction}>
                             <input

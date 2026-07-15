@@ -3,6 +3,47 @@
 All 15-min terminal updates and major milestones appended here. Chronological, newest at top.
 
 ---
+## 2026-07-15T16:10:00Z — Codex reactive docs-agent slice ready
+- Plane: moved BOSS-73/BOSS-74/BOSS-75 to In Progress before code work; paired the three dependency-ordered tickets so the handler could truthfully complete a budgeted, human-gated docs PR.
+- Implemented allowlisted/manual entity-debounced `docs.update` enqueue, latest-event coalescing, worker capability/control-plane execution, retry/deadletter propagation, and `docs.pr_opened` success evidence.
+- Added evidence assembly for code-task/discovery/plan/merge-artifact triggers, prior-branch Markdown reads, task artifacts, source PR references, a validated docs-writer RoleSpec, fixed Markdown template, safe `.md` paths, and managed markers that preserve human prose.
+- Added stable `boss/docs/<slug>` branch writes and idempotent draft PR creation behind BudgetReservation and provider Receipt gates; labelled features reconcile TRACEABILITY status/freshness and update catalog freshness. BOSS never merges the PR.
+- Validation: docs-agent 7 passed; reactive foundation 7 passed; worker 27 passed; focused Ruff/compile, OpenAPI + RoleSpec YAML, generator drift/unit, and strict MkDocs pass.
+- Coordination: isolated on `ai/codex/docs-agent`, stacked on PR #17; active contributor design/VAG/model-pacing branches remain non-overlapping. GitHub Community BOSS-85/BOSS-89 stay in a separate sibling PR.
+
+---
+## 2026-07-15T14:48:45Z — Codex event operability + public docs slice ready
+- Plane: claimed BOSS-24 and BOSS-76, kept both In Progress pending merge; returned BOSS-73 to Backlog before code work after confirming DOC-3/DOC-4 are required for a truthful successful handler.
+- Implemented a persisted reactive-dispatch exactly-once canary using temporary enabled/disabled routes, canonical emit + exact replay, deterministic job reuse, route cleanup, and queued→leased→succeeded proof without external effects.
+- Added related webhook-delivery type/id/status to `GET /v1/deadletters`, synced API-client/console presentation, and extended the terminal webhook retry test to prove the shared incident surface.
+- Added complete webhook/subscription/canary operator instructions and static canary OpenAPI paths.
+- Added MkDocs Material public site, BOSS-first poster landing surface, deterministic TRACEABILITY feature/status generator, drift test, strict `make docs`, and docs-PR build + reviewed-main Pages workflow.
+- Validation: 45 Python tests + 26 web tests pass; Next production build, TypeScript, focused Ruff/compile, YAML parse, generator `--check`, strict MkDocs, and diff checks pass. OpenAPI parity reports only the known unrelated baseline route backlog. Broad `make lint` passes web lint/typegen and stops on the same 13 unrelated pre-existing Python lint errors carried by the stacked base.
+- Coordination: work is isolated on `ai/codex/reactive-docs-operability`, stacked on PR #16; no overlap with contributor design/VAG/model-pacing branches.
+- Published implementation commit `5887088` and mergeable stacked draft PR #17. GitHub Documentation run `29425529835` was rejected before checkout with zero steps by the repository account payment/spending-limit gate; recorded as external, with no code workaround attempted.
+
+---
+## 2026-07-15T14:15:00Z — Codex — BOSS-22/BOSS-23 webhook foundation
+
+- Re-read the mandatory Plane rule and coordination state; moved BOSS-22 and BOSS-23 to In Progress and created focused stacked branch `ai/codex/webhook-foundation` from PR #15.
+- Implemented `webhook_endpoints`, `webhook_deliveries`, and `inbound_webhooks`; typed endpoint CRUD/manual delivery/list/worker execute/inbound APIs; static OpenAPI coverage; and runtime config for timeout, inbound secrets, and repository routing.
+- Extended `webhook_out` event subscriptions to create deterministic durable deliveries and leased jobs. Added exact canonical JSON HMAC headers, env-only secret references, Receipt per attempt, worker job ownership validation, replay no-op behavior, endpoint boundary gates, success/failure audit events, and retry/deadletter delivery state.
+- Added auth-exempt raw-body inbound verification with constant-time signature comparison before parsing, rejection metadata audit without unverified payload persistence, GitHub event normalization, durable `X-GitHub-Delivery` idempotency, project routing, 202 unrouted evidence, and end-to-end `github.triage` job dispatch.
+- Validation: webhook API/integration 10 passed; reactive foundation regressions 7 passed; worker suite 25 passed; focused Ruff and Python compile passed. Added operator runbook, env examples, changelog, traceability, and planning-ticket acceptance evidence.
+- Published implementation commit `eccad5f` and mergeable stacked draft PR #16. Attached commit/PR/tests/security and baseline-lint evidence to Plane BOSS-22/BOSS-23 and parent BOSS-19; all remain In Progress until merge. GitHub reports no checks for the stacked non-default-base branch.
+
+=== CODEX OSS-READINESS REACTIVE/DOCS FOUNDATION 2026-07-15 ===
+Product: BOSS (Business Operating System Sentinel)
+Repo root: /Volumes/DataSSD1/test/boss
+Base: origin/main `44b985b`
+Branch: ai/codex/oss-reactive-docs-foundation
+Plane: BOSS-20, BOSS-21, BOSS-72 moved to In Progress before implementation; parents BOSS-19/BOSS-71 remain In Progress because later children remain.
+Completed: pure idempotent job enqueue; isolated allowlisted same-transaction event dispatcher; event subscription schema/service/cache/defaults/CRUD/OpenAPI; TRACEABILITY-derived feature catalog with labelled/emergent resolution and idempotency; product trace/status updates.
+Safety: no direct provider/model/GitHub/Slack effects; no raw secrets; no spend path; jobs retain lease-time budget enforcement; project scope and data boundaries enforced; failures visible through logs and events.
+Validation: new acceptance suite 7 passed; representative existing job lifecycle 5 passed; schema applied twice successfully on fresh Postgres; Ruff/compile/diff/OpenAPI YAML checks passed. Broad API suite 241 passed/38 failed; four representative failures also fail on detached pristine origin/main, establishing pre-existing baseline debt.
+Coordination: committed as `6fa2df7`, pushed, and opened mergeable draft PR #15. PR #14 has no overlap; PR #9 has localized main.py/test overlap. GitHub CI was blocked before checkout by the account payment/spending-limit gate; evidence is attached to PR #15 and Plane. Remaining BOSS-22/23/24 and BOSS-73+ intentionally not included.
+
+---
 === QA / TEST FULL VALIDATION + E2E POLISH (P2) 2026-06-05 ===
 Product: BOSS (Business Operating System Sentinel)
 Repo root: /Volumes/DataSSD1/test/boss

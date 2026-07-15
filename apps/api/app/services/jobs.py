@@ -27,6 +27,131 @@ class LeaseNotFoundError(RuntimeError):
     pass
 
 
+def resolve_job_data_boundary(
+    connection: Connection,
+    task_id: Optional[str],
+    payload: dict[str, Any],
+    data_boundary: Optional[str],
+) -> str:
+    """Resolve a job boundary without constructing the budget-aware lease service."""
+    if data_boundary:
+        return normalize_data_boundary(data_boundary)
+    payload_boundary = payload.get("data_boundary")
+    if isinstance(payload_boundary, str) and payload_boundary.strip():
+        return normalize_data_boundary(payload_boundary)
+    if task_id:
+        row = connection.execute(
+            text("SELECT data_boundary FROM tasks WHERE id = :task_id"),
+            {"task_id": task_id},
+        ).mappings().first()
+        if row:
+            return normalize_data_boundary(row["data_boundary"])
+    return "internal"
+
+
+def enqueue_job(
+    connection: Connection,
+    project_id: str,
+    kind: str,
+    payload: Optional[dict[str, Any]] = None,
+    *,
+    task_id: Optional[str] = None,
+    priority: int = 100,
+    max_attempts: int = 3,
+    run_after_seconds: int = 0,
+    data_boundary: Optional[str] = None,
+    dedupe_key: Optional[str] = None,
+) -> dict[str, Any]:
+    """Insert a queued job without importing budget, entitlement, or agent services.
+
+    A non-null ``dedupe_key`` makes enqueue idempotent within a project.  Budget
+    and reservation enforcement intentionally remains at lease time.
+    """
+    job_payload = payload or {}
+    boundary = resolve_job_data_boundary(
+        connection, task_id, job_payload, data_boundary
+    )
+    job_id = make_id("job")
+    run_after = now_utc() + timedelta(seconds=run_after_seconds)
+    row = connection.execute(
+        text(
+            """
+            INSERT INTO jobs (
+                id, project_id, task_id, kind, priority, status, payload,
+                data_boundary, max_attempts, attempt, run_after, dedupe_key
+            )
+            VALUES (
+                :id, :project_id, :task_id, :kind, :priority, 'queued',
+                CAST(:payload AS JSONB), :data_boundary, :max_attempts, 0,
+                :run_after, :dedupe_key
+            )
+            ON CONFLICT (project_id, dedupe_key)
+              WHERE dedupe_key IS NOT NULL
+            DO NOTHING
+            RETURNING id, project_id, task_id, kind, status, data_boundary,
+                      priority, max_attempts, attempt, run_after, dedupe_key
+            """
+        ),
+        {
+            "id": job_id,
+            "project_id": project_id,
+            "task_id": task_id,
+            "kind": kind,
+            "priority": priority,
+            "payload": json.dumps(job_payload),
+            "data_boundary": boundary,
+            "max_attempts": max_attempts,
+            "run_after": run_after,
+            "dedupe_key": dedupe_key,
+        },
+    ).mappings().first()
+    created = row is not None
+    if row is None:
+        row = connection.execute(
+            text(
+                """
+                SELECT id, project_id, task_id, kind, status, data_boundary,
+                       priority, max_attempts, attempt, run_after, dedupe_key
+                FROM jobs
+                WHERE project_id = :project_id AND dedupe_key = :dedupe_key
+                """
+            ),
+            {"project_id": project_id, "dedupe_key": dedupe_key},
+        ).mappings().first()
+    if row is None:
+        raise RuntimeError("Job enqueue did not create or find a deduplicated job.")
+
+    if created:
+        emit_event(
+            connection,
+            project_id,
+            "job.created",
+            "control_plane",
+            "job",
+            row["id"],
+            {
+                "kind": kind,
+                "task_id": task_id,
+                "data_boundary": boundary,
+                "dedupe_key": dedupe_key,
+            },
+        )
+    return {
+        "id": row["id"],
+        "project_id": row["project_id"],
+        "task_id": row["task_id"],
+        "kind": row["kind"],
+        "status": row["status"],
+        "data_boundary": row["data_boundary"],
+        "priority": int(row["priority"]),
+        "max_attempts": int(row["max_attempts"]),
+        "attempt": int(row["attempt"]),
+        "run_after": row["run_after"].isoformat(),
+        "dedupe_key": row["dedupe_key"],
+        "created": created,
+    }
+
+
 class JobLeaseService:
     def __init__(self, settings: Settings):
         self.settings = settings
@@ -113,78 +238,22 @@ class JobLeaseService:
         run_after_seconds: int = 0,
         data_boundary: Optional[str] = None,
     ) -> dict[str, Any]:
-        job_id = make_id("job")
-        run_after = now_utc() + timedelta(seconds=run_after_seconds)
-        boundary = self._resolve_job_data_boundary(
-            connection, task_id, payload or {}, data_boundary
-        )
-        connection.execute(
-            text(
-                """
-                INSERT INTO jobs (
-                    id, project_id, task_id, kind, priority, status, payload,
-                    data_boundary, max_attempts, attempt, run_after
-                )
-                VALUES (
-                    :id, :project_id, :task_id, :kind, :priority, 'queued', CAST(:payload AS JSONB),
-                    :data_boundary, :max_attempts, 0, :run_after
-                )
-                """
-            ),
-            {
-                "id": job_id,
-                "project_id": project_id,
-                "task_id": task_id,
-                "kind": kind,
-                "priority": priority,
-                "payload": json.dumps(payload or {}),
-                "data_boundary": boundary,
-                "max_attempts": max_attempts,
-                "run_after": run_after,
-            },
-        )
-        emit_event(
+        job = enqueue_job(
             connection,
             project_id,
-            "job.created",
-            "control_plane",
-            "job",
-            job_id,
-            {"kind": kind, "task_id": task_id, "data_boundary": boundary},
+            kind,
+            payload,
+            task_id=task_id,
+            priority=priority,
+            max_attempts=max_attempts,
+            run_after_seconds=run_after_seconds,
+            data_boundary=data_boundary,
         )
-        return {
-            "id": job_id,
-            "project_id": project_id,
-            "task_id": task_id,
-            "kind": kind,
-            "status": "queued",
-            "data_boundary": boundary,
-            "priority": priority,
-            "max_attempts": max_attempts,
-            "attempt": 0,
-            "run_after": run_after.isoformat(),
-        }
-
-    def _resolve_job_data_boundary(
-        self,
-        connection: Connection,
-        task_id: Optional[str],
-        payload: dict[str, Any],
-        data_boundary: Optional[str],
-    ) -> str:
-        if data_boundary:
-            return normalize_data_boundary(data_boundary)
-        payload_boundary = payload.get("data_boundary")
-        if isinstance(payload_boundary, str) and payload_boundary.strip():
-            return normalize_data_boundary(payload_boundary)
-        if task_id:
-            row = connection.execute(
-                text("SELECT data_boundary FROM tasks WHERE id = :task_id"),
-                {"task_id": task_id},
-            ).mappings().first()
-            if row:
-                return normalize_data_boundary(row["data_boundary"])
-        return "internal"
+        # Preserve the public return shape used before enqueue_job was
+        # extracted.  Dispatcher-only metadata belongs on the free function.
+        job.pop("dedupe_key")
+        job.pop("created")
+        return job
 
     def claim_job(
         self,
@@ -636,6 +705,15 @@ class JobLeaseService:
                 "local_validation_receipt_id": result.get(
                     "local_validation_receipt_id"
                 ),
+            }
+
+        if job_row["kind"] == "docs.update":
+            return {
+                "receipt_id": result.get("receipt_id"),
+                "pull_request_url": result.get("pull_request_url"),
+                "branch_name": result.get("branch_name"),
+                "feature_id": result.get("feature_id"),
+                "doc_path": result.get("doc_path"),
             }
 
         if job_row["kind"] == "github.pull_request.merge":
@@ -1141,6 +1219,28 @@ class JobLeaseService:
     def _mark_related_message_retrying(
         self, connection: Connection, row, retry_delay_seconds: int
     ) -> None:
+        if row["kind"] == "webhook.outbound.deliver":
+            delivery_id = (row["payload"] or {}).get("delivery_id")
+            if delivery_id:
+                connection.execute(
+                    text(
+                        """
+                        UPDATE webhook_deliveries
+                        SET status = 'retrying',
+                            next_attempt_at = :next_attempt_at,
+                            updated_at = :updated_at
+                        WHERE id = :delivery_id AND project_id = :project_id
+                        """
+                    ),
+                    {
+                        "delivery_id": str(delivery_id),
+                        "project_id": row["project_id"],
+                        "next_attempt_at": now_utc()
+                        + timedelta(seconds=retry_delay_seconds),
+                        "updated_at": now_utc(),
+                    },
+                )
+            return
         if row["kind"] != "comms.outbox.deliver":
             return
         payload = row["payload"] or {}
@@ -1157,6 +1257,28 @@ class JobLeaseService:
     def _mark_related_message_deadlettered(
         self, connection: Connection, row, deadletter_id: str
     ) -> None:
+        if row["kind"] == "webhook.outbound.deliver":
+            delivery_id = (row["payload"] or {}).get("delivery_id")
+            if delivery_id:
+                connection.execute(
+                    text(
+                        """
+                        UPDATE webhook_deliveries
+                        SET status = 'deadlettered', next_attempt_at = NULL,
+                            last_error = COALESCE(last_error, '{}'::jsonb)
+                                || CAST(:deadletter AS JSONB),
+                            updated_at = :updated_at
+                        WHERE id = :delivery_id AND project_id = :project_id
+                        """
+                    ),
+                    {
+                        "delivery_id": str(delivery_id),
+                        "project_id": row["project_id"],
+                        "deadletter": json.dumps({"deadletter_id": deadletter_id}),
+                        "updated_at": now_utc(),
+                    },
+                )
+            return
         if row["kind"] != "comms.outbox.deliver":
             return
         payload = row["payload"] or {}

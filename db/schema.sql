@@ -749,11 +749,16 @@ CREATE TABLE IF NOT EXISTS jobs (
   lease_expires_at TIMESTAMPTZ,
   heartbeat_at TIMESTAMPTZ,
   last_error JSONB,
+  dedupe_key TEXT,
   run_after TIMESTAMPTZ NOT NULL DEFAULT now(),
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS dedupe_key TEXT;
 CREATE INDEX IF NOT EXISTS idx_jobs_claimable ON jobs (status, run_after, priority, created_at);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_jobs_project_dedupe
+  ON jobs(project_id, dedupe_key)
+  WHERE dedupe_key IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS receipts (
   id TEXT PRIMARY KEY,
@@ -1577,6 +1582,103 @@ CREATE TABLE IF NOT EXISTS events (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_events_project_created ON events(project_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS event_subscriptions (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  event_type TEXT NOT NULL,
+  sink_kind TEXT NOT NULL,
+  sink_ref TEXT NOT NULL,
+  data_boundary TEXT NOT NULL DEFAULT 'internal',
+  enabled BOOLEAN NOT NULL DEFAULT true,
+  config JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(project_id, event_type, sink_kind, sink_ref)
+);
+CREATE INDEX IF NOT EXISTS idx_event_subscriptions_match
+  ON event_subscriptions(project_id, enabled, event_type);
+
+CREATE TABLE IF NOT EXISTS webhook_endpoints (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  url TEXT NOT NULL,
+  secret_ref TEXT NOT NULL,
+  description TEXT,
+  data_boundary TEXT NOT NULL DEFAULT 'internal',
+  enabled BOOLEAN NOT NULL DEFAULT true,
+  deleted_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_webhook_endpoints_project
+  ON webhook_endpoints(project_id, enabled, created_at DESC)
+  WHERE deleted_at IS NULL;
+
+CREATE TABLE IF NOT EXISTS webhook_deliveries (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  endpoint_id TEXT NOT NULL REFERENCES webhook_endpoints(id),
+  event_id TEXT REFERENCES events(id) ON DELETE SET NULL,
+  event_type TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending',
+  dedupe_key TEXT NOT NULL,
+  request_body JSONB NOT NULL DEFAULT '{}'::jsonb,
+  response JSONB,
+  last_error JSONB,
+  receipt_id TEXT REFERENCES receipts(id) ON DELETE SET NULL,
+  attempt_count INTEGER NOT NULL DEFAULT 0,
+  data_boundary TEXT NOT NULL DEFAULT 'internal',
+  next_attempt_at TIMESTAMPTZ,
+  delivered_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(project_id, dedupe_key)
+);
+CREATE INDEX IF NOT EXISTS idx_webhook_deliveries_project_status
+  ON webhook_deliveries(project_id, status, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS inbound_webhooks (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  source TEXT NOT NULL,
+  delivery_key TEXT NOT NULL,
+  repo_full_name TEXT,
+  provider_event TEXT NOT NULL,
+  action TEXT,
+  status TEXT NOT NULL,
+  signature_status TEXT NOT NULL,
+  payload_hash TEXT NOT NULL,
+  payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+  event_id TEXT REFERENCES events(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(source, delivery_key)
+);
+CREATE INDEX IF NOT EXISTS idx_inbound_webhooks_project_created
+  ON inbound_webhooks(project_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS feature_catalog (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  label TEXT,
+  slug TEXT NOT NULL,
+  title TEXT NOT NULL,
+  doc_path TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'Planned',
+  source TEXT,
+  implementation_files JSONB NOT NULL DEFAULT '[]'::jsonb,
+  test_coverage JSONB NOT NULL DEFAULT '[]'::jsonb,
+  source_refs JSONB NOT NULL DEFAULT '[]'::jsonb,
+  needs_label BOOLEAN NOT NULL DEFAULT false,
+  last_documented_event_id TEXT,
+  last_documented_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(project_id, label),
+  UNIQUE(project_id, slug)
+);
+CREATE INDEX IF NOT EXISTS idx_feature_catalog_project_status
+  ON feature_catalog(project_id, status, updated_at DESC);
 
 CREATE TABLE IF NOT EXISTS mcp_servers (
   id TEXT PRIMARY KEY,

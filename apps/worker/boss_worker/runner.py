@@ -10,6 +10,10 @@ from .control_plane import ControlPlaneClient, LeasedJob
 LOGGER = logging.getLogger("boss.worker")
 
 
+class RetryableJobError(RuntimeError):
+    """A transient effect failure that should use the durable job backoff path."""
+
+
 AGENT_WORK_PRODUCT_STRATEGIES: dict[str, dict[str, Any]] = {
     "agent.metatron.status_brief": {
         "contract": "StatusBrief",
@@ -269,6 +273,7 @@ def capabilities() -> list[str]:
         "openai.plan",
         "meeting.step",
         "code.task",
+        "docs.update",
         "agent.resume",
         "software_factory.propose_pr",
         "github.pull_request.merge",
@@ -276,6 +281,7 @@ def capabilities() -> list[str]:
         "infra.droplet.create",
         "infra.droplet.delete",
         "comms.outbox.deliver",
+        "webhook.outbound.deliver",
     ]
 
 
@@ -570,6 +576,25 @@ def execute_job(job: LeasedJob, client: ControlPlaneClient) -> dict[str, Any]:
         if result.get("status") == "failed":
             raise RuntimeError(result.get("error") or "Code task failed.")
         return result
+    if job.kind == "docs.update":
+        result = client.run_docs_update(
+            {
+                "project_id": job.project_id,
+                "task_id": job.task_id,
+                "event_id": job.payload["event_id"],
+                "event_type": job.payload["event_type"],
+                "entity_type": job.payload["entity_type"],
+                "entity_id": job.payload["entity_id"],
+                "data_boundary": job.payload.get("data_boundary", job.data_boundary),
+                "created_by_job_id": job.id,
+            }
+        )
+        if result.get("status") in {"failed", "blocked"}:
+            error = result.get("message") or "Documentation update failed."
+            if result.get("retryable"):
+                raise RetryableJobError(error)
+            raise RuntimeError(error)
+        return result
     if job.kind == "agent.resume":
         result = client.resume_agent_run({"run_id": job.payload["run_id"]})
         if result.get("status") == "failed":
@@ -678,6 +703,21 @@ def execute_job(job: LeasedJob, client: ControlPlaneClient) -> dict[str, Any]:
         if result.get("status") == "failed":
             raise RuntimeError(result.get("message") or "Outbound communication failed.")
         return result
+    if job.kind == "webhook.outbound.deliver":
+        result = client.deliver_webhook(
+            job.payload["delivery_id"],
+            {
+                "project_id": job.project_id,
+                "created_by_job_id": job.id,
+                "worker_id": client.worker_id,
+                "lease_token": job.lease_token,
+            },
+        )
+        if result.get("status") == "failed":
+            raise RetryableJobError(
+                result.get("message") or "Outbound webhook delivery failed."
+            )
+        return result
     if job.kind == "providerops.sync.readonly":
         result = client.sync_provider_resources(
             {
@@ -742,6 +782,12 @@ def run_worker_cycle(client: ControlPlaneClient, settings: WorkerSettings) -> bo
             job.id,
             job.kind,
         )
+        retryable = isinstance(error, RetryableJobError)
+        retry_delay_seconds = (
+            min(300, 5 * (2 ** min(max(job.attempt - 1, 0), 6)))
+            if retryable
+            else 0
+        )
         client.fail(
             settings.worker_id,
             job.id,
@@ -750,8 +796,8 @@ def run_worker_cycle(client: ControlPlaneClient, settings: WorkerSettings) -> bo
                 "message": str(error),
                 "type": error.__class__.__name__,
             },
-            retryable=False,
-            retry_delay_seconds=0,
+            retryable=retryable,
+            retry_delay_seconds=retry_delay_seconds,
         )
         return True
 

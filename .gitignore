@@ -12,6 +12,7 @@ node_modules/
 .next/
 coverage/
 dist/
+site/
 artifacts/
 tmp/
 # .ai/ is now tracked as part of the autonomous delivery OS (per mission); do not re-add ignore without review

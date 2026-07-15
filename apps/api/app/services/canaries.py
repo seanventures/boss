@@ -16,6 +16,11 @@ from ..db import begin
 from .budget import BudgetGovernor
 from .comms import CommsService
 from .core import emit_event, make_id
+from .event_dispatch import dispatch_event
+from .event_subscription_service import (
+    create_event_subscription,
+    delete_event_subscription,
+)
 from .jobs import JobLeaseService
 from .receipts import ReceiptService
 
@@ -77,6 +82,118 @@ def _canary_job_lifecycle(engine, settings, project_id):
         ).mappings().first()
     ok = row is not None and row["status"] == "succeeded"
     return ok, f"job {job['id']} → {row['status'] if row else 'MISSING'} (queued→leased→succeeded)"
+
+
+def _canary_reactive_dispatch_exactly_once(engine, settings, project_id):
+    """One dispatchable event creates one durable job for its enabled subscription.
+
+    Replaying the exact event/subscription pair must reuse that job.  The canary
+    owns and removes its temporary subscriptions, then completes the proof job
+    through the normal lease protocol so it cannot leave unserviceable work in
+    the queue.
+    """
+    lease_service = JobLeaseService(settings)
+    token = make_id("reactive_canary")
+    enabled_kind = f"canary.reactive_dispatch.{token}"
+    disabled_kind = f"canary.reactive_dispatch.disabled.{token}"
+    with begin(engine) as c:
+        enabled = create_event_subscription(
+            c,
+            project_id,
+            "meeting.completed",
+            "job",
+            enabled_kind,
+            actor="canary",
+        )
+        disabled = create_event_subscription(
+            c,
+            project_id,
+            "meeting.completed",
+            "job",
+            disabled_kind,
+            enabled=False,
+            actor="canary",
+        )
+        event_id = emit_event(
+            c,
+            project_id,
+            "meeting.completed",
+            "canary",
+            "canary_probe",
+            token,
+            {"data_boundary": "internal", "canary": True},
+        )
+        replay = dispatch_event(
+            c,
+            event_id=event_id,
+            project_id=project_id,
+            event_type="meeting.completed",
+            actor="canary",
+            entity_type="canary_probe",
+            entity_id=token,
+            data={"data_boundary": "internal", "canary": True},
+        )
+        jobs = c.execute(
+            text(
+                """
+                SELECT id, kind, status
+                FROM jobs
+                WHERE project_id = :project_id
+                  AND payload->>'event_id' = :event_id
+                  AND kind IN (:enabled_kind, :disabled_kind)
+                ORDER BY kind
+                """
+            ),
+            {
+                "project_id": project_id,
+                "event_id": event_id,
+                "enabled_kind": enabled_kind,
+                "disabled_kind": disabled_kind,
+            },
+        ).mappings().all()
+        # Subscriptions are configuration, not canary artifacts.  Keep the
+        # source event and job as evidence but remove the temporary routes.
+        delete_event_subscription(
+            c, project_id, enabled["id"], actor="canary"
+        )
+        delete_event_subscription(
+            c, project_id, disabled["id"], actor="canary"
+        )
+
+    if len(jobs) != 1 or jobs[0]["kind"] != enabled_kind:
+        return False, (
+            f"event={event_id} expected=1 enabled job; observed="
+            f"{[(row['kind'], row['status']) for row in jobs]}"
+        )
+    if len(replay) != 1 or replay[0]["id"] != jobs[0]["id"]:
+        return False, (
+            f"event={event_id} replay did not resolve the original job "
+            f"{jobs[0]['id']}"
+        )
+    if replay[0].get("created") is not False:
+        return False, f"event={event_id} replay created a duplicate job"
+
+    worker_id = f"canary-worker-{token}"
+    with begin(engine) as c:
+        leased = lease_service.claim_job(c, worker_id, [enabled_kind], 60)
+    if not leased or leased["id"] != jobs[0]["id"]:
+        return False, (
+            f"event={event_id} dispatched job was not leaseable "
+            f"(got {leased['id'] if leased else None})"
+        )
+    with begin(engine) as c:
+        lease_service.complete(
+            c,
+            worker_id,
+            leased["id"],
+            leased["lease_token"],
+            {"canary": "reactive_dispatch_exactly_once"},
+        )
+    return True, (
+        f"event={event_id} subscription={enabled['id']} job={jobs[0]['id']} "
+        "created_once=true replay_reused=true disabled_ignored=true "
+        "lifecycle=queued→leased→succeeded"
+    )
 
 
 def _canary_budget_reserve_release(engine, settings, project_id):
@@ -150,6 +267,7 @@ def _canary_skill_mock_invocation(engine, settings, project_id):
 
 CANARIES = [
     ("exactly_once", _canary_exactly_once),
+    ("reactive_dispatch_exactly_once", _canary_reactive_dispatch_exactly_once),
     ("no_drop_outbox", _canary_no_drop_outbox),
     ("job_lifecycle", _canary_job_lifecycle),
     ("budget_reserve_release", _canary_budget_reserve_release),

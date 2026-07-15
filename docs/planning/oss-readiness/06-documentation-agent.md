@@ -144,43 +144,43 @@ Output is Markdown only (already an allowed extension, `code_agent.py:354`). The
 **Scope.** Register `docs.update` as a worker job kind; add the completion-event allowlist config and (via spec 00's dispatcher) enqueue `docs.update` on allowlisted events with entity-scoped dedupe/debounce. Add a manual `POST /v1/docs/update` for testing before the dispatcher lands.
 **Key files.** `apps/worker/boss_worker/runner.py` (new `if job.kind == "docs.update"` branch before `:709`), `apps/api/app/services/jobs.py` (enqueue, `:108`), `apps/api/app/main.py` (manual endpoint + client method), config (`docs.trigger_events` allowlist), spec-00 dispatcher wiring.
 **Acceptance criteria.**
-- [ ] Allowlisted event (`code_task.pr_opened`, `software_factory.pull_request_merged`, `discovery.completed`) enqueues exactly one `docs.update` job carrying `{event_id, event_type, entity_type, entity_id, project_id}`.
-- [ ] Non-allowlisted events enqueue nothing.
-- [ ] Two events for the same `entity_id` within the debounce window enqueue at most one job.
-- [ ] Handler failure follows existing lease retry/deadletter; success emits `docs.pr_opened`.
-- [ ] **Depends on spec 00** for the automatic trigger; manual endpoint works standalone.
+- [x] Allowlisted event (`code_task.pr_opened`, `software_factory.pull_request_merged`, `discovery.completed`) enqueues exactly one `docs.update` job carrying `{event_id, event_type, entity_type, entity_id, project_id}`.
+- [x] Non-allowlisted events enqueue nothing.
+- [x] Two events for the same `entity_id` within the debounce window enqueue at most one job.
+- [x] Handler failure follows existing lease retry/deadletter; success emits `docs.pr_opened`.
+- [x] **Depends on spec 00** for the automatic trigger; manual endpoint works standalone.
 **Size.** M.
 
 ### DOC-3 — Docs agent + context assembly + docs role
 **Scope.** Add `docs_agent.py` that assembles context (run diff/PR files + spec artifact + prior doc + catalog metadata) and calls `code_agent.run_role` with a new `docs_writer` role to emit a templated feature doc; preserve human-edited sections on update.
 **Key files.** `apps/api/app/services/docs_agent.py` (new), `packages/specpack/roles/docs_writer.yaml` (new `RoleSpec`), `apps/api/app/services/code_agent.py` (reuse `run_role` `:233`/`:402`, `.md` already allowed `:354`), `apps/api/app/services/discovery_service.py` (dossier read).
 **Acceptance criteria.**
-- [ ] Given a code-task run + prior doc, produces valid Markdown matching the feature-doc template.
-- [ ] On update, sections not targeted by the change are preserved (diff-and-patch, not clobber).
-- [ ] Emits Markdown only; no non-`.md` artifacts.
-- [ ] `docs_writer` RoleSpec validates against the specpack loader.
-- [ ] Unit test with a fixture run + fixture prior doc asserts template sections and preservation.
+- [x] Given a code-task run + prior doc, produces valid Markdown matching the feature-doc template.
+- [x] On update, sections not targeted by the change are preserved (diff-and-patch, not clobber).
+- [x] Emits Markdown only; no non-`.md` artifacts.
+- [x] `docs_writer` RoleSpec validates against the specpack loader.
+- [x] Unit test with a fixture run + fixture prior doc asserts template sections and preservation.
 **Size.** L.
 
 ### DOC-4 — Docs PR path + TRACEABILITY reconciliation
 **Scope.** Wire the docs agent output through `github_adapter.upsert_file` + `create_pull_request` on a stable per-feature branch; in the same PR, propose the `TRACEABILITY.md` status/`last updated` edit for labelled features. No auto-merge.
 **Key files.** `apps/api/app/services/docs_agent.py` (PR step), `apps/api/app/services/github_adapter.py` (reuse `upsert_file:148`, `create_pull_request:183`), `docs/product/TRACEABILITY.md` (patched in-PR), `apps/api/app/services/feature_catalog.py` (update `last_documented_*`).
 **Acceptance criteria.**
-- [ ] Opens a **draft** docs PR on branch `boss/docs/<slug>`; repeated updates reuse the same branch/PR (idempotent).
-- [ ] PR body links the triggering event, run, and spec artifact.
-- [ ] Labelled feature → PR includes a `TRACEABILITY.md` status + `Last updated` edit.
-- [ ] Catalog `last_documented_event_id`/`last_documented_at` set on PR open.
-- [ ] No merge is performed by BOSS (human-gated).
+- [x] Opens a **draft** docs PR on branch `boss/docs/<slug>`; repeated updates reuse the same branch/PR (idempotent).
+- [x] PR body links the triggering event, run, and spec artifact.
+- [x] Labelled feature → PR includes a `TRACEABILITY.md` status + `Last updated` edit.
+- [x] Catalog `last_documented_event_id`/`last_documented_at` set on PR open.
+- [x] No merge is performed by BOSS (human-gated).
 **Size.** M.
 
 ### DOC-5 — mkdocs site + CI publish
 **Scope.** Add `mkdocs.yml` (Material theme) rendering `docs/features/*.md` + a generated feature index; add `.github/workflows/docs.yml` to `mkdocs build --strict` on PRs and publish on merge.
 **Key files.** `mkdocs.yml` (new, repo root), `docs/features/index.md` (generated overview), `.github/workflows/docs.yml` (new), `requirements-docs.txt` (mkdocs-material pin).
 **Acceptance criteria.**
-- [ ] `mkdocs build --strict` passes locally and in CI; broken links/nav fail the build (and thus the docs PR).
-- [ ] Feature pages render with status badges sourced from the catalog/TRACEABILITY status.
-- [ ] Merge to default branch publishes the site (Pages or existing static host).
-- [ ] Landing page lists BOSS features with status — usable as the OSS front door.
+- [x] `mkdocs build --strict` passes locally and in CI; generated-catalog drift and broken links/nav fail the build (and thus the docs PR).
+- [x] Feature pages render with status badges sourced from the catalog/TRACEABILITY status.
+- [x] Merge to default branch publishes the site through the reviewed-main-only GitHub Pages workflow.
+- [x] Landing page lists BOSS features with status — usable as the OSS front door.
 **Size.** M.
 
 ---
