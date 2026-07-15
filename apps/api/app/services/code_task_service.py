@@ -343,7 +343,9 @@ def run_code_task(engine, settings: Settings, jobs, run_id: str) -> dict:
         from .governed_code_task_service import run_governed_code_task
         return run_governed_code_task(engine, settings, jobs, run_id)
 
-    project_id = run["project_id"]; task_id = run["task_id"]; spec = run["spec"]
+    project_id = run["project_id"]
+    task_id = run["task_id"]
+    spec = run["spec"]
     fctx = run["finalize_ctx"] or {}
     sf = SoftwareFactoryService(settings)
 

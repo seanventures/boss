@@ -1,6 +1,8 @@
 .DS_Store
 .git
 .github
+.env
+app.env
 .pytest_cache
 .ruff_cache
 .venv

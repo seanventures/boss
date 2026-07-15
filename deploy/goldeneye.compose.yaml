@@ -1,0 +1,126 @@
+services:
+  api:
+    image: ${BOSS_API_IMAGE}
+    restart: unless-stopped
+    env_file:
+      - ./.env
+    environment:
+      BOSS_ARTIFACTS_DIR: /var/lib/boss/artifacts
+      BOSS_CONTROL_PLANE_URL: http://api:8000
+      BOSS_REQUIRE_API_AUTH: ${BOSS_REQUIRE_API_AUTH:-true}
+      BOSS_BOOTSTRAP_SEED_API_ENABLED: ${BOSS_BOOTSTRAP_SEED_API_ENABLED:-false}
+    expose:
+      - "8000"
+    volumes:
+      - boss-artifacts:/var/lib/boss/artifacts
+    networks:
+      - boss
+      - web
+      - boss_supabase
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5).read()"
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=web
+      - traefik.http.routers.boss-api.rule=Host(`boss-api.local.sean.network`)
+      - traefik.http.routers.boss-api.entrypoints=tailnet
+      - traefik.http.routers.boss-api.tls.certresolver=cf
+      - traefik.http.routers.boss-api.middlewares=compress@file
+      - traefik.http.services.boss-api.loadbalancer.server.port=8000
+
+  worker:
+    image: ${BOSS_WORKER_IMAGE}
+    restart: unless-stopped
+    env_file:
+      - ./.env
+    environment:
+      BOSS_ARTIFACTS_DIR: /var/lib/boss/artifacts
+      BOSS_CONTROL_PLANE_URL: http://api:8000
+      BOSS_WORKER_ID: ${BOSS_WORKER_ID:-goldeneye-worker-1}
+    volumes:
+      - boss-artifacts:/var/lib/boss/artifacts
+    networks:
+      - boss
+      - boss_supabase
+    depends_on:
+      api:
+        condition: service_healthy
+
+  web:
+    image: ${BOSS_WEB_IMAGE}
+    command:
+      - pnpm
+      - --dir
+      - /app/apps/web
+      - start
+      - -H
+      - 0.0.0.0
+    restart: unless-stopped
+    env_file:
+      - ./.env
+    environment:
+      NEXT_PUBLIC_BOSS_API_URL: ${NEXT_PUBLIC_BOSS_API_URL:-https://boss-api.local.sean.network}
+      NEXT_PUBLIC_BOSS_PROJECT_ID: ${NEXT_PUBLIC_BOSS_PROJECT_ID:-boss-dogfood}
+      BOSS_API_KEY: ${BOSS_API_KEY:-}
+    expose:
+      - "3000"
+    networks:
+      - boss
+      - web
+    depends_on:
+      api:
+        condition: service_healthy
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=web
+      - traefik.http.routers.boss-web.rule=Host(`boss.local.sean.network`)
+      - traefik.http.routers.boss-web.entrypoints=tailnet
+      - traefik.http.routers.boss-web.tls.certresolver=cf
+      - traefik.http.routers.boss-web.middlewares=compress@file
+      - traefik.http.services.boss-web.loadbalancer.server.port=3000
+
+  account-connect:
+    image: ${BOSS_ACCOUNT_CONNECT_IMAGE}
+    profiles:
+      - account-connect
+    restart: unless-stopped
+    env_file:
+      - ./.env
+    environment:
+      AC_DATABASE_URL: ${AC_DATABASE_URL:-${DATABASE_URL}}
+      AC_SERVICE_TOKEN: ${AC_SERVICE_TOKEN:-}
+      AC_PUBLIC_BASE_URL: ${AC_PUBLIC_BASE_URL:-http://account-connect:8010}
+      AC_DEFAULT_ORG_ID: ${AC_DEFAULT_ORG_ID:-org_boss_cloud}
+      AC_DEFAULT_ORG_NAME: ${AC_DEFAULT_ORG_NAME:-BOSS Cloud}
+    expose:
+      - "8010"
+    networks:
+      - boss
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8010/v1/health', timeout=5).read()"
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+networks:
+  boss:
+    driver: bridge
+  boss_supabase:
+    name: boss_default
+    external: true
+  web:
+    external: true
+
+volumes:
+  boss-artifacts:

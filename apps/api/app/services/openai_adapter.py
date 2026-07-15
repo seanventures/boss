@@ -171,12 +171,28 @@ class OpenAIAdapter:
         if not self.settings.openai_api_key:
             raise IntegrationConfigurationError("OPENAI_API_KEY is not configured.")
 
-        # NOTE: the Responses API below is OpenAI-specific — most OpenAI-compatible hosts
-        # (DeepSeek/OpenRouter/Fireworks) only implement chat.completions. The coding
-        # pipeline (NativeCodeAgent) uses create_chat_completion, which is portable.
         client = self._openai_client()
         used_model = model or self.settings.openai_model
         stats = {}
+        if self.settings.openai_base_url:
+            messages: list[dict] = []
+            if system_prompt:
+                messages.append({"role": "system", "content": system_prompt})
+            messages.append({"role": "user", "content": prompt})
+            response = _with_retry(
+                lambda: client.chat.completions.create(
+                    model=used_model,
+                    messages=messages,
+                ),
+                stats=stats,
+            )
+            text = response.choices[0].message.content or ""
+            usage = _usage_from_response(response, used_model)
+            usage["retries"] = stats.get("retries", 0)
+            return response.id, text, usage
+
+        # The Responses API is OpenAI-specific; compatible base URLs use
+        # chat.completions above while the default OpenAI endpoint uses Responses.
         response = _with_retry(lambda: client.responses.create(
             model=used_model,
             instructions=system_prompt,
