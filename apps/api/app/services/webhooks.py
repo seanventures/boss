@@ -26,6 +26,18 @@ _BOUNDARY_RANK = {
     "local-only": 4,
 }
 _SUPPORTED_GITHUB_EVENTS = {"pull_request", "check_suite", "issue_comment"}
+_GITHUB_COMMUNITY_ACTIONS = {
+    "issues": {"opened", "edited", "reopened"},
+    "issue_comment": {"created"},
+    "pull_request": {"opened", "synchronize", "reopened"},
+    "pull_request_review": {"submitted"},
+}
+_GITHUB_COMMUNITY_EVENT_TYPES = {
+    "issues": "github.issue_opened",
+    "issue_comment": "github.issue_comment",
+    "pull_request": "github.pr_opened",
+    "pull_request_review": "github.pr_review",
+}
 
 
 def _iso(value: Any) -> Any:
@@ -789,8 +801,11 @@ class InboundWebhookService:
 
     def _secret(self, source: str) -> str:
         configured = self._mapping(self.settings.webhook_inbound_secrets_json)
+        fallback = self.settings.webhook_inbound_secret
+        if source == "github" and self.settings.github_webhook_secret:
+            fallback = self.settings.github_webhook_secret
         return self._resolve_config_secret(
-            configured.get(source, self.settings.webhook_inbound_secret)
+            configured.get(source, fallback)
         )
 
     def _project_for_repo(self, connection: Connection, repo: str) -> Optional[str]:
@@ -814,6 +829,8 @@ class InboundWebhookService:
         source: str,
         raw_body: bytes,
         headers: dict[str, str],
+        *,
+        github_community_only: bool = False,
     ) -> dict[str, Any]:
         normalized_source = source.strip().lower()
         signature = headers.get("x-hub-signature-256", "")
@@ -934,11 +951,25 @@ class InboundWebhookService:
             }
 
         provider_event = headers.get("x-github-event", "").strip().lower()
+        action = str(payload.get("action") or "").strip().lower()
         repo = str((payload.get("repository") or {}).get("full_name") or "")
         project_id = self._project_for_repo(connection, repo)
-        routed = bool(project_id and provider_event in _SUPPORTED_GITHUB_EVENTS)
+        community_event_type = None
+        if action in _GITHUB_COMMUNITY_ACTIONS.get(provider_event, set()):
+            community_event_type = _GITHUB_COMMUNITY_EVENT_TYPES[provider_event]
+        legacy_routed = (
+            not github_community_only and provider_event in _SUPPORTED_GITHUB_EVENTS
+        )
+        sender_login = str((payload.get("sender") or {}).get("login") or "")
+        own_sender = bool(
+            normalized_source == "github"
+            and sender_login
+            and sender_login.casefold()
+            == self.settings.github_app_bot_login.strip().casefold()
+        )
+        routed = bool(project_id and (community_event_type or legacy_routed) and not own_sender)
         target_project_id = project_id or audit_project_id
-        status = "accepted" if routed else "unrouted"
+        status = "ignored" if own_sender else ("accepted" if routed else "unrouted")
         inbound_id = make_id("whin")
         inserted = connection.execute(
             text(
@@ -964,7 +995,7 @@ class InboundWebhookService:
                 "delivery_key": delivery_key,
                 "repo_full_name": repo or None,
                 "provider_event": provider_event or "unknown",
-                "action": payload.get("action"),
+                "action": action or None,
                 "status": status,
                 "payload_hash": hashlib.sha256(raw_body).hexdigest(),
                 "payload": json.dumps(payload),
@@ -995,7 +1026,17 @@ class InboundWebhookService:
             }
 
         event_type = (
-            "webhook.inbound.received" if routed else "webhook.inbound.unrouted"
+            community_event_type
+            if routed and community_event_type
+            else (
+                "webhook.inbound.received"
+                if routed
+                else (
+                    "webhook.inbound.ignored"
+                    if own_sender
+                    else "webhook.inbound.unrouted"
+                )
+            )
         )
         normalized = self._normalize_github_payload(provider_event, payload)
         event_id = emit_event(
@@ -1010,13 +1051,23 @@ class InboundWebhookService:
                 "delivery_id": delivery_key,
                 "inbound_webhook_id": inbound_id,
                 "github_event": provider_event,
-                "action": payload.get("action"),
+                "action": action or None,
                 "repository": repo,
                 "data_boundary": "internal",
                 "normalized": normalized,
-                "reason": None
-                if routed
-                else ("unmapped_repository" if not project_id else "unsupported_event"),
+                "reason": (
+                    None
+                    if routed
+                    else (
+                        "self_sender"
+                        if own_sender
+                        else (
+                            "unmapped_repository"
+                            if not project_id
+                            else "unsupported_event_or_action"
+                        )
+                    )
+                ),
             },
         )
         connection.execute(
@@ -1037,19 +1088,105 @@ class InboundWebhookService:
     def _normalize_github_payload(
         provider_event: str, payload: dict[str, Any]
     ) -> dict[str, Any]:
+        repository = payload.get("repository") or {}
+        sender = payload.get("sender") or {}
         common = {
-            "sender": (payload.get("sender") or {}).get("login"),
+            "action": payload.get("action"),
+            "repository": repository.get("full_name"),
+            "sender": {"login": sender.get("login"), "type": sender.get("type")},
             "number": payload.get("number"),
         }
+        if provider_event == "issues":
+            item = payload.get("issue") or {}
+            author = item.get("user") or {}
+            return {
+                **common,
+                "entity_type": "issue",
+                "entity_id": item.get("id"),
+                "issue": {
+                    "id": item.get("id"),
+                    "number": item.get("number") or payload.get("number"),
+                    "title": item.get("title"),
+                    "body": item.get("body"),
+                    "html_url": item.get("html_url"),
+                    "author": author.get("login"),
+                    "labels": [
+                        label.get("name") if isinstance(label, dict) else str(label)
+                        for label in (item.get("labels") or [])
+                    ],
+                },
+            }
         if provider_event == "pull_request":
             item = payload.get("pull_request") or {}
+            author = item.get("user") or {}
             return {
                 **common,
                 "entity_type": "pull_request",
                 "entity_id": item.get("id"),
+                "pull_request": {
+                    "id": item.get("id"),
+                    "number": item.get("number") or payload.get("number"),
+                    "title": item.get("title"),
+                    "body": item.get("body"),
+                    "html_url": item.get("html_url"),
+                    "author": author.get("login"),
+                    "head_sha": (item.get("head") or {}).get("sha"),
+                    "head_ref": (item.get("head") or {}).get("ref"),
+                    "base_ref": (item.get("base") or {}).get("ref"),
+                    "draft": bool(item.get("draft")),
+                },
+            }
+        if provider_event == "pull_request_review":
+            item = payload.get("review") or {}
+            author = item.get("user") or {}
+            pr = payload.get("pull_request") or {}
+            return {
+                **common,
+                "entity_type": "pull_request_review",
+                "entity_id": item.get("id"),
+                "pull_request": {
+                    "id": pr.get("id"),
+                    "number": pr.get("number") or payload.get("number"),
+                    "title": pr.get("title"),
+                    "html_url": pr.get("html_url"),
+                    "head_sha": (pr.get("head") or {}).get("sha"),
+                },
+                "review": {
+                    "id": item.get("id"),
+                    "body": item.get("body"),
+                    "state": item.get("state"),
+                    "author": author.get("login"),
+                    "commit_id": item.get("commit_id"),
+                },
             }
         if provider_event == "check_suite":
             item = payload.get("check_suite") or {}
             return {**common, "entity_type": "check_suite", "entity_id": item.get("id")}
         item = payload.get("comment") or {}
-        return {**common, "entity_type": "issue_comment", "entity_id": item.get("id")}
+        author = item.get("user") or {}
+        issue = payload.get("issue") or {}
+        issue_author = issue.get("user") or {}
+        return {
+            **common,
+            "entity_type": "issue_comment",
+            "entity_id": item.get("id"),
+            "issue": {
+                "id": issue.get("id"),
+                "number": issue.get("number") or payload.get("number"),
+                "title": issue.get("title"),
+                "body": issue.get("body"),
+                "html_url": issue.get("html_url"),
+                "author": issue_author.get("login"),
+                "labels": [
+                    label.get("name") if isinstance(label, dict) else str(label)
+                    for label in (issue.get("labels") or [])
+                ],
+                "is_pull_request": bool(issue.get("pull_request")),
+            },
+            "comment": {
+                "id": item.get("id"),
+                "body": item.get("body"),
+                "html_url": item.get("html_url"),
+                "author": author.get("login"),
+            },
+        }

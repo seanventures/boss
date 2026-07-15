@@ -219,6 +219,20 @@ class Settings(BaseSettings):
     target_github_repo: str = Field(
         default="boss-sandbox", alias="BOSS_TARGET_GITHUB_REPO"
     )
+    github_webhook_secret: Optional[str] = Field(
+        default=None, alias="BOSS_GITHUB_WEBHOOK_SECRET"
+    )
+    github_app_bot_login: str = Field(
+        default="boss[bot]", alias="BOSS_GITHUB_APP_BOT_LOGIN"
+    )
+    github_community_model_review_enabled: bool = Field(
+        default=False, alias="BOSS_GITHUB_COMMUNITY_MODEL_REVIEW_ENABLED"
+    )
+    github_community_model_review_budget_usd_micros: int = Field(
+        default=250_000,
+        alias="BOSS_GITHUB_COMMUNITY_MODEL_REVIEW_BUDGET_USD_MICROS",
+        ge=1,
+    )
     webhook_timeout_seconds: float = Field(
         default=10.0, alias="BOSS_WEBHOOK_TIMEOUT_SECONDS", gt=0
     )

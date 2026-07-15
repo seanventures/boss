@@ -3,6 +3,13 @@
 All 15-min terminal updates and major milestones appended here. Chronological, newest at top.
 
 ---
+## 2026-07-15 — Codex — BOSS-84/BOSS-86–88 GitHub community agents
+
+- Added strict raw-body-signed GitHub community ingress with typed issue/comment/PR/review events, supported-action filtering, configured-bot suppression, durable delivery dedupe, and leased off-request jobs.
+- Added shared-router issue triage with exact-one Receipt-backed verdict comments, concrete needs-info questions, non-feature fast paths, accepted proposed plans, and hold-default decisions whose approval dispatches the plan.
+- Added safe unified-diff PR review with inline anchors, author-addressed value/ROI recommendations, COMMENT-only review writes, Receipt coverage for reads/writes, optional budgeted model review, per-head idempotency, and authorization-only PR decisions that never merge.
+- Added API/worker lease boundaries, OpenAPI/runbook/env docs, traceability, and focused tests spanning all four events, HMAC/parse ordering, filters/replay, triage outcomes, plan gate, PR findings/replay, receipts, and no-merge approval.
+
 ## 2026-07-15 — Codex — BOSS-78–82 conversational orchestration
 
 - Claimed five Plane orchestration tickets and kept them In Progress pending merge. Added persisted actor-owned threads/messages, agent_chat authorization, structured/audited turns, and the chat API contract.

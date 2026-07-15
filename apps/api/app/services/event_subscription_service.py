@@ -50,6 +50,34 @@ DEFAULT_EVENT_SUBSCRIPTIONS = (
         "data_boundary": "internal",
         "config": {"consumer": "github-community"},
     },
+    {
+        "event_type": "github.issue_opened",
+        "sink_kind": "job",
+        "sink_ref": "github.triage",
+        "data_boundary": "internal",
+        "config": {"consumer": "github-community"},
+    },
+    {
+        "event_type": "github.issue_comment",
+        "sink_kind": "job",
+        "sink_ref": "github.triage",
+        "data_boundary": "internal",
+        "config": {"consumer": "github-community"},
+    },
+    {
+        "event_type": "github.pr_opened",
+        "sink_kind": "job",
+        "sink_ref": "github.pr_review",
+        "data_boundary": "internal",
+        "config": {"consumer": "github-community"},
+    },
+    {
+        "event_type": "github.pr_review",
+        "sink_kind": "job",
+        "sink_ref": "github.pr_review",
+        "data_boundary": "internal",
+        "config": {"consumer": "github-community"},
+    },
 )
 
 

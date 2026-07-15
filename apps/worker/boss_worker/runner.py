@@ -281,6 +281,8 @@ def capabilities() -> list[str]:
         "infra.droplet.delete",
         "comms.outbox.deliver",
         "webhook.outbound.deliver",
+        "github.triage",
+        "github.pr_review",
     ]
 
 
@@ -543,6 +545,15 @@ def agent_module_id_from_payload(payload: dict[str, Any]) -> Any:
 
 
 def execute_job(job: LeasedJob, client: ControlPlaneClient) -> dict[str, Any]:
+    if job.kind in {"github.triage", "github.pr_review"}:
+        return client.run_github_community_job(
+            job.id,
+            {
+                "project_id": job.project_id,
+                "worker_id": client.worker_id,
+                "lease_token": job.lease_token,
+            },
+        )
     if job.kind.startswith("agent.") and job.kind != "agent.resume":
         return build_agent_brief_result(job)
     if job.kind == "enterprise.marketplace.validate":

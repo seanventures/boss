@@ -69,7 +69,7 @@ If a required credential is missing, the API must fail closed and create visible
 3. Run `make seed`.
 4. Run `make dev`.
 
-To opt into signed GitHub issue and pull-request automation, install the repository-scoped GitHub App and configure its webhook secret using the [GitHub App community enablement runbook](docs/operations/WEBHOOKS.md#enable-the-github-app-community-surface). The integration is disabled by default and fails closed when its App credentials or inbound secret are absent.
+To opt into signed GitHub issue triage and pull-request review, install the repository-scoped GitHub App and configure `/v1/webhooks/github` using the [GitHub App community enablement runbook](docs/operations/WEBHOOKS.md#enable-the-github-app-community-surface). The integration is disabled by default, fails closed when its App credentials or inbound secret are absent, never executes fork code, and never auto-merges.
 
 ## Commands
 

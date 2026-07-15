@@ -565,6 +565,14 @@ class IntentRouter:
             }
         return None, {}
 
+    def classify_message(self, message: str) -> tuple[Optional[str], dict[str, Any]]:
+        """Classify text without actuating the selected capability.
+
+        Community-facing agents use this shared, deterministic fast path so an
+        untrusted issue cannot create work merely by being classified.
+        """
+        return self._deterministic_intent(message.strip())
+
     @staticmethod
     def _looks_multi_phase(message: str) -> bool:
         action_verbs = re.findall(

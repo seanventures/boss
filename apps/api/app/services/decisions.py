@@ -10,6 +10,7 @@ from ..config import Settings
 from .budget import BudgetGovernor
 from .core import create_artifact, emit_event, now_utc
 from .infrastructure import InfrastructureService
+from .intake import CommandIntakeService
 from .jobs import JobLeaseService
 from .members import MemberDirectoryService
 from .role_governance import RoleGovernanceService
@@ -31,6 +32,7 @@ class DecisionService:
         self.budget = BudgetGovernor(settings)
         self.jobs = JobLeaseService(settings)
         self.infrastructure = InfrastructureService(settings)
+        self.intake = CommandIntakeService(settings)
         self.self_improvement = SelfImprovementService(settings)
         self.role_governance = RoleGovernanceService(settings)
         self.specpack = SpecPackService(settings)
@@ -602,6 +604,47 @@ class DecisionService:
             )
         elif action == "review_plan_draft":
             self._queue_pr_proposal_from_plan(connection, row, actor, recommendation)
+        elif action == "github.community.dispatch_plan":
+            plan_id = recommendation.get("plan_id") or recommendation.get(
+                "proposed_plan_id"
+            )
+            if not isinstance(plan_id, str) or not plan_id:
+                emit_event(
+                    connection,
+                    row["project_id"],
+                    "decision.follow_on_skipped",
+                    actor,
+                    "decision",
+                    row["id"],
+                    {"reason": "missing_community_plan_id"},
+                )
+                return
+            result = self.intake.dispatch_plan(connection, plan_id, actor=actor)
+            emit_event(
+                connection,
+                row["project_id"],
+                "github.community_plan_authorized",
+                actor,
+                "decision",
+                row["id"],
+                {"plan_id": plan_id, "phase_task_ids": result["phase_task_ids"]},
+            )
+        elif action == "github.community.merge_authorization":
+            # Approval records authorization only. Community webhook work never
+            # calls merge; a maintainer must still use the governed merge path.
+            emit_event(
+                connection,
+                row["project_id"],
+                "github.community_merge_authorized",
+                actor,
+                "decision",
+                row["id"],
+                {
+                    "repository": recommendation.get("github_repository"),
+                    "pull_request_number": recommendation.get("github_pr_number"),
+                    "head_sha": recommendation.get("head_sha"),
+                },
+            )
         elif action == "review_pull_request":
             ci_gate = self._pull_request_ci_gate(connection, row)
             if ci_gate is not None:

@@ -308,8 +308,8 @@ def test_dispatch_failure_does_not_roll_back_canonical_event(
 def test_default_subscriptions_prove_internal_reactive_loop(engine):
     with engine.begin() as connection:
         defaults = seed_default_event_subscriptions(connection, PROJECT_ID)
-        assert len(defaults) == 5
-        assert len(list_event_subscriptions(connection, PROJECT_ID)) == 5
+        assert len(defaults) == 9
+        assert len(list_event_subscriptions(connection, PROJECT_ID)) == 9
         emit_event(
             connection,
             PROJECT_ID,

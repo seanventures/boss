@@ -671,6 +671,20 @@ class JobLeaseService:
             raise LeaseNotFoundError("Lease has expired.")
         return row
 
+    def require_active_lease(
+        self,
+        connection: Connection,
+        worker_id: str,
+        job_id: str,
+        lease_token: str,
+    ) -> dict[str, Any]:
+        """Validate a worker lease before a side-effecting job endpoint runs."""
+        return dict(
+            self._load_leased_job_for_update(
+                connection, worker_id, job_id, lease_token
+            )
+        )
+
     def _finalize_success(
         self,
         connection: Connection,

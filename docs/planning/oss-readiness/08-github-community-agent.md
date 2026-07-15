@@ -131,11 +131,13 @@ This is the community front door. The webhook endpoint, the two agents, the adap
 **Scope.** Register GitHub as a source on the spec-00 inbound receiver: new `POST /v1/webhooks/github`, raw-body HMAC-SHA256 verification against `X-Hub-Signature-256`, event-type routing from `X-GitHub-Event`, delivery de-dupe on `X-GitHub-Delivery`, self-sender loop-guard, and normalization → `emit_event("github.*")`. Add `github_webhook_secret` config.
 **Key files.** `apps/api/app/main.py` (new route near `/v1/comms/inbox/ingest:7871`), `apps/api/app/config.py:455-462` (new `github_webhook_secret` field), `apps/api/app/services/github_webhook.py` (new — verify + normalize), spec-00 receiver/dispatcher.
 **Acceptance criteria.**
-- [ ] Valid signature over raw body accepted; tampered body / wrong secret / missing header → 401.
-- [ ] Signature is checked **before** JSON parsing; endpoint returns 503 when `github_webhook_secret` is unset.
-- [ ] `issues`, `issue_comment`, `pull_request`, `pull_request_review` produce the corresponding `github.*` event; all other types → 204 no-op.
-- [ ] Redelivered `X-GitHub-Delivery` is idempotent (no duplicate event/agent run); events from BOSS's own App sender are ignored.
-- [ ] Handler returns promptly (agent work is off the event, not inline).
+- [x] Valid signature over raw body accepted; tampered body / wrong secret / missing header → 401.
+- [x] Signature is checked **before** JSON parsing; endpoint returns 503 when `github_webhook_secret` is unset.
+- [x] `issues`, `issue_comment`, `pull_request`, `pull_request_review` produce the corresponding `github.*` event; all other types → 204 no-op.
+- [x] Redelivered `X-GitHub-Delivery` is idempotent (no duplicate event/agent run); events from BOSS's own App sender are ignored.
+- [x] Handler returns promptly (agent work is off the event, not inline).
+
+**Implementation evidence (BOSS-84).** The compatibility endpoint delegates raw-byte verification and delivery persistence to the shared inbound service, then applies a strict GitHub event/action allowlist. Typed events fan out only to leased jobs; unsupported actions and the configured App bot are acknowledged with 204. Integration coverage proves all four event families, signature-before-parse behavior, 503 inertness, redelivery dedupe, and loop suppression.
 **Size.** M
 
 ### T2 — Adapter methods: create_issue_comment, create_review, get_pull_request_diff
@@ -155,31 +157,37 @@ This is the community front door. The webhook endpoint, the two agents, the adap
 **Scope.** Subscriber on `github.issue_opened` / `github.issue_comment`: classify via the spec-07 intent router, decide accept/decline/needs-info, on accept call `/v1/commands/propose`, comment the verdict back.
 **Key files.** `apps/api/app/services/github_triage_agent.py` (new), spec-07 intent router, `apps/api/app/services/intake.py:220` (`propose_command`), `github_adapter.create_issue_comment` (T2).
 **Acceptance criteria.**
-- [ ] Feature-request issue → verdict in {accept, decline, needs-info}; non-feature intents get an appropriate reply and stop.
-- [ ] needs-info posts specific clarifying questions and re-enters triage on the follow-up comment.
-- [ ] accept calls `propose_command` and links the resulting plan id in the comment; **dispatch is not automatic** (gated by T5 decision).
-- [ ] Every path posts exactly one verdict comment; agent never triages its own comments (loop-guard honored).
+- [x] Feature-request issue → verdict in {accept, decline, needs-info}; non-feature intents get an appropriate reply and stop.
+- [x] needs-info posts specific clarifying questions and re-enters triage on the follow-up comment.
+- [x] accept calls `propose_command` and links the resulting plan id in the comment; **dispatch is not automatic** (gated by T5 decision).
+- [x] Every path posts exactly one verdict comment; agent never triages its own comments (loop-guard honored).
+
+**Implementation evidence (BOSS-86).** `GitHubTriageAgent` uses the transport-free `IntentRouter.classify_message` fast path, filters spam/bugs/questions before model spend, asks concrete missing-information questions, and creates a stable proposed plan only for accepted requests. Each event has one Receipt-deduplicated comment and one standard hold-default decision; the App sender is rejected at ingress and defended again by the agent.
 **Size.** M
 
 ### T4 — PR-review agent (diff review → inline comments → value/ROI recommendation)
 **Scope.** Subscriber on `github.pr_opened` / `pull_request.synchronize`: fetch diff, run `code_agent`/LLM review, post inline `create_review`, post a value/ROI recommendation to the branch owner, feed the human gate. No auto-merge.
 **Key files.** `apps/api/app/services/github_pr_review_agent.py` (new), `apps/api/app/services/code_agent.py` (review roles), `github_adapter.get_pull_request_diff` + `create_review` + `create_issue_comment` (T2).
 **Acceptance criteria.**
-- [ ] Opened PR produces inline review comments anchored to `{path, line}` in the diff.
-- [ ] A top-level value/ROI recommendation is posted addressed to the branch owner (does this add value / worth merging).
-- [ ] Review uses `event="COMMENT"` — never APPROVE/REQUEST_CHANGES and never `merge_pull_request`.
-- [ ] Recommendation is handed to the human gate (T5); merge stays off by default.
-- [ ] Re-review on `synchronize` doesn't duplicate prior still-valid inline comments (idempotent per head sha).
+- [x] Opened PR produces inline review comments anchored to `{path, line}` in the diff.
+- [x] A top-level value/ROI recommendation is posted addressed to the branch owner (does this add value / worth merging).
+- [x] Review uses `event="COMMENT"` — never APPROVE/REQUEST_CHANGES and never `merge_pull_request`.
+- [x] Recommendation is handed to the human gate (T5); merge stays off by default.
+- [x] Re-review on `synchronize` doesn't duplicate prior still-valid inline comments (idempotent per head sha).
+
+**Implementation evidence (BOSS-87).** `GitHubPullRequestReviewAgent` reviews unified diffs without a checkout or execution, anchors deterministic safety/correctness findings to new-file lines, posts only `COMMENT` reviews, and addresses an evidence-based value/ROI note to the author. GitHub reads/writes are Receipt-backed and keyed by repository/PR/head SHA. The existing read-only code-review role can be enabled as an additional budget-reserved, Receipt-backed model pass; deterministic review remains the fail-safe baseline.
 **Size.** L
 
 ### T5 — Persist triage + review verdicts as decisions (audit + human gate)
 **Scope.** Both agents write their verdict/recommendation via `create_blocking_decision`; approving a triage decision authorizes `dispatch_plan`, approving a PR-review decision authorizes the existing merge path.
 **Key files.** `apps/api/app/services/core.py:96` (`create_blocking_decision`), `apps/api/app/services/decisions.py:28`, `apps/api/app/main.py:5195` (`dispatch_plan`).
 **Acceptance criteria.**
-- [ ] Triage accept and PR-review each create one `decisions` row with `default_action="hold"` (never default-dispatch / default-merge).
-- [ ] recommendation payload carries the verdict, rationale, and linked plan/PR ids.
-- [ ] Approving a triage decision dispatches the proposed plan; approving a PR-review decision is a prerequisite for merge.
-- [ ] Verdicts appear in the standard maintainer decision queue/digest and expire safely.
+- [x] Triage accept and PR-review each create one `decisions` row with `default_action="hold"` (never default-dispatch / default-merge).
+- [x] recommendation payload carries the verdict, rationale, and linked plan/PR ids.
+- [x] Approving a triage decision dispatches the proposed plan; approving a PR-review decision is a prerequisite for merge.
+- [x] Verdicts appear in the standard maintainer decision queue/digest and expire safely.
+
+**Implementation evidence (BOSS-88).** Both agents call the canonical blocking-decision helper with risk tier 2 and `default_action=hold`. `DecisionService` dispatches the exact proposed plan only after triage approval and records community merge authorization only after PR-review approval; it does not call GitHub merge. Standard decision membership, transitions, digest, and expiry behavior remain unchanged.
 **Size.** M
 
 ### T6 — App permissions, config docs, and enablement
@@ -187,10 +195,10 @@ This is the community front door. The webhook endpoint, the two agents, the adap
 **Key files.** GitHub App manifest / setup docs, `apps/api/app/config.py` (field doc), `docs/` OSS onboarding.
 **Acceptance criteria.**
 - [x] App requests `issues:write` + `pull_requests:write` and subscribes to the four event types.
-- [x] Docs describe installing the App, setting the canonical webhook URL to `/v1/webhooks/inbound/github`, and the shared secret.
+- [x] Docs describe installing the App, setting the strict community webhook URL to `/v1/webhooks/github`, and the shared secret.
 - [x] With App uninstalled / secret unset, the feature is fully inert (503, no crashes).
 
-**Implementation evidence (BOSS-89).** `.github/boss-app-manifest.json` declares the least-privilege community permissions and four subscriptions. The webhook runbook documents installation, source-specific secret injection, repository mapping, current staged event support, and the canonical spec-00 endpoint. An unconfigured source now returns 503 before parsing or persistence; installation-token requests include `issues: write` and are unit-tested.
+**Implementation evidence (BOSS-89).** `.github/boss-app-manifest.json` declares the least-privilege community permissions and four subscriptions. The webhook runbook documents installation, source-specific secret injection, repository mapping, and the strict community endpoint while retaining the generic spec-00 route. An unconfigured source returns 503 before parsing or persistence; installation-token requests include `issues: write` and are unit-tested.
 **Size.** S
 
 ---

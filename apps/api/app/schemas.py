@@ -1551,6 +1551,12 @@ class InboundWebhookResponse(BaseModel):
     duplicate: bool = False
 
 
+class GitHubCommunityJobExecuteRequest(BaseModel):
+    project_id: str
+    worker_id: str
+    lease_token: str
+
+
 class OpenAIPlanRequest(BaseModel):
     project_id: str
     reservation_id: str

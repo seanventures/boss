@@ -179,6 +179,7 @@ from .schemas import (
     EventSubscriptionSummary,
     EventSubscriptionUpdateRequest,
     InboundWebhookResponse,
+    GitHubCommunityJobExecuteRequest,
     WebhookDeliveryCreateRequest,
     WebhookDeliveryExecuteRequest,
     WebhookDeliveryListResponse,
@@ -409,6 +410,7 @@ from .services.webhooks import (
     WebhookEndpointNotFoundError,
     WebhookService,
 )
+from .services.github_community_service import GitHubCommunityService
 from .services.infrastructure import (
     InfraResourceNotFoundError,
     InfrastructureService,
@@ -496,6 +498,7 @@ secret_refs = SecretRefService()
 receipts = ReceiptService()
 webhooks = WebhookService(settings)
 inbound_webhooks = InboundWebhookService(settings)
+github_community = GitHubCommunityService(settings)
 software_factory = SoftwareFactoryService(settings)
 decisions = DecisionService(settings)
 specpack = SpecPackService(settings)
@@ -738,11 +741,13 @@ async def require_transport_auth_for_v1(request: Request, call_next):
         and _parts[2] == "webhooks"
         and _parts[3] == "inbound"
     )
+    is_github_webhook = request.url.path == "/v1/webhooks/github"
     if (
         not request.url.path.startswith("/v1/")
         or not auth_required
         or is_preview_web
         or is_inbound_webhook
+        or is_github_webhook
     ):
         principal_token = current_api_principal.set(None)
         authenticated_token = current_transport_authenticated.set(False)
@@ -4200,6 +4205,52 @@ async def receive_inbound_webhook(
     if result["status"] == "invalid":
         raise HTTPException(status_code=400, detail="Invalid webhook payload.")
     return InboundWebhookResponse(**result)
+
+
+@app.post("/v1/webhooks/github", status_code=202)
+async def receive_github_webhook(request: Request):
+    """Compatibility GitHub ingress with the community event allowlist."""
+    raw_body = await request.body()
+    headers = {key.lower(): value for key, value in request.headers.items()}
+    with begin(engine) as connection:
+        result = inbound_webhooks.ingest(
+            connection,
+            "github",
+            raw_body,
+            headers,
+            github_community_only=True,
+        )
+    if result["status"] == "rejected":
+        raise HTTPException(status_code=401, detail="Invalid webhook signature.")
+    if result["status"] == "not_configured":
+        raise HTTPException(status_code=503, detail="Webhook source is not configured.")
+    if result["status"] == "invalid":
+        raise HTTPException(status_code=400, detail="Invalid webhook payload.")
+    if result["status"] in {"unrouted", "ignored"}:
+        return Response(status_code=204)
+    return JSONResponse(
+        status_code=202,
+        content=InboundWebhookResponse(**result).model_dump(mode="json"),
+    )
+
+
+@app.post("/v1/github/community/jobs/{job_id}/execute")
+def execute_github_community_job(
+    job_id: str, payload: GitHubCommunityJobExecuteRequest
+):
+    with begin(engine) as connection:
+        try:
+            return github_community.execute_job(
+                connection,
+                job_id=job_id,
+                project_id=payload.project_id,
+                worker_id=payload.worker_id,
+                lease_token=payload.lease_token,
+            )
+        except LeaseNotFoundError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
 
 
 @app.get("/v1/mcp/servers")

@@ -485,15 +485,18 @@ def test_valid_github_events_normalize_dispatch_and_dedupe(
             text("SELECT data FROM events WHERE id = :id"),
             {"id": first.json()["event_id"]},
         ).scalar_one()
+        expected_kind = (
+            "github.pr_review" if github_event == "pull_request" else "github.triage"
+        )
         jobs = connection.execute(
             text(
                 """
                 SELECT count(*) FROM jobs
-                WHERE kind = 'github.triage'
+                WHERE kind = :kind
                   AND payload->>'event_id' = :event_id
                 """
             ),
-            {"event_id": first.json()["event_id"]},
+            {"kind": expected_kind, "event_id": first.json()["event_id"]},
         ).scalar_one()
     assert event["normalized"]["entity_type"] == github_event
     assert jobs == 1

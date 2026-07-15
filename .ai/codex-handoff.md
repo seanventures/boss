@@ -1,6 +1,14 @@
 # Codex Handoff
 
-Last updated: 2026-07-15 (Codex conversational orchestration batch: Plane BOSS-78–82 implemented and validated)
+Last updated: 2026-07-15 (Codex GitHub community agents: Plane BOSS-84/BOSS-86–88 implemented and validated)
+
+## 2026-07-15 GitHub community agent handoff
+
+- Plane BOSS-84/BOSS-86/BOSS-87/BOSS-88 are implemented on `ai/codex/github-community-agents`, stacked on conversational orchestration PR #21 so triage shares its non-actuating intent classifier and accepted requests reuse its stable proposed-plan boundary.
+- `/v1/webhooks/github` verifies the exact raw body before parsing, accepts only the four documented GitHub event/action families, suppresses the configured App bot, persists delivery dedupe, emits typed `github.*` events, and returns before any agent/model/provider work.
+- Leased `github.triage` jobs classify feature/bug/question/spam, post exactly one Receipt-backed verdict, create a hold-default standard decision, and create but do not dispatch a stable plan on accept. Decision approval dispatches that exact plan.
+- Leased `github.pr_review` jobs fetch and review only the unified diff, never check out or execute fork code, post COMMENT-only inline findings and an author-addressed value/ROI note, and deduplicate all effects per head SHA. PR decisions default to hold; approval records merge authorization but never calls merge.
+- The default review is deterministic and zero-model-cost. An optional existing read-only review-role pass is disabled by default and uses a BudgetReservation plus Receipt when enabled. Focused community tests cover signed ingress, all four types, filtering/dedupe, lease ownership, every triage outcome, gated plan dispatch, inline review, per-head replay, receipts, and no-merge behavior.
 
 ## 2026-07-15 conversational orchestration handoff
 

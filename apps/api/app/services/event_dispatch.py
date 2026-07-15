@@ -29,6 +29,10 @@ DISPATCHABLE_EVENT_TYPES = frozenset(
         "meeting.completed",
         "software_factory.pull_request_merged",
         "webhook.inbound.received",
+        "github.issue_opened",
+        "github.issue_comment",
+        "github.pr_opened",
+        "github.pr_review",
     }
 )
 

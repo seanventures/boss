@@ -4723,6 +4723,58 @@ paths:
         '400': { description: Invalid signed payload or missing delivery identifier }
         '401': { description: Missing or invalid signature; rejection metadata audited }
         '503': { description: Inbound secret is not configured for this source }
+  /v1/webhooks/github:
+    post:
+      security: []
+      summary: Receive a signed GitHub community webhook
+      description: Verifies the raw body before parsing, durably emits a typed github.* event, and acknowledges unsupported actions with 204.
+      parameters:
+        - name: X-Hub-Signature-256
+          in: header
+          required: true
+          schema: { type: string }
+        - name: X-GitHub-Delivery
+          in: header
+          required: true
+          schema: { type: string }
+        - name: X-GitHub-Event
+          in: header
+          required: true
+          schema: { type: string, enum: [issues, issue_comment, pull_request, pull_request_review] }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: true }
+      responses:
+        '202': { description: Typed event durably accepted or redelivery deduplicated }
+        '204': { description: Unsupported action or self-sender safely ignored }
+        '400': { description: Invalid signed payload or missing delivery identifier }
+        '401': { description: Missing or invalid signature }
+        '503': { description: BOSS_GITHUB_WEBHOOK_SECRET is not configured }
+  /v1/github/community/jobs/{job_id}/execute:
+    post:
+      summary: Execute a leased GitHub community triage or review job
+      parameters:
+        - name: job_id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id, worker_id, lease_token]
+              properties:
+                project_id: { type: string }
+                worker_id: { type: string }
+                lease_token: { type: string, writeOnly: true }
+      responses:
+        '200': { description: Receipt-backed triage or review result }
+        '409': { description: Worker lease is missing, expired, or owned by another worker }
+        '422': { description: Job kind or normalized event payload is invalid }
 components:
   securitySchemes:
     BossBearerAuth:

@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-07-15 — GitHub community agents (BOSS-84, BOSS-86–88)
+
+- Added a strict signed `/v1/webhooks/github` ingress for four typed community events, action filtering, self-bot suppression, and delivery-deduplicated leased jobs.
+- Added issue triage that shares the orchestration classifier, comments exactly one verdict, proposes accepted feature plans without dispatching them, and creates hold-default decisions.
+- Added diff-only PR review with Receipt-backed GitHub reads/writes, inline defect annotations, an author-addressed value/ROI recommendation, and per-head-SHA idempotency. Fork code is never checked out or executed and reviews never merge.
+- Added decision follow-ons: triage approval dispatches the proposed plan; PR approval records merge authorization while preserving the separately governed human merge path. An optional budgeted/receipted model review role is disabled by default.
+
 ## 2026-07-15 — Conversational orchestration agent (BOSS-78–82)
 
 - Added durable actor-owned agent threads/messages, a permissioned and rate-limited chat endpoint, structured action history, and audit events.

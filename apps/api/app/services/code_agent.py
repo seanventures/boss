@@ -321,6 +321,14 @@ class ClaudeCodeAgent:
 # --------------------------------------------------------------------------- #
 #  Native chat-API implementation (model-agnostic: OpenAI / Azure)            #
 # --------------------------------------------------------------------------- #
+DIFF_REVIEW_SYSTEM_PROMPT = (
+    "You are BOSS's read-only code-review role. Review only the supplied unified diff; "
+    "never ask to check out or execute contributor code. Return compact JSON with keys "
+    "summary (string), value_verdict (worth_reviewing or needs_revision), and roi_notes "
+    "(array of strings). Focus on correctness, security, tests, maintenance cost, and product value."
+)
+
+
 class NativeCodeAgent:
     """Model-agnostic code agent on the raw chat API (OpenAI or Azure, via OpenAIAdapter).
 

@@ -1,10 +1,10 @@
 # BOSS Autonomous Delivery Status
 
-**Last updated**: 2026-07-15 (Codex conversational orchestration batch BOSS-78–82 implemented and validated on `ai/codex/conversational-orchestrator`)
+**Last updated**: 2026-07-15 (Codex GitHub community batch BOSS-84/BOSS-86–88 implemented and validated on `ai/codex/github-community-agents`)
 **Repo root**: /Volumes/DataSSD1/test/boss
 **Git remote**: https://github.com/seanheiney/boss
-**Current branch**: ai/codex/webhook-foundation (stacked on `ai/codex/oss-reactive-docs-foundation`, draft PR #15)
-**Base branch**: ai/codex/oss-reactive-docs-foundation until PR #15 merges
+**Current branch**: ai/codex/github-community-agents (stacked on `ai/codex/conversational-orchestrator`, draft PR #21)
+**Base branch**: ai/codex/conversational-orchestrator until PR #21 merges
 **Product**: BOSS v0.4.1 target (Business Operating System Sentinel)
 **Mission**: Complete product to production-grade, tested, documented, pushed, Codex-coordinated, ready for real users. Grind until all discovered PRD/spec features satisfy world-class DoD or truly blocked.
 
@@ -14,6 +14,7 @@
 - GitHub: draft PR #16 carries BOSS-22/BOSS-23 and is stacked on draft PR #15; other open PRs were inspected for overlap before implementation.
 
 ## Overall Product Status
+- GitHub community automation is implemented for Plane BOSS-84/BOSS-86–88: strict signed typed ingress, loop/delivery guards, leased triage and PR-review agents, Receipt-backed provider effects, safe diff-only review, value/ROI feedback, hold-default standard decisions, approval-gated plan dispatch, and authorization-only/no-auto-merge PR approval. Focused API and worker acceptance tests pass; tickets remain In Progress until the stacked draft PR merges.
 - Conversational orchestration is implemented for Plane BOSS-78–82: actor-owned persisted threads, `POST /v1/agent/chat`, a transport-free permission-rechecking intent router, a canonical feature-catalog manifest, explicit confirm-before-dispatch multi-task plans, and a thin Mission Control chat panel. Focused API acceptance tests and web type validation pass; tickets remain In Progress until the draft PR merges.
 - GitHub community enablement advanced on 2026-07-15: Plane BOSS-85/BOSS-89 add App-authenticated issue/PR comments, inline reviews, unified diff reads, scoped `issues` permission, a four-event App manifest, setup guidance, and 503/no-write behavior when no inbound secret is configured. Focused adapter/webhook tests pass; triage and PR-review consumers remain later tickets.
 - OSS webhook foundation advanced on 2026-07-15: Plane BOSS-22/BOSS-23 now provide Receipt-backed signed outbound delivery with leased retries/deadletters and a raw-body-verified, idempotent inbound GitHub receiver that routes into the reactive event dispatcher. Ten focused API/integration tests, seven foundation regressions, and twenty-five worker tests pass.

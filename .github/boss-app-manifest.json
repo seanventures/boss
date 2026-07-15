@@ -2,7 +2,7 @@
   "name": "BOSS Community Agent",
   "url": "https://github.com/seanheiney/boss",
   "hook_attributes": {
-    "url": "https://boss.example/v1/webhooks/inbound/github",
+    "url": "https://boss.example/v1/webhooks/github",
     "active": true
   },
   "redirect_url": "https://boss.example",

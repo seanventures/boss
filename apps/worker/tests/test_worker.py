@@ -146,6 +146,14 @@ class FakeControlPlaneClient:
             "receipt_id": "rcpt_webhook",
         }
 
+    def run_github_community_job(self, job_id, payload):
+        self.calls.append(("run_github_community_job", job_id, payload))
+        return {
+            "status": "completed",
+            "decision_id": "dec_community",
+            "verdict": "accept",
+        }
+
     def sync_provider_resources(self, payload):
         self.calls.append(("sync_provider_resources", payload))
         if payload.get("provider_account_id") == "prov_fail":
@@ -219,6 +227,38 @@ def test_worker_capabilities_include_infra_job_kinds():
     assert "enterprise.marketplace.validate" in supported
     assert "providerops.sync.readonly" in supported
     assert "webhook.outbound.deliver" in supported
+    assert "github.triage" in supported
+    assert "github.pr_review" in supported
+
+
+def test_worker_executes_github_community_job_through_lease_boundary():
+    leased_job = LeasedJob(
+        id="job_community",
+        project_id="boss-dogfood",
+        task_id=None,
+        kind="github.triage",
+        payload={"event_id": "evt_issue"},
+        attempt=1,
+        max_attempts=3,
+        lease_token="lease_community",
+        lease_expires_at="future",
+    )
+    client = FakeControlPlaneClient(leased_job)
+    settings = SimpleNamespace(
+        worker_id="worker-community", lease_ttl_seconds=60
+    )
+
+    assert run_worker_cycle(client, settings) is True
+    assert (
+        "run_github_community_job",
+        "job_community",
+        {
+            "project_id": "boss-dogfood",
+            "worker_id": "worker-community",
+            "lease_token": "lease_community",
+        },
+    ) in client.calls
+    assert any(call[0] == "complete" for call in client.calls)
 
 
 def test_agent_work_product_strategies_cover_initial_agent_capabilities():

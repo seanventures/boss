@@ -59,6 +59,7 @@ Generate a strong webhook secret, enter it in the App's webhook settings, and in
 
 ```dotenv
 BOSS_GITHUB_WEBHOOK_SECRET=replace-with-a-random-secret
+BOSS_GITHUB_APP_BOT_LOGIN=boss[bot]
 BOSS_WEBHOOK_INBOUND_SECRETS_JSON={"github":"env:BOSS_GITHUB_WEBHOOK_SECRET"}
 BOSS_WEBHOOK_PROJECT_MAP_JSON={"owner/repository":"boss-dogfood"}
 ```
@@ -66,14 +67,23 @@ BOSS_WEBHOOK_PROJECT_MAP_JSON={"owner/repository":"boss-dogfood"}
 Configure the GitHub webhook URL as:
 
 ```text
-https://boss.example/v1/webhooks/inbound/github
+https://boss.example/v1/webhooks/github
 ```
 
 The generic `BOSS_WEBHOOK_INBOUND_SECRET` remains available for a single-source deployment, but a source-specific `github` entry is preferred. When neither secret is set, the receiver returns HTTP 503 without parsing or storing the payload. When the App is not installed and no legacy PAT is configured, outbound GitHub calls fail closed with a configuration error. This leaves community automation inert without crashing the API.
 
-Valid deliveries are stored in `inbound_webhooks`, normalized to `webhook.inbound.received`, and routed through the normal event subscriptions. A repeated `X-GitHub-Delivery` is a no-op. An unmapped repository returns HTTP 202 and records `webhook.inbound.unrouted`; a missing or invalid signature returns HTTP 401 and records only rejection metadata, never the unverified payload.
+Valid deliveries are stored in `inbound_webhooks` and normalized to typed `github.issue_opened`, `github.issue_comment`, `github.pr_opened`, or `github.pr_review` events. Event subscriptions enqueue leased `github.triage` and `github.pr_review` jobs; no model or provider call runs in the webhook request. A repeated `X-GitHub-Delivery` creates neither a second event nor a second job. Unsupported event actions and messages sent by `BOSS_GITHUB_APP_BOT_LOGIN` return HTTP 204 without agent work. An unmapped repository also launches no work; a missing or invalid signature returns HTTP 401 and records only rejection metadata, never the unverified payload.
 
-The current receiver routes `pull_request`, `check_suite`, and `issue_comment`. The manifest also subscribes to `issues` and `pull_request_review` so those deliveries can be enabled by the planned community triage and review consumers without reinstalling the App; until those consumers land, unsupported deliveries are acknowledged as unrouted and do not launch agent work.
+Issue triage uses the shared orchestration intent classifier, posts exactly one accept/decline/needs-info verdict, and creates a hold-default decision. An accepted request creates only a proposed plan; approving its decision dispatches phase tasks. PR review reads the unified diff without checking out or executing fork code, posts `COMMENT`-only inline findings plus a value/ROI note addressed to the author, and creates a hold-default merge-authorization decision. The agent never calls merge. Every GitHub read/write is represented by a Receipt and deduplicated by delivery or PR head SHA.
+
+The default public review path is deterministic and does not incur model cost. To add the existing read-only code-review model role, opt in explicitly; the call is budget-reserved and Receipt-backed, and safely falls back to deterministic review if denied or unavailable:
+
+```dotenv
+BOSS_GITHUB_COMMUNITY_MODEL_REVIEW_ENABLED=true
+BOSS_GITHUB_COMMUNITY_MODEL_REVIEW_BUDGET_USD_MICROS=250000
+```
+
+The older `/v1/webhooks/inbound/github` route remains available for generic provider integrations. Use `/v1/webhooks/github` for the strict community action allowlist and 204 acknowledgements.
 
 ## Observe and recover
 
