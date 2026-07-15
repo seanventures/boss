@@ -134,6 +134,27 @@ async function postJsonReturn(path: string, body: Record<string, unknown>): Prom
   }
 }
 
+export async function agentChatAction(
+  _prev: ActionResult | null,
+  formData: FormData,
+): Promise<ActionResult> {
+  const message = String(formData.get("message") ?? "").trim();
+  const confirmPlanId = String(formData.get("confirm_plan_id") ?? "").trim();
+  if (!message && !confirmPlanId) {
+    return { ok: false, error: "Enter a message or confirm the pending plan." };
+  }
+  const result = await postJsonReturn("/v1/agent/chat", {
+    project_id: getProjectId(formData),
+    actor: getActor(formData),
+    thread_id: String(formData.get("thread_id") ?? "").trim() || undefined,
+    message,
+    confirm_plan_id: confirmPlanId || undefined,
+    surface: "chat",
+  });
+  revalidatePath("/");
+  return result;
+}
+
 export async function tallyVotesAction(_prev: ActionResult | null, formData: FormData): Promise<ActionResult> {
   const approve = Math.max(0, Number(formData.get("approve") ?? 0));
   const reject = Math.max(0, Number(formData.get("reject") ?? 0));

@@ -1,6 +1,6 @@
 # BOSS Autonomous Delivery Status
 
-**Last updated**: 2026-07-15 (Codex GitHub community adapter batch BOSS-85/BOSS-89 implemented and validated on a sibling branch from draft PR #16)
+**Last updated**: 2026-07-15 (Codex conversational orchestration batch BOSS-78–82 implemented and validated on `ai/codex/conversational-orchestrator`)
 **Repo root**: /Volumes/DataSSD1/test/boss
 **Git remote**: https://github.com/seanheiney/boss
 **Current branch**: ai/codex/webhook-foundation (stacked on `ai/codex/oss-reactive-docs-foundation`, draft PR #15)
@@ -14,6 +14,7 @@
 - GitHub: draft PR #16 carries BOSS-22/BOSS-23 and is stacked on draft PR #15; other open PRs were inspected for overlap before implementation.
 
 ## Overall Product Status
+- Conversational orchestration is implemented for Plane BOSS-78–82: actor-owned persisted threads, `POST /v1/agent/chat`, a transport-free permission-rechecking intent router, a canonical feature-catalog manifest, explicit confirm-before-dispatch multi-task plans, and a thin Mission Control chat panel. Focused API acceptance tests and web type validation pass; tickets remain In Progress until the draft PR merges.
 - GitHub community enablement advanced on 2026-07-15: Plane BOSS-85/BOSS-89 add App-authenticated issue/PR comments, inline reviews, unified diff reads, scoped `issues` permission, a four-event App manifest, setup guidance, and 503/no-write behavior when no inbound secret is configured. Focused adapter/webhook tests pass; triage and PR-review consumers remain later tickets.
 - OSS webhook foundation advanced on 2026-07-15: Plane BOSS-22/BOSS-23 now provide Receipt-backed signed outbound delivery with leased retries/deadletters and a raw-body-verified, idempotent inbound GitHub receiver that routes into the reactive event dispatcher. Ten focused API/integration tests, seven foundation regressions, and twenty-five worker tests pass.
 - OSS-readiness foundation advanced on 2026-07-15: transactional allowlisted event dispatch, project subscription registry/CRUD/defaults, and TRACEABILITY-derived feature catalog are implemented for Plane BOSS-20, BOSS-21, and BOSS-72. Downstream webhook and docs-agent consumers remain separate Plane tickets.

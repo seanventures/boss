@@ -1,6 +1,14 @@
 # Codex Handoff
 
-Last updated: 2026-07-15T15:30Z (Codex GitHub community batch: Plane BOSS-85/BOSS-89 implemented and validated on a sibling branch from draft PR #16)
+Last updated: 2026-07-15 (Codex conversational orchestration batch: Plane BOSS-78–82 implemented and validated)
+
+## 2026-07-15 conversational orchestration handoff
+
+- Plane BOSS-78–82 are implemented on `ai/codex/conversational-orchestrator`, stacked on the GitHub community adapter branch so the next GitHub triage/review slices can reuse the same transport-free router and shared `surface=github` thread store.
+- The API adds actor-owned `agent_threads`/`agent_messages`, `agent_chat` RBAC, a rate-limited `POST /v1/agent/chat`, full-history responses, structured actions, and `agent.turn_completed` evidence.
+- `IntentRouter` calls existing code-task, meeting, PRD, discovery, and command services in-process with per-tool permission checks. Explicit requests route deterministically; optional ambiguous model classification is off by default and, when enabled, is budget-reserved, Receipt-backed, deduplicated, and fed a per-turn canonical capability manifest.
+- `propose_command` now creates a stable non-actuating plan projection. Broad chat requests persist it as pending, never create child tasks until an exact `confirm_plan_id`, and safely re-propose on revisions while ambiguous replies hold.
+- Mission Control exposes a BOSS Agent area with multi-turn messages, linked actions, rendered phases, and a confirm-and-dispatch button. Focused orchestration API tests pass 9/9; web TypeScript/typegen and focused Ruff/compile pass.
 
 ## 2026-07-15 GitHub community adapter handoff
 

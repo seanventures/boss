@@ -1680,6 +1680,39 @@ CREATE TABLE IF NOT EXISTS feature_catalog (
 CREATE INDEX IF NOT EXISTS idx_feature_catalog_project_status
   ON feature_catalog(project_id, status, updated_at DESC);
 
+CREATE TABLE IF NOT EXISTS agent_threads (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  actor TEXT NOT NULL,
+  surface TEXT NOT NULL DEFAULT 'chat',
+  external_ref TEXT,
+  status TEXT NOT NULL DEFAULT 'active',
+  pending_plan_id TEXT REFERENCES plans(id) ON DELETE SET NULL,
+  pending_plan_summary JSONB,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CHECK (surface IN ('chat', 'github')),
+  CHECK (status IN ('active', 'closed'))
+);
+CREATE INDEX IF NOT EXISTS idx_agent_threads_project_actor
+  ON agent_threads(project_id, actor, updated_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_threads_surface_external
+  ON agent_threads(project_id, surface, external_ref)
+  WHERE external_ref IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS agent_messages (
+  id TEXT PRIMARY KEY,
+  thread_id TEXT NOT NULL REFERENCES agent_threads(id) ON DELETE CASCADE,
+  role TEXT NOT NULL,
+  content TEXT NOT NULL,
+  tool_calls JSONB NOT NULL DEFAULT '[]'::jsonb,
+  actions JSONB NOT NULL DEFAULT '[]'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CHECK (role IN ('user', 'assistant', 'tool'))
+);
+CREATE INDEX IF NOT EXISTS idx_agent_messages_thread_created
+  ON agent_messages(thread_id, created_at, id);
+
 CREATE TABLE IF NOT EXISTS mcp_servers (
   id TEXT PRIMARY KEY,
   project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,

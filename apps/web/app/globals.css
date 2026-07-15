@@ -1609,7 +1609,7 @@ details.wf-turn[open] > summary { border-bottom: 1px solid var(--border); margin
 
 .composer.compact-grid {
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-  align-items: end;
+  align-items: flex-end;
 }
 
 .composer h2 {
@@ -2334,4 +2334,149 @@ select.input:focus {
   border-radius: 8px;
   color: #f2b25b;
   font-size: 0.9rem;
+}
+.agent-chat-shell {
+  display: grid;
+  gap: 1rem;
+  min-height: min(72vh, 760px);
+  padding: clamp(1.1rem, 2.5vw, 2rem);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  background:
+    radial-gradient(circle at 90% 0%, color-mix(in srgb, var(--accent) 12%, transparent), transparent 32%),
+    var(--surface);
+}
+
+.agent-chat-intro {
+  max-width: 760px;
+}
+
+.agent-chat-intro h2,
+.agent-plan-gate h3 {
+  margin: 0.3rem 0 0.45rem;
+}
+
+.agent-chat-intro p,
+.agent-chat-empty p {
+  margin: 0;
+  color: var(--muted);
+}
+
+.agent-chat-log {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 0.75rem;
+  min-height: 260px;
+  max-height: 52vh;
+  overflow-y: auto;
+  padding: 1rem;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--surface) 76%, var(--bg));
+}
+
+.agent-chat-empty {
+  display: grid;
+  flex: 1;
+  place-items: center;
+  text-align: center;
+}
+
+.agent-message {
+  width: min(82%, 720px);
+  padding: 0.85rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: 14px 14px 14px 4px;
+  background: var(--surface);
+}
+
+.agent-message.user {
+  align-self: flex-end;
+  border-radius: 14px 14px 4px 14px;
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface));
+}
+
+.agent-message > span {
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.agent-message p {
+  margin: 0.35rem 0 0;
+  white-space: pre-wrap;
+}
+
+.agent-action-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+}
+
+.agent-action-row a,
+.agent-action-row em {
+  padding: 0.35rem 0.55rem;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 11%, transparent);
+  color: var(--accent);
+  font-size: 0.76rem;
+  font-style: normal;
+  font-weight: 700;
+  text-transform: capitalize;
+}
+
+.agent-plan-gate {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1rem;
+  border: 1px solid color-mix(in srgb, var(--accent) 42%, var(--border));
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--accent) 8%, var(--surface));
+}
+
+.agent-plan-gate ol {
+  margin: 0.6rem 0 0;
+  padding-left: 1.25rem;
+  color: var(--muted);
+}
+
+.agent-composer label {
+  display: block;
+  margin-bottom: 0.45rem;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.agent-composer > div {
+  display: flex;
+  align-items: end;
+  gap: 0.75rem;
+}
+
+.agent-composer textarea {
+  width: 100%;
+  resize: vertical;
+}
+
+.agent-chat-error {
+  margin: 0;
+  color: var(--red);
+}
+
+@media (max-width: 720px) {
+  .agent-message {
+    width: 94%;
+  }
+
+  .agent-plan-gate,
+  .agent-composer > div {
+    align-items: stretch;
+    flex-direction: column;
+  }
 }

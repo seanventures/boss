@@ -85,6 +85,8 @@ from .schemas import (
     BudgetReserveResponse,
     ChangeJournalDetail,
     ChangeJournalResponse,
+    AgentChatRequest,
+    AgentChatResponse,
     CommandProposeRequest,
     CommandProposeResponse,
     MeetingProposeRequest,
@@ -412,6 +414,11 @@ from .services.infrastructure import (
     InfrastructureService,
 )
 from .services.intake import CommandIntakeService
+from .services.agent_service import (
+    AgentService,
+    AgentThreadNotFoundError,
+    AgentThreadOwnershipError,
+)
 from .services.jobs import JobLeaseService, LeaseNotFoundError
 from .services.members import (
     MemberDirectoryService,
@@ -483,6 +490,7 @@ engine = get_engine(settings)
 LOGGER = logging.getLogger("boss.api")
 budget = BudgetGovernor(settings)
 intake = CommandIntakeService(settings)
+orchestration_agent = AgentService(settings)
 jobs = JobLeaseService(settings)
 secret_refs = SecretRefService()
 receipts = ReceiptService()
@@ -5263,6 +5271,37 @@ def propose_command(payload: CommandProposeRequest, request: Request) -> Command
         except ValueError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
         return CommandProposeResponse(**result)
+
+
+@app.post("/v1/agent/chat", response_model=AgentChatResponse)
+def agent_chat(payload: AgentChatRequest, request: Request) -> AgentChatResponse:
+    """Persist one conversational turn and route it to an existing BOSS initiator."""
+    _enforce_high_cost_rate_limit(
+        request, payload.project_id, payload.actor, endpoint="/v1/agent/chat"
+    )
+    with begin(engine) as connection:
+        require_project_actor(
+            connection,
+            payload.project_id,
+            payload.actor,
+            "agent_chat",
+        )
+        try:
+            result = orchestration_agent.chat(
+                connection,
+                project_id=payload.project_id,
+                actor=payload.actor,
+                thread_id=payload.thread_id,
+                message=payload.message,
+                confirm_plan_id=payload.confirm_plan_id,
+                surface=payload.surface,
+                external_ref=payload.external_ref,
+            )
+        except AgentThreadNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except AgentThreadOwnershipError as error:
+            raise HTTPException(status_code=403, detail=str(error)) from error
+        return AgentChatResponse(**result)
 
 
 @app.get("/v1/tasks", response_model=TaskListResponse)

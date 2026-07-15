@@ -33,6 +33,12 @@ class Settings(BaseSettings):
     agent_autonomous_risk_max: int = Field(
         default=1, alias="BOSS_AGENT_AUTONOMOUS_RISK_MAX"
     )
+    agent_router_llm_enabled: bool = Field(
+        default=False, alias="BOSS_AGENT_ROUTER_LLM_ENABLED"
+    )
+    agent_router_budget_usd_micros: int = Field(
+        default=100_000, alias="BOSS_AGENT_ROUTER_BUDGET_USD_MICROS", ge=1
+    )
     # Completion backend: auto (azure→openai) | openai | azure | claude_cli.
     # claude_cli drives BOSS's own loop but serves each completion via the
     # Claude Code CLI (`claude -p`) on a Max subscription instead of a paid API.

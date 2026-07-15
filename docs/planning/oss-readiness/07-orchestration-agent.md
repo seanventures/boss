@@ -192,48 +192,48 @@ This maps cleanly onto the already-two-step propose/dispatch API (§2.1) — we 
 **Scope.** Create `agent_threads` + `agent_messages` tables (migration in the project's migration path). Add `agent_service.py` with `start_or_load_thread`, `append_message`, `record_turn`. Add the `POST /v1/agent/chat` route in `main.py` gated on new `agent_chat` permission; for T1 it echoes and persists (router stubbed). Emit `agent.turn_completed`.
 **Key files.** `apps/api/app/main.py` (new route near other `/v1/*` posts), new `apps/api/app/services/agent_service.py`, migration file, `apps/api/app/schemas.py` (request/response models), permission seed alongside existing perms.
 **Acceptance.**
-- [ ] `POST /v1/agent/chat` with no `thread_id` creates a thread and returns its `thread_id`.
-- [ ] Second call with the `thread_id` appends and returns the full-turn structure.
-- [ ] User + assistant messages persisted in `agent_messages`; `agent.turn_completed` in `events`.
-- [ ] Missing `agent_chat` perm → 403 via `require_project_actor`.
+- [x] `POST /v1/agent/chat` with no `thread_id` creates a thread and returns its `thread_id`.
+- [x] Second call with the `thread_id` appends and returns the full-turn structure.
+- [x] User + assistant messages persisted in `agent_messages`; `agent.turn_completed` in `events`.
+- [x] Missing `agent_chat` perm → 403 via `require_project_actor`.
 **Size.** M.
 
 ### T2 — Surface-agnostic intent router core
 **Scope.** New `apps/api/app/services/intent_router.py`: `route_turn(...)` per §3.3, tool registry modeled on `agent_loop.py:{TOOLS,_TOOL_FNS,_dispatch}`, using `make_chat_adapter` (`claude_cli_adapter.py:317`) for tool-calling. Tools for the single-initiator intents only (code-task, meeting, prd, discovery) call the existing services in-process. No chat/HTTP coupling in this module.
 **Key files.** new `intent_router.py`; call sites into `code_task_service.py`, `meeting_service.py`, `discovery_service.py`; wire into `agent_service.py`.
 **Acceptance.**
-- [ ] "Fix the typo in the footer" routes to `create_code_task` and returns a real `task_id`.
-- [ ] "Should we use Postgres or Mongo?" routes to `create_meeting` (or `run_discovery`) — not a code task.
-- [ ] Each tool re-enforces its own `require_project_actor` perm; a caller lacking `task_create` gets a clean refusal surfaced in the reply.
-- [ ] `route_turn` has zero imports of FastAPI/`Request` (verified surface-agnostic for spec 08 reuse).
+- [x] "Fix the typo in the footer" routes to `create_code_task` and returns a real `task_id`.
+- [x] "Should we use Postgres or Mongo?" routes to `create_meeting` (or `run_discovery`) — not a code task.
+- [x] Each tool re-enforces its own `require_project_actor` perm; a caller lacking `task_create` gets a clean refusal surfaced in the reply.
+- [x] `route_turn` has zero imports of FastAPI/`Request` (verified surface-agnostic for spec 08 reuse).
 **Size.** L.
 
 ### T3 — Capability manifest feed
 **Scope.** `capability_manifest.py` exposing `build_manifest(connection, settings, project_id) -> CapabilityManifest`, each capability carrying an `enabled` predicate resolved against config/entitlements. Consume spec 06's feature registry if available; else a static minimal catalog. Inject rendered manifest into the router system prompt.
 **Key files.** new `apps/api/app/services/capability_manifest.py`; consumed by `intent_router.py`; cross-ref spec 06 registry.
 **Acceptance.**
-- [ ] Router prompt includes the manifest table; "what can you do?" yields a truthful capability list.
-- [ ] A capability whose `enabled` predicate is false is never routed to; agent explains the gap.
-- [ ] Manifest built once per turn (not per tool call).
+- [x] Router prompt includes the manifest table; "what can you do?" yields a truthful capability list.
+- [x] A capability whose `enabled` predicate is false is never routed to; agent explains the gap.
+- [x] Manifest built once per turn (not per tool call).
 **Size.** M.
 
 ### T4 — Multi-task fan-out with confirm-before-dispatch
 **Scope.** Add `propose_command` + `dispatch_plan` tools to the router. `propose_command` returns `pending_confirmation` and never dispatches. `agent_service` persists the pending plan on the thread; a subsequent turn with `confirm_plan_id` (or affirmative reply) triggers `dispatch_plan`. Reuse `intake.propose_command` (`intake.py:220`) and `intake.dispatch_plan` (`intake.py:116`) unchanged.
 **Key files.** `intent_router.py`, `agent_service.py`, `main.py` (`confirm_plan_id` in request), `schemas.py`.
 **Acceptance.**
-- [ ] Broad ask returns a proposed plan with phase count + dependency order and `requires_confirmation: true`; **no child tasks created yet** (verified via task count).
-- [ ] Confirmation turn dispatches; child tasks appear parented + sequenced per `dispatch_plan`.
-- [ ] A "no, change X" reply re-proposes rather than dispatching.
-- [ ] Non-affirmative / ambiguous replies never auto-dispatch.
+- [x] Broad ask returns a proposed plan with phase count + dependency order and `requires_confirmation: true`; **no child tasks created yet** (verified via task count).
+- [x] Confirmation turn dispatches; child tasks appear parented + sequenced per `dispatch_plan`.
+- [x] A "no, change X" reply re-proposes rather than dispatching.
+- [x] Non-affirmative / ambiguous replies never auto-dispatch.
 **Size.** L.
 
 ### T5 — Console chat surface (thin)
 **Scope.** A conversational panel in the Next.js console (`apps/web/app/*-ui.tsx`) posting to `/v1/agent/chat`, rendering `reply`, the `actions` list (with links to created tasks/meetings/discoveries), and an explicit **Confirm plan** button when `pending_confirmation` is present (sends `confirm_plan_id`).
 **Key files.** new `apps/web/app/agent-ui.tsx` (+ nav wiring), api-client addition in `packages/api-client`.
 **Acceptance.**
-- [ ] User can hold a multi-turn conversation from the console.
-- [ ] Created tasks/meetings/discoveries are shown as clickable links.
-- [ ] Fan-out plan renders phases; nothing dispatches until Confirm is clicked.
+- [x] User can hold a multi-turn conversation from the console.
+- [x] Created tasks/meetings/discoveries are shown as clickable links.
+- [x] Fan-out plan renders phases; nothing dispatches until Confirm is clicked.
 **Size.** M.
 
 ---

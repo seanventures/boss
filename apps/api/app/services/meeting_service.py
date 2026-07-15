@@ -489,7 +489,9 @@ def _finalize_meeting(connection, settings, run_id) -> dict:
     if run["meeting_id"]:  # already finalized — idempotent
         return {"meeting_id": run["meeting_id"], "minutes_artifact_id": run["minutes_artifact_id"],
                 "decision_id": run["decision_id"], "already": True}
-    project_id = run["project_id"]; task_id = run["task_id"]; state = run["state"]
+    project_id = run["project_id"]
+    task_id = run["task_id"]
+    state = run["state"]
     personas = resolve_roles(run["role_keys"], load_role_map(connection, project_id))
     fctx = run["finalize_ctx"] or {}
     research = state.get("research") or {}
@@ -523,7 +525,29 @@ def _finalize_meeting(connection, settings, run_id) -> dict:
          "args": {"title": "PRD: " + run["directive"][:80].rstrip(), "markdown": state.get("prd_markdown") or "",
                   "subtitle": f"Drafted by a BOSS agent panel · source {run['url']}", "repo_subdir": "docs/prd"},
          "task_id": task_id}, {}, "meeting_prd_ready_to_publish", risk_tier=2)
-    if fctx.get("reservation_id"):
+    if fctx.get("reservation_id") and fctx.get("receipt_id"):
+        from .budget import BudgetGovernor
+        from .receipts import ReceiptService
+
+        actual_cost = int((run["usage"] or {}).get("cost_usd_micros", 0))
+        model = (run["usage"] or {}).get("model") or "prd-meeting"
+        ReceiptService().mark_succeeded(
+            connection,
+            fctx["receipt_id"],
+            model,
+            {"meeting_id": meeting_id, "minutes_artifact_id": minutes_artifact_id},
+        )
+        BudgetGovernor(settings).settle(
+            connection,
+            project_id,
+            fctx["reservation_id"],
+            fctx["receipt_id"],
+            "model",
+            model,
+            int(fctx.get("estimated_usd_micros") or actual_cost),
+            actual_cost,
+        )
+    elif fctx.get("reservation_id"):
         try:
             from .budget import BudgetGovernor
             BudgetGovernor(settings).release(connection, project_id, fctx["reservation_id"], "meeting complete")

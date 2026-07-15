@@ -748,6 +748,54 @@ export type CommandProposeResponse = {
   task_id: string;
   job_id: string;
   artifact_id: string;
+  plan_id?: string;
+  phases?: Array<Record<string, unknown>>;
+};
+
+export type AgentAction = {
+  kind: string;
+  task_id?: string;
+  run_id?: string;
+  meeting_id?: string;
+  plan_id?: string;
+  phase_count?: number;
+  phases?: Array<Record<string, unknown>>;
+  requires_confirmation?: boolean;
+  href?: string;
+};
+
+export type AgentPendingConfirmation = {
+  plan_id: string;
+  summary: string;
+  phase_count: number;
+  phases: Array<Record<string, unknown>>;
+};
+
+export type AgentMessage = {
+  id: string;
+  role: "user" | "assistant" | "tool";
+  content: string;
+  tool_calls: Array<Record<string, unknown>>;
+  actions: AgentAction[];
+  created_at: string;
+};
+
+export type AgentChatRequest = {
+  project_id: string;
+  actor?: string;
+  thread_id?: string;
+  message?: string;
+  confirm_plan_id?: string;
+  surface?: "chat" | "github";
+  external_ref?: string;
+};
+
+export type AgentChatResponse = {
+  thread_id: string;
+  reply: string;
+  actions: AgentAction[];
+  pending_confirmation?: AgentPendingConfirmation | null;
+  messages: AgentMessage[];
 };
 
 export type TaskSummary = {
@@ -4458,6 +4506,11 @@ export function createBossApiClient(config: BossApiClientConfig) {
     },
     proposeCommand(payload: CommandProposeRequest) {
       return request<CommandProposeResponse>("POST", "/v1/commands/propose", {
+        body: payload,
+      });
+    },
+    chatWithAgent(payload: AgentChatRequest) {
+      return request<AgentChatResponse>("POST", "/v1/agent/chat", {
         body: payload,
       });
     },

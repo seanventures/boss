@@ -3,6 +3,13 @@
 All 15-min terminal updates and major milestones appended here. Chronological, newest at top.
 
 ---
+## 2026-07-15 — Codex — BOSS-78–82 conversational orchestration
+
+- Claimed five Plane orchestration tickets and kept them In Progress pending merge. Added persisted actor-owned threads/messages, agent_chat authorization, structured/audited turns, and the chat API contract.
+- Added a surface-neutral router over existing governed initiators, canonical capability manifest, budgeted/receipted optional model classifier, and clean per-tool permission refusals.
+- Added stable draft plans plus persisted explicit confirmation; broad asks create no child tasks before approval, exact confirmation creates dependency-sequenced children, revisions re-propose, and ambiguous replies hold.
+- Added a Mission Control BOSS Agent panel, API-client contract, linked actions, rendered plan phases, and explicit confirmation UI. Validation: 9 focused API tests, focused Ruff/compile, web typegen/typecheck, and OpenAPI YAML parsing pass.
+
 ## 2026-07-15T15:30:00Z — Codex — BOSS-85/BOSS-89 GitHub community adapter
 
 - Kept Plane BOSS-85/BOSS-89 In Progress and created sibling branch `ai/codex/github-community-adapter` from draft PR #16 to avoid coupling this work to the docs-agent sibling PR #18.

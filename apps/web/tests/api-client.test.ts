@@ -3,6 +3,41 @@ import { describe, expect, it } from "vitest";
 import { createBossApiClient, BossApiError } from "@boss/api-client";
 
 describe("createBossApiClient", () => {
+  it("posts conversational turns through the agent contract", async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const fetchImpl = async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({ url: String(input), init });
+      return new Response(
+        JSON.stringify({
+          thread_id: "athr_1",
+          reply: "Ready.",
+          actions: [],
+          pending_confirmation: null,
+          messages: [],
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    };
+    const client = createBossApiClient({
+      baseUrl: "http://127.0.0.1:8000",
+      fetchImpl,
+    });
+
+    const turn = await client.chatWithAgent({
+      project_id: "boss-dogfood",
+      actor: "executive_console",
+      message: "What can you do?",
+    });
+
+    expect(calls[0].url).toBe("http://127.0.0.1:8000/v1/agent/chat");
+    expect(calls[0].init?.method).toBe("POST");
+    expect(JSON.parse(String(calls[0].init?.body))).toMatchObject({
+      project_id: "boss-dogfood",
+      message: "What can you do?",
+    });
+    expect(turn.thread_id).toBe("athr_1");
+  });
+
   it("sends bearer API key headers when configured", async () => {
     const calls: RequestInit[] = [];
     const fetchImpl = async (_input: RequestInfo | URL, init?: RequestInit) => {

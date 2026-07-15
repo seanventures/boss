@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-07-15 — Conversational orchestration agent (BOSS-78–82)
+
+- Added durable actor-owned agent threads/messages, a permissioned and rate-limited chat endpoint, structured action history, and audit events.
+- Added a transport-free intent router over existing governed initiators plus a feature-catalog-backed truthful capability manifest. Optional model classification is budget-reserved and Receipt-backed.
+- Closed the command-proposal plan-id gap and added explicit persisted confirm-before-dispatch fan-out; revisions re-propose and ambiguous replies never dispatch.
+- Added a thin Mission Control BOSS Agent panel with multi-turn history, linked outcomes, rendered plan phases, and a confirm-and-dispatch human gate.
+
 All notable changes to BOSS are documented in this file.
 
 ## Unreleased — Gap Phase 4 (observability, testing depth, enterprise)

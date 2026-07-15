@@ -13,6 +13,7 @@ import {
 import { useRouter, useSearchParams } from "next/navigation";
 
 type AreaId =
+  | "agent"
   | "dashboard"
   | "overview"
   | "decisions"
@@ -55,6 +56,7 @@ const I = (d: ReactNode) => (props: SVGProps<SVGSVGElement>) => (
 );
 
 const ICONS = {
+  agent: I(<><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3h11A2.5 2.5 0 0 1 20 5.5v8a2.5 2.5 0 0 1-2.5 2.5H11l-4.5 4v-4A2.5 2.5 0 0 1 4 13.5Z" /><path d="M8 8h8M8 11.5h5" /></>),
   dashboard: I(<><rect x="3" y="3" width="8" height="8" rx="1.5" /><rect x="13" y="3" width="8" height="5" rx="1.5" /><rect x="13" y="10" width="8" height="11" rx="1.5" /><rect x="3" y="13" width="8" height="8" rx="1.5" /></>),
   overview: I(<><path d="M3 12l9-8 9 8" /><path d="M5 10v10h14V10" /></>),
   decisions: I(<><circle cx="12" cy="12" r="9" /><path d="M8.5 12.5l2.5 2.5 4.5-5" /></>),
@@ -74,6 +76,7 @@ const ICONS = {
 } as const;
 
 const AREAS: AreaDef[] = [
+  { id: "agent", label: "BOSS Agent", sub: "One conversation routes into every governed workflow", group: "Run", icon: ICONS.agent },
   { id: "dashboard", label: "Dashboard", sub: "Live cross-phase snapshot — budget, queue, proof, health", group: "Run", icon: ICONS.dashboard },
   { id: "overview", label: "Overview", sub: "What changed · top risks · next actions", group: "Run", icon: ICONS.overview },
   { id: "decisions", label: "Decisions", sub: "Explicit approvals before real effects", group: "Run", icon: ICONS.decisions },
