@@ -431,6 +431,36 @@ def test_invalid_inbound_signature_is_auth_exempt_and_audited(
     }
 
 
+def test_inbound_webhook_is_inert_when_secret_is_not_configured(
+    client, engine, monkeypatch
+):
+    settings = api_main.inbound_webhooks.settings
+    monkeypatch.setattr(settings, "webhook_inbound_secret", "")
+    monkeypatch.setattr(settings, "webhook_inbound_secrets_json", "")
+    with engine.begin() as connection:
+        before = connection.execute(
+            text("SELECT count(*) FROM inbound_webhooks")
+        ).scalar_one()
+
+    response = client.post(
+        "/v1/webhooks/inbound/github",
+        content=b"not-json-and-must-not-be-parsed",
+        headers={
+            "Content-Type": "application/json",
+            "X-GitHub-Delivery": "delivery-unconfigured",
+            "X-GitHub-Event": "issues",
+        },
+    )
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "Webhook source is not configured."
+    with engine.begin() as connection:
+        after = connection.execute(
+            text("SELECT count(*) FROM inbound_webhooks")
+        ).scalar_one()
+    assert after == before
+
+
 @pytest.mark.parametrize(
     "github_event", ["pull_request", "check_suite", "issue_comment"]
 )
@@ -470,15 +500,18 @@ def test_valid_github_events_normalize_dispatch_and_dedupe(
             text("SELECT data FROM events WHERE id = :id"),
             {"id": first.json()["event_id"]},
         ).scalar_one()
+        expected_kind = (
+            "github.pr_review" if github_event == "pull_request" else "github.triage"
+        )
         jobs = connection.execute(
             text(
                 """
                 SELECT count(*) FROM jobs
-                WHERE kind = 'github.triage'
+                WHERE kind = :kind
                   AND payload->>'event_id' = :event_id
                 """
             ),
-            {"event_id": first.json()["event_id"]},
+            {"kind": expected_kind, "event_id": first.json()["event_id"]},
         ).scalar_one()
     assert event["normalized"]["entity_type"] == github_event
     assert jobs == 1

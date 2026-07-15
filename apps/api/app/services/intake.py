@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Optional
 
 from sqlalchemy import text
@@ -253,6 +254,48 @@ class CommandIntakeService:
                 "next_expected_artifact": "plan_draft",
             },
         )
+        # Persist a dispatchable plan projection immediately. The background
+        # planning job can enrich the artifact, but the orchestration surface
+        # needs a stable plan id and phase boundary before asking a human to
+        # confirm fan-out. Creating the plan is non-actuating: child tasks are
+        # still created only by dispatch_plan after explicit confirmation.
+        phases = self._draft_phases(command, constraints or {})
+        plan_id = make_id("plan")
+        connection.execute(
+            text(
+                """
+                INSERT INTO plans (
+                    id, project_id, task_id, title, objective, phases,
+                    success_criteria, risks, artifact_id, created_by
+                )
+                VALUES (
+                    :id, :project_id, :task_id, :title, :objective,
+                    CAST(:phases AS JSONB), CAST(:success AS JSONB),
+                    CAST(:risks AS JSONB), :artifact_id, 'command_intake'
+                )
+                """
+            ),
+            {
+                "id": plan_id,
+                "project_id": project_id,
+                "task_id": task_id,
+                "title": f"Plan: {command[:120]}",
+                "objective": command,
+                "phases": json.dumps(phases),
+                "success": json.dumps((constraints or {}).get("success_criteria") or []),
+                "risks": json.dumps((constraints or {}).get("risks") or []),
+                "artifact_id": artifact_id,
+            },
+        )
+        emit_event(
+            connection,
+            project_id,
+            "plan.proposed",
+            "command_intake",
+            "plan",
+            plan_id,
+            {"task_id": task_id, "phase_count": len(phases)},
+        )
         job = None
         # Prefer a real model-generated plan when a model is configured and
         # budget allows; otherwise fall back to a deterministic local plan.
@@ -331,5 +374,47 @@ class CommandIntakeService:
             "task_id": task_id,
             "job_id": job["id"],
             "artifact_id": artifact_id,
+            "plan_id": plan_id,
+            "phases": phases,
             "status": "accepted",
         }
+
+    @staticmethod
+    def _draft_phases(command: str, constraints: dict) -> list[dict]:
+        supplied = constraints.get("phases")
+        if isinstance(supplied, list) and supplied:
+            normalized = []
+            for index, phase in enumerate(supplied[:12]):
+                item = phase if isinstance(phase, dict) else {"title": str(phase)}
+                title = str(item.get("title") or item.get("name") or "").strip()
+                if title:
+                    normalized.append(
+                        {
+                            **item,
+                            "title": title,
+                            "depends_on": item.get("depends_on", [index - 1] if index else []),
+                        }
+                    )
+            if normalized:
+                return normalized
+
+        clauses = [
+            clause.strip(" .,:-")
+            for clause in re.split(
+                r"\s*(?:;|\band then\b|\bthen\b|\band\b)\s*",
+                command,
+                flags=re.IGNORECASE,
+            )
+            if clause.strip(" .,:-")
+        ][:8]
+        if not clauses:
+            clauses = [command.strip() or "Complete the requested outcome"]
+        return [
+            {
+                "title": clause[0].upper() + clause[1:] if clause else f"Phase {index + 1}",
+                "objective": clause,
+                "depends_on": [index - 1] if index else [],
+                "risk_tier": 1,
+            }
+            for index, clause in enumerate(clauses)
+        ]

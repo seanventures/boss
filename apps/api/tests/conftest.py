@@ -48,6 +48,8 @@ def clean_tables(engine):
         # Original explicit list preserved (in designed child-to-parent delete order to avoid FK violations);
         # missing tables (commercial/enterprise) are skipped. Enables budget/kpi/concurrent tests + full -k matrix.
         for tbl in [
+            "agent_messages",
+            "agent_threads",
             "account_connect_billing_portal_sessions",
             "account_connect_auth_sessions",
             "account_connect_health_checks",

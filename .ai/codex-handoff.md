@@ -1,6 +1,6 @@
 # Codex Handoff
 
-Last updated: 2026-07-15T16:10Z (Codex docs-agent batch: Plane BOSS-73/BOSS-74/BOSS-75 implemented locally; publication pending)
+Last updated: 2026-07-15 (BOSS-118 controlled integration release in progress)
 
 ## 2026-07-15 reactive docs-agent handoff
 
@@ -19,6 +19,29 @@ Last updated: 2026-07-15T16:10Z (Codex docs-agent batch: Plane BOSS-73/BOSS-74/B
 - Validation: widened Python set 45/45 (new canary, webhook, dispatcher/catalog regressions, SOC2 canary consumer, worker, docs generator); web activity/deadletter mapping 26/26; Next production build; TypeScript; focused Ruff/compile; YAML; diff; generator check; and `mkdocs build --strict` all pass. Static OpenAPI parity confirms the new canary routes are covered while retaining the repository's unrelated pre-existing route backlog. Repository-wide `make lint` passes the web stage and then stops on the same 13 unrelated pre-existing Python lint errors documented for PR #16.
 - Coordination: branch `ai/codex/reactive-docs-operability` is stacked on draft PR #16 and does not overlap active design-system, VAG, or model-pacing branches. DOC-2/BOSS-73 was deliberately returned to Backlog without code changes because its successful docs-PR handler depends on DOC-3/DOC-4.
 - Publication: implementation commit `5887088`; mergeable stacked draft PR #17 (`ai/codex/reactive-docs-operability` → `ai/codex/webhook-foundation`). Documentation Actions run `29425529835` has zero steps and the explicit account payment/spending-limit annotation, so no branch code executed in GitHub CI; local workflow-equivalent tests/build are green.
+
+## 2026-07-15 GitHub community agent handoff
+
+- Plane BOSS-84/BOSS-86/BOSS-87/BOSS-88 are implemented on `ai/codex/github-community-agents`, stacked on conversational orchestration PR #21 so triage shares its non-actuating intent classifier and accepted requests reuse its stable proposed-plan boundary.
+- `/v1/webhooks/github` verifies the exact raw body before parsing, accepts only the four documented GitHub event/action families, suppresses the configured App bot, persists delivery dedupe, emits typed `github.*` events, and returns before any agent/model/provider work.
+- Leased `github.triage` jobs classify feature/bug/question/spam, post exactly one Receipt-backed verdict, create a hold-default standard decision, and create but do not dispatch a stable plan on accept. Decision approval dispatches that exact plan.
+- Leased `github.pr_review` jobs fetch and review only the unified diff, never check out or execute fork code, post COMMENT-only inline findings and an author-addressed value/ROI note, and deduplicate all effects per head SHA. PR decisions default to hold; approval records merge authorization but never calls merge.
+- The default review is deterministic and zero-model-cost. An optional existing read-only review-role pass is disabled by default and uses a BudgetReservation plus Receipt when enabled. Focused community tests cover signed ingress, all four types, filtering/dedupe, lease ownership, every triage outcome, gated plan dispatch, inline review, per-head replay, receipts, and no-merge behavior.
+
+## 2026-07-15 conversational orchestration handoff
+
+- Plane BOSS-78–82 are implemented on `ai/codex/conversational-orchestrator`, stacked on the GitHub community adapter branch so the next GitHub triage/review slices can reuse the same transport-free router and shared `surface=github` thread store.
+- The API adds actor-owned `agent_threads`/`agent_messages`, `agent_chat` RBAC, a rate-limited `POST /v1/agent/chat`, full-history responses, structured actions, and `agent.turn_completed` evidence.
+- `IntentRouter` calls existing code-task, meeting, PRD, discovery, and command services in-process with per-tool permission checks. Explicit requests route deterministically; optional ambiguous model classification is off by default and, when enabled, is budget-reserved, Receipt-backed, deduplicated, and fed a per-turn canonical capability manifest.
+- `propose_command` now creates a stable non-actuating plan projection. Broad chat requests persist it as pending, never create child tasks until an exact `confirm_plan_id`, and safely re-propose on revisions while ambiguous replies hold.
+- Mission Control exposes a BOSS Agent area with multi-turn messages, linked actions, rendered phases, and a confirm-and-dispatch button. Focused orchestration API tests pass 9/9; web TypeScript/typegen and focused Ruff/compile pass.
+
+## 2026-07-15 GitHub community adapter handoff
+
+- Plane BOSS-85: `GitHubAdapter` now comments on issues/PRs, creates inline reviews with a safe default `COMMENT` event, and fetches raw unified diffs while reusing the existing App-token/PAT request seam. Typed results, review-event validation, App auth, exact payloads, diff media type, and provider error propagation are covered.
+- Plane BOSS-89: the App installation token adds `issues: write`; `.github/boss-app-manifest.json` requests repository contents/issues/PR write access and the four community event subscriptions; `.env.example`, README, and the webhook runbook document installation and source-specific secrets. Missing inbound configuration returns 503 before JSON parsing or persistence.
+- Validation: 18 focused adapter/webhook tests pass; focused Ruff, Python compile, manifest JSON, and OpenAPI YAML parsing pass. Repository-wide web type generation/typecheck passes; broad Python lint stops on the same 13 unrelated pre-existing issues recorded for the parent stack (duplicate/unused imports and legacy semicolon lines), with no new changed-file finding. This branch is based directly on draft PR #16 (`ai/codex/webhook-foundation`) and intentionally does not include the docs-agent PR #18 sibling.
+- Remaining GitHub community work from this adapter-only checkpoint was completed by the community-agent slice above: typed ingress, triage/review agents, decision rails, and human-gated plan dispatch/merge authorization.
 
 ## 2026-07-15 webhook foundation handoff
 

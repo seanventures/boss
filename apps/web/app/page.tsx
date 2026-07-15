@@ -58,6 +58,7 @@ import {
   upsertWorkerPoolAction,
 } from "./actions";
 import ConsoleShell from "./ConsoleShell";
+import { AgentChat } from "./agent-ui";
 import { WorkBoard, WorkflowHealth } from "./workflow-ui";
 import { ReportsView } from "./reports-ui";
 import type { DataBoundary } from "@boss/api-client";
@@ -591,6 +592,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
       initialArea={requestedArea}
     >
       <div className="frame">
+        <section className="panel-stack" data-area="agent" aria-label="BOSS conversational agent">
+          <AgentChat projectId={activeProjectId} actor={activeActorId} />
+        </section>
         <section className="panel-stack" data-area="dashboard" aria-label="Live dashboard">
           <div className="section-head">
             <div>

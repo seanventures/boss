@@ -61,7 +61,9 @@ class GitHubAppAdapter:
             # Allow `\n`-escaped single-line env values.
             return self.settings.github_app_private_key.replace("\\n", "\n")
         path = self.settings.github_app_private_key_path
-        if path:
+        # Pydantic represents an empty Path environment value as ``Path('.')``.
+        # Treat that common partial-configuration state as unset, not as a key file.
+        if path and str(path).strip() not in {"", "."}:
             p = Path(path).expanduser()
             if not p.exists():
                 raise GitHubAppConfigurationError(
@@ -104,7 +106,12 @@ class GitHubAppAdapter:
         if not inst:
             raise GitHubAppConfigurationError("GitHub App installation id not configured.")
 
-        cache_key = f"{inst}:{','.join(sorted(repositories or []))}"
+        permission_scope = ",".join(
+            f"{key}={value}" for key, value in sorted((permissions or {}).items())
+        )
+        cache_key = (
+            f"{inst}:{','.join(sorted(repositories or []))}:{permission_scope}"
+        )
         cached = self._cache.get(cache_key)
         # reuse if more than 5 minutes of life remains
         if cached and cached[0] - time.time() > 300:
@@ -141,10 +148,13 @@ class GitHubAppAdapter:
         return token
 
     def token_for_repo(self, owner: str, repo: str) -> str:
-        """Convenience: a token scoped to a single repo with contents+PR write —
-        exactly what the sandbox clone and PR creation need."""
+        """Return a single-repository token for governed code and community work."""
         tok = self.installation_token(
             repositories=[repo],
-            permissions={"contents": "write", "pull_requests": "write"},
+            permissions={
+                "contents": "write",
+                "issues": "write",
+                "pull_requests": "write",
+            },
         )
         return tok.token

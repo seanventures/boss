@@ -85,6 +85,8 @@ from .schemas import (
     BudgetReserveResponse,
     ChangeJournalDetail,
     ChangeJournalResponse,
+    AgentChatRequest,
+    AgentChatResponse,
     CommandProposeRequest,
     CommandProposeResponse,
     MeetingProposeRequest,
@@ -179,6 +181,7 @@ from .schemas import (
     EventSubscriptionSummary,
     EventSubscriptionUpdateRequest,
     InboundWebhookResponse,
+    GitHubCommunityJobExecuteRequest,
     WebhookDeliveryCreateRequest,
     WebhookDeliveryExecuteRequest,
     WebhookDeliveryListResponse,
@@ -410,11 +413,17 @@ from .services.webhooks import (
     WebhookEndpointNotFoundError,
     WebhookService,
 )
+from .services.github_community_service import GitHubCommunityService
 from .services.infrastructure import (
     InfraResourceNotFoundError,
     InfrastructureService,
 )
 from .services.intake import CommandIntakeService
+from .services.agent_service import (
+    AgentService,
+    AgentThreadNotFoundError,
+    AgentThreadOwnershipError,
+)
 from .services.jobs import JobLeaseService, LeaseNotFoundError
 from .services.members import (
     MemberDirectoryService,
@@ -486,12 +495,14 @@ engine = get_engine(settings)
 LOGGER = logging.getLogger("boss.api")
 budget = BudgetGovernor(settings)
 intake = CommandIntakeService(settings)
+orchestration_agent = AgentService(settings)
 jobs = JobLeaseService(settings)
 docs_updates = DocsUpdateService(settings)
 secret_refs = SecretRefService()
 receipts = ReceiptService()
 webhooks = WebhookService(settings)
 inbound_webhooks = InboundWebhookService(settings)
+github_community = GitHubCommunityService(settings)
 software_factory = SoftwareFactoryService(settings)
 decisions = DecisionService(settings)
 specpack = SpecPackService(settings)
@@ -734,11 +745,13 @@ async def require_transport_auth_for_v1(request: Request, call_next):
         and _parts[2] == "webhooks"
         and _parts[3] == "inbound"
     )
+    is_github_webhook = request.url.path == "/v1/webhooks/github"
     if (
         not request.url.path.startswith("/v1/")
         or not auth_required
         or is_preview_web
         or is_inbound_webhook
+        or is_github_webhook
     ):
         principal_token = current_api_principal.set(None)
         authenticated_token = current_transport_authenticated.set(False)
@@ -4194,9 +4207,57 @@ async def receive_inbound_webhook(
         )
     if result["status"] == "rejected":
         raise HTTPException(status_code=401, detail="Invalid webhook signature.")
+    if result["status"] == "not_configured":
+        raise HTTPException(status_code=503, detail="Webhook source is not configured.")
     if result["status"] == "invalid":
         raise HTTPException(status_code=400, detail="Invalid webhook payload.")
     return InboundWebhookResponse(**result)
+
+
+@app.post("/v1/webhooks/github", status_code=202)
+async def receive_github_webhook(request: Request):
+    """Compatibility GitHub ingress with the community event allowlist."""
+    raw_body = await request.body()
+    headers = {key.lower(): value for key, value in request.headers.items()}
+    with begin(engine) as connection:
+        result = inbound_webhooks.ingest(
+            connection,
+            "github",
+            raw_body,
+            headers,
+            github_community_only=True,
+        )
+    if result["status"] == "rejected":
+        raise HTTPException(status_code=401, detail="Invalid webhook signature.")
+    if result["status"] == "not_configured":
+        raise HTTPException(status_code=503, detail="Webhook source is not configured.")
+    if result["status"] == "invalid":
+        raise HTTPException(status_code=400, detail="Invalid webhook payload.")
+    if result["status"] in {"unrouted", "ignored"}:
+        return Response(status_code=204)
+    return JSONResponse(
+        status_code=202,
+        content=InboundWebhookResponse(**result).model_dump(mode="json"),
+    )
+
+
+@app.post("/v1/github/community/jobs/{job_id}/execute")
+def execute_github_community_job(
+    job_id: str, payload: GitHubCommunityJobExecuteRequest
+):
+    with begin(engine) as connection:
+        try:
+            return github_community.execute_job(
+                connection,
+                job_id=job_id,
+                project_id=payload.project_id,
+                worker_id=payload.worker_id,
+                lease_token=payload.lease_token,
+            )
+        except LeaseNotFoundError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
 
 
 @app.get("/v1/mcp/servers")
@@ -5268,6 +5329,37 @@ def propose_command(payload: CommandProposeRequest, request: Request) -> Command
         except ValueError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
         return CommandProposeResponse(**result)
+
+
+@app.post("/v1/agent/chat", response_model=AgentChatResponse)
+def agent_chat(payload: AgentChatRequest, request: Request) -> AgentChatResponse:
+    """Persist one conversational turn and route it to an existing BOSS initiator."""
+    _enforce_high_cost_rate_limit(
+        request, payload.project_id, payload.actor, endpoint="/v1/agent/chat"
+    )
+    with begin(engine) as connection:
+        require_project_actor(
+            connection,
+            payload.project_id,
+            payload.actor,
+            "agent_chat",
+        )
+        try:
+            result = orchestration_agent.chat(
+                connection,
+                project_id=payload.project_id,
+                actor=payload.actor,
+                thread_id=payload.thread_id,
+                message=payload.message,
+                confirm_plan_id=payload.confirm_plan_id,
+                surface=payload.surface,
+                external_ref=payload.external_ref,
+            )
+        except AgentThreadNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except AgentThreadOwnershipError as error:
+            raise HTTPException(status_code=403, detail=str(error)) from error
+        return AgentChatResponse(**result)
 
 
 @app.get("/v1/tasks", response_model=TaskListResponse)

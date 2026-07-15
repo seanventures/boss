@@ -37,6 +37,7 @@ This document summarizes the currently implemented BOSS runtime surfaces in this
   - enterprise cluster/trust records for attached/detached enterprise posture, identity/audit/governance/private-worker controls, support/SLA metadata, and blocking-gap visibility
   - Enterprise SCIM group/user provisioning APIs that map active users to project-scoped BOSS members with explicit merged roles and permissions
   - CEO command intake
+  - persisted conversational orchestration (`POST /v1/agent/chat`) with capability-aware intent routing across code tasks, meetings, PRDs, discovery, and multi-phase commands; broad plans remain pending until explicit confirmation creates sequenced child tasks
   - canonical department, policy, plan, and meeting CRUD/list surfaces
   - task and job inspection
   - change journal list/detail for diff, review, deployment, self-improvement, infrastructure, and role-governance artifacts
@@ -48,6 +49,7 @@ This document summarizes the currently implemented BOSS runtime surfaces in this
   - decision digest artifact creation with optional outbox draft handoff
   - artifact, receipt, event, and audit export access
   - event-subscription list/create/update/delete APIs with exact or prefix matching, enabled-state filtering, OpenAPI contract coverage, and data-boundary enforcement
+  - GitHub community adapter primitives for issue/PR comments, inline reviews, and unified-diff reads through the existing repository-scoped App identity; App manifest/setup now includes issue and pull-request write permissions, four community subscriptions, and fail-closed unconfigured webhook behavior
   - replay bundle creation
   - Metatron status query
   - comms inbox and outbox

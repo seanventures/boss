@@ -1,0 +1,307 @@
+from __future__ import annotations
+
+import json
+from typing import Any, Optional
+
+from sqlalchemy import text
+from sqlalchemy.engine import Connection
+
+from ..config import Settings
+from .capability_manifest import build_manifest
+from .core import emit_event, make_id
+from .intent_router import IntentRouter
+
+
+class AgentThreadNotFoundError(ValueError):
+    pass
+
+
+class AgentThreadOwnershipError(ValueError):
+    pass
+
+
+class AgentService:
+    def __init__(self, settings: Settings):
+        self.settings = settings
+        self.router = IntentRouter(settings)
+
+    def start_or_load_thread(
+        self,
+        connection: Connection,
+        *,
+        project_id: str,
+        actor: str,
+        thread_id: Optional[str] = None,
+        surface: str = "chat",
+        external_ref: Optional[str] = None,
+    ) -> dict[str, Any]:
+        if thread_id:
+            row = connection.execute(
+                text(
+                    """
+                    SELECT id, project_id, actor, surface, external_ref, status,
+                           pending_plan_id, pending_plan_summary, created_at, updated_at
+                    FROM agent_threads WHERE id = :id
+                    """
+                ),
+                {"id": thread_id},
+            ).mappings().first()
+            if row is None:
+                raise AgentThreadNotFoundError("Agent thread not found.")
+            if row["project_id"] != project_id or row["actor"] != actor:
+                raise AgentThreadOwnershipError(
+                    "Agent thread belongs to a different project or actor."
+                )
+            if row["status"] != "active":
+                raise AgentThreadOwnershipError("Agent thread is closed.")
+            return dict(row)
+
+        if external_ref:
+            row = connection.execute(
+                text(
+                    """
+                    SELECT id, project_id, actor, surface, external_ref, status,
+                           pending_plan_id, pending_plan_summary, created_at, updated_at
+                    FROM agent_threads
+                    WHERE project_id = :project_id AND surface = :surface
+                      AND external_ref = :external_ref
+                    """
+                ),
+                {
+                    "project_id": project_id,
+                    "surface": surface,
+                    "external_ref": external_ref,
+                },
+            ).mappings().first()
+            if row:
+                if row["actor"] != actor:
+                    raise AgentThreadOwnershipError(
+                        "Agent thread belongs to a different actor."
+                    )
+                return dict(row)
+
+        new_id = make_id("athr")
+        row = connection.execute(
+            text(
+                """
+                INSERT INTO agent_threads (
+                    id, project_id, actor, surface, external_ref
+                )
+                VALUES (:id, :project_id, :actor, :surface, :external_ref)
+                RETURNING id, project_id, actor, surface, external_ref, status,
+                          pending_plan_id, pending_plan_summary, created_at, updated_at
+                """
+            ),
+            {
+                "id": new_id,
+                "project_id": project_id,
+                "actor": actor,
+                "surface": surface,
+                "external_ref": external_ref,
+            },
+        ).mappings().one()
+        emit_event(
+            connection,
+            project_id,
+            "agent.thread_started",
+            actor,
+            "agent_thread",
+            new_id,
+            {"surface": surface, "external_ref": external_ref},
+        )
+        return dict(row)
+
+    def append_message(
+        self,
+        connection: Connection,
+        *,
+        thread_id: str,
+        role: str,
+        content: str,
+        tool_calls: Optional[list[dict[str, Any]]] = None,
+        actions: Optional[list[dict[str, Any]]] = None,
+    ) -> dict[str, Any]:
+        row = connection.execute(
+            text(
+                """
+                INSERT INTO agent_messages (
+                    id, thread_id, role, content, tool_calls, actions
+                )
+                VALUES (
+                    :id, :thread_id, :role, :content,
+                    CAST(:tool_calls AS JSONB), CAST(:actions AS JSONB)
+                )
+                RETURNING id, role, content, tool_calls, actions, created_at
+                """
+            ),
+            {
+                "id": make_id("amsg"),
+                "thread_id": thread_id,
+                "role": role,
+                "content": content,
+                "tool_calls": json.dumps(tool_calls or []),
+                "actions": json.dumps(actions or []),
+            },
+        ).mappings().one()
+        connection.execute(
+            text("UPDATE agent_threads SET updated_at = now() WHERE id = :id"),
+            {"id": thread_id},
+        )
+        return self._serialize_message(row)
+
+    def list_messages(
+        self, connection: Connection, thread_id: str
+    ) -> list[dict[str, Any]]:
+        rows = connection.execute(
+            text(
+                """
+                SELECT id, role, content, tool_calls, actions, created_at
+                FROM agent_messages
+                WHERE thread_id = :thread_id
+                ORDER BY created_at, id
+                """
+            ),
+            {"thread_id": thread_id},
+        ).mappings().all()
+        return [self._serialize_message(row) for row in rows]
+
+    def record_turn(
+        self,
+        connection: Connection,
+        *,
+        project_id: str,
+        actor: str,
+        thread_id: str,
+        action_count: int,
+        pending_plan_id: Optional[str],
+    ) -> None:
+        emit_event(
+            connection,
+            project_id,
+            "agent.turn_completed",
+            actor,
+            "agent_thread",
+            thread_id,
+            {
+                "action_count": action_count,
+                "pending_plan_id": pending_plan_id,
+            },
+        )
+
+    def chat(
+        self,
+        connection: Connection,
+        *,
+        project_id: str,
+        actor: str,
+        message: str,
+        thread_id: Optional[str] = None,
+        confirm_plan_id: Optional[str] = None,
+        surface: str = "chat",
+        external_ref: Optional[str] = None,
+    ) -> dict[str, Any]:
+        thread = self.start_or_load_thread(
+            connection,
+            project_id=project_id,
+            actor=actor,
+            thread_id=thread_id,
+            surface=surface,
+            external_ref=external_ref,
+        )
+        user_content = message.strip() or f"Confirm plan {confirm_plan_id}"
+        self.append_message(
+            connection,
+            thread_id=thread["id"],
+            role="user",
+            content=user_content,
+        )
+        messages = self.list_messages(connection, thread["id"])
+        # Build exactly once for the turn. The router receives the resolved
+        # object and never reaches back into the feature catalog per tool call.
+        manifest = build_manifest(connection, self.settings, project_id)
+        turn = self.router.route_turn(
+            connection,
+            project_id=project_id,
+            actor=actor,
+            messages=messages,
+            manifest=manifest,
+            confirm_plan_id=confirm_plan_id,
+            pending_plan_id=thread.get("pending_plan_id"),
+        )
+        assistant = self.append_message(
+            connection,
+            thread_id=thread["id"],
+            role="assistant",
+            content=turn.reply,
+            tool_calls=turn.tool_calls,
+            actions=turn.actions,
+        )
+
+        pending = turn.pending_confirmation
+        dispatched = any(action.get("kind") == "plan_dispatched" for action in turn.actions)
+        if pending:
+            connection.execute(
+                text(
+                    """
+                    UPDATE agent_threads
+                    SET pending_plan_id = :plan_id,
+                        pending_plan_summary = CAST(:summary AS JSONB),
+                        updated_at = now()
+                    WHERE id = :id
+                    """
+                ),
+                {
+                    "id": thread["id"],
+                    "plan_id": pending["plan_id"],
+                    "summary": json.dumps(pending),
+                },
+            )
+        elif dispatched:
+            connection.execute(
+                text(
+                    """
+                    UPDATE agent_threads
+                    SET pending_plan_id = NULL, pending_plan_summary = NULL,
+                        updated_at = now()
+                    WHERE id = :id
+                    """
+                ),
+                {"id": thread["id"]},
+            )
+
+        active_pending_id = pending["plan_id"] if pending else (
+            None if dispatched else thread.get("pending_plan_id")
+        )
+        self.record_turn(
+            connection,
+            project_id=project_id,
+            actor=actor,
+            thread_id=thread["id"],
+            action_count=len(turn.actions),
+            pending_plan_id=active_pending_id,
+        )
+        return {
+            "thread_id": thread["id"],
+            "reply": turn.reply,
+            "actions": turn.actions,
+            "pending_confirmation": pending,
+            "messages": [*messages, assistant],
+        }
+
+    @staticmethod
+    def _serialize_message(row) -> dict[str, Any]:
+        def value(key: str) -> list[dict[str, Any]]:
+            raw = row[key]
+            return json.loads(raw) if isinstance(raw, str) else list(raw or [])
+
+        created_at = row["created_at"]
+        return {
+            "id": row["id"],
+            "role": row["role"],
+            "content": row["content"],
+            "tool_calls": value("tool_calls"),
+            "actions": value("actions"),
+            "created_at": created_at.isoformat()
+            if hasattr(created_at, "isoformat")
+            else str(created_at),
+        }

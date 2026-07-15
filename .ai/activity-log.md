@@ -3,6 +3,11 @@
 All 15-min terminal updates and major milestones appended here. Chronological, newest at top.
 
 ---
+## 2026-07-15 — Codex — BOSS-118 controlled main integration
+
+- Created a clean integration branch from the latest `origin/main`, enumerated all unmerged Codex PR stacks, and excluded the parallel contributor's `feat/*` work.
+- Merging each Codex stack with semantic conflict resolution, followed by repository-wide lint, test, build, smoke, documentation, Kubernetes, and infrastructure validation before a direct main push.
+
 ## 2026-07-15T16:10:00Z — Codex reactive docs-agent slice ready
 - Plane: moved BOSS-73/BOSS-74/BOSS-75 to In Progress before code work; paired the three dependency-ordered tickets so the handler could truthfully complete a budgeted, human-gated docs PR.
 - Implemented allowlisted/manual entity-debounced `docs.update` enqueue, latest-event coalescing, worker capability/control-plane execution, retry/deadletter propagation, and `docs.pr_opened` success evidence.
@@ -23,6 +28,27 @@ All 15-min terminal updates and major milestones appended here. Chronological, n
 - Published implementation commit `5887088` and mergeable stacked draft PR #17. GitHub Documentation run `29425529835` was rejected before checkout with zero steps by the repository account payment/spending-limit gate; recorded as external, with no code workaround attempted.
 
 ---
+## 2026-07-15 — Codex — BOSS-84/BOSS-86–88 GitHub community agents
+
+- Added strict raw-body-signed GitHub community ingress with typed issue/comment/PR/review events, supported-action filtering, configured-bot suppression, durable delivery dedupe, and leased off-request jobs.
+- Added shared-router issue triage with exact-one Receipt-backed verdict comments, concrete needs-info questions, non-feature fast paths, accepted proposed plans, and hold-default decisions whose approval dispatches the plan.
+- Added safe unified-diff PR review with inline anchors, author-addressed value/ROI recommendations, COMMENT-only review writes, Receipt coverage for reads/writes, optional budgeted model review, per-head idempotency, and authorization-only PR decisions that never merge.
+- Added API/worker lease boundaries, OpenAPI/runbook/env docs, traceability, and focused tests spanning all four events, HMAC/parse ordering, filters/replay, triage outcomes, plan gate, PR findings/replay, receipts, and no-merge approval.
+
+## 2026-07-15 — Codex — BOSS-78–82 conversational orchestration
+
+- Claimed five Plane orchestration tickets and kept them In Progress pending merge. Added persisted actor-owned threads/messages, agent_chat authorization, structured/audited turns, and the chat API contract.
+- Added a surface-neutral router over existing governed initiators, canonical capability manifest, budgeted/receipted optional model classifier, and clean per-tool permission refusals.
+- Added stable draft plans plus persisted explicit confirmation; broad asks create no child tasks before approval, exact confirmation creates dependency-sequenced children, revisions re-propose, and ambiguous replies hold.
+- Added a Mission Control BOSS Agent panel, API-client contract, linked actions, rendered plan phases, and explicit confirmation UI. Validation: 9 focused API tests, focused Ruff/compile, web typegen/typecheck, and OpenAPI YAML parsing pass.
+
+## 2026-07-15T15:30:00Z — Codex — BOSS-85/BOSS-89 GitHub community adapter
+
+- Kept Plane BOSS-85/BOSS-89 In Progress and created sibling branch `ai/codex/github-community-adapter` from draft PR #16 to avoid coupling this work to the docs-agent sibling PR #18.
+- Added typed issue-comment and pull-request-review methods plus raw unified-diff reads to the existing GitHub adapter request/auth seam. Review events are validated locally and all GitHub errors surface to callers.
+- Expanded App installation-token scope with `issues: write`; added a GitHub App manifest for contents/issues/PR permissions and four community subscriptions; documented installation, canonical `/v1/webhooks/inbound/github`, source-specific shared-secret mapping, and staged event support.
+- Made an unconfigured inbound source return 503 before parsing or persistence. Validation: 18 focused API tests, focused Ruff, Python compile, manifest JSON, and OpenAPI YAML parse all pass. Repository-wide web type/lint passes; broad Python lint reports the same 13 unrelated parent-stack findings and no new changed-file issue.
+
 ## 2026-07-15T14:15:00Z — Codex — BOSS-22/BOSS-23 webhook foundation
 
 - Re-read the mandatory Plane rule and coordination state; moved BOSS-22 and BOSS-23 to In Progress and created focused stacked branch `ai/codex/webhook-foundation` from PR #15.

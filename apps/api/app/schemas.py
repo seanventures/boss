@@ -1061,6 +1061,63 @@ class CommandProposeResponse(BaseModel):
     task_id: str
     job_id: str
     artifact_id: str
+    plan_id: Optional[str] = None
+    phases: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class AgentAction(BaseModel):
+    kind: str
+    task_id: Optional[str] = None
+    run_id: Optional[str] = None
+    meeting_id: Optional[str] = None
+    plan_id: Optional[str] = None
+    phase_count: Optional[int] = None
+    phases: list[dict[str, Any]] = Field(default_factory=list)
+    requires_confirmation: bool = False
+    href: Optional[str] = None
+
+
+class AgentPendingConfirmation(BaseModel):
+    plan_id: str
+    summary: str
+    phase_count: int = 0
+    phases: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class AgentMessageSummary(BaseModel):
+    id: str
+    role: Literal["user", "assistant", "tool"]
+    content: str
+    tool_calls: list[dict[str, Any]] = Field(default_factory=list)
+    actions: list[dict[str, Any]] = Field(default_factory=list)
+    created_at: str
+
+
+class AgentChatRequest(BaseModel):
+    project_id: str
+    actor: str = "executive_console"
+    thread_id: Optional[str] = None
+    message: str = ""
+    confirm_plan_id: Optional[str] = None
+    surface: Literal["chat", "github"] = "chat"
+    external_ref: Optional[str] = None
+
+    @model_validator(mode="after")
+    def validate_turn(self):
+        self.project_id = _require_text(self.project_id, "project_id")
+        self.actor = _require_text(self.actor, "actor")
+        self.message = self.message.strip()
+        if not self.message and not self.confirm_plan_id:
+            raise ValueError("message or confirm_plan_id is required.")
+        return self
+
+
+class AgentChatResponse(BaseModel):
+    thread_id: str
+    reply: str
+    actions: list[AgentAction] = Field(default_factory=list)
+    pending_confirmation: Optional[AgentPendingConfirmation] = None
+    messages: list[AgentMessageSummary] = Field(default_factory=list)
 
 
 class MeetingProposeRequest(BaseModel):
@@ -1492,6 +1549,12 @@ class InboundWebhookResponse(BaseModel):
     event_id: Optional[str] = None
     project_id: Optional[str] = None
     duplicate: bool = False
+
+
+class GitHubCommunityJobExecuteRequest(BaseModel):
+    project_id: str
+    worker_id: str
+    lease_token: str
 
 
 class OpenAIPlanRequest(BaseModel):

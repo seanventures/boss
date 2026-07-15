@@ -174,6 +174,15 @@ class ControlPlaneClient:
         response.raise_for_status()
         return response.json()
 
+    def run_github_community_job(
+        self, job_id: str, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        response = self._client.post(
+            f"/v1/github/community/jobs/{job_id}/execute", json=payload
+        )
+        response.raise_for_status()
+        return response.json()
+
     def sync_provider_resources(self, payload: dict[str, Any]) -> dict[str, Any]:
         response = self._client.post("/v1/resources/sync", json=payload)
         response.raise_for_status()

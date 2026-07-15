@@ -1105,6 +1105,30 @@ paths:
         '201': { description: Command accepted }
         '403': { description: Actor is not allowed to submit commands }
         '429': { description: Rate limit exceeded for high-cost path (in-memory 10/min per IP+actor for local; prod uses external limiter) }
+  /v1/agent/chat:
+    post:
+      summary: Persist a conversational turn and route it to a governed BOSS initiator
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id]
+              properties:
+                project_id: { type: string }
+                actor: { type: string, default: executive_console }
+                thread_id: { type: string }
+                message: { type: string }
+                confirm_plan_id: { type: string }
+                surface: { type: string, enum: [chat, github], default: chat }
+                external_ref: { type: string }
+      responses:
+        '200': { description: Persisted assistant turn with structured actions and optional plan confirmation }
+        '403': { description: Actor lacks agent_chat permission or does not own the thread }
+        '404': { description: Thread not found }
+        '422': { description: Message or confirm_plan_id is required }
+        '429': { description: Rate limit exceeded for high-cost path }
   /v1/tasks:
     get:
       summary: List tasks
@@ -4779,6 +4803,59 @@ paths:
         '202': { description: Accepted, duplicate, or unrouted delivery }
         '400': { description: Invalid signed payload or missing delivery identifier }
         '401': { description: Missing or invalid signature; rejection metadata audited }
+        '503': { description: Inbound secret is not configured for this source }
+  /v1/webhooks/github:
+    post:
+      security: []
+      summary: Receive a signed GitHub community webhook
+      description: Verifies the raw body before parsing, durably emits a typed github.* event, and acknowledges unsupported actions with 204.
+      parameters:
+        - name: X-Hub-Signature-256
+          in: header
+          required: true
+          schema: { type: string }
+        - name: X-GitHub-Delivery
+          in: header
+          required: true
+          schema: { type: string }
+        - name: X-GitHub-Event
+          in: header
+          required: true
+          schema: { type: string, enum: [issues, issue_comment, pull_request, pull_request_review] }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: true }
+      responses:
+        '202': { description: Typed event durably accepted or redelivery deduplicated }
+        '204': { description: Unsupported action or self-sender safely ignored }
+        '400': { description: Invalid signed payload or missing delivery identifier }
+        '401': { description: Missing or invalid signature }
+        '503': { description: BOSS_GITHUB_WEBHOOK_SECRET is not configured }
+  /v1/github/community/jobs/{job_id}/execute:
+    post:
+      summary: Execute a leased GitHub community triage or review job
+      parameters:
+        - name: job_id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id, worker_id, lease_token]
+              properties:
+                project_id: { type: string }
+                worker_id: { type: string }
+                lease_token: { type: string, writeOnly: true }
+      responses:
+        '200': { description: Receipt-backed triage or review result }
+        '409': { description: Worker lease is missing, expired, or owned by another worker }
+        '422': { description: Job kind or normalized event payload is invalid }
 components:
   securitySchemes:
     BossBearerAuth:

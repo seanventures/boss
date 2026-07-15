@@ -32,7 +32,8 @@ PHASES = ["queued", "signal_sweep", "synthesize", "vet", "shape", "gate", "done"
 #  Public API                                                                 #
 # --------------------------------------------------------------------------- #
 def start_discovery(*, project_id: str, title: str, seed: str, context: str,
-                    settings: Settings, deep: bool = False, parent_run_id: Optional[str] = None) -> str:
+                    settings: Settings, deep: bool = False, parent_run_id: Optional[str] = None,
+                    governance: Optional[dict] = None) -> str:
     """Create the durable run row and kick off the pipeline in a background thread.
 
     deep=True runs a multi-source parallel scout sweep (competitor/pain/demand/timing) for a richer,
@@ -40,6 +41,8 @@ def start_discovery(*, project_id: str, title: str, seed: str, context: str,
     run_id = make_id("drun")
     engine = get_engine()
     init_state = {"deep": deep}
+    if governance:
+        init_state["governance"] = governance
     if parent_run_id:
         init_state["parent_run_id"] = parent_run_id
     with begin(engine) as c:
@@ -54,7 +57,9 @@ def start_discovery(*, project_id: str, title: str, seed: str, context: str,
         emit_event(c, project_id, "discovery.started", "boss", "discovery_run", run_id,
                    {"title": title[:300], "deep": deep})
     threading.Thread(
-        target=_run_discovery, args=(run_id, project_id, seed, context, settings, deep), daemon=True,
+        target=_run_discovery,
+        args=(run_id, project_id, seed, context, settings, deep, governance),
+        daemon=True,
     ).start()
     return run_id
 
@@ -122,13 +127,16 @@ def _row_to_dict(r) -> dict:
 #  Pipeline                                                                    #
 # --------------------------------------------------------------------------- #
 def _run_discovery(run_id: str, project_id: str, seed: str, context: str,
-                   settings: Settings, deep: bool = False) -> None:
+                   settings: Settings, deep: bool = False,
+                   governance: Optional[dict] = None) -> None:
     engine = get_engine()
     try:
         agent = make_code_agent(settings, engine="claude_code")
         if not hasattr(agent, "run_research"):
             raise RuntimeError("Discovery requires the claude_code engine (web research).")
         dossier: dict = {"deep": deep}
+        if governance:
+            dossier["governance"] = governance
         cost = 0
         model = None
 
@@ -141,7 +149,8 @@ def _run_discovery(run_id: str, project_id: str, seed: str, context: str,
             cost += sweep_cost
         else:
             r = agent.run_research(_sweep_prompt(seed, context))
-            cost += r["cost_usd_micros"]; model = r.get("model")
+            cost += r["cost_usd_micros"]
+            model = r.get("model")
             sweep = _extract_json(r["summary"])
             dossier["research_brief"] = sweep.get("brief", {})
             dossier["signal_findings"] = sweep.get("findings", [])
@@ -184,12 +193,45 @@ def _run_discovery(run_id: str, project_id: str, seed: str, context: str,
             emit_event(c, project_id, "discovery.completed", "boss", "discovery_run", run_id,
                        {"verdict": dossier["gate"]["verdict"],
                         "outcomes": len(dossier.get("candidate_outcomes", []))})
+            if governance:
+                from .budget import BudgetGovernor
+                from .receipts import ReceiptService
+
+                ReceiptService().mark_succeeded(
+                    c,
+                    governance["receipt_id"],
+                    model,
+                    {"run_id": run_id, "verdict": dossier["gate"]["verdict"]},
+                )
+                BudgetGovernor(settings).settle(
+                    c,
+                    project_id,
+                    governance["reservation_id"],
+                    governance["receipt_id"],
+                    "model",
+                    model or "discovery",
+                    int(governance["estimated_usd_micros"]),
+                    int(cost),
+                )
     except Exception as exc:  # noqa: BLE001 — record the failure durably, never crash the thread
         detail = f"{exc}"[:1000]
         try:
             with begin(engine) as c:
                 c.execute(text("UPDATE discovery_runs SET status='failed', error=:e, updated_at=now() WHERE id=:id"),
                           {"e": detail, "id": run_id})
+                if governance:
+                    from .budget import BudgetGovernor
+                    from .receipts import ReceiptService
+
+                    ReceiptService().mark_failed(
+                        c, governance["receipt_id"], {"message": detail}
+                    )
+                    BudgetGovernor(settings).release(
+                        c,
+                        project_id,
+                        governance["reservation_id"],
+                        "Discovery failed before a verified outcome.",
+                    )
         except Exception:
             traceback.print_exc()
 

@@ -43,6 +43,7 @@ class MemberDirectoryService:
                 "member_type": "human",
                 "role_keys": ["ceo"],
                 "permissions": [
+                    "agent_chat",
                     "command_submit",
                     "task_create",
                     "decision_resolve",
@@ -67,6 +68,7 @@ class MemberDirectoryService:
                 "member_type": "human",
                 "role_keys": ["cto"],
                 "permissions": [
+                    "agent_chat",
                     "decision_resolve",
                     "audit_export",
                     "health_refresh",
@@ -111,7 +113,7 @@ class MemberDirectoryService:
                 "display_name": "Metatron Operator",
                 "member_type": "system",
                 "role_keys": ["metatron"],
-                "permissions": ["command_submit", "health_refresh", "audit_export"],
+                "permissions": ["agent_chat", "command_submit", "health_refresh", "audit_export"],
             },
             {
                 "member_id": "coo",
@@ -119,6 +121,7 @@ class MemberDirectoryService:
                 "member_type": "system",
                 "role_keys": ["coo"],
                 "permissions": [
+                    "agent_chat",
                     "health_refresh",
                     "audit_export",
                     "task_create",
@@ -130,6 +133,7 @@ class MemberDirectoryService:
                 "member_type": "system",
                 "role_keys": ["ceo", "ceo_delegate"],
                 "permissions": [
+                    "agent_chat",
                     "command_submit",
                     "task_create",
                     "decision_resolve",
@@ -153,6 +157,7 @@ class MemberDirectoryService:
                 "member_type": "system",
                 "role_keys": ["system"],
                 "permissions": [
+                    "agent_chat",
                     "command_submit",
                     "task_create",
                     "decision_resolve",

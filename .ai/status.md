@@ -1,10 +1,10 @@
 # BOSS Autonomous Delivery Status
 
-**Last updated**: 2026-07-15 (Codex docs-agent batch BOSS-73/BOSS-74/BOSS-75 implemented locally; stacked draft PR preparation in progress)
+**Last updated**: 2026-07-15 (BOSS-118 controlled integration release in progress)
 **Repo root**: /Volumes/DataSSD1/test/boss
 **Git remote**: https://github.com/seanheiney/boss
-**Current branch**: ai/codex/docs-agent (stacked on `ai/codex/reactive-docs-operability`, draft PR #17)
-**Base branch**: ai/codex/reactive-docs-operability until PR #17 merges
+**Current branch**: ai/codex/integrate-main
+**Base branch**: origin/main
 **Product**: BOSS v0.4.1 target (Business Operating System Sentinel)
 **Mission**: Complete product to production-grade, tested, documented, pushed, Codex-coordinated, ready for real users. Grind until all discovered PRD/spec features satisfy world-class DoD or truly blocked.
 
@@ -17,6 +17,9 @@
 - Reactive feature documentation advanced on 2026-07-15: Plane BOSS-73/BOSS-74/BOSS-75 now provide allowlisted and manual entity-debounced `docs.update` jobs, evidence/context assembly, a validated `docs_writer` role, managed Markdown preservation, a budgeted/Receipted stable-branch draft PR path, TRACEABILITY reconciliation, feature freshness, worker retry/deadletter handling, and no automatic merge. Validation: 7 docs-agent tests, 7 reactive regressions, 27 worker tests, focused Ruff/compile/YAML, generator drift, and strict MkDocs all pass.
 - Event/webhook operability and the public OSS docs surface advanced on 2026-07-15: Plane BOSS-24 now has a persisted reactive-dispatch exactly-once canary, related webhook-delivery identity in the shared deadletter feed, and a complete setup/recovery runbook. Plane BOSS-76 adds a deterministic TRACEABILITY-backed feature catalog site, strict local/CI MkDocs build, drift test, and reviewed-main-only Pages deployment. Focused/widened validation: 45 Python tests and 26 web tests pass; Next production build, TypeScript, focused Ruff/compile, YAML, diff, generator drift, and strict docs build pass. Repository-wide `make lint` reaches and passes the web lint/type stage, then reports the same 13 unrelated pre-existing Python lint errors documented on PR #16.
 - Publication: implementation commit `5887088` is pushed in mergeable stacked draft PR #17. GitHub Actions run `29425529835` created no steps and was rejected by the repository account payment/spending-limit gate; this is external to the branch, and local workflow-equivalent validation is green.
+- GitHub community automation is implemented for Plane BOSS-84/BOSS-86–88: strict signed typed ingress, loop/delivery guards, leased triage and PR-review agents, Receipt-backed provider effects, safe diff-only review, value/ROI feedback, hold-default standard decisions, approval-gated plan dispatch, and authorization-only/no-auto-merge PR approval. Focused API and worker acceptance tests pass; tickets remain In Progress until the stacked draft PR merges.
+- Conversational orchestration is implemented for Plane BOSS-78–82: actor-owned persisted threads, `POST /v1/agent/chat`, a transport-free permission-rechecking intent router, a canonical feature-catalog manifest, explicit confirm-before-dispatch multi-task plans, and a thin Mission Control chat panel. Focused API acceptance tests and web type validation pass; tickets remain In Progress until the draft PR merges.
+- GitHub community enablement advanced on 2026-07-15: Plane BOSS-85/BOSS-89 add App-authenticated issue/PR comments, inline reviews, unified diff reads, scoped `issues` permission, a four-event App manifest, setup guidance, and 503/no-write behavior when no inbound secret is configured. Focused adapter/webhook tests pass; triage and PR-review consumers remain later tickets.
 - OSS webhook foundation advanced on 2026-07-15: Plane BOSS-22/BOSS-23 now provide Receipt-backed signed outbound delivery with leased retries/deadletters and a raw-body-verified, idempotent inbound GitHub receiver that routes into the reactive event dispatcher. Ten focused API/integration tests, seven foundation regressions, and twenty-five worker tests pass.
 - OSS-readiness foundation advanced on 2026-07-15: transactional allowlisted event dispatch, project subscription registry/CRUD/defaults, and TRACEABILITY-derived feature catalog are implemented for Plane BOSS-20, BOSS-21, and BOSS-72. Downstream webhook and docs-agent consumers remain separate Plane tickets.
 - Current validation: 7 new acceptance tests + 5 representative legacy job tests pass on fresh Postgres; schema reapplication, focused lint/compile, diff checks, and OpenAPI YAML parsing pass. Full API baseline remains 241 passed/38 failed; selected failures reproduce unchanged on pristine origin/main.

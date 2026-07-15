@@ -1,5 +1,19 @@
 # Changelog
 
+## 2026-07-15 — GitHub community agents (BOSS-84, BOSS-86–88)
+
+- Added a strict signed `/v1/webhooks/github` ingress for four typed community events, action filtering, self-bot suppression, and delivery-deduplicated leased jobs.
+- Added issue triage that shares the orchestration classifier, comments exactly one verdict, proposes accepted feature plans without dispatching them, and creates hold-default decisions.
+- Added diff-only PR review with Receipt-backed GitHub reads/writes, inline defect annotations, an author-addressed value/ROI recommendation, and per-head-SHA idempotency. Fork code is never checked out or executed and reviews never merge.
+- Added decision follow-ons: triage approval dispatches the proposed plan; PR approval records merge authorization while preserving the separately governed human merge path. An optional budgeted/receipted model review role is disabled by default.
+
+## 2026-07-15 — Conversational orchestration agent (BOSS-78–82)
+
+- Added durable actor-owned agent threads/messages, a permissioned and rate-limited chat endpoint, structured action history, and audit events.
+- Added a transport-free intent router over existing governed initiators plus a feature-catalog-backed truthful capability manifest. Optional model classification is budget-reserved and Receipt-backed.
+- Closed the command-proposal plan-id gap and added explicit persisted confirm-before-dispatch fan-out; revisions re-propose and ambiguous replies never dispatch.
+- Added a thin Mission Control BOSS Agent panel with multi-turn history, linked outcomes, rendered plan phases, and a confirm-and-dispatch human gate.
+
 All notable changes to BOSS are documented in this file.
 
 ## Unreleased — Gap Phase 4 (observability, testing depth, enterprise)
@@ -12,6 +26,9 @@ All notable changes to BOSS are documented in this file.
 - Added an auth-exempt signed inbound webhook receiver with raw-body constant-time verification,
   durable GitHub delivery idempotency, repository routing, `pull_request`/`check_suite`/
   `issue_comment` normalization, rejection/unrouted audit events, and reactive job dispatch.
+- Added GitHub community response primitives for issue/PR comments, inline reviews, and unified
+  diff reads through the existing App-token path, plus a least-privilege GitHub App manifest,
+  installation runbook, and fail-closed 503 behavior when the inbound secret is absent.
 
 - Consolidated real-time dashboard (`dashboard.py`): `GET /v1/dashboard` aggregates
   budget/queue/workload/incidents + provider-health + latest canary/eval + spend run-rate + ack
