@@ -74,7 +74,7 @@ Only endpoints whose `data_boundary` is at least as restrictive as the event may
 
 ## Enable the GitHub App community surface
 
-Use [`.github/boss-app-manifest.json`](../../.github/boss-app-manifest.json) as the App-manifest template. Before submitting it through GitHub's App setup flow, replace `boss.example` with the public HTTPS host of the BOSS API. Install the resulting App on only the repositories BOSS should manage, then record its App id, installation id, and generated private key:
+Use [`.github/boss-app-manifest.json`](https://github.com/seanheiney/boss/blob/main/.github/boss-app-manifest.json) as the App-manifest template. Before submitting it through GitHub's App setup flow, replace `boss.example` with the public HTTPS host of the BOSS API. Install the resulting App on only the repositories BOSS should manage, then record its App id, installation id, and generated private key:
 
 ```dotenv
 BOSS_GITHUB_APP_ID=123456

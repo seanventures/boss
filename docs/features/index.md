@@ -7,7 +7,7 @@ This catalog is generated from the canonical product traceability ledger. It is 
 <div class="feature-summary">
   <div>
     <span class="boss-status boss-status--implemented">Implemented</span>
-    <strong>71</strong>
+    <strong>83</strong>
   </div>
   <div>
     <span class="boss-status boss-status--partial">Partial</span>
@@ -42,6 +42,17 @@ This catalog is generated from the canonical product traceability ledger. It is 
 | [EVT-003 — Outbound webhook delivery](implemented.md#evt-003-outbound-webhook-delivery) | <span class="boss-status boss-status--implemented">Implemented</span> | OSS readiness spec 00; BOSS-22 |
 | [EVT-004 — Signed inbound webhooks](implemented.md#evt-004-signed-inbound-webhooks) | <span class="boss-status boss-status--implemented">Implemented</span> | OSS readiness spec 00; BOSS-23 |
 | [EVT-005 — Event/webhook operability](implemented.md#evt-005-event-webhook-operability) | <span class="boss-status boss-status--implemented">Implemented</span> | OSS readiness spec 00; BOSS-24 |
+| [GH-001 — GitHub community ingress](implemented.md#gh-001-github-community-ingress) | <span class="boss-status boss-status--implemented">Implemented</span> | OSS readiness spec 08 T1; BOSS-84 |
+| [GH-002 — GitHub community response adapter](implemented.md#gh-002-github-community-response-adapter) | <span class="boss-status boss-status--implemented">Implemented</span> | OSS readiness spec 08 T2; BOSS-85 |
+| [GH-003 — GitHub issue triage](implemented.md#gh-003-github-issue-triage) | <span class="boss-status boss-status--implemented">Implemented</span> | OSS readiness spec 08 T3; BOSS-86 |
+| [GH-004 — GitHub pull-request review](implemented.md#gh-004-github-pull-request-review) | <span class="boss-status boss-status--implemented">Implemented</span> | OSS readiness spec 08 T4; BOSS-87 |
+| [GH-005 — GitHub community decision gates](implemented.md#gh-005-github-community-decision-gates) | <span class="boss-status boss-status--implemented">Implemented</span> | OSS readiness spec 08 T5; BOSS-88 |
+| [GH-006 — GitHub App community enablement](implemented.md#gh-006-github-app-community-enablement) | <span class="boss-status boss-status--implemented">Implemented</span> | OSS readiness spec 08 T6; BOSS-89 |
+| [ORC-001 — Conversational thread store/API](implemented.md#orc-001-conversational-thread-store-api) | <span class="boss-status boss-status--implemented">Implemented</span> | OSS readiness spec 07 T1; BOSS-78 |
+| [ORC-002 — Surface-agnostic intent routing](implemented.md#orc-002-surface-agnostic-intent-routing) | <span class="boss-status boss-status--implemented">Implemented</span> | OSS readiness spec 07 T2; BOSS-79 |
+| [ORC-003 — Capability-aware routing](implemented.md#orc-003-capability-aware-routing) | <span class="boss-status boss-status--implemented">Implemented</span> | OSS readiness spec 07 T3; BOSS-80 |
+| [ORC-004 — Confirmed multi-task fan-out](implemented.md#orc-004-confirmed-multi-task-fan-out) | <span class="boss-status boss-status--implemented">Implemented</span> | OSS readiness spec 07 T4; BOSS-81 |
+| [ORC-005 — Console agent panel](implemented.md#orc-005-console-agent-panel) | <span class="boss-status boss-status--implemented">Implemented</span> | OSS readiness spec 07 T5; BOSS-82 |
 | [DOC-001 — Feature documentation catalog](implemented.md#doc-001-feature-documentation-catalog) | <span class="boss-status boss-status--implemented">Implemented</span> | OSS readiness spec 06; BOSS-72 |
 | [DOC-002 — Reactive documentation jobs](implemented.md#doc-002-reactive-documentation-jobs) | <span class="boss-status boss-status--implemented">Implemented</span> | OSS readiness spec 06; BOSS-73 |
 | [DOC-003 — Evidence-grounded docs agent](implemented.md#doc-003-evidence-grounded-docs-agent) | <span class="boss-status boss-status--implemented">Implemented</span> | OSS readiness spec 06; BOSS-74 |
@@ -68,6 +79,7 @@ This catalog is generated from the canonical product traceability ledger. It is 
 | [SWF-004 — Review packet](implemented.md#swf-004-review-packet) | <span class="boss-status boss-status--implemented">Implemented</span> | PRD Software Factory |
 | [SWF-005 — Staged rollout evidence](implemented.md#swf-005-staged-rollout-evidence) | <span class="boss-status boss-status--implemented">Implemented</span> | PRD Software Factory; PRD Self-improvement rollout discipline |
 | [SKL-001 — SkillSpec registry](implemented.md#skl-001-skillspec-registry) | <span class="boss-status boss-status--implemented">Implemented</span> | PRD Skills Registry |
+| [SKL-002 — Skill executor registry](implemented.md#skl-002-skill-executor-registry) | <span class="boss-status boss-status--implemented">Implemented</span> | OSS readiness spec 03 A1; BOSS-45 |
 | [MEB-001 — Entitlement pools](implemented.md#meb-001-entitlement-pools) | <span class="boss-status boss-status--implemented">Implemented</span> | Model Entitlement Broker requirement |
 | [MEB-002 — No scraping/rate bypass](implemented.md#meb-002-no-scraping-rate-bypass) | <span class="boss-status boss-status--implemented">Implemented</span> | Model Entitlement Broker guardrail; policy spec |
 | [RPL-001 — ProviderOps as core plane](implemented.md#rpl-001-providerops-as-core-plane) | <span class="boss-status boss-status--implemented">Implemented</span> | PRD v1.1 Elastic Resource Plane; Technical Spec v1.1 |

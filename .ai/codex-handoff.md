@@ -1,6 +1,13 @@
 # Codex Handoff
 
-Last updated: 2026-07-15 (BOSS-118 controlled integration release in progress)
+Last updated: 2026-07-15 (BOSS-118 controlled integration release validated for main)
+
+## 2026-07-15 BOSS-118 main integration handoff
+
+- Combined every unmerged Codex stack from `origin/main` into `ai/codex/integrate-main` while leaving the parallel contributor's `feat/*` branches untouched.
+- Semantic conflict resolution preserves reactive docs/webhooks, docs-agent and GitHub worker paths, conversational BOSS Agent navigation inside the screenshot-driven design system, executable skill bindings, OpenAI-compatible deployment configuration, all traceability rows, and all coordination evidence.
+- Validation passes for lint, web production build, smoke, strict generated documentation, Kubernetes manifests, infrastructure profiles, and dependency-audit execution. Web tests pass 112/112; all newly merged Python suites pass. The broad Python result is 388 passed/37 failed, matching the documented `test_api.py` baseline; representative failures reproduce on detached `origin/main`.
+- External rollout checks remain fail-closed, as designed, until Account Connect, enterprise identity, live cluster approval/secrets, and provider-write credentials are supplied.
 
 ## 2026-07-15 reactive docs-agent handoff
 

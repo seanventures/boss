@@ -6,7 +6,9 @@ All 15-min terminal updates and major milestones appended here. Chronological, n
 ## 2026-07-15 — Codex — BOSS-118 controlled main integration
 
 - Created a clean integration branch from the latest `origin/main`, enumerated all unmerged Codex PR stacks, and excluded the parallel contributor's `feat/*` work.
-- Merging each Codex stack with semantic conflict resolution, followed by repository-wide lint, test, build, smoke, documentation, Kubernetes, and infrastructure validation before a direct main push.
+- Integrated reactive docs/webhooks, docs agent/site, GitHub community automation, conversational orchestration, the executable skill registry, BOSS-112 design system, and bare-metal deployment readiness through five reviewable merge commits.
+- Resolved conflicts semantically: retained all traceability/handoff evidence, corrected the union to 10 default subscriptions, kept both docs and GitHub leased worker paths, preserved the BOSS Agent area in the new Phosphor navigation, and combined OpenAI-compatible chat fallback with retry telemetry.
+- Validation: lint, clean production build, smoke, strict docs, Kubernetes manifests, infra profiles, and dependency-audit execution pass. Web passes 112/112. Python passes 388/425; all 37 failures are legacy `test_api.py` baseline cases, with representative auth, ProviderOps, and budget failures reproduced unchanged on detached `origin/main`. Release prerequisites remain intentionally blocked without external hosted/provider credentials.
 
 ## 2026-07-15T16:10:00Z — Codex reactive docs-agent slice ready
 - Plane: moved BOSS-73/BOSS-74/BOSS-75 to In Progress before code work; paired the three dependency-ordered tickets so the handler could truthfully complete a budgeted, human-gated docs PR.

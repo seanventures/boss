@@ -104,10 +104,10 @@ sandbox-template:
 # No auto-fix; dev-only vulns expected in some (vite etc for web dev server). Invoked by full-validate.
 deps-audit: install-python
 	@echo "=== Python runtime deps (freeze) ==="
-	$(PYTHON) -m pip list --format=freeze | head -30 || true
+	$(PYTHON) -m pip list --format=freeze | sed -n '1,30p'
 	@echo ""
 	@echo "=== Web pnpm audit (dev deps only; prod build unaffected) ==="
-	cd apps/web && pnpm audit --json 2>/dev/null | python -c 'import sys,json; d=json.load(sys.stdin); print(json.dumps(d.get("advisories", {}) or d, indent=2)[:2000])' || echo "(pnpm audit output or no vulns; run in web/ for details)"
+	cd apps/web && pnpm audit --json 2>/dev/null | $(abspath $(PYTHON)) -c 'import sys,json; d=json.load(sys.stdin); print(json.dumps(d.get("advisories", {}) or d, indent=2)[:2000])' || echo "(pnpm audit output or no vulns; run in web/ for details)"
 	@echo ""
 	@echo "For full: pip install pip-audit safety; add to CI. Current dev vulns (if any) noted in .ai/security-review.md; not prod runtime."
 

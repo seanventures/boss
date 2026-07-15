@@ -10,7 +10,7 @@ from typing import Any, Optional
 from urllib.parse import parse_qs
 
 from fastapi import FastAPI, HTTPException, Query, Request, Response
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
 from .bootstrap import seed

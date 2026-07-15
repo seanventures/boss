@@ -2,7 +2,7 @@
 
 # Implemented features
 
-<span class="boss-status boss-status--implemented">Implemented</span> **71 features**
+<span class="boss-status boss-status--implemented">Implemented</span> **83 features**
 
 ## MET-001 — CEO command intake {#met-001-ceo-command-intake}
 
@@ -207,6 +207,138 @@
 **Automated evidence:** `apps/api/tests/test_event_operability.py`, `apps/api/tests/test_webhook_foundation.py`, `apps/web/tests/deadletters.test.ts`
 
 **Ledger detail:** Implemented: persisted reactive-dispatch exactly-once canary, replay dedupe and lease-lifecycle proof, related webhook-delivery identity in the shared deadletter feed, and operator setup/recovery instructions
+
+## GH-001 — GitHub community ingress {#gh-001-github-community-ingress}
+
+<span class="boss-status boss-status--implemented">Implemented</span>
+
+**Source:** OSS readiness spec 08 T1; BOSS-84
+
+**Implementation:** `apps/api/app/services/webhooks.py`, `apps/api/app/services/event_dispatch.py`, `apps/api/app/services/event_subscription_service.py`, `apps/api/app/main.py`
+
+**Automated evidence:** `apps/api/tests/test_github_community_agents.py`
+
+**Ledger detail:** Implemented: strict four-event/action mapping, typed github.* events, bot loop suppression, 204 no-op filtering, delivery dedupe, and leased off-request agent jobs
+
+## GH-002 — GitHub community response adapter {#gh-002-github-community-response-adapter}
+
+<span class="boss-status boss-status--implemented">Implemented</span>
+
+**Source:** OSS readiness spec 08 T2; BOSS-85
+
+**Implementation:** `apps/api/app/services/github_adapter.py`
+
+**Automated evidence:** `apps/api/tests/test_github_community_adapter.py`
+
+**Ledger detail:** Implemented: App-authenticated issue/PR comments, inline pull-request reviews, unified diff reads, typed results, event validation, and surfaced provider errors
+
+## GH-003 — GitHub issue triage {#gh-003-github-issue-triage}
+
+<span class="boss-status boss-status--implemented">Implemented</span>
+
+**Source:** OSS readiness spec 08 T3; BOSS-86
+
+**Implementation:** `apps/api/app/services/github_triage_agent.py`, `apps/api/app/services/intent_router.py`, `apps/api/app/services/intake.py`
+
+**Automated evidence:** `apps/api/tests/test_github_community_agents.py`
+
+**Ledger detail:** Implemented: shared non-actuating classification, accept/decline/needs-info decisions, specific follow-up questions, one Receipt-backed verdict comment, and proposed-plan hold
+
+## GH-004 — GitHub pull-request review {#gh-004-github-pull-request-review}
+
+<span class="boss-status boss-status--implemented">Implemented</span>
+
+**Source:** OSS readiness spec 08 T4; BOSS-87
+
+**Implementation:** `apps/api/app/services/github_pr_review_agent.py`, `apps/api/app/services/code_agent.py`
+
+**Automated evidence:** `apps/api/tests/test_github_community_agents.py`
+
+**Ledger detail:** Implemented: safe diff-only inline review, author-addressed value/ROI note, COMMENT-only provider behavior, Receipt-backed effects, optional governed model role, and per-head idempotency
+
+## GH-005 — GitHub community decision gates {#gh-005-github-community-decision-gates}
+
+<span class="boss-status boss-status--implemented">Implemented</span>
+
+**Source:** OSS readiness spec 08 T5; BOSS-88
+
+**Implementation:** `apps/api/app/services/decisions.py`, GitHub community agents
+
+**Automated evidence:** `apps/api/tests/test_github_community_agents.py`
+
+**Ledger detail:** Implemented: hold-default risk-tier-2 decisions; triage approval dispatches the exact plan; PR approval records authorization but never auto-merges
+
+## GH-006 — GitHub App community enablement {#gh-006-github-app-community-enablement}
+
+<span class="boss-status boss-status--implemented">Implemented</span>
+
+**Source:** OSS readiness spec 08 T6; BOSS-89
+
+**Implementation:** `.github/boss-app-manifest.json`, `apps/api/app/services/github_app_adapter.py`, `apps/api/app/services/webhooks.py`, `docs/operations/WEBHOOKS.md`, `.env.example`
+
+**Automated evidence:** `apps/api/tests/test_github_community_adapter.py`, `apps/api/tests/test_webhook_foundation.py`
+
+**Ledger detail:** Implemented: repository-scoped issue/PR write permissions, four community subscriptions, canonical webhook setup, source-specific secret mapping, and fail-closed 503/no-persistence behavior when unconfigured
+
+## ORC-001 — Conversational thread store/API {#orc-001-conversational-thread-store-api}
+
+<span class="boss-status boss-status--implemented">Implemented</span>
+
+**Source:** OSS readiness spec 07 T1; BOSS-78
+
+**Implementation:** `db/schema.sql`, `apps/api/app/services/agent_service.py`, `apps/api/app/main.py`, `apps/api/app/schemas.py`, `api/openapi.yaml`
+
+**Automated evidence:** `apps/api/tests/test_orchestration_agent.py`
+
+**Ledger detail:** Implemented: actor-owned chat/GitHub threads, persisted messages/actions, agent_chat authorization, full-history turns, and agent.turn_completed events
+
+## ORC-002 — Surface-agnostic intent routing {#orc-002-surface-agnostic-intent-routing}
+
+<span class="boss-status boss-status--implemented">Implemented</span>
+
+**Source:** OSS readiness spec 07 T2; BOSS-79
+
+**Implementation:** `apps/api/app/services/intent_router.py`, `apps/api/app/services/intake.py`
+
+**Automated evidence:** `apps/api/tests/test_orchestration_agent.py`
+
+**Ledger detail:** Implemented: transport-free routing into existing code, meeting, PRD, discovery, and command services; each actuator rechecks project permission and model fallback is reservation/Receipt governed
+
+## ORC-003 — Capability-aware routing {#orc-003-capability-aware-routing}
+
+<span class="boss-status boss-status--implemented">Implemented</span>
+
+**Source:** OSS readiness spec 07 T3; BOSS-80
+
+**Implementation:** `apps/api/app/services/capability_manifest.py`, `apps/api/app/services/feature_catalog.py`
+
+**Automated evidence:** `apps/api/tests/test_orchestration_agent.py`
+
+**Ledger detail:** Implemented: canonical catalog consumption, per-turn manifest resolution, truthful enablement predicates, prompt table, and disabled-capability refusal
+
+## ORC-004 — Confirmed multi-task fan-out {#orc-004-confirmed-multi-task-fan-out}
+
+<span class="boss-status boss-status--implemented">Implemented</span>
+
+**Source:** OSS readiness spec 07 T4; BOSS-81
+
+**Implementation:** `apps/api/app/services/intent_router.py`, `apps/api/app/services/agent_service.py`, `apps/api/app/services/intake.py`
+
+**Automated evidence:** `apps/api/tests/test_orchestration_agent.py`
+
+**Ledger detail:** Implemented: stable draft plans, persisted pending confirmation, no child tasks before explicit plan id confirmation, sequenced dispatch, safe revision, and ambiguous-reply hold
+
+## ORC-005 — Console agent panel {#orc-005-console-agent-panel}
+
+<span class="boss-status boss-status--implemented">Implemented</span>
+
+**Source:** OSS readiness spec 07 T5; BOSS-82
+
+**Implementation:** `apps/web/app/agent-ui.tsx`, `apps/web/app/ConsoleShell.tsx`, `apps/web/app/actions.ts`, `packages/api-client/src/index.ts`
+
+**Automated evidence:** `apps/web/tests/api-client.test.ts`, web TypeScript validation
+
+**Ledger detail:** Implemented: multi-turn console, linked structured actions, rendered phases, and explicit confirm-and-dispatch control
 
 ## DOC-001 — Feature documentation catalog {#doc-001-feature-documentation-catalog}
 
@@ -519,6 +651,18 @@
 **Automated evidence:** `apps/api/tests/test_api.py`
 
 **Ledger detail:** Implemented
+
+## SKL-002 — Skill executor registry {#skl-002-skill-executor-registry}
+
+<span class="boss-status boss-status--implemented">Implemented</span>
+
+**Source:** OSS readiness spec 03 A1; BOSS-45
+
+**Implementation:** `apps/api/app/services/skill_executors.py`, `apps/api/app/services/github_adapter.py`, `apps/api/app/services/resource_plane.py`, `packages/specpack/skills/{github,deployment}.yaml`
+
+**Automated evidence:** `apps/api/tests/test_skill_executors.py`
+
+**Ledger detail:** Implemented: explicit server-context registry, GitHub/Deployment bindings, Receipt-backed external effects, target validation, and duplicate-effect suppression; worker real-mode bridge remains BOSS-46
 
 ## MEB-001 — Entitlement pools {#meb-001-entitlement-pools}
 
