@@ -1,6 +1,6 @@
 # BOSS Autonomous Delivery Status
 
-**Last updated**: 2026-07-15 (Codex webhook batch BOSS-22/BOSS-23 implemented and validated; mergeable stacked draft PR #16 open)
+**Last updated**: 2026-07-15 (Codex GitHub community adapter batch BOSS-85/BOSS-89 implemented and validated on a sibling branch from draft PR #16)
 **Repo root**: /Volumes/DataSSD1/test/boss
 **Git remote**: https://github.com/seanheiney/boss
 **Current branch**: ai/codex/webhook-foundation (stacked on `ai/codex/oss-reactive-docs-foundation`, draft PR #15)
@@ -14,6 +14,7 @@
 - GitHub: draft PR #16 carries BOSS-22/BOSS-23 and is stacked on draft PR #15; other open PRs were inspected for overlap before implementation.
 
 ## Overall Product Status
+- GitHub community enablement advanced on 2026-07-15: Plane BOSS-85/BOSS-89 add App-authenticated issue/PR comments, inline reviews, unified diff reads, scoped `issues` permission, a four-event App manifest, setup guidance, and 503/no-write behavior when no inbound secret is configured. Focused adapter/webhook tests pass; triage and PR-review consumers remain later tickets.
 - OSS webhook foundation advanced on 2026-07-15: Plane BOSS-22/BOSS-23 now provide Receipt-backed signed outbound delivery with leased retries/deadletters and a raw-body-verified, idempotent inbound GitHub receiver that routes into the reactive event dispatcher. Ten focused API/integration tests, seven foundation regressions, and twenty-five worker tests pass.
 - OSS-readiness foundation advanced on 2026-07-15: transactional allowlisted event dispatch, project subscription registry/CRUD/defaults, and TRACEABILITY-derived feature catalog are implemented for Plane BOSS-20, BOSS-21, and BOSS-72. Downstream webhook and docs-agent consumers remain separate Plane tickets.
 - Current validation: 7 new acceptance tests + 5 representative legacy job tests pass on fresh Postgres; schema reapplication, focused lint/compile, diff checks, and OpenAPI YAML parsing pass. Full API baseline remains 241 passed/38 failed; selected failures reproduce unchanged on pristine origin/main.

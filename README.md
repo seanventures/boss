@@ -69,6 +69,8 @@ If a required credential is missing, the API must fail closed and create visible
 3. Run `make seed`.
 4. Run `make dev`.
 
+To opt into signed GitHub issue and pull-request automation, install the repository-scoped GitHub App and configure its webhook secret using the [GitHub App community enablement runbook](docs/operations/WEBHOOKS.md#enable-the-github-app-community-surface). The integration is disabled by default and fails closed when its App credentials or inbound secret are absent.
+
 ## Commands
 
 - `make dev`: start Postgres, web, API, and worker

@@ -4698,6 +4698,7 @@ paths:
         '202': { description: Accepted, duplicate, or unrouted delivery }
         '400': { description: Invalid signed payload or missing delivery identifier }
         '401': { description: Missing or invalid signature; rejection metadata audited }
+        '503': { description: Inbound secret is not configured for this source }
 components:
   securitySchemes:
     BossBearerAuth:

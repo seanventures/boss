@@ -818,15 +818,20 @@ class InboundWebhookService:
         normalized_source = source.strip().lower()
         signature = headers.get("x-hub-signature-256", "")
         secret = self._secret(normalized_source)
+        if not secret:
+            return {
+                "status": "not_configured",
+                "source": normalized_source,
+                "delivery_id": headers.get("x-github-delivery", "").strip() or None,
+                "duplicate": False,
+            }
         expected = (
             "sha256="
             + hmac.new(secret.encode("utf-8"), raw_body, hashlib.sha256).hexdigest()
-            if secret
-            else ""
         )
         audit_project_id = self.settings.default_project_id
         delivery_key = headers.get("x-github-delivery", "").strip()
-        if not signature or not expected or not compare_digest(signature, expected):
+        if not signature or not compare_digest(signature, expected):
             emit_event(
                 connection,
                 audit_project_id,

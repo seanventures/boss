@@ -1,6 +1,13 @@
 # Codex Handoff
 
-Last updated: 2026-07-15T14:25Z (Codex webhook batch: Plane BOSS-22/BOSS-23 implemented and validated; mergeable stacked draft PR #16 open)
+Last updated: 2026-07-15T15:30Z (Codex GitHub community batch: Plane BOSS-85/BOSS-89 implemented and validated on a sibling branch from draft PR #16)
+
+## 2026-07-15 GitHub community adapter handoff
+
+- Plane BOSS-85: `GitHubAdapter` now comments on issues/PRs, creates inline reviews with a safe default `COMMENT` event, and fetches raw unified diffs while reusing the existing App-token/PAT request seam. Typed results, review-event validation, App auth, exact payloads, diff media type, and provider error propagation are covered.
+- Plane BOSS-89: the App installation token adds `issues: write`; `.github/boss-app-manifest.json` requests repository contents/issues/PR write access and the four community event subscriptions; `.env.example`, README, and the webhook runbook document installation and source-specific secrets. Missing inbound configuration returns 503 before JSON parsing or persistence.
+- Validation: 18 focused adapter/webhook tests pass; focused Ruff, Python compile, manifest JSON, and OpenAPI YAML parsing pass. Repository-wide web type generation/typecheck passes; broad Python lint stops on the same 13 unrelated pre-existing issues recorded for the parent stack (duplicate/unused imports and legacy semicolon lines), with no new changed-file finding. This branch is based directly on draft PR #16 (`ai/codex/webhook-foundation`) and intentionally does not include the docs-agent PR #18 sibling.
+- Remaining GitHub community work: inbound normalization for `issues`/`pull_request_review`, triage and PR-review agents, decision rail, throttling/budget controls, and human-gated dispatch/merge. The manifest subscriptions are staged; unsupported deliveries are currently acknowledged as unrouted.
 
 ## 2026-07-15 webhook foundation handoff
 

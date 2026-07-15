@@ -43,7 +43,25 @@ The receiver gets canonical JSON and these headers:
 
 Only endpoints whose `data_boundary` is at least as restrictive as the event may receive it.
 
-## Configure GitHub inbound delivery
+## Enable the GitHub App community surface
+
+Use [`.github/boss-app-manifest.json`](../../.github/boss-app-manifest.json) as the App-manifest template. Before submitting it through GitHub's App setup flow, replace `boss.example` with the public HTTPS host of the BOSS API. Install the resulting App on only the repositories BOSS should manage, then record its App id, installation id, and generated private key:
+
+```dotenv
+BOSS_GITHUB_APP_ID=123456
+BOSS_GITHUB_APP_INSTALLATION_ID=789012
+BOSS_GITHUB_APP_PRIVATE_KEY_PATH=/run/secrets/boss-github-app.pem
+```
+
+The manifest requests `contents: write`, `issues: write`, and `pull_requests: write`. It subscribes to `issues`, `issue_comment`, `pull_request`, and `pull_request_review`. BOSS narrows each installation token to one configured repository and those permissions. Community replies and reviews use the same short-lived installation-token path as existing PR creation; there is no second GitHub credential.
+
+Generate a strong webhook secret, enter it in the App's webhook settings, and inject the same value into BOSS. Keep the source-specific mapping so unrelated inbound providers do not share it:
+
+```dotenv
+BOSS_GITHUB_WEBHOOK_SECRET=replace-with-a-random-secret
+BOSS_WEBHOOK_INBOUND_SECRETS_JSON={"github":"env:BOSS_GITHUB_WEBHOOK_SECRET"}
+BOSS_WEBHOOK_PROJECT_MAP_JSON={"owner/repository":"boss-dogfood"}
+```
 
 Configure the GitHub webhook URL as:
 
@@ -51,9 +69,11 @@ Configure the GitHub webhook URL as:
 https://boss.example/v1/webhooks/inbound/github
 ```
 
-Use the same secret as `BOSS_WEBHOOK_INBOUND_SECRET` or the `github` entry in `BOSS_WEBHOOK_INBOUND_SECRETS_JSON`. Subscribe GitHub to `pull_request`, `check_suite`, and `issue_comment` events.
+The generic `BOSS_WEBHOOK_INBOUND_SECRET` remains available for a single-source deployment, but a source-specific `github` entry is preferred. When neither secret is set, the receiver returns HTTP 503 without parsing or storing the payload. When the App is not installed and no legacy PAT is configured, outbound GitHub calls fail closed with a configuration error. This leaves community automation inert without crashing the API.
 
 Valid deliveries are stored in `inbound_webhooks`, normalized to `webhook.inbound.received`, and routed through the normal event subscriptions. A repeated `X-GitHub-Delivery` is a no-op. An unmapped repository returns HTTP 202 and records `webhook.inbound.unrouted`; a missing or invalid signature returns HTTP 401 and records only rejection metadata, never the unverified payload.
+
+The current receiver routes `pull_request`, `check_suite`, and `issue_comment`. The manifest also subscribes to `issues` and `pull_request_review` so those deliveries can be enabled by the planned community triage and review consumers without reinstalling the App; until those consumers land, unsupported deliveries are acknowledged as unrouted and do not launch agent work.
 
 ## Observe and recover
 

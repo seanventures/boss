@@ -4187,6 +4187,8 @@ async def receive_inbound_webhook(
         )
     if result["status"] == "rejected":
         raise HTTPException(status_code=401, detail="Invalid webhook signature.")
+    if result["status"] == "not_configured":
+        raise HTTPException(status_code=503, detail="Webhook source is not configured.")
     if result["status"] == "invalid":
         raise HTTPException(status_code=400, detail="Invalid webhook payload.")
     return InboundWebhookResponse(**result)

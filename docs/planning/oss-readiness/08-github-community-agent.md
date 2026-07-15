@@ -142,11 +142,13 @@ This is the community front door. The webhook endpoint, the two agents, the adap
 **Scope.** Add the inbound-response write methods (+ diff read) to `GitHubAdapter`, reusing `_request`/`_headers`/App token.
 **Key files.** `apps/api/app/services/github_adapter.py` (after `merge_pull_request:223`); dataclasses near `:45-60`.
 **Acceptance criteria.**
-- [ ] `create_issue_comment(issue_number, body)` posts a comment on issues and PRs.
-- [ ] `create_review(pull_number, body, event, comments)` posts a review with inline `{path, line, side, body}` comments; defaults to `event="COMMENT"`.
-- [ ] `get_pull_request_diff(pull_number)` returns the unified diff (diff media type).
-- [ ] All three authenticate via the existing App installation token path (`_auth_token:73`); no new credential.
-- [ ] Unit tests with mocked httpx cover success + GitHub error surfacing.
+- [x] `create_issue_comment(issue_number, body)` posts a comment on issues and PRs.
+- [x] `create_review(pull_number, body, event, comments)` posts a review with inline `{path, line, side, body}` comments; defaults to `event="COMMENT"`.
+- [x] `get_pull_request_diff(pull_number)` returns the unified diff (diff media type).
+- [x] All three authenticate via the existing App installation token path (`_auth_token:73`); no new credential.
+- [x] Unit tests with mocked httpx cover success + GitHub error surfacing.
+
+**Implementation evidence (BOSS-85).** `GitHubAdapter` now returns typed comment/review results, validates review events, and extends its existing request seam for raw diff media without bypassing App/PAT authentication. `test_github_community_adapter.py` covers all three success paths, scoped App authentication, inline review payloads, invalid events, and GitHub HTTP errors.
 **Size.** S
 
 ### T3 — Triage agent (classify → decide → propose → comment)
@@ -184,9 +186,11 @@ This is the community front door. The webhook endpoint, the two agents, the adap
 **Scope.** Bump the GitHub App manifest permissions (`issues: write`, `pull_requests: write`, subscribe to Issues/Issue comment/Pull request/Pull request review events), document `BOSS_GITHUB_WEBHOOK_SECRET` and the webhook URL, and add an enablement note in OSS docs.
 **Key files.** GitHub App manifest / setup docs, `apps/api/app/config.py` (field doc), `docs/` OSS onboarding.
 **Acceptance criteria.**
-- [ ] App requests `issues:write` + `pull_requests:write` and subscribes to the four event types.
-- [ ] Docs describe installing the App, setting the webhook URL to `/v1/webhooks/github`, and the shared secret.
-- [ ] With App uninstalled / secret unset, the feature is fully inert (503, no crashes).
+- [x] App requests `issues:write` + `pull_requests:write` and subscribes to the four event types.
+- [x] Docs describe installing the App, setting the canonical webhook URL to `/v1/webhooks/inbound/github`, and the shared secret.
+- [x] With App uninstalled / secret unset, the feature is fully inert (503, no crashes).
+
+**Implementation evidence (BOSS-89).** `.github/boss-app-manifest.json` declares the least-privilege community permissions and four subscriptions. The webhook runbook documents installation, source-specific secret injection, repository mapping, current staged event support, and the canonical spec-00 endpoint. An unconfigured source now returns 503 before parsing or persistence; installation-token requests include `issues: write` and are unit-tested.
 **Size.** S
 
 ---

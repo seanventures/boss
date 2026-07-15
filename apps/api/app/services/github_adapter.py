@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import base64
 import time
-from typing import Optional
+from typing import Any, Optional
 
 import httpx
 
@@ -25,6 +25,19 @@ class PullRequestMergeResult:
     sha: str
     merged: bool
     message: str
+
+
+@dataclass
+class IssueCommentResult:
+    url: str
+    id: int
+
+
+@dataclass
+class PullRequestReviewResult:
+    url: str
+    id: int
+    state: str
 
 
 @dataclass
@@ -96,16 +109,27 @@ class GitHubAdapter:
         }
 
     def _request(
-        self, method: str, path: str, json_body: Optional[dict] = None
-    ) -> dict:
+        self,
+        method: str,
+        path: str,
+        json_body: Optional[dict] = None,
+        *,
+        accept: Optional[str] = None,
+        response_text: bool = False,
+    ) -> Any:
+        headers = self._headers()
+        if accept:
+            headers["Accept"] = accept
         response = httpx.request(
             method,
             f"https://api.github.com{path}",
-            headers=self._headers(),
+            headers=headers,
             json=json_body,
             timeout=30.0,
         )
         response.raise_for_status()
+        if response_text:
+            return response.text
         return response.json()
 
     def repo_metadata(self) -> dict:
@@ -235,6 +259,50 @@ class GitHubAdapter:
             sha=response["sha"],
             merged=bool(response["merged"]),
             message=response["message"],
+        )
+
+    def create_issue_comment(
+        self, issue_number: int, body: str
+    ) -> IssueCommentResult:
+        response = self._request(
+            "POST",
+            f"/repos/{self.repository_full_name}/issues/{issue_number}/comments",
+            {"body": body},
+        )
+        return IssueCommentResult(url=response["html_url"], id=int(response["id"]))
+
+    def create_review(
+        self,
+        pull_number: int,
+        body: str,
+        event: str = "COMMENT",
+        comments: Optional[list[dict]] = None,
+    ) -> PullRequestReviewResult:
+        normalized_event = event.upper()
+        if normalized_event not in {"COMMENT", "APPROVE", "REQUEST_CHANGES"}:
+            raise ValueError(
+                "event must be COMMENT, APPROVE, or REQUEST_CHANGES"
+            )
+        payload: dict = {"body": body, "event": normalized_event}
+        if comments:
+            payload["comments"] = comments
+        response = self._request(
+            "POST",
+            f"/repos/{self.repository_full_name}/pulls/{pull_number}/reviews",
+            payload,
+        )
+        return PullRequestReviewResult(
+            url=response["html_url"],
+            id=int(response["id"]),
+            state=response["state"],
+        )
+
+    def get_pull_request_diff(self, pull_number: int) -> str:
+        return self._request(
+            "GET",
+            f"/repos/{self.repository_full_name}/pulls/{pull_number}",
+            accept="application/vnd.github.v3.diff",
+            response_text=True,
         )
 
     def create_deployment(

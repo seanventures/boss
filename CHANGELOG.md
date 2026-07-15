@@ -12,6 +12,9 @@ All notable changes to BOSS are documented in this file.
 - Added an auth-exempt signed inbound webhook receiver with raw-body constant-time verification,
   durable GitHub delivery idempotency, repository routing, `pull_request`/`check_suite`/
   `issue_comment` normalization, rejection/unrouted audit events, and reactive job dispatch.
+- Added GitHub community response primitives for issue/PR comments, inline reviews, and unified
+  diff reads through the existing App-token path, plus a least-privilege GitHub App manifest,
+  installation runbook, and fail-closed 503 behavior when the inbound secret is absent.
 
 - Consolidated real-time dashboard (`dashboard.py`): `GET /v1/dashboard` aggregates
   budget/queue/workload/incidents + provider-health + latest canary/eval + spend run-rate + ack

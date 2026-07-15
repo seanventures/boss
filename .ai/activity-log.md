@@ -3,6 +3,13 @@
 All 15-min terminal updates and major milestones appended here. Chronological, newest at top.
 
 ---
+## 2026-07-15T15:30:00Z — Codex — BOSS-85/BOSS-89 GitHub community adapter
+
+- Kept Plane BOSS-85/BOSS-89 In Progress and created sibling branch `ai/codex/github-community-adapter` from draft PR #16 to avoid coupling this work to the docs-agent sibling PR #18.
+- Added typed issue-comment and pull-request-review methods plus raw unified-diff reads to the existing GitHub adapter request/auth seam. Review events are validated locally and all GitHub errors surface to callers.
+- Expanded App installation-token scope with `issues: write`; added a GitHub App manifest for contents/issues/PR permissions and four community subscriptions; documented installation, canonical `/v1/webhooks/inbound/github`, source-specific shared-secret mapping, and staged event support.
+- Made an unconfigured inbound source return 503 before parsing or persistence. Validation: 18 focused API tests, focused Ruff, Python compile, manifest JSON, and OpenAPI YAML parse all pass. Repository-wide web type/lint passes; broad Python lint reports the same 13 unrelated parent-stack findings and no new changed-file issue.
+
 ## 2026-07-15T14:15:00Z — Codex — BOSS-22/BOSS-23 webhook foundation
 
 - Re-read the mandatory Plane rule and coordination state; moved BOSS-22 and BOSS-23 to In Progress and created focused stacked branch `ai/codex/webhook-foundation` from PR #15.

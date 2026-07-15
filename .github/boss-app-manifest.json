@@ -1,0 +1,21 @@
+{
+  "name": "BOSS Community Agent",
+  "url": "https://github.com/seanheiney/boss",
+  "hook_attributes": {
+    "url": "https://boss.example/v1/webhooks/inbound/github",
+    "active": true
+  },
+  "redirect_url": "https://boss.example",
+  "public": false,
+  "default_permissions": {
+    "contents": "write",
+    "issues": "write",
+    "pull_requests": "write"
+  },
+  "default_events": [
+    "issues",
+    "issue_comment",
+    "pull_request",
+    "pull_request_review"
+  ]
+}

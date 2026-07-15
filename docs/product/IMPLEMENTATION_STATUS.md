@@ -46,6 +46,7 @@ This document summarizes the currently implemented BOSS runtime surfaces in this
   - decision digest artifact creation with optional outbox draft handoff
   - artifact, receipt, event, and audit export access
   - event-subscription list/create/update/delete APIs with exact or prefix matching, enabled-state filtering, OpenAPI contract coverage, and data-boundary enforcement
+  - GitHub community adapter primitives for issue/PR comments, inline reviews, and unified-diff reads through the existing repository-scoped App identity; App manifest/setup now includes issue and pull-request write permissions, four community subscriptions, and fail-closed unconfigured webhook behavior
   - replay bundle creation
   - Metatron status query
   - comms inbox and outbox
