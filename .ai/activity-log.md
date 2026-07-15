@@ -10,6 +10,7 @@ All 15-min terminal updates and major milestones appended here. Chronological, n
 - Extended `webhook_out` event subscriptions to create deterministic durable deliveries and leased jobs. Added exact canonical JSON HMAC headers, env-only secret references, Receipt per attempt, worker job ownership validation, replay no-op behavior, endpoint boundary gates, success/failure audit events, and retry/deadletter delivery state.
 - Added auth-exempt raw-body inbound verification with constant-time signature comparison before parsing, rejection metadata audit without unverified payload persistence, GitHub event normalization, durable `X-GitHub-Delivery` idempotency, project routing, 202 unrouted evidence, and end-to-end `github.triage` job dispatch.
 - Validation: webhook API/integration 10 passed; reactive foundation regressions 7 passed; worker suite 25 passed; focused Ruff and Python compile passed. Added operator runbook, env examples, changelog, traceability, and planning-ticket acceptance evidence.
+- Published implementation commit `eccad5f` and mergeable stacked draft PR #16. Attached commit/PR/tests/security and baseline-lint evidence to Plane BOSS-22/BOSS-23 and parent BOSS-19; all remain In Progress until merge. GitHub reports no checks for the stacked non-default-base branch.
 
 === CODEX OSS-READINESS REACTIVE/DOCS FOUNDATION 2026-07-15 ===
 Product: BOSS (Business Operating System Sentinel)

@@ -1,6 +1,6 @@
 # Codex Handoff
 
-Last updated: 2026-07-15T14:15Z (Codex webhook batch: Plane BOSS-22/BOSS-23 implemented and validated on stacked branch `ai/codex/webhook-foundation`)
+Last updated: 2026-07-15T14:25Z (Codex webhook batch: Plane BOSS-22/BOSS-23 implemented and validated; mergeable stacked draft PR #16 open)
 
 ## 2026-07-15 webhook foundation handoff
 
@@ -8,7 +8,7 @@ Last updated: 2026-07-15T14:15Z (Codex webhook batch: Plane BOSS-22/BOSS-23 impl
 - Plane BOSS-23: added an API-auth-exempt inbound route that verifies `X-Hub-Signature-256` against raw bytes with constant-time comparison before parsing; persists provider delivery idempotency; maps GitHub `pull_request`, `check_suite`, and `issue_comment`; routes repositories to projects; emits accepted/rejected/unrouted events; and dispatches accepted callbacks through the existing subscription path.
 - Persistence/API/docs: added `webhook_endpoints`, `webhook_deliveries`, and `inbound_webhooks`; typed FastAPI contracts; static OpenAPI paths; environment examples; operator runbook; product and autonomous traceability; and planning acceptance updates.
 - Validation: `test_webhook_foundation.py` 10/10; reactive foundation regressions 7/7; worker suite 25/25; focused Ruff, compile, YAML, and diff checks pass. Every new webhook route is present in static OpenAPI; the repository-wide parity checker still reports its pre-existing unrelated route backlog. The slice uses the existing Postgres lease queue and Receipt service, with no budget/entitlement/commercial import in the webhook engine.
-- Coordination: branch `ai/codex/webhook-foundation` is stacked on PR #15 (`ai/codex/oss-reactive-docs-foundation`) so its review diff stays focused. PR #14 remains frontend-only. PR #9 still has localized `main.py` conflict potential and should be rebased normally.
+- Publication/coordination: implementation commit `eccad5f`; mergeable stacked draft PR #16 (`ai/codex/webhook-foundation` → `ai/codex/oss-reactive-docs-foundation`) keeps the review diff focused. Plane BOSS-22/BOSS-23 and parent BOSS-19 contain PR/test evidence and remain In Progress until merge. PR #14 remains frontend-only. PR #9 still has localized `main.py` conflict potential and should be rebased normally.
 - Remaining event module work: Plane BOSS-24 canary/operability hardening. GitHub triage/review behavior beyond the now-durable `github.triage` job is a separate consumer slice.
 
 ## 2026-07-15 OSS-readiness handoff
