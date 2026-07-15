@@ -1,4 +1,5 @@
 import "./globals.css";
+import "./design-system.css";
 import type { Metadata } from "next";
 import { Toaster } from "./client-forms";
 
@@ -19,4 +20,3 @@ export default function RootLayout({
     </html>
   );
 }
-

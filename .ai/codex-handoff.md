@@ -68,6 +68,21 @@ Last updated: 2026-07-15 (BOSS-118 controlled integration release in progress)
 - Validation: five focused registry/executor tests and focused Ruff pass. BOSS-46 owns real-mode worker wiring; this slice intentionally does not relax the API's mock-only posture.
 - Coordination: standalone branch `ai/codex/skill-executor-registry` is based on current `origin/main` and does not overlap the reactive/docs/GitHub-community stack or the contributor's model-pacing/VAG/design-system branches.
 
+## Active Codex slice — 2026-07-15
+
+- Plane: `BOSS-112` (`f5b2a54d-3378-4597-a12d-8905d2eb5196`), In Progress.
+- Branch: `ai/codex/boss-112-design-system`, based on current `origin/main`.
+- Scope: approved screenshot-driven mission-control design system for `apps/web`.
+- Files: new design token/component layer, supplied BOSS mark, Phosphor icons,
+  command center, five-state task board, agent roster, approval ordering,
+  evidence receipt, responsive/reduced-motion behavior, tests, and docs.
+- Coordination: no overlap with PRs #9, #11, or #13. PR #12 touches one nav
+  description and two Coding Pipeline copy lines in files changed here; its VAG
+  feature is not absorbed, and merge order may require a localized copy rebase.
+  No external provider behavior, schema, budget, receipt, or worker logic changed.
+- Plane is now the mandatory system of record in `AGENTS.md`; future sessions
+  must deduplicate/start/update a Plane issue before implementation.
+
 ## Current Overall Product Status
 BOSS v0.4.1 target is in advanced local-dogfood state. Most PRD-v2.0 / TECH-SPEC-v2.0 requirements for core control plane, worker leases, budget governor (now full quote/reserve/consume/release/forecast), audit/no-silent-drops (with recent logging fixes), canonical objects (incl. recent KPI), roles/packs/agent-modules, Model Entitlement Broker, ProviderOps (local sync + real sandbox writes for CF/DO/Supabase), Software Factory (command->plan->PR->evidence->decision), Metatron/Mission Control console are Implemented and traced.
 

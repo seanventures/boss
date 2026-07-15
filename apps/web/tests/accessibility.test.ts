@@ -85,7 +85,7 @@ describe("executive console accessibility baseline", () => {
     expect(shellSource).toMatch(/<main[^>]*aria-label=/);
 
     // Console title heading + at least one labelled section landmark.
-    expect(pageSource).toContain('id="boss-console-title"');
+    expect(shellSource).toContain('id="boss-console-title"');
     expect(pageSource).toContain('aria-label="Command center"');
   });
 
