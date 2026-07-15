@@ -1,6 +1,6 @@
 # BOSS Autonomous Delivery Status
 
-**Last updated**: 2026-07-15 (Codex operability/docs-site batch BOSS-24/BOSS-76 implemented and validated; publication pending)
+**Last updated**: 2026-07-15 (Codex operability/docs-site batch BOSS-24/BOSS-76 implemented; mergeable stacked draft PR #17 open)
 **Repo root**: /Volumes/DataSSD1/test/boss
 **Git remote**: https://github.com/seanheiney/boss
 **Current branch**: ai/codex/reactive-docs-operability (stacked on `ai/codex/webhook-foundation`, draft PR #16)
@@ -15,10 +15,11 @@
 
 ## Overall Product Status
 - Event/webhook operability and the public OSS docs surface advanced on 2026-07-15: Plane BOSS-24 now has a persisted reactive-dispatch exactly-once canary, related webhook-delivery identity in the shared deadletter feed, and a complete setup/recovery runbook. Plane BOSS-76 adds a deterministic TRACEABILITY-backed feature catalog site, strict local/CI MkDocs build, drift test, and reviewed-main-only Pages deployment. Focused/widened validation: 45 Python tests and 26 web tests pass; Next production build, TypeScript, focused Ruff/compile, YAML, diff, generator drift, and strict docs build pass. Repository-wide `make lint` reaches and passes the web lint/type stage, then reports the same 13 unrelated pre-existing Python lint errors documented on PR #16.
+- Publication: implementation commit `5887088` is pushed in mergeable stacked draft PR #17. GitHub Actions run `29425529835` created no steps and was rejected by the repository account payment/spending-limit gate; this is external to the branch, and local workflow-equivalent validation is green.
 - OSS webhook foundation advanced on 2026-07-15: Plane BOSS-22/BOSS-23 now provide Receipt-backed signed outbound delivery with leased retries/deadletters and a raw-body-verified, idempotent inbound GitHub receiver that routes into the reactive event dispatcher. Ten focused API/integration tests, seven foundation regressions, and twenty-five worker tests pass.
 - OSS-readiness foundation advanced on 2026-07-15: transactional allowlisted event dispatch, project subscription registry/CRUD/defaults, and TRACEABILITY-derived feature catalog are implemented for Plane BOSS-20, BOSS-21, and BOSS-72. Downstream webhook and docs-agent consumers remain separate Plane tickets.
 - Current validation: 7 new acceptance tests + 5 representative legacy job tests pass on fresh Postgres; schema reapplication, focused lint/compile, diff checks, and OpenAPI YAML parsing pass. Full API baseline remains 241 passed/38 failed; selected failures reproduce unchanged on pristine origin/main.
-- Coordination: mergeable draft PR #16 targets PR #15's branch; open PR #14 is frontend-only and non-overlapping; open PR #9 overlaps `main.py`/API-test regions and needs normal rebase conflict care.
+- Coordination: mergeable draft PR #17 targets PR #16's branch, which targets PR #15; open PR #14 is frontend-only and non-overlapping; open PR #9 overlaps `main.py`/API-test regions and needs normal rebase conflict care.
 - Audit slice (spec closure, .ai/ OS, docs AC, recent gaps 001-003/005/011/012) COMPLETE per DoD: local P0s closed, P2s addressed by 4 subagents + branch commits (41e5243, 527e9a1). Additional: Security agent closed rate P2 (GAP-013) with in-mem limiter for high-cost paths + tests + updates. Validations green, pushed to PR #3, .ai/ current.
 - PM prd-audit (this) COMPLETE: full PRD-v2.0 + TECH audit vs impl/.ai/ (read thesis/planes/objects/journeys + code+openapi+trace); no other local implementable gaps/vertical slices not covered (comms/self-imp/commercial local/elastic covered fully local); noted GAP-PRD-AUDIT-001 P3; "coverage good, only external left". .ai/ updated + commit pending.
 - Core product largely implemented locally (control, budget full, ProviderOps local+real sandbox, SWF, console, roles, MEB, auth, etc.) per IMPLEMENTATION_STATUS + PRD-v2.

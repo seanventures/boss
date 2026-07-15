@@ -1,6 +1,6 @@
 # Codex Handoff
 
-Last updated: 2026-07-15T14:48Z (Codex operability/docs-site batch: Plane BOSS-24/BOSS-76 implemented and validated; publication pending)
+Last updated: 2026-07-15T14:54Z (Codex operability/docs-site batch: Plane BOSS-24/BOSS-76 implemented; mergeable stacked draft PR #17 open)
 
 ## 2026-07-15 event operability + public docs handoff
 
@@ -10,6 +10,7 @@ Last updated: 2026-07-15T14:48Z (Codex operability/docs-site batch: Plane BOSS-2
 - Plane BOSS-76: added MkDocs Material configuration, a restrained BOSS landing surface, deterministic feature/status pages generated from both TRACEABILITY tables, a drift-check CLI/unit test, strict local build target, and a GitHub Pages workflow that builds on docs PRs and deploys only from reviewed `main` pushes.
 - Validation: widened Python set 45/45 (new canary, webhook, dispatcher/catalog regressions, SOC2 canary consumer, worker, docs generator); web activity/deadletter mapping 26/26; Next production build; TypeScript; focused Ruff/compile; YAML; diff; generator check; and `mkdocs build --strict` all pass. Static OpenAPI parity confirms the new canary routes are covered while retaining the repository's unrelated pre-existing route backlog. Repository-wide `make lint` passes the web stage and then stops on the same 13 unrelated pre-existing Python lint errors documented for PR #16.
 - Coordination: branch `ai/codex/reactive-docs-operability` is stacked on draft PR #16 and does not overlap active design-system, VAG, or model-pacing branches. DOC-2/BOSS-73 was deliberately returned to Backlog without code changes because its successful docs-PR handler depends on DOC-3/DOC-4.
+- Publication: implementation commit `5887088`; mergeable stacked draft PR #17 (`ai/codex/reactive-docs-operability` → `ai/codex/webhook-foundation`). Documentation Actions run `29425529835` has zero steps and the explicit account payment/spending-limit annotation, so no branch code executed in GitHub CI; local workflow-equivalent tests/build are green.
 
 ## 2026-07-15 webhook foundation handoff
 

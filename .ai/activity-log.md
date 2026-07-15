@@ -11,6 +11,7 @@ All 15-min terminal updates and major milestones appended here. Chronological, n
 - Added MkDocs Material public site, BOSS-first poster landing surface, deterministic TRACEABILITY feature/status generator, drift test, strict `make docs`, and docs-PR build + reviewed-main Pages workflow.
 - Validation: 45 Python tests + 26 web tests pass; Next production build, TypeScript, focused Ruff/compile, YAML parse, generator `--check`, strict MkDocs, and diff checks pass. OpenAPI parity reports only the known unrelated baseline route backlog. Broad `make lint` passes web lint/typegen and stops on the same 13 unrelated pre-existing Python lint errors carried by the stacked base.
 - Coordination: work is isolated on `ai/codex/reactive-docs-operability`, stacked on PR #16; no overlap with contributor design/VAG/model-pacing branches.
+- Published implementation commit `5887088` and mergeable stacked draft PR #17. GitHub Documentation run `29425529835` was rejected before checkout with zero steps by the repository account payment/spending-limit gate; recorded as external, with no code workaround attempted.
 
 ---
 ## 2026-07-15T14:15:00Z — Codex — BOSS-22/BOSS-23 webhook foundation
