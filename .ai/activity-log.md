@@ -3,6 +3,13 @@
 All 15-min terminal updates and major milestones appended here. Chronological, newest at top.
 
 ---
+## 2026-07-15T16:20:00Z — Codex — BOSS-45 skill executor registry
+
+- Claimed Plane BOSS-45 and parent BOSS-44 before implementation; created standalone branch `ai/codex/skill-executor-registry` from refreshed `origin/main` to avoid contributor and reactive-stack overlap.
+- Added deterministic executor registration/resolution and explicit server context. Registered safe GitHub PR and Deployment Registry bindings without reimplementing provider/service behavior.
+- GitHub effects create/reuse Receipts, validate the configured repository, persist success/failure, and do not repeat a provider call when a Receipt is already in progress.
+- Validation: five focused tests and focused Ruff pass. Worker real-mode dispatch remains BOSS-46.
+
 === QA / TEST FULL VALIDATION + E2E POLISH (P2) 2026-06-05 ===
 Product: BOSS (Business Operating System Sentinel)
 Repo root: /Volumes/DataSSD1/test/boss

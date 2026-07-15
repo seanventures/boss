@@ -1,6 +1,6 @@
 # BOSS Autonomous Delivery Status
 
-**Last updated**: 2026-06-05 (Grok orchestrated team, post AUTO-004 DevOps/release + full validations complete; AUTO-004 Closed; PM prd-audit; coverage good, only external left)
+**Last updated**: 2026-07-15 (Codex BOSS-45 skill executor registry implemented and under focused validation)
 **Repo root**: /Volumes/DataSSD1/test/boss
 **Git remote**: https://github.com/seanheiney/boss
 **Current branch**: codex/spec-closure-audit (dirty at start: uncommitted gap-closure changes)
@@ -14,6 +14,7 @@
 - GitHub: 0 open issues; 2 open cursor PRs (on main); no open grok/codex PRs visible.
 
 ## Overall Product Status
+- OSS executable-skills work advanced on 2026-07-15: Plane BOSS-45 adds a deterministic server-side executor registry, safe GitHub PR and Deployment Registry bindings, Receipt-backed GitHub effects, and no-duplicate behavior for an existing provider Receipt. BOSS-46 remains the separate worker real-mode bridge.
 - Audit slice (spec closure, .ai/ OS, docs AC, recent gaps 001-003/005/011/012) COMPLETE per DoD: local P0s closed, P2s addressed by 4 subagents + branch commits (41e5243, 527e9a1). Additional: Security agent closed rate P2 (GAP-013) with in-mem limiter for high-cost paths + tests + updates. Validations green, pushed to PR #3, .ai/ current.
 - PM prd-audit (this) COMPLETE: full PRD-v2.0 + TECH audit vs impl/.ai/ (read thesis/planes/objects/journeys + code+openapi+trace); no other local implementable gaps/vertical slices not covered (comms/self-imp/commercial local/elastic covered fully local); noted GAP-PRD-AUDIT-001 P3; "coverage good, only external left". .ai/ updated + commit pending.
 - Core product largely implemented locally (control, budget full, ProviderOps local+real sandbox, SWF, console, roles, MEB, auth, etc.) per IMPLEMENTATION_STATUS + PRD-v2.

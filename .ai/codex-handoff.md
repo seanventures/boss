@@ -1,6 +1,13 @@
 # Codex Handoff
 
-Last updated: 2026-06-05T17:30Z (5 agents managed + integrated + validate green: DevOps AUTO-004 Closed 990d00e + .env full + full-validate target + release script; Security rate 013 Closed 5083391 in-mem + tests; Arch pag 014 Closed 4dd031c; PM audit dcd5fc8 + GAP-PRD-AUDIT-001 P3; QA e2e tests a374f4a (killed long run); .ai/ + commit/push/PR#3; only 1 P3 local + external blocked)
+Last updated: 2026-07-15T16:20Z (Codex BOSS-45 executable-skills foundation implemented on a standalone branch)
+
+## 2026-07-15 skill executor registry handoff
+
+- Plane BOSS-45 / spec 03 A1: added `register_executor`, decorator registration, `resolve_executor`, explicit `SkillExecutorContext`, and deterministic registered-id inspection.
+- Real bindings reuse `GitHubAdapter` for sandbox/real PR creation and `ResourcePlaneService` for deployment target registration, run planning, and health checks. GitHub writes validate the configured repository, create/reuse a Receipt before the call, record success/failure, and refuse a duplicate effect when a Receipt is already active.
+- Validation: five focused registry/executor tests and focused Ruff pass. BOSS-46 owns real-mode worker wiring; this slice intentionally does not relax the API's mock-only posture.
+- Coordination: standalone branch `ai/codex/skill-executor-registry` is based on current `origin/main` and does not overlap the reactive/docs/GitHub-community stack or the contributor's model-pacing/VAG/design-system branches.
 
 ## Current Overall Product Status
 BOSS v0.4.1 target is in advanced local-dogfood state. Most PRD-v2.0 / TECH-SPEC-v2.0 requirements for core control plane, worker leases, budget governor (now full quote/reserve/consume/release/forecast), audit/no-silent-drops (with recent logging fixes), canonical objects (incl. recent KPI), roles/packs/agent-modules, Model Entitlement Broker, ProviderOps (local sync + real sandbox writes for CF/DO/Supabase), Software Factory (command->plan->PR->evidence->decision), Metatron/Mission Control console are Implemented and traced.

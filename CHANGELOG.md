@@ -82,6 +82,9 @@ All notable changes to BOSS are documented in this file.
   call to the new `skill_invocations` table. **Mock mode** runs the full gauntlet with no side
   effects — `POST /v1/skills/{skill_id}/invoke` (API mock-only) + `GET /v1/skills/invocations`; a
   `skill_mock_invocation` canary proves the no-side-effect guarantee.
+- Skill executor registry (`skill_executors.py`) with decorator/direct registration, fail-closed
+  server context, Receipt-backed GitHub PR bindings, Deployment Registry bindings, and
+  duplicate-effect suppression for existing provider Receipts.
 
 ## v0.6.0 - 2026-06-03
 
