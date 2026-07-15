@@ -1,6 +1,6 @@
 # BOSS Requirements Traceability Matrix (Autonomous .ai version)
 
-**Last rebuilt**: 2026-07-15T22:30:00Z by Codex (OSS-readiness reactive event and documentation-catalog foundation; Plane BOSS-20/BOSS-21/BOSS-72)
+**Last rebuilt**: 2026-07-15T13:43:00Z by Codex (OSS-readiness reactive event and documentation-catalog foundation; Plane BOSS-20/BOSS-21/BOSS-72)
 **Sources**: docs/product/PRD-v2.0.md, TECHNICAL_SPEC-v2.0.md, REQUIREMENT_INVENTORY.md, TRACEABILITY.md, user-stories.md, AGENTS.md, README, api/openapi.yaml, db/schema.sql, packages/specpack/*, code + tests scan.
 **Status key**: Implemented (full vertical + tests + states + audit + DoD), Partial, Planned, Blocked (external per real-only), In-Progress (this session).
 **DoD reminder**: Requirement complete only when traced, full journey, UI nav, backend, persistence, auth server+client, validations, loading/empty/error/success, edges, mobile/a11y basics, security/arch/QA review, tests pass, lint/build, docs updated, NO mocks/fakes/TODOs for required behavior.

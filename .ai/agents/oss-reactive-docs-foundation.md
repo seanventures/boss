@@ -11,5 +11,5 @@
 **Baseline note**: broad API suite is 241 passed/38 failed; four representative failures reproduce unchanged on detached pristine `origin/main`.
 **Coordination**: PR #14 is frontend-only/no overlap. PR #9 has localized `main.py` and test overlap; preserve its unrelated fixes during rebase.
 **Risks**: seeded future consumer jobs (`docs.refresh`, `docs.update`, orchestrator, GitHub triage) remain queued until their later Plane tickets add worker handlers; this is the intended foundation boundary.
-**Next**: publish a draft PR, attach commit/test evidence to Plane, move BOSS-20/BOSS-21/BOSS-72 to Done, keep BOSS-19/BOSS-71 In Progress.
+**Next**: review and merge draft PR #15, then move BOSS-20/BOSS-21/BOSS-72 to Done; keep BOSS-19/BOSS-71 In Progress for remaining children. GitHub Actions is currently blocked before job start by the account payment/spending-limit gate.
 **Last update**: 2026-07-15.

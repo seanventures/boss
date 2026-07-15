@@ -1,6 +1,6 @@
 # Codex Handoff
 
-Last updated: 2026-07-15T22:30Z (Codex OSS-readiness batch: Plane BOSS-20, BOSS-21, BOSS-72 implemented and validated on `ai/codex/oss-reactive-docs-foundation`; draft PR pending publication)
+Last updated: 2026-07-15T13:43Z (Codex OSS-readiness batch: Plane BOSS-20, BOSS-21, BOSS-72 implemented and validated on `ai/codex/oss-reactive-docs-foundation`; draft PR #15 open)
 
 ## 2026-07-15 OSS-readiness handoff
 

@@ -1,6 +1,6 @@
 # BOSS Autonomous Delivery Status
 
-**Last updated**: 2026-07-15 (Codex OSS-readiness batch BOSS-20/BOSS-21/BOSS-72 implemented; validation complete; draft PR pending)
+**Last updated**: 2026-07-15 (Codex OSS-readiness batch BOSS-20/BOSS-21/BOSS-72 implemented; validation complete; draft PR #15 open)
 **Repo root**: /Volumes/DataSSD1/test/boss
 **Git remote**: https://github.com/seanheiney/boss
 **Current branch**: ai/codex/oss-reactive-docs-foundation (based on origin/main `44b985b`)
