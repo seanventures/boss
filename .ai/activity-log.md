@@ -70,6 +70,13 @@ Validation: new acceptance suite 7 passed; representative existing job lifecycle
 Coordination: committed as `6fa2df7`, pushed, and opened mergeable draft PR #15. PR #14 has no overlap; PR #9 has localized main.py/test overlap. GitHub CI was blocked before checkout by the account payment/spending-limit gate; evidence is attached to PR #15 and Plane. Remaining BOSS-22/23/24 and BOSS-73+ intentionally not included.
 
 ---
+## 2026-07-15T16:20:00Z — Codex — BOSS-45 skill executor registry
+
+- Claimed Plane BOSS-45 and parent BOSS-44 before implementation; created standalone branch `ai/codex/skill-executor-registry` from refreshed `origin/main` to avoid contributor and reactive-stack overlap.
+- Added deterministic executor registration/resolution and explicit server context. Registered safe GitHub PR and Deployment Registry bindings without reimplementing provider/service behavior.
+- GitHub effects create/reuse Receipts, validate the configured repository, persist success/failure, and do not repeat a provider call when a Receipt is already in progress.
+- Validation: five focused tests and focused Ruff pass. Worker real-mode dispatch remains BOSS-46.
+
 === QA / TEST FULL VALIDATION + E2E POLISH (P2) 2026-06-05 ===
 Product: BOSS (Business Operating System Sentinel)
 Repo root: /Volumes/DataSSD1/test/boss

@@ -133,9 +133,11 @@ Rather than resurrect the hosted-gated `/v1/marketplace/*` pack machinery for sk
 
 **A1. Skill executor registry + built-in executors** — *P0, M*
 Scope: new `services/skill_executors.py` with `register_executor`/decorator/`resolve_executor`; adapt existing adapters (github, deployment, provider ops) to their SkillSpec ids as thin wrappers. Key files: `services/skill_executors.py` (new), `services/github_adapter.py`, `packages/specpack/skills/*.yaml`.
-- [ ] `resolve_executor(skill_id)` returns a callable for every non-mock SkillSpec that has a real backing, `None` otherwise.
-- [ ] At least github + deployment skills have working executors that reuse existing adapter code (no reimplementation).
-- [ ] Unit test: registry lookup + a happy-path execution against a fake adapter.
+- [x] `resolve_executor(skill_id)` returns a callable for every registered non-mock SkillSpec with a safe real backing, `None` otherwise.
+- [x] GitHub PR and Deployment Registry skills have working executors that reuse existing adapter/service code (no reimplementation).
+- [x] Unit tests cover registry lookup, context fail-closed behavior, GitHub and deployment happy paths, Receipt creation, and concurrent-effect dedupe.
+
+**Implementation evidence (BOSS-45).** `skill_executors.py` provides direct/decorator registration, deterministic lookup, explicit server context, Receipt-backed GitHub PR effects, and Resource Plane deployment bindings. Unsafe/unbacked skills resolve to `None`; an existing in-progress Receipt prevents a duplicate GitHub provider call. Real-mode worker wiring remains BOSS-46/A2.
 
 **A2. Wire real-mode `skill_runtime` (API + worker)** — *P0, M*
 Scope: `skill_runtime.invoke()` looks up `resolve_executor` when `mock=false`; worker imports `SkillRuntimeService` and drives real invocations; lift the `main.py:6432` `mock=false` rejection to allow real invocation *from the worker path only* (API stays mock unless caller is trusted worker). Key files: `services/skill_runtime.py:49-137`, `apps/worker/boss_worker/runner.py`, `main.py:6428`.

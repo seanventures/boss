@@ -59,7 +59,14 @@ Last updated: 2026-07-15 (BOSS-118 controlled integration release in progress)
 - Plane BOSS-72: added a project-scoped feature catalog seeded from `docs/product/TRACEABILITY.md`, labelled/emergent entity resolution for code-task/discovery/plan sources, source-reference preservation, and last-documented idempotency.
 - Validation: 7/7 new acceptance tests pass; 5/5 representative legacy job-lifecycle tests pass; fresh/existing schema application is idempotent; focused Ruff/compile/diff/OpenAPI YAML checks pass. The broad API suite reports 241 passed/38 failed; four representative failures reproduce unchanged on pristine `origin/main`, confirming baseline debt rather than this slice.
 - Coordination: based on `origin/main` at `44b985b`. PR #14 is frontend design-system work with no overlap. PR #9 has localized overlap in `main.py`/API tests and should be merged or rebased carefully; this slice does not absorb its unrelated lint fixes.
-- Remaining module work is intentionally separate: outbound/inbound webhooks (BOSS-22/23), operability/canary (BOSS-24), and the docs worker/agent/PR/site chain (BOSS-73+). Default reactive jobs are durable queue entries for those future consumers.
+- Remaining module work from this foundation checkpoint was completed by the webhook and docs-agent slices above. Default reactive jobs use the durable lease queue and retain budget enforcement at execution time.
+
+## 2026-07-15 skill executor registry handoff
+
+- Plane BOSS-45 / spec 03 A1: added `register_executor`, decorator registration, `resolve_executor`, explicit `SkillExecutorContext`, and deterministic registered-id inspection.
+- Real bindings reuse `GitHubAdapter` for sandbox/real PR creation and `ResourcePlaneService` for deployment target registration, run planning, and health checks. GitHub writes validate the configured repository, create/reuse a Receipt before the call, record success/failure, and refuse a duplicate effect when a Receipt is already active.
+- Validation: five focused registry/executor tests and focused Ruff pass. BOSS-46 owns real-mode worker wiring; this slice intentionally does not relax the API's mock-only posture.
+- Coordination: standalone branch `ai/codex/skill-executor-registry` is based on current `origin/main` and does not overlap the reactive/docs/GitHub-community stack or the contributor's model-pacing/VAG/design-system branches.
 
 ## Current Overall Product Status
 BOSS v0.4.1 target is in advanced local-dogfood state. Most PRD-v2.0 / TECH-SPEC-v2.0 requirements for core control plane, worker leases, budget governor (now full quote/reserve/consume/release/forecast), audit/no-silent-drops (with recent logging fixes), canonical objects (incl. recent KPI), roles/packs/agent-modules, Model Entitlement Broker, ProviderOps (local sync + real sandbox writes for CF/DO/Supabase), Software Factory (command->plan->PR->evidence->decision), Metatron/Mission Control console are Implemented and traced.

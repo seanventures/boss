@@ -115,6 +115,7 @@ This document summarizes the currently implemented BOSS runtime surfaces in this
   - packaged agent-module catalog, entitlement-aware install flow, install governance records, and role lineage
   - deterministic RoleSpec validation for pack roles and module-provided roles
   - deterministic SkillSpec validation for typed IO, cost, retry, permissions, data boundary, policy, and real-only mode
+  - server-side SkillSpec executor registry with explicit-context GitHub PR and Deployment Registry bindings; GitHub effects are Receipt-backed and duplicate-safe, while real-mode worker dispatch remains a separate gated slice
   - model entitlement broker with routing logs, official subscription connection checks, connect/disconnect APIs, capacity-state fail-closed denials, multi-tenant denials for personal/public subscription sources, capacity receipt dedupe, and ModelRouteDecision API surfaces
   - data-boundary-aware routing that blocks restricted/local-only work from unapproved external model sources and records the boundary in routing decisions
   - data-boundary-aware GitHub effect gates that block restricted/local-only PR, merge, and deployment effects before receipts or external calls are opened
