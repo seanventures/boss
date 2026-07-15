@@ -3816,6 +3816,9 @@ export type DeadletterItem = {
   project_id?: string;
   source_kind: string;
   source_id: string;
+  related_entity_type?: string;
+  related_entity_id?: string;
+  related_status?: string;
   reason: string;
   payload: Record<string, unknown>;
   status: string;

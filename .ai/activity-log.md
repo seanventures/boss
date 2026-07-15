@@ -3,6 +3,16 @@
 All 15-min terminal updates and major milestones appended here. Chronological, newest at top.
 
 ---
+## 2026-07-15T14:48:45Z — Codex event operability + public docs slice ready
+- Plane: claimed BOSS-24 and BOSS-76, kept both In Progress pending merge; returned BOSS-73 to Backlog before code work after confirming DOC-3/DOC-4 are required for a truthful successful handler.
+- Implemented a persisted reactive-dispatch exactly-once canary using temporary enabled/disabled routes, canonical emit + exact replay, deterministic job reuse, route cleanup, and queued→leased→succeeded proof without external effects.
+- Added related webhook-delivery type/id/status to `GET /v1/deadletters`, synced API-client/console presentation, and extended the terminal webhook retry test to prove the shared incident surface.
+- Added complete webhook/subscription/canary operator instructions and static canary OpenAPI paths.
+- Added MkDocs Material public site, BOSS-first poster landing surface, deterministic TRACEABILITY feature/status generator, drift test, strict `make docs`, and docs-PR build + reviewed-main Pages workflow.
+- Validation: 45 Python tests + 26 web tests pass; Next production build, TypeScript, focused Ruff/compile, YAML parse, generator `--check`, strict MkDocs, and diff checks pass. OpenAPI parity reports only the known unrelated baseline route backlog. Broad `make lint` passes web lint/typegen and stops on the same 13 unrelated pre-existing Python lint errors carried by the stacked base.
+- Coordination: work is isolated on `ai/codex/reactive-docs-operability`, stacked on PR #16; no overlap with contributor design/VAG/model-pacing branches.
+
+---
 ## 2026-07-15T14:15:00Z — Codex — BOSS-22/BOSS-23 webhook foundation
 
 - Re-read the mandatory Plane rule and coordination state; moved BOSS-22 and BOSS-23 to In Progress and created focused stacked branch `ai/codex/webhook-foundation` from PR #15.

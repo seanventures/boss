@@ -321,6 +321,21 @@ def test_failed_delivery_retries_then_deadletters(client, engine, monkeypatch):
     assert delivery["status"] == "deadlettered"
     assert delivery["last_error"]["deadletter_id"] == final["deadletter_id"]
 
+    feed = client.get(
+        "/v1/deadletters", params={"project_id": PROJECT_ID}
+    )
+    assert feed.status_code == 200
+    surfaced = next(
+        item
+        for item in feed.json()["items"]
+        if item["id"] == final["deadletter_id"]
+    )
+    assert surfaced["source_kind"] == "job"
+    assert surfaced["source_id"] == queued["job_id"]
+    assert surfaced["related_entity_type"] == "webhook_delivery"
+    assert surfaced["related_entity_id"] == queued["id"]
+    assert surfaced["related_status"] == "deadlettered"
+
 
 def test_webhook_out_subscription_creates_durable_delivery(engine, client, monkeypatch):
     monkeypatch.setenv("BOSS_TEST_WEBHOOK_SECRET", WEBHOOK_SECRET)

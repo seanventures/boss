@@ -1336,6 +1336,9 @@ def deadletter_item_from_row(row) -> DeadletterItem:
         project_id=row["project_id"],
         source_kind=row["source_kind"],
         source_id=row["source_id"],
+        related_entity_type=row.get("related_entity_type"),
+        related_entity_id=row.get("related_entity_id"),
+        related_status=row.get("related_status"),
         reason=row["reason"],
         payload=row["payload"] or {},
         status=row.get("status") or "open",
@@ -9400,13 +9403,29 @@ def list_deadletters(project_id: str, limit: int = 50) -> DeadletterListResponse
         rows = connection.execute(
             text(
                 """
-                SELECT id, project_id, source_kind, source_id, reason, payload,
-                       status, incident_task_id, incident_artifact_id,
-                       remediation_decision_id, requeued_job_id, resolved_by,
-                       resolved_at, created_at, updated_at
-                FROM deadletters
-                WHERE project_id = :project_id
-                ORDER BY created_at DESC
+                SELECT d.id, d.project_id, d.source_kind, d.source_id,
+                       CASE
+                         WHEN j.kind = 'webhook.outbound.deliver'
+                         THEN 'webhook_delivery'
+                       END AS related_entity_type,
+                       CASE
+                         WHEN j.kind = 'webhook.outbound.deliver'
+                         THEN j.payload->>'delivery_id'
+                       END AS related_entity_id,
+                       wd.status AS related_status,
+                       d.reason, d.payload, d.status, d.incident_task_id,
+                       d.incident_artifact_id, d.remediation_decision_id,
+                       d.requeued_job_id, d.resolved_by, d.resolved_at,
+                       d.created_at, d.updated_at
+                FROM deadletters d
+                LEFT JOIN jobs j
+                  ON d.source_kind = 'job' AND d.source_id = j.id
+                LEFT JOIN webhook_deliveries wd
+                  ON j.kind = 'webhook.outbound.deliver'
+                 AND wd.project_id = d.project_id
+                 AND wd.id = j.payload->>'delivery_id'
+                WHERE d.project_id = :project_id
+                ORDER BY d.created_at DESC
                 LIMIT :limit
                 """
             ),

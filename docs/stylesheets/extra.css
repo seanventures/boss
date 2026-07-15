@@ -1,0 +1,194 @@
+:root {
+  --boss-green: #16865b;
+  --boss-amber: #a65f00;
+  --boss-blue: #2563a8;
+  --boss-red: #b42318;
+  --boss-ink: #080a0e;
+  --boss-cyan: #73e4ff;
+}
+
+.boss-hero {
+  width: 100vw;
+  margin: -1.2rem 0 3.5rem calc(50% - 50vw);
+  color: #f4f7fb;
+  background: var(--boss-ink);
+  border-bottom: 1px solid #252b34;
+}
+
+.boss-hero__inner {
+  box-sizing: border-box;
+  max-width: 76rem;
+  min-height: min(42rem, calc(100svh - 3rem));
+  margin: 0 auto;
+  padding: clamp(4.5rem, 11vw, 8.5rem) clamp(1.4rem, 5vw, 4.5rem) 2rem;
+}
+
+.boss-hero__eyebrow {
+  margin: 0 0 1.25rem;
+  color: var(--boss-cyan);
+  font-size: 0.76rem;
+  font-weight: 750;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+.boss-hero h1 {
+  max-width: 13ch;
+  margin: 0;
+  color: inherit;
+  font-size: clamp(4rem, 11vw, 8.4rem);
+  font-weight: 760;
+  letter-spacing: -0.065em;
+  line-height: 0.82;
+}
+
+.boss-hero h1 span {
+  display: block;
+  margin-top: 0.42em;
+  color: #aeb7c2;
+  font-size: 0.34em;
+  letter-spacing: -0.025em;
+  line-height: 1.05;
+}
+
+.boss-hero__lede {
+  max-width: 42rem;
+  margin: 2rem 0 0;
+  color: #c8d0da;
+  font-size: clamp(1rem, 2vw, 1.25rem);
+}
+
+.boss-hero__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem 1.5rem;
+  align-items: center;
+  margin: 2rem 0 4rem;
+}
+
+.boss-hero__actions a {
+  color: #f4f7fb;
+  font-weight: 700;
+  text-decoration: none;
+  transition: color 140ms ease, transform 140ms ease;
+}
+
+.boss-hero__actions a:hover {
+  color: var(--boss-cyan);
+  transform: translateY(-1px);
+}
+
+.boss-primary-link {
+  padding: 0.7rem 1rem;
+  color: var(--boss-ink) !important;
+  background: var(--boss-cyan);
+}
+
+.boss-control-loop {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  border-top: 1px solid #343b46;
+  border-bottom: 1px solid #343b46;
+}
+
+.boss-control-loop > div {
+  padding: 1rem 0.85rem 1rem 0;
+}
+
+.boss-control-loop > div + div {
+  padding-left: 0.85rem;
+  border-left: 1px solid #343b46;
+}
+
+.boss-control-loop small,
+.boss-control-loop strong {
+  display: block;
+}
+
+.boss-control-loop small {
+  margin-bottom: 0.45rem;
+  color: #788391;
+  font-size: 0.66rem;
+  letter-spacing: 0.12em;
+}
+
+.boss-control-loop strong {
+  font-size: clamp(0.72rem, 1.6vw, 0.92rem);
+}
+
+.boss-status {
+  display: inline-block;
+  padding: 0.12rem 0.48rem;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.035em;
+  line-height: 1.35;
+  text-transform: uppercase;
+}
+
+.boss-status--implemented { color: var(--boss-green); }
+.boss-status--partial { color: var(--boss-amber); }
+.boss-status--planned { color: var(--boss-blue); }
+.boss-status--blocked { color: var(--boss-red); }
+
+.feature-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
+  gap: 0.75rem;
+  margin: 1rem 0 1.5rem;
+}
+
+.feature-summary > div {
+  padding: 0.85rem;
+  border: 1px solid var(--md-default-fg-color--lightest);
+  border-radius: 0.35rem;
+}
+
+.feature-summary strong {
+  display: block;
+  margin-top: 0.35rem;
+  font-size: 1.35rem;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .boss-hero__eyebrow,
+  .boss-hero h1,
+  .boss-hero__lede,
+  .boss-hero__actions,
+  .boss-control-loop {
+    animation: boss-rise 480ms both;
+  }
+
+  .boss-hero h1 { animation-delay: 45ms; }
+  .boss-hero__lede { animation-delay: 90ms; }
+  .boss-hero__actions { animation-delay: 135ms; }
+  .boss-control-loop { animation-delay: 180ms; }
+}
+
+@keyframes boss-rise {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@media (max-width: 44rem) {
+  .boss-hero__inner {
+    min-height: auto;
+    padding-top: 4.5rem;
+  }
+
+  .boss-control-loop {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .boss-control-loop > div + div {
+    padding-left: 0;
+    border-left: 0;
+  }
+
+  .boss-control-loop > div:nth-child(even) {
+    padding-left: 0.85rem;
+    border-left: 1px solid #343b46;
+  }
+}

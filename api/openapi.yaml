@@ -4377,7 +4377,38 @@ paths:
           required: false
           schema: { type: integer, default: 0 }
       responses:
-        '200': { description: Deadletters }
+        '200':
+          description: Deadletters, including related webhook delivery identity and status for outbound webhook job failures
+  /v1/canaries/run:
+    post:
+      summary: Run and persist the BOSS invariant canary suite
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id]
+              properties:
+                project_id: { type: string }
+                actor: { type: string, default: canary }
+      responses:
+        '200':
+          description: Canary run with per-invariant pass, fail, or skipped evidence, including reactive dispatch exactly-once proof
+  /v1/canaries:
+    get:
+      summary: List persisted invariant canary runs
+      parameters:
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, default: 20 }
+      responses:
+        '200': { description: Canary runs ordered newest first }
   /v1/deadletters/{deadletter_id}/incident:
     post:
       summary: Create a deadletter incident packet and investigation task

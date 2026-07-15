@@ -2591,6 +2591,9 @@ class DeadletterItem(BaseModel):
     project_id: Optional[str] = None
     source_kind: str
     source_id: str
+    related_entity_type: Optional[str] = None
+    related_entity_id: Optional[str] = None
+    related_status: Optional[str] = None
     reason: str
     payload: dict[str, Any] = Field(default_factory=dict)
     status: str = "open"

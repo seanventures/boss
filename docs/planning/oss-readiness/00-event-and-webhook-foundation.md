@@ -190,9 +190,9 @@ Everything above lives in the **engine layer** and imports only `core`, `db`, `c
 ### Ticket 5 — Docs, canary & operability — size S
 **Scope:** Make the foundation observable and prove it under BOSS's own invariant harness. Add a delivery/dispatch view to `GET /v1/events` neighbors (or a `GET /v1/webhook-deliveries` list); add an exactly-once dispatch canary alongside the existing outbox canary; write operator docs (register a subscription, add an endpoint, verify a GitHub webhook).
 **Key files:** `apps/api/app/main.py`, `apps/api/app/services/canaries.py`, `docs/` (this folder).
-- [ ] Canary asserts: one emit of a dispatchable event → exactly one reactive job per enabled subscription (no dupes, no drops), consistent with the existing exactly-once/outbox canaries.
-- [ ] Deadlettered webhook deliveries surface in the existing `GET /v1/deadletters` view.
-- [ ] Operator doc covers inbound secret setup + subscription registration for all three asks.
+- [x] Canary asserts: one emit of a dispatchable event → exactly one reactive job per enabled subscription (no dupes, no drops), consistent with the existing exactly-once/outbox canaries.
+- [x] Deadlettered webhook deliveries surface in the existing `GET /v1/deadletters` view.
+- [x] Operator doc covers inbound secret setup + subscription registration for all three asks.
 
 ## 5. Dependencies, Sequencing & Priority
 

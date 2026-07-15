@@ -1,6 +1,15 @@
 # Codex Handoff
 
-Last updated: 2026-07-15T14:25Z (Codex webhook batch: Plane BOSS-22/BOSS-23 implemented and validated; mergeable stacked draft PR #16 open)
+Last updated: 2026-07-15T14:48Z (Codex operability/docs-site batch: Plane BOSS-24/BOSS-76 implemented and validated; publication pending)
+
+## 2026-07-15 event operability + public docs handoff
+
+- Plane BOSS-24: added a live `reactive_dispatch_exactly_once` invariant canary. It creates one enabled and one disabled temporary subscription, emits and replays one dispatchable event, proves the same durable job is reused, cleans up the temporary routes, and completes the proof job through the normal lease protocol. No external effect or spend occurs.
+- Failure visibility: enriched the existing deadletter API/client/console view with related webhook-delivery identity and current status by joining the terminal leased job to its delivery. The outbound retry/deadletter acceptance test now proves this API linkage.
+- Operator surface: expanded `docs/operations/WEBHOOKS.md` with inbound secret/project routing, subscription examples for docs/orchestration/GitHub consumers, canary invocation, and recovery semantics. Static OpenAPI now includes the canary endpoints.
+- Plane BOSS-76: added MkDocs Material configuration, a restrained BOSS landing surface, deterministic feature/status pages generated from both TRACEABILITY tables, a drift-check CLI/unit test, strict local build target, and a GitHub Pages workflow that builds on docs PRs and deploys only from reviewed `main` pushes.
+- Validation: widened Python set 45/45 (new canary, webhook, dispatcher/catalog regressions, SOC2 canary consumer, worker, docs generator); web activity/deadletter mapping 26/26; Next production build; TypeScript; focused Ruff/compile; YAML; diff; generator check; and `mkdocs build --strict` all pass. Static OpenAPI parity confirms the new canary routes are covered while retaining the repository's unrelated pre-existing route backlog. Repository-wide `make lint` passes the web stage and then stops on the same 13 unrelated pre-existing Python lint errors documented for PR #16.
+- Coordination: branch `ai/codex/reactive-docs-operability` is stacked on draft PR #16 and does not overlap active design-system, VAG, or model-pacing branches. DOC-2/BOSS-73 was deliberately returned to Backlog without code changes because its successful docs-PR handler depends on DOC-3/DOC-4.
 
 ## 2026-07-15 webhook foundation handoff
 

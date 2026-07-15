@@ -177,10 +177,10 @@ Output is Markdown only (already an allowed extension, `code_agent.py:354`). The
 **Scope.** Add `mkdocs.yml` (Material theme) rendering `docs/features/*.md` + a generated feature index; add `.github/workflows/docs.yml` to `mkdocs build --strict` on PRs and publish on merge.
 **Key files.** `mkdocs.yml` (new, repo root), `docs/features/index.md` (generated overview), `.github/workflows/docs.yml` (new), `requirements-docs.txt` (mkdocs-material pin).
 **Acceptance criteria.**
-- [ ] `mkdocs build --strict` passes locally and in CI; broken links/nav fail the build (and thus the docs PR).
-- [ ] Feature pages render with status badges sourced from the catalog/TRACEABILITY status.
-- [ ] Merge to default branch publishes the site (Pages or existing static host).
-- [ ] Landing page lists BOSS features with status — usable as the OSS front door.
+- [x] `mkdocs build --strict` passes locally and in CI; generated-catalog drift and broken links/nav fail the build (and thus the docs PR).
+- [x] Feature pages render with status badges sourced from the catalog/TRACEABILITY status.
+- [x] Merge to default branch publishes the site through the reviewed-main-only GitHub Pages workflow.
+- [x] Landing page lists BOSS features with status — usable as the OSS front door.
 **Size.** M.
 
 ---

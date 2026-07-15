@@ -6,6 +6,9 @@ export type DeadletterFeedItem = {
   id: string;
   sourceKind: string;
   sourceId: string;
+  relatedEntityType?: string;
+  relatedEntityId?: string;
+  relatedStatus?: string;
   reason: string;
   status: string;
   incidentTaskId?: string;
@@ -29,6 +32,9 @@ function mapDeadletter(payload: DeadletterItem): DeadletterFeedItem {
     id: payload.id,
     sourceKind: payload.source_kind,
     sourceId: payload.source_id,
+    relatedEntityType: payload.related_entity_type,
+    relatedEntityId: payload.related_entity_id,
+    relatedStatus: payload.related_status,
     reason: payload.reason,
     status: payload.status,
     incidentTaskId: payload.incident_task_id,

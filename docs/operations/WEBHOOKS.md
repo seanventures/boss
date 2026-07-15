@@ -33,6 +33,35 @@ curl -X POST "$BOSS_URL/v1/webhook-endpoints" \
 
 Use the returned endpoint ID as the `sink_ref` of a `webhook_out` event subscription, or queue a manual delivery through `POST /v1/webhook-endpoints/{endpoint_id}/deliver`. Reusing the same project-scoped `dedupe_key` returns the existing delivery and job without another external effect.
 
+Register event subscriptions through the same project-scoped registry. These
+examples cover the three initial reactive consumers; keep a subscription
+disabled until its worker capability is deployed.
+
+```bash
+# Documentation consumer
+curl -X POST "$BOSS_URL/v1/event-subscriptions" \
+  -H "Authorization: Bearer $BOSS_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"project_id":"boss-dogfood","event_type":"code_task.pr_opened","sink_kind":"job","sink_ref":"docs.update","enabled":true,"actor":"ceo"}'
+
+# Conversational orchestrator
+curl -X POST "$BOSS_URL/v1/event-subscriptions" \
+  -H "Authorization: Bearer $BOSS_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"project_id":"boss-dogfood","event_type":"plan.dispatched","sink_kind":"job","sink_ref":"agent.orchestrator.next_move","enabled":true,"actor":"ceo"}'
+
+# GitHub community triage
+curl -X POST "$BOSS_URL/v1/event-subscriptions" \
+  -H "Authorization: Bearer $BOSS_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"project_id":"boss-dogfood","event_type":"webhook.inbound.received","sink_kind":"job","sink_ref":"github.triage","enabled":true,"actor":"ceo"}'
+```
+
+List the registry with `GET /v1/event-subscriptions?project_id=...` and use
+`PATCH /v1/event-subscriptions/{subscription_id}` to enable or disable a route.
+An exact event type or a suffix glob such as `code_task.*` is accepted, but the
+engine also applies its fixed dispatchable-event allowlist.
+
 Endpoint mutations and manual queueing require the project actor's `comms_manage` permission. The execute endpoint is worker-only: it validates the worker ID, active lease token, lease expiry, job kind, project, and delivery ownership before making any external call.
 
 The receiver gets canonical JSON and these headers:
@@ -60,5 +89,23 @@ Valid deliveries are stored in `inbound_webhooks`, normalized to `webhook.inboun
 - `GET /v1/webhook-deliveries?project_id=...` lists pending, delivered, failed, retrying, and deadlettered deliveries.
 - `GET /v1/events?project_id=...` shows endpoint, delivery, inbound, rejection, and unrouted audit events.
 - `GET /v1/deadletters?project_id=...` shows terminal worker failures and supports the existing remediation workflow.
+- Webhook job deadletters include `related_entity_type=webhook_delivery`, the
+  durable delivery ID, and its current status so an operator can move directly
+  from the shared deadletter feed to the delivery record.
+
+Run the invariant suite after changing subscriptions or webhook configuration:
+
+```bash
+curl -X POST "$BOSS_URL/v1/canaries/run" \
+  -H "Authorization: Bearer $BOSS_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"project_id":"boss-dogfood","actor":"operator"}'
+```
+
+The `reactive_dispatch_exactly_once` result proves that one dispatchable event
+creates one job for its enabled subscription, ignores a disabled subscription,
+reuses the same job when the event is replayed, and completes it through the
+normal queued→leased→succeeded protocol. Results persist in `canary_runs` and
+are available from `GET /v1/canaries?project_id=...`.
 
 HTTP 2xx marks a delivery complete. Non-2xx responses and timeouts use bounded exponential job backoff and transition to a deadletter after `max_attempts`; BOSS does not run a hidden retry loop.

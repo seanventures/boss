@@ -1,10 +1,10 @@
 # BOSS Autonomous Delivery Status
 
-**Last updated**: 2026-07-15 (Codex webhook batch BOSS-22/BOSS-23 implemented and validated; mergeable stacked draft PR #16 open)
+**Last updated**: 2026-07-15 (Codex operability/docs-site batch BOSS-24/BOSS-76 implemented and validated; publication pending)
 **Repo root**: /Volumes/DataSSD1/test/boss
 **Git remote**: https://github.com/seanheiney/boss
-**Current branch**: ai/codex/webhook-foundation (stacked on `ai/codex/oss-reactive-docs-foundation`, draft PR #15)
-**Base branch**: ai/codex/oss-reactive-docs-foundation until PR #15 merges
+**Current branch**: ai/codex/reactive-docs-operability (stacked on `ai/codex/webhook-foundation`, draft PR #16)
+**Base branch**: ai/codex/webhook-foundation until PR #16 merges
 **Product**: BOSS v0.4.1 target (Business Operating System Sentinel)
 **Mission**: Complete product to production-grade, tested, documented, pushed, Codex-coordinated, ready for real users. Grind until all discovered PRD/spec features satisfy world-class DoD or truly blocked.
 
@@ -14,6 +14,7 @@
 - GitHub: draft PR #16 carries BOSS-22/BOSS-23 and is stacked on draft PR #15; other open PRs were inspected for overlap before implementation.
 
 ## Overall Product Status
+- Event/webhook operability and the public OSS docs surface advanced on 2026-07-15: Plane BOSS-24 now has a persisted reactive-dispatch exactly-once canary, related webhook-delivery identity in the shared deadletter feed, and a complete setup/recovery runbook. Plane BOSS-76 adds a deterministic TRACEABILITY-backed feature catalog site, strict local/CI MkDocs build, drift test, and reviewed-main-only Pages deployment. Focused/widened validation: 45 Python tests and 26 web tests pass; Next production build, TypeScript, focused Ruff/compile, YAML, diff, generator drift, and strict docs build pass. Repository-wide `make lint` reaches and passes the web lint/type stage, then reports the same 13 unrelated pre-existing Python lint errors documented on PR #16.
 - OSS webhook foundation advanced on 2026-07-15: Plane BOSS-22/BOSS-23 now provide Receipt-backed signed outbound delivery with leased retries/deadletters and a raw-body-verified, idempotent inbound GitHub receiver that routes into the reactive event dispatcher. Ten focused API/integration tests, seven foundation regressions, and twenty-five worker tests pass.
 - OSS-readiness foundation advanced on 2026-07-15: transactional allowlisted event dispatch, project subscription registry/CRUD/defaults, and TRACEABILITY-derived feature catalog are implemented for Plane BOSS-20, BOSS-21, and BOSS-72. Downstream webhook and docs-agent consumers remain separate Plane tickets.
 - Current validation: 7 new acceptance tests + 5 representative legacy job tests pass on fresh Postgres; schema reapplication, focused lint/compile, diff checks, and OpenAPI YAML parsing pass. Full API baseline remains 241 passed/38 failed; selected failures reproduce unchanged on pristine origin/main.
