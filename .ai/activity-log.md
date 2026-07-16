@@ -10,6 +10,7 @@ All 15-min terminal updates and major milestones appended here. Chronological, n
 - Added canonical local SkillSpec/MCP capability bundles, local import/export routes, detached Ed25519 checksum signatures, configured trust verification, explicit untrusted overrides, persisted provenance, and optional resolver exclusion.
 - Added project skill enable/disable and eager/on-demand toggle routes, a compact lazy loader that attaches schemas for the remainder of a run, live RoleSpec reads/re-resolution before invocation, shared id reconciliation, and startup diagnostics for stale/legacy references.
 - Focused validation checkpoint: 23 marketplace/resolution/runtime/executor tests and 10 selected API role/runtime regressions pass after retaining the legacy global mock/canary behavior. Ruff, compile, diff, and dynamic OpenAPI checks pass; full validation and stacked PR publication follow.
+- Published implementation commit `2c67f7a` and mergeable stacked draft PR #26. Final validation also passes 41 worker and 112 web tests plus repository lint/typecheck and static OpenAPI checks. Documentation run `29513302734` contains zero steps and the explicit account payment/spending-limit annotation, so no branch code ran in GitHub CI; Plane and the PR retain local evidence and all five tickets remain In Progress pending merge.
 
 ## 2026-07-16 — BOSS-53/BOSS-54/BOSS-47 skill resolution implementation
 
