@@ -284,6 +284,7 @@ def capabilities() -> list[str]:
         "webhook.outbound.deliver",
         "github.triage",
         "github.pr_review",
+        "skill.execute",
     ]
 
 
@@ -546,6 +547,27 @@ def agent_module_id_from_payload(payload: dict[str, Any]) -> Any:
 
 
 def execute_job(job: LeasedJob, client: ControlPlaneClient) -> dict[str, Any]:
+    if job.kind == "skill.execute":
+        skill_id = str(job.payload.get("skill_id") or "").strip()
+        if not skill_id:
+            raise ValueError("skill.execute requires payload.skill_id")
+        result = client.invoke_skill(
+            skill_id,
+            {
+                "project_id": job.project_id,
+                "caller": job.payload.get("caller") or "worker",
+                "inputs": job.payload.get("inputs") or {},
+                "mock": False,
+                "created_by_job_id": job.id,
+                "worker_id": client.worker_id,
+                "lease_token": job.lease_token,
+            },
+        )
+        if result.get("status") != "succeeded":
+            raise RuntimeError(
+                result.get("reason") or "Real skill invocation failed."
+            )
+        return result
     if job.kind in {"github.triage", "github.pr_review"}:
         return client.run_github_community_job(
             job.id,

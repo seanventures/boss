@@ -1,6 +1,6 @@
 # Skills & Extensibility: Marketplace + System-vs-Customer Skill Loading
 
-> **Summary:** BOSS ships a fully-specified SkillSpec governance layer (`skill_runtime.py`, `packages/specpack/skills/*.yaml`, `entitlements.py`) that is **not wired to real execution** — the API rejects `mock=false`, the worker never imports it, and the live agent loop (`agent_loop.py`) runs on a **separate** hardcoded `_TOOL_SCHEMAS` list. The one boundary that actually executes third-party tools today is **MCP** (`mcp_client.py` + `mcp_registry.py`), which is per-project, DB-backed, live-injected into the agent, and already delivers ~70% of the "extensible plug-in" ask. Skills are globbed globally with no per-tenant storage and no pack/tier filter.
+> **Implementation status (July 2026):** The executable skill and local marketplace path (A1-A6/B1-B6) is implemented. SkillSpecs and MCP tools share the governed permission/budget/retry/receipt gauntlet; project capability bundles support canonical local import/export plus Ed25519 trust verification; per-project toggles, lazy on-demand attachment, and RoleSpec hot-path enforcement are live. Hosted cross-tenant discovery and distribution remain behind the paid Account Connect seam.
 > · **User asks:** #4 (skills marketplace / extensibility) and #5 (system-provided vs customer-provided skill loading)
 > · **Module:** Skills & Extensibility
 > · **Priority:** **P0** — the loading model (ask 5) and a real executor registry (the wiring half of ask 4); **P1** — the marketplace surface (publishing, provenance, import/export) on top of MCP.
@@ -24,7 +24,7 @@ The goal of this spec is to (a) collapse those two systems by making SkillSpecs 
 
 ---
 
-## 2. Current State (ground truth)
+## 2. Baseline State at Decomposition (historical ground truth)
 
 ### 2.1 SkillSpec is an inert governance shell
 
@@ -141,71 +141,93 @@ Scope: new `services/skill_executors.py` with `register_executor`/decorator/`res
 
 **A2. Wire real-mode `skill_runtime` (API + worker)** — *P0, M*
 Scope: `skill_runtime.invoke()` looks up `resolve_executor` when `mock=false`; worker imports `SkillRuntimeService` and drives real invocations; lift the `main.py:6432` `mock=false` rejection to allow real invocation *from the worker path only* (API stays mock unless caller is trusted worker). Key files: `services/skill_runtime.py:49-137`, `apps/worker/boss_worker/runner.py`, `main.py:6428`.
-- [ ] Worker can execute a real skill end-to-end: permission gate + budget reserve + retry + receipt + `skill.invoked` event all fire.
-- [ ] `skill_invocations` row shows `mode='real'`, real cost reconciled.
-- [ ] API `/v1/skills/{id}/invoke` with `mock=false` no longer 400s when invoked on the worker path; still refuses unbacked skills with a clear error.
+- [x] Worker can execute a real skill end-to-end: permission gate + budget reserve + retry + receipt + `skill.invoked` event all fire.
+- [x] `skill_invocations` row shows `mode='real'`, real cost reconciled.
+- [x] API `/v1/skills/{id}/invoke` with `mock=false` no longer 400s when invoked on the worker path; still refuses unbacked skills with a clear error.
+
+**Implementation evidence (BOSS-46).** `skill.execute` is an explicit worker capability. The control-plane endpoint validates the active lease and exact project/skill/caller/input scope before constructing server-only executor context. `SkillRuntimeService` resolves registered executors, applies permission/budget/retry gates, records real-mode invocations, and consumes receipt-backed reservations into cost receipts; unbacked skills fail closed before reserving budget. A replay of the same locked job returns its original invocation without a second reservation or executor call.
 
 **A3. Bridge SkillSpecs into the agent loop** — *P0, M*
 Scope: inject resolved skills as `skill_<id>` tools into the live agent schema list and dispatch them through `skill_runtime.invoke(mock=False)` with risk-tier→approval mapping. Key files: `services/agent_loop.py:610` (schema build), `:657-689` (dispatch), reuse `:673-685` approval pattern.
-- [ ] Agent can call a system skill; the call goes through the full gauntlet (not the raw `_dispatch`).
-- [ ] A `risk_tier > agent_autonomous_risk_max` skill triggers `create_blocking_decision` and pauses the run exactly like `_WRITE_FNS`.
-- [ ] MCP, native tools, and skills coexist in one schema list without name collisions.
+- [x] Agent can call a system skill; the call goes through the full gauntlet (not the raw `_dispatch`).
+- [x] A `risk_tier > agent_autonomous_risk_max` skill triggers `create_blocking_decision` and pauses the run exactly like `_WRITE_FNS`.
+- [x] MCP, native tools, and skills coexist in one schema list without name collisions.
+
+**Implementation evidence (BOSS-47).** The durable agent loop consumes BOSS-54's eager resolver output, converts SkillSpec input declarations to collision-safe `skill_*` function schemas, and dispatches through `SkillRuntimeService.invoke(mock=false)` with a server-only executor context. Tier-above-threshold skills create a blocking decision and persist enough typed pending state to revalidate project/task availability before approved resume. Native, MCP, and SkillSpec names share one deterministic occupied-name set; MCP discovery failures now emit visible audit events.
 
 **A4. Elevate MCP: publisher/provenance + per-tool risk + route through gauntlet** — *P1, M*
 Scope: add `publisher`/`provenance` to `mcp_servers`; per-tool risk override; wrap MCP calls as `kind: mcp` skills so they inherit cost/retry/receipts. Key files: `services/mcp_registry.py:11-85`, `services/agent_loop.py:666-672`, `services/mcp_client.py`.
-- [ ] MCP tool invocations record a `skill_invocations`-equivalent receipt with cost + attempts.
-- [ ] A high-risk tool on a low-risk server is gated individually.
-- [ ] `list_mcp_servers` returns publisher/provenance; bootstrap built-ins carry a `publisher='boss'` provenance.
+- [x] MCP tool invocations record a `skill_invocations`-equivalent receipt with cost + attempts.
+- [x] A high-risk tool on a low-risk server is gated individually.
+- [x] `list_mcp_servers` returns publisher/provenance; bootstrap built-ins carry a `publisher='boss'` provenance.
+
+**Implementation evidence (BOSS-48).** MCP server rows now carry publisher, provenance, and per-tool risk overrides; built-ins seed BOSS-owned trusted provenance. Agent discovery wraps every MCP tool in a synthetic `kind: mcp` SkillSpec and executes it through `SkillRuntimeService`, producing a budget reservation, attempt-counted `skill_invocations` record, and deduplicated external-effect Receipt. Tool overrides are evaluated before the existing human-approval threshold and approved resumes revalidate that the server and tool are still enabled.
 
 **A5. Local capability bundle: packaging + import/export** — *P1, M*
 Scope: `services/skill_packaging.py` defining the bundle manifest; `POST /v1/skills/import`, `GET /v1/skills/{id}/export`, and MCP equivalents — all Account-Connect-free. Key files: `services/skill_packaging.py` (new), `main.py` (new routes), `services/skill_registry.py` (A6).
-- [ ] A skill exported from one project imports cleanly into another self-hosted instance with no hosted dependency.
-- [ ] Import registers into `project_skills` / `mcp_servers` and emits `skill.imported` / `mcp.imported`.
-- [ ] Round-trip export→import is byte-stable for the SkillSpec payload.
+- [x] A skill exported from one project imports cleanly into another self-hosted instance with no hosted dependency.
+- [x] Import registers into `project_skills` / `mcp_servers` and emits `skill.imported` / `mcp.imported`.
+- [x] Round-trip export→import is byte-stable for the SkillSpec payload.
+
+**Implementation evidence (BOSS-49).** `skill_packaging.py` defines the canonical `boss.capability-bundle/v1` JSON format and local SkillSpec/MCP descriptor import-export services. `/v1/skills/import`, `/v1/skills/{id}/export`, `/v1/mcp/servers/import`, and `/v1/mcp/servers/{id}/export` require only local project authorization, register imported capabilities in their project stores, and emit provenance-bearing import events. Imported SkillSpecs are retained in project configuration and participate in listing, mock invocation, and task resolution without a repository fork.
 
 **A6. Trust & provenance (signing)** — *P1, S/M*
 Scope: detached signature over manifest checksum; verify on import against `BOSS_SKILL_TRUST_KEYS`; mark untrusted bundles and allow resolver exclusion. Key files: `services/skill_packaging.py`, `config.py`, `services/skill_registry.py`.
-- [ ] Signed bundle from a trusted key imports as `provenance.trusted=true`.
-- [ ] Unsigned/untrusted bundle requires explicit operator override and imports as `trusted=false`.
-- [ ] Resolver can be configured to exclude untrusted skills.
+- [x] Signed bundle from a trusted key imports as `provenance.trusted=true`.
+- [x] Unsigned/untrusted bundle requires explicit operator override and imports as `trusted=false`.
+- [x] Resolver can be configured to exclude untrusted skills.
+
+**Implementation evidence (BOSS-50).** Capability bundles carry a detached Ed25519 signature over their canonical manifest checksum. Imports verify against the JSON key set in `BOSS_SKILL_TRUST_KEYS`; invalid signatures fail closed, while unsigned or unknown-key bundles require `allow_untrusted=true` and persist `provenance.trusted=false`. `BOSS_EXCLUDE_UNTRUSTED_SKILLS=true` removes explicitly untrusted project extensions from the entitlement catalog and task resolver.
 
 ### Epic B — System-vs-customer skill loading model
 
 **B1. `project_skills` store + registry service** — *P0, M*
 Scope: new table + `services/skill_registry.py` (`list_project_skills`, `enable_skill`, `disable_skill`, `register_skill`, `ensure_skill`) mirroring `mcp_registry.py`. Key files: `services/skill_registry.py` (new), migration, `services/mcp_registry.py` (pattern to mirror).
-- [ ] CRUD for per-project skills with `source`, `enabled`, `on_demand`, `config`, `publisher`.
-- [ ] `ensure_skill` is idempotent across restarts (like `ensure_mcp_server`).
-- [ ] Events emitted on register/enable/disable.
+- [x] CRUD for per-project skills with `source`, `enabled`, `on_demand`, `config`, `publisher`.
+- [x] `ensure_skill` is idempotent across restarts (like `ensure_mcp_server`).
+- [x] Events emitted on register/enable/disable.
+
+**Implementation evidence (BOSS-51).** `project_skills` is project-scoped with a unique `(project_id, skill_id)` key and source constraint. `skill_registry.py` provides list/register/enable/disable/ensure operations, preserves strict project scope, and emits `skill.registered`, `skill.enabled`, and `skill.disabled` events.
 
 **B2. `system` + `load` fields on SkillSpec; seed system skills at bootstrap** — *P0, S*
 Scope: add optional `system: bool` and `load: eager|on_demand` to SkillSpec + validator; bootstrap seeds `system` skills into `project_skills` for every project. Key files: `entitlements.py:120-171` (validator), `packages/specpack/skills/*.yaml`, `bootstrap.py:19-56`.
-- [ ] `system: true` skills are auto-present on a fresh project without any tenant action.
-- [ ] Validator accepts the new fields and rejects invalid `load` values.
-- [ ] At least one skill marked `system` and one marked `on_demand` for test coverage.
+- [x] `system: true` skills are auto-present on a fresh project without any tenant action.
+- [x] Validator accepts the new fields and rejects invalid `load` values.
+- [x] At least one skill marked `system` and one marked `on_demand` for test coverage.
+
+**Implementation evidence (BOSS-52).** SkillSpec loading now defaults `system=false` and `load=eager`, rejects invalid metadata, seeds `deployment.health.check` as an eager system skill for every project, and marks `github.create_pr_sandbox` for on-demand loading.
 
 **B3. Pack/tier-aware `list_skills`** — *P0, M*
 Scope: `entitlements.list_skills(project_id=None)`; when set, intersect global glob with the project's edition-pack `installs.skills`; `GET /v1/skills?project_id=` returns per-project state. Key files: `entitlements.py:90-118`, `packages/specpack/packs/*.yaml`, `main.py:6415`.
-- [ ] A Community-edition project does not see enterprise-only skills.
-- [ ] `GET /v1/skills?project_id=X` returns `{source, system, enabled, on_demand}` per skill.
-- [ ] Global `GET /v1/skills` (no project) still returns the full catalog (back-compat).
+- [x] A Community-edition project does not see enterprise-only skills.
+- [x] `GET /v1/skills?project_id=X` returns `{source, system, enabled, on_demand}` per skill.
+- [x] Global `GET /v1/skills` (no project) still returns the full catalog (back-compat).
+
+**Implementation evidence (BOSS-53).** `EntitlementBrokerService.list_skills` accepts optional project scope, recursively resolves the effective edition pack's inherited skill bundles, and overlays project registry state. The typed API/OpenAPI contract exposes source/system/enabled/on-demand state while the unscoped route retains every validated SkillSpec.
 
 **B4. Per-task skill resolver** — *P0, M*
 Scope: `skill_registry.resolve_for_task(project_id, task)` returning system ∪ module `default_skill_ids` ∪ enabled tenant skills, filtered by pack/tier and role allow/forbid; feed the result into the agent schema build (A3). Key files: `services/skill_registry.py`, `services/agent_runtime.py:77`, `services/agent_loop.py:610`, `services/role_governance.py:137-153`.
-- [ ] Resolver returns the correct union+filter for a task with a matched agent-module.
-- [ ] On-demand skills are excluded from the eager set but discoverable.
-- [ ] The agent loop consumes the resolver output (no more hardcoded-only tool set for skills).
+- [x] Resolver returns the correct union+filter for a task with a matched agent-module.
+- [x] On-demand skills are excluded from the eager set but discoverable.
+- [x] The agent loop consumes the resolver output (no more hardcoded-only tool set for skills).
+
+**Implementation evidence (BOSS-54).** `skill_registry.resolve_for_task` unions pack-eligible system skills, canonicalized module defaults, and enabled tenant rows; suppresses disabled rows; enforces RoleSpec allow/forbid patterns; and separates eager from on-demand discovery. Legacy compact references such as `health.check` are deterministically reconciled to canonical dotted SkillSpec ids so existing modules work without widening their role scope.
 
 **B5. On-demand enable/disable + lazy load** — *P1, S/M*
 Scope: `POST /v1/skills/{id}/enable|disable` (per project) and `load` toggle; lazy-attach an on-demand skill's schema + executor on first agent reference within a run. Key files: `main.py` (routes), `services/skill_registry.py`, `services/agent_loop.py` (lazy attach).
-- [ ] Enabling a skill makes it appear for subsequent tasks without restart.
-- [ ] An on-demand skill referenced mid-run is lazily resolved and usable for the rest of that run.
-- [ ] Disable removes it from resolver output.
+- [x] Enabling a skill makes it appear for subsequent tasks without restart.
+- [x] An on-demand skill referenced mid-run is lazily resolved and usable for the rest of that run.
+- [x] Disable removes it from resolver output.
+
+**Implementation evidence (BOSS-55).** Project-authorized enable/disable routes upsert catalog state and optionally switch eager/on-demand loading without process restart. The agent receives a minimal `load_on_demand_skill` discovery tool whose enum contains only resolver-approved capabilities; loading attaches the selected schema to the mutable run toolset and keeps it available for subsequent turns. Every new task resolves current database state, so disabled skills disappear immediately.
 
 **B6. Enforce role `allowed_skills` on the hot path + id reconciliation** — *P1, S/M*
 Scope: call `role_governance` matching as a resolver **filter** (not just the standalone endpoint / prompt checklist at `agent_runtime.py:247-250`); add a load-time validator reconciling role `allowed_skills` ids against real SkillSpec ids. Key files: `services/role_governance.py:137-153`, `services/skill_registry.py` (resolver), `services/agent_runtime.py:247-250`, `services/specpack.py:158`.
-- [ ] A skill outside a role's `allowed_skills` is filtered out of that role's tool set (enforced, not advisory).
-- [ ] `forbidden_skills` matches block invocation and record the scope violation.
-- [ ] Startup validation reports any role `allowed_skills` id that has no matching SkillSpec.
+- [x] A skill outside a role's `allowed_skills` is filtered out of that role's tool set (enforced, not advisory).
+- [x] `forbidden_skills` matches block invocation and record the scope violation.
+- [x] Startup validation reports any role `allowed_skills` id that has no matching SkillSpec.
+
+**Implementation evidence (BOSS-56).** Role allow/forbid matching is shared by resolver and pack diagnostics. The agent runtime reads the current installed RoleSpec on every resolution, re-resolves before every skill invocation, and records a governed `role.scope_violation` if an already-exposed or lazily requested capability becomes forbidden. Role/module load validation classifies unmatched references and legacy aliases, while bootstrap emits an aggregate `rolespec.skill_reference_diagnostics` audit event for reconciliation.
 
 ---
 
@@ -235,4 +257,4 @@ Scope: call `role_governance` matching as a resolver **filter** (not just the st
 3. **Pack filter authority.** Is a project's edition pack the sole authority for skill availability, or can a tenant enable a skill outside its pack (upsell path)? Affects B3/B4 filter order. Ties into the open PRD-v2.0 open-core divergence (whole control plane AGPL vs engine-only) flagged in the digest — resolve alongside the OSS-split decision.
 4. **Signing trust model.** Self-signed + operator trust list (`BOSS_SKILL_TRUST_KEYS`) vs a BOSS-rooted CA vs sigstore/cosign. Recommend starting with a simple detached-signature + configured public-key set (A6) and leaving a hosted verified-publisher program to the paid side.
 5. **Where do executors live for OSS extraction?** `skill_executors.py` will import adapters (github, deployment) that may themselves be paid/hosted-coupled. Need to confirm the built-in executor set is engine-clean (imports only engine modules) so the executor registry ships in the OSS engine while hosted executors register from the control plane.
-6. **On-demand discovery UX.** How does an agent learn an on-demand skill exists to request it? Options: a lightweight "available on-demand skills" catalog line in the system prompt, or an explicit `list_available_skills` meta-tool. Affects B5.
+6. **On-demand discovery UX (resolved for BOSS-55).** BOSS uses an explicit `load_on_demand_skill` meta-tool. Its compact id/description catalog avoids eagerly injecting every capability schema, and a successful request attaches the selected skill for the remainder of the run.

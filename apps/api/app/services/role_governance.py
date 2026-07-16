@@ -12,6 +12,7 @@ from sqlalchemy.engine import Connection
 from ..config import Settings
 from .core import create_artifact, emit_event, make_id, now_utc
 from .specpack import RoleNotFoundError
+from .skill_scope import skill_reference_matches
 
 
 class RoleGovernanceService:
@@ -1206,9 +1207,7 @@ class RoleGovernanceService:
 
     def _matching_pattern(self, skill_id: str, patterns: list[str]) -> Optional[str]:
         for pattern in patterns:
-            if pattern == skill_id:
-                return pattern
-            if pattern.endswith(".*") and skill_id.startswith(pattern[:-1]):
+            if skill_reference_matches(pattern, skill_id):
                 return pattern
         return None
 

@@ -88,6 +88,16 @@ class FakeControlPlaneClient:
             "doc_path": "docs/features/met-001-command-intake.md",
         }
 
+    def invoke_skill(self, skill_id, payload):
+        self.calls.append(("invoke_skill", skill_id, payload))
+        return {
+            "status": "succeeded",
+            "mode": "real",
+            "skill_id": skill_id,
+            "attempts": 1,
+            "result": {"ok": True},
+        }
+
     def merge_pull_request(self, payload):
         self.calls.append(("merge_pull_request", payload))
         return {
@@ -241,6 +251,48 @@ def test_worker_capabilities_include_infra_job_kinds():
     assert "docs.update" in supported
     assert "github.triage" in supported
     assert "github.pr_review" in supported
+    assert "skill.execute" in supported
+
+
+def test_run_worker_cycle_executes_real_skill_with_lease_scope():
+    leased_job = LeasedJob(
+        id="job_skill",
+        project_id="boss-dogfood",
+        task_id=None,
+        kind="skill.execute",
+        payload={
+            "skill_id": "github.create_pr_sandbox",
+            "caller": "worker",
+            "inputs": {"repo": "acme/widget"},
+        },
+        attempt=1,
+        max_attempts=3,
+        lease_token="lease_skill",
+        lease_expires_at="future",
+    )
+    client = FakeControlPlaneClient(leased_job)
+    settings = SimpleNamespace(worker_id="worker-skill", lease_ttl_seconds=60)
+
+    assert run_worker_cycle(client, settings) is True
+    assert [call[0] for call in client.calls] == [
+        "poll",
+        "heartbeat",
+        "invoke_skill",
+        "complete",
+    ]
+    assert client.calls[2] == (
+        "invoke_skill",
+        "github.create_pr_sandbox",
+        {
+            "project_id": "boss-dogfood",
+            "caller": "worker",
+            "inputs": {"repo": "acme/widget"},
+            "mock": False,
+            "created_by_job_id": "job_skill",
+            "worker_id": "worker-skill",
+            "lease_token": "lease_skill",
+        },
+    )
 
 
 def test_run_worker_cycle_executes_budgeted_docs_update_job():

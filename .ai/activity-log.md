@@ -3,6 +3,31 @@
 All 15-min terminal updates and major milestones appended here. Chronological, newest at top.
 
 ---
+## 2026-07-16 — BOSS-48/BOSS-49/BOSS-50/BOSS-55/BOSS-56 local skill marketplace
+
+- Claimed all five dependency-safe Plane slices through Todo to In Progress and created `ai/codex/boss-48-50-55-56-skill-marketplace` directly above draft PR #25.
+- Added MCP publisher/provenance and per-tool risk state; wrapped live MCP calls in synthetic SkillSpecs with budget, retry, attempt ledger, approval revalidation, and deduplicated provider Receipts.
+- Added canonical local SkillSpec/MCP capability bundles, local import/export routes, detached Ed25519 checksum signatures, configured trust verification, explicit untrusted overrides, persisted provenance, and optional resolver exclusion.
+- Added project skill enable/disable and eager/on-demand toggle routes, a compact lazy loader that attaches schemas for the remainder of a run, live RoleSpec reads/re-resolution before invocation, shared id reconciliation, and startup diagnostics for stale/legacy references.
+- Focused validation checkpoint: 23 marketplace/resolution/runtime/executor tests and 10 selected API role/runtime regressions pass after retaining the legacy global mock/canary behavior. Ruff, compile, diff, and dynamic OpenAPI checks pass; full validation and stacked PR publication follow.
+- Published implementation commit `2c67f7a` and mergeable stacked draft PR #26. Final validation also passes 41 worker and 112 web tests plus repository lint/typecheck and static OpenAPI checks. Documentation run `29513302734` contains zero steps and the explicit account payment/spending-limit annotation, so no branch code ran in GitHub CI; Plane and the PR retain local evidence and all five tickets remain In Progress pending merge.
+
+## 2026-07-16 — BOSS-53/BOSS-54/BOSS-47 skill resolution implementation
+
+- Claimed the three dependency-ordered Plane slices through Todo to In Progress and created stacked branch `ai/codex/boss-47-53-54-skill-resolution` above PR #24.
+- Implemented effective-edition catalog filtering/state overlay, per-task system/module/tenant resolution with RoleSpec filters and on-demand discovery, and live collision-safe SkillRuntime tools in the durable agent loop.
+- Added high-risk blocking decision/persisted resume state, resolver revalidation on approval, and visible MCP discovery failure events; preserved all external effects behind existing executors, budgets, receipts, and policy boundaries.
+- Validation: 13 focused resolution/registry/executor tests, 11 focused API skill/runtime/role regressions, 29 worker tests, all 112 web tests, repository lint/typecheck, focused compile, and OpenAPI YAML parsing pass. Route parity retains only the documented unrelated baseline backlog.
+- Published implementation commit `9495a8a` and mergeable stacked draft PR #25. Documentation run `29502637887` failed before checkout with zero steps because of the GitHub account payment/spending-limit gate; stacked PR CI is not configured until the base is `main`.
+
+## 2026-07-16 — Codex — BOSS-46/BOSS-51/BOSS-52 skill foundation
+
+- Claimed the three dependency-ordered Plane slices and created `ai/codex/boss-46-51-52-skill-foundation` from refreshed `origin/main`, avoiding the contributor's open model-pacing/VAG/console PRs.
+- Added strict project skill storage and audited lifecycle operations; validated `system` and eager/on-demand SkillSpec metadata; seeded system skills idempotently for every project.
+- Added worker capability and control-plane dispatch for real skills. Exact lease scope is verified before server executor resolution; permission, budget, retry, Receipt, CostReceipt, reservation, and invocation evidence all remain in the governed runtime.
+- Validation: 4 registry/runtime tests + 5 executor tests + 29 worker tests pass, focused API skill tests pass, web 112/112 and repository lint pass, OpenAPI/YAML/compile/diff checks pass. Broad Python baseline failures were reproduced unchanged on detached `origin/main` and were not mixed into this slice.
+- Published implementation commit `1ed12b8` and draft PR #24. CI and Documentation were rejected before checkout with zero steps by the repository account payment/spending-limit gate; linked both external run failures and green local equivalents in GitHub and Plane.
+
 ## 2026-07-15 — Codex — BOSS-118 controlled main integration
 
 - Created a clean integration branch from the latest `origin/main`, enumerated all unmerged Codex PR stacks, and excluded the parallel contributor's `feat/*` work.

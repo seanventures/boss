@@ -1,6 +1,15 @@
 # Codex Handoff
 
-Last updated: 2026-07-15 (BOSS-118 controlled integration release validated for main)
+Last updated: 2026-07-16 (BOSS-48/BOSS-49/BOSS-50/BOSS-55/BOSS-56 local skill marketplace)
+
+## 2026-07-16 local skill marketplace + trust handoff
+
+- Plane BOSS-48/BOSS-49/BOSS-50/BOSS-55/BOSS-56 are implemented on `ai/codex/boss-48-50-55-56-skill-marketplace`, stacked on draft PR #25 so the marketplace cannot land without its project registry, resolver, and agent bridge.
+- MCP servers now retain publisher/provenance and per-tool risk overrides. Agent MCP tools are synthetic SkillSpecs that use the existing permission/budget/retry gauntlet, attempt ledger, risk approval pause, and deduplicated external-effect Receipt.
+- Canonical local `boss.capability-bundle/v1` JSON supports SkillSpec and MCP import/export without Account Connect. Detached Ed25519 signatures cover the manifest checksum; configured trust keys mark verified imports trusted, explicit untrusted override is required otherwise, and deployments can exclude untrusted project extensions.
+- Project-authorized enable/disable changes affect the next task without restart. A compact on-demand loader attaches only resolver-approved schemas for the remainder of a run. Every invocation re-resolves current project and installed RoleSpec state; forbidden stale calls create normal scope-violation evidence.
+- Validation passes 23 focused marketplace/resolution/runtime/executor tests, 10 focused legacy API runtime/role cases, 41 worker tests, and 112 web tests after preserving the global mock/canary contract; repository lint/typecheck, Python compilation, diff checks, and static/dynamic OpenAPI route checks pass.
+- Implementation commit `2c67f7a` is published in mergeable stacked draft PR #26. Documentation run `29513302734` failed before checkout with zero steps and the explicit GitHub account payment/spending-limit annotation; no branch code executed, so the green local workflow-equivalent evidence is the review gate.
 
 ## 2026-07-15 BOSS-118 main integration handoff
 
@@ -74,6 +83,25 @@ Last updated: 2026-07-15 (BOSS-118 controlled integration release validated for 
 - Real bindings reuse `GitHubAdapter` for sandbox/real PR creation and `ResourcePlaneService` for deployment target registration, run planning, and health checks. GitHub writes validate the configured repository, create/reuse a Receipt before the call, record success/failure, and refuse a duplicate effect when a Receipt is already active.
 - Validation: five focused registry/executor tests and focused Ruff pass. BOSS-46 owns real-mode worker wiring; this slice intentionally does not relax the API's mock-only posture.
 - Coordination: standalone branch `ai/codex/skill-executor-registry` is based on current `origin/main` and does not overlap the reactive/docs/GitHub-community stack or the contributor's model-pacing/VAG/design-system branches.
+
+## 2026-07-16 real skill runtime + project loading foundation
+
+- Plane BOSS-46/BOSS-51/BOSS-52 / spec 03 A2/B1/B2 are implemented on `ai/codex/boss-46-51-52-skill-foundation`, based on current `origin/main` (`cfb39d3`).
+- Real skill calls use the existing `/v1/skills/{id}/invoke` contract only from an active `skill.execute` worker lease. The API validates exact project, job kind, skill, caller, and inputs before constructing server-only executor context. Unbacked skills fail visibly before reserving budget.
+- The runtime now resolves registered executors, retries per SkillSpec, reserves before execution, consumes receipt-backed actual cost into a CostReceipt, releases non-settled reservations, and records actual cost/cost-receipt identity on `skill_invocations`.
+- `project_skills` and `skill_registry.py` provide strict per-project list/register/enable/disable/ensure behavior plus audit events. Bootstrap seeds `system: true` skills idempotently; SkillSpec accepts only `load: eager|on_demand`. `deployment.health.check` is the initial eager system skill and `github.create_pr_sandbox` is on-demand.
+- Validation: 4 registry/runtime tests, 5 executor tests, and the full 29-test worker suite pass; web 112/112, repository lint, OpenAPI YAML, focused API skill tests, compile, and diff checks pass. The broad Python suite reached 90 passes before interruption and reported only known `test_api.py` baseline failures; representative auth, Metatron-budget, and Resource Plane failures reproduce unchanged on detached `origin/main`.
+- GitHub Actions CI run `29498267699` and Documentation run `29498267668` failed before checkout with zero executed steps because of the repository account payment/spending-limit gate. The run links and local validation evidence are recorded on draft PR #24 and Plane; no code workaround is appropriate.
+- Next dependency-safe work is BOSS-53 (pack-aware list) then BOSS-54 (task resolver), followed by BOSS-47 agent-loop injection. Do not bridge A3 directly against a hardcoded/global catalog.
+
+## 2026-07-16 pack-aware skill resolution + agent bridge
+
+- Plane BOSS-53/BOSS-54/BOSS-47 are implemented on `ai/codex/boss-47-53-54-skill-resolution`, stacked directly on draft PR #24 so the resolver cannot land without its registry/runtime foundation.
+- Project skill lists now follow the effective edition pack and inherited skill bundles, overlay `{source, system, enabled, on_demand}`, and keep the unscoped catalog backward-compatible.
+- Per-task resolution unions system, canonicalized module-default, and enabled tenant skills; filters pack, disabled rows, and RoleSpec allow/forbid; and separates eager tools from discoverable on-demand entries.
+- The agent loop injects collision-safe SkillSpec schemas beside native/MCP tools, invokes the existing real SkillRuntime gauntlet, and suspends tier-above-threshold calls behind blocking decisions. Approved resume revalidates current resolver eligibility before execution.
+- Validation passes: 13 resolution/registry/executor tests, 11 API skill/runtime/role regressions, 29 worker tests, all 112 web tests, repository Ruff/TypeScript lint, Python compile, and OpenAPI YAML parsing. The parity checker still reports only its documented pre-existing unrelated route backlog; `/v1/skills` is present and updated.
+- Draft PR #25 is mergeable. Documentation run `29502637887` was rejected before checkout with zero steps by the repository account payment/spending-limit gate. CI does not trigger for the intentionally stacked non-`main` base, so the local lint/test evidence above is the review gate until the stack is retargeted or merged.
 
 ## Active Codex slice — 2026-07-15
 

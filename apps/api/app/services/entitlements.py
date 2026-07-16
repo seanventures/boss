@@ -10,6 +10,7 @@ from sqlalchemy.engine import Connection
 
 from ..config import Settings
 from .budget import BudgetGovernor
+from .commercial import CommercialService
 from .core import DATA_BOUNDARIES, emit_event, make_id, normalize_data_boundary
 
 
@@ -90,18 +91,115 @@ class EntitlementBrokerService:
     def _skill_files(self) -> list[Path]:
         return sorted((self.settings.specpack_root / "skills").glob("*.yaml"))
 
-    def list_skills(self) -> list[dict[str, Any]]:
+    def _edition_skill_bundles(
+        self,
+        connection: Connection,
+        project_id: str,
+    ) -> set[str]:
+        edition = CommercialService(self.settings).edition_status(
+            connection,
+            project_id,
+        )
+        source_pack = Path(str(edition["source_pack"])).stem
+        return self._pack_skill_bundles(source_pack)
+
+    def _pack_skill_bundles(
+        self,
+        pack_id: str,
+        visited: Optional[set[str]] = None,
+    ) -> set[str]:
+        visited = visited or set()
+        if pack_id in visited:
+            return set()
+        visited.add(pack_id)
+        path = self.settings.specpack_root / "packs" / f"{pack_id}.yaml"
+        if not path.exists():
+            return set()
+        pack = self._load_yaml(path)
+        installs = pack.get("installs") or {}
+        bundles = {
+            str(item).strip()
+            for item in (installs.get("skills") or [])
+            if isinstance(item, str) and item.strip()
+        }
+        for requirement in pack.get("requires") or []:
+            if not isinstance(requirement, str):
+                continue
+            required_path = (
+                self.settings.specpack_root / "packs" / f"{requirement}.yaml"
+            )
+            if required_path.exists():
+                bundles.update(self._pack_skill_bundles(requirement, visited))
+        return bundles
+
+    def list_skills(
+        self,
+        project_id: Optional[str] = None,
+        *,
+        connection: Optional[Connection] = None,
+    ) -> list[dict[str, Any]]:
+        if project_id is not None and connection is None:
+            raise ValueError("connection is required when project_id is provided")
+
+        allowed_bundles: Optional[set[str]] = None
+        project_state: dict[str, dict[str, Any]] = {}
+        if project_id is not None:
+            assert connection is not None
+            allowed_bundles = self._edition_skill_bundles(connection, project_id)
+            rows = connection.execute(
+                text(
+                    """
+                    SELECT skill_id, source, enabled, on_demand, config,
+                           publisher, provenance
+                    FROM project_skills
+                    WHERE project_id = :project_id
+                    """
+                ),
+                {"project_id": project_id},
+            ).mappings().all()
+            project_state = {str(row["skill_id"]): dict(row) for row in rows}
+
         items: list[dict[str, Any]] = []
         for path in self._skill_files():
+            if allowed_bundles is not None and path.stem not in allowed_bundles:
+                continue
             payload = self._load_yaml(path)
             for skill in payload.get("skills", []):
                 if not isinstance(skill, dict):
                     continue
                 self.validate_skill_spec(skill, str(path))
+                skill_id = str(skill.get("id", path.stem))
+                system = bool(skill.get("system", False))
+                load = skill.get("load", "eager")
+                state = project_state.get(skill_id)
+                source = (
+                    str(state["source"])
+                    if state is not None
+                    else ("system" if system else "module")
+                )
+                enabled = (
+                    True
+                    if system
+                    else bool(state["enabled"])
+                    if state is not None
+                    else True
+                )
+                on_demand = (
+                    bool(state["on_demand"])
+                    if state is not None
+                    else load == "on_demand"
+                )
                 items.append(
                     {
-                        "id": skill.get("id", path.stem),
+                        "id": skill_id,
                         "kind": skill.get("kind", "unknown"),
+                        "system": system,
+                        "load": load,
+                        "source": source if project_id is not None else (
+                            "system" if system else "catalog"
+                        ),
+                        "enabled": enabled if project_id is not None else system,
+                        "on_demand": on_demand,
                         "risk_tier": int(skill.get("risk_tier", 0)),
                         "description": skill.get("description", ""),
                         "mock_mode": bool(skill.get("mock_mode", False)),
@@ -112,6 +210,41 @@ class EntitlementBrokerService:
                         "permissions": skill.get("permissions", {}) or {},
                         "data_boundary": skill.get("data_boundary", "internal"),
                         "policy": skill.get("policy", {}) or {},
+                        "publisher": (
+                            (state or {}).get("publisher") or
+                            ({"id": "boss", "name": "BOSS"} if system else {})
+                        ),
+                        "provenance": (
+                            (state or {}).get("provenance") or
+                            ({"source": "builtin", "version": "1", "trusted": True}
+                             if system else {"source": "specpack", "trusted": True})
+                        ),
+                    }
+                )
+        catalog_ids = {str(item["id"]) for item in items}
+        if project_id is not None:
+            for skill_id, state in project_state.items():
+                config = state.get("config") or {}
+                custom = config.get("skill_spec") if isinstance(config, dict) else None
+                if skill_id in catalog_ids or not isinstance(custom, dict):
+                    continue
+                self.validate_skill_spec(custom, f"project:{project_id}")
+                provenance = state.get("provenance") or {}
+                if (
+                    self.settings.exclude_untrusted_skills
+                    and provenance.get("trusted") is False
+                ):
+                    continue
+                items.append(
+                    {
+                        **custom,
+                        "id": skill_id,
+                        "system": False,
+                        "source": str(state.get("source") or "tenant"),
+                        "enabled": bool(state.get("enabled")),
+                        "on_demand": bool(state.get("on_demand")),
+                        "publisher": state.get("publisher") or {},
+                        "provenance": provenance,
                     }
                 )
         items.sort(key=lambda item: item["id"])
@@ -129,6 +262,11 @@ class EntitlementBrokerService:
 
         if skill.get("mock_mode") is not False:
             errors.append("mock_mode must be false in real-only runtime specs")
+
+        if not isinstance(skill.get("system", False), bool):
+            errors.append("system must be a boolean when provided")
+        if skill.get("load", "eager") not in {"eager", "on_demand"}:
+            errors.append("load must be either eager or on_demand")
 
         for key in (
             "input_schema",
@@ -170,10 +308,23 @@ class EntitlementBrokerService:
             skill_id = skill.get("id", "<unknown>")
             raise ValueError(f"SkillSpec {skill_id} in {source} is invalid: {'; '.join(errors)}")
 
-    def get_skill(self, skill_id: str) -> dict[str, Any]:
-        for skill in self.list_skills():
+    def get_skill(
+        self,
+        skill_id: str,
+        project_id: Optional[str] = None,
+        *,
+        connection: Optional[Connection] = None,
+    ) -> dict[str, Any]:
+        catalog = self.list_skills(project_id, connection=connection)
+        for skill in catalog:
             if skill["id"] == skill_id:
                 return skill
+        # Preserve the global mock/canary API contract for catalog SkillSpecs
+        # that are not installed in the project's effective edition pack.
+        if project_id is not None:
+            for skill in self.list_skills():
+                if skill["id"] == skill_id:
+                    return skill
         raise SkillNotFoundError(f"Skill '{skill_id}' not found")
 
     def _runtime_flags(self, source_id: str) -> tuple[bool, bool]:
@@ -1586,7 +1737,7 @@ class EntitlementBrokerService:
         actor: str = "system",
     ) -> dict[str, Any]:
         preferred_capabilities = preferred_capabilities or []
-        skill = self.get_skill(skill_id)
+        skill = self.get_skill(skill_id, project_id, connection=connection)
         boundary = normalize_data_boundary(data_boundary)
         budget_snapshot = self.budget.status_for_project(connection, project_id)
         resolved_budget_state = budget_state or budget_snapshot["budget_state"]

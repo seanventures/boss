@@ -119,6 +119,7 @@ def test_github_executor_reuses_adapter_and_records_receipt():
         "pr_url": "https://github.test/acme/widget/pull/7",
         "pull_request_number": 7,
         "receipt_id": "rcpt_test",
+        "actual_cost_usd_micros": 0,
     }
     assert github.calls == [
         ("boss/change", "Add governed change", "Receipt-backed proposal")

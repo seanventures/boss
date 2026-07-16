@@ -4,12 +4,13 @@ from sqlalchemy import text
 
 from .config import get_settings
 from .db import ensure_schema, get_engine
-from .services.core import make_id
+from .services.core import emit_event, make_id
 from .services.entitlements import EntitlementBrokerService
 from .services.event_subscription_service import seed_default_event_subscriptions
 from .services.feature_catalog import FeatureCatalog
 from .services.mcp_registry import ensure_mcp_server
 from .services.members import MemberDirectoryService
+from .services.skill_registry import seed_system_skills
 from .services.specpack import SpecPackService
 
 
@@ -84,7 +85,46 @@ def seed_project_defaults(
     members.seed_default_members(connection, project_id, actor)
     specpack.install_pack(connection, project_id, settings.core_pack_id, actor)
     specpack.install_default_agent_modules(connection, project_id, actor)
+    diagnostics = []
+    for module_id in specpack.DEFAULT_AGENT_MODULE_IDS:
+        module = specpack.load_agent_module_spec(module_id)
+        role_key, module_diagnostics = (
+            specpack.skill_reference_diagnostics_for_module(module)
+        )
+        diagnostics.extend(
+            {
+                **item,
+                "module_id": module_id,
+                "role_key": role_key,
+            }
+            for item in module_diagnostics
+        )
+    if diagnostics:
+        emit_event(
+            connection,
+            project_id,
+            "rolespec.skill_reference_diagnostics",
+            actor,
+            "project",
+            project_id,
+            {
+                "count": len(diagnostics),
+                "unresolved": sum(
+                    item["status"] == "unresolved" for item in diagnostics
+                ),
+                "legacy_aliases": sum(
+                    item["status"] == "legacy_alias" for item in diagnostics
+                ),
+                "items": diagnostics,
+            },
+        )
     entitlements.seed_default_sources(connection, project_id, actor)
+    seed_system_skills(
+        connection,
+        project_id,
+        entitlements.list_skills(),
+        actor,
+    )
     # seed the meeting role-agent template so a new org's panel isn't empty
     from .services.meeting_service import seed_roles
     seed_roles(connection, project_id)
@@ -97,6 +137,12 @@ def seed_project_defaults(
             risk_tier=srv["risk_tier"],
             data_boundary=srv["data_boundary"],
             description=srv["description"],
+            publisher={"id": "boss", "name": "BOSS", "kind": "system"},
+            provenance={
+                "source": "builtin",
+                "version": "1",
+                "trusted": True,
+            },
         )
     seed_default_event_subscriptions(connection, project_id)
     FeatureCatalog(settings).seed_from_traceability(connection, project_id)

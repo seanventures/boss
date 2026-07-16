@@ -76,6 +76,8 @@ from .schemas import (
     ProviderHealthPollRequest,
     RouterRationaleRequest,
     SkillInvokeRequest,
+    SkillToggleRequest,
+    CapabilityBundleImportRequest,
     SlackDigestBatchRequest,
     SlackRenderRequest,
     BudgetStatusResponse,
@@ -447,6 +449,10 @@ from .services.mcp_registry import (
     register_mcp_server,
     set_mcp_enabled,
 )
+from .services.skill_packaging import (
+    CapabilityBundleError,
+    CapabilityBundleService,
+)
 from .services.receipts import ReceiptService
 from .services.resource_plane import (
     ChangeSetNotFoundError,
@@ -459,6 +465,13 @@ from .services.router_health import RouterHealthService
 from .services.skill_runtime import (
     SkillPermissionError,
     SkillRuntimeService,
+)
+from .services.skill_executors import SkillExecutorContext
+from .services.skill_registry import (
+    disable_skill,
+    enable_skill,
+    ensure_skill,
+    list_project_skills,
 )
 from .services.slack_comms import (
     SlackCommsService,
@@ -505,6 +518,7 @@ decisions = DecisionService(settings)
 specpack = SpecPackService(settings)
 agent_runtime = AgentRuntimeService(settings)
 entitlements = EntitlementBrokerService(settings)
+capability_bundles = CapabilityBundleService(settings)
 commercial = CommercialService(settings)
 enterprise = EnterpriseService(settings)
 audit = AuditTrailService(settings)
@@ -1641,6 +1655,13 @@ def skill_summary_from_service(payload) -> SkillSummary:
     return SkillSummary(
         id=payload["id"],
         kind=payload["kind"],
+        system=payload.get("system", False),
+        load=payload.get("load", "eager"),
+        source=payload.get("source", "catalog"),
+        enabled=bool(payload.get("enabled", False)),
+        on_demand=bool(
+            payload.get("on_demand", payload.get("load") == "on_demand")
+        ),
         risk_tier=payload["risk_tier"],
         description=payload["description"],
         mock_mode=payload["mock_mode"],
@@ -1651,6 +1672,8 @@ def skill_summary_from_service(payload) -> SkillSummary:
         permissions=payload.get("permissions") or {},
         data_boundary=payload.get("data_boundary", "internal"),
         policy=payload.get("policy") or {},
+        publisher=payload.get("publisher") or {},
+        provenance=payload.get("provenance") or {},
     )
 
 
@@ -4218,17 +4241,55 @@ def list_mcp(project_id: str):
 @app.post("/v1/mcp/servers", status_code=201)
 def register_mcp(payload: McpServerRegisterRequest):
     with begin(engine) as connection:
-        return register_mcp_server(
-            connection,
-            payload.project_id,
-            payload.name,
-            payload.url,
-            transport=payload.transport,
-            risk_tier=payload.risk_tier,
-            data_boundary=payload.data_boundary,
-            description=payload.description,
-            actor=payload.actor,
-        )
+        try:
+            return register_mcp_server(
+                connection,
+                payload.project_id,
+                payload.name,
+                payload.url,
+                transport=payload.transport,
+                risk_tier=payload.risk_tier,
+                data_boundary=payload.data_boundary,
+                description=payload.description,
+                publisher=payload.publisher,
+                provenance=payload.provenance,
+                tool_risk_overrides=payload.tool_risk_overrides,
+                actor=payload.actor,
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+
+
+@app.post("/v1/mcp/servers/import", status_code=201)
+def import_mcp_bundle(payload: CapabilityBundleImportRequest) -> dict:
+    with begin(engine) as connection:
+        try:
+            require_project_actor(
+                connection, payload.project_id, payload.actor, "pack_manage"
+            )
+            return capability_bundles.import_mcp(
+                connection,
+                payload.project_id,
+                payload.bundle,
+                allow_untrusted=payload.allow_untrusted,
+                enabled=payload.enabled,
+                actor=payload.actor,
+            )
+        except CapabilityBundleError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+
+
+@app.get("/v1/mcp/servers/{server_id}/export")
+def export_mcp_bundle(server_id: str, project_id: str, actor: str = "ceo"):
+    with begin(engine) as connection:
+        try:
+            require_project_actor(connection, project_id, actor, "pack_manage")
+            content = capability_bundles.export_mcp(
+                connection, project_id, server_id
+            )
+        except CapabilityBundleError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+    return Response(content=content, media_type="application/vnd.boss.capability+json")
 
 
 @app.patch("/v1/mcp/servers/{server_id}")
@@ -6776,9 +6837,17 @@ def resolve_agent_runtime(
 
 
 @app.get("/v1/skills", response_model=SkillListResponse)
-def list_skills() -> SkillListResponse:
+def list_skills(project_id: Optional[str] = None) -> SkillListResponse:
+    if project_id is None:
+        skills = entitlements.list_skills()
+    else:
+        with begin(engine) as connection:
+            skills = entitlements.list_skills(
+                project_id,
+                connection=connection,
+            )
     return SkillListResponse(
-        items=[skill_summary_from_service(skill) for skill in entitlements.list_skills()]
+        items=[skill_summary_from_service(skill) for skill in skills]
     )
 
 
@@ -6788,28 +6857,168 @@ def list_skill_invocations(project_id: str, limit: int = 50) -> dict:
         return {"items": skill_runtime.list_invocations(connection, project_id, limit)}
 
 
-@app.post("/v1/skills/{skill_id}/invoke", status_code=201)
-def invoke_skill(skill_id: str, payload: SkillInvokeRequest) -> dict:
-    """Invoke a skill through the runtime (per-skill permission/cost/retry enforcement). The API
-    only drives mock mode — full governance gauntlet, no real side effects (spec §C). Real
-    invocation is driven by the worker runtime with a server-side executor."""
-    if not payload.mock:
-        raise HTTPException(
-            status_code=400,
-            detail="Real skill invocation must be driven by the worker runtime, not the API. "
-            "Use mock=true for a side-effect-free invocation.",
-        )
+@app.post("/v1/skills/import", status_code=201)
+def import_skill_bundle(payload: CapabilityBundleImportRequest) -> dict:
     with begin(engine) as connection:
         try:
+            require_project_actor(
+                connection, payload.project_id, payload.actor, "pack_manage"
+            )
+            return capability_bundles.import_skill(
+                connection,
+                payload.project_id,
+                payload.bundle,
+                allow_untrusted=payload.allow_untrusted,
+                enabled=payload.enabled,
+                on_demand=payload.on_demand,
+                actor=payload.actor,
+            )
+        except (CapabilityBundleError, ValueError) as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+
+
+@app.get("/v1/skills/{skill_id}/export")
+def export_skill_bundle(skill_id: str, project_id: str, actor: str = "ceo"):
+    with begin(engine) as connection:
+        try:
+            require_project_actor(connection, project_id, actor, "pack_manage")
+            content = capability_bundles.export_skill(
+                connection, project_id, skill_id
+            )
+        except SkillNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except CapabilityBundleError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+    return Response(content=content, media_type="application/vnd.boss.capability+json")
+
+
+def _set_project_skill_state(
+    connection,
+    skill_id: str,
+    payload: SkillToggleRequest,
+    *,
+    enabled: bool,
+) -> dict:
+    require_project_actor(
+        connection, payload.project_id, payload.actor, "pack_manage"
+    )
+    catalog = entitlements.list_skills(
+        payload.project_id, connection=connection
+    )
+    skill = next((item for item in catalog if item["id"] == skill_id), None)
+    if skill is None:
+        raise HTTPException(status_code=404, detail="Skill not found in project catalog.")
+    if skill.get("system") is True and not enabled:
+        raise HTTPException(status_code=409, detail="System skills cannot be disabled.")
+    rows = list_project_skills(connection, payload.project_id)
+    row = next((item for item in rows if item["skill_id"] == skill_id), None)
+    if row is None:
+        row = ensure_skill(
+            connection,
+            payload.project_id,
+            skill_id,
+            source="system" if skill.get("system") is True else "tenant",
+            enabled=enabled,
+            on_demand=(
+                bool(payload.on_demand)
+                if payload.on_demand is not None
+                else skill.get("load") == "on_demand"
+            ),
+            publisher=skill.get("publisher") or {},
+            provenance=skill.get("provenance") or {},
+            actor=payload.actor,
+        )
+    updated = (
+        enable_skill(
+            connection,
+            payload.project_id,
+            skill_id,
+            payload.actor,
+            on_demand=payload.on_demand,
+        )
+        if enabled
+        else disable_skill(
+            connection, payload.project_id, skill_id, payload.actor
+        )
+    )
+    return updated or row
+
+
+@app.post("/v1/skills/{skill_id}/enable")
+def enable_project_skill(skill_id: str, payload: SkillToggleRequest) -> dict:
+    with begin(engine) as connection:
+        return _set_project_skill_state(connection, skill_id, payload, enabled=True)
+
+
+@app.post("/v1/skills/{skill_id}/disable")
+def disable_project_skill(skill_id: str, payload: SkillToggleRequest) -> dict:
+    with begin(engine) as connection:
+        return _set_project_skill_state(connection, skill_id, payload, enabled=False)
+
+
+@app.post("/v1/skills/{skill_id}/invoke", status_code=201)
+def invoke_skill(skill_id: str, payload: SkillInvokeRequest) -> dict:
+    """Run API mock mode or lease-owned worker real mode through one governance gauntlet."""
+    with begin(engine) as connection:
+        try:
+            executor_context = None
+            if not payload.mock:
+                if not (
+                    payload.created_by_job_id
+                    and payload.worker_id
+                    and payload.lease_token
+                ):
+                    raise HTTPException(
+                        status_code=400,
+                        detail=(
+                            "Real skill invocation requires an active worker lease. "
+                            "Use mock=true for a side-effect-free invocation."
+                        ),
+                    )
+                leased_job = jobs.require_active_lease(
+                    connection,
+                    payload.worker_id,
+                    payload.created_by_job_id,
+                    payload.lease_token,
+                )
+                job_payload = leased_job.get("payload") or {}
+                if (
+                    leased_job["project_id"] != payload.project_id
+                    or leased_job["kind"] != "skill.execute"
+                    or job_payload.get("skill_id") != skill_id
+                    or (job_payload.get("caller") or "worker") != payload.caller
+                    or (job_payload.get("inputs") or {}) != payload.inputs
+                ):
+                    raise HTTPException(
+                        status_code=409,
+                        detail=(
+                            "Skill invocation does not match the active leased job "
+                            "scope."
+                        ),
+                    )
+                executor_context = SkillExecutorContext(
+                    settings=settings,
+                    connection=connection,
+                    project_id=payload.project_id,
+                    actor=payload.worker_id,
+                    created_by_job_id=payload.created_by_job_id,
+                )
             return skill_runtime.invoke(
                 connection,
                 payload.project_id,
                 skill_id,
                 payload.caller,
                 payload.inputs,
-                mock=True,
-                actor=payload.actor or payload.caller,
+                mock=payload.mock,
+                executor_context=executor_context,
+                actor=(
+                    payload.worker_id
+                    if not payload.mock
+                    else payload.actor or payload.caller
+                ),
             )
+        except LeaseNotFoundError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
         except SkillNotFoundError as error:
             raise HTTPException(status_code=404, detail=str(error)) from error
         except SkillPermissionError as error:

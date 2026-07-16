@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
+from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
 from ..config import Settings
@@ -55,6 +56,17 @@ class AgentRuntimeService:
                 "config": {},
             }
         role = module.get("role") or {}
+        role_key = role.get("role_key") or role.get("role_id")
+        if role_key:
+            installed_role = connection.execute(
+                text(
+                    "SELECT spec FROM roles WHERE project_id = :project_id "
+                    "AND role_key = :role_key"
+                ),
+                {"project_id": project_id, "role_key": role_key},
+            ).mappings().one_or_none()
+            if installed_role is not None:
+                role = dict(installed_role["spec"] or role)
         runtime = module.get("runtime") or {}
         prompt_bundle = module.get("prompt_bundle") or {}
         job_prompt = self._job_prompt(job_kind, prompt_bundle, runtime)

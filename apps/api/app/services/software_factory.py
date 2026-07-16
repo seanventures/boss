@@ -666,6 +666,8 @@ class SoftwareFactoryService:
                 "route_log_id": route["route_decision_log_id"],
                 "module_descriptor": self._module_descriptor(module_spec),
                 "module_id": module_spec.get("id") if isinstance(module_spec, dict) else None,
+                "job_kind": "openai.plan",
+                "skill_caller": "software_factory",
                 "created_by_job_id": created_by_job_id,
             }
             loop_result = run_agent_loop(

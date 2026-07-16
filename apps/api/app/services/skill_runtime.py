@@ -23,6 +23,7 @@ from ..config import Settings
 from .budget import BudgetGovernor
 from .core import emit_event, make_id, record_policy_eval
 from .entitlements import EntitlementBrokerService
+from .skill_executors import SkillExecutorContext, resolve_executor
 
 # Rough per-estimator budget reservation (USD micros). The point is to exercise the cost *gate*,
 # not to be precise — the real cost is reconciled by the executor's receipts.
@@ -56,10 +57,32 @@ class SkillRuntimeService:
         *,
         mock: bool = True,
         executor: Optional[Callable[[dict[str, Any]], dict[str, Any]]] = None,
+        executor_context: Optional[SkillExecutorContext] = None,
+        skill_spec: Optional[dict[str, Any]] = None,
         actor: Optional[str] = None,
     ) -> dict[str, Any]:
         actor = actor or caller
-        skill = self.entitlements.get_skill(skill_id)  # raises SkillNotFoundError
+        created_by_job_id = (
+            executor_context.created_by_job_id
+            if not mock and executor_context is not None
+            else None
+        )
+        if created_by_job_id:
+            existing = self._invocation_for_job(
+                connection,
+                project_id,
+                skill_id,
+                caller,
+                created_by_job_id,
+            )
+            if existing is not None:
+                return existing
+        skill = skill_spec or self.entitlements.get_skill(
+            skill_id, project_id, connection=connection
+        )
+        if str(skill.get("id") or "") != skill_id:
+            raise ValueError("skill_spec id does not match skill_id")
+        self.entitlements.validate_skill_spec(skill, "runtime")
         permissions = skill.get("permissions") or {}
         allowed_callers = permissions.get("allowed_callers") or []
         retry = skill.get("retry") or {}
@@ -79,7 +102,23 @@ class SkillRuntimeService:
                 connection, project_id, skill_id, caller, mode,
                 status="denied", permission_decision="deny", attempts=0,
                 max_attempts=max_attempts, estimate=estimate, reservation_id=None,
-                reason=reason, result={}, actor=actor)
+                actual_cost=None, cost_receipt_id=None,
+                created_by_job_id=created_by_job_id, reason=reason, result={}, actor=actor)
+
+        if not mock and executor is None:
+            executor = resolve_executor(skill_id, context=executor_context)
+            if executor is None:
+                reason = f"No server-side executor is registered for skill '{skill_id}'."
+                record_policy_eval(
+                    connection, project_id, "skill.invoke", "deny",
+                    action=skill_id, reason=reason,
+                    detail={"caller": caller, "mode": mode})
+                return self._record(
+                    connection, project_id, skill_id, caller, mode,
+                    status="failed", permission_decision="allow", attempts=0,
+                    max_attempts=max_attempts, estimate=estimate, reservation_id=None,
+                    actual_cost=None, cost_receipt_id=None,
+                    created_by_job_id=created_by_job_id, reason=reason, result={}, actor=actor)
 
         # 2) Cost gate — reserve budget before running (real mode only; mock has no side effects).
         reservation_id: Optional[str] = None
@@ -97,7 +136,8 @@ class SkillRuntimeService:
                     connection, project_id, skill_id, caller, mode,
                     status="denied", permission_decision="allow", attempts=0,
                     max_attempts=max_attempts, estimate=estimate, reservation_id=None,
-                    reason=reason, result={}, actor=actor)
+                    actual_cost=None, cost_receipt_id=None,
+                    created_by_job_id=created_by_job_id, reason=reason, result={}, actor=actor)
             reservation_id = reservation["reservation_id"]
 
         # 3) Execute with the skill's retry policy.
@@ -110,19 +150,67 @@ class SkillRuntimeService:
             try:
                 if mock:
                     result = {"mock": True, "skill_id": skill_id, "echo": inputs}
-                elif executor is None:
-                    raise SkillPermissionError(
-                        "real skill invocation requires a server-side executor")
                 else:
-                    result = executor(inputs)
+                    assert executor is not None
+                    candidate = executor(inputs)
+                    if not isinstance(candidate, dict):
+                        raise TypeError("skill executor must return an object")
+                    if candidate.get("status") in {"blocked", "failed", "in_progress"}:
+                        raise RuntimeError(
+                            "skill executor returned non-terminal success status: "
+                            f"{candidate['status']}"
+                        )
+                    result = candidate
                 status = "succeeded"
                 break
             except Exception as exc:  # noqa: BLE001 — retry per policy; capture for the record
                 last_error = str(exc)
 
-        # Release the reservation — the executor records actual cost via its own receipts.
+        actual_cost: Optional[int] = None
+        cost_receipt_id: Optional[str] = None
+        # Receipt-backed executors can settle the reservation with their actual cost.
+        # Internal/no-cost executors release it instead of fabricating a provider receipt.
         if reservation_id is not None:
-            self.budget.release(connection, project_id, reservation_id, f"skill:{skill_id} done")
+            receipt_id = result.get("receipt_id") if status == "succeeded" else None
+            reported_actual = (
+                result.get("actual_cost_usd_micros")
+                if status == "succeeded"
+                else None
+            )
+            if (
+                receipt_id
+                and isinstance(reported_actual, int)
+                and not isinstance(reported_actual, bool)
+                and reported_actual >= 0
+            ):
+                try:
+                    with connection.begin_nested():
+                        settlement = self.budget.consume(
+                            connection,
+                            project_id,
+                            reservation_id,
+                            str(receipt_id),
+                            category,
+                            skill_id,
+                            estimate,
+                            reported_actual,
+                            actor,
+                        )
+                    actual_cost = reported_actual
+                    cost_receipt_id = settlement["cost_receipt"]["id"]
+                except Exception as exc:  # noqa: BLE001 — preserve effect evidence
+                    last_error = f"cost reconciliation failed: {exc}"
+                    result = {**result, "cost_reconciliation_error": str(exc)}
+                    status = "failed"
+                    self.budget.release(
+                        connection,
+                        project_id,
+                        reservation_id,
+                        f"skill:{skill_id} reconciliation failed",
+                    )
+            else:
+                self.budget.release(
+                    connection, project_id, reservation_id, f"skill:{skill_id} done")
 
         record_policy_eval(
             connection, project_id, "skill.invoke",
@@ -134,6 +222,8 @@ class SkillRuntimeService:
             connection, project_id, skill_id, caller, mode,
             status=status, permission_decision="allow", attempts=attempts,
             max_attempts=max_attempts, estimate=estimate, reservation_id=reservation_id,
+            actual_cost=actual_cost, cost_receipt_id=cost_receipt_id,
+            created_by_job_id=created_by_job_id,
             reason=None if status == "succeeded" else last_error, result=result, actor=actor)
 
     def list_invocations(
@@ -142,9 +232,11 @@ class SkillRuntimeService:
         rows = connection.execute(
             text(
                 """
-                SELECT id, skill_id, caller, mode, status, permission_decision, attempts,
-                       max_attempts, cost_estimate_usd_micros, reservation_id, reason,
-                       result, created_at
+                SELECT id, created_by_job_id, skill_id, caller, mode, status,
+                       permission_decision, attempts,
+                       max_attempts, cost_estimate_usd_micros,
+                       actual_cost_usd_micros, cost_receipt_id, reservation_id,
+                       reason, result, created_at
                 FROM skill_invocations
                 WHERE project_id = :p
                 ORDER BY created_at DESC
@@ -164,6 +256,38 @@ class SkillRuntimeService:
             return True
         return caller in allowed_callers
 
+    def _invocation_for_job(
+        self,
+        connection: Connection,
+        project_id: str,
+        skill_id: str,
+        caller: str,
+        created_by_job_id: str,
+    ) -> Optional[dict[str, Any]]:
+        row = connection.execute(
+            text(
+                """
+                SELECT id, project_id, created_by_job_id, skill_id, caller, mode,
+                       status, permission_decision, attempts, max_attempts,
+                       cost_estimate_usd_micros, actual_cost_usd_micros,
+                       cost_receipt_id, reservation_id, reason, result
+                FROM skill_invocations
+                WHERE created_by_job_id = :created_by_job_id
+                  AND project_id = :project_id
+                  AND skill_id = :skill_id
+                  AND caller = :caller
+                  AND mode = 'real'
+                """
+            ),
+            {
+                "created_by_job_id": created_by_job_id,
+                "project_id": project_id,
+                "skill_id": skill_id,
+                "caller": caller,
+            },
+        ).mappings().one_or_none()
+        return dict(row) if row is not None else None
+
     def _record(
         self,
         connection: Connection,
@@ -178,6 +302,9 @@ class SkillRuntimeService:
         max_attempts: int,
         estimate: int,
         reservation_id: Optional[str],
+        actual_cost: Optional[int],
+        cost_receipt_id: Optional[str],
+        created_by_job_id: Optional[str],
         reason: Optional[str],
         result: dict[str, Any],
         actor: str,
@@ -187,21 +314,27 @@ class SkillRuntimeService:
             text(
                 """
                 INSERT INTO skill_invocations (
-                    id, project_id, skill_id, caller, mode, status, permission_decision,
-                    attempts, max_attempts, cost_estimate_usd_micros, reservation_id, reason, result
+                    id, project_id, created_by_job_id, skill_id, caller, mode,
+                    status, permission_decision,
+                    attempts, max_attempts, cost_estimate_usd_micros,
+                    actual_cost_usd_micros, cost_receipt_id, reservation_id, reason, result
                 )
                 VALUES (
-                    :id, :p, :skill_id, :caller, :mode, :status, :permission_decision,
-                    :attempts, :max_attempts, :estimate, :reservation_id, :reason,
-                    CAST(:result AS JSONB)
+                    :id, :p, :created_by_job_id, :skill_id, :caller, :mode,
+                    :status, :permission_decision,
+                    :attempts, :max_attempts, :estimate, :actual_cost,
+                    :cost_receipt_id, :reservation_id, :reason, CAST(:result AS JSONB)
                 )
                 """
             ),
             {
                 "id": invocation_id, "p": project_id, "skill_id": skill_id, "caller": caller,
+                "created_by_job_id": created_by_job_id,
                 "mode": mode, "status": status, "permission_decision": permission_decision,
                 "attempts": attempts, "max_attempts": max_attempts, "estimate": estimate,
-                "reservation_id": reservation_id, "reason": reason, "result": json.dumps(result),
+                "actual_cost": actual_cost, "cost_receipt_id": cost_receipt_id,
+                "reservation_id": reservation_id, "reason": reason,
+                "result": json.dumps(result),
             },
         )
         emit_event(
@@ -210,8 +343,12 @@ class SkillRuntimeService:
              "permission_decision": permission_decision, "attempts": attempts})
         return {
             "id": invocation_id, "project_id": project_id, "skill_id": skill_id, "caller": caller,
+            "created_by_job_id": created_by_job_id,
             "mode": mode, "status": status, "permission_decision": permission_decision,
             "attempts": attempts, "max_attempts": max_attempts,
-            "cost_estimate_usd_micros": estimate, "reservation_id": reservation_id,
+            "cost_estimate_usd_micros": estimate,
+            "actual_cost_usd_micros": actual_cost,
+            "cost_receipt_id": cost_receipt_id,
+            "reservation_id": reservation_id,
             "reason": reason, "result": result,
         }

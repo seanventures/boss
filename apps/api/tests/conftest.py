@@ -12,6 +12,7 @@ from apps.api.app import main as api_main
 from apps.api.app.services.entitlements import EntitlementBrokerService
 from apps.api.app.services.event_dispatch import invalidate_subscription_cache
 from apps.api.app.services.members import MemberDirectoryService
+from apps.api.app.services.skill_registry import seed_system_skills
 from apps.api.app.services.specpack import SpecPackService
 
 
@@ -86,6 +87,7 @@ def clean_tables(engine):
             "resource_policies",
             "capacity_receipts",
             "entitlement_sources",
+            "skill_invocations",
             "cost_receipts",
             "budget_reservations",
             "budget_allocations",
@@ -94,7 +96,7 @@ def clean_tables(engine):
             "commitment_reconciliations",
             "canary_runs",
             "eval_runs",
-            "skill_invocations",
+            "project_skills",
             "quality_gates",
             "code_task_runs",
             "meeting_runs",
@@ -145,6 +147,12 @@ def clean_tables(engine):
         entitlements.seed_default_sources(
             connection,
             settings.default_project_id,
+            "test-reset",
+        )
+        seed_system_skills(
+            connection,
+            settings.default_project_id,
+            entitlements.list_skills(),
             "test-reset",
         )
         members.seed_default_members(

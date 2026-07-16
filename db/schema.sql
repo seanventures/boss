@@ -1723,9 +1723,30 @@ CREATE TABLE IF NOT EXISTS mcp_servers (
   data_boundary TEXT NOT NULL DEFAULT 'internal',
   enabled BOOLEAN NOT NULL DEFAULT true,
   description TEXT,
+  publisher JSONB NOT NULL DEFAULT '{}'::jsonb,
+  provenance JSONB NOT NULL DEFAULT '{}'::jsonb,
+  tool_risk_overrides JSONB NOT NULL DEFAULT '{}'::jsonb,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_mcp_servers_project ON mcp_servers(project_id, enabled);
+
+CREATE TABLE IF NOT EXISTS project_skills (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  skill_id TEXT NOT NULL,
+  source TEXT NOT NULL DEFAULT 'tenant',
+  enabled BOOLEAN NOT NULL DEFAULT true,
+  on_demand BOOLEAN NOT NULL DEFAULT false,
+  config JSONB NOT NULL DEFAULT '{}'::jsonb,
+  publisher JSONB NOT NULL DEFAULT '{}'::jsonb,
+  provenance JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(project_id, skill_id),
+  CHECK (source IN ('system', 'tenant', 'module'))
+);
+CREATE INDEX IF NOT EXISTS idx_project_skills_project
+  ON project_skills(project_id, enabled, on_demand);
 
 CREATE TABLE IF NOT EXISTS agent_runs (
   id TEXT PRIMARY KEY,
@@ -1905,6 +1926,7 @@ ALTER TABLE self_improvement_proposals
 CREATE TABLE IF NOT EXISTS skill_invocations (
   id TEXT PRIMARY KEY,
   project_id TEXT NOT NULL,
+  created_by_job_id TEXT REFERENCES jobs(id),
   skill_id TEXT NOT NULL,
   caller TEXT NOT NULL,
   mode TEXT NOT NULL,                       -- mock | real
@@ -1913,13 +1935,24 @@ CREATE TABLE IF NOT EXISTS skill_invocations (
   attempts INTEGER NOT NULL DEFAULT 0,
   max_attempts INTEGER NOT NULL DEFAULT 1,
   cost_estimate_usd_micros BIGINT NOT NULL DEFAULT 0,
+  actual_cost_usd_micros BIGINT,
+  cost_receipt_id TEXT REFERENCES cost_receipts(id),
   reservation_id TEXT,
   reason TEXT,
   result JSONB NOT NULL DEFAULT '{}'::jsonb,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+ALTER TABLE skill_invocations
+  ADD COLUMN IF NOT EXISTS actual_cost_usd_micros BIGINT;
+ALTER TABLE skill_invocations
+  ADD COLUMN IF NOT EXISTS cost_receipt_id TEXT REFERENCES cost_receipts(id);
+ALTER TABLE skill_invocations
+  ADD COLUMN IF NOT EXISTS created_by_job_id TEXT REFERENCES jobs(id);
 CREATE INDEX IF NOT EXISTS idx_skill_invocations_project
   ON skill_invocations (project_id, created_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_skill_invocations_real_job
+  ON skill_invocations(created_by_job_id)
+  WHERE created_by_job_id IS NOT NULL AND mode = 'real';
 
 -- Phase 3 (comms robustness): inbound acknowledgment ledger — one row per inbox message, advanced
 -- through received → parsed → routed → (actioned | deadlettered | acknowledged). The durable proof
