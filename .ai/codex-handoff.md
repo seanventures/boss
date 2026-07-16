@@ -10,6 +10,7 @@ Last updated: 2026-07-16 (BOSS-58–62 CI/CD promotion slice)
 - Added deterministic Actions/Jenkins config proposals via the existing governed software-factory PR path. Generated deploy jobs hand off build evidence only and never receive provider credentials.
 - Added a first-class promotion that records pipeline verdict, staging run, real staging health gate, delayed production run, production rollout, failures, and a single ordered timeline; the ProviderOps console polls active promotions every five seconds.
 - Validation: focused Python 7/7, web 113/113, repo lint, production build, smoke, double schema apply, YAML/OpenAPI parse, client contracts, and diff checks pass. Two adjacent budget-dependent tests fail identically on detached `origin/main`; three other deployment registry/health regressions pass.
+- Publication: implementation commit `d5800f6`; mergeable draft PR [#27](https://github.com/seanheiney/boss/pull/27) targets `main`. Plane BOSS-57–62 have linked evidence and remain In Progress pending merge; BOSS-63 remains Backlog.
 
 ## 2026-07-15 BOSS-118 main integration handoff
 

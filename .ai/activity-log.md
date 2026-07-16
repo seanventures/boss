@@ -9,6 +9,7 @@ All 15-min terminal updates and major milestones appended here. Chronological, n
 - Implemented the shared DeploymentRun rollout engine, GitHub Actions pipeline adapter, CI/Jenkins config generator, staging-to-production promotion orchestrator, aggregate API/client contract, and ProviderOps promotion timeline.
 - Preserved safety boundaries: external pipeline dispatch remains an adapter-only primitive with no public unguarded route; generated CI never actuates providers; production planning honors environment policy, budget reservation, ChangeSet, health, and ResourceReceipt boundaries; rollback stops widening and records `rollback_pending` for governed follow-up.
 - Validation passes: 7 focused Python tests, 113 web tests, repo lint, production build, smoke, two consecutive schema applications, focused Ruff/compile, YAML/OpenAPI parsing, and diff checks. Two adjacent budget-dependent failures reproduce unchanged on detached `origin/main`.
+- Published implementation commit `d5800f6` to mergeable draft PR [#27](https://github.com/seanheiney/boss/pull/27). Attached commit/PR/test/risk evidence to Plane BOSS-57–62 and retained In Progress state until merge.
 
 ---
 ## 2026-07-15 — Codex — BOSS-118 controlled main integration
