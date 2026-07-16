@@ -2103,6 +2103,8 @@ paths:
                         - permissions
                         - data_boundary
                         - policy
+                        - publisher
+                        - provenance
                       properties:
                         id: { type: string }
                         kind: { type: string }
@@ -2121,6 +2123,8 @@ paths:
                         permissions: { type: object }
                         data_boundary: { type: string }
                         policy: { type: object }
+                        publisher: { type: object }
+                        provenance: { type: object }
   /v1/skills/invocations:
     get:
       summary: List governed skill invocation records for a project
@@ -2135,6 +2139,78 @@ paths:
           schema: { type: integer, default: 50 }
       responses:
         '200': { description: Skill invocation ledger }
+  /v1/skills/import:
+    post:
+      summary: Import a local SkillSpec capability bundle without Account Connect
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id, bundle]
+              properties:
+                project_id: { type: string }
+                bundle: { type: string }
+                allow_untrusted: { type: boolean, default: false }
+                enabled: { type: boolean, default: true }
+                on_demand: { type: boolean, nullable: true }
+                actor: { type: string, default: system }
+      responses:
+        '201': { description: Skill registered in the project capability store }
+        '403': { description: Actor lacks pack management permission }
+        '422': { description: Bundle, signature, or SkillSpec is invalid }
+  /v1/skills/{skill_id}/export:
+    get:
+      summary: Export a project skill as a canonical local capability bundle
+      parameters:
+        - { name: skill_id, in: path, required: true, schema: { type: string } }
+        - { name: project_id, in: query, required: true, schema: { type: string } }
+        - { name: actor, in: query, required: false, schema: { type: string, default: ceo } }
+      responses:
+        '200': { description: Canonical boss.capability-bundle/v1 JSON }
+        '403': { description: Actor lacks pack management permission }
+        '404': { description: Skill not found }
+  /v1/skills/{skill_id}/enable:
+    post:
+      summary: Enable a project skill and optionally change its load mode
+      parameters:
+        - { name: skill_id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id]
+              properties:
+                project_id: { type: string }
+                on_demand: { type: boolean, nullable: true }
+                actor: { type: string, default: system }
+      responses:
+        '200': { description: Current project skill state }
+        '403': { description: Actor lacks pack management permission }
+        '404': { description: Skill not found in project catalog }
+  /v1/skills/{skill_id}/disable:
+    post:
+      summary: Disable a non-system project skill
+      parameters:
+        - { name: skill_id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id]
+              properties:
+                project_id: { type: string }
+                actor: { type: string, default: system }
+      responses:
+        '200': { description: Disabled project skill state }
+        '403': { description: Actor lacks pack management permission }
+        '404': { description: Skill not found in project catalog }
+        '409': { description: System skills cannot be disabled }
   /v1/skills/{skill_id}/invoke:
     post:
       summary: Mock-invoke a skill, or execute real mode from an exactly scoped worker lease
@@ -2165,6 +2241,87 @@ paths:
         '404': { description: Skill not found }
         '409': { description: Worker lease is invalid or does not match invocation scope }
         '422': { description: Invalid invocation input }
+  /v1/mcp/servers:
+    get:
+      summary: List project MCP servers with publisher and provenance
+      parameters:
+        - { name: project_id, in: query, required: true, schema: { type: string } }
+      responses:
+        '200': { description: MCP server inventory }
+    post:
+      summary: Register an MCP server with per-tool governance metadata
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id, name, url]
+              properties:
+                project_id: { type: string }
+                name: { type: string }
+                url: { type: string }
+                transport: { type: string, default: http }
+                risk_tier: { type: integer, minimum: 0, maximum: 3, default: 1 }
+                data_boundary: { type: string, default: internal }
+                description: { type: string, nullable: true }
+                publisher: { type: object }
+                provenance: { type: object }
+                tool_risk_overrides:
+                  type: object
+                  additionalProperties: { type: integer, minimum: 0, maximum: 3 }
+                actor: { type: string, default: system }
+      responses:
+        '201': { description: MCP server registered }
+  /v1/mcp/servers/import:
+    post:
+      summary: Import a local MCP descriptor capability bundle without Account Connect
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id, bundle]
+              properties:
+                project_id: { type: string }
+                bundle: { type: string }
+                allow_untrusted: { type: boolean, default: false }
+                enabled: { type: boolean, default: true }
+                actor: { type: string, default: system }
+      responses:
+        '201': { description: MCP server registered from the capability bundle }
+        '403': { description: Actor lacks pack management permission }
+        '422': { description: Bundle, signature, or descriptor is invalid }
+  /v1/mcp/servers/{server_id}/export:
+    get:
+      summary: Export a project MCP descriptor as a canonical capability bundle
+      parameters:
+        - { name: server_id, in: path, required: true, schema: { type: string } }
+        - { name: project_id, in: query, required: true, schema: { type: string } }
+        - { name: actor, in: query, required: false, schema: { type: string, default: ceo } }
+      responses:
+        '200': { description: Canonical boss.capability-bundle/v1 JSON }
+        '403': { description: Actor lacks pack management permission }
+        '404': { description: MCP server not found }
+  /v1/mcp/servers/{server_id}:
+    patch:
+      summary: Enable or disable a project MCP server
+      parameters:
+        - { name: server_id, in: path, required: true, schema: { type: string } }
+        - { name: project_id, in: query, required: true, schema: { type: string } }
+        - { name: enabled, in: query, required: true, schema: { type: boolean } }
+      responses:
+        '200': { description: Current MCP server state }
+        '404': { description: MCP server not found }
+    delete:
+      summary: Remove a project MCP server
+      parameters:
+        - { name: server_id, in: path, required: true, schema: { type: string } }
+        - { name: project_id, in: query, required: true, schema: { type: string } }
+      responses:
+        '204': { description: MCP server removed }
+        '404': { description: MCP server not found }
   /v1/model-adapters:
     get:
       summary: List registered model adapter definitions from the Model Entitlement Broker

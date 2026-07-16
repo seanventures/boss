@@ -1,10 +1,10 @@
 # BOSS Autonomous Delivery Status
 
-**Last updated**: 2026-07-16 (BOSS-47/BOSS-53/BOSS-54 skill resolution validated)
+**Last updated**: 2026-07-16 (BOSS-48/BOSS-49/BOSS-50/BOSS-55/BOSS-56 local marketplace validated)
 **Repo root**: /Volumes/DataSSD1/test/boss
 **Git remote**: https://github.com/seanheiney/boss
-**Current branch**: ai/codex/boss-47-53-54-skill-resolution
-**Base branch**: ai/codex/boss-46-51-52-skill-foundation / draft PR #24
+**Current branch**: ai/codex/boss-48-50-55-56-skill-marketplace
+**Base branch**: ai/codex/boss-47-53-54-skill-resolution / draft PR #25
 **Product**: BOSS v0.4.1 target (Business Operating System Sentinel)
 **Mission**: Complete product to production-grade, tested, documented, pushed, Codex-coordinated, ready for real users. Grind until all discovered PRD/spec features satisfy world-class DoD or truly blocked.
 
@@ -14,6 +14,7 @@
 - GitHub: draft PR #16 carries BOSS-22/BOSS-23 and is stacked on draft PR #15; other open PRs were inspected for overlap before implementation.
 
 ## Overall Product Status
+- OSS skill marketplace P1 is implemented for Plane BOSS-48/BOSS-49/BOSS-50/BOSS-55/BOSS-56: MCP tools share the SkillRuntime gauntlet and receipt ledger; local canonical bundles import/export SkillSpecs and MCP descriptors; Ed25519 trust and explicit untrusted overrides are enforced; per-project enable/disable and lazy attachment are live; current installed RoleSpecs are filtered and rechecked on the invocation hot path with scope-violation evidence. Focused marketplace and regression validation is green; the branch is stacked on PR #25 pending final publication.
 - BOSS-118 integrates every unmerged Codex feature stack from current `origin/main`: reactive docs/webhooks, docs agent/site, GitHub community automation, conversational orchestration, executable skill registry, BOSS-112 design system, and bare-metal deployment readiness. Parallel contributor `feat/*` branches remain excluded. Semantic conflicts were resolved as unions, including 10 default reactive subscriptions, both docs/GitHub worker paths, the agent panel inside the new Phosphor design navigation, and OpenAI-compatible chat fallback with retry telemetry.
 - Integrated validation: `make lint`, production `make build`, `make smoke`, strict `make docs`, `make k8s-validate`, `make infra-validate`, and `make deps-audit` complete. Web tests pass 112/112; the Python run passes 388/425, with all 37 failures confined to the documented legacy `test_api.py` baseline. Representative auth, ProviderOps, and budget failures reproduce unchanged on detached `origin/main`. External release readiness remains deliberately fail-closed without hosted identity/provider credentials.
 - Reactive feature documentation advanced on 2026-07-15: Plane BOSS-73/BOSS-74/BOSS-75 now provide allowlisted and manual entity-debounced `docs.update` jobs, evidence/context assembly, a validated `docs_writer` role, managed Markdown preservation, a budgeted/Receipted stable-branch draft PR path, TRACEABILITY reconciliation, feature freshness, worker retry/deadletter handling, and no automatic merge. Validation: 7 docs-agent tests, 7 reactive regressions, 27 worker tests, focused Ruff/compile/YAML, generator drift, and strict MkDocs all pass.

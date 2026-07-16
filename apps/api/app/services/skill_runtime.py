@@ -58,6 +58,7 @@ class SkillRuntimeService:
         mock: bool = True,
         executor: Optional[Callable[[dict[str, Any]], dict[str, Any]]] = None,
         executor_context: Optional[SkillExecutorContext] = None,
+        skill_spec: Optional[dict[str, Any]] = None,
         actor: Optional[str] = None,
     ) -> dict[str, Any]:
         actor = actor or caller
@@ -76,7 +77,12 @@ class SkillRuntimeService:
             )
             if existing is not None:
                 return existing
-        skill = self.entitlements.get_skill(skill_id)  # raises SkillNotFoundError
+        skill = skill_spec or self.entitlements.get_skill(
+            skill_id, project_id, connection=connection
+        )
+        if str(skill.get("id") or "") != skill_id:
+            raise ValueError("skill_spec id does not match skill_id")
+        self.entitlements.validate_skill_spec(skill, "runtime")
         permissions = skill.get("permissions") or {}
         allowed_callers = permissions.get("allowed_callers") or []
         retry = skill.get("retry") or {}

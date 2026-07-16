@@ -1415,9 +1415,27 @@ class McpServerRegisterRequest(BaseModel):
     name: str
     url: str
     transport: str = "http"
-    risk_tier: int = 1
+    risk_tier: int = Field(default=1, ge=0, le=3)
     data_boundary: DataBoundary = "internal"
     description: Optional[str] = None
+    publisher: dict[str, Any] = Field(default_factory=dict)
+    provenance: dict[str, Any] = Field(default_factory=dict)
+    tool_risk_overrides: dict[str, int] = Field(default_factory=dict)
+    actor: str = "system"
+
+
+class CapabilityBundleImportRequest(BaseModel):
+    project_id: str
+    bundle: str
+    allow_untrusted: bool = False
+    enabled: bool = True
+    on_demand: Optional[bool] = None
+    actor: str = "system"
+
+
+class SkillToggleRequest(BaseModel):
+    project_id: str
+    on_demand: Optional[bool] = None
     actor: str = "system"
 
 
@@ -3336,6 +3354,8 @@ class SkillSummary(BaseModel):
     permissions: dict[str, Any]
     data_boundary: str
     policy: dict[str, Any]
+    publisher: dict[str, Any] = Field(default_factory=dict)
+    provenance: dict[str, Any] = Field(default_factory=dict)
 
 
 class SkillListResponse(BaseModel):

@@ -13,6 +13,7 @@ from ..config import Settings
 from .commercial import CommercialService
 from .core import create_artifact, emit_event, json_hash
 from .receipts import ReceiptService
+from .skill_scope import matching_skill_ids
 
 
 class PackNotFoundError(Exception):
@@ -60,6 +61,7 @@ class SpecPackService:
         self.settings = settings
         self.commercial = CommercialService(settings)
         self.receipts = ReceiptService()
+        self._skill_ids_cache: set[str] | None = None
 
     def _project_scope(self, connection: Connection, project_id: str) -> dict[str, str]:
         row = connection.execute(
@@ -116,7 +118,71 @@ class SpecPackService:
         payload.setdefault("role_id", role_key)
         payload.setdefault("display_name", role_key.replace("_", " ").title())
         self.validate_role_spec(payload, f"roles/{role_key}.yaml")
+        payload["skill_reference_diagnostics"] = (
+            self.skill_reference_diagnostics_for_role(payload)
+        )
         return payload
+
+    def _catalog_skill_ids(self) -> set[str]:
+        if self._skill_ids_cache is not None:
+            return set(self._skill_ids_cache)
+        skill_ids: set[str] = set()
+        for path in sorted((self.settings.specpack_root / "skills").glob("*.yaml")):
+            payload = self._load_yaml(path)
+            for skill in payload.get("skills") or []:
+                if isinstance(skill, dict) and isinstance(skill.get("id"), str):
+                    skill_ids.add(skill["id"])
+        self._skill_ids_cache = skill_ids
+        return set(skill_ids)
+
+    def skill_reference_diagnostics_for_role(
+        self,
+        role_spec: dict[str, Any],
+        *,
+        runtime: dict[str, Any] | None = None,
+    ) -> list[dict[str, Any]]:
+        catalog_ids = self._catalog_skill_ids()
+        permissions = role_spec.get("permissions") or {}
+        references: list[tuple[str, str]] = []
+        for field in ("allowed_skills", "forbidden_skills"):
+            references.extend(
+                (field, item.strip())
+                for item in permissions.get(field) or []
+                if isinstance(item, str) and item.strip()
+            )
+        references.extend(
+            ("runtime.default_skill_ids", item.strip())
+            for item in (runtime or {}).get("default_skill_ids") or []
+            if isinstance(item, str) and item.strip()
+        )
+        diagnostics: list[dict[str, Any]] = []
+        for field, reference in references:
+            matches = sorted(matching_skill_ids(reference, catalog_ids))
+            status = (
+                "unresolved"
+                if not matches
+                else "exact"
+                if reference in catalog_ids
+                else "wildcard"
+                if reference.endswith(".*")
+                else "legacy_alias"
+            )
+            if status in {"unresolved", "legacy_alias"}:
+                diagnostics.append(
+                    {
+                        "field": field,
+                        "reference": reference,
+                        "status": status,
+                        "matches": matches,
+                    }
+                )
+        return diagnostics
+
+    def skill_reference_diagnostics_for_module(
+        self, module_spec: dict[str, Any]
+    ) -> tuple[str, list[dict[str, Any]]]:
+        role_key, role_spec = self._normalize_role_spec_from_module(module_spec)
+        return role_key, list(role_spec.get("skill_reference_diagnostics") or [])
 
     def validate_role_spec(
         self, role_spec: dict[str, Any], source: str = "RoleSpec"
@@ -277,6 +343,11 @@ class SpecPackService:
         self.validate_role_spec(
             role_spec,
             f"modules/{module_spec['id']}.yaml role",
+        )
+        role_spec["skill_reference_diagnostics"] = (
+            self.skill_reference_diagnostics_for_role(
+                role_spec, runtime=module_spec.get("runtime") or {}
+            )
         )
         return role_key, role_spec
 

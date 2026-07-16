@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-07-16 — Local skill marketplace and governed MCP (BOSS-48–50, BOSS-55–56)
+
+- Added canonical local SkillSpec and MCP capability-bundle import/export, detached Ed25519 checksum signatures, configured trust verification, explicit untrusted overrides, and optional exclusion of untrusted project extensions.
+- Added MCP publisher/provenance, per-tool risk overrides, and synthetic SkillRuntime execution with budget reservations, retries, invocation evidence, deduplicated Receipts, and normal high-risk approvals.
+- Added project skill enable/disable and load-mode controls, resolver-approved lazy on-demand schema attachment, live installed-RoleSpec enforcement before invocation, scope-violation evidence, and startup reference diagnostics.
+
 ## 2026-07-15 — GitHub community agents (BOSS-84, BOSS-86–88)
 
 - Added a strict signed `/v1/webhooks/github` ingress for four typed community events, action filtering, self-bot suppression, and delivery-deduplicated leased jobs.

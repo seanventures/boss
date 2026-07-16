@@ -313,6 +313,16 @@ class Settings(BaseSettings):
     )
     artifact_dir: Path = Field(default=Path("artifacts"), alias="BOSS_ARTIFACTS_DIR")
     core_pack_id: str = Field(default="core_v1", alias="BOSS_CORE_PACK_ID")
+    skill_trust_keys: str = Field(default="", alias="BOSS_SKILL_TRUST_KEYS")
+    skill_signing_private_key: str = Field(
+        default="", alias="BOSS_SKILL_SIGNING_PRIVATE_KEY"
+    )
+    skill_signing_key_id: str = Field(
+        default="", alias="BOSS_SKILL_SIGNING_KEY_ID"
+    )
+    exclude_untrusted_skills: bool = Field(
+        default=False, alias="BOSS_EXCLUDE_UNTRUSTED_SKILLS"
+    )
     boss_edition: str = Field(default="community", alias="BOSS_EDITION")
     account_connect_url: Optional[str] = Field(
         default=None, alias="BOSS_ACCOUNT_CONNECT_URL"

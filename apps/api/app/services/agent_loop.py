@@ -14,6 +14,8 @@ from .core import create_artifact, create_blocking_decision, emit_event, make_id
 from .github_adapter import GitHubAdapter
 from .mcp_client import MCPClient
 from .mcp_registry import list_mcp_servers
+from .receipts import ReceiptService
+from .role_governance import RoleGovernanceService
 from .claude_cli_adapter import make_chat_adapter
 from .openai_adapter import OpenAIAdapter, _usage_from_response  # noqa: F401
 from .pdf_render import pdf_page_count, render_markdown_pdf
@@ -115,6 +117,144 @@ def _append_skill_tools(
         )
         skill_map[name] = skill
     return skill_map
+
+
+def _mcp_tool_risk(server: dict[str, Any], tool: dict[str, Any]) -> int:
+    tool_name = str(tool.get("name") or "")
+    overrides = server.get("tool_risk_overrides") or {}
+    annotations = tool.get("annotations") or {}
+    candidate = overrides.get(
+        tool_name,
+        tool.get("risk_tier", annotations.get("risk_tier", server.get("risk_tier", 1))),
+    )
+    try:
+        risk = int(candidate)
+    except (TypeError, ValueError):
+        risk = int(server.get("risk_tier") or 1)
+    return max(0, min(risk, 3))
+
+
+def _mcp_skill_spec(
+    server: dict[str, Any], tool: dict[str, Any]
+) -> dict[str, Any]:
+    tool_name = str(tool.get("name") or "tool")
+    return {
+        "id": f"mcp.{server['id']}.{_slug(tool_name)}",
+        "kind": "mcp",
+        "system": False,
+        "load": "eager",
+        "risk_tier": _mcp_tool_risk(server, tool),
+        "description": (
+            f"{server.get('name', 'MCP')} / {tool_name}: "
+            f"{tool.get('description', '')}"
+        ),
+        "mock_mode": False,
+        "input_schema": tool.get("inputSchema")
+        or {"type": "object", "properties": {}},
+        "output_schema": {"type": "object", "properties": {}},
+        "cost": {"estimator": "fixed", "category": "tool"},
+        "retry": {"max_attempts": 2, "backoff": "exponential"},
+        "permissions": {
+            "allowed_callers": ["agent_loop"],
+            "required_permissions": ["mcp_call"],
+        },
+        "data_boundary": server.get("data_boundary") or "internal",
+        "policy": {"requires_receipt": True},
+        "publisher": server.get("publisher") or {},
+        "provenance": server.get("provenance") or {},
+    }
+
+
+def _invoke_mcp_skill(
+    connection: Connection,
+    settings: Settings,
+    project_id: str,
+    server: dict[str, Any],
+    tool: dict[str, Any],
+    args: dict[str, Any],
+    *,
+    run_id: str,
+    step: int,
+    actor: str,
+) -> dict[str, Any]:
+    tool_name = str(tool.get("name") or "tool")
+    skill_spec = _mcp_skill_spec(server, tool)
+    context = SkillExecutorContext(
+        settings=settings,
+        connection=connection,
+        project_id=project_id,
+        actor=actor,
+    )
+
+    def execute(inputs: dict[str, Any]) -> dict[str, Any]:
+        org_id, workspace_id = context.tenant_scope()
+        receipts = ReceiptService()
+        args_digest = sha256(
+            json.dumps(inputs, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()[:20]
+        dedupe_key = (
+            f"mcp:{run_id}:{step}:{server['id']}:{tool_name}:{args_digest}"
+        )
+        receipt, created = receipts.create_or_reuse(
+            connection,
+            org_id,
+            workspace_id,
+            project_id,
+            dedupe_key,
+            "mcp.tool.call",
+            {
+                "server_id": server["id"],
+                "server": server["name"],
+                "tool": tool_name,
+                "data_boundary": server.get("data_boundary") or "internal",
+            },
+            inputs,
+            data_boundary=server.get("data_boundary") or "internal",
+        )
+        if not created:
+            if receipt.get("status") == "succeeded":
+                return {
+                    "output": receipt.get("result") or {},
+                    "receipt_id": receipt["id"],
+                    "actual_cost_usd_micros": 0,
+                    "deduplicated": True,
+                }
+            raise RuntimeError(
+                f"MCP effect receipt already exists with status {receipt.get('status')}"
+            )
+        try:
+            output = MCPClient(settings).call_tool(server["url"], tool_name, inputs)
+        except Exception as exc:
+            receipts.mark_failed(
+                connection,
+                receipt["id"],
+                {"type": type(exc).__name__, "message": str(exc)},
+            )
+            raise
+        receipts.mark_succeeded(
+            connection,
+            receipt["id"],
+            f"{server['id']}:{tool_name}",
+            output if isinstance(output, dict) else {"value": output},
+        )
+        return {
+            "output": output,
+            "receipt_id": receipt["id"],
+            "actual_cost_usd_micros": 0,
+        }
+
+    return SkillRuntimeService(settings).invoke(
+        connection,
+        project_id,
+        str(skill_spec["id"]),
+        "agent_loop",
+        args,
+        mock=False,
+        executor=execute,
+        executor_context=context,
+        skill_spec=skill_spec,
+        actor=actor,
+    )
 
 # ============================================================
 # Read tools — internal/local data only (no external side effects).
@@ -653,6 +793,7 @@ def _invoke_agent_skill(
     args: dict[str, Any],
     *,
     actor: str,
+    skill_spec: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
     return SkillRuntimeService(settings).invoke(
         connection,
@@ -667,6 +808,7 @@ def _invoke_agent_skill(
             project_id=project_id,
             actor=actor,
         ),
+        skill_spec=skill_spec,
         actor=actor,
     )
 
@@ -705,7 +847,61 @@ def resume_agent_run(connection: Connection, settings: Settings, run_id: str) ->
         return {"status": run["status"], "run_id": run_id}
     project_id = run["project_id"]
     pending = run["pending"] or {}
-    if pending.get("kind") == "skill":
+    if pending.get("kind") == "mcp":
+        server = next(
+            (
+                item
+                for item in list_mcp_servers(
+                    connection, project_id, enabled_only=True
+                )
+                if item["id"] == pending.get("server_id")
+            ),
+            None,
+        )
+        tool = None
+        if server is not None:
+            try:
+                tool = next(
+                    (
+                        item
+                        for item in MCPClient(settings).list_tools(server["url"])
+                        if item.get("name") == pending.get("tool_name")
+                    ),
+                    None,
+                )
+            except Exception:
+                tool = None
+        if server is None or tool is None:
+            result = {
+                "status": "denied",
+                "reason": "MCP server or tool is no longer enabled and available",
+            }
+        else:
+            result = _invoke_mcp_skill(
+                connection,
+                settings,
+                project_id,
+                server,
+                tool,
+                pending.get("args") or {},
+                run_id=run_id,
+                step=int(pending.get("step") or run.get("step") or 0),
+                actor="decision_approval",
+            )
+            emit_event(
+                connection,
+                project_id,
+                "agent.mcp_invoked",
+                "decision_approval",
+                "agent_run",
+                run_id,
+                {
+                    "server": server["name"],
+                    "tool": tool["name"],
+                    "approved": True,
+                },
+            )
+    elif pending.get("kind") == "skill":
         skill_id = str(pending.get("skill_id") or "")
         resolution = _skill_resolution_for_run(connection, settings, run)
         still_resolved = next(
@@ -717,9 +913,24 @@ def resume_agent_run(connection: Connection, settings: Settings, run_id: str) ->
             None,
         )
         if still_resolved is None:
+            scope = None
+            if resolution.get("role_key"):
+                scope = RoleGovernanceService(settings).check_scope(
+                    connection,
+                    project_id=project_id,
+                    role_key=str(resolution["role_key"]),
+                    action="skill.invoke",
+                    skill_id=skill_id,
+                    actor="decision_approval",
+                    evidence_ref=run_id,
+                )
             result = {
                 "status": "denied",
-                "reason": "skill is no longer available for this project/task",
+                "reason": (
+                    (scope or {}).get("reason")
+                    if scope and not scope.get("allowed")
+                    else "skill is no longer available for this project/task"
+                ),
                 "skill_id": skill_id,
             }
         else:
@@ -731,6 +942,7 @@ def resume_agent_run(connection: Connection, settings: Settings, run_id: str) ->
                 str(pending.get("caller") or resolution.get("role_key") or "agent_loop"),
                 pending.get("args") or {},
                 actor="decision_approval",
+                skill_spec=still_resolved,
             )
             emit_event(
                 connection,
@@ -793,7 +1005,7 @@ def _drive_run(connection: Connection, settings: Settings, run_id: str, max_step
         str(schema["function"]["name"])
         for schema in schemas
     }
-    mcp_map: dict[str, tuple[dict, str]] = {}
+    mcp_map: dict[str, tuple[dict[str, Any], dict[str, Any]]] = {}
     for server in list_mcp_servers(connection, project_id, enabled_only=True):
         try:
             server_tools = mcp.list_tools(server["url"])
@@ -825,7 +1037,7 @@ def _drive_run(connection: Connection, settings: Settings, run_id: str, max_step
                     },
                 }
             )
-            mcp_map[ns] = (server, tool_name)
+            mcp_map[ns] = (server, t)
 
     skill_resolution = _skill_resolution_for_run(connection, settings, run)
     skill_map = _append_skill_tools(
@@ -833,6 +1045,41 @@ def _drive_run(connection: Connection, settings: Settings, run_id: str, max_step
         occupied,
         skill_resolution["eager"],
     )
+    on_demand_loader: Optional[str] = None
+    if skill_resolution["on_demand"]:
+        on_demand_loader = _unique_tool_name(
+            "load_on_demand_skill", occupied, "skill:on_demand:loader"
+        )
+        discoverable = [
+            {
+                "id": str(skill["id"]),
+                "description": str(skill.get("description") or ""),
+            }
+            for skill in skill_resolution["on_demand"]
+        ]
+        schemas.append(
+            {
+                "type": "function",
+                "function": {
+                    "name": on_demand_loader,
+                    "description": (
+                        "Attach one on-demand BOSS skill for the remainder of this run. "
+                        f"Available skills: {json.dumps(discoverable)}"
+                    ),
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "skill_id": {
+                                "type": "string",
+                                "enum": [item["id"] for item in discoverable],
+                            }
+                        },
+                        "required": ["skill_id"],
+                        "additionalProperties": False,
+                    },
+                },
+            }
+        )
 
     steps_cap = int(max_steps or settings.agent_max_steps)
     threshold = int(settings.agent_autonomous_risk_max)
@@ -869,16 +1116,199 @@ def _drive_run(connection: Connection, settings: Settings, run_id: str, max_step
             is_deferred = False
             if deferred is not None:
                 result = {"status": "skipped", "note": "a prior action this turn awaits approval"}
+            elif on_demand_loader is not None and name == on_demand_loader:
+                requested_id = str(args.get("skill_id") or "")
+                current_resolution = _skill_resolution_for_run(
+                    connection, settings, run
+                )
+                skill = next(
+                    (
+                        item
+                        for item in current_resolution["on_demand"]
+                        if item["id"] == requested_id
+                    ),
+                    None,
+                )
+                if skill is None:
+                    scope = None
+                    if current_resolution.get("role_key") and requested_id:
+                        scope = RoleGovernanceService(settings).check_scope(
+                            connection,
+                            project_id=project_id,
+                            role_key=str(current_resolution["role_key"]),
+                            action="skill.invoke",
+                            skill_id=requested_id,
+                            actor="agent_loop",
+                            evidence_ref=run_id,
+                        )
+                    result = {
+                        "status": "denied",
+                        "skill_id": requested_id,
+                        "reason": (
+                            (scope or {}).get("reason")
+                            if scope and not scope.get("allowed")
+                            else None
+                        )
+                        or "skill is not available on demand for this task",
+                    }
+                else:
+                    loaded = _append_skill_tools(schemas, occupied, [skill])
+                    skill_map.update(loaded)
+                    result = {
+                        "status": "loaded",
+                        "skill_id": requested_id,
+                        "tool_name": next(iter(loaded)),
+                        "available_for_remainder_of_run": True,
+                    }
+                    emit_event(
+                        connection,
+                        project_id,
+                        "agent.skill_lazy_loaded",
+                        "agent_loop",
+                        "agent_run",
+                        run_id,
+                        {"skill_id": requested_id, "step": step},
+                    )
             elif name in mcp_map:
-                server, tool_name = mcp_map[name]
-                try:
-                    result = mcp.call_tool(server["url"], tool_name, args)
-                except Exception as exc:
-                    result = {"error": f"{type(exc).__name__}: {exc}"}
-                emit_event(connection, project_id, "agent.mcp_invoked", "agent_loop", "task", task_id or project_id, {"server": server["name"], "tool": tool_name, "step": step})
+                server, tool = mcp_map[name]
+                tool_name = str(tool.get("name") or "tool")
+                risk = _mcp_tool_risk(server, tool)
+                if risk > threshold:
+                    decision_id = create_blocking_decision(
+                        connection,
+                        project_id,
+                        task_id,
+                        f"Approve MCP tool: {server['name']} / {tool_name}",
+                        {
+                            "action": "resume_agent_run",
+                            "run_id": run_id,
+                            "tool": name,
+                            "kind": "mcp",
+                            "server_id": server["id"],
+                            "tool_name": tool_name,
+                            "args": args,
+                            "task_id": task_id,
+                        },
+                        {},
+                        "agent_mcp_requires_approval",
+                        risk_tier=risk,
+                    )
+                    result = {
+                        "status": "deferred_for_approval",
+                        "decision_id": decision_id,
+                        "message": (
+                            f"MCP tool '{tool_name}' (risk tier {risk}) requires "
+                            "human approval."
+                        ),
+                    }
+                    is_deferred = True
+                    deferred = {
+                        "kind": "mcp",
+                        "tool": name,
+                        "server_id": server["id"],
+                        "tool_name": tool_name,
+                        "args": args,
+                        "decision_id": decision_id,
+                        "step": step,
+                    }
+                    emit_event(
+                        connection,
+                        project_id,
+                        "agent.mcp_deferred",
+                        "agent_loop",
+                        "decision",
+                        decision_id,
+                        {
+                            "server": server["name"],
+                            "tool": tool_name,
+                            "risk_tier": risk,
+                            "step": step,
+                        },
+                    )
+                else:
+                    result = _invoke_mcp_skill(
+                        connection,
+                        settings,
+                        project_id,
+                        server,
+                        tool,
+                        args,
+                        run_id=run_id,
+                        step=step,
+                        actor="agent_loop",
+                    )
+                    emit_event(
+                        connection,
+                        project_id,
+                        "agent.mcp_invoked",
+                        "agent_loop",
+                        "agent_run",
+                        run_id,
+                        {
+                            "server": server["name"],
+                            "tool": tool_name,
+                            "risk_tier": risk,
+                            "step": step,
+                        },
+                    )
             elif name in skill_map:
                 skill = skill_map[name]
                 skill_id = str(skill["id"])
+                current_resolution = _skill_resolution_for_run(
+                    connection, settings, run
+                )
+                current_skill = next(
+                    (
+                        item
+                        for item in current_resolution["eager"]
+                        + current_resolution["on_demand"]
+                        if item["id"] == skill_id
+                    ),
+                    None,
+                )
+                if current_skill is None:
+                    scope = None
+                    if current_resolution.get("role_key"):
+                        scope = RoleGovernanceService(settings).check_scope(
+                            connection,
+                            project_id=project_id,
+                            role_key=str(current_resolution["role_key"]),
+                            action="skill.invoke",
+                            skill_id=skill_id,
+                            actor="agent_loop",
+                            evidence_ref=run_id,
+                        )
+                    result = {
+                        "status": "denied",
+                        "skill_id": skill_id,
+                        "reason": (
+                            (scope or {}).get("reason")
+                            if scope and not scope.get("allowed")
+                            else None
+                        )
+                        or "skill is no longer enabled for this task",
+                    }
+                    current_skill = None
+                if current_skill is None:
+                    step_obj = {
+                        "step": step,
+                        "tool": name,
+                        "args": args,
+                        "result_preview": json.dumps(result)[:240],
+                        "deferred": False,
+                    }
+                    if tc_idx == 0 and thought:
+                        step_obj["thought"] = thought
+                    transcript.append(step_obj)
+                    messages.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": tc["id"],
+                            "content": json.dumps(result)[:16000],
+                        }
+                    )
+                    continue
+                skill = current_skill
                 risk = int(skill.get("risk_tier") or 0)
                 caller = str(
                     skill.get("caller")
@@ -941,6 +1371,7 @@ def _drive_run(connection: Connection, settings: Settings, run_id: str, max_step
                         caller,
                         args,
                         actor="agent_loop",
+                        skill_spec=skill,
                     )
                     emit_event(
                         connection,

@@ -149,7 +149,8 @@ class EntitlementBrokerService:
             rows = connection.execute(
                 text(
                     """
-                    SELECT skill_id, source, enabled, on_demand
+                    SELECT skill_id, source, enabled, on_demand, config,
+                           publisher, provenance
                     FROM project_skills
                     WHERE project_id = :project_id
                     """
@@ -209,6 +210,41 @@ class EntitlementBrokerService:
                         "permissions": skill.get("permissions", {}) or {},
                         "data_boundary": skill.get("data_boundary", "internal"),
                         "policy": skill.get("policy", {}) or {},
+                        "publisher": (
+                            (state or {}).get("publisher") or
+                            ({"id": "boss", "name": "BOSS"} if system else {})
+                        ),
+                        "provenance": (
+                            (state or {}).get("provenance") or
+                            ({"source": "builtin", "version": "1", "trusted": True}
+                             if system else {"source": "specpack", "trusted": True})
+                        ),
+                    }
+                )
+        catalog_ids = {str(item["id"]) for item in items}
+        if project_id is not None:
+            for skill_id, state in project_state.items():
+                config = state.get("config") or {}
+                custom = config.get("skill_spec") if isinstance(config, dict) else None
+                if skill_id in catalog_ids or not isinstance(custom, dict):
+                    continue
+                self.validate_skill_spec(custom, f"project:{project_id}")
+                provenance = state.get("provenance") or {}
+                if (
+                    self.settings.exclude_untrusted_skills
+                    and provenance.get("trusted") is False
+                ):
+                    continue
+                items.append(
+                    {
+                        **custom,
+                        "id": skill_id,
+                        "system": False,
+                        "source": str(state.get("source") or "tenant"),
+                        "enabled": bool(state.get("enabled")),
+                        "on_demand": bool(state.get("on_demand")),
+                        "publisher": state.get("publisher") or {},
+                        "provenance": provenance,
                     }
                 )
         items.sort(key=lambda item: item["id"])
@@ -272,10 +308,23 @@ class EntitlementBrokerService:
             skill_id = skill.get("id", "<unknown>")
             raise ValueError(f"SkillSpec {skill_id} in {source} is invalid: {'; '.join(errors)}")
 
-    def get_skill(self, skill_id: str) -> dict[str, Any]:
-        for skill in self.list_skills():
+    def get_skill(
+        self,
+        skill_id: str,
+        project_id: Optional[str] = None,
+        *,
+        connection: Optional[Connection] = None,
+    ) -> dict[str, Any]:
+        catalog = self.list_skills(project_id, connection=connection)
+        for skill in catalog:
             if skill["id"] == skill_id:
                 return skill
+        # Preserve the global mock/canary API contract for catalog SkillSpecs
+        # that are not installed in the project's effective edition pack.
+        if project_id is not None:
+            for skill in self.list_skills():
+                if skill["id"] == skill_id:
+                    return skill
         raise SkillNotFoundError(f"Skill '{skill_id}' not found")
 
     def _runtime_flags(self, source_id: str) -> tuple[bool, bool]:
@@ -1688,7 +1737,7 @@ class EntitlementBrokerService:
         actor: str = "system",
     ) -> dict[str, Any]:
         preferred_capabilities = preferred_capabilities or []
-        skill = self.get_skill(skill_id)
+        skill = self.get_skill(skill_id, project_id, connection=connection)
         boundary = normalize_data_boundary(data_boundary)
         budget_snapshot = self.budget.status_for_project(connection, project_id)
         resolved_budget_state = budget_state or budget_snapshot["budget_state"]

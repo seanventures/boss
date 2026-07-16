@@ -76,6 +76,8 @@ from .schemas import (
     ProviderHealthPollRequest,
     RouterRationaleRequest,
     SkillInvokeRequest,
+    SkillToggleRequest,
+    CapabilityBundleImportRequest,
     SlackDigestBatchRequest,
     SlackRenderRequest,
     BudgetStatusResponse,
@@ -447,6 +449,10 @@ from .services.mcp_registry import (
     register_mcp_server,
     set_mcp_enabled,
 )
+from .services.skill_packaging import (
+    CapabilityBundleError,
+    CapabilityBundleService,
+)
 from .services.receipts import ReceiptService
 from .services.resource_plane import (
     ChangeSetNotFoundError,
@@ -461,6 +467,12 @@ from .services.skill_runtime import (
     SkillRuntimeService,
 )
 from .services.skill_executors import SkillExecutorContext
+from .services.skill_registry import (
+    disable_skill,
+    enable_skill,
+    ensure_skill,
+    list_project_skills,
+)
 from .services.slack_comms import (
     SlackCommsService,
     department_channel,
@@ -506,6 +518,7 @@ decisions = DecisionService(settings)
 specpack = SpecPackService(settings)
 agent_runtime = AgentRuntimeService(settings)
 entitlements = EntitlementBrokerService(settings)
+capability_bundles = CapabilityBundleService(settings)
 commercial = CommercialService(settings)
 enterprise = EnterpriseService(settings)
 audit = AuditTrailService(settings)
@@ -1659,6 +1672,8 @@ def skill_summary_from_service(payload) -> SkillSummary:
         permissions=payload.get("permissions") or {},
         data_boundary=payload.get("data_boundary", "internal"),
         policy=payload.get("policy") or {},
+        publisher=payload.get("publisher") or {},
+        provenance=payload.get("provenance") or {},
     )
 
 
@@ -4226,17 +4241,55 @@ def list_mcp(project_id: str):
 @app.post("/v1/mcp/servers", status_code=201)
 def register_mcp(payload: McpServerRegisterRequest):
     with begin(engine) as connection:
-        return register_mcp_server(
-            connection,
-            payload.project_id,
-            payload.name,
-            payload.url,
-            transport=payload.transport,
-            risk_tier=payload.risk_tier,
-            data_boundary=payload.data_boundary,
-            description=payload.description,
-            actor=payload.actor,
-        )
+        try:
+            return register_mcp_server(
+                connection,
+                payload.project_id,
+                payload.name,
+                payload.url,
+                transport=payload.transport,
+                risk_tier=payload.risk_tier,
+                data_boundary=payload.data_boundary,
+                description=payload.description,
+                publisher=payload.publisher,
+                provenance=payload.provenance,
+                tool_risk_overrides=payload.tool_risk_overrides,
+                actor=payload.actor,
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+
+
+@app.post("/v1/mcp/servers/import", status_code=201)
+def import_mcp_bundle(payload: CapabilityBundleImportRequest) -> dict:
+    with begin(engine) as connection:
+        try:
+            require_project_actor(
+                connection, payload.project_id, payload.actor, "pack_manage"
+            )
+            return capability_bundles.import_mcp(
+                connection,
+                payload.project_id,
+                payload.bundle,
+                allow_untrusted=payload.allow_untrusted,
+                enabled=payload.enabled,
+                actor=payload.actor,
+            )
+        except CapabilityBundleError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+
+
+@app.get("/v1/mcp/servers/{server_id}/export")
+def export_mcp_bundle(server_id: str, project_id: str, actor: str = "ceo"):
+    with begin(engine) as connection:
+        try:
+            require_project_actor(connection, project_id, actor, "pack_manage")
+            content = capability_bundles.export_mcp(
+                connection, project_id, server_id
+            )
+        except CapabilityBundleError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+    return Response(content=content, media_type="application/vnd.boss.capability+json")
 
 
 @app.patch("/v1/mcp/servers/{server_id}")
@@ -6802,6 +6855,105 @@ def list_skills(project_id: Optional[str] = None) -> SkillListResponse:
 def list_skill_invocations(project_id: str, limit: int = 50) -> dict:
     with begin(engine) as connection:
         return {"items": skill_runtime.list_invocations(connection, project_id, limit)}
+
+
+@app.post("/v1/skills/import", status_code=201)
+def import_skill_bundle(payload: CapabilityBundleImportRequest) -> dict:
+    with begin(engine) as connection:
+        try:
+            require_project_actor(
+                connection, payload.project_id, payload.actor, "pack_manage"
+            )
+            return capability_bundles.import_skill(
+                connection,
+                payload.project_id,
+                payload.bundle,
+                allow_untrusted=payload.allow_untrusted,
+                enabled=payload.enabled,
+                on_demand=payload.on_demand,
+                actor=payload.actor,
+            )
+        except (CapabilityBundleError, ValueError) as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+
+
+@app.get("/v1/skills/{skill_id}/export")
+def export_skill_bundle(skill_id: str, project_id: str, actor: str = "ceo"):
+    with begin(engine) as connection:
+        try:
+            require_project_actor(connection, project_id, actor, "pack_manage")
+            content = capability_bundles.export_skill(
+                connection, project_id, skill_id
+            )
+        except SkillNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except CapabilityBundleError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+    return Response(content=content, media_type="application/vnd.boss.capability+json")
+
+
+def _set_project_skill_state(
+    connection,
+    skill_id: str,
+    payload: SkillToggleRequest,
+    *,
+    enabled: bool,
+) -> dict:
+    require_project_actor(
+        connection, payload.project_id, payload.actor, "pack_manage"
+    )
+    catalog = entitlements.list_skills(
+        payload.project_id, connection=connection
+    )
+    skill = next((item for item in catalog if item["id"] == skill_id), None)
+    if skill is None:
+        raise HTTPException(status_code=404, detail="Skill not found in project catalog.")
+    if skill.get("system") is True and not enabled:
+        raise HTTPException(status_code=409, detail="System skills cannot be disabled.")
+    rows = list_project_skills(connection, payload.project_id)
+    row = next((item for item in rows if item["skill_id"] == skill_id), None)
+    if row is None:
+        row = ensure_skill(
+            connection,
+            payload.project_id,
+            skill_id,
+            source="system" if skill.get("system") is True else "tenant",
+            enabled=enabled,
+            on_demand=(
+                bool(payload.on_demand)
+                if payload.on_demand is not None
+                else skill.get("load") == "on_demand"
+            ),
+            publisher=skill.get("publisher") or {},
+            provenance=skill.get("provenance") or {},
+            actor=payload.actor,
+        )
+    updated = (
+        enable_skill(
+            connection,
+            payload.project_id,
+            skill_id,
+            payload.actor,
+            on_demand=payload.on_demand,
+        )
+        if enabled
+        else disable_skill(
+            connection, payload.project_id, skill_id, payload.actor
+        )
+    )
+    return updated or row
+
+
+@app.post("/v1/skills/{skill_id}/enable")
+def enable_project_skill(skill_id: str, payload: SkillToggleRequest) -> dict:
+    with begin(engine) as connection:
+        return _set_project_skill_state(connection, skill_id, payload, enabled=True)
+
+
+@app.post("/v1/skills/{skill_id}/disable")
+def disable_project_skill(skill_id: str, payload: SkillToggleRequest) -> dict:
+    with begin(engine) as connection:
+        return _set_project_skill_state(connection, skill_id, payload, enabled=False)
 
 
 @app.post("/v1/skills/{skill_id}/invoke", status_code=201)

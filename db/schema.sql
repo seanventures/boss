@@ -1723,6 +1723,9 @@ CREATE TABLE IF NOT EXISTS mcp_servers (
   data_boundary TEXT NOT NULL DEFAULT 'internal',
   enabled BOOLEAN NOT NULL DEFAULT true,
   description TEXT,
+  publisher JSONB NOT NULL DEFAULT '{}'::jsonb,
+  provenance JSONB NOT NULL DEFAULT '{}'::jsonb,
+  tool_risk_overrides JSONB NOT NULL DEFAULT '{}'::jsonb,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_mcp_servers_project ON mcp_servers(project_id, enabled);
@@ -1736,6 +1739,7 @@ CREATE TABLE IF NOT EXISTS project_skills (
   on_demand BOOLEAN NOT NULL DEFAULT false,
   config JSONB NOT NULL DEFAULT '{}'::jsonb,
   publisher JSONB NOT NULL DEFAULT '{}'::jsonb,
+  provenance JSONB NOT NULL DEFAULT '{}'::jsonb,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE(project_id, skill_id),

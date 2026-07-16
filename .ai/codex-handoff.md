@@ -1,6 +1,14 @@
 # Codex Handoff
 
-Last updated: 2026-07-15 (BOSS-118 controlled integration release validated for main)
+Last updated: 2026-07-16 (BOSS-48/BOSS-49/BOSS-50/BOSS-55/BOSS-56 local skill marketplace)
+
+## 2026-07-16 local skill marketplace + trust handoff
+
+- Plane BOSS-48/BOSS-49/BOSS-50/BOSS-55/BOSS-56 are implemented on `ai/codex/boss-48-50-55-56-skill-marketplace`, stacked on draft PR #25 so the marketplace cannot land without its project registry, resolver, and agent bridge.
+- MCP servers now retain publisher/provenance and per-tool risk overrides. Agent MCP tools are synthetic SkillSpecs that use the existing permission/budget/retry gauntlet, attempt ledger, risk approval pause, and deduplicated external-effect Receipt.
+- Canonical local `boss.capability-bundle/v1` JSON supports SkillSpec and MCP import/export without Account Connect. Detached Ed25519 signatures cover the manifest checksum; configured trust keys mark verified imports trusted, explicit untrusted override is required otherwise, and deployments can exclude untrusted project extensions.
+- Project-authorized enable/disable changes affect the next task without restart. A compact on-demand loader attaches only resolver-approved schemas for the remainder of a run. Every invocation re-resolves current project and installed RoleSpec state; forbidden stale calls create normal scope-violation evidence.
+- Validation currently passes 23 focused marketplace/resolution/runtime/executor tests plus 10 focused legacy API runtime/role cases after preserving the global mock/canary contract; focused Ruff, Python compilation, diff checks, and dynamic OpenAPI route checks pass. Complete repository validation and PR publication are the remaining handoff steps.
 
 ## 2026-07-15 BOSS-118 main integration handoff
 

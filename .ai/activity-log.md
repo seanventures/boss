@@ -3,6 +3,14 @@
 All 15-min terminal updates and major milestones appended here. Chronological, newest at top.
 
 ---
+## 2026-07-16 — BOSS-48/BOSS-49/BOSS-50/BOSS-55/BOSS-56 local skill marketplace
+
+- Claimed all five dependency-safe Plane slices through Todo to In Progress and created `ai/codex/boss-48-50-55-56-skill-marketplace` directly above draft PR #25.
+- Added MCP publisher/provenance and per-tool risk state; wrapped live MCP calls in synthetic SkillSpecs with budget, retry, attempt ledger, approval revalidation, and deduplicated provider Receipts.
+- Added canonical local SkillSpec/MCP capability bundles, local import/export routes, detached Ed25519 checksum signatures, configured trust verification, explicit untrusted overrides, persisted provenance, and optional resolver exclusion.
+- Added project skill enable/disable and eager/on-demand toggle routes, a compact lazy loader that attaches schemas for the remainder of a run, live RoleSpec reads/re-resolution before invocation, shared id reconciliation, and startup diagnostics for stale/legacy references.
+- Focused validation checkpoint: 23 marketplace/resolution/runtime/executor tests and 10 selected API role/runtime regressions pass after retaining the legacy global mock/canary behavior. Ruff, compile, diff, and dynamic OpenAPI checks pass; full validation and stacked PR publication follow.
+
 ## 2026-07-16 — BOSS-53/BOSS-54/BOSS-47 skill resolution implementation
 
 - Claimed the three dependency-ordered Plane slices through Todo to In Progress and created stacked branch `ai/codex/boss-47-53-54-skill-resolution` above PR #24.

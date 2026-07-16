@@ -10,42 +10,10 @@ from ..config import Settings
 from .agent_runtime import AgentRuntimeService
 from .core import emit_event, make_id
 from .entitlements import EntitlementBrokerService
+from .skill_scope import matching_skill_ids, skill_reference_matches
 
 
 SKILL_SOURCES = {"system", "tenant", "module"}
-
-
-def _skill_reference_matches(reference: str, skill_id: str) -> bool:
-    """Match exact/wildcard RoleSpec ids and legacy dotted aliases.
-
-    Existing modules use compact references such as ``health.check`` and
-    ``deployment.plan`` for canonical SkillSpecs named
-    ``deployment.health.check`` and ``deployment.run.plan``. Treat the
-    reference segments as an ordered subsequence until B6 can reject stale
-    aliases at pack-load time.
-    """
-
-    if reference == skill_id:
-        return True
-    if reference.endswith(".*") and skill_id.startswith(reference[:-1]):
-        return True
-    reference_parts = [part for part in reference.split(".") if part]
-    skill_parts = [part for part in skill_id.split(".") if part]
-    position = 0
-    for part in skill_parts:
-        if position < len(reference_parts) and part == reference_parts[position]:
-            position += 1
-    return bool(reference_parts) and position == len(reference_parts)
-
-
-def _matching_skill_ids(reference: str, catalog_ids: set[str]) -> set[str]:
-    if reference in catalog_ids:
-        return {reference}
-    return {
-        skill_id
-        for skill_id in catalog_ids
-        if _skill_reference_matches(reference, skill_id)
-    }
 
 
 def _row(row: Any) -> dict[str, Any]:
@@ -58,6 +26,7 @@ def _row(row: Any) -> dict[str, Any]:
         "on_demand": bool(row["on_demand"]),
         "config": row["config"] or {},
         "publisher": row["publisher"] or {},
+        "provenance": row["provenance"] or {},
         "created_at": (
             row["created_at"].isoformat()
             if hasattr(row["created_at"], "isoformat")
@@ -95,7 +64,7 @@ def list_project_skills(
 ) -> list[dict[str, Any]]:
     query = """
         SELECT id, project_id, skill_id, source, enabled, on_demand, config,
-               publisher, created_at, updated_at
+               publisher, provenance, created_at, updated_at
         FROM project_skills
         WHERE project_id = :project_id
     """
@@ -118,6 +87,7 @@ def register_skill(
     on_demand: bool = False,
     config: Optional[dict[str, Any]] = None,
     publisher: Optional[dict[str, Any]] = None,
+    provenance: Optional[dict[str, Any]] = None,
     actor: str = "system",
 ) -> dict[str, Any]:
     normalized_skill_id = _validate_skill_id(skill_id)
@@ -127,14 +97,15 @@ def register_skill(
             """
             INSERT INTO project_skills (
                 id, project_id, skill_id, source, enabled, on_demand,
-                config, publisher
+                config, publisher, provenance
             )
             VALUES (
                 :id, :project_id, :skill_id, :source, :enabled, :on_demand,
-                CAST(:config AS JSONB), CAST(:publisher AS JSONB)
+                CAST(:config AS JSONB), CAST(:publisher AS JSONB),
+                CAST(:provenance AS JSONB)
             )
             RETURNING id, project_id, skill_id, source, enabled, on_demand,
-                      config, publisher, created_at, updated_at
+                      config, publisher, provenance, created_at, updated_at
             """
         ),
         {
@@ -146,6 +117,7 @@ def register_skill(
             "on_demand": bool(on_demand),
             "config": json.dumps(config or {}),
             "publisher": json.dumps(publisher or {}),
+            "provenance": json.dumps(provenance or {}),
         },
     ).mappings().one()
     item = _row(row)
@@ -172,21 +144,25 @@ def _set_skill_enabled(
     skill_id: str,
     enabled: bool,
     actor: str,
+    on_demand: Optional[bool] = None,
 ) -> Optional[dict[str, Any]]:
     row = connection.execute(
         text(
             """
             UPDATE project_skills
-            SET enabled = :enabled, updated_at = now()
+            SET enabled = :enabled,
+                on_demand = COALESCE(:on_demand, on_demand),
+                updated_at = now()
             WHERE project_id = :project_id AND skill_id = :skill_id
             RETURNING id, project_id, skill_id, source, enabled, on_demand,
-                      config, publisher, created_at, updated_at
+                      config, publisher, provenance, created_at, updated_at
             """
         ),
         {
             "enabled": enabled,
             "project_id": project_id,
             "skill_id": skill_id,
+            "on_demand": on_demand,
         },
     ).mappings().one_or_none()
     if row is None:
@@ -209,9 +185,10 @@ def enable_skill(
     project_id: str,
     skill_id: str,
     actor: str = "system",
+    on_demand: Optional[bool] = None,
 ) -> Optional[dict[str, Any]]:
     return _set_skill_enabled(
-        connection, project_id, skill_id, True, actor
+        connection, project_id, skill_id, True, actor, on_demand
     )
 
 
@@ -236,6 +213,7 @@ def ensure_skill(
     on_demand: bool = False,
     config: Optional[dict[str, Any]] = None,
     publisher: Optional[dict[str, Any]] = None,
+    provenance: Optional[dict[str, Any]] = None,
     actor: str = "bootstrap",
 ) -> dict[str, Any]:
     """Idempotently seed a project skill without duplicating restart events."""
@@ -262,6 +240,7 @@ def ensure_skill(
             on_demand=on_demand,
             config=config,
             publisher=publisher,
+            provenance=provenance,
             actor=actor,
         )
 
@@ -274,10 +253,11 @@ def ensure_skill(
                 on_demand = :on_demand,
                 config = CAST(:config AS JSONB),
                 publisher = CAST(:publisher AS JSONB),
+                provenance = CAST(:provenance AS JSONB),
                 updated_at = now()
             WHERE id = :id
             RETURNING id, project_id, skill_id, source, enabled, on_demand,
-                      config, publisher, created_at, updated_at
+                      config, publisher, provenance, created_at, updated_at
             """
         ),
         {
@@ -286,6 +266,7 @@ def ensure_skill(
             "on_demand": bool(on_demand),
             "config": json.dumps(config or {}),
             "publisher": json.dumps(publisher or {}),
+            "provenance": json.dumps(provenance or {}),
         },
     ).mappings().one()
     return _row(row)
@@ -310,6 +291,7 @@ def seed_system_skills(
                 enabled=True,
                 on_demand=skill.get("load") == "on_demand",
                 publisher={"id": "boss", "kind": "system"},
+                provenance={"source": "builtin", "version": "1", "trusted": True},
                 actor=actor,
             )
         )
@@ -377,7 +359,7 @@ def resolve_for_task(
     for reference in runtime.get("default_skill_ids") or []:
         if not isinstance(reference, str) or not reference.strip():
             continue
-        for skill_id in _matching_skill_ids(reference.strip(), catalog_ids):
+        for skill_id in matching_skill_ids(reference.strip(), catalog_ids):
             include(skill_id, "module")
 
     for row in rows:
@@ -410,12 +392,12 @@ def resolve_for_task(
             continue
         if role_key:
             if any(
-                _skill_reference_matches(pattern, skill_id)
+                skill_reference_matches(pattern, skill_id)
                 for pattern in forbidden
             ):
                 continue
             if not any(
-                _skill_reference_matches(pattern, skill_id)
+                skill_reference_matches(pattern, skill_id)
                 for pattern in allowed
             ):
                 continue
@@ -440,6 +422,12 @@ def resolve_for_task(
             else skill.get("load") == "on_demand"
         )
         skill["resolved_from"] = sorted(resolution_sources[skill_id])
+        skill["publisher"] = (
+            row["publisher"] if row is not None else skill.get("publisher") or {}
+        )
+        skill["provenance"] = (
+            row["provenance"] if row is not None else skill.get("provenance") or {}
+        )
         skill["role_key"] = role_key
         allowed_callers = skill.get("permissions", {}).get("allowed_callers") or []
         preferred_caller = str(task.get("skill_caller") or "").strip()
@@ -462,6 +450,7 @@ def resolve_for_task(
         "job_kind": job_kind or None,
         "agent_module": runtime_context.get("agent_module"),
         "role_key": role_key,
+        "role": role,
         "eager": eager,
         "on_demand": on_demand,
     }
