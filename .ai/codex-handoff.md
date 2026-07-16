@@ -276,3 +276,6 @@ Slice complete; accelerating full product with parallel agents.
   base `f626511` with a separate Postgres instance and are not caused here.
 - Do not duplicate this module while the stacked draft PR is open. Plane
   BOSS-34/35–43 and BOSS-63 remain In Progress until merge.
+- Draft PR: https://github.com/seanheiney/boss/pull/28 at commit `1eb1d36`.
+  Merge https://github.com/seanheiney/boss/pull/27 first, then retarget #28 to
+  `main`; attach the merge commit and move the selected Plane issues to Done.

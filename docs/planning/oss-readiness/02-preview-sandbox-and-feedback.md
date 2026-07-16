@@ -185,6 +185,9 @@ badges, live logs, a distinct completed-task extension flow, and preview-injecte
 route/element capture. Operator semantics and the chosen portable proxy decision
 are documented in `docs/operations/PREVIEW_EXECUTION_SUBSTRATES.md`; focused
 acceptance coverage lives in `apps/api/tests/test_preview_feedback.py`.
+Delivery evidence: commit `1eb1d36`, stacked draft PR
+https://github.com/seanheiney/boss/pull/28. BOSS-35–43 remain In Progress until
+the stack merges.
 
 ---
 

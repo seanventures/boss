@@ -415,6 +415,18 @@ Next autonomous actions:
 Blockers: Subagent runtime (long running ok, thorough); external 3 P0s (final report will document exact resume: "configure creds + make release-blockers green").
 PR: https://github.com/seanheiney/boss/pull/3
 
+=== CODEX DELIVERY UPDATE 2026-07-16 — BOSS-35–43 / BOSS-63 ===
+Branch: `ai/codex/boss-35-43-63-preview-feedback`
+Base: `ai/codex/boss-58-62-cicd-promotion` (stacked on draft PR #27)
+Commit: `1eb1d36` (`feat(preview): deliver feedback and substrate slices`)
+Draft PR: https://github.com/seanheiney/boss/pull/28
+Plane: BOSS-34/35–43 and BOSS-63 are In Progress pending merge; inherited
+monolithic API matrix failures are separately tracked as BOSS-119.
+Validation: 15 focused API tests, 160 unaffected backend/worker tests, and all
+113 web tests passed; lint/typecheck, production web build, OpenAPI parse, and
+diff checks passed. Three representative legacy failures reproduce unchanged on
+parent `f626511`.
+
 === CODEX UPDATE 2026-07-16 — BOSS-35–43 + BOSS-63 ===
 - Claimed ten Plane slices and parent BOSS-34; isolated stacked branch created.
 - Implemented durable preview reconciliation, retained-rootfs serve/hold/release,

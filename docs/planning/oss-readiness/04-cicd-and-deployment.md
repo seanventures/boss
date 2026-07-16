@@ -168,6 +168,9 @@ verdict mapping, plus GitLab project discovery, pipeline triggering, polling,
 and verdict mapping. Both are selected by `BOSS_PIPELINE_PROVIDER`; credential
 settings are documented as blank secret-store inputs in `.env.example`. Mocked
 provider coverage is in `apps/api/tests/test_cicd_promotion.py`.
+Delivery evidence: commit `1eb1d36`, stacked draft PR
+https://github.com/seanheiney/boss/pull/28. BOSS-63 remains In Progress until
+the stack merges.
 **Size:** M
 
 ---

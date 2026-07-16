@@ -15,7 +15,7 @@
 | BOSS-61 | Staging→production promotion | first-class promotion row, pipeline/policy/staging-health gates, delayed production run, production rollout, terminal evidence | persisted integration test covers pass, policy block, delayed production, auto-rollback, aggregate read | Implemented |
 | BOSS-62 | Console promotion timeline | one aggregate API/client mapping and five-second active refresh in ProviderOps | ProviderOps mapping, API client, full web test/build | Implemented |
 
-Provider rollback is intentionally recorded as `rollback_pending` until a separate approved Resource Plane ChangeSet performs the provider write. BOSS-63 remains Backlog for concrete Jenkins/GitLab adapters.
+Provider rollback is intentionally recorded as `rollback_pending` until a separate approved Resource Plane ChangeSet performs the provider write. BOSS-63's concrete Jenkins/GitLab adapters are implemented in stacked draft PR #28 and remain In Progress until merge.
 
 | Req ID | Source Quote/Paraphrase | Persona | User Goal / Journey | Required UI/Nav | Required Backend/API | Data/Storage | Auth/Perms | Validations | Loading/Empty/Error/Success | Edge Cases | Integrations/Jobs/Notes | Analytics/Obs | Tests Required | Impl Status | Test Status | Files Changed | Branch/PR | Owning Agent | Reviewer Agents | Blocker | Completion |
 |--------|-------------------------|---------|---------------------|-----------------|----------------------|--------------|------------|-------------|-----------------------------|------------|-------------------------|---------------|----------------|-------------|-------------|---------------|-----------|--------------|-----------------|---------|------------|
@@ -75,3 +75,7 @@ Provider rollback is intentionally recorded as `rollback_pending` until a separa
 | BOSS-35–40 | Durable, faithful, attributable previews | `preview_service.py`, `execution_substrate.py`, `sandbox_provider.py`, `sandbox-host/sandbox_agent.py`, Code Tasks badges/logs | `test_preview_feedback.py`; operator substrate runbook |
 | BOSS-41–43 | Conversational, confirmed iteration and completed-task extension with preview anchor | `feedback_agent.py`, feedback tables/endpoints/actions/UI, injected preview capture | clarification/proposal/dispatch and anchored-capture API tests |
 | BOSS-63 | Jenkins and GitLab pipeline parity | `pipeline_adapter.py`, provider settings and env documentation | mocked trigger/poll/terminal-verdict tests in `test_cicd_promotion.py` |
+
+Delivery: commit `1eb1d36`, stacked draft PR
+https://github.com/seanheiney/boss/pull/28. Merge PR #27 first, then retarget #28
+to `main`; the Plane issues intentionally remain In Progress until merged.

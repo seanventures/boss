@@ -118,4 +118,7 @@ See activity-log.md for chronological.
 BOSS-35–43 and BOSS-63 are implementation-complete on
 `ai/codex/boss-35-43-63-preview-feedback`. Focused acceptance, full web, and all
 backend/worker tests outside the inherited failing legacy API matrix are green.
-Publication and Plane evidence are pending; tickets stay In Progress until merge.
+Commit `1eb1d36` is published in stacked draft PR
+https://github.com/seanheiney/boss/pull/28 (base: PR #27 branch). Plane evidence
+is attached; tickets stay In Progress until merge. The inherited API matrix
+baseline is tracked separately as BOSS-119.
