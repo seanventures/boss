@@ -933,6 +933,59 @@ class ResourcePlaneService:
         ).mappings().all()
         return [self._serialize_deployment_target(row) for row in rows]
 
+    def get_deployment_target(
+        self,
+        connection: Connection,
+        project_id: str,
+        deployment_target_id: str,
+    ) -> dict[str, Any]:
+        return self._get_deployment_target(
+            connection,
+            project_id,
+            deployment_target_id,
+        )
+
+    def get_deployment_run(
+        self,
+        connection: Connection,
+        project_id: str,
+        deployment_run_id: str,
+    ) -> dict[str, Any]:
+        return self._get_deployment_run(
+            connection,
+            project_id,
+            deployment_run_id,
+        )
+
+    def deployment_rollout_policy_for_target(
+        self,
+        connection: Connection,
+        project_id: str,
+        target: dict[str, Any],
+    ) -> Optional[dict[str, Any]]:
+        return self._deployment_rollout_policy_for_target(
+            connection,
+            project_id,
+            target,
+        )
+
+    def deployment_rollout_policy_block_reason(
+        self,
+        target: dict[str, Any],
+        policy: dict[str, Any],
+        rollback_plan: list[str],
+        reservation_id: Optional[str],
+    ) -> Optional[str]:
+        return self._deployment_rollout_policy_block_reason(
+            target,
+            policy,
+            rollback_plan,
+            reservation_id,
+        )
+
+    def deployment_rollback_plan(self, target: dict[str, Any]) -> list[str]:
+        return self._deployment_rollback_plan(target)
+
     def list_deployment_environment_policies(
         self,
         connection: Connection,

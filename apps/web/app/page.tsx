@@ -136,6 +136,7 @@ import { ApprovalRulesView } from "./approval-rules-ui";
 import { fetchMcpServers } from "../lib/mcp";
 import { fetchPackFeed } from "../lib/packs";
 import { fetchProviderOpsFeed } from "../lib/providerops";
+import { DeploymentPromotionTimeline } from "./deployment-promotion-timeline";
 import { fetchProjectFeed } from "../lib/projects";
 import { fetchReceiptFeed } from "../lib/receipts";
 import { fetchRoleFeed } from "../lib/roles";
@@ -2604,6 +2605,18 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                       ))}
                     </div>
                   ) : null}
+
+                  <div className="section-heading">
+                    <div>
+                      <h3>Promotion timeline</h3>
+                      <p className="detail">
+                        Pipeline verdict → staging → health gate → production → rollout.
+                      </p>
+                    </div>
+                  </div>
+                  <DeploymentPromotionTimeline
+                    promotions={providerOps.deploymentPromotions}
+                  />
                 </article>
 
                 <article className="stack-card">

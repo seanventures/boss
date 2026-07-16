@@ -1621,6 +1621,41 @@ class PullRequestProposalResponse(BaseModel):
     message: Optional[str] = None
 
 
+class CIConfigProposalRequest(BaseModel):
+    project_id: str
+    repo: str
+    language: str
+    framework: Optional[str] = None
+    target: str = "github_actions"
+    reservation_id: str
+    dedupe_key: str
+    branch_name: str
+    title: str = "ci: add governed build and deployment evidence pipeline"
+    task_id: Optional[str] = None
+    actor: str = "release_manager"
+    created_by_job_id: Optional[str] = None
+
+    @model_validator(mode="after")
+    def validate_ci_config_proposal(self) -> "CIConfigProposalRequest":
+        self.project_id = _require_text(self.project_id, "project_id")
+        self.repo = _require_text(self.repo, "repo")
+        self.language = _require_text(self.language, "language")
+        self.target = _require_text(self.target, "target")
+        self.reservation_id = _require_text(self.reservation_id, "reservation_id")
+        self.dedupe_key = _require_text(self.dedupe_key, "dedupe_key")
+        self.branch_name = _require_text(self.branch_name, "branch_name")
+        self.title = _require_text(self.title, "title")
+        self.actor = _require_text(self.actor, "actor")
+        return self
+
+
+class CIConfigProposalResponse(BaseModel):
+    status: str
+    pipeline_descriptor: dict[str, Any]
+    generated_config: Optional[dict[str, Any]] = None
+    proposal: Optional[PullRequestProposalResponse] = None
+
+
 class PullRequestMergeRequest(BaseModel):
     project_id: str
     decision_id: str
@@ -1838,11 +1873,51 @@ class DeploymentRolloutSummary(BaseModel):
     created_by_job_id: Optional[str] = None
     created_at: datetime
     updated_at: datetime
+    deployment_run_id: Optional[str] = None
+    promotion_id: Optional[str] = None
+    rollback_reason: Optional[str] = None
+    health_observations: list[dict[str, Any]] = Field(default_factory=list)
+    started_at: Optional[datetime] = None
+    finished_at: Optional[datetime] = None
 
 
 class DeploymentRolloutListResponse(BaseModel):
     project_id: str
     items: list[DeploymentRolloutSummary]
+
+
+class DeploymentRolloutStartRequest(BaseModel):
+    actor: str = "deployment_manager"
+    stages: list[str] = Field(default_factory=list)
+    thresholds: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def validate_deployment_rollout_start(self) -> "DeploymentRolloutStartRequest":
+        self.actor = _require_text(self.actor, "actor")
+        return self
+
+
+class DeploymentRolloutAdvanceRequest(BaseModel):
+    actor: str = "deployment_manager"
+    observation: dict[str, Any]
+
+    @model_validator(mode="after")
+    def validate_deployment_rollout_advance(self) -> "DeploymentRolloutAdvanceRequest":
+        self.actor = _require_text(self.actor, "actor")
+        if not self.observation:
+            raise ValueError("observation is required")
+        return self
+
+
+class DeploymentRolloutRollbackRequest(BaseModel):
+    actor: str = "deployment_manager"
+    reason: str
+
+    @model_validator(mode="after")
+    def validate_deployment_rollout_rollback(self) -> "DeploymentRolloutRollbackRequest":
+        self.actor = _require_text(self.actor, "actor")
+        self.reason = _require_text(self.reason, "reason")
+        return self
 
 
 class ReceiptResponse(BaseModel):
@@ -4050,6 +4125,75 @@ class DeploymentRunHealthCheckResponse(BaseModel):
     health_artifact_id: str
     rollback_artifact_id: Optional[str] = None
     decision_id: Optional[str] = None
+
+
+class DeploymentPromotionStartRequest(BaseModel):
+    project_id: str
+    staging_target_id: str
+    production_target_id: str
+    commit_ref: str
+    staging_reservation_id: Optional[str] = None
+    production_reservation_id: Optional[str] = None
+    staging_expected_cost_usd_micros: int = Field(default=0, ge=0)
+    production_expected_cost_usd_micros: int = Field(default=0, ge=0)
+    release_packet: dict[str, Any] = Field(default_factory=dict)
+    actor: str = "release_manager"
+
+    @model_validator(mode="after")
+    def validate_deployment_promotion_start(self) -> "DeploymentPromotionStartRequest":
+        self.project_id = _require_text(self.project_id, "project_id")
+        self.staging_target_id = _require_text(
+            self.staging_target_id, "staging_target_id"
+        )
+        self.production_target_id = _require_text(
+            self.production_target_id, "production_target_id"
+        )
+        self.commit_ref = _require_text(self.commit_ref, "commit_ref")
+        self.actor = _require_text(self.actor, "actor")
+        return self
+
+
+class DeploymentPromotionAdvanceRequest(BaseModel):
+    actor: str = "release_manager"
+
+    @model_validator(mode="after")
+    def validate_deployment_promotion_advance(
+        self,
+    ) -> "DeploymentPromotionAdvanceRequest":
+        self.actor = _require_text(self.actor, "actor")
+        return self
+
+
+class DeploymentPromotionSummary(BaseModel):
+    id: str
+    project_id: str
+    app_name: str
+    repo: str
+    commit_ref: str
+    staging_target_id: str
+    production_target_id: str
+    staging_deployment_run_id: Optional[str] = None
+    production_deployment_run_id: Optional[str] = None
+    production_rollout_id: Optional[str] = None
+    pipeline_provider: str
+    pipeline_descriptor: dict[str, Any]
+    pipeline_verdict: dict[str, Any]
+    gate_result: dict[str, Any]
+    status: str
+    failure_reason: Optional[str] = None
+    created_by: str
+    created_at: datetime
+    updated_at: datetime
+    completed_at: Optional[datetime] = None
+    staging_deployment_run: Optional[DeploymentRunSummary] = None
+    production_deployment_run: Optional[DeploymentRunSummary] = None
+    production_rollout: Optional[DeploymentRolloutSummary] = None
+    timeline: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class DeploymentPromotionListResponse(BaseModel):
+    project_id: str
+    items: list[DeploymentPromotionSummary]
 
 
 class ChangeSetOperationRequest(BaseModel):

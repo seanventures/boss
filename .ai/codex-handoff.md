@@ -1,6 +1,15 @@
 # Codex Handoff
 
-Last updated: 2026-07-15 (BOSS-118 controlled integration release validated for main)
+Last updated: 2026-07-16 (BOSS-58–62 CI/CD promotion slice)
+
+## 2026-07-16 BOSS-58–62 CI/CD promotion handoff
+
+- Isolated branch `ai/codex/boss-58-62-cicd-promotion` starts at current `origin/main`; parallel contributor `feat/console-vag-explainer`, `feat/model-call-pacing`, and `feat/vag-phase1-refute-panel` branches were inspected and left untouched.
+- Added a shared deterministic ship-narrow/widen transition used by self-improvement and arbitrary DeploymentRuns; customer rollout persistence is idempotent, RBAC-guarded, ChangeSet-aware, health-gated, evented, and stops at `rollback_pending` instead of bypassing Resource Plane provider controls.
+- Added the PipelineAdapter contract and GitHub Actions discovery/dispatch/check verdict implementation. The existing merge gate now consumes `PipelineVerdict`; Jenkins/GitLab remain explicit BOSS-63 stubs.
+- Added deterministic Actions/Jenkins config proposals via the existing governed software-factory PR path. Generated deploy jobs hand off build evidence only and never receive provider credentials.
+- Added a first-class promotion that records pipeline verdict, staging run, real staging health gate, delayed production run, production rollout, failures, and a single ordered timeline; the ProviderOps console polls active promotions every five seconds.
+- Validation: focused Python 7/7, web 113/113, repo lint, production build, smoke, double schema apply, YAML/OpenAPI parse, client contracts, and diff checks pass. Two adjacent budget-dependent tests fail identically on detached `origin/main`; three other deployment registry/health regressions pass.
 
 ## 2026-07-15 BOSS-118 main integration handoff
 

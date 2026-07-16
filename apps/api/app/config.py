@@ -417,6 +417,9 @@ class Settings(BaseSettings):
     sandbox_ci_poll_interval_seconds: int = Field(
         default=5, alias="BOSS_SANDBOX_CI_POLL_INTERVAL_SECONDS"
     )
+    pipeline_provider: str = Field(
+        default="github_actions", alias="BOSS_PIPELINE_PROVIDER"
+    )
     sandbox_local_validation_enabled: bool = Field(
         default=False, alias="BOSS_SANDBOX_LOCAL_VALIDATION_ENABLED"
     )

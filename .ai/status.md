@@ -1,9 +1,9 @@
 # BOSS Autonomous Delivery Status
 
-**Last updated**: 2026-07-15 (BOSS-118 controlled integration release validated for main)
+**Last updated**: 2026-07-16 (BOSS-58–62 CI/CD promotion slice validated)
 **Repo root**: /Volumes/DataSSD1/test/boss
 **Git remote**: https://github.com/seanheiney/boss
-**Current branch**: ai/codex/integrate-main
+**Current branch**: ai/codex/boss-58-62-cicd-promotion
 **Base branch**: origin/main
 **Product**: BOSS v0.4.1 target (Business Operating System Sentinel)
 **Mission**: Complete product to production-grade, tested, documented, pushed, Codex-coordinated, ready for real users. Grind until all discovered PRD/spec features satisfy world-class DoD or truly blocked.
@@ -14,6 +14,8 @@
 - GitHub: draft PR #16 carries BOSS-22/BOSS-23 and is stacked on draft PR #15; other open PRs were inspected for overlap before implementation.
 
 ## Overall Product Status
+- BOSS-58–62 implement the CI/CD module's first five dependency-ordered slices: a shared health-gated rollout state machine for arbitrary DeploymentRuns, a GitHub Actions implementation of the provider-neutral pipeline contract, deterministic CI/Jenkins config generation through the existing budgeted/Receipted draft-PR path, a fail-closed staging→health-gate→production promotion entity, and a live console timeline. Jenkins/GitLab execution remains the separately tracked BOSS-63 follow-on.
+- Validation for this slice: 7 focused Python acceptance/regression tests, 113 web tests, repository lint, production web build, smoke, double schema application, YAML/OpenAPI parsing, and diff checks pass. Three adjacent ProviderOps tests pass; two budget-dependent legacy tests reproduce their unchanged `reservation_id=None` failure on detached `origin/main` and are not caused by this branch.
 - BOSS-118 integrates every unmerged Codex feature stack from current `origin/main`: reactive docs/webhooks, docs agent/site, GitHub community automation, conversational orchestration, executable skill registry, BOSS-112 design system, and bare-metal deployment readiness. Parallel contributor `feat/*` branches remain excluded. Semantic conflicts were resolved as unions, including 10 default reactive subscriptions, both docs/GitHub worker paths, the agent panel inside the new Phosphor design navigation, and OpenAI-compatible chat fallback with retry telemetry.
 - Integrated validation: `make lint`, production `make build`, `make smoke`, strict `make docs`, `make k8s-validate`, `make infra-validate`, and `make deps-audit` complete. Web tests pass 112/112; the Python run passes 388/425, with all 37 failures confined to the documented legacy `test_api.py` baseline. Representative auth, ProviderOps, and budget failures reproduce unchanged on detached `origin/main`. External release readiness remains deliberately fail-closed without hosted identity/provider credentials.
 - Reactive feature documentation advanced on 2026-07-15: Plane BOSS-73/BOSS-74/BOSS-75 now provide allowlisted and manual entity-debounced `docs.update` jobs, evidence/context assembly, a validated `docs_writer` role, managed Markdown preservation, a budgeted/Receipted stable-branch draft PR path, TRACEABILITY reconciliation, feature freshness, worker retry/deadletter handling, and no automatic merge. Validation: 7 docs-agent tests, 7 reactive regressions, 27 worker tests, focused Ruff/compile/YAML, generator drift, and strict MkDocs all pass.

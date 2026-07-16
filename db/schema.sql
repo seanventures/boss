@@ -1270,6 +1270,49 @@ CREATE INDEX IF NOT EXISTS idx_deployment_runs_project
   ON deployment_runs(project_id, status, created_at DESC);
 ALTER TABLE deployment_runs ADD COLUMN IF NOT EXISTS decision_id TEXT REFERENCES decisions(id);
 
+-- Generalized customer-app rollout state reuses the existing deployment_rollouts
+-- ledger while linking each new rollout to its ProviderOps DeploymentRun.
+ALTER TABLE deployment_rollouts
+  ADD COLUMN IF NOT EXISTS deployment_run_id TEXT REFERENCES deployment_runs(id);
+ALTER TABLE deployment_rollouts
+  ADD COLUMN IF NOT EXISTS promotion_id TEXT;
+ALTER TABLE deployment_rollouts
+  ADD COLUMN IF NOT EXISTS rollback_reason TEXT;
+ALTER TABLE deployment_rollouts
+  ADD COLUMN IF NOT EXISTS health_observations JSONB NOT NULL DEFAULT '[]'::jsonb;
+ALTER TABLE deployment_rollouts
+  ADD COLUMN IF NOT EXISTS started_at TIMESTAMPTZ;
+ALTER TABLE deployment_rollouts
+  ADD COLUMN IF NOT EXISTS finished_at TIMESTAMPTZ;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_deployment_rollouts_deployment_run
+  ON deployment_rollouts(deployment_run_id)
+  WHERE deployment_run_id IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS deployment_promotions (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  app_name TEXT NOT NULL,
+  repo TEXT NOT NULL,
+  commit_ref TEXT NOT NULL,
+  staging_target_id TEXT NOT NULL REFERENCES deployment_targets(id),
+  production_target_id TEXT NOT NULL REFERENCES deployment_targets(id),
+  staging_deployment_run_id TEXT REFERENCES deployment_runs(id),
+  production_deployment_run_id TEXT REFERENCES deployment_runs(id),
+  production_rollout_id TEXT REFERENCES deployment_rollouts(id),
+  pipeline_provider TEXT NOT NULL,
+  pipeline_descriptor JSONB NOT NULL DEFAULT '{}'::jsonb,
+  pipeline_verdict JSONB NOT NULL DEFAULT '{}'::jsonb,
+  gate_result JSONB NOT NULL DEFAULT '{}'::jsonb,
+  status TEXT NOT NULL DEFAULT 'created',
+  failure_reason TEXT,
+  created_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  completed_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_deployment_promotions_project
+  ON deployment_promotions(project_id, status, created_at DESC);
+
 CREATE TABLE IF NOT EXISTS changeset_operations (
   id TEXT PRIMARY KEY,
   project_id TEXT NOT NULL REFERENCES projects(id),

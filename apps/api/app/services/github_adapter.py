@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import base64
-import time
 from typing import Any, Optional
 
 import httpx
@@ -116,6 +115,7 @@ class GitHubAdapter:
         *,
         accept: Optional[str] = None,
         response_text: bool = False,
+        allow_empty: bool = False,
     ) -> Any:
         headers = self._headers()
         if accept:
@@ -130,6 +130,8 @@ class GitHubAdapter:
         response.raise_for_status()
         if response_text:
             return response.text
+        if allow_empty and not response.content:
+            return {}
         return response.json()
 
     def repo_metadata(self) -> dict:
@@ -407,41 +409,16 @@ class GitHubAdapter:
         timeout_seconds: int,
         poll_interval_seconds: int,
     ) -> PullRequestValidationResult:
-        start = time.monotonic()
-        while True:
-            payload = self._request(
-                "GET",
-                f"/repos/{self.repository_full_name}/commits/{head_sha}/check-runs",
-            )
-            check_runs = [
-                PullRequestValidationCheck(
-                    name=str(item.get("name") or "Unnamed check"),
-                    status=str(item.get("status") or "unknown"),
-                    conclusion=item.get("conclusion"),
-                    html_url=item.get("html_url"),
-                    started_at=item.get("started_at"),
-                    completed_at=item.get("completed_at"),
-                )
-                for item in payload.get("check_runs", [])
-            ]
-            evaluation = self._evaluate_check_runs(head_sha, check_runs)
-            if evaluation.completed:
-                return evaluation
+        from .pipeline_adapter import GitHubActionsPipeline
 
-            elapsed = time.monotonic() - start
-            if elapsed >= timeout_seconds:
-                return PullRequestValidationResult(
-                    status="timed_out",
-                    summary=(
-                        "Timed out while waiting for GitHub validation checks to "
-                        "complete."
-                    ),
-                    head_sha=head_sha,
-                    completed=False,
-                    checks=check_runs,
-                )
-
-            time.sleep(max(1, poll_interval_seconds))
+        return GitHubActionsPipeline(
+            self.settings,
+            github=self,
+        ).wait_for_verdict(
+            head_sha,
+            timeout_seconds=timeout_seconds,
+            poll_interval_seconds=poll_interval_seconds,
+        ).to_pull_request_validation()
 
     def _evaluate_check_runs(
         self, head_sha: str, check_runs: list[PullRequestValidationCheck]

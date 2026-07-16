@@ -1,9 +1,21 @@
 # BOSS Requirements Traceability Matrix (Autonomous .ai version)
 
-**Last rebuilt**: 2026-07-15 by Codex (BOSS-118 controlled integration of reactive docs, GitHub community, and conversational orchestration)
+**Last rebuilt**: 2026-07-16 by Codex (BOSS-58–62 CI/CD promotion delivery)
 **Sources**: docs/product/PRD-v2.0.md, TECHNICAL_SPEC-v2.0.md, REQUIREMENT_INVENTORY.md, TRACEABILITY.md, user-stories.md, AGENTS.md, README, api/openapi.yaml, db/schema.sql, packages/specpack/*, code + tests scan.
 **Status key**: Implemented (full vertical + tests + states + audit + DoD), Partial, Planned, Blocked (external per real-only), In-Progress (this session).
 **DoD reminder**: Requirement complete only when traced, full journey, UI nav, backend, persistence, auth server+client, validations, loading/empty/error/success, edges, mobile/a11y basics, security/arch/QA review, tests pass, lint/build, docs updated, NO mocks/fakes/TODOs for required behavior.
+
+## 2026-07-16 CI/CD and Deployment Trace
+
+| Plane | Requirement | Implementation | Verification | Status |
+|---|---|---|---|---|
+| BOSS-58 | Generalized staged rollout and auto-stop/rollback state | shared pure transition engine; DeploymentRun rollout persistence/routes/RBAC/events; self-improvement delegation | API permission/idempotency, healthy advance, breach rollback, unchanged self-improvement tests | Implemented |
+| BOSS-59 | Provider-neutral pipeline boundary | discover/trigger/poll/verdict protocol, GitHub Actions adapter/factory, merge-gate consumption, additive Jenkins/GitLab seams | adapter unit test plus existing software-factory contract updates | Implemented |
+| BOSS-60 | Governed CI config proposal | deterministic Actions/Jenkins generation, parse/job validation, discovery no-op, existing BudgetReservation/Receipt/draft-PR path | generator determinism/safety and API-client route tests | Implemented |
+| BOSS-61 | Staging→production promotion | first-class promotion row, pipeline/policy/staging-health gates, delayed production run, production rollout, terminal evidence | persisted integration test covers pass, policy block, delayed production, auto-rollback, aggregate read | Implemented |
+| BOSS-62 | Console promotion timeline | one aggregate API/client mapping and five-second active refresh in ProviderOps | ProviderOps mapping, API client, full web test/build | Implemented |
+
+Provider rollback is intentionally recorded as `rollback_pending` until a separate approved Resource Plane ChangeSet performs the provider write. BOSS-63 remains Backlog for concrete Jenkins/GitLab adapters.
 
 | Req ID | Source Quote/Paraphrase | Persona | User Goal / Journey | Required UI/Nav | Required Backend/API | Data/Storage | Auth/Perms | Validations | Loading/Empty/Error/Success | Edge Cases | Integrations/Jobs/Notes | Analytics/Obs | Tests Required | Impl Status | Test Status | Files Changed | Branch/PR | Owning Agent | Reviewer Agents | Blocker | Completion |
 |--------|-------------------------|---------|---------------------|-----------------|----------------------|--------------|------------|-------------|-----------------------------|------------|-------------------------|---------------|----------------|-------------|-------------|---------------|-----------|--------------|-----------------|---------|------------|

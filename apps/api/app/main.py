@@ -113,6 +113,9 @@ from .schemas import (
     KpiListResponse,
     KpiSummary,
     DeploymentRolloutListResponse,
+    DeploymentRolloutAdvanceRequest,
+    DeploymentRolloutRollbackRequest,
+    DeploymentRolloutStartRequest,
     DeploymentRolloutSummary,
     DeploymentEnvironmentPolicyListResponse,
     DeploymentEnvironmentPolicySummary,
@@ -122,6 +125,10 @@ from .schemas import (
     DeploymentRunHealthCheckResponse,
     DeploymentRunListResponse,
     DeploymentRunSummary,
+    DeploymentPromotionAdvanceRequest,
+    DeploymentPromotionListResponse,
+    DeploymentPromotionStartRequest,
+    DeploymentPromotionSummary,
     DeploymentTargetCreateRequest,
     DeploymentTargetListResponse,
     DeploymentTargetSummary,
@@ -138,6 +145,8 @@ from .schemas import (
     DeadletterRequeueResponse,
     DriftReportListResponse,
     DriftReportSummary,
+    CIConfigProposalRequest,
+    CIConfigProposalResponse,
     DocsUpdateExecuteRequest,
     DocsUpdateRequest,
     EntitlementSourceConnectRequest,
@@ -178,6 +187,7 @@ from .schemas import (
     EventSubscriptionListResponse,
     EventSubscriptionSummary,
     EventSubscriptionUpdateRequest,
+    FileChange,
     InboundWebhookResponse,
     GitHubCommunityJobExecuteRequest,
     WebhookDeliveryCreateRequest,
@@ -478,6 +488,10 @@ from .services.self_improvement import (
     SelfImprovementService,
 )
 from .services.software_factory import SoftwareFactoryService
+from .services.github_adapter import IntegrationConfigurationError
+from .services.ci_config_generator import CIConfigGenerator
+from .services.deployment_rollout_engine import DeploymentRolloutEngine
+from .services.promotion_orchestrator import PromotionOrchestrator
 from .services.specpack import (
     AgentModuleEntitlementError,
     AgentModuleNotFoundError,
@@ -529,6 +543,14 @@ ops_queue = OpsQueueService(settings)
 reports = ReportService(settings)
 break_glass = BreakGlassService()
 resource_plane = ResourcePlaneService(settings)
+deployment_rollout_engine = DeploymentRolloutEngine(settings)
+promotion_orchestrator = PromotionOrchestrator(
+    settings,
+    resource_plane=resource_plane,
+    rollout_engine=deployment_rollout_engine,
+    pipeline=software_factory.pipeline,
+)
+ci_config_generator = CIConfigGenerator()
 oidc_auth = OidcAuthenticator(settings)
 saml_sessions = SamlSessionService(settings)
 current_api_principal: ContextVar[Optional[str]] = ContextVar(
@@ -7962,6 +7984,192 @@ def run_deployment_health_check(
         )
 
 
+@app.post(
+    "/v1/deployment-runs/{deployment_run_id}/rollout/start",
+    response_model=DeploymentRolloutSummary,
+)
+def start_deployment_rollout(
+    deployment_run_id: str,
+    payload: DeploymentRolloutStartRequest,
+) -> DeploymentRolloutSummary:
+    with begin(engine) as connection:
+        project_id = project_id_for_deployment_run(connection, deployment_run_id)
+        require_project_actor(
+            connection, project_id, payload.actor, "providerops_manage"
+        )
+        try:
+            rollout = deployment_rollout_engine.start_rollout(
+                connection,
+                project_id=project_id,
+                deployment_run_id=deployment_run_id,
+                actor=payload.actor,
+                stages=payload.stages or None,
+                thresholds=payload.thresholds,
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        return DeploymentRolloutSummary(**rollout)
+
+
+@app.post(
+    "/v1/deployment-runs/{deployment_run_id}/rollout/advance",
+    response_model=DeploymentRolloutSummary,
+)
+def advance_deployment_rollout(
+    deployment_run_id: str,
+    payload: DeploymentRolloutAdvanceRequest,
+) -> DeploymentRolloutSummary:
+    with begin(engine) as connection:
+        project_id = project_id_for_deployment_run(connection, deployment_run_id)
+        require_project_actor(
+            connection, project_id, payload.actor, "providerops_manage"
+        )
+        try:
+            rollout = deployment_rollout_engine.advance_rollout(
+                connection,
+                project_id=project_id,
+                deployment_run_id=deployment_run_id,
+                actor=payload.actor,
+                observation=payload.observation,
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        return DeploymentRolloutSummary(**rollout)
+
+
+@app.post(
+    "/v1/deployment-runs/{deployment_run_id}/rollout/rollback",
+    response_model=DeploymentRolloutSummary,
+)
+def rollback_deployment_rollout(
+    deployment_run_id: str,
+    payload: DeploymentRolloutRollbackRequest,
+) -> DeploymentRolloutSummary:
+    with begin(engine) as connection:
+        project_id = project_id_for_deployment_run(connection, deployment_run_id)
+        require_project_actor(
+            connection, project_id, payload.actor, "providerops_manage"
+        )
+        try:
+            rollout = deployment_rollout_engine.rollback(
+                connection,
+                project_id=project_id,
+                deployment_run_id=deployment_run_id,
+                actor=payload.actor,
+                reason=payload.reason,
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        return DeploymentRolloutSummary(**rollout)
+
+
+@app.get(
+    "/v1/deployment-promotions",
+    response_model=DeploymentPromotionListResponse,
+)
+def list_deployment_promotions(
+    project_id: str,
+    limit: int = 50,
+) -> DeploymentPromotionListResponse:
+    if limit < 1 or limit > 200:
+        raise HTTPException(status_code=400, detail="limit must be between 1 and 200.")
+    with begin(engine) as connection:
+        items = promotion_orchestrator.list_promotions(
+            connection, project_id, limit=limit
+        )
+        return DeploymentPromotionListResponse(
+            project_id=project_id,
+            items=[DeploymentPromotionSummary(**item) for item in items],
+        )
+
+
+@app.get(
+    "/v1/deployment-promotions/{promotion_id}",
+    response_model=DeploymentPromotionSummary,
+)
+def get_deployment_promotion(promotion_id: str) -> DeploymentPromotionSummary:
+    with begin(engine) as connection:
+        row = connection.execute(
+            text("SELECT project_id FROM deployment_promotions WHERE id = :id"),
+            {"id": promotion_id},
+        ).mappings().first()
+        if not row:
+            raise HTTPException(status_code=404, detail="Deployment promotion not found.")
+        return DeploymentPromotionSummary(
+            **promotion_orchestrator.get_promotion_detail(
+                connection, row["project_id"], promotion_id
+            )
+        )
+
+
+@app.post(
+    "/v1/deployment-promotions",
+    response_model=DeploymentPromotionSummary,
+    status_code=201,
+)
+def create_deployment_promotion(
+    payload: DeploymentPromotionStartRequest,
+) -> DeploymentPromotionSummary:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection,
+            payload.project_id,
+            payload.actor,
+            "providerops_manage",
+        )
+        try:
+            item = promotion_orchestrator.promote(
+                connection,
+                project_id=payload.project_id,
+                staging_target_id=payload.staging_target_id,
+                production_target_id=payload.production_target_id,
+                commit_ref=payload.commit_ref,
+                actor=payload.actor,
+                staging_reservation_id=payload.staging_reservation_id,
+                production_reservation_id=payload.production_reservation_id,
+                staging_expected_cost_usd_micros=(
+                    payload.staging_expected_cost_usd_micros
+                ),
+                production_expected_cost_usd_micros=(
+                    payload.production_expected_cost_usd_micros
+                ),
+                release_packet=payload.release_packet,
+            )
+        except (ValueError, IntegrationConfigurationError) as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        return DeploymentPromotionSummary(**item)
+
+
+@app.post(
+    "/v1/deployment-promotions/{promotion_id}/advance",
+    response_model=DeploymentPromotionSummary,
+)
+def advance_deployment_promotion(
+    promotion_id: str,
+    payload: DeploymentPromotionAdvanceRequest,
+) -> DeploymentPromotionSummary:
+    with begin(engine) as connection:
+        row = connection.execute(
+            text("SELECT project_id FROM deployment_promotions WHERE id = :id"),
+            {"id": promotion_id},
+        ).mappings().first()
+        if not row:
+            raise HTTPException(status_code=404, detail="Deployment promotion not found.")
+        require_project_actor(
+            connection, row["project_id"], payload.actor, "providerops_manage"
+        )
+        try:
+            item = promotion_orchestrator.advance_after_staging_gate(
+                connection,
+                project_id=row["project_id"],
+                promotion_id=promotion_id,
+                actor=payload.actor,
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        return DeploymentPromotionSummary(**item)
+
+
 @app.get("/v1/provider-health", response_model=ProviderHealthListResponse)
 def list_provider_health(
     project_id: str,
@@ -9127,6 +9335,69 @@ def create_pull_request_proposal(
         except AgentModuleNotFoundError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
         return PullRequestProposalResponse(**result)
+
+
+@app.post(
+    "/v1/pipeline-config/proposals",
+    response_model=CIConfigProposalResponse,
+)
+def propose_ci_config(
+    payload: CIConfigProposalRequest,
+) -> CIConfigProposalResponse:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection,
+            payload.project_id,
+            payload.actor,
+            "task_create",
+        )
+        try:
+            descriptor = software_factory.pipeline.discover(payload.repo)
+            descriptor_data = descriptor.to_dict()
+            emit_event(
+                connection,
+                payload.project_id,
+                "pipeline.discovered",
+                payload.actor,
+                "repository",
+                payload.repo,
+                descriptor_data,
+            )
+            if descriptor.configured:
+                return CIConfigProposalResponse(
+                    status="existing_pipeline",
+                    pipeline_descriptor=descriptor_data,
+                )
+            generated = ci_config_generator.generate(
+                language=payload.language,
+                framework=payload.framework,
+                target=payload.target,
+            )
+            proposal = software_factory.propose_pull_request(
+                connection,
+                payload.project_id,
+                payload.task_id,
+                payload.reservation_id,
+                payload.dedupe_key,
+                payload.title,
+                payload.branch_name,
+                (
+                    "Add deterministic CI build/test/deploy-evidence configuration. "
+                    "Provider deployment remains governed by BOSS ChangeSets."
+                ),
+                [FileChange(path=generated["path"], content=generated["content"])],
+                payload.created_by_job_id,
+            )
+        except (ValueError, IntegrationConfigurationError) as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        return CIConfigProposalResponse(
+            status=proposal["status"],
+            pipeline_descriptor=descriptor_data,
+            generated_config={
+                key: value for key, value in generated.items() if key != "content"
+            },
+            proposal=PullRequestProposalResponse(**proposal),
+        )
 
 
 @app.post("/v1/software-factory/merges", response_model=PullRequestMergeResponse)

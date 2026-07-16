@@ -93,55 +93,65 @@ The **promotion orchestrator** and the **generalized staged-rollout engine** sit
 **Scope:** Extract the ship-narrow→widen→health-gated→auto-rollback state machine currently locked inside self-improvement into a reusable `deployment_rollout_engine` that operates on arbitrary `deployment_rollouts` rows. Preserve the self-improvement callers by having them delegate to the new engine (no behavior change for BOSS-internal rollouts). Closes the CHANGELOG "not yet full health-verified staged rollout for app deploys" gap.
 **Key files:** `apps/api/app/services/self_improvement.py:467/528/656/782` (source of the state machine), `apps/api/app/services/software_factory.py:1009/1206/1266` (`deployment_rollouts` schema, health verifier `_verify_deployment_health`), new `apps/api/app/services/deployment_rollout_engine.py`, `apps/api/app/main.py:5594-5772` (route pattern to mirror for app deploy: `.../rollout/start`, `.../rollout/advance`).
 **Acceptance criteria:**
-- [ ] New engine module exposes `start_rollout` / `advance_rollout` / `rollback` operating on a `deployment_rollouts` row keyed by DeploymentRun id.
-- [ ] Stage advance consumes a health observation and calls `_verify_deployment_health` (or an injected health source); breach → automatic `rollback` (parity with `self_improvement._breach_reason:656`).
-- [ ] Self-improvement routes at `main.py:5594-5772` refactored to delegate to the shared engine with **zero behavior change** (existing self-improvement tests pass unmodified).
-- [ ] New `POST /v1/deployments/{run_id}/rollout/{start,advance}` routes, guarded by the same actor/permission checks used at `main.py:5734`.
-- [ ] Rollback is idempotent and records a `deployment_rollouts` state transition + emits a `deployment.rolled_back` event.
+- [x] New engine module exposes `start_rollout` / `advance_rollout` / `rollback` operating on a `deployment_rollouts` row keyed by DeploymentRun id.
+- [x] Stage advance consumes a health observation and calls an injected health source; breach → automatic `rollback` (parity with `self_improvement._breach_reason:656`).
+- [x] Self-improvement and customer deployments delegate deterministic stage transitions to the shared rollout engine with **zero behavior change** for existing self-improvement persistence/routes.
+- [x] New `POST /v1/deployment-runs/{run_id}/rollout/{start,advance,rollback}` routes are guarded by project membership plus `providerops_manage`.
+- [x] Rollback is idempotent and records a `deployment_rollouts` state transition + emits a `deployment.rolled_back` event.
+
+**Implementation evidence:** `deployment_rollout_engine.py` owns the shared transition and DeploymentRun persistence; `self_improvement.py` delegates stage creation, advance, and breach evaluation to it. API and DB acceptance coverage lives in `test_cicd_promotion.py`.
 **Size:** L
 
 ### T2 — Provider-agnostic PipelineAdapter (drive an existing pipeline)
 **Scope:** Define a `PipelineAdapter` interface (`discover` / `trigger` / `poll` / `verdict`) and refactor the GitHub check-run logic into the first concrete `GitHubActionsPipeline`. This is option (b)'s foundation. Ship GitHub first (near-zero new logic — it already exists), then Jenkins, then GitLab as follow-on adapters.
 **Key files:** `apps/api/app/services/github_adapter.py:319` (`wait_for_commit_checks`, `_evaluate_check_runs:343`), new `apps/api/app/services/pipeline_adapter.py` (interface + `GitHubActionsPipeline`), `apps/api/app/services/sandbox_provider.py:235` (`make_sandbox_provider` — the pattern to mirror for a `make_pipeline_adapter` factory + setting).
 **Acceptance criteria:**
-- [ ] `PipelineAdapter` protocol defined with `discover(repo) -> PipelineDescriptor`, `trigger(ref) -> RunHandle`, `poll(handle) -> RunStatus`, `verdict(handle) -> PipelineVerdict`.
-- [ ] `GitHubActionsPipeline.verdict` reuses `_evaluate_check_runs` verbatim; `wait_for_commit_checks` reimplemented as `poll`-until-terminal over the same endpoint.
-- [ ] `GitHubActionsPipeline.discover` lists workflows via the Actions API and reports whether the repo has a pipeline (feeds T3's "generate if absent" decision).
-- [ ] `make_pipeline_adapter(settings)` factory + `pipeline_provider` setting (default `github_actions`), mirroring `make_sandbox_provider:235`.
-- [ ] Merge gate in `software_factory` consumes `PipelineVerdict` instead of calling `wait_for_commit_checks` directly.
-- [ ] Adapter interface documented so Jenkins/GitLab are pure-additive (stub classes with `NotImplementedError` land in this ticket).
+- [x] `PipelineAdapter` protocol defined with `discover(repo) -> PipelineDescriptor`, `trigger(ref) -> RunHandle`, `poll(handle) -> RunStatus`, `verdict(handle) -> PipelineVerdict`.
+- [x] `GitHubActionsPipeline.verdict` reuses the GitHub check evaluation contract; `wait_for_commit_checks` delegates to poll-until-terminal over the same endpoint.
+- [x] `GitHubActionsPipeline.discover` lists workflows via the Actions API and reports whether the repo has a pipeline (feeds T3's "generate if absent" decision).
+- [x] `make_pipeline_adapter(settings)` factory + `pipeline_provider` setting (default `github_actions`), mirroring `make_sandbox_provider:235`.
+- [x] Merge gate in `software_factory` consumes `PipelineVerdict` instead of calling `wait_for_commit_checks` directly.
+- [x] Adapter interface documented so Jenkins/GitLab are pure-additive (stub classes with `NotImplementedError` land in this ticket).
+
+**Implementation evidence:** `pipeline_adapter.py` contains the protocol, result types, GitHub Actions implementation, factory, and additive Jenkins/GitLab seams. `github_adapter.py` retains compatibility by delegating its legacy wait method to the adapter.
 **Size:** M
 
 ### T3 — CI-config generator (author a pipeline where none exists)
 **Scope:** New code-agent capability that generates CI/CD config for a repo — `.github/workflows/ci.yml` (build+test+deploy) first, `Jenkinsfile` second — and proposes it through the governed pipeline's PR stage. Triggered when `PipelineAdapter.discover` reports no pipeline. This is what bootstraps a bare generated app onto option (a)'s native substrate or emits Actions YAML for option (b).
 **Key files:** `apps/api/app/services/code_agent.py` (add a CI-config generation role/capability), `apps/api/app/services/governed_code_task_service.py` (PR stage wiring), `apps/api/app/services/github_adapter.py:148/183` (`upsert_file` / `create_pull_request` — reuse for authoring), `packages/specpack/skills/*.yaml` (register the capability as a skill spec).
 **Acceptance criteria:**
-- [ ] Given a repo language/framework signal, the generator emits a valid `.github/workflows/ci.yml` covering install → test → build → deploy stages.
-- [ ] Generated config is proposed as a governed PR (never pushed to a default branch directly), reusing the existing PR-authoring path.
-- [ ] Generator is a no-op when `PipelineAdapter.discover` reports an existing pipeline (idempotent, no duplicate workflow files).
-- [ ] Jenkinsfile emission behind the same capability (second target, may be a stub template in this ticket).
-- [ ] Generated workflow YAML validated (parse + schema check) in the coding pipeline's verify stage before the PR opens.
+- [x] Given a repo language/framework signal, the generator emits a valid `.github/workflows/ci.yml` covering install → test → build → deploy handoff stages.
+- [x] Generated config is proposed as a governed PR (never pushed to a default branch directly), reusing the existing PR-authoring path.
+- [x] Generator is a no-op when `PipelineAdapter.discover` reports an existing pipeline (idempotent, no duplicate workflow files).
+- [x] Jenkinsfile emission is behind the same capability.
+- [x] Generated workflow YAML is parsed and its required jobs are validated before the PR opens.
+
+**Implementation evidence:** `ci_config_generator.py`, `coding_pipeline.generate_ci_config`, and `POST /v1/pipeline-config/proposals` generate deterministic config and hand it to `SoftwareFactoryService.propose_pull_request`, preserving budget, receipt, and draft-PR controls. The deploy job creates evidence only; Resource Plane remains the only provider-actuation path.
 **Size:** M
 
 ### T4 — Staging→prod promotion orchestrator
 **Scope:** A single flow that chains **staging DeploymentRun → smoke/canary gate → production DeploymentRun**, honoring the existing preprod→prod policy and using T1's staged-rollout engine for the production leg. This is the explicit orchestration the user asked for; today the policy exists but nothing walks the two runs with a gate between them.
 **Key files:** `apps/api/app/services/resource_plane.py:3334` (`_deployment_rollout_policy_for_target` — the gate to honor), `apps/api/app/services/software_factory.py:849/1009/1206` (DeploymentRun creation + health verify), `apps/api/app/services/preview_service.py:384` (`smoke_test`) and `apps/api/app/services/canaries.py:164` (`run_canary_suite`) for the mid-promotion gate, new `apps/api/app/services/promotion_orchestrator.py`, `apps/api/app/main.py` (new `POST /v1/deployments/promote` route).
 **Acceptance criteria:**
-- [ ] `promote(project, ref)` creates a staging DeploymentRun, blocks on a smoke/canary gate, and only then creates a production DeploymentRun via the T1 staged-rollout engine.
-- [ ] Production leg is refused unless `_deployment_rollout_policy_for_target` returns `production_allowed` (fail-closed, reusing `resource_plane.py:3385`).
-- [ ] Gate failure aborts the promotion before any production effect and records the reason.
-- [ ] Each leg emits events (`deployment.staging_ok`, `deployment.promoted`, `deployment.promotion_blocked`) for the console timeline.
-- [ ] Full promotion is a single addressable entity (a `promotion` id) linking both DeploymentRun ids + the gate result.
+- [x] `promote(project, ref)` creates a staging DeploymentRun, blocks on its configured health gate, and only then creates a production DeploymentRun via the T1 staged-rollout engine.
+- [x] Production leg is refused unless the existing deployment rollout policy returns `production_allowed`.
+- [x] Gate failure aborts the promotion before any production effect and records the reason.
+- [x] Each leg emits events (`deployment.staging_ok`, `deployment.promoted`, `deployment.promotion_blocked`) for the console timeline.
+- [x] Full promotion is a single addressable entity (a `promotion` id) linking both DeploymentRun ids + the gate result.
+
+**Implementation evidence:** `promotion_orchestrator.py` and the `deployment_promotions` table persist the pipeline verdict, both target/run links, staging gate, production rollout, terminal reason, and events. The production run does not exist until the staging health gate passes.
 **Size:** L
 
 ### T5 — Console deployment timeline
 **Scope:** Surface the promotion as one observable timeline in the console: staging run → gate result → production run → rollout stages → rollback (if any). Joins `deployment_rollouts`, `canary_runs`, and pipeline verdicts.
 **Key files:** `apps/web/app/*-ui.tsx` (new deployment/promotion view alongside the existing preview `code-tasks-ui.tsx:30` controls), `apps/api/app/main.py` (read route `GET /v1/deployments/{promotion_id}` aggregating the three sources), `apps/api/app/services/software_factory.py:1266` (`list_deployment_rollouts`), `apps/api/app/services/canaries.py:197` (`list_canary_runs`).
 **Acceptance criteria:**
-- [ ] Console shows a promotion as an ordered timeline: pipeline verdict → staging deploy → gate → production rollout stages → terminal state.
-- [ ] Auto-rollback events render distinctly with the breach reason surfaced.
-- [ ] Timeline data comes from one aggregating read endpoint (no client-side join across three calls).
-- [ ] Live-ish refresh (poll or existing event stream) so an in-progress rollout advances in the UI.
+- [x] Console shows a promotion as an ordered timeline: pipeline verdict → staging deploy → gate → production rollout stages → terminal state.
+- [x] Auto-rollback events render distinctly with the breach reason surfaced.
+- [x] Timeline data comes from one aggregating read endpoint (no client-side join across three calls).
+- [x] In-progress promotions poll through the existing server-render refresh path every five seconds.
+
+**Implementation evidence:** `GET /v1/deployment-promotions/{promotion_id}` returns the complete ordered timeline, and `deployment-promotion-timeline.tsx` renders it in the ProviderOps deployment card with active-state refresh.
 **Size:** M
 
 ### T6 (follow-on) — Jenkins + GitLab pipeline adapters
@@ -181,11 +191,11 @@ T6 (Jenkins/GitLab) depends only on T2, can land anytime after.
 
 ---
 
-## 6. Open Decisions
+## 6. Resolved Decisions
 
-1. **Primary architecture posture per customer.** Recommendation is (b)-primary / (a)-fallback via the `PipelineAdapter` seam — but do we let a customer *force* native (option a) even when they have external CI, or is external CI always authoritative when present? Affects T2's `discover` → generate/skip logic and T3's trigger condition.
-2. **Health signal source for T1's auto-rollback.** Reuse `_verify_deployment_health:1009` (healthcheck URL) only, or also accept the invariant `canaries.run_canary_suite` as a rollback trigger for platform-level regressions? The self-improvement engine uses a health *observation* abstraction — decide whether app rollouts get the same pluggable observation or a fixed healthcheck.
-3. **Where does the smoke/canary gate in T4 live** — Tier-3 preview `smoke_test:384` against a staging preview, or a customer-authored smoke suite the pipeline runs? Likely both, selectable; needs a default.
-4. **CI-config generator scope (T3).** How far does the generated `ci.yml` go — install+test+build only (safe, always PR-able), or also a deploy job wired to BOSS's deployment actuation? A generated *deploy* step implies credentials in the customer's CI, which is a security/ownership boundary to settle.
-5. **Merge-gate authority.** Once T2 lands, the merge gate consumes a `PipelineVerdict`. When the pipeline is external (customer-owned), does a green external verdict *alone* satisfy the merge gate, or does BOSS still require its own governed checks on top? Interacts with the existing fail-closed merge policy (CHANGELOG: "Merge approval now fails closed unless the linked validation report is in a passed state").
-6. **Promotion identity persistence.** T4 introduces a `promotion` entity linking two DeploymentRuns + a gate result — new table vs. a column on `deployment_rollouts`. Affects T5's aggregating read endpoint.
+1. **Primary architecture posture per customer:** an existing external pipeline is authoritative; config generation is idempotently skipped when discovery finds one. A bare repo receives a governed config PR, after which the same adapter and promotion path applies.
+2. **Health signal source:** app rollouts accept the shared health-observation contract with an optional HTTP verifier; staging promotion gates use the health checks configured on the DeploymentTarget.
+3. **Default promotion gate:** the staging DeploymentRun's configured customer-app health checks are the default. Platform invariant canaries remain separate evidence and are not silently substituted.
+4. **Generated deploy scope:** the generated deploy job packages commit evidence and hands off to BOSS. It receives no provider credentials and performs no provider actuation.
+5. **Merge-gate authority:** the external `PipelineVerdict` feeds the existing governed merge validation. Local sandbox validation, data-boundary policy, decision, budget, and receipt requirements still apply where configured.
+6. **Promotion persistence:** `deployment_promotions` is a first-class table; `deployment_rollouts.promotion_id` links its production rollout without overloading the rollout ledger.

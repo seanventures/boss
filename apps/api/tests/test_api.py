@@ -28,8 +28,8 @@ from apps.api.app.services.github_adapter import (
     PullRequestMergeResult,
     PullRequestResult,
     PullRequestValidationCheck,
-    PullRequestValidationResult,
 )
+from apps.api.app.services.pipeline_adapter import PipelineVerdict
 from apps.api.app.services.oidc import OidcPrincipal
 from apps.api.app.services.resource_plane import (
     InventoryResource,
@@ -121,12 +121,14 @@ def configure_pr_proposal_integrations(monkeypatch):
         ),
     )
     monkeypatch.setattr(
-        api_main.software_factory.github,
-        "wait_for_commit_checks",
-        lambda head_sha, timeout_seconds, poll_interval_seconds: PullRequestValidationResult(
+        api_main.software_factory.pipeline,
+        "wait_for_verdict",
+        lambda head_sha, timeout_seconds, poll_interval_seconds: PipelineVerdict(
+            provider="github_actions",
+            repository="seanheiney/boss-sandbox",
+            ref=head_sha,
             status="passed",
             summary="GitHub validation passed: CI.",
-            head_sha=head_sha,
             completed=True,
             checks=[
                 PullRequestValidationCheck(
@@ -15910,12 +15912,14 @@ def test_pr_proposal_records_github_validation_evidence(client, monkeypatch):
         ),
     )
     monkeypatch.setattr(
-        api_main.software_factory.github,
-        "wait_for_commit_checks",
-        lambda head_sha, timeout_seconds, poll_interval_seconds: PullRequestValidationResult(
+        api_main.software_factory.pipeline,
+        "wait_for_verdict",
+        lambda head_sha, timeout_seconds, poll_interval_seconds: PipelineVerdict(
+            provider="github_actions",
+            repository="seanheiney/boss-sandbox",
+            ref=head_sha,
             status="passed",
             summary="GitHub validation passed: CI.",
-            head_sha=head_sha,
             completed=True,
             checks=[
                 PullRequestValidationCheck(
@@ -16636,12 +16640,14 @@ def test_command_to_merge_flow_completes_task_when_merge_policy_enabled(
         ),
     )
     monkeypatch.setattr(
-        api_main.software_factory.github,
-        "wait_for_commit_checks",
-        lambda head_sha, timeout_seconds, poll_interval_seconds: PullRequestValidationResult(
+        api_main.software_factory.pipeline,
+        "wait_for_verdict",
+        lambda head_sha, timeout_seconds, poll_interval_seconds: PipelineVerdict(
+            provider="github_actions",
+            repository="seanheiney/boss-sandbox",
+            ref=head_sha,
             status="passed",
             summary="GitHub validation passed: CI.",
-            head_sha=head_sha,
             completed=True,
             checks=[
                 PullRequestValidationCheck(
@@ -17002,12 +17008,14 @@ def test_command_to_deploy_flow_completes_task_when_deploy_policy_enabled(
         ),
     )
     monkeypatch.setattr(
-        api_main.software_factory.github,
-        "wait_for_commit_checks",
-        lambda head_sha, timeout_seconds, poll_interval_seconds: PullRequestValidationResult(
+        api_main.software_factory.pipeline,
+        "wait_for_verdict",
+        lambda head_sha, timeout_seconds, poll_interval_seconds: PipelineVerdict(
+            provider="github_actions",
+            repository="seanheiney/boss-sandbox",
+            ref=head_sha,
             status="passed",
             summary="GitHub validation passed: CI.",
-            head_sha=head_sha,
             completed=True,
             checks=[
                 PullRequestValidationCheck(

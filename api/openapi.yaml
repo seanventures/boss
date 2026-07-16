@@ -3120,6 +3120,166 @@ paths:
         '403': { description: Actor is not allowed to manage ProviderOps }
         '404': { description: DeploymentRun not found }
         '422': { description: Deployment ChangeSet is not applied or health check config is invalid }
+  /v1/deployment-runs/{deployment_run_id}/rollout/start:
+    post:
+      summary: Start an idempotent health-gated staged rollout for a DeploymentRun
+      parameters:
+        - name: deployment_run_id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                actor: { type: string, default: deployment_manager }
+                stages: { type: array, items: { type: string } }
+                thresholds: { type: object }
+      responses:
+        '200': { description: Durable rollout state linked to the DeploymentRun }
+        '403': { description: Actor is not allowed to manage ProviderOps }
+        '422': { description: DeploymentRun or stage configuration is invalid }
+  /v1/deployment-runs/{deployment_run_id}/rollout/advance:
+    post:
+      summary: Verify a rollout health observation and advance or auto-rollback
+      parameters:
+        - name: deployment_run_id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [observation]
+              properties:
+                actor: { type: string, default: deployment_manager }
+                observation: { type: object }
+      responses:
+        '200': { description: Rollout advanced, completed, or stopped with rollback evidence }
+        '403': { description: Actor is not allowed to manage ProviderOps }
+        '422': { description: ChangeSet is not applied or health evidence is invalid }
+  /v1/deployment-runs/{deployment_run_id}/rollout/rollback:
+    post:
+      summary: Idempotently stop a staged rollout and request governed provider rollback
+      parameters:
+        - name: deployment_run_id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                actor: { type: string, default: deployment_manager }
+                reason: { type: string }
+      responses:
+        '200': { description: Rollout is rolled back and provider actuation is rollback_pending }
+        '403': { description: Actor is not allowed to manage ProviderOps }
+        '422': { description: Deployment rollout has not started }
+  /v1/deployment-promotions:
+    get:
+      summary: List aggregated staging-to-production promotions
+      parameters:
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+        - name: limit
+          in: query
+          schema: { type: integer, default: 50, minimum: 1, maximum: 200 }
+      responses:
+        '200': { description: Promotions with pipeline, deployment, gate, rollout, and timeline evidence }
+    post:
+      summary: Evaluate pipeline evidence and plan the staging leg of a promotion
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id, staging_target_id, production_target_id, commit_ref]
+              properties:
+                project_id: { type: string }
+                staging_target_id: { type: string }
+                production_target_id: { type: string }
+                commit_ref: { type: string }
+                staging_reservation_id: { type: string }
+                production_reservation_id: { type: string }
+                staging_expected_cost_usd_micros: { type: integer, minimum: 0, default: 0 }
+                production_expected_cost_usd_micros: { type: integer, minimum: 0, default: 0 }
+                release_packet: { type: object }
+                actor: { type: string, default: release_manager }
+      responses:
+        '201': { description: Promotion is blocked visibly or waiting on the staging health gate }
+        '403': { description: Actor is not allowed to manage ProviderOps }
+        '422': { description: Targets, policies, or pipeline configuration are invalid }
+  /v1/deployment-promotions/{promotion_id}:
+    get:
+      summary: Read one promotion as an ordered evidence timeline
+      parameters:
+        - name: promotion_id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Aggregated pipeline, staging, gate, production, rollout, and rollback state }
+        '404': { description: Promotion not found }
+  /v1/deployment-promotions/{promotion_id}/advance:
+    post:
+      summary: Run the staging health gate and plan production only after it passes
+      parameters:
+        - name: promotion_id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                actor: { type: string, default: release_manager }
+      responses:
+        '200': { description: Promotion blocked by health or advanced to production_planned }
+        '403': { description: Actor is not allowed to manage ProviderOps }
+        '404': { description: Promotion not found }
+        '422': { description: Staging ChangeSet is not applied or promotion state is invalid }
+  /v1/pipeline-config/proposals:
+    post:
+      summary: Discover CI and propose deterministic config as a governed draft PR only when absent
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id, repo, language, reservation_id, dedupe_key, branch_name]
+              properties:
+                project_id: { type: string }
+                repo: { type: string }
+                language: { type: string }
+                framework: { type: string }
+                target: { type: string, enum: [github_actions, jenkins], default: github_actions }
+                reservation_id: { type: string }
+                dedupe_key: { type: string }
+                branch_name: { type: string }
+                title: { type: string }
+                task_id: { type: string }
+                actor: { type: string, default: release_manager }
+                created_by_job_id: { type: string }
+      responses:
+        '200': { description: Existing pipeline found or a Receipt-backed draft PR proposal returned }
+        '403': { description: Actor is not allowed to create work }
+        '422': { description: Repository, pipeline target, or generated configuration is invalid }
   /v1/provider-health:
     get:
       summary: List provider health observations

@@ -3,6 +3,14 @@
 All 15-min terminal updates and major milestones appended here. Chronological, newest at top.
 
 ---
+## 2026-07-16 — Codex — BOSS-58–62 CI/CD promotion slices
+
+- Claimed Plane BOSS-58 through BOSS-62 and parent BOSS-57, advanced each through Todo to In Progress, and isolated work from all active contributor branches.
+- Implemented the shared DeploymentRun rollout engine, GitHub Actions pipeline adapter, CI/Jenkins config generator, staging-to-production promotion orchestrator, aggregate API/client contract, and ProviderOps promotion timeline.
+- Preserved safety boundaries: external pipeline dispatch remains an adapter-only primitive with no public unguarded route; generated CI never actuates providers; production planning honors environment policy, budget reservation, ChangeSet, health, and ResourceReceipt boundaries; rollback stops widening and records `rollback_pending` for governed follow-up.
+- Validation passes: 7 focused Python tests, 113 web tests, repo lint, production build, smoke, two consecutive schema applications, focused Ruff/compile, YAML/OpenAPI parsing, and diff checks. Two adjacent budget-dependent failures reproduce unchanged on detached `origin/main`.
+
+---
 ## 2026-07-15 — Codex — BOSS-118 controlled main integration
 
 - Created a clean integration branch from the latest `origin/main`, enumerated all unmerged Codex PR stacks, and excluded the parallel contributor's `feat/*` work.

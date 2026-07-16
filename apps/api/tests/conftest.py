@@ -63,6 +63,7 @@ def clean_tables(engine):
             "enterprise_identity_providers",
             "enterprise_cluster_validation_runs",
             "enterprise_clusters",
+            "deployment_promotions",
             "deployment_rollouts",
             "resource_receipts",
             "scale_plans",
