@@ -1,5 +1,39 @@
 # Changelog
 
+## v0.7.0 - 2026-07-16
+
+This release integrates the governed skills, deployment-promotion, durable
+preview, and conversational feedback stacks tracked in Plane BOSS-35–63.
+
+### Added
+
+- Added a project skill registry with eager/on-demand loading, role-aware
+  resolution, leased real-mode execution, runtime permission/budget/retry
+  enforcement, and Receipt/CostReceipt evidence.
+- Added local signed capability bundles, MCP publisher/provenance and per-tool
+  risk metadata, Ed25519 trust verification, hot enable/disable, and governed
+  lazy attachment of resolver-approved tools.
+- Added provider-neutral CI pipeline contracts, GitHub Actions, Jenkins, and
+  GitLab adapters, deterministic CI configuration proposals, customer
+  DeploymentRun staged rollout, health-gated staging-to-production promotion,
+  auto-stop/rollback evidence, and a live console timeline.
+- Added restart-safe application previews, retained micro-VM rootfs serving,
+  Docker/host fallback, command detection, strict health checks, streamed logs,
+  actionable failures, route-faithful HTTP/WebSocket proxying, and execution
+  substrate provenance in the console.
+- Added durable per-task feedback threads, clarification and scoped/full-rerun
+  proposals, permissioned confirmation before retry dispatch, completed-task
+  extension, and preview route/element feedback capture.
+
+### Release notes
+
+- All external effects remain behind policy, budget, approval, dedupe, and
+  Receipt boundaries. Provider rollback remains `rollback_pending` until an
+  approved Resource Plane ChangeSet performs the provider action.
+- GitHub-hosted checks are currently prevented from starting by the repository
+  account billing/spending-limit gate; release validation is recorded from the
+  equivalent local lint, test, build, docs, schema, smoke, and manifest gates.
+
 ## 2026-07-16 — Local skill marketplace and governed MCP (BOSS-48–50, BOSS-55–56)
 
 - Added canonical local SkillSpec and MCP capability-bundle import/export, detached Ed25519 checksum signatures, configured trust verification, explicit untrusted overrides, and optional exclusion of untrusted project extensions.

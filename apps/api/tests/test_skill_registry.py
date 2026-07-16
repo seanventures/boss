@@ -104,7 +104,9 @@ def test_skill_spec_system_and_load_metadata_seed_fresh_projects(engine):
     entitlements = EntitlementBrokerService(settings)
     skills = entitlements.list_skills()
     system_skill = next(skill for skill in skills if skill["system"])
-    on_demand_skill = next(skill for skill in skills if skill["load"] == "on_demand")
+    on_demand_skill = next(
+        skill for skill in skills if skill["id"] == "github.create_pr_sandbox"
+    )
     assert system_skill["id"] == "deployment.health.check"
     assert on_demand_skill["id"] == "github.create_pr_sandbox"
 

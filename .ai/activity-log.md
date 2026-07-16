@@ -3,6 +3,25 @@
 All 15-min terminal updates and major milestones appended here. Chronological, newest at top.
 
 ---
+## 2026-07-16 — Codex — BOSS v0.7.0 integration and release
+
+- Created Plane BOSS-120 and advanced it through Todo to In Progress before
+  integrating the two pending dependency stacks from current `origin/main`.
+- Merged PR #26's complete skill stack (#24–#26) and PR #28's complete
+  deployment/preview stack (#27–#28), preserving all commits. Code/schema
+  merged cleanly; four `.ai` conflicts were resolved additively.
+- Corrected one integration-only brittle test that assumed GitHub was the first
+  on-demand skill after the deployment stack added a second valid on-demand
+  skill. The assertion now selects the intended skill by stable ID.
+- Prepared v0.7.0 package, README, Helm, Kubernetes, and changelog metadata.
+- Release validation: repository lint/typecheck, 139 non-legacy API tests, 41
+  worker tests, 113 web tests, production build, two schema applications,
+  smoke, strict docs, 17 Kubernetes resources, and four infra profiles pass.
+  The legacy matrix remains exactly 242 passed / 37 inherited failures tracked
+  by BOSS-119. External hosted/provider readiness stays fail-closed; dependency
+  audit retains the known dev-only esbuild advisory.
+
+---
 ## 2026-07-16 — BOSS-48/BOSS-49/BOSS-50/BOSS-55/BOSS-56 local skill marketplace
 
 - Claimed all five dependency-safe Plane slices through Todo to In Progress and created `ai/codex/boss-48-50-55-56-skill-marketplace` directly above draft PR #25.

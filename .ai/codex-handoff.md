@@ -2,6 +2,22 @@
 
 Last updated: 2026-07-16 (v0.7.0 integration of PRs #24–#28)
 
+## 2026-07-16 v0.7.0 release handoff
+
+- Plane BOSS-120 tracks the integration and release. The release branch
+  `ai/codex/release-v0.7.0` integrates both pending Codex stacks from current
+  `origin/main`: PR #26 contains #24/#25; PR #28 contains #27.
+- Conflict resolution retained both stacks' coordination evidence. All code,
+  schema, OpenAPI, client, web, worker, and deployment-manifest changes merged
+  without textual conflict.
+- Release gates pass: lint/typecheck; 139 non-legacy API, 41 worker, and 113 web
+  tests; production build; double schema application; smoke; strict docs;
+  Kubernetes and infra validation. The legacy matrix is unchanged at 242 pass /
+  37 fail (BOSS-119). External rollout blockers remain fail-closed by design.
+- v0.7.0 updates package, README, Helm, Kubernetes, and changelog metadata. Do
+  not move older tags: local v0.3.0–v0.6.0 tag objects differ from GitHub's
+  authoritative published tags.
+
 ## 2026-07-16 local skill marketplace + trust handoff
 
 - Plane BOSS-48/BOSS-49/BOSS-50/BOSS-55/BOSS-56 are implemented on `ai/codex/boss-48-50-55-56-skill-marketplace`, stacked on draft PR #25 so the marketplace cannot land without its project registry, resolver, and agent bridge.

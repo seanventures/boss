@@ -14,6 +14,13 @@
 - GitHub: draft PR #16 carries BOSS-22/BOSS-23 and is stacked on draft PR #15; other open PRs were inspected for overlap before implementation.
 
 ## Overall Product Status
+- BOSS v0.7.0 integrates the complete PR #24–#28 delivery: project skills and
+  signed local marketplace/MCP, provider-neutral CI/CD and promotions, durable
+  attributable previews, and confirmation-gated conversational feedback.
+  Release validation passes lint, non-legacy API/worker/web tests, build,
+  schema idempotency, smoke, docs, Kubernetes, and infra checks. BOSS-119 tracks
+  the unchanged 37-test legacy matrix baseline; external hosted/provider paths
+  remain intentionally blocked until their real credentials and approvals exist.
 - OSS skill marketplace P1 is implemented for Plane BOSS-48/BOSS-49/BOSS-50/BOSS-55/BOSS-56: MCP tools share the SkillRuntime gauntlet and receipt ledger; local canonical bundles import/export SkillSpecs and MCP descriptors; Ed25519 trust and explicit untrusted overrides are enforced; per-project enable/disable and lazy attachment are live; current installed RoleSpecs are filtered and rechecked on the invocation hot path with scope-violation evidence. Mergeable draft PR #26 is stacked on PR #25. Its Documentation job ran zero steps and was rejected by the external GitHub account payment/spending-limit gate; local workflow-equivalent validation is green.
 - BOSS-58–62 implement the CI/CD module's first five dependency-ordered slices: a shared health-gated rollout state machine for arbitrary DeploymentRuns, a GitHub Actions implementation of the provider-neutral pipeline contract, deterministic CI/Jenkins config generation through the existing budgeted/Receipted draft-PR path, a fail-closed staging→health-gate→production promotion entity, and a live console timeline. Jenkins/GitLab execution remains the separately tracked BOSS-63 follow-on.
 - Validation for this slice: 7 focused Python acceptance/regression tests, 113 web tests, repository lint, production web build, smoke, double schema application, YAML/OpenAPI parsing, and diff checks pass. Three adjacent ProviderOps tests pass; two budget-dependent legacy tests reproduce their unchanged `reservation_id=None` failure on detached `origin/main` and are not caused by this branch.
