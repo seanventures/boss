@@ -158,9 +158,16 @@ The **promotion orchestrator** and the **generalized staged-rollout engine** sit
 **Scope:** Concrete `JenkinsPipeline` and `GitLabPipeline` implementations of the T2 interface (trigger via job/API, poll build status, map to `PipelineVerdict`). Pure-additive once T2 lands.
 **Key files:** `apps/api/app/services/pipeline_adapter.py` (new concrete classes), settings for Jenkins/GitLab base URLs + credentials.
 **Acceptance criteria:**
-- [ ] `JenkinsPipeline` triggers a job, polls to a terminal state, maps to `PipelineVerdict`.
-- [ ] `GitLabPipeline` does the same over the GitLab pipelines API.
-- [ ] Both selectable via `pipeline_provider` setting with no changes to the orchestrator or merge gate.
+- [x] `JenkinsPipeline` triggers a job, polls to a terminal state, maps to `PipelineVerdict`.
+- [x] `GitLabPipeline` does the same over the GitLab pipelines API.
+- [x] Both selectable via `pipeline_provider` setting with no changes to the orchestrator or merge gate.
+
+**Implementation evidence (BOSS-63):** `pipeline_adapter.py` now implements
+Jenkins job discovery, crumb-aware triggering, queue/build polling, and terminal
+verdict mapping, plus GitLab project discovery, pipeline triggering, polling,
+and verdict mapping. Both are selected by `BOSS_PIPELINE_PROVIDER`; credential
+settings are documented as blank secret-store inputs in `.env.example`. Mocked
+provider coverage is in `apps/api/tests/test_cicd_promotion.py`.
 **Size:** M
 
 ---

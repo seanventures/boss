@@ -258,3 +258,21 @@ Recent gap work (KPI, budget, bootstrap, audit logging, route parity) now has pa
 9. Monitor PR #3; new focused branches if needed (e.g. codex/auto-004-env-release).
 
 Slice complete; accelerating full product with parallel agents.
+
+## Codex handoff — BOSS-35–43 and BOSS-63 (2026-07-16)
+
+- Active branch: `ai/codex/boss-35-43-63-preview-feedback`, stacked on
+  `ai/codex/boss-58-62-cicd-promotion` because BOSS-63 extends its adapter seam.
+- Delivered: restart-safe preview reconciliation; retained-rootfs/Docker/host
+  preview fallback; full path-prefix/SPA/SSE/WebSocket proxy; command detection,
+  classified failures, and streamed logs; normalized build/preview substrate
+  provenance and console badges; durable confirmation-gated feedback threads,
+  completed-task extension, and preview route/element capture; concrete Jenkins
+  and GitLab pipeline adapters.
+- Validation: 15 focused API tests pass, all 113 web tests pass, 160 unaffected
+  backend/worker tests pass, web typecheck and focused Ruff/compile/diff checks
+  pass. The monolithic legacy `test_api.py` baseline still fails representative
+  auth, Metatron, and ProviderOps expectations; all three reproduce on detached
+  base `f626511` with a separate Postgres instance and are not caused here.
+- Do not duplicate this module while the stacked draft PR is open. Plane
+  BOSS-34/35–43 and BOSS-63 remain In Progress until merge.

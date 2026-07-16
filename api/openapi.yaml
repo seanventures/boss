@@ -5016,6 +5016,107 @@ paths:
         '200': { description: Receipt-backed triage or review result }
         '409': { description: Worker lease is missing, expired, or owned by another worker }
         '422': { description: Job kind or normalized event payload is invalid }
+  /v1/code-tasks/{run_id}/feedback:
+    get:
+      summary: Read the durable feedback thread for a code-task lineage
+      parameters:
+        - { name: run_id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Feedback thread and messages }
+        '404': { description: Code task not found }
+    post:
+      summary: Ask the feedback agent to clarify and structure an iteration proposal
+      parameters:
+        - { name: run_id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [message]
+              properties:
+                message: { type: string }
+                expected: { type: string }
+                anchor: { type: string }
+                selected_element: { type: string }
+                screenshot_url: { type: string }
+                severity: { type: string, default: normal }
+      responses:
+        '200': { description: Clarifying question or confirmation-gated structured proposal }
+        '422': { description: Invalid feedback }
+  /v1/feedback-threads/{thread_id}/confirm:
+    post:
+      summary: Confirm and dispatch a proposed governed code-task iteration
+      parameters:
+        - { name: thread_id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                actor: { type: string, default: operator }
+      responses:
+        '200': { description: New attempt queued on the existing branch and PR }
+        '403': { description: Actor lacks task_create permission }
+        '409': { description: No proposal awaits confirmation }
+  /v1/code-tasks/{run_id}/preview:
+    post:
+      summary: Start a retained-rootfs, Docker, or host-process preview
+      parameters:
+        - { name: run_id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                mode: { type: string, enum: [auto, rootfs, docker, process], default: auto }
+                ttl_minutes: { type: integer, default: 60 }
+      responses:
+        '200': { description: Running preview or classified startup failure }
+        '404': { description: Code task not found }
+  /v1/previews:
+    get:
+      summary: List and reap previews for a project
+      parameters:
+        - { name: project_id, in: query, required: true, schema: { type: string } }
+        - { name: limit, in: query, required: false, schema: { type: integer, default: 50 } }
+      responses:
+        '200': { description: Preview records including build and preview substrates }
+  /v1/previews/{preview_id}/logs:
+    get:
+      security: []
+      summary: Stream preview startup logs as server-sent events
+      parameters:
+        - { name: preview_id, in: path, required: true, schema: { type: string } }
+        - { name: stream, in: query, required: false, schema: { type: boolean, default: true } }
+      responses:
+        '200': { description: SSE log stream or JSON snapshot }
+        '404': { description: Preview not found }
+  /v1/previews/{preview_id}/feedback:
+    post:
+      security: []
+      summary: Capture route-anchored feedback from a live preview capability
+      parameters:
+        - { name: preview_id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [message]
+              properties:
+                message: { type: string }
+                expected: { type: string }
+                anchor: { type: string }
+                selected_element: { type: string }
+                screenshot_url: { type: string }
+      responses:
+        '200': { description: Feedback captured; dispatch still requires authenticated confirmation }
+        '422': { description: Preview or feedback invalid }
 components:
   securitySchemes:
     BossBearerAuth:

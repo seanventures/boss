@@ -2049,6 +2049,57 @@ export async function retryCodeTaskAction(formData: FormData): Promise<void> {
   revalidatePath("/");
 }
 
+export type FeedbackActionResult = {
+  thread_id?: string;
+  status?: string;
+  question?: string;
+  proposal?: {
+    classification: "scoped_tweak" | "full_rerun";
+    fix_note: string;
+    profile: string;
+    repair_retries: number;
+  };
+  run_id?: string;
+  error?: string;
+};
+
+export async function submitCodeTaskFeedbackAction(
+  _prev: FeedbackActionResult | null,
+  formData: FormData,
+): Promise<FeedbackActionResult> {
+  const runId = String(formData.get("run_id") ?? "").trim();
+  const message = String(formData.get("message") ?? "").trim();
+  if (!runId || !message) return { error: "Describe what should change." };
+  try {
+    const result = await client.submitCodeTaskFeedback(runId, {
+      message,
+      expected: String(formData.get("expected") ?? "").trim(),
+      anchor: String(formData.get("anchor") ?? "").trim(),
+      severity: String(formData.get("severity") ?? "normal").trim(),
+      selected_element: String(formData.get("selected_element") ?? "").trim(),
+    });
+    revalidatePath("/");
+    return result;
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+export async function confirmCodeTaskFeedbackAction(
+  _prev: FeedbackActionResult | null,
+  formData: FormData,
+): Promise<FeedbackActionResult> {
+  const threadId = String(formData.get("thread_id") ?? "").trim();
+  if (!threadId) return { error: "Missing feedback thread." };
+  try {
+    const result = await client.confirmCodeTaskFeedback(threadId, getActor(formData));
+    revalidatePath("/");
+    return result;
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
 export async function startPreviewAction(
   _prev: { url?: string; error?: string } | null,
   formData: FormData,

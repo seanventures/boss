@@ -1001,6 +1001,8 @@ export type CodeTaskState = {
   test_command?: string;
   impl_files?: string[];
   test_files?: string[];
+  substrate?: string;
+  sandbox_task_ids?: string[];
 };
 
 export type CodeTaskRun = {
@@ -1020,6 +1022,13 @@ export type CodeTaskRun = {
   };
   state: CodeTaskState;
   usage?: { cost_usd_micros?: number; model?: string };
+  finalize_ctx?: {
+    execution_substrate?: string;
+    sandbox_task_id?: string;
+    sandbox_task_ids?: string[];
+    root_run_id?: string;
+    attempt?: number;
+  };
   reservation_id?: string | null;
   pull_request_url?: string | null;
   pull_request_number?: number | null;
@@ -1035,10 +1044,32 @@ export type PreviewRec = {
   status: string; // running | stopped | failed | expired
   url?: string | null;
   mode?: string | null;
+  substrate?: string | null;
+  build_substrate?: string | null;
+  sandbox_task_id?: string | null;
+  failure_kind?: string | null;
   branch?: string | null;
   repo?: string | null;
   error?: string | null;
   expires_at?: string | null;
+};
+
+export type FeedbackProposal = {
+  source_run_id: string;
+  classification: "scoped_tweak" | "full_rerun";
+  fix_note: string;
+  profile: string;
+  repair_retries: number;
+};
+
+export type FeedbackResponse = {
+  thread_id: string;
+  status: string;
+  question?: string;
+  requires_confirmation?: boolean;
+  proposal?: FeedbackProposal;
+  dispatched?: boolean;
+  run_id?: string;
 };
 
 // --- Discovery pipeline (research-driven outcome discovery) ----------------
@@ -4201,6 +4232,22 @@ export function createBossApiClient(config: BossApiClientConfig) {
     retryCodeTask(runId: string, fixNote?: string) {
       return request<{ status: string; run_id: string; attempt: number }>(
         "POST", `/v1/code-tasks/${encodeURIComponent(runId)}/retry`, { body: { fix_note: fixNote ?? "" } });
+    },
+    submitCodeTaskFeedback(runId: string, payload: {
+      message: string;
+      expected?: string;
+      anchor?: string;
+      severity?: string;
+      selected_element?: string;
+      screenshot_url?: string;
+    }) {
+      return request<FeedbackResponse>(
+        "POST", `/v1/code-tasks/${encodeURIComponent(runId)}/feedback`, { body: payload });
+    },
+    confirmCodeTaskFeedback(threadId: string, actor = "operator") {
+      return request<FeedbackResponse>(
+        "POST", `/v1/feedback-threads/${encodeURIComponent(threadId)}/confirm`,
+        { body: { actor } });
     },
     overrideCodeTask(runId: string, waiveGates: string[], reason?: string) {
       return request<{ status: string; pull_request_url?: string; pull_request_number?: number }>(

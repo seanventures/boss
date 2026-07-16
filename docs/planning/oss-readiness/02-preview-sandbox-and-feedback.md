@@ -100,78 +100,91 @@ Build a conversational **feedback agent** on top of the existing `retry_code_tas
 **Scope.** Stop bulk-killing previews on boot; run a reconciliation pass that re-probes each `running` preview and only marks the genuinely-dead ones. Move local-process previews under a supervisor that is not a child of the API (detached session already exists via `start_new_session=True`, `preview_service.py:159`, but the DB is wiped regardless).
 **Key files.** `apps/api/app/main.py:643-652` (replace blanket UPDATE with reconcile), `apps/api/app/services/preview_service.py` (add `reconcile_previews()` using `_http_ok`/`_docker_rm`), `app_previews` table.
 **Acceptance criteria.**
-- [ ] After an API restart, a preview whose process/container is still alive stays `running` and is reachable through the proxy.
-- [ ] A preview whose process actually died is marked `stopped`/`expired`, not left `running`.
-- [ ] No blanket `UPDATE app_previews SET status='stopped'` on boot remains.
-- [ ] Reconcile is idempotent and bounded (probes with timeout, reaps expired per `list_previews` line 456).
+- [x] After an API restart, a preview whose process/container is still alive stays `running` and is reachable through the proxy.
+- [x] A preview whose process actually died is marked `stopped`/`expired`, not left `running`.
+- [x] No blanket `UPDATE app_previews SET status='stopped'` on boot remains.
+- [x] Reconcile is idempotent and bounded (probes with timeout, reaps expired per `list_previews` line 456).
 
 ### T2 — Serve preview from the retained build artifact / micro-VM rootfs · **P0 · L**
 **Scope.** For runs built on the microvm substrate, add a "serve" path so the preview boots inside the retained rootfs (preview env == build env) and exposes its port back through the existing proxy. Extend the sandbox-service contract (submit/hold analog) and wire a `start_rootfs_preview()` alongside `start_preview`/`start_container_preview`.
 **Key files.** `apps/api/app/services/preview_service.py` (new serve path), `apps/api/app/services/sandbox_provider.py:70-109` (MicroVMProvider — add serve/hold verbs, reuse `last_sandbox_task_id` line 87), `apps/api/app/services/sandbox_console.py:112` (`hold` analog), sandbox-service side contract.
 **Acceptance criteria.**
-- [ ] A task built in a micro-VM can be previewed from its retained rootfs without re-cloning on the API host.
-- [ ] The preview's substrate is recorded as `preview_rootfs` (feeds T6 badge).
-- [ ] Rootfs preview honors the ~2h retention window and is released/held explicitly, not leaked.
-- [ ] Falls back cleanly to host/docker preview when the run was built on the local substrate.
+- [x] A task built in a micro-VM can be previewed from its retained rootfs without re-cloning on the API host.
+- [x] The preview's substrate is recorded as `preview_rootfs` (feeds T6 badge).
+- [x] Rootfs preview honors the ~2h retention window and is released/held explicitly, not leaked.
+- [x] Falls back cleanly to host/docker preview when the run was built on the local substrate.
 
 ### T3 — Faithful preview rendering: subdomain routing or a real rewriting proxy · **P0 · L**
 **Scope.** Implement Open Decision D1. Preferred: per-preview subdomain routing with no HTML rewriting. Fallback: replace `_inject_shim` with a `<base>` tag + broadened client shim (history API, WS, EventSource, `a/img/link/script`, `srcset`, CSS `url()`) and `Location`-header rewriting.
 **Key files.** `apps/api/app/services/preview_service.py:316` (`_inject_shim`) and `:338` (`proxy_preview`), `apps/api/app/main.py` (preview web route + any DNS/TLS/routing config for subdomains).
 **Acceptance criteria.**
-- [ ] A multi-page app with `<a href="/...">` links and `<img src="/...">` assets renders and navigates correctly through the preview.
-- [ ] A client-side-routed SPA (pushState) deep-links and reloads correctly.
-- [ ] A WebSocket/EventSource-using app connects through the preview.
-- [ ] Non-HTML responses remain byte-identical (regression guard on `proxy_preview` line 379).
+- [x] A multi-page app with `<a href="/...">` links and `<img src="/...">` assets renders and navigates correctly through the preview.
+- [x] A client-side-routed SPA (pushState) deep-links and reloads correctly.
+- [x] A WebSocket/EventSource-using app connects through the preview.
+- [x] Non-HTML responses remain byte-identical (regression guard on `proxy_preview` line 379).
 
 ### T4 — Robust run-command detection + streamed logs + actionable failures · **P0 · M**
 **Scope.** Extend `_detect_command` to cover `package.json` `dev`/`start` scripts, `Procfile`, `Makefile` targets, framework dev servers, and a `boss.preview.command` repo hint. Tighten `_http_ok`/`_discover_working_port` so an error page isn't "up." Stream the preview log to the UI; classify failures with actionable next steps.
 **Key files.** `apps/api/app/services/preview_service.py:43` (`_detect_command`), `:66` (`_http_ok`), `:102` (`_discover_working_port`), `:134` (`_fail`), `apps/web/app/code-tasks-ui.tsx:30` (`PreviewControls` — log stream + failure affordances).
 **Acceptance criteria.**
-- [ ] A Vite/Next/CRA app and a `Procfile`/`Makefile`-based app all start without hand configuration.
-- [ ] A boot that only produces an error page is reported as failed, not "running."
-- [ ] The operator sees streamed startup logs (not just a 300-char tail).
-- [ ] A failed preview shows a classified cause + a concrete next action (e.g. "retry in docker mode", "set boss.preview.command").
+- [x] A Vite/Next/CRA app and a `Procfile`/`Makefile`-based app all start without hand configuration.
+- [x] A boot that only produces an error page is reported as failed, not "running."
+- [x] The operator sees streamed startup logs (not just a 300-char tail).
+- [x] A failed preview shows a classified cause + a concrete next action (e.g. "retry in docker mode", "set boss.preview.command").
 
 ### T5 — Execution-substrate as a single source of truth · **P0 · M**
 **Scope.** Introduce a normalized substrate enum, resolve and persist it per run (native + governed pipelines) and per preview, and reconcile the two default-`local` settings with a documented relationship and a boot-time effective-substrate log line.
 **Key files.** `apps/api/app/services/sandbox_provider.py:235` (`make_sandbox_provider`), `apps/api/app/services/code_task_service.py:387`, `apps/api/app/services/governed_code_task_service.py:480`, `apps/api/app/config.py:427,434`, run + `app_previews` schema.
 **Acceptance criteria.**
-- [ ] Each run persists the substrate it actually executed on (plus `sandbox_task_id` when microvm).
-- [ ] Native and governed pipelines report substrate through one shared code path/enum.
-- [ ] Startup logs the effective substrate for each pipeline.
-- [ ] The two settings' relationship is documented and validated (no silent disagreement).
+- [x] Each run persists the substrate it actually executed on (plus `sandbox_task_id` when microvm).
+- [x] Native and governed pipelines report substrate through one shared code path/enum.
+- [x] Startup logs the effective substrate for each pipeline.
+- [x] The two settings' relationship is documented and validated (no silent disagreement).
 
 ### T6 — Console substrate badge · **P0 · S**
 **Scope.** Show, on each run and preview, exactly where it built and where the preview is running.
 **Key files.** `apps/web/app/code-tasks-ui.tsx` (near `PreviewControls` line 30 / run detail line 381), run + preview API payloads (from T5/T4 provenance).
 **Acceptance criteria.**
-- [ ] A run shows "built: micro-VM `sb_...`" vs "built: API host."
-- [ ] A preview shows "preview: retained rootfs | docker | host process."
-- [ ] Badge reflects reconciled state after a restart (consistent with T1).
+- [x] A run shows "built: micro-VM `sb_...`" vs "built: API host."
+- [x] A preview shows "preview: retained rootfs | docker | host process."
+- [x] Badge reflects reconciled state after a restart (consistent with T1).
 
 ### T7 — Feedback thread + conversational feedback agent · **P2 · L**
 **Scope.** A durable per-task feedback thread keyed by `root_run_id` and an agent that asks clarifying questions, classifies tweak-vs-rerun, emits a structured `fix_note`, and drives `retry_code_task`. Reuses the existing iteration mechanism end-to-end.
 **Key files.** new `apps/api/app/services/feedback_agent.py` + `feedback_threads`/`feedback_messages` store, `apps/api/app/services/code_task_service.py:134` (`retry_code_task`, unchanged entry point), `apps/api/app/main.py:4310` (retry endpoint) + new feedback endpoints, events ledger.
 **Acceptance criteria.**
-- [ ] Vague feedback triggers a clarifying question before any retry is dispatched.
-- [ ] The agent classifies each request as scoped-tweak vs full-rerun and tunes `profile`/`repair_retries` accordingly (via `retry_code_task` args, lines 212-214).
-- [ ] The dispatched retry carries a structured `fix_note` (observed/expected/anchor/severity/scope), landing in the `## Feedback to address` block (line 176).
-- [ ] The thread links each operator message to the resulting attempt (`feedback_history`, lines 195-199).
+- [x] Vague feedback triggers a clarifying question before any retry is dispatched.
+- [x] The agent classifies each request as scoped-tweak vs full-rerun and tunes `profile`/`repair_retries` accordingly (via `retry_code_task` args, lines 212-214).
+- [x] The dispatched retry carries a structured `fix_note` (observed/expected/anchor/severity/scope), landing in the `## Feedback to address` block (line 176).
+- [x] The thread links each operator message to the resulting attempt (`feedback_history`, lines 195-199).
 
 ### T8 — First-class "extend a completed task" flow · **P2 · S**
 **Scope.** Surface completed-task extension as its own affordance framed as "change/add behavior on the existing PR," relying on the existing no-status-guard retry path.
 **Key files.** `apps/web/app/code-tasks-ui.tsx:54` (`RetryControls` — distinct completed-task entry), `apps/api/app/services/code_task_service.py:154-156` (existing completed-task behavior, no change needed).
 **Acceptance criteria.**
-- [ ] Completed tasks present an "extend" action distinct from failure-retry, wired to the feedback agent (T7).
-- [ ] Extension reuses the same branch/PR (`boss/code/{root}`, line 149) and does not carry stale findings (line 156).
+- [x] Completed tasks present an "extend" action distinct from failure-retry, wired to the feedback agent (T7).
+- [x] Extension reuses the same branch/PR (`boss/code/{root}`, line 149) and does not carry stale findings (line 156).
 
 ### T9 — Preview-anchored feedback capture · **P2 · M**
 **Scope.** Capture feedback in context from the preview (current URL/route, optional selected element/screenshot) and route it into the feedback thread pre-populated so the structured `fix_note` anchor is automatic.
 **Key files.** `apps/web/app/code-tasks-ui.tsx` (preview UI, `PreviewControls` line 30), preview proxy (`preview_service.py:338`), feedback endpoints (T7).
 **Acceptance criteria.**
-- [ ] From a live preview, an operator can start feedback with the current route captured.
-- [ ] The captured anchor pre-fills the structured `fix_note` anchor field (T7).
-- [ ] Works for both subdomain-routed and proxy-prefixed previews (T3).
+- [x] From a live preview, an operator can start feedback with the current route captured.
+- [x] The captured anchor pre-fills the structured `fix_note` anchor field (T7).
+- [x] Works for both subdomain-routed and proxy-prefixed previews (T3).
+
+**Implementation evidence (BOSS-35–43):** `preview_service.py` now reconciles
+durable previews, selects retained-rootfs → Docker → host fallback, persists
+build/preview substrate, classifies startup failures, streams logs, and provides
+the portable full-rewrite proxy plus WebSocket route. `sandbox_provider.py` and
+`sandbox-host/sandbox_agent.py` implement bounded hold/serve/stop for retained
+rootfs previews. `feedback_agent.py` persists per-lineage conversations,
+clarifies vague feedback, proposes structured tweak/full-rerun instructions,
+and dispatches only after confirmation. The Code Tasks console shows substrate
+badges, live logs, a distinct completed-task extension flow, and preview-injected
+route/element capture. Operator semantics and the chosen portable proxy decision
+are documented in `docs/operations/PREVIEW_EXECUTION_SUBSTRATES.md`; focused
+acceptance coverage lives in `apps/api/tests/test_preview_feedback.py`.
 
 ---
 

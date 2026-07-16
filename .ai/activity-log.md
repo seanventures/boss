@@ -415,6 +415,19 @@ Next autonomous actions:
 Blockers: Subagent runtime (long running ok, thorough); external 3 P0s (final report will document exact resume: "configure creds + make release-blockers green").
 PR: https://github.com/seanheiney/boss/pull/3
 
+=== CODEX UPDATE 2026-07-16 — BOSS-35–43 + BOSS-63 ===
+- Claimed ten Plane slices and parent BOSS-34; isolated stacked branch created.
+- Implemented durable preview reconciliation, retained-rootfs serve/hold/release,
+  portable full rewriting proxy with SPA/SSE/WebSocket support, startup detection,
+  live logs/failure guidance, execution-substrate audit fields and badges.
+- Implemented durable confirmation-gated feedback agent, completed-task extension,
+  preview route/element capture, and Jenkins/GitLab pipeline adapters.
+- Green: 15 focused API tests, 113 web tests, 160 unaffected backend/worker tests,
+  web typecheck, focused Ruff/compile/diff checks.
+- Inherited baseline: representative auth, Metatron, and ProviderOps failures
+  reproduce unchanged on detached `f626511` against separate Postgres.
+- Next: commit/push, stacked draft PR, Plane evidence; keep tickets In Progress until merge.
+
 === CODEX UPDATE 2026-07-15T21:30:00-04:00 — BOSS-112 DESIGN SYSTEM ===
 Plane: BOSS-112 (In Progress)
 Branch: ai/codex/boss-112-design-system

@@ -102,6 +102,42 @@ class MicroVMProvider:
         except Exception:  # noqa: BLE001
             pass
 
+    def hold(self, sandbox_task_id: Optional[str], *, ttl_seconds: int, reason: str) -> bool:
+        """Bound retention explicitly so a successful build can back a rootfs preview."""
+        if not sandbox_task_id:
+            return False
+        base = (self.settings.sandbox_agent_url or "").rstrip("/")
+        try:
+            import httpx
+            with httpx.Client(timeout=15.0) as client:
+                response = client.post(
+                    f"{base}/v1/sandbox/tasks/{sandbox_task_id}/hold",
+                    json={"ttl_seconds": int(ttl_seconds), "reason": reason},
+                    headers=self._headers(),
+                )
+                response.raise_for_status()
+            return True
+        except Exception:  # older sandbox services fall back to normal TTL/fallback preview
+            return False
+
+    def serve_preview(
+        self, sandbox_task_id: str, *, ttl_seconds: int, command: str = ""
+    ) -> dict:
+        """Ask the sandbox service to boot the app in the retained build rootfs."""
+        base = (self.settings.sandbox_agent_url or "").rstrip("/")
+        import httpx
+        try:
+            with httpx.Client(timeout=45.0) as client:
+                response = client.post(
+                    f"{base}/v1/sandbox/tasks/{sandbox_task_id}/preview",
+                    json={"ttl_seconds": int(ttl_seconds), "command": command},
+                    headers=self._headers(),
+                )
+                response.raise_for_status()
+                return response.json()
+        except httpx.HTTPError as exc:
+            raise RuntimeError(f"retained-rootfs preview unavailable: {exc}") from exc
+
     def acquire(self, *, task_id: str, tenant_id: Optional[str] = None) -> Sandbox:
         raise NotImplementedError(
             "MicroVMProvider dispatches whole tasks via run_code_task(); it has no "

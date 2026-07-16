@@ -2029,16 +2029,48 @@ CREATE TABLE IF NOT EXISTS app_previews (
   port INTEGER,
   url TEXT,
   pid INTEGER,
-  mode TEXT NOT NULL DEFAULT 'process',       -- process | docker
+  mode TEXT NOT NULL DEFAULT 'process',       -- process | docker | rootfs
   container_id TEXT,                           -- docker container id (mode=docker)
+  substrate TEXT NOT NULL DEFAULT 'preview_host', -- preview_host|preview_docker|preview_rootfs
+  build_substrate TEXT,                        -- local_subprocess|microvm
+  sandbox_task_id TEXT,                        -- retained rootfs backing a rootfs preview
   status TEXT NOT NULL DEFAULT 'starting',   -- starting|running|failed|stopped|expired
+  failure_kind TEXT,                           -- clone_failed|command_missing|boot_crash|port_timeout
   error TEXT,
   log_path TEXT,
   expires_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+ALTER TABLE app_previews ADD COLUMN IF NOT EXISTS substrate TEXT NOT NULL DEFAULT 'preview_host';
+ALTER TABLE app_previews ADD COLUMN IF NOT EXISTS build_substrate TEXT;
+ALTER TABLE app_previews ADD COLUMN IF NOT EXISTS sandbox_task_id TEXT;
+ALTER TABLE app_previews ADD COLUMN IF NOT EXISTS failure_kind TEXT;
 CREATE INDEX IF NOT EXISTS idx_app_previews_project ON app_previews (project_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_app_previews_run ON app_previews (run_id);
+
+-- Durable, per-lineage feedback conversation.  Dispatch is confirmation-gated;
+-- messages preserve the operator request, clarification, proposal and retry link.
+CREATE TABLE IF NOT EXISTS feedback_threads (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  root_run_id TEXT NOT NULL UNIQUE,
+  status TEXT NOT NULL DEFAULT 'open',
+  pending_proposal JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS feedback_messages (
+  id TEXT PRIMARY KEY,
+  thread_id TEXT NOT NULL REFERENCES feedback_threads(id) ON DELETE CASCADE,
+  role TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  content TEXT NOT NULL,
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+  resulting_run_id TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_feedback_messages_thread
+  ON feedback_messages (thread_id, created_at);
 
 -- Discovery pipeline: research-driven outcome discovery (signal sweep -> synthesize -> vet ->
 -- shape -> evidence gate). state holds the cited Discovery Dossier + candidate outcomes.

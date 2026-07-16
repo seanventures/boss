@@ -479,6 +479,18 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
     # (no live exec), and the guest never pushes — only the control plane writes git.
     use_microvm = (settings.governed_sandbox_provider or "local").lower() in (
         "microvm", "firecracker")
+    from .execution_substrate import normalize_build_substrate
+    execution_substrate = normalize_build_substrate(
+        "microvm" if use_microvm else "local"
+    ).value
+    fctx = {**fctx, "execution_substrate": execution_substrate}
+    with begin(engine) as c:
+        c.execute(
+            text("UPDATE code_task_runs SET finalize_ctx=COALESCE(finalize_ctx, '{}'::jsonb) "
+                 "|| jsonb_build_object('execution_substrate', CAST(:s AS text)), updated_at=now() "
+                 "WHERE id=:id"),
+            {"s": execution_substrate, "id": run_id},
+        )
     mv = MicroVMProvider(settings) if use_microvm else None
     guest_vm_ids: list[str] = []          # for release-on-success / retain-on-failure
     accumulated: dict[str, str] = {}      # path -> content committed so far (the PR diff)
@@ -508,6 +520,13 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
         res = mv.run_code_task(guest_spec, tenant_id=project_id)
         if mv.last_sandbox_task_id:
             guest_vm_ids.append(mv.last_sandbox_task_id)
+            with begin(engine) as c:
+                c.execute(
+                    text("UPDATE code_task_runs SET finalize_ctx=COALESCE(finalize_ctx, '{}'::jsonb) "
+                         "|| jsonb_build_object('sandbox_task_id', CAST(:sid AS text), "
+                         "'sandbox_task_ids', CAST(:ids AS JSONB)), updated_at=now() WHERE id=:id"),
+                    {"sid": mv.last_sandbox_task_id, "ids": json.dumps(guest_vm_ids), "id": run_id},
+                )
         cost += int(res.cost_usd_micros or 0)
         record_llm_call(engine_name=f"guest:{eng_name}", usage=res.usage,
                         cost_usd_micros=int(res.cost_usd_micros or 0),
@@ -527,11 +546,11 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
         guest_base = work_branch
 
     def _finish_vms(success: bool) -> None:
-        """Release stage VMs on success (free capacity); RETAIN them all on failure so
-        the sandbox-service keeps the rootfs (~2h) for inspection via the console."""
+        """Hold successful stage VMs for a bounded rootfs-preview window; retain failed
+        VMs for inspection. The sandbox service owns TTL reaping in both cases."""
         if use_microvm and mv and success:
             for sid in guest_vm_ids:
-                mv.release(sid)
+                mv.hold(sid, ttl_seconds=7200, reason="governed build available for preview")
 
     sandbox = None
     review_sandbox = None

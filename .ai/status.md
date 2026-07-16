@@ -112,3 +112,10 @@ See .ai/requirements-traceability.md for full matrix + status "Yes" for local.
 - Modified this Security rate task: apps/api/app/config.py, apps/api/app/main.py, apps/api/tests/test_api.py, apps/api/tests/conftest.py, api/openapi.yaml, .ai/gap-backlog.md, .ai/security-review.md, .ai/agents/security.md, .ai/status.md, .ai/codex-handoff.md, .ai/activity-log.md (plus prior)
 
 See activity-log.md for chronological.
+
+## 2026-07-16 — preview/feedback/pipeline slice
+
+BOSS-35–43 and BOSS-63 are implementation-complete on
+`ai/codex/boss-35-43-63-preview-feedback`. Focused acceptance, full web, and all
+backend/worker tests outside the inherited failing legacy API matrix are green.
+Publication and Plane evidence are pending; tickets stay In Progress until merge.

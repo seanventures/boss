@@ -1,5 +1,6 @@
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
+import asyncio
 import json
 import logging
 import re
@@ -9,8 +10,8 @@ from collections import defaultdict, deque
 from typing import Any, Optional
 from urllib.parse import parse_qs
 
-from fastapi import FastAPI, HTTPException, Query, Request, Response
-from fastapi.responses import JSONResponse
+from fastapi import FastAPI, HTTPException, Query, Request, Response, WebSocket, WebSocketDisconnect
+from fastapi.responses import JSONResponse, StreamingResponse
 from sqlalchemy import text
 
 from .bootstrap import seed
@@ -701,16 +702,19 @@ async def lifespan(_: FastAPI):
         print("[lifespan] ensure_schema applied (idempotent schema sync)")
     except Exception as exc:  # noqa: BLE001
         print(f"[lifespan] ensure_schema skipped — DB not ready or migration error: {exc}")
-    # Previews are subprocess children of this api process — a restart/recreate kills them all, so
-    # any 'running' record is now stale (dead port → proxy would 'connection refused'). Clear them.
+    # Preview lifecycle is independent from the API. Reconcile the durable rows against
+    # live processes/containers/rootfs services; never blanket-kill healthy previews.
     try:
-        from sqlalchemy import text as _text
-        with begin(engine) as _c:
-            n = _c.execute(_text("UPDATE app_previews SET status='stopped' WHERE status='running'")).rowcount
-        if n:
-            print(f"[lifespan] cleared {n} stale running preview(s) from a prior process")
+        from .services.preview_service import reconcile_previews
+        result = reconcile_previews(engine, settings)
+        print(f"[lifespan] preview reconciliation: {result}")
     except Exception as exc:  # noqa: BLE001
-        print(f"[lifespan] preview cleanup skipped: {exc}")
+        print(f"[lifespan] preview reconciliation skipped: {exc}")
+    try:
+        from .services.execution_substrate import effective_substrates
+        print(f"[lifespan] execution substrates: {effective_substrates(settings)}")
+    except ValueError as exc:
+        raise RuntimeError(f"invalid execution-substrate configuration: {exc}") from exc
     yield
 
 
@@ -756,7 +760,8 @@ async def require_transport_auth_for_v1(request: Request, call_next):
     # without the API key — it's gated by the unguessable preview id + the preview TTL.
     _parts = request.url.path.split("/")
     is_preview_web = (
-        len(_parts) >= 5 and _parts[1] == "v1" and _parts[2] == "previews" and _parts[4] == "web"
+        len(_parts) >= 5 and _parts[1] == "v1" and _parts[2] == "previews"
+        and _parts[4] in {"web", "feedback", "logs"}
     )
     is_inbound_webhook = (
         len(_parts) >= 5
@@ -4674,6 +4679,51 @@ def retry_code_task_endpoint(run_id: str, payload: Optional[dict] = None):
         raise HTTPException(status_code=404, detail=str(exc))
 
 
+@app.get("/v1/code-tasks/{run_id}/feedback")
+def get_code_task_feedback_endpoint(run_id: str):
+    from .services.feedback_agent import get_feedback_thread
+    try:
+        return get_feedback_thread(engine, run_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
+@app.post("/v1/code-tasks/{run_id}/feedback")
+def submit_code_task_feedback_endpoint(run_id: str, payload: dict):
+    """Ask/clarify/structure iteration feedback; never dispatch without confirmation."""
+    from .services.feedback_agent import submit_feedback
+    try:
+        return submit_feedback(
+            engine, run_id, message=str(payload.get("message") or ""),
+            expected=str(payload.get("expected") or ""),
+            anchor=str(payload.get("anchor") or ""),
+            severity=str(payload.get("severity") or "normal"),
+            selected_element=str(payload.get("selected_element") or ""),
+            screenshot_url=str(payload.get("screenshot_url") or ""),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+
+@app.post("/v1/feedback-threads/{thread_id}/confirm")
+def confirm_code_task_feedback_endpoint(thread_id: str, payload: Optional[dict] = None):
+    from .services.feedback_agent import confirm_feedback
+    actor = str((payload or {}).get("actor") or "operator")
+    with begin(engine) as connection:
+        thread = connection.execute(text(
+            "SELECT project_id FROM feedback_threads WHERE id=:id"
+        ), {"id": thread_id}).mappings().first()
+        if thread is None:
+            raise HTTPException(status_code=404, detail="feedback thread not found")
+        require_project_actor(connection, thread["project_id"], actor, "task_create")
+    try:
+        return confirm_feedback(
+            engine, settings, jobs, thread_id, actor=actor,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+
+
 @app.post("/v1/code-tasks/{run_id}/override")
 def override_code_task_endpoint(run_id: str, payload: dict):
     """Human gate override: waive the named failed gate(s) + open the PR from the preserved diff
@@ -4691,14 +4741,15 @@ def override_code_task_endpoint(run_id: str, payload: dict):
 
 @app.post("/v1/code-tasks/{run_id}/preview")
 def start_preview_endpoint(run_id: str, payload: Optional[dict] = None):
-    """1-box preview of a code task's built app. mode=docker (default) builds + runs a dev
-    container; mode=process runs it as a managed host process. Returns a live URL."""
+    """Preview a built app from retained rootfs, Docker, or a managed host process."""
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
     p = payload or {}
     mode = str(p.get("mode", "auto")).lower()
     ttl = int(p.get("ttl_minutes", 60))
-    from .services.preview_service import start_preview, start_container_preview, stop_preview
+    from .services.preview_service import (
+        start_preview, start_container_preview, start_rootfs_preview, stop_preview,
+    )
     # Replace (don't accumulate): stop any prior running preview for this run so there's one live
     # preview per task — a fresh "Run preview" regenerates it.
     with begin(engine) as _c:
@@ -4707,7 +4758,7 @@ def start_preview_endpoint(run_id: str, payload: Optional[dict] = None):
             {"r": run_id}).fetchall()]
     for _pid in prior:
         try:
-            stop_preview(engine, _pid)
+            stop_preview(engine, _pid, settings)
         except Exception:  # noqa: BLE001 — best-effort cleanup
             pass
     # auto: containerize first (isolated), fall back to a host process (handles loopback-binding
@@ -4716,8 +4767,10 @@ def start_preview_endpoint(run_id: str, payload: Optional[dict] = None):
         attempts = [start_preview]
     elif mode == "docker":
         attempts = [start_container_preview]
+    elif mode == "rootfs":
+        attempts = [start_rootfs_preview]
     else:
-        attempts = [start_container_preview, start_preview]
+        attempts = [start_rootfs_preview, start_container_preview, start_preview]
     last: Optional[dict] = None
     for fn in attempts:
         try:
@@ -4739,7 +4792,34 @@ def list_previews_endpoint(project_id: str, limit: int = 50):
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
     from .services.preview_service import list_previews
-    return {"previews": list_previews(engine, project_id, limit)}
+    return {"previews": list_previews(engine, project_id, limit, settings)}
+
+
+@app.get("/v1/previews/{preview_id}/logs")
+def preview_logs_endpoint(preview_id: str, stream: bool = True):
+    """Tail classified preview startup logs; SSE clients receive live updates."""
+    from .services.preview_service import preview_log_snapshot, stream_preview_logs
+    try:
+        if not stream:
+            return preview_log_snapshot(engine, preview_id)
+        # Probe once so a missing id returns 404 before the stream starts.
+        preview_log_snapshot(engine, preview_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    return StreamingResponse(
+        stream_preview_logs(engine, preview_id), media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.post("/v1/previews/{preview_id}/feedback")
+def submit_preview_feedback_endpoint(preview_id: str, payload: dict):
+    """Capability-gated capture from the injected preview overlay (proposal only)."""
+    from .services.feedback_agent import submit_preview_feedback
+    try:
+        return submit_preview_feedback(engine, preview_id, payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
 
 
 @app.post("/v1/previews/{preview_id}/smoke")
@@ -4764,11 +4844,59 @@ async def preview_web_proxy(preview_id: str, request: Request, path: str = ""):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
     from .services.preview_service import proxy_preview
     body = await request.body()
-    status, ctype, data = proxy_preview(
+    status, ctype, data, headers = proxy_preview(
         engine, preview_id, path, request.method, request.url.query,
-        body or None, request.headers.get("content-type"),
+        body or None, request.headers.get("content-type"), settings.sandbox_token,
     )
-    return Response(content=data, status_code=status, media_type=ctype)
+    return Response(content=data, status_code=status, media_type=ctype, headers=headers)
+
+
+@app.websocket("/v1/previews/{preview_id}/web/")
+@app.websocket("/v1/previews/{preview_id}/web/{path:path}")
+async def preview_websocket_proxy(websocket: WebSocket, preview_id: str, path: str = ""):
+    """Bidirectional WebSocket proxy for SPA/live-preview development servers."""
+    await websocket.accept()
+    with begin(engine) as connection:
+        row = connection.execute(text(
+            "SELECT url,status,mode FROM app_previews WHERE id=:id"
+        ), {"id": preview_id}).mappings().first()
+    if row is None or row["status"] != "running" or not row["url"]:
+        await websocket.close(code=4404, reason="preview not running")
+        return
+    base = str(row["url"]).rstrip("/")
+    target = ("wss://" + base[8:] if base.startswith("https://") else
+              "ws://" + base[7:] if base.startswith("http://") else base)
+    target += "/" + path.lstrip("/")
+    if websocket.url.query:
+        target += "?" + websocket.url.query
+    headers = ({"X-Sandbox-Token": settings.sandbox_token}
+               if row["mode"] == "rootfs" and settings.sandbox_token else None)
+    try:
+        import websockets
+        async with websockets.connect(target, additional_headers=headers) as upstream:
+            async def client_to_upstream():
+                while True:
+                    message = await websocket.receive()
+                    if message.get("text") is not None:
+                        await upstream.send(message["text"])
+                    elif message.get("bytes") is not None:
+                        await upstream.send(message["bytes"])
+                    else:
+                        return
+
+            async def upstream_to_client():
+                async for message in upstream:
+                    if isinstance(message, bytes):
+                        await websocket.send_bytes(message)
+                    else:
+                        await websocket.send_text(message)
+
+            await asyncio.gather(client_to_upstream(), upstream_to_client())
+    except (WebSocketDisconnect, Exception):  # connection closure is reflected to the browser
+        try:
+            await websocket.close()
+        except Exception:
+            pass
 
 
 @app.post("/v1/previews/{preview_id}/stop")
@@ -4778,7 +4906,7 @@ def stop_preview_endpoint(preview_id: str):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
     from .services.preview_service import stop_preview
     try:
-        return stop_preview(engine, preview_id)
+        return stop_preview(engine, preview_id, settings)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
 
