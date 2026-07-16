@@ -9,6 +9,7 @@ All 15-min terminal updates and major milestones appended here. Chronological, n
 - Added strict project skill storage and audited lifecycle operations; validated `system` and eager/on-demand SkillSpec metadata; seeded system skills idempotently for every project.
 - Added worker capability and control-plane dispatch for real skills. Exact lease scope is verified before server executor resolution; permission, budget, retry, Receipt, CostReceipt, reservation, and invocation evidence all remain in the governed runtime.
 - Validation: 4 registry/runtime tests + 5 executor tests + 29 worker tests pass, focused API skill tests pass, web 112/112 and repository lint pass, OpenAPI/YAML/compile/diff checks pass. Broad Python baseline failures were reproduced unchanged on detached `origin/main` and were not mixed into this slice.
+- Published implementation commit `1ed12b8` and draft PR #24. CI and Documentation were rejected before checkout with zero steps by the repository account payment/spending-limit gate; linked both external run failures and green local equivalents in GitHub and Plane.
 
 ## 2026-07-15 — Codex — BOSS-118 controlled main integration
 
