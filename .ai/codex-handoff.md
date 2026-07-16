@@ -92,6 +92,7 @@ Last updated: 2026-07-15 (BOSS-118 controlled integration release validated for 
 - Per-task resolution unions system, canonicalized module-default, and enabled tenant skills; filters pack, disabled rows, and RoleSpec allow/forbid; and separates eager tools from discoverable on-demand entries.
 - The agent loop injects collision-safe SkillSpec schemas beside native/MCP tools, invokes the existing real SkillRuntime gauntlet, and suspends tier-above-threshold calls behind blocking decisions. Approved resume revalidates current resolver eligibility before execution.
 - Validation passes: 13 resolution/registry/executor tests, 11 API skill/runtime/role regressions, 29 worker tests, all 112 web tests, repository Ruff/TypeScript lint, Python compile, and OpenAPI YAML parsing. The parity checker still reports only its documented pre-existing unrelated route backlog; `/v1/skills` is present and updated.
+- Draft PR #25 is mergeable. Documentation run `29502637887` was rejected before checkout with zero steps by the repository account payment/spending-limit gate. CI does not trigger for the intentionally stacked non-`main` base, so the local lint/test evidence above is the review gate until the stack is retargeted or merged.
 
 ## Active Codex slice — 2026-07-15
 

@@ -9,6 +9,7 @@ All 15-min terminal updates and major milestones appended here. Chronological, n
 - Implemented effective-edition catalog filtering/state overlay, per-task system/module/tenant resolution with RoleSpec filters and on-demand discovery, and live collision-safe SkillRuntime tools in the durable agent loop.
 - Added high-risk blocking decision/persisted resume state, resolver revalidation on approval, and visible MCP discovery failure events; preserved all external effects behind existing executors, budgets, receipts, and policy boundaries.
 - Validation: 13 focused resolution/registry/executor tests, 11 focused API skill/runtime/role regressions, 29 worker tests, all 112 web tests, repository lint/typecheck, focused compile, and OpenAPI YAML parsing pass. Route parity retains only the documented unrelated baseline backlog.
+- Published implementation commit `9495a8a` and mergeable stacked draft PR #25. Documentation run `29502637887` failed before checkout with zero steps because of the GitHub account payment/spending-limit gate; stacked PR CI is not configured until the base is `main`.
 
 ## 2026-07-16 — Codex — BOSS-46/BOSS-51/BOSS-52 skill foundation
 
