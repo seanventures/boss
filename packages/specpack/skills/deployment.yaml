@@ -27,6 +27,8 @@ skills:
     kind: deployment
     risk_tier: 1
     mock_mode: false
+    system: true
+    load: eager
     description: Execute configured health checks and write deployment health artifacts.
     data_boundary: internal
     input_schema: { deployment_run_id: string }

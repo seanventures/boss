@@ -3,6 +3,13 @@
 All 15-min terminal updates and major milestones appended here. Chronological, newest at top.
 
 ---
+## 2026-07-16 — Codex — BOSS-46/BOSS-51/BOSS-52 skill foundation
+
+- Claimed the three dependency-ordered Plane slices and created `ai/codex/boss-46-51-52-skill-foundation` from refreshed `origin/main`, avoiding the contributor's open model-pacing/VAG/console PRs.
+- Added strict project skill storage and audited lifecycle operations; validated `system` and eager/on-demand SkillSpec metadata; seeded system skills idempotently for every project.
+- Added worker capability and control-plane dispatch for real skills. Exact lease scope is verified before server executor resolution; permission, budget, retry, Receipt, CostReceipt, reservation, and invocation evidence all remain in the governed runtime.
+- Validation: 4 registry/runtime tests + 5 executor tests + 29 worker tests pass, focused API skill tests pass, web 112/112 and repository lint pass, OpenAPI/YAML/compile/diff checks pass. Broad Python baseline failures were reproduced unchanged on detached `origin/main` and were not mixed into this slice.
+
 ## 2026-07-15 — Codex — BOSS-118 controlled main integration
 
 - Created a clean integration branch from the latest `origin/main`, enumerated all unmerged Codex PR stacks, and excluded the parallel contributor's `feat/*` work.

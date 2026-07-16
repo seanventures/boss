@@ -102,6 +102,8 @@ class EntitlementBrokerService:
                     {
                         "id": skill.get("id", path.stem),
                         "kind": skill.get("kind", "unknown"),
+                        "system": bool(skill.get("system", False)),
+                        "load": skill.get("load", "eager"),
                         "risk_tier": int(skill.get("risk_tier", 0)),
                         "description": skill.get("description", ""),
                         "mock_mode": bool(skill.get("mock_mode", False)),
@@ -129,6 +131,11 @@ class EntitlementBrokerService:
 
         if skill.get("mock_mode") is not False:
             errors.append("mock_mode must be false in real-only runtime specs")
+
+        if not isinstance(skill.get("system", False), bool):
+            errors.append("system must be a boolean when provided")
+        if skill.get("load", "eager") not in {"eager", "on_demand"}:
+            errors.append("load must be either eager or on_demand")
 
         for key in (
             "input_schema",

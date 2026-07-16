@@ -183,6 +183,15 @@ class ControlPlaneClient:
         response.raise_for_status()
         return response.json()
 
+    def invoke_skill(
+        self, skill_id: str, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        response = self._client.post(
+            f"/v1/skills/{skill_id}/invoke", json=payload
+        )
+        response.raise_for_status()
+        return response.json()
+
     def sync_provider_resources(self, payload: dict[str, Any]) -> dict[str, Any]:
         response = self._client.post("/v1/resources/sync", json=payload)
         response.raise_for_status()

@@ -183,6 +183,7 @@ def _github_create_pr(
             "pr_url": result.get("pr_url"),
             "pull_request_number": result.get("pull_request_number"),
             "receipt_id": receipt["id"],
+            "actual_cost_usd_micros": 0,
         }
 
     try:
@@ -211,6 +212,7 @@ def _github_create_pr(
         "pr_url": pull_request.url,
         "pull_request_number": pull_request.number,
         "receipt_id": receipt["id"],
+        "actual_cost_usd_micros": 0,
     }
 
 

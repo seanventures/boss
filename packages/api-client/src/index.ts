@@ -2918,6 +2918,8 @@ export type AgentRuntimeResolveResponse = {
 export type SkillSummary = {
   id: string;
   kind: string;
+  system: boolean;
+  load: "eager" | "on_demand";
   risk_tier: number;
   description: string;
   mock_mode: boolean;

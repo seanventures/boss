@@ -10,6 +10,7 @@ from .services.event_subscription_service import seed_default_event_subscription
 from .services.feature_catalog import FeatureCatalog
 from .services.mcp_registry import ensure_mcp_server
 from .services.members import MemberDirectoryService
+from .services.skill_registry import seed_system_skills
 from .services.specpack import SpecPackService
 
 
@@ -85,6 +86,12 @@ def seed_project_defaults(
     specpack.install_pack(connection, project_id, settings.core_pack_id, actor)
     specpack.install_default_agent_modules(connection, project_id, actor)
     entitlements.seed_default_sources(connection, project_id, actor)
+    seed_system_skills(
+        connection,
+        project_id,
+        entitlements.list_skills(),
+        actor,
+    )
     # seed the meeting role-agent template so a new org's panel isn't empty
     from .services.meeting_service import seed_roles
     seed_roles(connection, project_id)

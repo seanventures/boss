@@ -1253,6 +1253,9 @@ class SkillInvokeRequest(BaseModel):
     inputs: dict[str, Any] = Field(default_factory=dict)
     mock: bool = True
     actor: Optional[str] = None
+    created_by_job_id: Optional[str] = None
+    worker_id: Optional[str] = None
+    lease_token: Optional[str] = None
 
     @model_validator(mode="after")
     def validate_fields(self) -> "SkillInvokeRequest":
@@ -3318,6 +3321,8 @@ class AgentRuntimeResolveResponse(BaseModel):
 class SkillSummary(BaseModel):
     id: str
     kind: str
+    system: bool = False
+    load: Literal["eager", "on_demand"] = "eager"
     risk_tier: int
     description: str
     mock_mode: bool

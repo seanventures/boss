@@ -1,9 +1,9 @@
 # BOSS Autonomous Delivery Status
 
-**Last updated**: 2026-07-15 (BOSS-118 controlled integration release validated for main)
+**Last updated**: 2026-07-16 (BOSS-46/BOSS-51/BOSS-52 skill foundation validated)
 **Repo root**: /Volumes/DataSSD1/test/boss
 **Git remote**: https://github.com/seanheiney/boss
-**Current branch**: ai/codex/integrate-main
+**Current branch**: ai/codex/boss-46-51-52-skill-foundation
 **Base branch**: origin/main
 **Product**: BOSS v0.4.1 target (Business Operating System Sentinel)
 **Mission**: Complete product to production-grade, tested, documented, pushed, Codex-coordinated, ready for real users. Grind until all discovered PRD/spec features satisfy world-class DoD or truly blocked.
@@ -26,7 +26,7 @@
 - OSS-readiness foundation advanced on 2026-07-15: transactional allowlisted event dispatch, project subscription registry/CRUD/defaults, and TRACEABILITY-derived feature catalog are implemented for Plane BOSS-20, BOSS-21, and BOSS-72. Downstream webhook and docs-agent consumers are included in BOSS-118 and remain separately traceable in Plane.
 - Current validation: 7 new acceptance tests + 5 representative legacy job tests pass on fresh Postgres; schema reapplication, focused lint/compile, diff checks, and OpenAPI YAML parsing pass. Full API baseline remains 241 passed/38 failed; selected failures reproduce unchanged on pristine origin/main.
 - Coordination: mergeable draft PR #17 targets PR #16's branch, which targets PR #15; open PR #14 is frontend-only and non-overlapping; open PR #9 overlaps `main.py`/API-test regions and needs normal rebase conflict care.
-- OSS executable-skills work advanced on 2026-07-15: Plane BOSS-45 adds a deterministic server-side executor registry, safe GitHub PR and Deployment Registry bindings, Receipt-backed GitHub effects, and no-duplicate behavior for an existing provider Receipt. BOSS-46 remains the separate worker real-mode bridge.
+- OSS executable-skills work advanced through Plane BOSS-46/BOSS-51/BOSS-52: a lease-owned `skill.execute` worker path now resolves safe server executors, applies permission/budget/retry gates, reconciles provider Receipts into CostReceipts, and records real-mode invocations. The new project-scoped skill registry audits register/enable/disable state, while validated `system`/`load` metadata seeds eager system skills and preserves on-demand catalog entries. BOSS-53/BOSS-54 then BOSS-47 remain the dependency-safe next slices for pack-aware listing, task resolution, and agent-loop injection.
 - Audit slice (spec closure, .ai/ OS, docs AC, recent gaps 001-003/005/011/012) COMPLETE per DoD: local P0s closed, P2s addressed by 4 subagents + branch commits (41e5243, 527e9a1). Additional: Security agent closed rate P2 (GAP-013) with in-mem limiter for high-cost paths + tests + updates. Validations green, pushed to PR #3, .ai/ current.
 - PM prd-audit (this) COMPLETE: full PRD-v2.0 + TECH audit vs impl/.ai/ (read thesis/planes/objects/journeys + code+openapi+trace); no other local implementable gaps/vertical slices not covered (comms/self-imp/commercial local/elastic covered fully local); noted GAP-PRD-AUDIT-001 P3; "coverage good, only external left". .ai/ updated + commit pending.
 - Core product largely implemented locally (control, budget full, ProviderOps local+real sandbox, SWF, console, roles, MEB, auth, etc.) per IMPLEMENTATION_STATUS + PRD-v2.

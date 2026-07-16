@@ -460,6 +460,7 @@ from .services.skill_runtime import (
     SkillPermissionError,
     SkillRuntimeService,
 )
+from .services.skill_executors import SkillExecutorContext
 from .services.slack_comms import (
     SlackCommsService,
     department_channel,
@@ -1641,6 +1642,8 @@ def skill_summary_from_service(payload) -> SkillSummary:
     return SkillSummary(
         id=payload["id"],
         kind=payload["kind"],
+        system=payload.get("system", False),
+        load=payload.get("load", "eager"),
         risk_tier=payload["risk_tier"],
         description=payload["description"],
         mock_mode=payload["mock_mode"],
@@ -6790,26 +6793,67 @@ def list_skill_invocations(project_id: str, limit: int = 50) -> dict:
 
 @app.post("/v1/skills/{skill_id}/invoke", status_code=201)
 def invoke_skill(skill_id: str, payload: SkillInvokeRequest) -> dict:
-    """Invoke a skill through the runtime (per-skill permission/cost/retry enforcement). The API
-    only drives mock mode — full governance gauntlet, no real side effects (spec §C). Real
-    invocation is driven by the worker runtime with a server-side executor."""
-    if not payload.mock:
-        raise HTTPException(
-            status_code=400,
-            detail="Real skill invocation must be driven by the worker runtime, not the API. "
-            "Use mock=true for a side-effect-free invocation.",
-        )
+    """Run API mock mode or lease-owned worker real mode through one governance gauntlet."""
     with begin(engine) as connection:
         try:
+            executor_context = None
+            if not payload.mock:
+                if not (
+                    payload.created_by_job_id
+                    and payload.worker_id
+                    and payload.lease_token
+                ):
+                    raise HTTPException(
+                        status_code=400,
+                        detail=(
+                            "Real skill invocation requires an active worker lease. "
+                            "Use mock=true for a side-effect-free invocation."
+                        ),
+                    )
+                leased_job = jobs.require_active_lease(
+                    connection,
+                    payload.worker_id,
+                    payload.created_by_job_id,
+                    payload.lease_token,
+                )
+                job_payload = leased_job.get("payload") or {}
+                if (
+                    leased_job["project_id"] != payload.project_id
+                    or leased_job["kind"] != "skill.execute"
+                    or job_payload.get("skill_id") != skill_id
+                    or (job_payload.get("caller") or "worker") != payload.caller
+                    or (job_payload.get("inputs") or {}) != payload.inputs
+                ):
+                    raise HTTPException(
+                        status_code=409,
+                        detail=(
+                            "Skill invocation does not match the active leased job "
+                            "scope."
+                        ),
+                    )
+                executor_context = SkillExecutorContext(
+                    settings=settings,
+                    connection=connection,
+                    project_id=payload.project_id,
+                    actor=payload.worker_id,
+                    created_by_job_id=payload.created_by_job_id,
+                )
             return skill_runtime.invoke(
                 connection,
                 payload.project_id,
                 skill_id,
                 payload.caller,
                 payload.inputs,
-                mock=True,
-                actor=payload.actor or payload.caller,
+                mock=payload.mock,
+                executor_context=executor_context,
+                actor=(
+                    payload.worker_id
+                    if not payload.mock
+                    else payload.actor or payload.caller
+                ),
             )
+        except LeaseNotFoundError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
         except SkillNotFoundError as error:
             raise HTTPException(status_code=404, detail=str(error)) from error
         except SkillPermissionError as error:

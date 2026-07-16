@@ -1,6 +1,6 @@
 # Skills & Extensibility: Marketplace + System-vs-Customer Skill Loading
 
-> **Summary:** BOSS ships a fully-specified SkillSpec governance layer (`skill_runtime.py`, `packages/specpack/skills/*.yaml`, `entitlements.py`) that is **not wired to real execution** — the API rejects `mock=false`, the worker never imports it, and the live agent loop (`agent_loop.py`) runs on a **separate** hardcoded `_TOOL_SCHEMAS` list. The one boundary that actually executes third-party tools today is **MCP** (`mcp_client.py` + `mcp_registry.py`), which is per-project, DB-backed, live-injected into the agent, and already delivers ~70% of the "extensible plug-in" ask. Skills are globbed globally with no per-tenant storage and no pack/tier filter.
+> **Implementation status (July 2026):** A1/A2/B1/B2 are implemented. SkillSpecs now resolve real server executors from lease-owned `skill.execute` jobs, reconcile receipt-backed costs, persist per-project registry state, and seed validated system skills. The agent-loop bridge and pack-aware task resolver remain A3/B3/B4.
 > · **User asks:** #4 (skills marketplace / extensibility) and #5 (system-provided vs customer-provided skill loading)
 > · **Module:** Skills & Extensibility
 > · **Priority:** **P0** — the loading model (ask 5) and a real executor registry (the wiring half of ask 4); **P1** — the marketplace surface (publishing, provenance, import/export) on top of MCP.
@@ -24,7 +24,7 @@ The goal of this spec is to (a) collapse those two systems by making SkillSpecs 
 
 ---
 
-## 2. Current State (ground truth)
+## 2. Baseline State at Decomposition (historical ground truth)
 
 ### 2.1 SkillSpec is an inert governance shell
 
@@ -141,9 +141,11 @@ Scope: new `services/skill_executors.py` with `register_executor`/decorator/`res
 
 **A2. Wire real-mode `skill_runtime` (API + worker)** — *P0, M*
 Scope: `skill_runtime.invoke()` looks up `resolve_executor` when `mock=false`; worker imports `SkillRuntimeService` and drives real invocations; lift the `main.py:6432` `mock=false` rejection to allow real invocation *from the worker path only* (API stays mock unless caller is trusted worker). Key files: `services/skill_runtime.py:49-137`, `apps/worker/boss_worker/runner.py`, `main.py:6428`.
-- [ ] Worker can execute a real skill end-to-end: permission gate + budget reserve + retry + receipt + `skill.invoked` event all fire.
-- [ ] `skill_invocations` row shows `mode='real'`, real cost reconciled.
-- [ ] API `/v1/skills/{id}/invoke` with `mock=false` no longer 400s when invoked on the worker path; still refuses unbacked skills with a clear error.
+- [x] Worker can execute a real skill end-to-end: permission gate + budget reserve + retry + receipt + `skill.invoked` event all fire.
+- [x] `skill_invocations` row shows `mode='real'`, real cost reconciled.
+- [x] API `/v1/skills/{id}/invoke` with `mock=false` no longer 400s when invoked on the worker path; still refuses unbacked skills with a clear error.
+
+**Implementation evidence (BOSS-46).** `skill.execute` is an explicit worker capability. The control-plane endpoint validates the active lease and exact project/skill/caller/input scope before constructing server-only executor context. `SkillRuntimeService` resolves registered executors, applies permission/budget/retry gates, records real-mode invocations, and consumes receipt-backed reservations into cost receipts; unbacked skills fail closed before reserving budget. A replay of the same locked job returns its original invocation without a second reservation or executor call.
 
 **A3. Bridge SkillSpecs into the agent loop** — *P0, M*
 Scope: inject resolved skills as `skill_<id>` tools into the live agent schema list and dispatch them through `skill_runtime.invoke(mock=False)` with risk-tier→approval mapping. Key files: `services/agent_loop.py:610` (schema build), `:657-689` (dispatch), reuse `:673-685` approval pattern.
@@ -173,15 +175,19 @@ Scope: detached signature over manifest checksum; verify on import against `BOSS
 
 **B1. `project_skills` store + registry service** — *P0, M*
 Scope: new table + `services/skill_registry.py` (`list_project_skills`, `enable_skill`, `disable_skill`, `register_skill`, `ensure_skill`) mirroring `mcp_registry.py`. Key files: `services/skill_registry.py` (new), migration, `services/mcp_registry.py` (pattern to mirror).
-- [ ] CRUD for per-project skills with `source`, `enabled`, `on_demand`, `config`, `publisher`.
-- [ ] `ensure_skill` is idempotent across restarts (like `ensure_mcp_server`).
-- [ ] Events emitted on register/enable/disable.
+- [x] CRUD for per-project skills with `source`, `enabled`, `on_demand`, `config`, `publisher`.
+- [x] `ensure_skill` is idempotent across restarts (like `ensure_mcp_server`).
+- [x] Events emitted on register/enable/disable.
+
+**Implementation evidence (BOSS-51).** `project_skills` is project-scoped with a unique `(project_id, skill_id)` key and source constraint. `skill_registry.py` provides list/register/enable/disable/ensure operations, preserves strict project scope, and emits `skill.registered`, `skill.enabled`, and `skill.disabled` events.
 
 **B2. `system` + `load` fields on SkillSpec; seed system skills at bootstrap** — *P0, S*
 Scope: add optional `system: bool` and `load: eager|on_demand` to SkillSpec + validator; bootstrap seeds `system` skills into `project_skills` for every project. Key files: `entitlements.py:120-171` (validator), `packages/specpack/skills/*.yaml`, `bootstrap.py:19-56`.
-- [ ] `system: true` skills are auto-present on a fresh project without any tenant action.
-- [ ] Validator accepts the new fields and rejects invalid `load` values.
-- [ ] At least one skill marked `system` and one marked `on_demand` for test coverage.
+- [x] `system: true` skills are auto-present on a fresh project without any tenant action.
+- [x] Validator accepts the new fields and rejects invalid `load` values.
+- [x] At least one skill marked `system` and one marked `on_demand` for test coverage.
+
+**Implementation evidence (BOSS-52).** SkillSpec loading now defaults `system=false` and `load=eager`, rejects invalid metadata, seeds `deployment.health.check` as an eager system skill for every project, and marks `github.create_pr_sandbox` for on-demand loading.
 
 **B3. Pack/tier-aware `list_skills`** — *P0, M*
 Scope: `entitlements.list_skills(project_id=None)`; when set, intersect global glob with the project's edition-pack `installs.skills`; `GET /v1/skills?project_id=` returns per-project state. Key files: `entitlements.py:90-118`, `packages/specpack/packs/*.yaml`, `main.py:6415`.

@@ -2082,6 +2082,8 @@ paths:
                       required:
                         - id
                         - kind
+                        - system
+                        - load
                         - risk_tier
                         - description
                         - mock_mode
@@ -2095,6 +2097,8 @@ paths:
                       properties:
                         id: { type: string }
                         kind: { type: string }
+                        system: { type: boolean, default: false }
+                        load: { type: string, enum: [eager, on_demand], default: eager }
                         risk_tier: { type: integer }
                         description: { type: string }
                         mock_mode: { type: boolean }
@@ -2105,6 +2109,50 @@ paths:
                         permissions: { type: object }
                         data_boundary: { type: string }
                         policy: { type: object }
+  /v1/skills/invocations:
+    get:
+      summary: List governed skill invocation records for a project
+      parameters:
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, default: 50 }
+      responses:
+        '200': { description: Skill invocation ledger }
+  /v1/skills/{skill_id}/invoke:
+    post:
+      summary: Mock-invoke a skill, or execute real mode from an exactly scoped worker lease
+      parameters:
+        - name: skill_id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id, caller]
+              properties:
+                project_id: { type: string }
+                caller: { type: string }
+                inputs: { type: object, additionalProperties: true }
+                mock: { type: boolean, default: true }
+                actor: { type: string }
+                created_by_job_id: { type: string }
+                worker_id: { type: string }
+                lease_token: { type: string }
+      responses:
+        '201': { description: Governed skill invocation record }
+        '400': { description: Real mode requested without a worker lease }
+        '404': { description: Skill not found }
+        '409': { description: Worker lease is invalid or does not match invocation scope }
+        '422': { description: Invalid invocation input }
   /v1/model-adapters:
     get:
       summary: List registered model adapter definitions from the Model Entitlement Broker

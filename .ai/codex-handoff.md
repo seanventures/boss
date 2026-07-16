@@ -75,6 +75,15 @@ Last updated: 2026-07-15 (BOSS-118 controlled integration release validated for 
 - Validation: five focused registry/executor tests and focused Ruff pass. BOSS-46 owns real-mode worker wiring; this slice intentionally does not relax the API's mock-only posture.
 - Coordination: standalone branch `ai/codex/skill-executor-registry` is based on current `origin/main` and does not overlap the reactive/docs/GitHub-community stack or the contributor's model-pacing/VAG/design-system branches.
 
+## 2026-07-16 real skill runtime + project loading foundation
+
+- Plane BOSS-46/BOSS-51/BOSS-52 / spec 03 A2/B1/B2 are implemented on `ai/codex/boss-46-51-52-skill-foundation`, based on current `origin/main` (`cfb39d3`).
+- Real skill calls use the existing `/v1/skills/{id}/invoke` contract only from an active `skill.execute` worker lease. The API validates exact project, job kind, skill, caller, and inputs before constructing server-only executor context. Unbacked skills fail visibly before reserving budget.
+- The runtime now resolves registered executors, retries per SkillSpec, reserves before execution, consumes receipt-backed actual cost into a CostReceipt, releases non-settled reservations, and records actual cost/cost-receipt identity on `skill_invocations`.
+- `project_skills` and `skill_registry.py` provide strict per-project list/register/enable/disable/ensure behavior plus audit events. Bootstrap seeds `system: true` skills idempotently; SkillSpec accepts only `load: eager|on_demand`. `deployment.health.check` is the initial eager system skill and `github.create_pr_sandbox` is on-demand.
+- Validation: 4 registry/runtime tests, 5 executor tests, and the full 29-test worker suite pass; web 112/112, repository lint, OpenAPI YAML, focused API skill tests, compile, and diff checks pass. The broad Python suite reached 90 passes before interruption and reported only known `test_api.py` baseline failures; representative auth, Metatron-budget, and Resource Plane failures reproduce unchanged on detached `origin/main`.
+- Next dependency-safe work is BOSS-53 (pack-aware list) then BOSS-54 (task resolver), followed by BOSS-47 agent-loop injection. Do not bridge A3 directly against a hardcoded/global catalog.
+
 ## Active Codex slice — 2026-07-15
 
 - Plane: `BOSS-112` (`f5b2a54d-3378-4597-a12d-8905d2eb5196`), In Progress.

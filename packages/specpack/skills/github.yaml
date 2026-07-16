@@ -3,6 +3,7 @@ skills:
     kind: software_factory
     risk_tier: 2
     mock_mode: false
+    load: on_demand
     description: Create a real sandbox PR artifact and receipt against the approved test repository.
     data_boundary: internal
     input_schema:
