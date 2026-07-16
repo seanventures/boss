@@ -85,6 +85,14 @@ Last updated: 2026-07-15 (BOSS-118 controlled integration release validated for 
 - GitHub Actions CI run `29498267699` and Documentation run `29498267668` failed before checkout with zero executed steps because of the repository account payment/spending-limit gate. The run links and local validation evidence are recorded on draft PR #24 and Plane; no code workaround is appropriate.
 - Next dependency-safe work is BOSS-53 (pack-aware list) then BOSS-54 (task resolver), followed by BOSS-47 agent-loop injection. Do not bridge A3 directly against a hardcoded/global catalog.
 
+## 2026-07-16 pack-aware skill resolution + agent bridge
+
+- Plane BOSS-53/BOSS-54/BOSS-47 are implemented on `ai/codex/boss-47-53-54-skill-resolution`, stacked directly on draft PR #24 so the resolver cannot land without its registry/runtime foundation.
+- Project skill lists now follow the effective edition pack and inherited skill bundles, overlay `{source, system, enabled, on_demand}`, and keep the unscoped catalog backward-compatible.
+- Per-task resolution unions system, canonicalized module-default, and enabled tenant skills; filters pack, disabled rows, and RoleSpec allow/forbid; and separates eager tools from discoverable on-demand entries.
+- The agent loop injects collision-safe SkillSpec schemas beside native/MCP tools, invokes the existing real SkillRuntime gauntlet, and suspends tier-above-threshold calls behind blocking decisions. Approved resume revalidates current resolver eligibility before execution.
+- Validation passes: 13 resolution/registry/executor tests, 11 API skill/runtime/role regressions, 29 worker tests, all 112 web tests, repository Ruff/TypeScript lint, Python compile, and OpenAPI YAML parsing. The parity checker still reports only its documented pre-existing unrelated route backlog; `/v1/skills` is present and updated.
+
 ## Active Codex slice — 2026-07-15
 
 - Plane: `BOSS-112` (`f5b2a54d-3378-4597-a12d-8905d2eb5196`), In Progress.

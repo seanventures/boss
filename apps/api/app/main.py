@@ -1644,6 +1644,11 @@ def skill_summary_from_service(payload) -> SkillSummary:
         kind=payload["kind"],
         system=payload.get("system", False),
         load=payload.get("load", "eager"),
+        source=payload.get("source", "catalog"),
+        enabled=bool(payload.get("enabled", False)),
+        on_demand=bool(
+            payload.get("on_demand", payload.get("load") == "on_demand")
+        ),
         risk_tier=payload["risk_tier"],
         description=payload["description"],
         mock_mode=payload["mock_mode"],
@@ -6779,9 +6784,17 @@ def resolve_agent_runtime(
 
 
 @app.get("/v1/skills", response_model=SkillListResponse)
-def list_skills() -> SkillListResponse:
+def list_skills(project_id: Optional[str] = None) -> SkillListResponse:
+    if project_id is None:
+        skills = entitlements.list_skills()
+    else:
+        with begin(engine) as connection:
+            skills = entitlements.list_skills(
+                project_id,
+                connection=connection,
+            )
     return SkillListResponse(
-        items=[skill_summary_from_service(skill) for skill in entitlements.list_skills()]
+        items=[skill_summary_from_service(skill) for skill in skills]
     )
 
 

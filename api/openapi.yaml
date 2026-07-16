@@ -2066,6 +2066,12 @@ paths:
   /v1/skills:
     get:
       summary: List registered control-plane skills from specpack
+      parameters:
+        - name: project_id
+          in: query
+          required: false
+          description: Filter the catalog through the project's effective edition pack and include project registry state.
+          schema: { type: string }
       responses:
         '200':
           description: Skill list
@@ -2084,6 +2090,9 @@ paths:
                         - kind
                         - system
                         - load
+                        - source
+                        - enabled
+                        - on_demand
                         - risk_tier
                         - description
                         - mock_mode
@@ -2099,6 +2108,9 @@ paths:
                         kind: { type: string }
                         system: { type: boolean, default: false }
                         load: { type: string, enum: [eager, on_demand], default: eager }
+                        source: { type: string }
+                        enabled: { type: boolean }
+                        on_demand: { type: boolean }
                         risk_tier: { type: integer }
                         description: { type: string }
                         mock_mode: { type: boolean }

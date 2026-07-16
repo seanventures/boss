@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+from hashlib import sha256
 from pathlib import Path
 from typing import Any, Callable, Optional
 
@@ -16,10 +17,104 @@ from .mcp_registry import list_mcp_servers
 from .claude_cli_adapter import make_chat_adapter
 from .openai_adapter import OpenAIAdapter, _usage_from_response  # noqa: F401
 from .pdf_render import pdf_page_count, render_markdown_pdf
+from .skill_executors import SkillExecutorContext
+from .skill_registry import resolve_for_task
+from .skill_runtime import SkillRuntimeService
 
 
 def _slug(value: str) -> str:
     return re.sub(r"[^a-zA-Z0-9_]+", "_", value or "").strip("_").lower()
+
+
+def _unique_tool_name(
+    base: str,
+    occupied: set[str],
+    identity: str,
+) -> str:
+    candidate = base[:64]
+    if candidate not in occupied:
+        occupied.add(candidate)
+        return candidate
+    suffix = "_" + sha256(identity.encode("utf-8")).hexdigest()[:8]
+    candidate = base[: 64 - len(suffix)] + suffix
+    counter = 2
+    while candidate in occupied:
+        numbered = f"_{counter}"
+        candidate = base[: 64 - len(suffix) - len(numbered)] + suffix + numbered
+        counter += 1
+    occupied.add(candidate)
+    return candidate
+
+
+def _skill_tool_parameters(input_schema: dict[str, Any]) -> dict[str, Any]:
+    if input_schema.get("type") == "object":
+        return input_schema
+    properties: dict[str, Any] = {}
+    required: list[str] = []
+    supported_types = {
+        "array",
+        "boolean",
+        "integer",
+        "number",
+        "object",
+        "string",
+    }
+    for raw_name, declaration in input_schema.items():
+        name = str(raw_name).rstrip("?")
+        optional = str(raw_name).endswith("?")
+        if isinstance(declaration, dict):
+            property_schema = dict(declaration)
+            optional = optional or bool(property_schema.pop("optional", False))
+        else:
+            declared_type = str(declaration or "string")
+            optional = optional or declared_type.endswith("?")
+            declared_type = declared_type.rstrip("?")
+            property_schema = {
+                "type": declared_type if declared_type in supported_types else "string"
+            }
+        properties[name] = property_schema
+        if not optional:
+            required.append(name)
+    schema: dict[str, Any] = {
+        "type": "object",
+        "properties": properties,
+        "additionalProperties": False,
+    }
+    if required:
+        schema["required"] = required
+    return schema
+
+
+def _append_skill_tools(
+    schemas: list[dict[str, Any]],
+    occupied: set[str],
+    resolved_skills: list[dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    skill_map: dict[str, dict[str, Any]] = {}
+    for skill in sorted(resolved_skills, key=lambda item: str(item["id"])):
+        skill_id = str(skill["id"])
+        name = _unique_tool_name(
+            "skill_" + _slug(skill_id),
+            occupied,
+            f"skill:{skill_id}",
+        )
+        schemas.append(
+            {
+                "type": "function",
+                "function": {
+                    "name": name,
+                    "description": (
+                        f"[BOSS Skill · {skill.get('kind', 'unknown')}] "
+                        f"{skill.get('description', '')}"
+                    ),
+                    "parameters": _skill_tool_parameters(
+                        skill.get("input_schema") or {}
+                    ),
+                },
+            }
+        )
+        skill_map[name] = skill
+    return skill_map
 
 # ============================================================
 # Read tools — internal/local data only (no external side effects).
@@ -527,6 +622,55 @@ def load_agent_run(connection, run_id) -> Optional[dict]:
     return dict(row) if row else None
 
 
+def _skill_resolution_for_run(
+    connection: Connection,
+    settings: Settings,
+    run: dict[str, Any],
+) -> dict[str, Any]:
+    finalize_ctx = run.get("finalize_ctx") or {}
+    module_descriptor = finalize_ctx.get("module_descriptor") or {}
+    return resolve_for_task(
+        connection,
+        settings,
+        str(run["project_id"]),
+        {
+            "job_kind": finalize_ctx.get("job_kind"),
+            "agent_module_id": (
+                finalize_ctx.get("module_id") or module_descriptor.get("id")
+            ),
+            "task_id": run.get("task_id"),
+            "skill_caller": finalize_ctx.get("skill_caller"),
+        },
+    )
+
+
+def _invoke_agent_skill(
+    connection: Connection,
+    settings: Settings,
+    project_id: str,
+    skill_id: str,
+    caller: str,
+    args: dict[str, Any],
+    *,
+    actor: str,
+) -> dict[str, Any]:
+    return SkillRuntimeService(settings).invoke(
+        connection,
+        project_id,
+        skill_id,
+        caller,
+        args,
+        mock=False,
+        executor_context=SkillExecutorContext(
+            settings=settings,
+            connection=connection,
+            project_id=project_id,
+            actor=actor,
+        ),
+        actor=actor,
+    )
+
+
 def run_agent_loop(
     connection: Connection,
     settings: Settings,
@@ -561,10 +705,47 @@ def resume_agent_run(connection: Connection, settings: Settings, run_id: str) ->
         return {"status": run["status"], "run_id": run_id}
     project_id = run["project_id"]
     pending = run["pending"] or {}
-    result = execute_agent_tool(
-        connection, project_id, settings, str(pending.get("tool")), pending.get("args") or {},
-        "decision_approval", task_id=run.get("task_id"),
-    )
+    if pending.get("kind") == "skill":
+        skill_id = str(pending.get("skill_id") or "")
+        resolution = _skill_resolution_for_run(connection, settings, run)
+        still_resolved = next(
+            (
+                skill
+                for skill in resolution["eager"] + resolution["on_demand"]
+                if skill["id"] == skill_id
+            ),
+            None,
+        )
+        if still_resolved is None:
+            result = {
+                "status": "denied",
+                "reason": "skill is no longer available for this project/task",
+                "skill_id": skill_id,
+            }
+        else:
+            result = _invoke_agent_skill(
+                connection,
+                settings,
+                project_id,
+                skill_id,
+                str(pending.get("caller") or resolution.get("role_key") or "agent_loop"),
+                pending.get("args") or {},
+                actor="decision_approval",
+            )
+            emit_event(
+                connection,
+                project_id,
+                "agent.skill_invoked",
+                "decision_approval",
+                "agent_run",
+                run_id,
+                {"skill_id": skill_id, "approved": True},
+            )
+    else:
+        result = execute_agent_tool(
+            connection, project_id, settings, str(pending.get("tool")), pending.get("args") or {},
+            "decision_approval", task_id=run.get("task_id"),
+        )
     messages = run["messages"]
     messages.append(
         {
@@ -608,14 +789,32 @@ def _drive_run(connection: Connection, settings: Settings, run_id: str, max_step
     adapter = make_chat_adapter(settings)
     mcp = MCPClient(settings)
     schemas = list(_TOOL_SCHEMAS) + list(_WRITE_SCHEMAS)
+    occupied = {
+        str(schema["function"]["name"])
+        for schema in schemas
+    }
     mcp_map: dict[str, tuple[dict, str]] = {}
     for server in list_mcp_servers(connection, project_id, enabled_only=True):
         try:
             server_tools = mcp.list_tools(server["url"])
-        except Exception:
+        except Exception as exc:
+            emit_event(
+                connection,
+                project_id,
+                "agent.mcp_discovery_failed",
+                "agent_loop",
+                "mcp_server",
+                str(server["id"]),
+                {"server": server["name"], "error": str(exc)},
+            )
             continue
         for t in server_tools:
-            ns = ("mcp_" + _slug(server["name"]) + "_" + _slug(str(t.get("name") or "tool")))[:60]
+            tool_name = str(t.get("name") or "tool")
+            ns = _unique_tool_name(
+                "mcp_" + _slug(server["name"]) + "_" + _slug(tool_name),
+                occupied,
+                f"mcp:{server['id']}:{tool_name}",
+            )
             schemas.append(
                 {
                     "type": "function",
@@ -626,7 +825,14 @@ def _drive_run(connection: Connection, settings: Settings, run_id: str, max_step
                     },
                 }
             )
-            mcp_map[ns] = (server, str(t.get("name")))
+            mcp_map[ns] = (server, tool_name)
+
+    skill_resolution = _skill_resolution_for_run(connection, settings, run)
+    skill_map = _append_skill_tools(
+        schemas,
+        occupied,
+        skill_resolution["eager"],
+    )
 
     steps_cap = int(max_steps or settings.agent_max_steps)
     threshold = int(settings.agent_autonomous_risk_max)
@@ -670,6 +876,81 @@ def _drive_run(connection: Connection, settings: Settings, run_id: str, max_step
                 except Exception as exc:
                     result = {"error": f"{type(exc).__name__}: {exc}"}
                 emit_event(connection, project_id, "agent.mcp_invoked", "agent_loop", "task", task_id or project_id, {"server": server["name"], "tool": tool_name, "step": step})
+            elif name in skill_map:
+                skill = skill_map[name]
+                skill_id = str(skill["id"])
+                risk = int(skill.get("risk_tier") or 0)
+                caller = str(
+                    skill.get("caller")
+                    or skill.get("role_key")
+                    or skill_resolution.get("role_key")
+                    or "agent_loop"
+                )
+                if risk > threshold:
+                    decision_id = create_blocking_decision(
+                        connection,
+                        project_id,
+                        task_id,
+                        f"Approve agent skill: {skill_id}",
+                        {
+                            "action": "resume_agent_run",
+                            "run_id": run_id,
+                            "tool": name,
+                            "kind": "skill",
+                            "skill_id": skill_id,
+                            "caller": caller,
+                            "args": args,
+                            "task_id": task_id,
+                        },
+                        {},
+                        "agent_skill_requires_approval",
+                        risk_tier=risk,
+                    )
+                    result = {
+                        "status": "deferred_for_approval",
+                        "decision_id": decision_id,
+                        "message": (
+                            f"'{skill_id}' (risk tier {risk}) requires human "
+                            "approval; the run is paused and resumes on approval."
+                        ),
+                    }
+                    is_deferred = True
+                    deferred = {
+                        "kind": "skill",
+                        "tool": name,
+                        "skill_id": skill_id,
+                        "caller": caller,
+                        "args": args,
+                        "decision_id": decision_id,
+                    }
+                    emit_event(
+                        connection,
+                        project_id,
+                        "agent.skill_deferred",
+                        "agent_loop",
+                        "decision",
+                        decision_id,
+                        {"skill_id": skill_id, "risk_tier": risk, "step": step},
+                    )
+                else:
+                    result = _invoke_agent_skill(
+                        connection,
+                        settings,
+                        project_id,
+                        skill_id,
+                        caller,
+                        args,
+                        actor="agent_loop",
+                    )
+                    emit_event(
+                        connection,
+                        project_id,
+                        "agent.skill_invoked",
+                        "agent_loop",
+                        "agent_run",
+                        run_id,
+                        {"skill_id": skill_id, "step": step},
+                    )
             elif name in _WRITE_FNS:
                 _, risk = _WRITE_FNS[name]
                 if risk > threshold:

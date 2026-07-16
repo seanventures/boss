@@ -3323,6 +3323,9 @@ class SkillSummary(BaseModel):
     kind: str
     system: bool = False
     load: Literal["eager", "on_demand"] = "eager"
+    source: str
+    enabled: bool
+    on_demand: bool
     risk_tier: int
     description: str
     mock_mode: bool

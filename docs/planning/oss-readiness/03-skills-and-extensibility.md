@@ -1,6 +1,6 @@
 # Skills & Extensibility: Marketplace + System-vs-Customer Skill Loading
 
-> **Implementation status (July 2026):** A1/A2/B1/B2 are implemented. SkillSpecs now resolve real server executors from lease-owned `skill.execute` jobs, reconcile receipt-backed costs, persist per-project registry state, and seed validated system skills. The agent-loop bridge and pack-aware task resolver remain A3/B3/B4.
+> **Implementation status (July 2026):** The P0 core (A1/A2/A3/B1/B2/B3/B4) is implemented. SkillSpecs now resolve real server executors from lease-owned `skill.execute` jobs or the governed agent loop, reconcile receipt-backed costs, persist per-project registry state, filter through effective edition packs, resolve per-task module/system/tenant unions, and pause high-risk agent skill calls for approval. Marketplace packaging, MCP gauntlet unification, and lazy on-demand enablement remain P1.
 > · **User asks:** #4 (skills marketplace / extensibility) and #5 (system-provided vs customer-provided skill loading)
 > · **Module:** Skills & Extensibility
 > · **Priority:** **P0** — the loading model (ask 5) and a real executor registry (the wiring half of ask 4); **P1** — the marketplace surface (publishing, provenance, import/export) on top of MCP.
@@ -149,9 +149,11 @@ Scope: `skill_runtime.invoke()` looks up `resolve_executor` when `mock=false`; w
 
 **A3. Bridge SkillSpecs into the agent loop** — *P0, M*
 Scope: inject resolved skills as `skill_<id>` tools into the live agent schema list and dispatch them through `skill_runtime.invoke(mock=False)` with risk-tier→approval mapping. Key files: `services/agent_loop.py:610` (schema build), `:657-689` (dispatch), reuse `:673-685` approval pattern.
-- [ ] Agent can call a system skill; the call goes through the full gauntlet (not the raw `_dispatch`).
-- [ ] A `risk_tier > agent_autonomous_risk_max` skill triggers `create_blocking_decision` and pauses the run exactly like `_WRITE_FNS`.
-- [ ] MCP, native tools, and skills coexist in one schema list without name collisions.
+- [x] Agent can call a system skill; the call goes through the full gauntlet (not the raw `_dispatch`).
+- [x] A `risk_tier > agent_autonomous_risk_max` skill triggers `create_blocking_decision` and pauses the run exactly like `_WRITE_FNS`.
+- [x] MCP, native tools, and skills coexist in one schema list without name collisions.
+
+**Implementation evidence (BOSS-47).** The durable agent loop consumes BOSS-54's eager resolver output, converts SkillSpec input declarations to collision-safe `skill_*` function schemas, and dispatches through `SkillRuntimeService.invoke(mock=false)` with a server-only executor context. Tier-above-threshold skills create a blocking decision and persist enough typed pending state to revalidate project/task availability before approved resume. Native, MCP, and SkillSpec names share one deterministic occupied-name set; MCP discovery failures now emit visible audit events.
 
 **A4. Elevate MCP: publisher/provenance + per-tool risk + route through gauntlet** — *P1, M*
 Scope: add `publisher`/`provenance` to `mcp_servers`; per-tool risk override; wrap MCP calls as `kind: mcp` skills so they inherit cost/retry/receipts. Key files: `services/mcp_registry.py:11-85`, `services/agent_loop.py:666-672`, `services/mcp_client.py`.
@@ -191,15 +193,19 @@ Scope: add optional `system: bool` and `load: eager|on_demand` to SkillSpec + va
 
 **B3. Pack/tier-aware `list_skills`** — *P0, M*
 Scope: `entitlements.list_skills(project_id=None)`; when set, intersect global glob with the project's edition-pack `installs.skills`; `GET /v1/skills?project_id=` returns per-project state. Key files: `entitlements.py:90-118`, `packages/specpack/packs/*.yaml`, `main.py:6415`.
-- [ ] A Community-edition project does not see enterprise-only skills.
-- [ ] `GET /v1/skills?project_id=X` returns `{source, system, enabled, on_demand}` per skill.
-- [ ] Global `GET /v1/skills` (no project) still returns the full catalog (back-compat).
+- [x] A Community-edition project does not see enterprise-only skills.
+- [x] `GET /v1/skills?project_id=X` returns `{source, system, enabled, on_demand}` per skill.
+- [x] Global `GET /v1/skills` (no project) still returns the full catalog (back-compat).
+
+**Implementation evidence (BOSS-53).** `EntitlementBrokerService.list_skills` accepts optional project scope, recursively resolves the effective edition pack's inherited skill bundles, and overlays project registry state. The typed API/OpenAPI contract exposes source/system/enabled/on-demand state while the unscoped route retains every validated SkillSpec.
 
 **B4. Per-task skill resolver** — *P0, M*
 Scope: `skill_registry.resolve_for_task(project_id, task)` returning system ∪ module `default_skill_ids` ∪ enabled tenant skills, filtered by pack/tier and role allow/forbid; feed the result into the agent schema build (A3). Key files: `services/skill_registry.py`, `services/agent_runtime.py:77`, `services/agent_loop.py:610`, `services/role_governance.py:137-153`.
-- [ ] Resolver returns the correct union+filter for a task with a matched agent-module.
-- [ ] On-demand skills are excluded from the eager set but discoverable.
-- [ ] The agent loop consumes the resolver output (no more hardcoded-only tool set for skills).
+- [x] Resolver returns the correct union+filter for a task with a matched agent-module.
+- [x] On-demand skills are excluded from the eager set but discoverable.
+- [x] The agent loop consumes the resolver output (no more hardcoded-only tool set for skills).
+
+**Implementation evidence (BOSS-54).** `skill_registry.resolve_for_task` unions pack-eligible system skills, canonicalized module defaults, and enabled tenant rows; suppresses disabled rows; enforces RoleSpec allow/forbid patterns; and separates eager from on-demand discovery. Legacy compact references such as `health.check` are deterministically reconciled to canonical dotted SkillSpec ids so existing modules work without widening their role scope.
 
 **B5. On-demand enable/disable + lazy load** — *P1, S/M*
 Scope: `POST /v1/skills/{id}/enable|disable` (per project) and `load` toggle; lazy-attach an on-demand skill's schema + executor on first agent reference within a run. Key files: `main.py` (routes), `services/skill_registry.py`, `services/agent_loop.py` (lazy attach).
