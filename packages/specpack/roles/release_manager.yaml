@@ -12,7 +12,7 @@ boundaries:
   must_not:
     - Deploy to production autonomously in v0.
 permissions:
-  allowed_skills: [release.plan, artifact.create, decision.create]
+  allowed_skills: [release.plan, coding_pipeline.generate_ci_config, artifact.create, decision.create]
   forbidden_skills: [deploy.prod_real]
 output_contracts: [ReleasePacket, RollbackPlan]
 autonomy:

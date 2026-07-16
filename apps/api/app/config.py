@@ -427,6 +427,18 @@ class Settings(BaseSettings):
     sandbox_ci_poll_interval_seconds: int = Field(
         default=5, alias="BOSS_SANDBOX_CI_POLL_INTERVAL_SECONDS"
     )
+    pipeline_provider: str = Field(
+        default="github_actions", alias="BOSS_PIPELINE_PROVIDER"
+    )
+    jenkins_base_url: str = Field(default="", alias="BOSS_JENKINS_BASE_URL")
+    jenkins_user: str = Field(default="", alias="BOSS_JENKINS_USER")
+    jenkins_token: str = Field(default="", alias="BOSS_JENKINS_TOKEN")
+    jenkins_job: str = Field(default="", alias="BOSS_JENKINS_JOB")
+    gitlab_base_url: str = Field(
+        default="https://gitlab.com", alias="BOSS_GITLAB_BASE_URL"
+    )
+    gitlab_token: str = Field(default="", alias="BOSS_GITLAB_TOKEN")
+    gitlab_project_id: str = Field(default="", alias="BOSS_GITLAB_PROJECT_ID")
     sandbox_local_validation_enabled: bool = Field(
         default=False, alias="BOSS_SANDBOX_LOCAL_VALIDATION_ENABLED"
     )

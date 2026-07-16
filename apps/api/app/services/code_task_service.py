@@ -131,7 +131,10 @@ def start_code_task(
     return run_id
 
 
-def retry_code_task(engine, settings: Settings, jobs, run_id: str, *, fix_note: str = "") -> dict:
+def retry_code_task(
+    engine, settings: Settings, jobs, run_id: str, *, fix_note: str = "",
+    profile: Optional[str] = None, repair_retries: Optional[int] = None,
+) -> dict:
     """Resume a failed/blocked code task as a NEW attempt in the same lineage — carrying the prior
     attempt's findings forward as explicit feedback so the agent fixes the identified issues instead
     of regenerating blind. History is preserved: each attempt links to its parent + root run, and
@@ -209,9 +212,10 @@ def retry_code_task(engine, settings: Settings, jobs, run_id: str, *, fix_note: 
             base_branch=spec.get("base_branch") or "main",
             finalize_ctx={"parent_run_id": run_id, "root_run_id": root, "attempt": attempt,
                           "feedback_history": history},
-            jobs=jobs, profile=spec.get("profile"), risk_tier=spec.get("risk_tier"),
+            jobs=jobs, profile=profile or spec.get("profile"), risk_tier=spec.get("risk_tier"),
             model_config=spec.get("model_config"), open_pr=spec.get("open_pr"),
-            repair_retries=spec.get("repair_retries"),
+            repair_retries=(repair_retries if isinstance(repair_retries, int)
+                            else spec.get("repair_retries")),
         )
     return {"status": "queued", "run_id": new_id, "attempt": attempt,
             "parent_run_id": run_id, "root_run_id": root}
@@ -387,6 +391,17 @@ def run_code_task(engine, settings: Settings, jobs, run_id: str) -> dict:
     #    spec and collect the result (run_code_task).
     #  - local provider: the control plane drives the agent against a host sandbox.
     provider = make_sandbox_provider(settings)
+    # Persist the resolved provider, rather than re-deriving it from mutable settings
+    # when an operator later asks where this run actually executed.
+    from .execution_substrate import normalize_build_substrate
+    execution_substrate = normalize_build_substrate(getattr(provider, "kind", "local")).value
+    with begin(engine) as c:
+        c.execute(
+            text("UPDATE code_task_runs SET finalize_ctx=COALESCE(finalize_ctx, '{}'::jsonb) "
+                 "|| jsonb_build_object('execution_substrate', CAST(:s AS text)), updated_at=now() "
+                 "WHERE id=:id"),
+            {"s": execution_substrate, "id": run_id},
+        )
     sandbox = None
     try:
         if hasattr(provider, "run_code_task"):
@@ -497,9 +512,14 @@ def run_code_task(engine, settings: Settings, jobs, run_id: str) -> dict:
             emit_event(c, project_id, "code_task.pr_opened", "boss", "code_task_run", run_id,
                        {"pull_request_url": proposal.get("pull_request_url"),
                         "decision_id": proposal.get("decision_id")})
-        # Success — release the micro-VM to free capacity (failures are retained).
+        # A successful micro-VM is held for the bounded preview window so the app can
+        # be served from the exact build rootfs. The sandbox service reaps the hold.
         if hasattr(provider, "release"):
-            provider.release(getattr(provider, "last_sandbox_task_id", None))
+            sid = getattr(provider, "last_sandbox_task_id", None)
+            if sid and hasattr(provider, "hold"):
+                provider.hold(sid, ttl_seconds=7200, reason="successful build available for preview")
+            else:
+                provider.release(sid)
         return {"status": "completed", "done": True, **proposal}
 
     except (SandboxError, RuntimeError) as exc:

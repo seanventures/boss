@@ -297,3 +297,37 @@ skills:
       fail_closed: true
       override_needs_decision: true
       dedupe_key_template: "coding_pipeline.final_gate:{code_task_run_id}"
+
+  - id: coding_pipeline.generate_ci_config
+    kind: software_factory
+    risk_tier: 2
+    mock_mode: false
+    load: on_demand
+    description: Generate deterministic CI configuration only when repository discovery proves no pipeline exists, then propose it through the governed draft-PR path.
+    data_boundary: internal
+    input_schema:
+      project_id: string
+      repo: string
+      language: string
+      framework: string?
+      target: string
+    output_schema:
+      status: string
+      path: string
+      checksum: string
+      pull_request_url: string?
+    cost:
+      estimator: fixed
+      category: tool
+    retry:
+      max_attempts: 1
+      backoff: none
+    permissions:
+      allowed_callers: [software_factory, release_manager, worker]
+      required_permissions: [github_pr_create]
+    policy:
+      requires_receipt: true
+      requires_pipeline_discovery: true
+      no_direct_default_branch_write: true
+      provider_deploy_stays_resource_plane_gated: true
+      dedupe_key_template: "coding_pipeline.generate_ci_config:{repo}:{target}"

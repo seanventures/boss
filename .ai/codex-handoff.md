@@ -1,6 +1,6 @@
 # Codex Handoff
 
-Last updated: 2026-07-16 (BOSS-48/BOSS-49/BOSS-50/BOSS-55/BOSS-56 local skill marketplace)
+Last updated: 2026-07-16 (v0.7.0 integration of PRs #24–#28)
 
 ## 2026-07-16 local skill marketplace + trust handoff
 
@@ -10,6 +10,15 @@ Last updated: 2026-07-16 (BOSS-48/BOSS-49/BOSS-50/BOSS-55/BOSS-56 local skill ma
 - Project-authorized enable/disable changes affect the next task without restart. A compact on-demand loader attaches only resolver-approved schemas for the remainder of a run. Every invocation re-resolves current project and installed RoleSpec state; forbidden stale calls create normal scope-violation evidence.
 - Validation passes 23 focused marketplace/resolution/runtime/executor tests, 10 focused legacy API runtime/role cases, 41 worker tests, and 112 web tests after preserving the global mock/canary contract; repository lint/typecheck, Python compilation, diff checks, and static/dynamic OpenAPI route checks pass.
 - Implementation commit `2c67f7a` is published in mergeable stacked draft PR #26. Documentation run `29513302734` failed before checkout with zero steps and the explicit GitHub account payment/spending-limit annotation; no branch code executed, so the green local workflow-equivalent evidence is the review gate.
+## 2026-07-16 BOSS-58–62 CI/CD promotion handoff
+
+- Isolated branch `ai/codex/boss-58-62-cicd-promotion` starts at current `origin/main`; parallel contributor `feat/console-vag-explainer`, `feat/model-call-pacing`, and `feat/vag-phase1-refute-panel` branches were inspected and left untouched.
+- Added a shared deterministic ship-narrow/widen transition used by self-improvement and arbitrary DeploymentRuns; customer rollout persistence is idempotent, RBAC-guarded, ChangeSet-aware, health-gated, evented, and stops at `rollback_pending` instead of bypassing Resource Plane provider controls.
+- Added the PipelineAdapter contract and GitHub Actions discovery/dispatch/check verdict implementation. The existing merge gate now consumes `PipelineVerdict`; Jenkins/GitLab remain explicit BOSS-63 stubs.
+- Added deterministic Actions/Jenkins config proposals via the existing governed software-factory PR path. Generated deploy jobs hand off build evidence only and never receive provider credentials.
+- Added a first-class promotion that records pipeline verdict, staging run, real staging health gate, delayed production run, production rollout, failures, and a single ordered timeline; the ProviderOps console polls active promotions every five seconds.
+- Validation: focused Python 7/7, web 113/113, repo lint, production build, smoke, double schema apply, YAML/OpenAPI parse, client contracts, and diff checks pass. Two adjacent budget-dependent tests fail identically on detached `origin/main`; three other deployment registry/health regressions pass.
+- Publication: implementation commit `d5800f6`; mergeable draft PR [#27](https://github.com/seanheiney/boss/pull/27) targets `main`. Plane BOSS-57–62 have linked evidence and remain In Progress pending merge; BOSS-63 is implemented in the stacked preview/feedback follow-on.
 
 ## 2026-07-15 BOSS-118 main integration handoff
 
@@ -276,3 +285,24 @@ Recent gap work (KPI, budget, bootstrap, audit logging, route parity) now has pa
 9. Monitor PR #3; new focused branches if needed (e.g. codex/auto-004-env-release).
 
 Slice complete; accelerating full product with parallel agents.
+
+## Codex handoff — BOSS-35–43 and BOSS-63 (2026-07-16)
+
+- Active branch: `ai/codex/boss-35-43-63-preview-feedback`, stacked on
+  `ai/codex/boss-58-62-cicd-promotion` because BOSS-63 extends its adapter seam.
+- Delivered: restart-safe preview reconciliation; retained-rootfs/Docker/host
+  preview fallback; full path-prefix/SPA/SSE/WebSocket proxy; command detection,
+  classified failures, and streamed logs; normalized build/preview substrate
+  provenance and console badges; durable confirmation-gated feedback threads,
+  completed-task extension, and preview route/element capture; concrete Jenkins
+  and GitLab pipeline adapters.
+- Validation: 15 focused API tests pass, all 113 web tests pass, 160 unaffected
+  backend/worker tests pass, web typecheck and focused Ruff/compile/diff checks
+  pass. The monolithic legacy `test_api.py` baseline still fails representative
+  auth, Metatron, and ProviderOps expectations; all three reproduce on detached
+  base `f626511` with a separate Postgres instance and are not caused here.
+- Do not duplicate this module while the stacked draft PR is open. Plane
+  BOSS-34/35–43 and BOSS-63 remain In Progress until merge.
+- Draft PR: https://github.com/seanheiney/boss/pull/28 at commit `1eb1d36`.
+  Merge https://github.com/seanheiney/boss/pull/27 first, then retarget #28 to
+  `main`; attach the merge commit and move the selected Plane issues to Done.

@@ -1,11 +1,11 @@
 # BOSS Autonomous Delivery Status
 
-**Last updated**: 2026-07-16 (BOSS-48/BOSS-49/BOSS-50/BOSS-55/BOSS-56 local marketplace validated)
+**Last updated**: 2026-07-16 (v0.7.0 integration of PRs #24–#28)
 **Repo root**: /Volumes/DataSSD1/test/boss
 **Git remote**: https://github.com/seanheiney/boss
-**Current branch**: ai/codex/boss-48-50-55-56-skill-marketplace
-**Base branch**: ai/codex/boss-47-53-54-skill-resolution / draft PR #25
-**Product**: BOSS v0.4.1 target (Business Operating System Sentinel)
+**Current branch**: ai/codex/release-v0.7.0
+**Base branch**: origin/main
+**Product**: BOSS v0.7.0 target (Business Operating System Sentinel)
 **Mission**: Complete product to production-grade, tested, documented, pushed, Codex-coordinated, ready for real users. Grind until all discovered PRD/spec features satisfy world-class DoD or truly blocked.
 
 ## Discovered Spec Sources (see .ai/spec-index.md)
@@ -15,6 +15,9 @@
 
 ## Overall Product Status
 - OSS skill marketplace P1 is implemented for Plane BOSS-48/BOSS-49/BOSS-50/BOSS-55/BOSS-56: MCP tools share the SkillRuntime gauntlet and receipt ledger; local canonical bundles import/export SkillSpecs and MCP descriptors; Ed25519 trust and explicit untrusted overrides are enforced; per-project enable/disable and lazy attachment are live; current installed RoleSpecs are filtered and rechecked on the invocation hot path with scope-violation evidence. Mergeable draft PR #26 is stacked on PR #25. Its Documentation job ran zero steps and was rejected by the external GitHub account payment/spending-limit gate; local workflow-equivalent validation is green.
+- BOSS-58–62 implement the CI/CD module's first five dependency-ordered slices: a shared health-gated rollout state machine for arbitrary DeploymentRuns, a GitHub Actions implementation of the provider-neutral pipeline contract, deterministic CI/Jenkins config generation through the existing budgeted/Receipted draft-PR path, a fail-closed staging→health-gate→production promotion entity, and a live console timeline. Jenkins/GitLab execution remains the separately tracked BOSS-63 follow-on.
+- Validation for this slice: 7 focused Python acceptance/regression tests, 113 web tests, repository lint, production web build, smoke, double schema application, YAML/OpenAPI parsing, and diff checks pass. Three adjacent ProviderOps tests pass; two budget-dependent legacy tests reproduce their unchanged `reservation_id=None` failure on detached `origin/main` and are not caused by this branch.
+- Publication: implementation commit `d5800f6` is pushed in mergeable draft PR [#27](https://github.com/seanheiney/boss/pull/27). Plane BOSS-57–62 contain the commit, PR, validation, risk, and pending-merge evidence and remain In Progress until merge.
 - BOSS-118 integrates every unmerged Codex feature stack from current `origin/main`: reactive docs/webhooks, docs agent/site, GitHub community automation, conversational orchestration, executable skill registry, BOSS-112 design system, and bare-metal deployment readiness. Parallel contributor `feat/*` branches remain excluded. Semantic conflicts were resolved as unions, including 10 default reactive subscriptions, both docs/GitHub worker paths, the agent panel inside the new Phosphor design navigation, and OpenAI-compatible chat fallback with retry telemetry.
 - Integrated validation: `make lint`, production `make build`, `make smoke`, strict `make docs`, `make k8s-validate`, `make infra-validate`, and `make deps-audit` complete. Web tests pass 112/112; the Python run passes 388/425, with all 37 failures confined to the documented legacy `test_api.py` baseline. Representative auth, ProviderOps, and budget failures reproduce unchanged on detached `origin/main`. External release readiness remains deliberately fail-closed without hosted identity/provider credentials.
 - Reactive feature documentation advanced on 2026-07-15: Plane BOSS-73/BOSS-74/BOSS-75 now provide allowlisted and manual entity-debounced `docs.update` jobs, evidence/context assembly, a validated `docs_writer` role, managed Markdown preservation, a budgeted/Receipted stable-branch draft PR path, TRACEABILITY reconciliation, feature freshness, worker retry/deadletter handling, and no automatic merge. Validation: 7 docs-agent tests, 7 reactive regressions, 27 worker tests, focused Ruff/compile/YAML, generator drift, and strict MkDocs all pass.
@@ -111,3 +114,13 @@ See .ai/requirements-traceability.md for full matrix + status "Yes" for local.
 - Modified this Security rate task: apps/api/app/config.py, apps/api/app/main.py, apps/api/tests/test_api.py, apps/api/tests/conftest.py, api/openapi.yaml, .ai/gap-backlog.md, .ai/security-review.md, .ai/agents/security.md, .ai/status.md, .ai/codex-handoff.md, .ai/activity-log.md (plus prior)
 
 See activity-log.md for chronological.
+
+## 2026-07-16 — preview/feedback/pipeline slice
+
+BOSS-35–43 and BOSS-63 are implementation-complete on
+`ai/codex/boss-35-43-63-preview-feedback`. Focused acceptance, full web, and all
+backend/worker tests outside the inherited failing legacy API matrix are green.
+Commit `1eb1d36` is published in stacked draft PR
+https://github.com/seanheiney/boss/pull/28 (base: PR #27 branch). Plane evidence
+is attached; tickets stay In Progress until merge. The inherited API matrix
+baseline is tracked separately as BOSS-119.

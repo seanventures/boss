@@ -4,7 +4,13 @@ import { useState, useEffect, useActionState } from "react";
 import { useRouter } from "next/navigation";
 import type { CodeTaskRun, PreviewRec } from "@boss/api-client";
 
-import { createCodeTaskAction, retryCodeTaskAction, startPreviewAction, overrideCodeTaskAction } from "./actions";
+import {
+  confirmCodeTaskFeedbackAction,
+  createCodeTaskAction,
+  startPreviewAction,
+  submitCodeTaskFeedbackAction,
+  overrideCodeTaskAction,
+} from "./actions";
 import { Markdown } from "./markdown";
 
 function OverrideControls({ runId }: { runId: string }) {
@@ -27,6 +33,36 @@ function OverrideControls({ runId }: { runId: string }) {
 
 const PREVIEW_API = process.env.NEXT_PUBLIC_BOSS_API_URL ?? "";
 
+function PreviewLogs({ previewId }: { previewId: string }) {
+  const [open, setOpen] = useState(false);
+  const [log, setLog] = useState("");
+  useEffect(() => {
+    if (!open) return;
+    const source = new EventSource(
+      `${PREVIEW_API}/v1/previews/${encodeURIComponent(previewId)}/logs`,
+    );
+    source.addEventListener("log", (event) => {
+      try { setLog((current) => (current + JSON.parse((event as MessageEvent).data)).slice(-12000)); }
+      catch { setLog((current) => (current + (event as MessageEvent).data).slice(-12000)); }
+    });
+    source.addEventListener("end", () => source.close());
+    source.onerror = () => source.close();
+    return () => source.close();
+  }, [open, previewId]);
+  return (
+    <span>
+      <button type="button" className="cap-btn" onClick={() => setOpen((value) => !value)}>
+        {open ? "Hide startup logs" : "Startup logs"}
+      </button>
+      {open ? (
+        <pre style={{ width: "min(720px, 86vw)", maxHeight: 220, overflow: "auto", whiteSpace: "pre-wrap", marginTop: 8 }}>
+          {log || "Waiting for preview output…"}
+        </pre>
+      ) : null}
+    </span>
+  );
+}
+
 function PreviewControls({ runId, livePreviews = [] }: { runId: string; livePreviews?: PreviewRec[] }) {
   const [state, action, pending] = useActionState(startPreviewAction, null);
   return (
@@ -37,7 +73,13 @@ function PreviewControls({ runId, livePreviews = [] }: { runId: string; livePrev
       </form>
       {/* Persistent link(s) from the durable preview record — survive the console's auto-refresh */}
       {livePreviews.map((p) => (
-        <a key={p.id} className="cap-btn primary" href={`${PREVIEW_API}/v1/previews/${encodeURIComponent(p.id)}/web/`} target="_blank" rel="noreferrer">Open preview ↗</a>
+        <span key={p.id} style={{ display: "inline-flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+          <a className="cap-btn primary" href={`${PREVIEW_API}/v1/previews/${encodeURIComponent(p.id)}/web/`} target="_blank" rel="noreferrer">Open preview ↗</a>
+          <span className="cap-badge tone-blue">
+            preview: {p.substrate === "preview_rootfs" ? "retained rootfs" : p.substrate === "preview_docker" ? "docker" : "host process"}
+          </span>
+          <PreviewLogs previewId={p.id} />
+        </span>
       ))}
       {/* Freshly-started link (shows instantly, before the record is re-fetched) */}
       {state?.url && livePreviews.length === 0 ? (
@@ -48,24 +90,55 @@ function PreviewControls({ runId, livePreviews = [] }: { runId: string; livePrev
   );
 }
 
-// Retry / iterate: re-runs the SAME task on its existing code (same branch + PR),
-// feeding the operator's feedback + any prior findings to the model so it builds on
-// prior work instead of starting fresh. Available on any terminal state.
-function RetryControls({ runId, status }: { runId: string; status: string }) {
-  const completed = status === "completed";
+function ConfirmFeedback({ threadId }: { threadId: string }) {
+  const [state, action, pending] = useActionState(confirmCodeTaskFeedbackAction, null);
   return (
-    <form action={retryCodeTaskAction}
-          style={{ display: "flex", gap: 6, flexDirection: "column", maxWidth: 560 }}>
-      <input type="hidden" name="run_id" value={runId} />
-      <textarea name="fix_note" className="cap-input" rows={2}
-        placeholder={completed
-          ? "What should BOSS fix or improve? (bugs, missing features, tweaks) — it iterates on the SAME code with this feedback"
-          : "Optional extra guidance for the retry (prior findings are carried forward automatically)"}
-        style={{ minWidth: 320, resize: "vertical" }} />
-      <button className="cap-btn" style={{ alignSelf: "flex-start" }}>
-        {completed ? "↻ Iterate with feedback" : "↻ Retry with feedback"}
+    <form action={action} style={{ display: "flex", alignItems: "center", gap: 8 }}>
+      <input type="hidden" name="thread_id" value={threadId} />
+      <button className="cap-btn primary" disabled={pending}>
+        {pending ? "Dispatching…" : "Confirm & dispatch governed iteration"}
       </button>
+      {state?.run_id ? <span className="detail" style={{ color: "#3fb950" }}>Queued {state.run_id}</span> : null}
+      {state?.error ? <span className="detail" style={{ color: "#f85149" }}>{state.error}</span> : null}
     </form>
+  );
+}
+
+// Feedback is conversational and confirmation-gated. The agent clarifies vague
+// requests, structures the fix, classifies its scope, then reuses the same branch/PR.
+function FeedbackControls({ runId, status, anchor = "" }: { runId: string; status: string; anchor?: string }) {
+  const completed = status === "completed";
+  const [state, action, pending] = useActionState(submitCodeTaskFeedbackAction, null);
+  return (
+    <div style={{ display: "grid", gap: 8, maxWidth: 680 }}>
+      <div className="ct-block-title">
+        {completed ? "Extend this completed task on its existing PR" : "Diagnose and retry with feedback"}
+      </div>
+      <form action={action} style={{ display: "grid", gap: 7 }}>
+        <input type="hidden" name="run_id" value={runId} />
+        <input type="hidden" name="anchor" value={anchor} />
+        <textarea name="message" className="cap-input" rows={2} required
+          placeholder={completed
+            ? "Describe the behavior to add or change. The agent will clarify and propose a scoped extension."
+            : "Describe what failed or should change. Prior findings are carried forward automatically."}
+          style={{ minWidth: 320, resize: "vertical" }} />
+        <input name="expected" className="cap-input" placeholder="Expected behavior (helps avoid a clarification round)" />
+        <button className="cap-btn" disabled={pending} style={{ justifySelf: "start" }}>
+          {pending ? "Reviewing feedback…" : completed ? "Propose extension" : "Propose retry"}
+        </button>
+      </form>
+      {state?.question ? (
+        <div className="detail" style={{ color: "#d29922" }}>Agent question: {state.question}</div>
+      ) : null}
+      {state?.proposal ? (
+        <div style={{ display: "grid", gap: 8, padding: 10, border: "1px solid rgba(88,166,255,.35)", borderRadius: 8 }}>
+          <span className="cap-badge tone-blue">{state.proposal.classification.replace("_", " ")}</span>
+          <pre style={{ whiteSpace: "pre-wrap", margin: 0 }}>{state.proposal.fix_note}</pre>
+          {state.thread_id ? <ConfirmFeedback threadId={state.thread_id} /> : null}
+        </div>
+      ) : null}
+      {state?.error ? <span className="detail" style={{ color: "#f85149" }}>{state.error}</span> : null}
+    </div>
   );
 }
 
@@ -229,6 +302,11 @@ function CodeTaskDetail({ run, previews = [], onBack }: { run: CodeTaskRun; prev
         <span><b>Model</b> {run.usage?.model ?? "—"}</span>
         <span><b>Cost</b> {fmtUsd(st.cost_usd_micros ?? run.usage?.cost_usd_micros)}</span>
         <span><b>Turns</b> {st.turns ?? "—"}</span>
+        <span className="cap-badge tone-blue">
+          built: {(run.finalize_ctx?.execution_substrate ?? st.substrate) === "microvm"
+            ? `micro-VM ${run.finalize_ctx?.sandbox_task_id ?? ""}`.trim()
+            : "API host"}
+        </span>
       </div>
 
       <Flow phase={run.phase} status={run.status} />
@@ -386,7 +464,11 @@ function CodeTaskDetail({ run, previews = [], onBack }: { run: CodeTaskRun; prev
         {/* Separate row: iterate on the same task with feedback */}
         {(run.status === "completed" || run.status === "failed" || run.status === "blocked") ? (
           <div style={{ marginTop: 12, paddingTop: 12, borderTop: "1px solid rgba(255,255,255,0.09)" }}>
-            <RetryControls runId={run.id} status={run.status} />
+            <FeedbackControls
+              runId={run.id}
+              status={run.status}
+              anchor={livePreviews[0] ? `/v1/previews/${livePreviews[0].id}/web/` : ""}
+            />
           </div>
         ) : null}
         {(run.status === "failed" || run.status === "blocked") ? (

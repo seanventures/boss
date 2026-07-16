@@ -11,6 +11,11 @@ from ..config import Settings
 from ..db import begin
 from .core import create_artifact, emit_event, make_id, now_utc
 from .intake import CommandIntakeService
+from .deployment_rollout_engine import (
+    advance_rollout_state,
+    build_rollout_state,
+    rollout_regression_reason,
+)
 
 # Default staged-rollout ladder for the self-improvement runtime: ship narrow, then widen, with a
 # health observation gating each step. Auto-rollback trips if an observation regresses past the cap.
@@ -487,13 +492,7 @@ class SelfImprovementService:
             else list(DEFAULT_ROLLOUT_STAGES)
         )
         thresholds = {**DEFAULT_ROLLOUT_THRESHOLDS, **(thresholds or {})}
-        rollout_state = {
-            "stages": stages,
-            "current_index": 0,
-            "status": "in_progress",
-            "thresholds": thresholds,
-            "history": [],
-        }
+        rollout_state = build_rollout_state(stages, thresholds)
         timestamp = now_utc()
         connection.execute(
             text(
@@ -544,25 +543,15 @@ class SelfImprovementService:
             )
         state = dict(proposal.get("rollout_state") or {})
         stages = state.get("stages") or list(DEFAULT_ROLLOUT_STAGES)
-        index = int(state.get("current_index", 0))
-        thresholds = state.get("thresholds") or dict(DEFAULT_ROLLOUT_THRESHOLDS)
-        current_stage = stages[index] if index < len(stages) else stages[-1]
-        history = list(state.get("history") or [])
         timestamp = now_utc()
-
-        regression = self._rollout_regression(observation, thresholds)
+        state, transition = advance_rollout_state(
+            state,
+            observation,
+            observed_at=timestamp.isoformat(),
+        )
+        current_stage = str(transition["from_stage"])
+        regression = transition["reason"]
         if regression is not None:
-            history.append(
-                {
-                    "stage": current_stage,
-                    "observation": observation,
-                    "result": "rolled_back",
-                    "reason": regression,
-                    "at": timestamp.isoformat(),
-                }
-            )
-            state["history"] = history
-            state["status"] = "rolled_back"
             reason = f"Auto-rollback at stage {current_stage}: {regression}"
             self._record_rollback(
                 connection,
@@ -585,19 +574,8 @@ class SelfImprovementService:
             )
             return self.get_proposal(connection, proposal_id)
 
-        history.append(
-            {
-                "stage": current_stage,
-                "observation": observation,
-                "result": "advanced",
-                "at": timestamp.isoformat(),
-            }
-        )
-        next_index = index + 1
-        state["history"] = history
-        if next_index >= len(stages):
-            state["current_index"] = len(stages)
-            state["status"] = "completed"
+        history = list(state["history"])
+        if transition["status"] == "completed":
             summary = f"Staged rollout completed ({len(stages)} stages, all healthy)."
             self._finalize_rollout(
                 connection,
@@ -620,8 +598,7 @@ class SelfImprovementService:
             )
             return self.get_proposal(connection, proposal_id)
 
-        state["current_index"] = next_index
-        next_stage = stages[next_index]
+        next_stage = str(transition["to_stage"])
         connection.execute(
             text(
                 """
@@ -654,20 +631,7 @@ class SelfImprovementService:
         self, observation: dict[str, Any], thresholds: dict[str, Any]
     ) -> Optional[str]:
         """Return a reason string if the observation breaches an auto-rollback threshold, else None."""
-        health = str(observation.get("health", "")).strip().lower()
-        if health in {"degraded", "unhealthy", "failing", "fail"}:
-            return f"health={health}"
-        if observation.get("regression") is True:
-            return "regression_flag"
-        error_rate = observation.get("error_rate")
-        max_error_rate = thresholds.get("max_error_rate")
-        if error_rate is not None and max_error_rate is not None:
-            try:
-                if float(error_rate) > float(max_error_rate):
-                    return f"error_rate {error_rate} > {max_error_rate}"
-            except (TypeError, ValueError):
-                pass
-        return None
+        return rollout_regression_reason(observation, thresholds)
 
     def record_rollout(
         self,

@@ -15,6 +15,7 @@ vi.mock("../lib/client", () => ({
     listDeploymentTargets: vi.fn(),
     listDeploymentEnvironmentPolicies: vi.fn(),
     listDeploymentRuns: vi.fn(),
+    listDeploymentPromotions: vi.fn(),
     listProviderHealth: vi.fn(),
     listDriftReports: vi.fn(),
     listReconciliationRuns: vi.fn(),
@@ -206,6 +207,48 @@ describe("ProviderOps feed", async () => {
         },
       ],
     });
+    vi.mocked(client.listDeploymentPromotions).mockResolvedValueOnce({
+      project_id: "boss-dogfood",
+      items: [
+        {
+          id: "prom_1",
+          project_id: "boss-dogfood",
+          app_name: "BOSS",
+          repo: "seanheiney/boss",
+          commit_ref: "abc123",
+          staging_target_id: "dt_staging",
+          production_target_id: "dt_production",
+          staging_deployment_run_id: "deprun_1",
+          pipeline_provider: "github_actions",
+          pipeline_descriptor: { configured: true },
+          pipeline_verdict: { status: "passed" },
+          gate_result: { status: "waiting" },
+          status: "staging_planned",
+          created_by: "release_manager",
+          created_at: "2026-06-03T12:00:00Z",
+          updated_at: "2026-06-03T12:00:00Z",
+          staging_deployment_run: {
+            id: "deprun_1",
+            project_id: "boss-dogfood",
+            deployment_target_id: "dt_1",
+            app_name: "BOSS",
+            environment: "staging",
+            repo: "seanheiney/boss",
+            target_kind: "digitalocean_app",
+            target_ref: "app",
+            status: "created",
+            release_packet: {},
+            health_check_results: [],
+            rollback_plan: ["previous release"],
+            release_receipt_ids: [],
+            created_by: "ceo",
+            created_at: "2026-06-03T12:00:00Z",
+            updated_at: "2026-06-03T12:00:00Z",
+          },
+          timeline: [],
+        },
+      ],
+    });
     vi.mocked(client.listProviderHealth).mockResolvedValueOnce({
       project_id: "boss-dogfood",
       items: [
@@ -360,6 +403,12 @@ describe("ProviderOps feed", async () => {
       environment: "staging",
       runtimeMode: "staging_allowed",
       requiresBudgetReservation: true,
+    });
+    expect(feed.deploymentPromotions[0]).toMatchObject({
+      appName: "BOSS",
+      pipelineStatus: "passed",
+      gateStatus: "waiting",
+      stagingRunStatus: "created",
     });
   });
 

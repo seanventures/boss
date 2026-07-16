@@ -1270,6 +1270,49 @@ CREATE INDEX IF NOT EXISTS idx_deployment_runs_project
   ON deployment_runs(project_id, status, created_at DESC);
 ALTER TABLE deployment_runs ADD COLUMN IF NOT EXISTS decision_id TEXT REFERENCES decisions(id);
 
+-- Generalized customer-app rollout state reuses the existing deployment_rollouts
+-- ledger while linking each new rollout to its ProviderOps DeploymentRun.
+ALTER TABLE deployment_rollouts
+  ADD COLUMN IF NOT EXISTS deployment_run_id TEXT REFERENCES deployment_runs(id);
+ALTER TABLE deployment_rollouts
+  ADD COLUMN IF NOT EXISTS promotion_id TEXT;
+ALTER TABLE deployment_rollouts
+  ADD COLUMN IF NOT EXISTS rollback_reason TEXT;
+ALTER TABLE deployment_rollouts
+  ADD COLUMN IF NOT EXISTS health_observations JSONB NOT NULL DEFAULT '[]'::jsonb;
+ALTER TABLE deployment_rollouts
+  ADD COLUMN IF NOT EXISTS started_at TIMESTAMPTZ;
+ALTER TABLE deployment_rollouts
+  ADD COLUMN IF NOT EXISTS finished_at TIMESTAMPTZ;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_deployment_rollouts_deployment_run
+  ON deployment_rollouts(deployment_run_id)
+  WHERE deployment_run_id IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS deployment_promotions (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  app_name TEXT NOT NULL,
+  repo TEXT NOT NULL,
+  commit_ref TEXT NOT NULL,
+  staging_target_id TEXT NOT NULL REFERENCES deployment_targets(id),
+  production_target_id TEXT NOT NULL REFERENCES deployment_targets(id),
+  staging_deployment_run_id TEXT REFERENCES deployment_runs(id),
+  production_deployment_run_id TEXT REFERENCES deployment_runs(id),
+  production_rollout_id TEXT REFERENCES deployment_rollouts(id),
+  pipeline_provider TEXT NOT NULL,
+  pipeline_descriptor JSONB NOT NULL DEFAULT '{}'::jsonb,
+  pipeline_verdict JSONB NOT NULL DEFAULT '{}'::jsonb,
+  gate_result JSONB NOT NULL DEFAULT '{}'::jsonb,
+  status TEXT NOT NULL DEFAULT 'created',
+  failure_reason TEXT,
+  created_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  completed_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_deployment_promotions_project
+  ON deployment_promotions(project_id, status, created_at DESC);
+
 CREATE TABLE IF NOT EXISTS changeset_operations (
   id TEXT PRIMARY KEY,
   project_id TEXT NOT NULL REFERENCES projects(id),
@@ -2019,16 +2062,48 @@ CREATE TABLE IF NOT EXISTS app_previews (
   port INTEGER,
   url TEXT,
   pid INTEGER,
-  mode TEXT NOT NULL DEFAULT 'process',       -- process | docker
+  mode TEXT NOT NULL DEFAULT 'process',       -- process | docker | rootfs
   container_id TEXT,                           -- docker container id (mode=docker)
+  substrate TEXT NOT NULL DEFAULT 'preview_host', -- preview_host|preview_docker|preview_rootfs
+  build_substrate TEXT,                        -- local_subprocess|microvm
+  sandbox_task_id TEXT,                        -- retained rootfs backing a rootfs preview
   status TEXT NOT NULL DEFAULT 'starting',   -- starting|running|failed|stopped|expired
+  failure_kind TEXT,                           -- clone_failed|command_missing|boot_crash|port_timeout
   error TEXT,
   log_path TEXT,
   expires_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+ALTER TABLE app_previews ADD COLUMN IF NOT EXISTS substrate TEXT NOT NULL DEFAULT 'preview_host';
+ALTER TABLE app_previews ADD COLUMN IF NOT EXISTS build_substrate TEXT;
+ALTER TABLE app_previews ADD COLUMN IF NOT EXISTS sandbox_task_id TEXT;
+ALTER TABLE app_previews ADD COLUMN IF NOT EXISTS failure_kind TEXT;
 CREATE INDEX IF NOT EXISTS idx_app_previews_project ON app_previews (project_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_app_previews_run ON app_previews (run_id);
+
+-- Durable, per-lineage feedback conversation.  Dispatch is confirmation-gated;
+-- messages preserve the operator request, clarification, proposal and retry link.
+CREATE TABLE IF NOT EXISTS feedback_threads (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  root_run_id TEXT NOT NULL UNIQUE,
+  status TEXT NOT NULL DEFAULT 'open',
+  pending_proposal JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS feedback_messages (
+  id TEXT PRIMARY KEY,
+  thread_id TEXT NOT NULL REFERENCES feedback_threads(id) ON DELETE CASCADE,
+  role TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  content TEXT NOT NULL,
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+  resulting_run_id TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_feedback_messages_thread
+  ON feedback_messages (thread_id, created_at);
 
 -- Discovery pipeline: research-driven outcome discovery (signal sweep -> synthesize -> vet ->
 -- shape -> evidence gate). state holds the cited Discovery Dossier + candidate outcomes.

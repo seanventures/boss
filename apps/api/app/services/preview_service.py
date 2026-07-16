@@ -28,8 +28,15 @@ from ..config import Settings
 from ..db import begin
 from .code_task_service import load_code_task_run
 from .core import emit_event, make_id
+from .execution_substrate import ExecutionSubstrate, normalize_build_substrate
+from .sandbox_provider import MicroVMProvider
 
 PREVIEW_ROOT = Path(os.environ.get("BOSS_PREVIEW_ROOT", "/tmp/boss-previews"))
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
 
 
 def _free_port() -> int:
@@ -41,14 +48,43 @@ def _free_port() -> int:
 
 
 def _detect_command(workdir: Path) -> Optional[list[str]]:
-    """Heuristically determine how to start the app. Apps that read PORT/HOST from env get
-    the allocated port; others (e.g. a hardcoded port) are discovered post-launch via lsof."""
+    """Detect the repo's declared preview command before falling back to stack hints."""
+    hint = workdir / "boss.preview.command"
+    if hint.is_file() and hint.read_text(errors="ignore").strip():
+        return ["sh", "-lc", hint.read_text(errors="ignore").strip()]
+    package = workdir / "package.json"
+    if package.is_file():
+        try:
+            payload = json.loads(package.read_text())
+        except (OSError, json.JSONDecodeError):
+            payload = {}
+        configured = ((payload.get("boss") or {}).get("preview") or {}).get("command")
+        if isinstance(configured, str) and configured.strip():
+            return ["sh", "-lc", configured.strip()]
+        scripts = payload.get("scripts") or {}
+        script = "dev" if scripts.get("dev") else "start" if scripts.get("start") else None
+        if script:
+            suffix = " -- --host 0.0.0.0" if script == "dev" else ""
+            return [
+                "sh", "-lc",
+                "npm install --no-audit --no-fund --loglevel=error && "
+                f"npm run {script}{suffix}",
+            ]
+    procfile = workdir / "Procfile"
+    if procfile.is_file():
+        for line in procfile.read_text(errors="ignore").splitlines():
+            kind, sep, command = line.partition(":")
+            if sep and kind.strip().lower() == "web" and command.strip():
+                return ["sh", "-lc", command.strip()]
+    makefile = workdir / "Makefile"
+    if makefile.is_file():
+        content = makefile.read_text(errors="ignore")
+        for target in ("dev", "run"):
+            if re.search(rf"(?m)^{target}\s*:", content):
+                return ["make", target]
     for entry in ("server.py", "app.py", "wsgi.py", "main.py"):
         if (workdir / entry).exists():
             return ["python3", entry]
-    if (workdir / "package.json").exists():
-        return ["sh", "-c", "npm install --no-audit --no-fund --loglevel=error && "
-                "(npm run build --if-present || true) && npm run start"]
     return None
 
 
@@ -63,14 +99,31 @@ def _descendant_pids(pid: int) -> list[int]:
     return pids
 
 
-def _http_ok(port: int) -> bool:
+def _url_ok(url: str, *, headers: Optional[dict[str, str]] = None) -> bool:
     try:
-        urllib.request.urlopen(f"http://127.0.0.1:{port}", timeout=2)
-        return True
+        request = urllib.request.Request(url, headers=headers or {})
+        response = urllib.request.urlopen(request, timeout=2)
+        return 200 <= int(response.status) < 400
     except urllib.error.HTTPError:
-        return True  # any HTTP response (even 4xx) means the app is serving
+        # A framework error page is not a healthy preview.
+        return False
     except Exception:
         return False
+
+
+def _http_ok(port: int) -> bool:
+    return _url_ok(f"http://127.0.0.1:{port}")
+
+
+def _classify_start_failure(message: str) -> tuple[str, str]:
+    lowered = message.lower()
+    if "clone" in lowered:
+        return "clone_failed", "Check repository access and the task branch, then retry."
+    if "detect" in lowered or "command" in lowered:
+        return "command_missing", "Add boss.preview.command or retry with an explicit command."
+    if "did not serve" in lowered or "port" in lowered:
+        return "port_timeout", "Inspect startup logs, ensure HOST/PORT are honored, or retry in Docker mode."
+    return "boot_crash", "Inspect startup logs and retry in Docker mode."
 
 
 def _candidate_ports(log_path: str, port_hint: int) -> list[int]:
@@ -124,6 +177,9 @@ def start_preview(engine, settings: Settings, run_id: str, *, ttl_minutes: int =
     # id may have no branch. Prefer an explicit work_branch, else the root-derived one.
     _fctx = run.get("finalize_ctx") or {}
     branch = _fctx.get("work_branch") or f"boss/code/{_fctx.get('root_run_id') or run_id}"
+    build_substrate = _fctx.get("execution_substrate") or normalize_build_substrate(
+        settings.sandbox_provider
+    ).value
     project_id = run["project_id"]
     preview_id = make_id("prev")
 
@@ -132,13 +188,18 @@ def start_preview(engine, settings: Settings, run_id: str, *, ttl_minutes: int =
     log_path = str(workdir / "_preview.log")
 
     def _fail(msg: str) -> dict:
+        failure_kind, suggested_action = _classify_start_failure(msg)
         with begin(engine) as c:
             c.execute(text(
-                "INSERT INTO app_previews (id,project_id,run_id,repo,branch,status,error,log_path,expires_at) "
-                "VALUES (:id,:p,:r,:repo,:b,'failed',:e,:lg,now())"),
+                "INSERT INTO app_previews (id,project_id,run_id,repo,branch,substrate,build_substrate,"
+                "status,error,failure_kind,log_path,expires_at) "
+                "VALUES (:id,:p,:r,:repo,:b,:sub,:build,'failed',:e,:fk,:lg,now())"),
                 {"id": preview_id, "p": project_id, "r": run_id, "repo": f"{owner}/{repo}",
-                 "b": branch, "e": msg[:500], "lg": log_path})
-        return {"id": preview_id, "status": "failed", "error": msg}
+                 "b": branch, "sub": ExecutionSubstrate.PREVIEW_HOST.value,
+                 "build": build_substrate, "e": msg[:500], "fk": failure_kind,
+                 "lg": log_path})
+        return {"id": preview_id, "status": "failed", "error": msg,
+                "failure_kind": failure_kind, "suggested_action": suggested_action}
 
     token = settings.github_token
     clone_url = (f"https://x-access-token:{token}@github.com/{owner}/{repo}.git"
@@ -150,13 +211,17 @@ def start_preview(engine, settings: Settings, run_id: str, *, ttl_minutes: int =
 
     command = _detect_command(workdir)
     if not command:
-        return _fail("could not detect how to run the app (no server.py/app.py/main.py/package.json)")
+        return _fail(
+            "could not detect a preview command (add boss.preview.command, a package.json "
+            "dev/start script, Procfile web command, Makefile dev/run target, or Python entrypoint)"
+        )
 
     port_hint = _free_port()
     env = {**os.environ, "PORT": str(port_hint), "HOST": "0.0.0.0", "PYTHONUNBUFFERED": "1"}
     logf = open(log_path, "w")
     proc = subprocess.Popen(command, cwd=str(workdir), env=env, stdout=logf, stderr=subprocess.STDOUT,
                             stdin=subprocess.DEVNULL, start_new_session=True)
+    logf.close()
 
     port = _discover_working_port(log_path, port_hint)
     if port is None:
@@ -172,16 +237,20 @@ def start_preview(engine, settings: Settings, run_id: str, *, ttl_minutes: int =
     expires = datetime.now(timezone.utc) + timedelta(minutes=ttl_minutes)
     with begin(engine) as c:
         c.execute(text(
-            "INSERT INTO app_previews (id,project_id,run_id,repo,branch,command,port,url,pid,status,log_path,expires_at) "
-            "VALUES (:id,:p,:r,:repo,:b,:cmd,:port,:url,:pid,'running',:lg,:exp)"),
+            "INSERT INTO app_previews (id,project_id,run_id,repo,branch,command,port,url,pid,"
+            "substrate,build_substrate,status,log_path,expires_at) "
+            "VALUES (:id,:p,:r,:repo,:b,:cmd,:port,:url,:pid,:sub,:build,'running',:lg,:exp)"),
             {"id": preview_id, "p": project_id, "r": run_id, "repo": f"{owner}/{repo}", "b": branch,
              "cmd": " ".join(command), "port": port, "url": url, "pid": proc.pid,
+             "sub": ExecutionSubstrate.PREVIEW_HOST.value, "build": build_substrate,
              "lg": log_path, "exp": expires})
         emit_event(c, project_id, "app_preview.started", "operator", "app_preview", preview_id,
                    {"run_id": run_id, "url": url, "repo": f"{owner}/{repo}", "branch": branch})
     return {"id": preview_id, "status": "running", "url": url, "port": port,
             "pid": proc.pid, "expires_at": expires.isoformat(), "run_id": run_id,
-            "repo": f"{owner}/{repo}", "branch": branch}
+            "repo": f"{owner}/{repo}", "branch": branch,
+            "substrate": ExecutionSubstrate.PREVIEW_HOST.value,
+            "build_substrate": build_substrate}
 
 
 def _generate_dockerfile(workdir: Path) -> int:
@@ -228,6 +297,9 @@ def start_container_preview(engine, settings: Settings, run_id: str, *, ttl_minu
     # id may have no branch. Prefer an explicit work_branch, else the root-derived one.
     _fctx = run.get("finalize_ctx") or {}
     branch = _fctx.get("work_branch") or f"boss/code/{_fctx.get('root_run_id') or run_id}"
+    build_substrate = _fctx.get("execution_substrate") or normalize_build_substrate(
+        settings.sandbox_provider
+    ).value
     project_id = run["project_id"]
     preview_id = make_id("prev")
     tag = f"boss-prev-{preview_id.replace('_', '-').lower()}"
@@ -235,13 +307,17 @@ def start_container_preview(engine, settings: Settings, run_id: str, *, ttl_minu
     workdir = Path(tempfile.mkdtemp(prefix=f"{preview_id}-", dir=str(PREVIEW_ROOT)))
 
     def _fail(msg: str) -> dict:
+        failure_kind, suggested_action = _classify_start_failure(msg)
         with begin(engine) as c:
             c.execute(text(
-                "INSERT INTO app_previews (id,project_id,run_id,repo,branch,mode,status,error,expires_at) "
-                "VALUES (:id,:p,:r,:repo,:b,'docker','failed',:e,now())"),
+                "INSERT INTO app_previews (id,project_id,run_id,repo,branch,mode,substrate,"
+                "build_substrate,status,error,failure_kind,expires_at) "
+                "VALUES (:id,:p,:r,:repo,:b,'docker',:sub,:build,'failed',:e,:fk,now())"),
                 {"id": preview_id, "p": project_id, "r": run_id, "repo": f"{owner}/{repo}",
-                 "b": branch, "e": msg[:500]})
-        return {"id": preview_id, "status": "failed", "error": msg, "mode": "docker"}
+                 "b": branch, "sub": ExecutionSubstrate.PREVIEW_DOCKER.value,
+                 "build": build_substrate, "e": msg[:500], "fk": failure_kind})
+        return {"id": preview_id, "status": "failed", "error": msg, "mode": "docker",
+                "failure_kind": failure_kind, "suggested_action": suggested_action}
 
     token = settings.github_token
     clone_url = (f"https://x-access-token:{token}@github.com/{owner}/{repo}.git"
@@ -285,15 +361,190 @@ def start_container_preview(engine, settings: Settings, run_id: str, *, ttl_minu
     expires = datetime.now(timezone.utc) + timedelta(minutes=ttl_minutes)
     with begin(engine) as c:
         c.execute(text(
-            "INSERT INTO app_previews (id,project_id,run_id,repo,branch,mode,container_id,port,url,status,expires_at) "
-            "VALUES (:id,:p,:r,:repo,:b,'docker',:cid,:port,:url,'running',:exp)"),
+            "INSERT INTO app_previews (id,project_id,run_id,repo,branch,mode,container_id,port,url,"
+            "substrate,build_substrate,status,expires_at) "
+            "VALUES (:id,:p,:r,:repo,:b,'docker',:cid,:port,:url,:sub,:build,'running',:exp)"),
             {"id": preview_id, "p": project_id, "r": run_id, "repo": f"{owner}/{repo}", "b": branch,
-             "cid": container_id, "port": host_port, "url": url, "exp": expires})
+             "cid": container_id, "port": host_port, "url": url,
+             "sub": ExecutionSubstrate.PREVIEW_DOCKER.value, "build": build_substrate,
+             "exp": expires})
         emit_event(c, project_id, "app_preview.started", "operator", "app_preview", preview_id,
                    {"run_id": run_id, "url": url, "mode": "docker", "image": tag})
     return {"id": preview_id, "status": "running", "url": url, "port": host_port, "mode": "docker",
             "container_id": container_id, "image": tag, "expires_at": expires.isoformat(),
-            "run_id": run_id, "repo": f"{owner}/{repo}", "branch": branch}
+            "run_id": run_id, "repo": f"{owner}/{repo}", "branch": branch,
+            "substrate": ExecutionSubstrate.PREVIEW_DOCKER.value,
+            "build_substrate": build_substrate}
+
+
+def start_rootfs_preview(
+    engine, settings: Settings, run_id: str, *, ttl_minutes: int = 60,
+    command: str = "",
+) -> dict:
+    """Serve a micro-VM run from its retained build rootfs (no host-side re-clone)."""
+    with begin(engine) as c:
+        run = load_code_task_run(c, run_id)
+    if run is None:
+        raise ValueError(f"code task run not found: {run_id}")
+    fctx = run.get("finalize_ctx") or {}
+    state = run.get("state") or {}
+    build_substrate = fctx.get("execution_substrate") or state.get("execution_substrate")
+    if build_substrate != ExecutionSubstrate.MICROVM.value:
+        raise RuntimeError("rootfs preview is only available for a micro-VM build")
+    sandbox_ids = fctx.get("sandbox_task_ids") or state.get("sandbox_task_ids") or []
+    sandbox_id = fctx.get("sandbox_task_id") or (sandbox_ids[-1] if sandbox_ids else None)
+    if not sandbox_id:
+        raise RuntimeError("micro-VM build has no retained sandbox_task_id")
+
+    provider = MicroVMProvider(settings)
+    provider.hold(
+        sandbox_id,
+        ttl_seconds=max(60, int(ttl_minutes) * 60),
+        reason=f"rootfs preview for {run_id}",
+    )
+    served = provider.serve_preview(
+        sandbox_id,
+        ttl_seconds=max(60, int(ttl_minutes) * 60),
+        command=command,
+    )
+    remote_url = served.get("url") or served.get("proxy_url")
+    if not remote_url:
+        raise RuntimeError("sandbox service did not return a rootfs preview URL")
+    preview_id = make_id("prev")
+    spec = run.get("spec") or {}
+    owner = spec.get("owner") or settings.target_github_owner
+    repo = spec.get("repo") or settings.target_github_repo
+    branch = fctx.get("work_branch") or f"boss/code/{fctx.get('root_run_id') or run_id}"
+    expires = datetime.now(timezone.utc) + timedelta(minutes=ttl_minutes)
+    with begin(engine) as c:
+        c.execute(
+            text(
+                "INSERT INTO app_previews (id,project_id,run_id,repo,branch,command,url,mode,"
+                "substrate,build_substrate,sandbox_task_id,status,expires_at) "
+                "VALUES (:id,:p,:r,:repo,:b,:cmd,:url,'rootfs',:sub,:build,:sid,'running',:exp)"
+            ),
+            {"id": preview_id, "p": run["project_id"], "r": run_id,
+             "repo": f"{owner}/{repo}", "b": branch, "cmd": served.get("command") or command,
+             "url": remote_url, "sub": ExecutionSubstrate.PREVIEW_ROOTFS.value,
+             "build": build_substrate, "sid": sandbox_id, "exp": expires},
+        )
+        emit_event(
+            c, run["project_id"], "app_preview.started", "operator", "app_preview", preview_id,
+            {"run_id": run_id, "mode": "rootfs", "sandbox_task_id": sandbox_id,
+             "substrate": ExecutionSubstrate.PREVIEW_ROOTFS.value},
+        )
+    return {
+        "id": preview_id, "status": "running", "mode": "rootfs",
+        "substrate": ExecutionSubstrate.PREVIEW_ROOTFS.value,
+        "build_substrate": build_substrate, "sandbox_task_id": sandbox_id,
+        "expires_at": expires.isoformat(), "run_id": run_id,
+        "repo": f"{owner}/{repo}", "branch": branch,
+    }
+
+
+def _process_alive(pid: Optional[int]) -> bool:
+    if not pid:
+        return False
+    try:
+        os.kill(int(pid), 0)
+        return True
+    except (OSError, ValueError):
+        return False
+
+
+def _docker_alive(container_id: Optional[str]) -> bool:
+    if not container_id or shutil.which("docker") is None:
+        return False
+    result = subprocess.run(
+        ["docker", "inspect", "-f", "{{.State.Running}}", container_id],
+        capture_output=True, text=True, timeout=5,
+    )
+    return result.returncode == 0 and result.stdout.strip().lower() == "true"
+
+
+def reconcile_previews(engine, settings: Settings) -> dict[str, int]:
+    """Idempotently reconcile durable preview rows against their live substrate."""
+    with begin(engine) as c:
+        rows = c.execute(text(
+            "SELECT id,pid,mode,container_id,url,expires_at,sandbox_task_id FROM app_previews "
+            "WHERE status='running'"
+        )).mappings().all()
+    now = datetime.now(timezone.utc)
+    alive = stopped = expired = 0
+    headers = ({"X-Sandbox-Token": settings.sandbox_token}
+               if settings.sandbox_token else {})
+    for raw in rows:
+        row = dict(raw)
+        expires_at = row.get("expires_at")
+        if expires_at and expires_at <= now:
+            target_status = "expired"
+        else:
+            mode = row.get("mode") or "process"
+            substrate_alive = (
+                _docker_alive(row.get("container_id")) if mode == "docker"
+                else _url_ok(row.get("url") or "", headers=headers) if mode == "rootfs"
+                else _process_alive(row.get("pid"))
+            )
+            healthy = substrate_alive and _url_ok(
+                row.get("url") or "", headers=headers if mode == "rootfs" else None
+            )
+            target_status = "running" if healthy else "stopped"
+        if target_status == "running":
+            alive += 1
+            continue
+        if target_status == "expired":
+            _teardown(row, settings)
+        with begin(engine) as c:
+            c.execute(
+                text("UPDATE app_previews SET status=:status WHERE id=:id AND status='running'"),
+                {"status": target_status, "id": row["id"]},
+            )
+        if target_status == "expired":
+            expired += 1
+        else:
+            stopped += 1
+    return {"checked": len(rows), "running": alive, "stopped": stopped, "expired": expired}
+
+
+def preview_log_snapshot(engine, preview_id: str, *, tail_chars: int = 12000) -> dict:
+    with begin(engine) as c:
+        row = c.execute(text(
+            "SELECT status,mode,log_path,container_id,failure_kind,error FROM app_previews WHERE id=:id"
+        ), {"id": preview_id}).mappings().first()
+    if row is None:
+        raise ValueError("preview not found")
+    content = ""
+    if row["log_path"]:
+        try:
+            content = Path(row["log_path"]).read_text(errors="ignore")[-tail_chars:]
+        except OSError:
+            content = ""
+    elif row["mode"] == "docker" and row["container_id"] and shutil.which("docker"):
+        result = subprocess.run(
+            ["docker", "logs", "--tail", "200", row["container_id"]],
+            capture_output=True, text=True, timeout=10,
+        )
+        content = (result.stdout + result.stderr)[-tail_chars:]
+    return {"preview_id": preview_id, "status": row["status"], "mode": row["mode"],
+            "failure_kind": row["failure_kind"], "error": row["error"], "log": content}
+
+
+def stream_preview_logs(engine, preview_id: str):
+    """SSE generator that tails startup logs until the preview reaches a terminal state."""
+    offset = 0
+    for _ in range(600):  # bounded to ten minutes; clients may reconnect
+        snapshot = preview_log_snapshot(engine, preview_id)
+        content = snapshot["log"]
+        if len(content) > offset:
+            chunk = content[offset:]
+            offset = len(content)
+            yield f"event: log\ndata: {json.dumps(chunk)}\n\n"
+        else:
+            yield ": heartbeat\n\n"
+        if snapshot["status"] in {"failed", "stopped", "expired"}:
+            yield f"event: end\ndata: {json.dumps(snapshot['status'])}\n\n"
+            return
+        time.sleep(1)
 
 
 def _docker_rm(container_id: Optional[str]) -> None:
@@ -314,20 +565,87 @@ def _kill(pid: Optional[int]) -> None:
 
 
 def _inject_shim(html: bytes, prefix: str) -> bytes:
-    """Rewrite root-relative fetch()/form-action paths to the proxy prefix so a preview served
-    under /v1/previews/<id>/web/ works when the browser reaches it via the api's tailnet route."""
+    """Make a path-prefixed preview behave like an app mounted at `/`.
+
+    The server-side rewrite handles initial markup/CSS; the client shim covers
+    dynamic DOM, fetch/XHR, history routing, WebSocket/EventSource, and captures
+    preview-anchored operator feedback.
+    """
+    prefix = prefix.rstrip("/")
+    p_json = json.dumps(prefix)
+    feedback_url = json.dumps(prefix.rsplit("/web", 1)[0] + "/feedback")
     shim = (
-        "<script>(function(){var P=" + repr(prefix) + ";"
-        "var of=window.fetch;window.fetch=function(u,o){try{if(typeof u===\"string\"&&u.charAt(0)===\"/\"&&u.indexOf(P)!==0)u=P+u;}catch(e){}return of.call(this,u,o);};"
-        "document.addEventListener(\"submit\",function(e){var f=e.target;if(f&&f.getAttribute){var a=f.getAttribute(\"action\");if(a&&a.charAt(0)===\"/\"&&a.indexOf(P)!==0)f.setAttribute(\"action\",P+a);}},true);"
-        "})();</script>"
+        "<base href=\"" + prefix + "/\">"
+        "<script data-boss-preview-shim>(function(){var P=" + p_json + ",F=" + feedback_url + ";"
+        "function path(u){if(typeof u!==\"string\")return u;"
+        "if(u.charAt(0)===\"/\"&&u.slice(0,2)!==\"//\"&&u.indexOf(P)!==0)return P+u;return u;}"
+        "function srcset(v){return String(v||\"\").split(\",\").map(function(x){var p=x.trim().split(/\\s+/);"
+        "p[0]=path(p[0]);return p.join(\" \").trim();}).join(\", \");}"
+        "function ws(u){u=path(u);if(typeof u===\"string\"&&u.charAt(0)===\"/\")"
+        "return(location.protocol===\"https:\"?\"wss:\":\"ws:\")+\"//\"+location.host+u;return u;}"
+        "var of=window.fetch;window.fetch=function(u,o){return of.call(this,path(u),o);};"
+        "var xo=XMLHttpRequest.prototype.open;XMLHttpRequest.prototype.open=function(m,u){"
+        "arguments[1]=path(u);return xo.apply(this,arguments);};"
+        "[\"pushState\",\"replaceState\"].forEach(function(k){var old=history[k];"
+        "history[k]=function(s,t,u){return old.call(this,s,t,path(u));};});"
+        "var OW=window.WebSocket;if(OW){window.WebSocket=function(u,p){"
+        "return p===undefined?new OW(ws(u)):new OW(ws(u),p);};window.WebSocket.prototype=OW.prototype;}"
+        "var OE=window.EventSource;if(OE){window.EventSource=function(u,o){return new OE(path(u),o);};"
+        "window.EventSource.prototype=OE.prototype;}"
+        "function fix(root){if(!root||!root.querySelectorAll)return;"
+        "root.querySelectorAll(\"[href],[src],[action],[srcset],[style]\").forEach(function(el){"
+        "[\"href\",\"src\",\"action\"].forEach(function(a){var v=el.getAttribute(a);"
+        "if(v)el.setAttribute(a,path(v));});var ss=el.getAttribute(\"srcset\");if(ss)el.setAttribute(\"srcset\",srcset(ss));"
+        "var st=el.getAttribute(\"style\");if(st)el.setAttribute(\"style\",st.replace(/url\\((['\"]?)\\/(?!\\/)/g,\"url($1\"+P+\"/\"));});}"
+        "new MutationObserver(function(ms){ms.forEach(function(m){m.addedNodes.forEach(fix);});})"
+        ".observe(document.documentElement,{childList:true,subtree:true});"
+        "document.addEventListener(\"DOMContentLoaded\",function(){fix(document);"
+        "if(document.querySelector(\"[data-boss-feedback]\"))return;var b=document.createElement(\"button\");"
+        "b.textContent=\"Send preview feedback\";b.setAttribute(\"data-boss-feedback\",\"1\");"
+        "b.style.cssText=\"position:fixed;right:16px;bottom:16px;z-index:2147483647;padding:9px 13px;"
+        "border:0;border-radius:999px;background:#111827;color:white;font:600 12px system-ui;cursor:pointer\";"
+        "b.onclick=async function(){var message=prompt(\"What should BOSS change here?\");if(!message)return;"
+        "var route=location.pathname.indexOf(P)===0?(location.pathname.slice(P.length)||\"/\"):location.pathname;"
+        "var a=document.activeElement,sel=a?String(a.tagName||\"\").toLowerCase()+"
+        "(a.id?\"#\"+a.id:\"\")+(a.className&&typeof a.className===\"string\"?\".\"+a.className.trim().replace(/\\s+/g,\".\"):\"\"):\"\";"
+        "var r=await of.call(window,F,{method:\"POST\",headers:{\"Content-Type\":\"application/json\"},"
+        "body:JSON.stringify({message:message,anchor:route,selected_element:sel})});"
+        "var d=await r.json();alert(d.question||\"Feedback captured. Confirm the proposed iteration in BOSS.\");};"
+        "document.body.appendChild(b);});})();</script>"
     )
     try:
         s = html.decode("utf-8", "ignore")
-        if "<head>" in s:
-            s = s.replace("<head>", "<head>" + shim, 1)
-        elif "<html" in s:
-            s = re.sub(r"(<html[^>]*>)", lambda m: m.group(1) + shim, s, count=1)
+        # Initial static resources and CSS URLs must be prefixed before the browser
+        # starts fetching them. Protocol-relative/external/fragment URLs are untouched.
+        def attr_rewrite(match: re.Match) -> str:
+            value = match.group("value")
+            if value.startswith("/") and not value.startswith("//") and not value.startswith(prefix):
+                value = prefix + value
+            return f"{match.group('attr')}={match.group('quote')}{value}{match.group('quote')}"
+
+        s = re.sub(
+            r"(?P<attr>href|src|action)=(?P<quote>['\"])(?P<value>[^'\"]*)(?P=quote)",
+            attr_rewrite, s, flags=re.I,
+        )
+        def srcset_rewrite(match: re.Match) -> str:
+            candidates = []
+            for candidate in match.group("value").split(","):
+                pieces = candidate.strip().split()
+                if pieces and pieces[0].startswith("/") and not pieces[0].startswith("//"):
+                    pieces[0] = prefix + pieces[0]
+                candidates.append(" ".join(pieces))
+            return f"srcset={match.group('quote')}{', '.join(candidates)}{match.group('quote')}"
+
+        s = re.sub(
+            r"srcset=(?P<quote>['\"])(?P<value>[^'\"]*)(?P=quote)",
+            srcset_rewrite, s, flags=re.I,
+        )
+        s = re.sub(r"url\((['\"]?)/(?!/)", rf"url(\1{prefix}/", s, flags=re.I)
+        if re.search(r"<head(?:\s[^>]*)?>", s, flags=re.I):
+            s = re.sub(r"(<head(?:\s[^>]*)?>)", lambda m: m.group(1) + shim, s, count=1, flags=re.I)
+        elif "<html" in s.lower():
+            s = re.sub(r"(<html[^>]*>)", lambda m: m.group(1) + "<head>" + shim + "</head>", s,
+                       count=1, flags=re.I)
         else:
             s = shim + s
         return s.encode("utf-8")
@@ -337,31 +655,39 @@ def _inject_shim(html: bytes, prefix: str) -> bytes:
 
 def proxy_preview(engine, preview_id: str, subpath: str, method: str,
                   query_string: str = "", body: Optional[bytes] = None,
-                  content_type: Optional[str] = None):
+                  content_type: Optional[str] = None,
+                  sandbox_token: str = ""):
     """Reverse-proxy a request to a running preview's loopback port → (status, content_type, bytes).
     Only the api can reach the preview's 127.0.0.1 port, so this exposes it via the api's own
     (tailnet-routed) URL. HTML responses get the root-relative path-rewrite shim."""
     import urllib.error
     with begin(engine) as c:
-        row = c.execute(text("SELECT url, status FROM app_previews WHERE id=:id"),
+        row = c.execute(text("SELECT url,status,mode FROM app_previews WHERE id=:id"),
                         {"id": preview_id}).mappings().first()
     if row is None:
-        return 404, "text/plain", b"preview not found"
+        return 404, "text/plain", b"preview not found", {}
     if row["status"] != "running" or not row["url"]:
-        return 409, "text/plain", f"preview not running (status={row['status']})".encode()
+        return 409, "text/plain", f"preview not running (status={row['status']})".encode(), {}
     target = row["url"].rstrip("/") + "/" + (subpath or "")
     if query_string:
         target += "?" + query_string
     req = urllib.request.Request(target, data=body or None, method=method)
     if content_type:
         req.add_header("Content-Type", content_type)
+    if row["mode"] == "rootfs" and sandbox_token:
+        req.add_header("X-Sandbox-Token", sandbox_token)
+    response_headers: dict[str, str] = {}
     try:
-        resp = urllib.request.urlopen(req, timeout=25)
+        resp = urllib.request.build_opener(_NoRedirect()).open(req, timeout=25)
         status = resp.status
         ctype = resp.headers.get("Content-Type", "application/octet-stream")
         data = resp.read()
+        if resp.headers.get("Location"):
+            response_headers["Location"] = resp.headers["Location"]
     except urllib.error.HTTPError as e:
         status, ctype, data = e.code, e.headers.get("Content-Type", "text/plain"), e.read()
+        if e.headers.get("Location"):
+            response_headers["Location"] = e.headers["Location"]
     except Exception as e:  # noqa: BLE001 — process gone (e.g. after an api restart): self-heal
         try:
             with begin(engine) as c2:
@@ -375,10 +701,13 @@ def proxy_preview(engine, preview_id: str, subpath: str, method: str,
             "<p>Its process ended (this happens after a redeploy). Go back to the code task and click "
             "<b>Run preview</b> to regenerate it.</p>"
             f"<p style=\"color:#888;font-size:12px\">{e}</p></div>"
-        ).encode()
+        ).encode(), {}
+    location = response_headers.get("Location")
+    if location and location.startswith("/") and not location.startswith("//"):
+        response_headers["Location"] = f"/v1/previews/{preview_id}/web{location}"
     if "text/html" in (ctype or ""):
         data = _inject_shim(data, f"/v1/previews/{preview_id}/web")
-    return status, ctype, data
+    return status, ctype, data, response_headers
 
 
 def smoke_test(engine, preview_id: str, checks: Optional[list[dict]] = None) -> dict:
@@ -433,34 +762,57 @@ def smoke_test(engine, preview_id: str, checks: Optional[list[dict]] = None) -> 
             "passed": passed, "total": len(checks), "results": results}
 
 
-def _teardown(row) -> None:
+def _teardown(row, settings: Optional[Settings] = None) -> None:
     if row.get("mode") == "docker":
         _docker_rm(row.get("container_id"))
+    elif row.get("mode") == "rootfs":
+        sandbox_id = row.get("sandbox_task_id")
+        if settings and sandbox_id:
+            # Explicitly stop/release the retained rootfs when the preview is stopped
+            # or expires. Both operations are best-effort and bounded by service TTL.
+            base = (settings.sandbox_agent_url or "").rstrip("/")
+            headers = ({"X-Sandbox-Token": settings.sandbox_token}
+                       if settings.sandbox_token else {})
+            try:
+                import httpx
+                with httpx.Client(timeout=15.0) as client:
+                    client.delete(
+                        f"{base}/v1/sandbox/tasks/{sandbox_id}/preview", headers=headers
+                    )
+            except Exception:  # noqa: BLE001
+                pass
+            MicroVMProvider(settings).release(sandbox_id)
     else:
         _kill(row.get("pid"))
 
 
-def stop_preview(engine, preview_id: str) -> dict:
+def stop_preview(engine, preview_id: str, settings: Optional[Settings] = None) -> dict:
     with begin(engine) as c:
-        row = c.execute(text("SELECT pid,mode,container_id FROM app_previews WHERE id=:id"),
+        row = c.execute(text(
+            "SELECT pid,mode,container_id,sandbox_task_id FROM app_previews WHERE id=:id"
+        ),
                         {"id": preview_id}).mappings().first()
         if row is None:
             raise ValueError("preview not found")
-        _teardown(dict(row))
+        _teardown(dict(row), settings)
         c.execute(text("UPDATE app_previews SET status='stopped' WHERE id=:id"), {"id": preview_id})
     return {"id": preview_id, "status": "stopped"}
 
 
-def list_previews(engine, project_id: str, limit: int = 50) -> list[dict]:
+def list_previews(
+    engine, project_id: str, limit: int = 50, settings: Optional[Settings] = None
+) -> list[dict]:
     """Reap expired previews (tear down + mark) and return recent ones."""
     with begin(engine) as c:
         expired = c.execute(text(
-            "SELECT id,pid,mode,container_id FROM app_previews WHERE status='running' AND expires_at < now()")).mappings().all()
+            "SELECT id,pid,mode,container_id,sandbox_task_id FROM app_previews "
+            "WHERE status='running' AND expires_at < now()")).mappings().all()
         for r in expired:
-            _teardown(dict(r))
+            _teardown(dict(r), settings)
             c.execute(text("UPDATE app_previews SET status='expired' WHERE id=:id"), {"id": r["id"]})
         rows = c.execute(text(
-            "SELECT id,run_id,repo,branch,url,port,mode,status,error,expires_at,created_at "
+            "SELECT id,run_id,repo,branch,url,port,mode,substrate,build_substrate,sandbox_task_id,"
+            "status,error,failure_kind,expires_at,created_at "
             "FROM app_previews WHERE project_id=:p ORDER BY created_at DESC LIMIT :l"),
             {"p": project_id, "l": int(limit)}).mappings().all()
     return [dict(r) for r in rows]

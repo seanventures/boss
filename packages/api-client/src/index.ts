@@ -1001,6 +1001,8 @@ export type CodeTaskState = {
   test_command?: string;
   impl_files?: string[];
   test_files?: string[];
+  substrate?: string;
+  sandbox_task_ids?: string[];
 };
 
 export type CodeTaskRun = {
@@ -1020,6 +1022,13 @@ export type CodeTaskRun = {
   };
   state: CodeTaskState;
   usage?: { cost_usd_micros?: number; model?: string };
+  finalize_ctx?: {
+    execution_substrate?: string;
+    sandbox_task_id?: string;
+    sandbox_task_ids?: string[];
+    root_run_id?: string;
+    attempt?: number;
+  };
   reservation_id?: string | null;
   pull_request_url?: string | null;
   pull_request_number?: number | null;
@@ -1035,10 +1044,32 @@ export type PreviewRec = {
   status: string; // running | stopped | failed | expired
   url?: string | null;
   mode?: string | null;
+  substrate?: string | null;
+  build_substrate?: string | null;
+  sandbox_task_id?: string | null;
+  failure_kind?: string | null;
   branch?: string | null;
   repo?: string | null;
   error?: string | null;
   expires_at?: string | null;
+};
+
+export type FeedbackProposal = {
+  source_run_id: string;
+  classification: "scoped_tweak" | "full_rerun";
+  fix_note: string;
+  profile: string;
+  repair_retries: number;
+};
+
+export type FeedbackResponse = {
+  thread_id: string;
+  status: string;
+  question?: string;
+  requires_confirmation?: boolean;
+  proposal?: FeedbackProposal;
+  dispatched?: boolean;
+  run_id?: string;
 };
 
 // --- Discovery pipeline (research-driven outcome discovery) ----------------
@@ -2024,6 +2055,28 @@ export type PullRequestProposalResponse = {
   message?: string;
 };
 
+export type CIConfigProposalRequest = {
+  project_id: string;
+  repo: string;
+  language: string;
+  framework?: string;
+  target?: string;
+  reservation_id: string;
+  dedupe_key: string;
+  branch_name: string;
+  title?: string;
+  task_id?: string;
+  actor?: string;
+  created_by_job_id?: string;
+};
+
+export type CIConfigProposalResponse = {
+  status: string;
+  pipeline_descriptor: Record<string, unknown>;
+  generated_config?: Record<string, unknown>;
+  proposal?: PullRequestProposalResponse;
+};
+
 export type PullRequestMergeRequest = {
   project_id: string;
   decision_id: string;
@@ -2241,11 +2294,33 @@ export type DeploymentRolloutSummary = {
   created_by_job_id?: string;
   created_at: string;
   updated_at: string;
+  deployment_run_id?: string;
+  promotion_id?: string;
+  rollback_reason?: string;
+  health_observations: Array<Record<string, unknown>>;
+  started_at?: string;
+  finished_at?: string;
 };
 
 export type DeploymentRolloutListResponse = {
   project_id: string;
   items: DeploymentRolloutSummary[];
+};
+
+export type DeploymentRolloutStartRequest = {
+  actor?: string;
+  stages?: string[];
+  thresholds?: Record<string, unknown>;
+};
+
+export type DeploymentRolloutAdvanceRequest = {
+  actor?: string;
+  observation: Record<string, unknown>;
+};
+
+export type DeploymentRolloutRollbackRequest = {
+  actor?: string;
+  reason: string;
 };
 
 export type ArtifactSummary = {
@@ -3624,6 +3699,55 @@ export type DeploymentRunHealthCheckResponse = {
   decision_id?: string;
 };
 
+export type DeploymentPromotionStartRequest = {
+  project_id: string;
+  staging_target_id: string;
+  production_target_id: string;
+  commit_ref: string;
+  staging_reservation_id?: string;
+  production_reservation_id?: string;
+  staging_expected_cost_usd_micros?: number;
+  production_expected_cost_usd_micros?: number;
+  release_packet?: Record<string, unknown>;
+  actor?: string;
+};
+
+export type DeploymentPromotionAdvanceRequest = {
+  actor?: string;
+};
+
+export type DeploymentPromotionSummary = {
+  id: string;
+  project_id: string;
+  app_name: string;
+  repo: string;
+  commit_ref: string;
+  staging_target_id: string;
+  production_target_id: string;
+  staging_deployment_run_id?: string;
+  production_deployment_run_id?: string;
+  production_rollout_id?: string;
+  pipeline_provider: string;
+  pipeline_descriptor: Record<string, unknown>;
+  pipeline_verdict: Record<string, unknown>;
+  gate_result: Record<string, unknown>;
+  status: string;
+  failure_reason?: string;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+  completed_at?: string;
+  staging_deployment_run?: DeploymentRunSummary;
+  production_deployment_run?: DeploymentRunSummary;
+  production_rollout?: DeploymentRolloutSummary;
+  timeline: Array<Record<string, unknown>>;
+};
+
+export type DeploymentPromotionListResponse = {
+  project_id: string;
+  items: DeploymentPromotionSummary[];
+};
+
 export type ChangeSetOperationRequest = {
   skill_id: string;
   action: string;
@@ -4110,6 +4234,22 @@ export function createBossApiClient(config: BossApiClientConfig) {
     retryCodeTask(runId: string, fixNote?: string) {
       return request<{ status: string; run_id: string; attempt: number }>(
         "POST", `/v1/code-tasks/${encodeURIComponent(runId)}/retry`, { body: { fix_note: fixNote ?? "" } });
+    },
+    submitCodeTaskFeedback(runId: string, payload: {
+      message: string;
+      expected?: string;
+      anchor?: string;
+      severity?: string;
+      selected_element?: string;
+      screenshot_url?: string;
+    }) {
+      return request<FeedbackResponse>(
+        "POST", `/v1/code-tasks/${encodeURIComponent(runId)}/feedback`, { body: payload });
+    },
+    confirmCodeTaskFeedback(threadId: string, actor = "operator") {
+      return request<FeedbackResponse>(
+        "POST", `/v1/feedback-threads/${encodeURIComponent(threadId)}/confirm`,
+        { body: { actor } });
     },
     overrideCodeTask(runId: string, waiveGates: string[], reason?: string) {
       return request<{ status: string; pull_request_url?: string; pull_request_number?: number }>(
@@ -5202,6 +5342,66 @@ export function createBossApiClient(config: BossApiClientConfig) {
         body: payload,
       });
     },
+    startDeploymentRollout(
+      deploymentRunId: string,
+      payload: DeploymentRolloutStartRequest = {},
+    ) {
+      return request<DeploymentRolloutSummary>(
+        "POST",
+        `/v1/deployment-runs/${encodeURIComponent(deploymentRunId)}/rollout/start`,
+        { body: payload },
+      );
+    },
+    advanceDeploymentRollout(
+      deploymentRunId: string,
+      payload: DeploymentRolloutAdvanceRequest,
+    ) {
+      return request<DeploymentRolloutSummary>(
+        "POST",
+        `/v1/deployment-runs/${encodeURIComponent(deploymentRunId)}/rollout/advance`,
+        { body: payload },
+      );
+    },
+    rollbackDeploymentRollout(
+      deploymentRunId: string,
+      payload: DeploymentRolloutRollbackRequest,
+    ) {
+      return request<DeploymentRolloutSummary>(
+        "POST",
+        `/v1/deployment-runs/${encodeURIComponent(deploymentRunId)}/rollout/rollback`,
+        { body: payload },
+      );
+    },
+    listDeploymentPromotions(projectId: string, limit = 50) {
+      return request<DeploymentPromotionListResponse>(
+        "GET",
+        "/v1/deployment-promotions",
+        { query: { project_id: projectId, limit } },
+      );
+    },
+    getDeploymentPromotion(promotionId: string) {
+      return request<DeploymentPromotionSummary>(
+        "GET",
+        `/v1/deployment-promotions/${encodeURIComponent(promotionId)}`,
+      );
+    },
+    createDeploymentPromotion(payload: DeploymentPromotionStartRequest) {
+      return request<DeploymentPromotionSummary>(
+        "POST",
+        "/v1/deployment-promotions",
+        { body: payload },
+      );
+    },
+    advanceDeploymentPromotion(
+      promotionId: string,
+      payload: DeploymentPromotionAdvanceRequest = {},
+    ) {
+      return request<DeploymentPromotionSummary>(
+        "POST",
+        `/v1/deployment-promotions/${encodeURIComponent(promotionId)}/advance`,
+        { body: payload },
+      );
+    },
     runDeploymentHealthCheck(
       deploymentRunId: string,
       payload: DeploymentRunHealthCheckRequest = {},
@@ -5404,6 +5604,13 @@ export function createBossApiClient(config: BossApiClientConfig) {
         {
           body: payload,
         },
+      );
+    },
+    proposeCIConfig(payload: CIConfigProposalRequest) {
+      return request<CIConfigProposalResponse>(
+        "POST",
+        "/v1/pipeline-config/proposals",
+        { body: payload },
       );
     },
     mergePullRequest(payload: PullRequestMergeRequest) {

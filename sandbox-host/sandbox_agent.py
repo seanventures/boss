@@ -13,6 +13,7 @@ later) — swapping it does NOT change this contract.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import shlex
@@ -20,12 +21,14 @@ import shutil
 import subprocess
 import tempfile
 import time
+import urllib.error
+import urllib.request
 import uuid
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request, Response, WebSocket
 from pydantic import BaseModel
 
 # Commands the governed helper console allows without break-glass, grouped for
@@ -127,6 +130,7 @@ class ContainerBackend:
         now = time.time()
         for sid in [s for s, r in self.sandboxes.items()
                     if r.status not in ("destroyed", "quarantined")  # never reap a preserved VM
+                    and float(r.meta.get("hold_until") or 0) <= now
                     and now - r.updated_at > IDLE_TTL_SECONDS]:
             try:
                 self.destroy(sid)
@@ -350,6 +354,131 @@ class ContainerBackend:
         self._persist()
         return rec.summary()
 
+    # -- retained-rootfs preview ------------------------------------------
+    def hold(self, sandbox_id: str, *, ttl_seconds: int, reason: str) -> dict:
+        rec = self._require(sandbox_id)
+        rec.meta["hold_until"] = time.time() + max(60, min(int(ttl_seconds), 7200))
+        rec.meta["hold_reason"] = reason[:300]
+        rec.updated_at = time.time()
+        self._persist()
+        return {"sandbox_task_id": sandbox_id, "hold_until": rec.meta["hold_until"]}
+
+    def _preview_command(self, rec: SandboxRecord, explicit: str = "") -> str:
+        root = self._repo_root(rec)
+        if explicit.strip():
+            return explicit.strip()
+        hint = root / "boss.preview.command"
+        if hint.is_file() and hint.read_text(errors="ignore").strip():
+            return hint.read_text(errors="ignore").strip()
+        package = root / "package.json"
+        if package.is_file():
+            try:
+                scripts = (json.loads(package.read_text()).get("scripts") or {})
+            except (OSError, json.JSONDecodeError):
+                scripts = {}
+            if scripts.get("dev"):
+                return "npm run dev -- --host 0.0.0.0"
+            if scripts.get("start"):
+                return "npm run start"
+        procfile = root / "Procfile"
+        if procfile.is_file():
+            for line in procfile.read_text(errors="ignore").splitlines():
+                kind, sep, command = line.partition(":")
+                if sep and kind.strip().lower() == "web" and command.strip():
+                    return command.strip()
+        for entry in ("server.py", "app.py", "wsgi.py", "main.py"):
+            if (root / entry).is_file():
+                return f"python3 {shlex.quote(entry)}"
+        raise ValueError("could not detect a preview command in retained rootfs")
+
+    def _container_ip(self, rec: SandboxRecord) -> str:
+        result = self._docker(["inspect", rec.container_id], timeout=10, check=True)
+        info = json.loads(result.stdout)[0].get("NetworkSettings") or {}
+        if info.get("IPAddress"):
+            return info["IPAddress"]
+        for network in (info.get("Networks") or {}).values():
+            if network.get("IPAddress"):
+                return network["IPAddress"]
+        raise RuntimeError("sandbox container has no routable IP")
+
+    def start_preview(
+        self, sandbox_id: str, *, ttl_seconds: int, command: str = ""
+    ) -> dict:
+        rec = self._require(sandbox_id)
+        existing = rec.meta.get("preview") or {}
+        if existing.get("port") and float(existing.get("expires_at") or 0) > time.time():
+            return {**existing, "sandbox_task_id": sandbox_id}
+        command = self._preview_command(rec, command)
+        port = 4100 + (int(sandbox_id[-4:], 16) % 700)
+        launch = (
+            f"cd /work/repo && export PORT={port} HOST=0.0.0.0 PYTHONUNBUFFERED=1; "
+            f"({command}) > /work/preview.log 2>&1 & echo $! > /work/preview.pid"
+        )
+        result = self._docker(
+            ["exec", rec.container_id, "bash", "-lc", launch], timeout=30
+        )
+        if result.returncode != 0:
+            raise RuntimeError((result.stderr or result.stdout or "preview launch failed")[-500:])
+        ip = self._container_ip(rec)
+        deadline = time.time() + 30
+        while time.time() < deadline:
+            try:
+                response = urllib.request.urlopen(f"http://{ip}:{port}/", timeout=2)
+                if 200 <= response.status < 400:
+                    break
+            except Exception:
+                time.sleep(0.5)
+        else:
+            logs = self._docker(
+                ["exec", rec.container_id, "tail", "-n", "80", "/work/preview.log"], timeout=10
+            )
+            raise RuntimeError(f"rootfs preview did not become healthy: {logs.stdout[-500:]}")
+        expires_at = time.time() + max(60, min(int(ttl_seconds), 7200))
+        rec.meta["preview"] = {
+            "port": port, "command": command, "expires_at": expires_at,
+            "url": f"/v1/sandbox/tasks/{sandbox_id}/preview/web/",
+        }
+        rec.meta["hold_until"] = expires_at
+        rec.updated_at = time.time()
+        self._persist()
+        return {**rec.meta["preview"], "sandbox_task_id": sandbox_id}
+
+    def stop_preview(self, sandbox_id: str) -> None:
+        rec = self._require(sandbox_id)
+        self._docker(
+            ["exec", rec.container_id, "bash", "-lc",
+             "test ! -f /work/preview.pid || kill $(cat /work/preview.pid) 2>/dev/null || true"],
+            timeout=10,
+        )
+        rec.meta.pop("preview", None)
+        rec.updated_at = time.time()
+        self._persist()
+
+    def proxy_preview(
+        self, sandbox_id: str, path: str, *, method: str, query: str,
+        body: bytes, content_type: str,
+    ) -> tuple[int, str, bytes]:
+        target = self.preview_target(sandbox_id, path, query=query, websocket=False)
+        request = urllib.request.Request(target, data=body or None, method=method)
+        if content_type:
+            request.add_header("Content-Type", content_type)
+        try:
+            response = urllib.request.urlopen(request, timeout=25)
+            return response.status, response.headers.get("Content-Type", "application/octet-stream"), response.read()
+        except urllib.error.HTTPError as exc:
+            return exc.code, exc.headers.get("Content-Type", "text/plain"), exc.read()
+
+    def preview_target(
+        self, sandbox_id: str, path: str, *, query: str = "", websocket: bool = False
+    ) -> str:
+        rec = self._require(sandbox_id)
+        preview = rec.meta.get("preview") or {}
+        if not preview.get("port") or float(preview.get("expires_at") or 0) <= time.time():
+            raise ValueError("rootfs preview is not running")
+        scheme = "ws" if websocket else "http"
+        target = f"{scheme}://{self._container_ip(rec)}:{preview['port']}/{path.lstrip('/')}"
+        return target + ("?" + query if query else "")
+
     def _require(self, sandbox_id: str) -> SandboxRecord:
         rec = self.sandboxes.get(sandbox_id)
         if not rec or rec.status == "destroyed":
@@ -387,6 +516,16 @@ class ExecRequest(BaseModel):
 class PreserveRequest(BaseModel):
     reason: str
     actor: str = "operator"
+
+
+class HoldRequest(BaseModel):
+    ttl_seconds: int = 7200
+    reason: str = "preview retention"
+
+
+class PreviewRequest(BaseModel):
+    ttl_seconds: int = 3600
+    command: str = ""
 
 
 @app.get("/healthz")
@@ -466,6 +605,7 @@ def sandbox_preserve(sandbox_id: str, req: PreserveRequest) -> dict:
         raise HTTPException(status_code=404, detail="sandbox not found")
 
 
+@app.delete("/v1/sandbox/tasks/{sandbox_id}")
 @app.delete("/v1/sandboxes/{sandbox_id}")
 def sandbox_destroy(sandbox_id: str) -> dict:
     try:
@@ -473,3 +613,93 @@ def sandbox_destroy(sandbox_id: str) -> dict:
         return {"status": "destroyed", "sandbox_id": sandbox_id}
     except KeyError:
         raise HTTPException(status_code=404, detail="sandbox not found")
+
+
+@app.post("/v1/sandboxes/{sandbox_id}/hold")
+@app.post("/v1/sandbox/tasks/{sandbox_id}/hold")
+def sandbox_hold(sandbox_id: str, req: HoldRequest) -> dict:
+    try:
+        return _backend.hold(sandbox_id, ttl_seconds=req.ttl_seconds, reason=req.reason)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="sandbox not found")
+
+
+@app.post("/v1/sandboxes/{sandbox_id}/preview")
+@app.post("/v1/sandbox/tasks/{sandbox_id}/preview")
+def sandbox_start_preview(sandbox_id: str, req: PreviewRequest, request: Request) -> dict:
+    try:
+        result = _backend.start_preview(
+            sandbox_id, ttl_seconds=req.ttl_seconds, command=req.command
+        )
+        path = result["url"]
+        return {**result, "url": str(request.base_url).rstrip("/") + path}
+    except KeyError:
+        raise HTTPException(status_code=404, detail="sandbox not found")
+    except (ValueError, RuntimeError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+
+@app.delete("/v1/sandboxes/{sandbox_id}/preview")
+@app.delete("/v1/sandbox/tasks/{sandbox_id}/preview")
+def sandbox_stop_preview(sandbox_id: str) -> dict:
+    try:
+        _backend.stop_preview(sandbox_id)
+        return {"status": "stopped", "sandbox_task_id": sandbox_id}
+    except KeyError:
+        raise HTTPException(status_code=404, detail="sandbox not found")
+
+
+@app.api_route(
+    "/v1/sandbox/tasks/{sandbox_id}/preview/web/{path:path}",
+    methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
+)
+@app.api_route(
+    "/v1/sandbox/tasks/{sandbox_id}/preview/web/",
+    methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
+)
+async def sandbox_preview_web(sandbox_id: str, request: Request, path: str = ""):
+    try:
+        status, content_type, content = _backend.proxy_preview(
+            sandbox_id, path, method=request.method, query=request.url.query,
+            body=await request.body(), content_type=request.headers.get("content-type", ""),
+        )
+        return Response(content=content, status_code=status, media_type=content_type)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="sandbox not found")
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+
+
+@app.websocket("/v1/sandbox/tasks/{sandbox_id}/preview/web/")
+@app.websocket("/v1/sandbox/tasks/{sandbox_id}/preview/web/{path:path}")
+async def sandbox_preview_websocket(websocket: WebSocket, sandbox_id: str, path: str = ""):
+    await websocket.accept()
+    try:
+        target = _backend.preview_target(
+            sandbox_id, path, query=websocket.url.query, websocket=True
+        )
+        import websockets
+        async with websockets.connect(target) as upstream:
+            async def client_to_upstream():
+                while True:
+                    message = await websocket.receive()
+                    if message.get("text") is not None:
+                        await upstream.send(message["text"])
+                    elif message.get("bytes") is not None:
+                        await upstream.send(message["bytes"])
+                    else:
+                        return
+
+            async def upstream_to_client():
+                async for message in upstream:
+                    if isinstance(message, bytes):
+                        await websocket.send_bytes(message)
+                    else:
+                        await websocket.send_text(message)
+
+            await asyncio.gather(client_to_upstream(), upstream_to_client())
+    except Exception:
+        try:
+            await websocket.close()
+        except Exception:
+            pass

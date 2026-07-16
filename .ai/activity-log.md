@@ -28,6 +28,18 @@ All 15-min terminal updates and major milestones appended here. Chronological, n
 - Validation: 4 registry/runtime tests + 5 executor tests + 29 worker tests pass, focused API skill tests pass, web 112/112 and repository lint pass, OpenAPI/YAML/compile/diff checks pass. Broad Python baseline failures were reproduced unchanged on detached `origin/main` and were not mixed into this slice.
 - Published implementation commit `1ed12b8` and draft PR #24. CI and Documentation were rejected before checkout with zero steps by the repository account payment/spending-limit gate; linked both external run failures and green local equivalents in GitHub and Plane.
 
+---
+
+## 2026-07-16 — Codex — BOSS-58–62 CI/CD promotion slices
+
+- Claimed Plane BOSS-58 through BOSS-62 and parent BOSS-57, advanced each through Todo to In Progress, and isolated work from all active contributor branches.
+- Implemented the shared DeploymentRun rollout engine, GitHub Actions pipeline adapter, CI/Jenkins config generator, staging-to-production promotion orchestrator, aggregate API/client contract, and ProviderOps promotion timeline.
+- Preserved safety boundaries: external pipeline dispatch remains an adapter-only primitive with no public unguarded route; generated CI never actuates providers; production planning honors environment policy, budget reservation, ChangeSet, health, and ResourceReceipt boundaries; rollback stops widening and records `rollback_pending` for governed follow-up.
+- Validation passes: 7 focused Python tests, 113 web tests, repo lint, production build, smoke, two consecutive schema applications, focused Ruff/compile, YAML/OpenAPI parsing, and diff checks. Two adjacent budget-dependent failures reproduce unchanged on detached `origin/main`.
+- Published implementation commit `d5800f6` to mergeable draft PR [#27](https://github.com/seanheiney/boss/pull/27). Attached commit/PR/test/risk evidence to Plane BOSS-57–62 and retained In Progress state until merge.
+
+---
+
 ## 2026-07-15 — Codex — BOSS-118 controlled main integration
 
 - Created a clean integration branch from the latest `origin/main`, enumerated all unmerged Codex PR stacks, and excluded the parallel contributor's `feat/*` work.
@@ -430,6 +442,31 @@ Next autonomous actions:
 - Grind: if subagents surface new local P1, close it.
 Blockers: Subagent runtime (long running ok, thorough); external 3 P0s (final report will document exact resume: "configure creds + make release-blockers green").
 PR: https://github.com/seanheiney/boss/pull/3
+
+=== CODEX DELIVERY UPDATE 2026-07-16 — BOSS-35–43 / BOSS-63 ===
+Branch: `ai/codex/boss-35-43-63-preview-feedback`
+Base: `ai/codex/boss-58-62-cicd-promotion` (stacked on draft PR #27)
+Commit: `1eb1d36` (`feat(preview): deliver feedback and substrate slices`)
+Draft PR: https://github.com/seanheiney/boss/pull/28
+Plane: BOSS-34/35–43 and BOSS-63 are In Progress pending merge; inherited
+monolithic API matrix failures are separately tracked as BOSS-119.
+Validation: 15 focused API tests, 160 unaffected backend/worker tests, and all
+113 web tests passed; lint/typecheck, production web build, OpenAPI parse, and
+diff checks passed. Three representative legacy failures reproduce unchanged on
+parent `f626511`.
+
+=== CODEX UPDATE 2026-07-16 — BOSS-35–43 + BOSS-63 ===
+- Claimed ten Plane slices and parent BOSS-34; isolated stacked branch created.
+- Implemented durable preview reconciliation, retained-rootfs serve/hold/release,
+  portable full rewriting proxy with SPA/SSE/WebSocket support, startup detection,
+  live logs/failure guidance, execution-substrate audit fields and badges.
+- Implemented durable confirmation-gated feedback agent, completed-task extension,
+  preview route/element capture, and Jenkins/GitLab pipeline adapters.
+- Green: 15 focused API tests, 113 web tests, 160 unaffected backend/worker tests,
+  web typecheck, focused Ruff/compile/diff checks.
+- Inherited baseline: representative auth, Metatron, and ProviderOps failures
+  reproduce unchanged on detached `f626511` against separate Postgres.
+- Next: commit/push, stacked draft PR, Plane evidence; keep tickets In Progress until merge.
 
 === CODEX UPDATE 2026-07-15T21:30:00-04:00 — BOSS-112 DESIGN SYSTEM ===
 Plane: BOSS-112 (In Progress)

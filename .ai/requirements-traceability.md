@@ -1,9 +1,21 @@
 # BOSS Requirements Traceability Matrix (Autonomous .ai version)
 
-**Last rebuilt**: 2026-07-16 by Codex (BOSS-48/BOSS-49/BOSS-50/BOSS-55/BOSS-56 local skill marketplace)
+**Last rebuilt**: 2026-07-16 by Codex (v0.7.0 integration: skill marketplace, CI/CD, preview, and feedback delivery)
 **Sources**: docs/product/PRD-v2.0.md, TECHNICAL_SPEC-v2.0.md, REQUIREMENT_INVENTORY.md, TRACEABILITY.md, user-stories.md, AGENTS.md, README, api/openapi.yaml, db/schema.sql, packages/specpack/*, code + tests scan.
 **Status key**: Implemented (full vertical + tests + states + audit + DoD), Partial, Planned, Blocked (external per real-only), In-Progress (this session).
 **DoD reminder**: Requirement complete only when traced, full journey, UI nav, backend, persistence, auth server+client, validations, loading/empty/error/success, edges, mobile/a11y basics, security/arch/QA review, tests pass, lint/build, docs updated, NO mocks/fakes/TODOs for required behavior.
+
+## 2026-07-16 CI/CD and Deployment Trace
+
+| Plane | Requirement | Implementation | Verification | Status |
+|---|---|---|---|---|
+| BOSS-58 | Generalized staged rollout and auto-stop/rollback state | shared pure transition engine; DeploymentRun rollout persistence/routes/RBAC/events; self-improvement delegation | API permission/idempotency, healthy advance, breach rollback, unchanged self-improvement tests | Implemented |
+| BOSS-59 | Provider-neutral pipeline boundary | discover/trigger/poll/verdict protocol, GitHub Actions adapter/factory, merge-gate consumption, additive Jenkins/GitLab seams | adapter unit test plus existing software-factory contract updates | Implemented |
+| BOSS-60 | Governed CI config proposal | deterministic Actions/Jenkins generation, parse/job validation, discovery no-op, existing BudgetReservation/Receipt/draft-PR path | generator determinism/safety and API-client route tests | Implemented |
+| BOSS-61 | Staging→production promotion | first-class promotion row, pipeline/policy/staging-health gates, delayed production run, production rollout, terminal evidence | persisted integration test covers pass, policy block, delayed production, auto-rollback, aggregate read | Implemented |
+| BOSS-62 | Console promotion timeline | one aggregate API/client mapping and five-second active refresh in ProviderOps | ProviderOps mapping, API client, full web test/build | Implemented |
+
+Provider rollback is intentionally recorded as `rollback_pending` until a separate approved Resource Plane ChangeSet performs the provider write. BOSS-63's concrete Jenkins/GitLab adapters are implemented in stacked draft PR #28 and remain In Progress until merge.
 
 | Req ID | Source Quote/Paraphrase | Persona | User Goal / Journey | Required UI/Nav | Required Backend/API | Data/Storage | Auth/Perms | Validations | Loading/Empty/Error/Success | Edge Cases | Integrations/Jobs/Notes | Analytics/Obs | Tests Required | Impl Status | Test Status | Files Changed | Branch/PR | Owning Agent | Reviewer Agents | Blocker | Completion |
 |--------|-------------------------|---------|---------------------|-----------------|----------------------|--------------|------------|-------------|-----------------------------|------------|-------------------------|---------------|----------------|-------------|-------------|---------------|-----------|--------------|-----------------|---------|------------|
@@ -58,3 +70,15 @@
 - For Blocked: local behavior is complete (fail-closed + visible + receipt/decision); "completion" for prod requires external setup (not code work).
 - New from 41e5243: CAN-000 fresh schema bootstrap reliability (text ref for receipt_id to allow clean bootstrap); RPL-004 now explicitly graceful for providers without direct billing (inventory preserved, status exposed, event, no fake costs).
 - PM prd-audit 2026-06-05 (this): Read full PRD-v2.0 thesis/planes (Control/Execution/Comms/Elastic Resource/ProviderOps/Model Entitlement Broker/Skills/Account Connect/Enterprise)/objects (incl ImprovementProposal, EvaluationRun, CanaryRun, SnapshotHealth, RoutingDecision, ArtifactManifest, KPI etc mapped to tables/artifacts/projections)/journeys + TECH + .ai/ + IMPLEMENTATION_STATUS + openapi (154 paths cover all TECH surfaces + self-imp full + budget full + comms + provider + commercial + model) + code/services/db/web/worker/specpack/policies. Confirmed: comms (COM-002..004: policy enforcement before send, outbox/inbox/quiet/throttle/ACK/deadletter/UI panels+forms; worker deliver job; fail-closed adapters), self-improvement full (SIM-001 + UI: submit proposal form/action, list feed, conditional canary success/fail record forms, rollout record, rollback action; backend states/transitions/artifacts/events/decision linkage/task; matches propose/canary/rollout/rollback; general eval/canary via artifacts + role gov for drift), commercial local (COMPKG: edition community local_auth_allowed + no-hosted, /packs local bundles + install, fail-closed hosted; no runtime dynamic pack import/export yet = noted P3 GAP-PRD-AUDIT-001), elastic resource beyond (RPL-001..009: full local M0 read-only sync/inv, M1 receipted actuate (CF/DO/Supabase skills), M2 deploy registry+env policies, M3 budget-aware autoscaler+janitor+drift+health+killswitches; governor wins; graceful billing; UI explorer+console+janitor). No other "not impl/shallow" high-impact local verticals uncovered by prior audits (KPI/BUD/AUD/SEC/RPL-011/012/AUTO-00x); all core per AGENTS/PRD local feasible covered (receipts/res/leases/no-silent/fail-closed/adapters). Only external (hosted AC, IdP, live provider writes) + P2/P3 polish (rate done, pagination, pack import P3, e2e) left. Updated .ai/gap/trace/agents/handoff/status/activity/release + commit. Coverage good, only external left.
+
+## Preview / substrate / feedback trace (2026-07-16)
+
+| Plane | Requirement | Implementation | Evidence |
+| --- | --- | --- | --- |
+| BOSS-35–40 | Durable, faithful, attributable previews | `preview_service.py`, `execution_substrate.py`, `sandbox_provider.py`, `sandbox-host/sandbox_agent.py`, Code Tasks badges/logs | `test_preview_feedback.py`; operator substrate runbook |
+| BOSS-41–43 | Conversational, confirmed iteration and completed-task extension with preview anchor | `feedback_agent.py`, feedback tables/endpoints/actions/UI, injected preview capture | clarification/proposal/dispatch and anchored-capture API tests |
+| BOSS-63 | Jenkins and GitLab pipeline parity | `pipeline_adapter.py`, provider settings and env documentation | mocked trigger/poll/terminal-verdict tests in `test_cicd_promotion.py` |
+
+Delivery: commit `1eb1d36`, stacked draft PR
+https://github.com/seanheiney/boss/pull/28. Merge PR #27 first, then retarget #28
+to `main`; the Plane issues intentionally remain In Progress until merged.

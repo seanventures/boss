@@ -27,6 +27,7 @@ from .github_adapter import (
 from .agent_loop import load_agent_run, run_agent_loop
 from .claude_cli_adapter import make_chat_adapter
 from .openai_adapter import OpenAIAdapter, estimate_cost_usd_micros  # noqa: F401
+from .pipeline_adapter import make_pipeline_adapter
 from .receipts import ReceiptService
 from .sandbox_validation import (
     SandboxValidationAdapter,
@@ -41,6 +42,7 @@ class SoftwareFactoryService:
         self.budget = BudgetGovernor(settings)
         self.receipts = ReceiptService()
         self.github = GitHubAdapter(settings)
+        self.pipeline = make_pipeline_adapter(settings, github=self.github)
         self.openai = make_chat_adapter(settings)
         self.entitlements = EntitlementBrokerService(settings)
         self.specpack = SpecPackService(settings)
@@ -1276,6 +1278,8 @@ class SoftwareFactoryService:
                        environment, merged_sha, pull_request_url, branch_name,
                        status, current_stage, health_verification_status,
                        rollback_decision_id, stages, created_by_job_id,
+                       deployment_run_id, promotion_id, rollback_reason,
+                       health_observations, started_at, finished_at,
                        created_at, updated_at
                 FROM deployment_rollouts
                 WHERE project_id = :project_id
@@ -1543,11 +1547,11 @@ class SoftwareFactoryService:
             branch_name
         )
         try:
-            validation = self.github.wait_for_commit_checks(
+            validation = self.pipeline.wait_for_verdict(
                 branch_head_sha,
                 timeout_seconds=self.settings.sandbox_ci_timeout_seconds,
                 poll_interval_seconds=self.settings.sandbox_ci_poll_interval_seconds,
-            )
+            ).to_pull_request_validation()
         except Exception as error:
             validation = PullRequestValidationResult(
                 status="unavailable",

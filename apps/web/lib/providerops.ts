@@ -4,6 +4,7 @@ import {
   type CostAnomalySummary,
   type CostEventSummary,
   type DeploymentEnvironmentPolicySummary,
+  type DeploymentPromotionSummary,
   type DeploymentRunSummary,
   type DeploymentTargetSummary,
   type DriftReportSummary,
@@ -160,6 +161,24 @@ export type DeploymentEnvironmentPolicyFeedItem = {
   createdAt?: string;
 };
 
+export type DeploymentPromotionFeedItem = {
+  id: string;
+  appName: string;
+  repo: string;
+  commitRef: string;
+  status: string;
+  pipelineStatus: string;
+  gateStatus: string;
+  stagingRunStatus?: string;
+  productionRunStatus?: string;
+  rolloutStatus?: string;
+  rolloutStage?: string;
+  rollbackReason?: string;
+  failureReason?: string;
+  timeline: Array<Record<string, unknown>>;
+  createdAt: string;
+};
+
 export type ProviderHealthFeedItem = {
   id: string;
   providerAccountId?: string;
@@ -261,6 +280,7 @@ export type ProviderOpsFeed = {
   deploymentTargets: DeploymentTargetFeedItem[];
   deploymentPolicies: DeploymentEnvironmentPolicyFeedItem[];
   deploymentRuns: DeploymentRunFeedItem[];
+  deploymentPromotions: DeploymentPromotionFeedItem[];
   providerHealth: ProviderHealthFeedItem[];
   driftReports: DriftReportFeedItem[];
   reconciliationRuns: ReconciliationRunFeedItem[];
@@ -437,6 +457,28 @@ function mapDeploymentEnvironmentPolicy(
   };
 }
 
+export function mapDeploymentPromotion(
+  payload: DeploymentPromotionSummary,
+): DeploymentPromotionFeedItem {
+  return {
+    id: payload.id,
+    appName: payload.app_name,
+    repo: payload.repo,
+    commitRef: payload.commit_ref,
+    status: payload.status,
+    pipelineStatus: String(payload.pipeline_verdict.status ?? "pending"),
+    gateStatus: String(payload.gate_result.status ?? "waiting"),
+    stagingRunStatus: payload.staging_deployment_run?.status,
+    productionRunStatus: payload.production_deployment_run?.status,
+    rolloutStatus: payload.production_rollout?.status,
+    rolloutStage: payload.production_rollout?.current_stage,
+    rollbackReason: payload.production_rollout?.rollback_reason,
+    failureReason: payload.failure_reason,
+    timeline: payload.timeline,
+    createdAt: payload.created_at,
+  };
+}
+
 function mapProviderHealth(payload: ProviderHealthSummary): ProviderHealthFeedItem {
   return {
     id: payload.id,
@@ -587,6 +629,7 @@ export function emptyProviderOpsFeed(
     deploymentTargets: [],
     deploymentPolicies: [],
     deploymentRuns: [],
+    deploymentPromotions: [],
     providerHealth: [],
     driftReports: [],
     reconciliationRuns: [],
@@ -623,6 +666,7 @@ export async function fetchProviderOpsFeed(
       deploymentTargets,
       deploymentPolicies,
       deploymentRuns,
+      deploymentPromotions,
       providerHealth,
       driftReports,
       reconciliationRuns,
@@ -638,6 +682,7 @@ export async function fetchProviderOpsFeed(
       client.listDeploymentTargets(resolvedProjectId),
       client.listDeploymentEnvironmentPolicies(resolvedProjectId),
       client.listDeploymentRuns(resolvedProjectId, 25),
+      client.listDeploymentPromotions(resolvedProjectId, 25),
       client.listProviderHealth(resolvedProjectId, { limit: 25 }),
       client.listDriftReports(resolvedProjectId, 25),
       client.listReconciliationRuns(resolvedProjectId, 25),
@@ -657,6 +702,7 @@ export async function fetchProviderOpsFeed(
         mapDeploymentEnvironmentPolicy,
       ),
       deploymentRuns: deploymentRuns.items.map(mapDeploymentRun),
+      deploymentPromotions: deploymentPromotions.items.map(mapDeploymentPromotion),
       providerHealth: providerHealth.items.map(mapProviderHealth),
       driftReports: driftReports.items.map(mapDriftReport),
       reconciliationRuns: reconciliationRuns.items.map(mapReconciliationRun),
