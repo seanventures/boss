@@ -82,3 +82,16 @@ Provider rollback is intentionally recorded as `rollback_pending` until a separa
 Delivery: commit `1eb1d36`, stacked draft PR
 https://github.com/seanheiney/boss/pull/28. Merge PR #27 first, then retarget #28
 to `main`; the Plane issues intentionally remain In Progress until merged.
+
+## Product capability taxonomy trace (2026-07-18)
+
+| Requirement | Plane | Product boundary | Runtime status |
+| --- | --- | --- | --- |
+| AGP-001 | BOSS-129 | Agent Group defines who collaborates and the reusable protocol | Planned |
+| INT-001 | BOSS-130; extends BOSS-44–56 | Skill defines the typed capability; IntegrationConnection defines the configured implementation | Partial foundation |
+| WFL-001 | BOSS-132 | Workflow defines the predetermined sequence, mappings, gates, and durable run state | Partial WorkflowSpec/purpose-built foundation |
+| AST-001 | BOSS-123–128, BOSS-131 | Assurance measures and gates claims/outcomes; it references but does not own groups, workflows, skills, or integrations | Partial VAG foundation |
+
+Documentation implementation is tracked by BOSS-133 on
+`ai/codex/boss-133-product-capability-taxonomy`. Validation: generated feature
+docs current and strict MkDocs build passes.

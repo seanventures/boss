@@ -2,7 +2,43 @@
 
 # Partial features
 
-<span class="boss-status boss-status--partial">Partial</span> **3 features**
+<span class="boss-status boss-status--partial">Partial</span> **6 features**
+
+## INT-001 — Integration registry and typed skill contracts {#int-001-integration-registry-and-typed-skill-contracts}
+
+<span class="boss-status boss-status--partial">Partial</span>
+
+**Source:** PRD v2.0 Skills and Integrations; Plane BOSS-130; extends BOSS-44–56
+
+**Implementation:** `docs/product/PRD-v2.0.md`, `docs/product/TECHNICAL_SPEC-v2.0.md`, `packages/specpack/skills`, `apps/api/app/services/skill_executors.py`
+
+**Automated evidence:** Planned: connection lifecycle/health, capability intersection, revocation, provenance, receipt, and tenant tests
+
+**Ledger detail:** Partial: SkillSpec/MCP marketplace and executor foundations exist; generic IntegrationDefinition/IntegrationConnection runtime is planned
+
+## WFL-001 — Reusable mapped workflow registry and runtime {#wfl-001-reusable-mapped-workflow-registry-and-runtime}
+
+<span class="boss-status boss-status--partial">Partial</span>
+
+**Source:** PRD v2.0 Reusable Mapped Workflows; Plane BOSS-132
+
+**Implementation:** `docs/product/PRD-v2.0.md`, `docs/product/TECHNICAL_SPEC-v2.0.md`, `docs/product/ROADMAP-v2.0.md`, `packages/specpack/workflows`
+
+**Automated evidence:** Planned: mapping precedence, immutable versions, run/step state, join/branch, subworkflow, retry/deadletter, replay, migration, and compensation tests
+
+**Ledger detail:** Partial: WorkflowSpec YAML and purpose-built service flows exist; generic registry, mappings, and durable runtime are planned
+
+## AST-001 — Ground-truth and Assurance runtime {#ast-001-ground-truth-and-assurance-runtime}
+
+<span class="boss-status boss-status--partial">Partial</span>
+
+**Source:** PRD v2.0 Ground-truth and Assurance; Plane BOSS-123–128 and BOSS-131
+
+**Implementation:** `docs/product/PRD-v2.0.md`, `docs/product/TECHNICAL_SPEC-v2.0.md`, `docs/product/ROADMAP-v2.0.md`, `docs/product/BOSS_VERIFICATION_AMPLIFIED_GENERATION.md`
+
+**Automated evidence:** Planned: metric regression, closed-question, claim evidence, ownership, Assurance Case, verifier scheduling, override, and tenant tests
+
+**Ledger detail:** Partial: VAG/refute foundations exist; generalized ground-truth enforcement is planned
 
 ## COM-PKG-001 — Open-core editions {#com-pkg-001-open-core-editions}
 

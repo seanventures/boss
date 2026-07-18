@@ -1,5 +1,22 @@
 # Codex Handoff
 
+## 2026-07-18 BOSS-133 product-capability taxonomy
+
+- Active branch: `ai/codex/boss-133-product-capability-taxonomy`, based on
+  current `origin/main`. Plane BOSS-133 tracks the governing-doc change.
+- The PRD now treats Agent Groups (BOSS-129), Skills/Integrations (BOSS-130),
+  Reusable Workflows (BOSS-132), and Ground-truth/Assurance (BOSS-123) as
+  separate first-class capabilities. They compose through versioned IDs, typed
+  inputs/outputs, evidence references, events, decisions, and policy snapshots.
+- Workflow mappings are deterministic and pinned to immutable versions. Agents
+  may propose a process when no mapping exists, but cannot silently improvise
+  an authoritative workflow for a mapped class of work.
+- The technical spec adds canonical group, integration, workflow, and assurance
+  records/state machines. The roadmap and traceability ledger now carry
+  AGP-001, INT-001, WFL-001, and AST-001.
+- Validation: generated feature docs are current and `make docs` passes its
+  strict MkDocs build. No runtime implementation is included in this branch.
+
 Last updated: 2026-07-16 (v0.7.0 integration of PRs #24–#28)
 
 ## 2026-07-16 v0.7.0 release handoff

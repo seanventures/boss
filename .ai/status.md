@@ -1,9 +1,9 @@
 # BOSS Autonomous Delivery Status
 
-**Last updated**: 2026-07-16 (v0.7.0 integration of PRs #24–#28)
+**Last updated**: 2026-07-18 (BOSS-133 product-capability taxonomy)
 **Repo root**: /Volumes/DataSSD1/test/boss
 **Git remote**: https://github.com/seanheiney/boss
-**Current branch**: ai/codex/release-v0.7.0
+**Current branch**: ai/codex/boss-133-product-capability-taxonomy
 **Base branch**: origin/main
 **Product**: BOSS v0.7.0 target (Business Operating System Sentinel)
 **Mission**: Complete product to production-grade, tested, documented, pushed, Codex-coordinated, ready for real users. Grind until all discovered PRD/spec features satisfy world-class DoD or truly blocked.
@@ -14,6 +14,12 @@
 - GitHub: draft PR #16 carries BOSS-22/BOSS-23 and is stacked on draft PR #15; other open PRs were inspected for overlap before implementation.
 
 ## Overall Product Status
+- BOSS-133 separates Agent Groups, Skills/Integrations, Reusable Workflows, and
+  Ground-truth/Assurance in the governing PRD/technical spec while defining how
+  they compose. Plane root features are BOSS-129, BOSS-130, BOSS-132, and
+  BOSS-123 respectively; BOSS-131 remains the Assurance Case child of BOSS-123.
+  Traceability IDs AGP-001, INT-001, WFL-001, and AST-001 are published in the
+  generated docs catalog. Strict documentation validation passes.
 - BOSS v0.7.0 integrates the complete PR #24–#28 delivery: project skills and
   signed local marketplace/MCP, provider-neutral CI/CD and promotions, durable
   attributable previews, and confirmation-gated conversational feedback.
