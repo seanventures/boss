@@ -2,6 +2,7 @@
 
 Status: Governing product-intent specification
 Date: June 3, 2026
+Last updated: July 18, 2026
 Supersedes: `docs/product/PRD-v1.1.md`
 Product: BOSS - Business Operating System Sentinel
 
@@ -40,6 +41,9 @@ BOSS is an open-core product: BOSS Community must be useful, self-hostable, and 
 15. Provider adapters are plugins; the Resource Plane is core.
 16. The open core must not be a crippled demo.
 17. Enterprise monetizes operational trust: identity, scale, governance, compliance, support, and managed infrastructure.
+18. Repeatable classes of work use approved, versioned workflow mappings; a model may propose a workflow but may not silently invent an authoritative process when no mapping exists.
+19. Agent-group agreement is not proof. Consensus, quorum, or model confidence cannot bypass evidence, policy, budget, approval, ownership, or safety gates.
+20. Skills describe typed capabilities; integrations provide configured implementations. Agents and workflows receive resolved capabilities, never raw credentials or ambient provider access.
 
 ## Architecture Position
 
@@ -73,6 +77,22 @@ Owns local models, official CLI adapters, official API adapters, provider health
 
 Owns typed skills, risk tiers, retries, dry-run capability flags, cost estimates, data boundaries, permissions, artifact requirements, and receipt requirements. Skills are the typed boundary agents request; deterministic services decide whether and how to execute them.
 
+### Integration Registry
+
+Owns integration definitions, installed connections, connector/adapter bindings, SecretRefs, granted capabilities, scope, health, freshness, rate-limit state, provenance, and revocation. An integration is a configured implementation of one or more skills; it is not an agent role or a workflow.
+
+### Agent Group Runtime
+
+Owns reusable multi-agent collaboration definitions and runs: member roles, topology, collaboration protocol, context-sharing boundaries, independence constraints, dissent, completion rules, time/budget bounds, and escalation. Agent Groups can be invoked by workflows and can use resolved skills/integrations, but group consensus never becomes ground truth by itself.
+
+### Workflow Registry and Runtime
+
+Owns reusable WorkflowDefinitions, immutable versions, deterministic mappings from work classes to approved versions, durable WorkflowRuns and StepRuns, branching, fan-out/join, timers, approvals, subworkflows, retries/deadletters, compensation, and migration. Workflows coordinate roles or Agent Groups and bind them to skills/integrations under policy.
+
+### Ground-truth and Assurance Runtime
+
+Owns standing health/coverage metrics, settled conclusions, typed claims and evidence, production-surface ownership checks, Assurance Cases, and adversarial verification scheduling. It evaluates whether claims and outcomes are supportable; it does not own the Agent Group, Skill/Integration, or Workflow runtimes it may reference.
+
 ### BOSS Account Connect
 
 Owns hosted login, account identity, cloud org/workspace membership, licensing/entitlements, marketplace identity, team invites, billing portal, optional telemetry/health sync, and hosted connector authorization.
@@ -83,6 +103,14 @@ Community works with local auth and no hosted dependency. BOSS Cloud uses BOSS A
 
 Core objects: `Org`, `Workspace`, `Project`, `User`, `Membership`, `Task`, `Plan`, `Decision`, `Approval`, `Policy`, `RoleSpec`, `RolePack`, `Department`, `KPI`, `Meeting`, `Receipt`, `ArtifactManifest`, `OutboxMessage`, `InboxMessage`, `RoutingDecision`, `TrustScore`, `ImprovementProposal`, `EvaluationRun`, `CanaryRun`, `Deadletter`, `SnapshotHealth`.
 
+Collaboration objects: `AgentGroupSpec`, `AgentGroupVersion`, `AgentGroupRun`, `AgentGroupMemberRun`, `AgentFinding`, `DissentRecord`.
+
+Capability/integration objects: `SkillSpec`, `IntegrationDefinition`, `IntegrationConnection`, `IntegrationHealth`, `SkillInvocation`, `ExecutorBinding`.
+
+Workflow objects: `WorkflowDefinition`, `WorkflowVersion`, `WorkflowMapping`, `WorkflowRun`, `WorkflowStepRun`, `WorkflowMigration`, `CompensationRun`.
+
+Ground-truth/assurance objects: `GroundTruthMetricDefinition`, `GroundTruthObservation`, `SettledConclusion`, `Claim`, `Evidence`, `SurfaceOwnership`, `AssuranceCase`, `VerificationRun`.
+
 Budget/finance objects: `BudgetPolicy`, `BudgetAllocation`, `BudgetReservation`, `CostReceipt`, `CostEvent`, `Commitment`, `BillingAccount`, `ReconciliationRun`.
 
 Model/capacity objects: `ProviderAccount`, `ProviderAdapter`, `EntitlementPool`, `EntitlementConnectionSession`, `ModelRouteDecision`, `CapacityReceipt`, `ModelProviderHealth`, `LocalRunner`, `ExecutionNode`, `WorkerPool`.
@@ -90,6 +118,20 @@ Model/capacity objects: `ProviderAccount`, `ProviderAdapter`, `EntitlementPool`,
 ProviderOps objects: `ExternalResource`, `Capability`, `DeploymentTarget`, `DeploymentEnvironmentPolicy`, `DeploymentRun`, `ChangeSet`, `ResourceReceipt`, `DriftReport`, `ProviderHealth`, `SecretRef`, `ResourcePolicy`, `ScalePlan`, `ResourceInventorySnapshot`.
 
 Commercial objects: `Edition`, `LicenseEntitlement`, `AccountConnectOrg`, `AccountConnectHealthCheck`, `HostedMarketplaceListing`, `HostedMarketplaceSyncRun`, `PackListing`, `PackInstall`, `MarketplacePublisher`, `EnterpriseCluster`, `EnterpriseIdentityProvider`.
+
+## Product Capability Composition Model
+
+These are separate first-class product concepts. They interoperate through versioned identifiers, typed inputs/outputs, events, evidence references, policy snapshots, and durable run records; none is shorthand for another.
+
+| Concept | Owns | Does not own |
+| --- | --- | --- |
+| Agent Group | Who collaborates and the collaboration protocol | Workflow sequencing, capability implementation, or truth determination |
+| Skill | The typed capability contract that may be requested | Credentials, installed provider configuration, or orchestration |
+| Integration | The installed/configured system that implements skills | Agent roles, business process sequencing, or claim acceptance |
+| Workflow | What happens, in what order, under which gates | Agent identity, connector implementation, or evidence truthfulness |
+| Ground-truth/Assurance | Whether claims and outcomes satisfy measured evidence and policy | The group, integration, skill, or workflow runtimes it references |
+
+Composition example: a `WorkflowMapping` selects a pinned `WorkflowVersion`; one step invokes an `AgentGroupVersion`; group members receive only policy-resolved `SkillSpec` capabilities backed by healthy `IntegrationConnection` records; their outputs become `Evidence` in an `AssuranceCase`; deterministic gates decide whether the workflow may advance.
 
 ### YAML Examples
 
@@ -463,6 +505,36 @@ Agent Factory responsibilities:
 
 No new role may ship without objective linkage, bounded scope, eval plan, permissions, budget, staged rollout, and rollback plan.
 
+## Agent Groups and Reusable Collaboration Protocols
+
+An Agent Group is a reusable, governed collaboration unit, not merely several prompts running at once. It defines a purpose, versioned membership by RoleSpec, topology, collaboration protocol, shared/private context boundaries, independence rules, allowed capabilities, time and budget bounds, completion rule, dissent handling, and escalation target.
+
+Required group patterns include panel, producer-reviewer, bounded debate, fan-out/swarm, sequential handoff, incident cell, and evidence-based council. Meetings can render a human-readable view of an Agent Group run, but meetings and groups remain distinct: meetings own minutes and decisions; groups own governed multi-agent execution.
+
+Every group run must preserve independent work products and dissent. Quorum can determine that the group has completed its protocol; it cannot convert weak evidence into truth or bypass a Decision, approval, budget, ownership, data-boundary, or safety gate.
+
+## Skills and Integrations
+
+A SkillSpec is the typed capability contract an agent, Agent Group, or Workflow step may request. An IntegrationDefinition describes a supported external or internal system and the skills its adapters can implement. An IntegrationConnection is an installed, scoped configuration with SecretRefs, permissions, health, freshness, rate-limit state, provenance, and revocation status. An executor/adapter is the deterministic implementation.
+
+Capability resolution must intersect the requesting role/group, Workflow step, org/project policy, risk tier, data boundary, installed connection, granted permissions, and current health. Skills and integrations must never create ambient authority. Every invocation links attempts, artifacts/evidence, cost, receipts, integration/version, and any ChangeSet or ResourceReceipt.
+
+The existing SkillSpec, MCP, capability-bundle, provider-adapter, and project skill registry foundations remain canonical. The Integration Registry generalizes configured connectivity across developer, data, communications, SaaS, model, and provider systems without building a competing skill marketplace.
+
+## Reusable Mapped Workflows
+
+A Workflow is a predetermined, versioned, reusable map for a class of work. It defines typed inputs/outputs, steps, branches, parallel fan-out/join, bounded loops, timers, roles or Agent Groups, Skill/Integration bindings, preconditions, postconditions, policy and evidence gates, approvals, retries/deadletters, compensation/rollback, and completion semantics.
+
+`WorkflowMapping` deterministically maps a command, task kind, event, object transition, project, or policy scope to an approved immutable `WorkflowVersion`. An active mapping takes precedence over model improvisation. If no approved mapping exists, BOSS may propose a new mapping or raise a Decision; it must not silently invent an authoritative process.
+
+`WorkflowRun` and `WorkflowStepRun` are durable, lease-aware records. Published versions are immutable and running instances stay pinned unless an explicit, audited migration succeeds. Reusable subworkflows and Workflow Packs provide composition. Existing YAML WorkflowSpecs become registered definitions and must not remain disconnected documentation examples.
+
+## Ground-truth and Assurance
+
+Ground truth must live outside model memory as measured, versioned, enforceable state. BOSS supports continuous coverage/freshness metrics and regression alarms, a settled-conclusions ledger and closed-question tripwire, evidence-backed solved/fixed/regressed/caused-by claim gates, production-surface ownership enforcement, Assurance Cases, and standing adversarial verification.
+
+An Assurance Case links a subject to its claims, evidence, metrics, settled conclusions, surface owners, verification results, overrides, and decisions. It may reference Agent Group runs, Workflow Runs, Skill invocations, and Integration Connections, but does not own those capabilities. Fixed/solved claims require reproducible red-to-green evidence; causal claims require isolation evidence or remain inconclusive.
+
 ## Metatron and Mission Control
 
 Metatron is the executive/operator interface. It provides status graph, what changed, blockers, decision needs, risk summaries, incident mode, command palette, routing/cost/receipt visibility, and freshness-aware answers with durable references. Metatron can render to dashboard, chat, TUI, and later voice/video.
@@ -582,6 +654,9 @@ Phase 0 - Kernel / Local dogfood:
 Phase 1 - BOSS builds BOSS:
 
 - Spec-to-PR workflow.
+- Workflow registry, immutable versions, deterministic mappings, and durable WorkflowRuns for core dogfood processes.
+- Basic Agent Group runtime with producer-reviewer and bounded-debate protocols.
+- Generic Integration Registry layered over the existing SkillSpec and provider-adapter foundations.
 - Branch/worktree isolation.
 - Evidence bundles.
 - Model entitlement broker.
@@ -593,6 +668,8 @@ Phase 1 - BOSS builds BOSS:
 
 Phase 2 - ProviderOps M0/M1:
 
+- Ground-truth metric definitions/observations and regression alarms for collectors and production services.
+- Production-surface ownership registry and single-deployer gate.
 - Read-only provider sync.
 - Resource inventory.
 - Cost ledger.
@@ -602,6 +679,8 @@ Phase 2 - ProviderOps M0/M1:
 
 Phase 3 - Software Factory v1:
 
+- Evidence-backed claim transitions and Assurance Cases for release, incident, and regression claims.
+- Standing verifier scheduling over the existing VAG/refute foundation.
 - Code/test/review lanes.
 - Browser/UI validation.
 - CI integration.
@@ -656,6 +735,14 @@ Commercial: Community installs, activation rate, Cloud conversion, enterprise tr
 
 Trust/autonomy: trust score trends, autonomy upgrades/downgrades, policy violations, role drift incidents, operator corrections per role.
 
+Agent Groups: group-run completion rate, unresolved dissent, quorum-without-evidence blocks, member failure recovery, cost per group outcome, and operator overrides.
+
+Skills/integrations: healthy connection coverage, capability-resolution denials, stale integration rate, undeclared-effect blocks, invocation receipt coverage, and revocation propagation time.
+
+Workflows: mapped-work coverage, version adoption, successful recovery/replay, step deadletter rate, compensation success, unhandled work-class rate, and model-improvised-process blocks.
+
+Ground-truth/assurance: regression detection latency, evidence-backed claim rate, closed-question tripwire hits, stale evidence blocks, verifier overturn rate, and ownership-conflict prevention.
+
 ## Conflicts and Resolutions
 
 1. Plugin vs core plane. Resolution: provider adapters are plugins. The Resource Plane is core.
@@ -668,6 +755,10 @@ Trust/autonomy: trust score trends, autonomy upgrades/downgrades, policy violati
 8. Open source adoption vs monetization. Resolution: Community must be useful and self-hostable. Enterprise monetizes scale, governance, compliance, managed infrastructure, support, and commercial safety.
 9. Central auth moat vs open-source trust. Resolution: BOSS Account Connect is required for Cloud but optional for Community. Community must run with local auth.
 10. Personal subscriptions vs production workloads. Resolution: personal subscription/CLI capacity is for owner dogfood/personal work only. Production/customer/multi-tenant workloads use approved APIs or enterprise gateways.
+11. Flexible agents vs repeatable operations. Resolution: approved WorkflowMappings govern known classes of work; agents may propose changes, but cannot silently replace mapped process.
+12. Multi-agent consensus vs correctness. Resolution: Agent Groups preserve independent findings and dissent; evidence and deterministic policy—not vote count—establish authoritative status.
+13. Skill vs integration. Resolution: SkillSpec describes what may be requested; IntegrationConnection describes which configured system can implement it under current scope, health, and authority.
+14. Composition vs coupling. Resolution: Agent Groups, Skills, Integrations, Workflows, and Assurance are separate runtimes connected by versioned references and typed contracts.
 
 ## Release-Grade Acceptance Criteria
 
@@ -677,6 +768,10 @@ Trust/autonomy: trust score trends, autonomy upgrades/downgrades, policy violati
 - Every provider-backed non-sandbox deployment run has an explicit environment rollout policy before any provider ChangeSet is planned.
 - Every critical message has Outbox/Inbox ACK, retry/deadletter, and escalation path.
 - Every model route decision records selected/rejected sources, capacity, budget state, data boundary, and provider-policy result.
+- Every repeatable work class with an active mapping runs the pinned WorkflowVersion; missing mappings create a proposal/Decision rather than invisible process invention.
+- Every Agent Group run preserves member provenance and dissent and cannot use consensus to bypass deterministic gates.
+- Every skill invocation identifies the resolved SkillSpec, executor, IntegrationConnection where applicable, authority, evidence/artifacts, costs, and receipts.
+- Every authoritative solved/fixed/regressed/caused-by claim links the required reproducible evidence and Assurance Case.
 - Community runs locally without BOSS Account Connect.
 - Cloud uses BOSS Account Connect.
 - Enterprise attached/detached modes are designed before enterprise packaging ships.

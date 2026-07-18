@@ -462,6 +462,19 @@ Next autonomous actions:
 Blockers: Subagent runtime (long running ok, thorough); external 3 P0s (final report will document exact resume: "configure creds + make release-blockers green").
 PR: https://github.com/seanheiney/boss/pull/3
 
+=== CODEX PRODUCT TAXONOMY UPDATE 2026-07-18 ===
+Plane: BOSS-133 (In Progress); related root features BOSS-123, BOSS-129,
+BOSS-130, and BOSS-132.
+Branch: ai/codex/boss-133-product-capability-taxonomy (origin/main).
+Outcome: Corrected the product model so Agent Groups, Skills, Integrations,
+Reusable Workflows, and Ground-truth/Assurance remain separate capabilities
+that compose through versioned contracts. Added immutable WorkflowVersion,
+deterministic WorkflowMapping, durable WorkflowRun/StepRun, Agent Group,
+IntegrationConnection, and Assurance Case requirements to PRD v2 and technical
+spec v2; updated roadmap and traceability; regenerated feature status pages.
+Validation: git diff --check; make docs-check; make docs (strict MkDocs) PASS.
+Runtime scope: Documentation and planning only; no API/schema/runtime code.
+
 === CODEX DELIVERY UPDATE 2026-07-16 — BOSS-35–43 / BOSS-63 ===
 Branch: `ai/codex/boss-35-43-63-preview-feedback`
 Base: `ai/codex/boss-58-62-cicd-promotion` (stacked on draft PR #27)

@@ -2,6 +2,16 @@
 
 # Planned features
 
-<span class="boss-status boss-status--planned">Planned</span> **0 features**
+<span class="boss-status boss-status--planned">Planned</span> **1 feature**
 
-No features currently have this status.
+## AGP-001 — Versioned Agent Groups and collaboration protocols {#agp-001-versioned-agent-groups-and-collaboration-protocols}
+
+<span class="boss-status boss-status--planned">Planned</span>
+
+**Source:** PRD v2.0 Agent Groups; Plane BOSS-129
+
+**Implementation:** `docs/product/PRD-v2.0.md`, `docs/product/TECHNICAL_SPEC-v2.0.md`, `docs/product/ROADMAP-v2.0.md`
+
+**Automated evidence:** Planned: group version/run state, member provenance, dissent, lease/budget, protocol, and gate-bypass tests
+
+**Ledger detail:** Planned

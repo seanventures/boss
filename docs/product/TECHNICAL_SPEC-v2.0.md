@@ -2,6 +2,7 @@
 
 Status: Technical companion to `docs/product/PRD-v2.0.md`
 Date: June 3, 2026
+Last updated: July 18, 2026
 Supersedes: `docs/product/TECHNICAL_SPEC-v1.1.md`
 
 ## Architecture Overview
@@ -14,6 +15,10 @@ BOSS is a durable, API-first control plane for accountable AI labor. The technic
 - Elastic Resource Plane / ProviderOps: provider accounts, adapters, inventory, billing, deployments, ChangeSets, ResourceReceipts, drift, health, reconciliation, janitor, and autoscaler policy.
 - Model Entitlement Broker / AI Capacity Router: adapter discovery, entitlement pools, capacity state, route decisions, cooldowns, fallback selection, local/subscription/API/enterprise gateway routing.
 - Skills Registry: typed skills, risk tier, data boundary, permissions, retry policy, cost estimates, artifact requirements, receipt requirements.
+- Integration Registry: connector/adapter definitions, installed connections, SecretRefs, granted capabilities, scope, health/freshness, provenance, rate-limit state, and revocation.
+- Agent Group Runtime: versioned collaboration definitions, member-role resolution, topology/protocol, context boundaries, independence, dissent, bounded rounds, budgets, and durable runs.
+- Workflow Registry and Runtime: immutable definitions/versions, deterministic work mappings, durable runs/step runs, branching, fan-out/join, approvals, subworkflows, retries/deadletters, compensation, and migration.
+- Ground-truth and Assurance Runtime: metric observations, settled conclusions, typed claims/evidence, surface ownership, Assurance Cases, and scheduled adversarial verification.
 - BOSS Account Connect: hosted account identity, licensing, marketplace identity, cloud org/workspace membership, team invites, billing portal, managed connector authorization, and optional telemetry/health sync.
 - Enterprise Identity Runtime: OIDC/SAML/SCIM provider metadata, SecretRefs, certificate/JWKS configuration, and explicit per-project rollout policies. Provider metadata alone is not sufficient for live SSO or SCIM; runtime paths require matching rollout policy.
 
@@ -192,6 +197,57 @@ Local runners are execution nodes that can host workers, browser automation, cod
 
 Local runners may be Community-managed, Cloud-attached, or Enterprise-private. Detached Enterprise runners must support local license activation and private SecretRef resolution.
 
+## Agent Group Runtime
+
+Canonical records:
+
+- `AgentGroupSpec`: stable identity, scope, purpose, policy references, and active version.
+- `AgentGroupVersion`: immutable member RoleSpecs, topology, protocol, context policy, allowed capability constraints, independence rules, budget/call bounds, completion rule, and escalation target.
+- `AgentGroupRun`: pinned version, subject/task/workflow/assurance references, state, policy snapshot, budget, timestamps, and disposition.
+- `AgentGroupMemberRun`: resolved role/module, input bundle version, leased job, attempts, outputs, costs, receipts, and status.
+- `AgentFinding` and `DissentRecord`: separately attributable conclusions and evidence references.
+
+Group-run state machine:
+
+`queued -> resolving -> running -> waiting_member|waiting_decision -> completed|failed|deadlettered|cancelled`.
+
+Completion rules decide whether the collaboration protocol is finished, not whether a claim is true. Evidence/approval/safety gates execute after group completion. Every spendy member call uses BudgetReservation and Receipt; every member job uses lease, heartbeat, bounded retry, and deadletter.
+
+## Skill and Integration Runtime
+
+`SkillSpec` remains the requested capability boundary. `IntegrationDefinition` lists connector metadata and supported SkillSpecs. `IntegrationConnection` is a scoped installation with `SecretRef`, permission grants, health/freshness, rate-limit state, owner, provenance, and enabled/revoked status. `ExecutorBinding` maps a SkillSpec and compatible IntegrationDefinition to a deterministic local/server/plugin executor.
+
+Resolution input is `(tenant, project, actor, RoleSpec, AgentGroupVersion?, WorkflowStep?, SkillSpec, risk, data_boundary, policy_snapshot)`. The result is either one allowed executor/connection with an explanation or a fail-closed Decision/denial. Resolution must recheck connection health, revocation, permissions, ownership where relevant, and current project registry state immediately before execution.
+
+Each `SkillInvocation` records the requested and effective SkillSpec versions, executor binding, IntegrationConnection, typed input/output hashes, attempts, evidence/artifacts, cost, BudgetReservation, Receipt/dedupe key, and ChangeSet/ResourceReceipt for provider effects. Raw credentials never enter agent context.
+
+## Reusable Workflow Runtime
+
+Canonical records:
+
+- `WorkflowDefinition`: stable workflow identity, scope, owner, pack/provenance, and active version.
+- `WorkflowVersion`: immutable typed graph containing steps, edges, inputs/outputs, gates, role/Agent Group and Skill/Integration bindings, retry/deadletter, timers, compensation, and completion rules.
+- `WorkflowMapping`: deterministic selector over command/task/event/object kind plus tenant/project/policy scope and priority, pointing to one approved WorkflowVersion.
+- `WorkflowRun`: pinned definition/version, mapping/policy snapshot, inputs, state, current frontier, budget, evidence, decisions, timestamps, and final output.
+- `WorkflowStepRun`: step state, leased job or Decision/AgentGroupRun/subworkflow reference, attempts, inputs/outputs, evidence, costs, receipts, and compensation state.
+- `WorkflowMigration`: explicit validated transition of a paused run between compatible versions, including rollback evidence.
+
+Mapping resolution is deterministic: most-specific active scope wins, then explicit priority; ambiguous equal-precedence mappings fail closed. When no mapping exists, intake may create a workflow proposal or Decision but cannot synthesize an authoritative run graph silently.
+
+Workflow-run states:
+
+`queued -> validating -> running -> waiting_timer|waiting_decision|blocked -> completed|failed|deadlettered|cancelled|compensating -> compensated`.
+
+Supported graph semantics include sequential edges, conditionals, parallel fan-out/join, bounded loops, human decisions, Agent Group steps, Skill invocations, Integration-backed actions, and pinned subworkflows. Step effects are idempotent; crash recovery resumes from durable state. Published versions are immutable. Existing `packages/specpack/workflows/*.yaml` files are seed definitions and must pass schema/policy validation before activation.
+
+## Ground-truth and Assurance Runtime
+
+Canonical records include `GroundTruthMetricDefinition`, `GroundTruthObservation`, `SettledConclusion`, `Claim`, `Evidence`, `SurfaceOwnership`, `AssuranceCase`, and `VerificationRun`.
+
+An Assurance Case references, but does not contain or redefine, AgentGroupRuns, WorkflowRuns, SkillInvocations, and IntegrationConnections. Policy evaluation snapshots the metric/evidence contract, settled conclusions, surface ownership, risk, tenant/project rules, and required verifier. A blocked or conflicting result creates a durable Decision/event; lower-scope policy cannot weaken mandatory higher-scope requirements.
+
+Metric evaluators and verifier runs are leased jobs with dedupe, retry/deadletter, and budgets/receipts where spendy. Fixed/solved claims require reproducible red-to-green evidence. Caused-by claims require an isolation experiment or remain `inconclusive`. Surface ownership is revalidated at the provider/deployment boundary.
+
 ## BOSS Account Connect
 
 BOSS Account Connect owns hosted login, account identity, cloud org/workspace membership, license entitlements, marketplace identity, team invites, billing portal, managed connector authorization, hosted model/provider credential management, optional telemetry/health sync, and cloud backup/sync if enabled.
@@ -299,6 +355,45 @@ Pack types:
 BOSS Account Connect provides marketplace identity for Cloud and attached Enterprise. Community must support local import/export of packs without hosted identity.
 
 ## API Surface Inventory
+
+Agent Groups (planned):
+
+- `GET/POST /v1/agent-groups`
+- `GET/POST /v1/agent-groups/{id}/versions`
+- `GET/POST /v1/agent-group-runs`
+- `GET /v1/agent-group-runs/{id}/findings`
+
+Skills and Integrations:
+
+- `GET /v1/skills`
+- `GET/POST /v1/integration-definitions`
+- `GET/POST /v1/integration-connections`
+- `POST /v1/integration-connections/{id}/test`
+- `POST /v1/integration-connections/{id}/revoke`
+- `GET /v1/skill-invocations`
+
+Reusable Workflows (planned):
+
+- `GET/POST /v1/workflows`
+- `GET/POST /v1/workflows/{id}/versions`
+- `GET/POST /v1/workflow-mappings`
+- `GET/POST /v1/workflow-runs`
+- `POST /v1/workflow-runs/{id}/pause`
+- `POST /v1/workflow-runs/{id}/resume`
+- `POST /v1/workflow-runs/{id}/cancel`
+- `POST /v1/workflow-runs/{id}/migrate`
+- `GET /v1/workflow-runs/{id}/steps`
+
+Ground-truth and Assurance (planned):
+
+- `GET/POST /v1/ground-truth-metrics`
+- `GET /v1/ground-truth-observations`
+- `GET/POST /v1/settled-conclusions`
+- `GET/POST /v1/assurance-cases`
+- `GET/POST /v1/claims`
+- `GET/POST /v1/evidence`
+- `GET/POST /v1/surface-ownership`
+- `GET/POST /v1/verification-runs`
 
 ProviderOps:
 

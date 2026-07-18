@@ -2,8 +2,20 @@
 
 Status: Product roadmap companion to `docs/product/PRD-v2.0.md`
 Date: June 3, 2026
+Last updated: July 18, 2026
 
 This roadmap describes intended maturity phases. It is not an implementation-status report.
+
+## Cross-cutting Capability Tracks
+
+Four product tracks mature alongside the numbered phases and remain separate even when composed in one run:
+
+1. **Agent Groups** — who collaborates and under which reusable protocol. Phase 1 establishes versioned group definitions/runs; later phases add richer templates, enterprise governance, and marketplace packs.
+2. **Skills and Integrations** — what typed capability is requested and which installed/configured system implements it. The existing SkillSpec/MCP/provider-adapter foundation is extended with a generic Integration Registry and connection health/authority model.
+3. **Reusable Workflows** — what happens, in what order, and under which deterministic gates. Phase 1 turns existing WorkflowSpec YAML into immutable registered versions, work-class mappings, and durable runs; later phases add composition, migration, and marketplace distribution.
+4. **Ground-truth and Assurance** — whether claims and outcomes are supported by measured external evidence. Phases 2–3 add regression alarms, settled conclusions, evidence gates, surface ownership, Assurance Cases, and standing verification.
+
+Composition rule: a mapped Workflow may invoke roles or Agent Groups and resolve Skills through Integration Connections; their outputs may feed an Assurance Case. No track owns or substitutes for another.
 
 ## Phase 0 - Kernel / Local Dogfood
 
@@ -20,6 +32,8 @@ Scope:
 - Mission Control shell.
 - Metatron status API.
 - Simple budget governor.
+- Canonical schemas for Agent Groups, Integrations, Workflows, and Assurance references.
+- WorkflowSpec validation and registry seed path for existing core YAML definitions.
 - Basic Software Factory sandbox-real PR proposal and evidence path.
 - PRD/spec export.
 
@@ -37,6 +51,9 @@ Goal: dogfood BOSS as its first customer.
 Scope:
 
 - Spec-to-PR workflow.
+- Immutable WorkflowVersions, deterministic WorkflowMappings, durable WorkflowRuns/StepRuns, and reusable subworkflows for core dogfood processes.
+- Basic Agent Group runtime with producer-reviewer, bounded-debate, fan-out, and sequential-handoff protocols.
+- Generic IntegrationDefinition/IntegrationConnection registry layered over SkillSpec, MCP, and provider adapters.
 - Branch/worktree isolation.
 - Evidence bundles.
 - Model Entitlement Broker.
@@ -59,6 +76,8 @@ Goal: make external resources visible and safely changeable.
 Scope:
 
 - Read-only provider sync.
+- Continuous ground-truth metrics/observations and regression alarms for collectors and services.
+- Production-surface ownership registry and single-deployer enforcement.
 - Resource inventory.
 - Cost ledger.
 - ChangeSets.
@@ -78,6 +97,9 @@ Goal: make BOSS a reliable software-production department.
 Scope:
 
 - Code/test/review lanes.
+- Evidence-backed solved/fixed/regressed/caused-by gates and Assurance Cases.
+- Standing verifier scheduling over the existing VAG/refute engine.
+- Workflow compensation, explicit run migration, and broader Agent Group templates.
 - Browser/UI validation.
 - CI integration.
 - Release packets.
@@ -142,6 +164,7 @@ Scope:
 - Verified publishers.
 - Private enterprise packs.
 - Sector templates.
+- Agent Group, Integration, Workflow, and evaluation/assurance packs with explicit trust metadata and install boundaries.
 - Simulation/forecasting.
 
 Exit criteria:
