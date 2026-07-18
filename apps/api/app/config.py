@@ -560,6 +560,16 @@ class Settings(BaseSettings):
     verifier_meta_max_fp_rate: float = Field(
         default=0.2, alias="BOSS_VERIFIER_META_MAX_FP_RATE"
     )
+    # VAG #106 mutation gate on the FROZEN TESTS: plant deterministic AST mutations in the impl and
+    # require the tests to kill them. min_score = floor on mutation score (killed/run); a surviving
+    # mutant is a bug-class the suite can't catch. max_mutants caps cost/time (one test run each);
+    # require_property_tests optionally blocks a suite with no Hypothesis property tests.
+    mutation_min_score: float = Field(default=0.8, alias="BOSS_MUTATION_MIN_SCORE")
+    mutation_max_mutants: int = Field(default=30, alias="BOSS_MUTATION_MAX_MUTANTS")
+    mutation_timeout_seconds: int = Field(default=30, alias="BOSS_MUTATION_TIMEOUT_SECONDS")
+    mutation_require_property_tests: bool = Field(
+        default=False, alias="BOSS_MUTATION_REQUIRE_PROPERTY_TESTS"
+    )
     # Per-task budget cap for a code task (model spend), reserved before work.
     code_task_budget_usd_micros: int = Field(
         default=2_000_000, alias="BOSS_CODE_TASK_BUDGET_USD_MICROS"

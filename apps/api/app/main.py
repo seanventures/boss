@@ -5096,6 +5096,29 @@ def verifier_ratchet_capture_endpoint(payload: dict):
     return result
 
 
+@app.post("/v1/mutation-gate")
+def mutation_gate_endpoint(payload: dict):
+    """VAG #106: mutation-gate the frozen tests. Plants deterministic AST mutations in `target_file`
+    and requires the tests to KILL them — a surviving mutant is a bug-class the suite can't catch.
+    payload: {files: {path: content}, target_file, test_command?, min_score?, max_mutants?, timeout?,
+    require_property_tests?}. Model-free, but it EXECUTES the provided tests, so call it from a
+    trusted eval / sandbox context. Returns the mutation score, gate, and the surviving mutants."""
+    from .services import mutation_gate as mg
+    files = payload.get("files")
+    target = payload.get("target_file")
+    if not isinstance(files, dict) or not files or not target:
+        raise HTTPException(status_code=422, detail="files (path->content) and target_file are required.")
+    return mg.run_mutation_gate(
+        files, target,
+        payload.get("test_command") or ["python3", "-m", "unittest", "discover", "-v"],
+        min_score=payload.get("min_score", settings.mutation_min_score),
+        max_mutants=payload.get("max_mutants", settings.mutation_max_mutants),
+        timeout=payload.get("timeout", settings.mutation_timeout_seconds),
+        require_property_tests=payload.get(
+            "require_property_tests", settings.mutation_require_property_tests),
+    )
+
+
 # --- Discovery pipeline: research-driven outcome discovery -------------------
 @app.post("/v1/discoveries")
 def start_discovery_endpoint(payload: dict):
