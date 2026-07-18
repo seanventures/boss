@@ -790,7 +790,7 @@ class ResourcePlaneService:
                 """
                 SELECT id, project_id, provider_account_id, classification, summary,
                        unmanaged_count, orphaned_count, security_impacting_count,
-                       production_impacting_count, recommendations, created_at
+                       production_impacting_count, recommendations, detail, created_at
                 FROM drift_reports
                 WHERE project_id = :project_id
                 ORDER BY created_at DESC
@@ -6422,58 +6422,75 @@ class ResourcePlaneService:
         self,
         connection: Connection,
         project_id: str,
-        provider_account_id: str,
+        provider_account_id: Optional[str],
+        *,
+        classification: Optional[str] = None,
+        summary: Optional[str] = None,
+        unmanaged_count: Optional[int] = None,
+        orphaned_count: Optional[int] = None,
+        recommendations: Optional[list[dict[str, Any]]] = None,
+        detail: Optional[dict[str, Any]] = None,
     ) -> dict[str, Any]:
-        counts = connection.execute(
-            text(
-                """
-                SELECT
-                    COUNT(*) FILTER (WHERE ownership = 'discovered_unmanaged') AS unmanaged_count,
-                    COUNT(*) FILTER (WHERE ownership = 'orphaned') AS orphaned_count
-                FROM external_resources
-                WHERE project_id = :project_id AND provider_account_id = :provider_account_id
-                """
-            ),
-            {
-                "project_id": project_id,
-                "provider_account_id": provider_account_id,
-            },
-        ).mappings().one()
-        unmanaged_count = int(counts["unmanaged_count"] or 0)
-        orphaned_count = int(counts["orphaned_count"] or 0)
-        classification = (
-            "cost-impacting" if unmanaged_count or orphaned_count else "benign"
-        )
+        """Persist a drift report.
+
+        Called without keyword overrides, this is the reconciliation-loop path:
+        it classifies the synced external_resources inventory.  The Terraform
+        drift-sync path (BOSS-69) precomputes its own three-way comparison and
+        passes classification/summary/counts/detail explicitly while reusing
+        the same table, vocabulary, and serializer.
+        """
+        if classification is None:
+            counts = connection.execute(
+                text(
+                    """
+                    SELECT
+                        COUNT(*) FILTER (WHERE ownership = 'discovered_unmanaged') AS unmanaged_count,
+                        COUNT(*) FILTER (WHERE ownership = 'orphaned') AS orphaned_count
+                    FROM external_resources
+                    WHERE project_id = :project_id AND provider_account_id = :provider_account_id
+                    """
+                ),
+                {
+                    "project_id": project_id,
+                    "provider_account_id": provider_account_id,
+                },
+            ).mappings().one()
+            unmanaged_count = int(counts["unmanaged_count"] or 0)
+            orphaned_count = int(counts["orphaned_count"] or 0)
+            classification = (
+                "cost-impacting" if unmanaged_count or orphaned_count else "benign"
+            )
+            recommendations = []
+            if unmanaged_count:
+                recommendations.append(
+                    {
+                        "action": "classify_or_import_resources",
+                        "count": unmanaged_count,
+                    }
+                )
+            if orphaned_count:
+                recommendations.append(
+                    {
+                        "action": "propose_cleanup_changeset",
+                        "count": orphaned_count,
+                        "requires_approval": True,
+                    }
+                )
+            summary = (
+                f"{unmanaged_count} unmanaged and {orphaned_count} orphaned resources found."
+            )
         report_id = make_id("drift")
-        recommendations = []
-        if unmanaged_count:
-            recommendations.append(
-                {
-                    "action": "classify_or_import_resources",
-                    "count": unmanaged_count,
-                }
-            )
-        if orphaned_count:
-            recommendations.append(
-                {
-                    "action": "propose_cleanup_changeset",
-                    "count": orphaned_count,
-                    "requires_approval": True,
-                }
-            )
-        summary = (
-            f"{unmanaged_count} unmanaged and {orphaned_count} orphaned resources found."
-        )
         connection.execute(
             text(
                 """
                 INSERT INTO drift_reports (
                     id, project_id, provider_account_id, classification, summary,
-                    unmanaged_count, orphaned_count, recommendations
+                    unmanaged_count, orphaned_count, recommendations, detail
                 )
                 VALUES (
                     :id, :project_id, :provider_account_id, :classification, :summary,
-                    :unmanaged_count, :orphaned_count, CAST(:recommendations AS JSONB)
+                    :unmanaged_count, :orphaned_count, CAST(:recommendations AS JSONB),
+                    CAST(:detail AS JSONB)
                 )
                 """
             ),
@@ -6483,9 +6500,10 @@ class ResourcePlaneService:
                 "provider_account_id": provider_account_id,
                 "classification": classification,
                 "summary": summary,
-                "unmanaged_count": unmanaged_count,
-                "orphaned_count": orphaned_count,
-                "recommendations": json.dumps(recommendations),
+                "unmanaged_count": int(unmanaged_count or 0),
+                "orphaned_count": int(orphaned_count or 0),
+                "recommendations": json.dumps(recommendations or []),
+                "detail": json.dumps(detail or {}),
             },
         )
         return self._serialize_drift_report(
@@ -6494,7 +6512,7 @@ class ResourcePlaneService:
                     """
                     SELECT id, project_id, provider_account_id, classification, summary,
                            unmanaged_count, orphaned_count, security_impacting_count,
-                           production_impacting_count, recommendations, created_at
+                           production_impacting_count, recommendations, detail, created_at
                     FROM drift_reports
                     WHERE id = :id
                     """
@@ -7431,6 +7449,7 @@ class ResourcePlaneService:
         payload = dict(row)
         payload["created_at"] = payload["created_at"].isoformat()
         payload["recommendations"] = payload.get("recommendations") or []
+        payload["detail"] = payload.get("detail") or {}
         return payload
 
     def _serialize_reconciliation_run(self, row) -> dict[str, Any]:

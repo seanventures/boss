@@ -1467,6 +1467,12 @@ CREATE TABLE IF NOT EXISTS drift_reports (
 );
 CREATE INDEX IF NOT EXISTS idx_drift_reports_project
   ON drift_reports(project_id, classification, created_at DESC);
+-- Terraform drift-sync (BOSS-69): per-resource three-way comparison payload
+-- (BOSS desired_state vs supplied .tf vs live inventory, with affected
+-- resource_refs). A customer .tf never mutates desired state — divergence only
+-- ever yields this report plus a proposed corrective ChangeSet.
+ALTER TABLE drift_reports
+  ADD COLUMN IF NOT EXISTS detail JSONB NOT NULL DEFAULT '{}'::jsonb;
 
 CREATE TABLE IF NOT EXISTS resource_policies (
   id TEXT PRIMARY KEY,
