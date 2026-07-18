@@ -10,8 +10,16 @@ THE INVARIANT under test: the BOSS DB is canonical, the .tf.json is a
 deterministic downstream projection, and no literal secret ever appears in it.
 """
 
-import copy
+from __future__ import annotations
 
+import copy
+import shutil
+import subprocess
+
+import pytest
+from sqlalchemy import text
+
+from apps.api.app import main as api_main
 from apps.api.app.services.terraform_export import (
     RESOURCE_TYPE_MAP,
     canonical_tf_json,
@@ -322,14 +330,6 @@ def test_resource_type_map_covers_ticket_surface():
 # --------------------------------------------------------------------------- #
 # API integration (hermetic: fake AWS client seam, boss_test DB)              #
 # --------------------------------------------------------------------------- #
-
-import shutil
-import subprocess
-
-import pytest
-from sqlalchemy import text
-
-from apps.api.app import main as api_main
 
 PROJECT_ID = "boss-dogfood"
 
