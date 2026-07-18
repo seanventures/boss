@@ -27,6 +27,11 @@
   OpenAPI YAML parse, and diff checks pass. Static OpenAPI includes every new
   workflow route; the parity checker still reports only the repository's known
   unrelated pre-existing route backlog.
+- GitHub Actions did not run branch code: PR #34 Documentation run
+  `29660195919` and parent PR #33 runs `29660065835` / `29660065842` created
+  zero-step jobs rejected by the account payment/spending-limit gate. Exact
+  annotations and local workflow-equivalent evidence are linked in both PRs and
+  Plane.
 
 ## 2026-07-18 BOSS-133 product-capability taxonomy
 

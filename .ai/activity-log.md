@@ -487,6 +487,9 @@ PR: https://github.com/seanheiney/boss/pull/3
   tracked Plane BOSS-144; 24 focused contributor tests pass with 1 expected
   skip. Published `c0f70b2` / `220493d` in stacked draft PR
   https://github.com/seanheiney/boss/pull/34 and linked Plane evidence.
+- GitHub runs for PRs #33/#34 were rejected before checkout with zero steps and
+  the explicit account payment/spending-limit annotation. Added PR comments and
+  Plane evidence; no branch code executed in Actions.
 
 === CODEX PRODUCT TAXONOMY UPDATE 2026-07-18 ===
 Plane: BOSS-133 (In Progress); related root features BOSS-123, BOSS-129,
