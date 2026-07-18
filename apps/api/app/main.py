@@ -5040,6 +5040,33 @@ def bakeoff_report_endpoint(batch_id: str):
     return report
 
 
+@app.post("/v1/verifier-meta-eval")
+def verifier_meta_eval_endpoint(payload: Optional[dict] = None):
+    """VAG #105: meta-eval the verifier. Run the adversarial reviewer over the labeled
+    bugged/clean corpus and gate on recall (bugs caught) + false-fail rate (clean code
+    wrongly rejected). Payload (all optional): {corpus, dry_run, min_recall, max_fp_rate,
+    engine, model}. **dry_run defaults to true** — it replays each item's stub_verdict for a
+    zero-cost harness check; dry_run=false runs the REAL reviewer (one paid review call per
+    item)."""
+    from .services import verifier_meta_eval as vme
+    payload = payload or {}
+    corpus = payload.get("corpus") or vme.load_corpus()
+    min_recall = payload.get("min_recall", settings.verifier_meta_min_recall)
+    max_fp_rate = payload.get("max_fp_rate", settings.verifier_meta_max_fp_rate)
+    if payload.get("dry_run", True):
+        verify_fn = vme.stub_verify_fn
+    else:
+        verify_fn = vme.review_verify_fn(
+            settings, engine=payload.get("engine"), model=payload.get("model")
+        )
+    report = vme.run_meta_eval(
+        corpus, verify_fn, min_recall=min_recall, max_fp_rate=max_fp_rate
+    )
+    report["markdown"] = vme.render_markdown(report)
+    report["dry_run"] = bool(payload.get("dry_run", True))
+    return report
+
+
 # --- Discovery pipeline: research-driven outcome discovery -------------------
 @app.post("/v1/discoveries")
 def start_discovery_endpoint(payload: dict):

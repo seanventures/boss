@@ -1,0 +1,129 @@
+{
+  "_readme": "VAG #105 verifier meta-eval corpus. Each item is a FIXED implementation the adversarial reviewer judges against its title + acceptance_criteria (it reads the files, not a diff or the tests). label=bugged means the code contains a real defect the reviewer SHOULD refute; label=clean means it's correct and SHOULD survive. bug_class categorizes the defect. stub_verdict is what a PERFECT reviewer would return (refuted for bugged, survived for clean) \u2014 it drives the offline dry-run so the harness (scoring + gate + report) can be exercised with zero model calls; a real run replaces it with the actual reviewer's verdict and shows how far it falls short. Keep the corpus BALANCED (both classes) or the gate is meaningless. Deterministic stdlib-only Python so a defect is a genuine logic error, not an environment artifact.",
+  "items": [
+    {
+      "key": "bug_last_n_offbyone",
+      "title": "Return the last N elements of a list",
+      "acceptance_criteria": [
+        "last_n([1,2,3,4], 2) == [4] is WRONG; it must == [3,4]",
+        "last_n([1,2], 5) == [1,2] (n larger than list returns the whole list)",
+        "last_n([1,2,3], 0) == []"
+      ],
+      "implementation": {
+        "solution.py": "def last_n(xs, n):\n    # BUG: off-by-one \u2014 slices from -n+1, dropping one element.\n    return xs[-n + 1:]\n"
+      },
+      "label": "bugged",
+      "bug_class": "off-by-one",
+      "note": "last_n([1,2,3,4],2) returns [2,3,4]-ish / wrong count; also n=0 -> xs[1:] not []",
+      "stub_verdict": "refuted"
+    },
+    {
+      "key": "bug_top_region_tiebreak",
+      "title": "Aggregate sales and pick the top region",
+      "acceptance_criteria": [
+        "summarize returns {'total_revenue', 'by_region', 'top_region'}",
+        "On a revenue TIE, top_region is the alphabetically FIRST region",
+        "Empty input -> top_region is None"
+      ],
+      "implementation": {
+        "solution.py": "def summarize(rows):\n    by = {}\n    for r in rows:\n        by[r['region']] = by.get(r['region'], 0.0) + r['units'] * r['unit_price']\n    # BUG: max() on ties returns an arbitrary region, not the alphabetically-first one,\n    # and it raises ValueError on empty input instead of returning None.\n    top = max(by, key=by.get)\n    return {'total_revenue': sum(by.values()), 'by_region': by, 'top_region': top}\n"
+      },
+      "label": "bugged",
+      "bug_class": "wrong-tiebreak+missing-empty-guard",
+      "note": "ties non-deterministic; empty input raises ValueError instead of None",
+      "stub_verdict": "refuted"
+    },
+    {
+      "key": "bug_mean_zero_div",
+      "title": "Mean of a list of numbers",
+      "acceptance_criteria": [
+        "mean([2,4,6]) == 4.0",
+        "mean([]) == 0.0 (empty list returns 0.0, does NOT raise)"
+      ],
+      "implementation": {
+        "solution.py": "def mean(xs):\n    # BUG: no empty-list guard -> ZeroDivisionError on mean([]).\n    return sum(xs) / len(xs)\n"
+      },
+      "label": "bugged",
+      "bug_class": "missing-edge-case",
+      "note": "mean([]) raises ZeroDivisionError; spec requires 0.0",
+      "stub_verdict": "refuted"
+    },
+    {
+      "key": "bug_dedup_mutates_input",
+      "title": "Return a list with duplicates removed, order preserved",
+      "acceptance_criteria": [
+        "dedupe([3,1,3,2,1]) == [3,1,2]",
+        "The input list must NOT be mutated by the call"
+      ],
+      "implementation": {
+        "solution.py": "def dedupe(xs):\n    seen = set()\n    # BUG: mutates the caller's list in place while iterating (also risks skipping elements).\n    i = 0\n    while i < len(xs):\n        if xs[i] in seen:\n            xs.pop(i)\n        else:\n            seen.add(xs[i])\n            i += 1\n    return xs\n"
+      },
+      "label": "bugged",
+      "bug_class": "input-mutation",
+      "note": "returns the same list object, mutated \u2014 caller's data is destroyed",
+      "stub_verdict": "refuted"
+    },
+    {
+      "key": "clean_last_n",
+      "title": "Return the last N elements of a list",
+      "acceptance_criteria": [
+        "last_n([1,2,3,4], 2) == [3,4]",
+        "last_n([1,2], 5) == [1,2]",
+        "last_n([1,2,3], 0) == []"
+      ],
+      "implementation": {
+        "solution.py": "def last_n(xs, n):\n    if n <= 0:\n        return []\n    return xs[-n:]\n"
+      },
+      "label": "clean",
+      "bug_class": null,
+      "stub_verdict": "survived",
+      "note": "correct: handles n<=0 and n>len"
+    },
+    {
+      "key": "clean_top_region",
+      "title": "Aggregate sales and pick the top region",
+      "acceptance_criteria": [
+        "summarize returns {'total_revenue', 'by_region', 'top_region'}",
+        "On a revenue TIE, top_region is the alphabetically FIRST region",
+        "Empty input -> top_region is None"
+      ],
+      "implementation": {
+        "solution.py": "def summarize(rows):\n    by = {}\n    for r in rows:\n        by[r['region']] = by.get(r['region'], 0.0) + r['units'] * r['unit_price']\n    top = None\n    if by:\n        # max revenue, ties broken alphabetically by region name\n        top = min(by, key=lambda region: (-by[region], region))\n    return {'total_revenue': sum(by.values()), 'by_region': by, 'top_region': top}\n"
+      },
+      "label": "clean",
+      "bug_class": null,
+      "stub_verdict": "survived",
+      "note": "correct: alphabetical tie-break, empty -> None"
+    },
+    {
+      "key": "clean_mean",
+      "title": "Mean of a list of numbers",
+      "acceptance_criteria": [
+        "mean([2,4,6]) == 4.0",
+        "mean([]) == 0.0 (empty list returns 0.0, does NOT raise)"
+      ],
+      "implementation": {
+        "solution.py": "def mean(xs):\n    if not xs:\n        return 0.0\n    return sum(xs) / len(xs)\n"
+      },
+      "label": "clean",
+      "bug_class": null,
+      "stub_verdict": "survived",
+      "note": "correct: empty-list guard"
+    },
+    {
+      "key": "clean_dedupe",
+      "title": "Return a list with duplicates removed, order preserved",
+      "acceptance_criteria": [
+        "dedupe([3,1,3,2,1]) == [3,1,2]",
+        "The input list must NOT be mutated by the call"
+      ],
+      "implementation": {
+        "solution.py": "def dedupe(xs):\n    seen = set()\n    out = []\n    for x in xs:\n        if x not in seen:\n            seen.add(x)\n            out.append(x)\n    return out\n"
+      },
+      "label": "clean",
+      "bug_class": null,
+      "stub_verdict": "survived",
+      "note": "correct: builds a new list, input untouched"
+    }
+  ]
+}

@@ -551,6 +551,15 @@ class Settings(BaseSettings):
     # re-run per retry (cheap); the frontier panel re-judges only candidates whose tests
     # pass. Per-run override: spec["repair_retries"].
     code_repair_max_retries: int = Field(default=0, alias="BOSS_CODE_REPAIR_MAX_RETRIES")
+    # VAG #105 verifier meta-eval: the quality bar the VERIFIER itself must clear when run over
+    # the labeled bugged/clean corpus. min_recall = floor on bug-detection (catch bugs); max_fp_rate
+    # = ceiling on false alarms (don't reject clean code). A verifier below the bar fails the gate.
+    verifier_meta_min_recall: float = Field(
+        default=0.8, alias="BOSS_VERIFIER_META_MIN_RECALL"
+    )
+    verifier_meta_max_fp_rate: float = Field(
+        default=0.2, alias="BOSS_VERIFIER_META_MAX_FP_RATE"
+    )
     # Per-task budget cap for a code task (model spend), reserved before work.
     code_task_budget_usd_micros: int = Field(
         default=2_000_000, alias="BOSS_CODE_TASK_BUDGET_USD_MICROS"
