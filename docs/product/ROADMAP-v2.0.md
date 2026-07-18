@@ -12,7 +12,7 @@ Four product tracks mature alongside the numbered phases and remain separate eve
 
 1. **Agent Groups** — who collaborates and under which reusable protocol. Phase 1 establishes versioned group definitions/runs; later phases add richer templates, enterprise governance, and marketplace packs.
 2. **Skills and Integrations** — what typed capability is requested and which installed/configured system implements it. The existing SkillSpec/MCP/provider-adapter foundation is extended with a generic Integration Registry and connection health/authority model.
-3. **Reusable Workflows** — what happens, in what order, and under which deterministic gates. Phase 1 turns existing WorkflowSpec YAML into immutable registered versions, work-class mappings, and durable runs; later phases add composition, migration, and marketplace distribution.
+3. **Reusable Workflows** — what happens, in what order, and under which deterministic gates. Phase 1 turns existing WorkflowSpec YAML into immutable registered versions, work-class mappings, durable runs, composition, compensation, and explicit migration; later phases add marketplace distribution.
 4. **Ground-truth and Assurance** — whether claims and outcomes are supported by measured external evidence. Phases 2–3 add regression alarms, settled conclusions, evidence gates, surface ownership, Assurance Cases, and standing verification.
 
 Composition rule: a mapped Workflow may invoke roles or Agent Groups and resolve Skills through Integration Connections; their outputs may feed an Assurance Case. No track owns or substitutes for another.
@@ -51,7 +51,7 @@ Goal: dogfood BOSS as its first customer.
 Scope:
 
 - Spec-to-PR workflow.
-- Immutable WorkflowVersions, deterministic WorkflowMappings, durable WorkflowRuns/StepRuns, and reusable subworkflows for core dogfood processes.
+- Immutable WorkflowVersions, deterministic WorkflowMappings, durable WorkflowRuns/StepRuns, branch/fan-out/join/loop semantics, reusable subworkflows, reverse compensation, and explicit safe migration for core dogfood processes.
 - Basic Agent Group runtime with producer-reviewer, bounded-debate, fan-out, and sequential-handoff protocols.
 - Generic IntegrationDefinition/IntegrationConnection registry layered over SkillSpec, MCP, and provider adapters.
 - Branch/worktree isolation.
@@ -99,7 +99,7 @@ Scope:
 - Code/test/review lanes.
 - Evidence-backed solved/fixed/regressed/caused-by gates and Assurance Cases.
 - Standing verifier scheduling over the existing VAG/refute engine.
-- Workflow compensation, explicit run migration, and broader Agent Group templates.
+- Workflow Pack distribution and broader Agent Group templates.
 - Browser/UI validation.
 - CI integration.
 - Release packets.

@@ -60,6 +60,8 @@ class MemberDirectoryService:
                     "enterprise_manage",
                     "infra_provision",
                     "providerops_manage",
+                    "workflow_manage",
+                    "workflow_execute",
                 ],
             },
             {
@@ -74,6 +76,7 @@ class MemberDirectoryService:
                     "health_refresh",
                     "infra_provision",
                     "providerops_manage",
+                    "workflow_execute",
                 ],
             },
             {
@@ -149,6 +152,8 @@ class MemberDirectoryService:
                     "enterprise_manage",
                     "infra_provision",
                     "providerops_manage",
+                    "workflow_manage",
+                    "workflow_execute",
                 ],
             },
             {
@@ -174,6 +179,8 @@ class MemberDirectoryService:
                     "enterprise_manage",
                     "infra_provision",
                     "providerops_manage",
+                    "workflow_manage",
+                    "workflow_execute",
                 ],
             },
         ]

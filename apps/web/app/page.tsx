@@ -112,6 +112,8 @@ import { fetchMemberFeed, fetchOrgMemberFeed } from "../lib/members";
 import { fetchMeetingFeed } from "../lib/meetings";
 import { fetchMetatronQuery } from "../lib/metatron";
 import { fetchOpsQueueFeed } from "../lib/ops";
+import { fetchWorkflowFeed } from "../lib/workflows";
+import { WorkflowRegistryView } from "./workflow-registry-ui";
 import { fetchReportSummary } from "../lib/reports";
 import { fetchAgentRuns } from "../lib/agent-runs";
 import { fetchTaskOutputs } from "../lib/outputs";
@@ -519,6 +521,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
     wipStatus,
     chaosRuns,
     commitmentRecons,
+    workflowFeed,
   ] =
     await Promise.all([
       fetchStatus(activeProjectId),
@@ -592,6 +595,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
       fetchWipStatus(activeProjectId),
       fetchChaosRuns(activeProjectId),
       fetchCommitmentReconciliations(activeProjectId),
+      fetchWorkflowFeed(activeProjectId),
     ]);
 
   const deadletterCount = deadletters.items.length;
@@ -2834,6 +2838,26 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             deadletters={deadletters.items}
             openTasks={status.openTasks}
             pendingDecisions={status.pendingDecisions}
+          />
+        </section>
+
+        <section className="panel-stack" data-area="ops" aria-label="Reusable workflow registry">
+          <div className="section-head">
+            <div>
+              <span className="eyebrow">Workflow Runtime</span>
+              <h2>Mapped playbooks with pinned versions and visible execution.</h2>
+            </div>
+            <p className="status-meta">
+              Definitions, work-class mappings, live frontiers, and audit evidence share one durable control plane.
+            </p>
+          </div>
+          <WorkflowRegistryView
+            apiReachable={workflowFeed.apiReachable}
+            blockedReason={workflowFeed.blockedReason}
+            definitions={workflowFeed.definitions}
+            mappings={workflowFeed.mappings}
+            runs={workflowFeed.runs}
+            selectedRun={workflowFeed.selectedRun}
           />
         </section>
 

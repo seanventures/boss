@@ -2,7 +2,7 @@
 
 # Implemented features
 
-<span class="boss-status boss-status--implemented">Implemented</span> **83 features**
+<span class="boss-status boss-status--implemented">Implemented</span> **84 features**
 
 ## MET-001 — CEO command intake {#met-001-ceo-command-intake}
 
@@ -987,6 +987,18 @@
 **Automated evidence:** `apps/web/tests/accessibility.test.ts`
 
 **Ledger detail:** Implemented
+
+## WFL-001 — Reusable mapped workflow registry and runtime {#wfl-001-reusable-mapped-workflow-registry-and-runtime}
+
+<span class="boss-status boss-status--implemented">Implemented</span>
+
+**Source:** PRD v2.0 Reusable Mapped Workflows; Plane BOSS-132/BOSS-134–143
+
+**Implementation:** `db/schema.sql`, `apps/api/app/services/workflows.py`, `apps/api/app/main.py`, `apps/api/app/schemas.py`, `packages/api-client/src/index.ts`, `apps/web/lib/workflows.ts`, `apps/web/app/workflow-registry-ui.tsx`, `api/openapi.yaml`, `packages/specpack/workflows`
+
+**Automated evidence:** `apps/api/tests/test_workflow_runtime.py`, `apps/web/tests/workflows.test.tsx`, `apps/web/tests/api-client.test.ts`
+
+**Ledger detail:** Implemented: immutable registry and specpack seed, deterministic mapping precedence, version-pinned replay-safe runs, leased steps with retry/deadletter, conditions, fan-out/join, bounded loops, timers, Decisions, fail-closed group/skill/integration/subworkflow bindings, pause/resume/cancel, reverse compensation, explicit migration/rollback, typed client, and Mission Control timeline
 
 ## MEB-V2-001 — Entitlement pools and capacity receipts {#meb-v2-001-entitlement-pools-and-capacity-receipts}
 

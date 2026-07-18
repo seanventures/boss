@@ -2179,3 +2179,174 @@ CREATE TABLE IF NOT EXISTS llm_calls (
 CREATE INDEX IF NOT EXISTS idx_llm_calls_run ON llm_calls (code_task_run_id);
 CREATE INDEX IF NOT EXISTS idx_llm_calls_model ON llm_calls (model, stage, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_llm_calls_project ON llm_calls (project_id, created_at DESC);
+
+-- Reusable mapped workflow runtime (WFL-001 / Plane BOSS-134..143).  Definitions
+-- are stable identities; published versions are immutable content-addressed
+-- graphs.  Mappings deterministically select a version for a class of work and
+-- runs/steps retain the exact version, policy snapshot, leases, and evidence.
+CREATE TABLE IF NOT EXISTS workflow_definitions (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id),
+  workflow_key TEXT NOT NULL,
+  name TEXT NOT NULL,
+  description TEXT,
+  status TEXT NOT NULL DEFAULT 'active'
+    CHECK (status IN ('draft', 'active', 'retired')),
+  active_version_id TEXT,
+  created_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(project_id, workflow_key)
+);
+CREATE INDEX IF NOT EXISTS idx_workflow_definitions_project
+  ON workflow_definitions(project_id, status, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS workflow_versions (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id),
+  workflow_definition_id TEXT NOT NULL REFERENCES workflow_definitions(id) ON DELETE CASCADE,
+  version INTEGER NOT NULL CHECK (version > 0),
+  status TEXT NOT NULL DEFAULT 'published'
+    CHECK (status IN ('published', 'retired')),
+  spec JSONB NOT NULL,
+  content_hash TEXT NOT NULL,
+  created_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  published_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(workflow_definition_id, version),
+  UNIQUE(workflow_definition_id, content_hash)
+);
+CREATE INDEX IF NOT EXISTS idx_workflow_versions_project
+  ON workflow_versions(project_id, workflow_definition_id, version DESC);
+
+CREATE TABLE IF NOT EXISTS workflow_mappings (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id),
+  workflow_version_id TEXT NOT NULL REFERENCES workflow_versions(id),
+  selector_kind TEXT NOT NULL,
+  selector_value TEXT NOT NULL,
+  scope_type TEXT NOT NULL CHECK (scope_type IN ('org', 'workspace', 'project')),
+  scope_id TEXT NOT NULL,
+  priority INTEGER NOT NULL DEFAULT 100,
+  enabled BOOLEAN NOT NULL DEFAULT true,
+  created_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_workflow_mappings_resolve
+  ON workflow_mappings(project_id, selector_kind, selector_value, enabled, priority DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_workflow_mappings_active_selector
+  ON workflow_mappings(project_id, selector_kind, selector_value, scope_type, scope_id, priority)
+  WHERE enabled = true;
+
+CREATE TABLE IF NOT EXISTS workflow_runs (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id),
+  workflow_definition_id TEXT NOT NULL REFERENCES workflow_definitions(id),
+  workflow_version_id TEXT NOT NULL REFERENCES workflow_versions(id),
+  workflow_mapping_id TEXT REFERENCES workflow_mappings(id),
+  parent_run_id TEXT REFERENCES workflow_runs(id),
+  root_run_id TEXT,
+  actor TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'queued'
+    CHECK (status IN (
+      'queued', 'validating', 'running', 'waiting', 'paused', 'blocked',
+      'completed', 'failed', 'deadlettered', 'cancelled', 'compensating', 'compensated'
+    )),
+  input JSONB NOT NULL DEFAULT '{}'::jsonb,
+  output JSONB NOT NULL DEFAULT '{}'::jsonb,
+  context JSONB NOT NULL DEFAULT '{}'::jsonb,
+  policy_snapshot JSONB NOT NULL DEFAULT '{}'::jsonb,
+  current_frontier JSONB NOT NULL DEFAULT '[]'::jsonb,
+  dedupe_key TEXT,
+  blocked_reason TEXT,
+  error TEXT,
+  paused_at TIMESTAMPTZ,
+  completed_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_workflow_runs_dedupe
+  ON workflow_runs(project_id, dedupe_key) WHERE dedupe_key IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_workflow_runs_project_state
+  ON workflow_runs(project_id, status, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_workflow_runs_parent
+  ON workflow_runs(parent_run_id, created_at);
+
+CREATE TABLE IF NOT EXISTS workflow_step_runs (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id),
+  workflow_run_id TEXT NOT NULL REFERENCES workflow_runs(id) ON DELETE CASCADE,
+  step_id TEXT NOT NULL,
+  step_kind TEXT NOT NULL,
+  iteration INTEGER NOT NULL DEFAULT 0 CHECK (iteration >= 0),
+  status TEXT NOT NULL DEFAULT 'pending'
+    CHECK (status IN (
+      'pending', 'ready', 'leased', 'running', 'waiting', 'succeeded',
+      'skipped', 'failed', 'deadlettered', 'cancelled'
+    )),
+  input JSONB NOT NULL DEFAULT '{}'::jsonb,
+  output JSONB NOT NULL DEFAULT '{}'::jsonb,
+  binding_snapshot JSONB NOT NULL DEFAULT '{}'::jsonb,
+  evidence JSONB NOT NULL DEFAULT '[]'::jsonb,
+  attempt INTEGER NOT NULL DEFAULT 0 CHECK (attempt >= 0),
+  max_attempts INTEGER NOT NULL DEFAULT 3 CHECK (max_attempts > 0),
+  run_after TIMESTAMPTZ NOT NULL DEFAULT now(),
+  lease_owner TEXT,
+  lease_expires_at TIMESTAMPTZ,
+  heartbeat_at TIMESTAMPTZ,
+  decision_id TEXT REFERENCES decisions(id),
+  child_workflow_run_id TEXT REFERENCES workflow_runs(id),
+  last_error TEXT,
+  started_at TIMESTAMPTZ,
+  completed_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(workflow_run_id, step_id, iteration)
+);
+CREATE INDEX IF NOT EXISTS idx_workflow_steps_claim
+  ON workflow_step_runs(project_id, status, run_after, lease_expires_at);
+CREATE INDEX IF NOT EXISTS idx_workflow_steps_run
+  ON workflow_step_runs(workflow_run_id, iteration, created_at);
+
+CREATE TABLE IF NOT EXISTS workflow_migrations (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id),
+  workflow_run_id TEXT NOT NULL REFERENCES workflow_runs(id) ON DELETE CASCADE,
+  from_version_id TEXT NOT NULL REFERENCES workflow_versions(id),
+  to_version_id TEXT NOT NULL REFERENCES workflow_versions(id),
+  status TEXT NOT NULL CHECK (status IN ('completed', 'rolled_back', 'failed')),
+  compatibility JSONB NOT NULL DEFAULT '{}'::jsonb,
+  rollback_snapshot JSONB NOT NULL DEFAULT '{}'::jsonb,
+  reason TEXT NOT NULL,
+  created_by TEXT NOT NULL,
+  rolled_back_by TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  rolled_back_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_workflow_migrations_run
+  ON workflow_migrations(workflow_run_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS workflow_compensation_runs (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id),
+  workflow_run_id TEXT NOT NULL REFERENCES workflow_runs(id) ON DELETE CASCADE,
+  workflow_step_run_id TEXT NOT NULL REFERENCES workflow_step_runs(id) ON DELETE CASCADE,
+  sequence INTEGER NOT NULL CHECK (sequence >= 0),
+  status TEXT NOT NULL DEFAULT 'pending'
+    CHECK (status IN ('pending', 'ready', 'leased', 'running', 'succeeded', 'failed', 'deadlettered', 'cancelled')),
+  action JSONB NOT NULL,
+  output JSONB NOT NULL DEFAULT '{}'::jsonb,
+  dedupe_key TEXT NOT NULL,
+  attempt INTEGER NOT NULL DEFAULT 0 CHECK (attempt >= 0),
+  max_attempts INTEGER NOT NULL DEFAULT 3 CHECK (max_attempts > 0),
+  lease_owner TEXT,
+  lease_expires_at TIMESTAMPTZ,
+  heartbeat_at TIMESTAMPTZ,
+  last_error TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(project_id, dedupe_key)
+);
+CREATE INDEX IF NOT EXISTS idx_workflow_compensation_claim
+  ON workflow_compensation_runs(project_id, workflow_run_id, status, sequence);

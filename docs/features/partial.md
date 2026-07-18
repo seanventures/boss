@@ -2,7 +2,7 @@
 
 # Partial features
 
-<span class="boss-status boss-status--partial">Partial</span> **6 features**
+<span class="boss-status boss-status--partial">Partial</span> **5 features**
 
 ## INT-001 — Integration registry and typed skill contracts {#int-001-integration-registry-and-typed-skill-contracts}
 
@@ -15,18 +15,6 @@
 **Automated evidence:** Planned: connection lifecycle/health, capability intersection, revocation, provenance, receipt, and tenant tests
 
 **Ledger detail:** Partial: SkillSpec/MCP marketplace and executor foundations exist; generic IntegrationDefinition/IntegrationConnection runtime is planned
-
-## WFL-001 — Reusable mapped workflow registry and runtime {#wfl-001-reusable-mapped-workflow-registry-and-runtime}
-
-<span class="boss-status boss-status--partial">Partial</span>
-
-**Source:** PRD v2.0 Reusable Mapped Workflows; Plane BOSS-132
-
-**Implementation:** `docs/product/PRD-v2.0.md`, `docs/product/TECHNICAL_SPEC-v2.0.md`, `docs/product/ROADMAP-v2.0.md`, `packages/specpack/workflows`
-
-**Automated evidence:** Planned: mapping precedence, immutable versions, run/step state, join/branch, subworkflow, retry/deadletter, replay, migration, and compensation tests
-
-**Ledger detail:** Partial: WorkflowSpec YAML and purpose-built service flows exist; generic registry, mappings, and durable runtime are planned
 
 ## AST-001 — Ground-truth and Assurance runtime {#ast-001-ground-truth-and-assurance-runtime}
 

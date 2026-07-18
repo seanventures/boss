@@ -1,0 +1,2922 @@
+"""Reusable, mapped, durable workflow runtime.
+
+The runtime deliberately owns orchestration only.  Agent groups, skills,
+integrations, decisions, and subworkflows remain separate capabilities and are
+referenced through pinned bindings.  All control-flow evaluation is
+declarative; no workflow field is evaluated as Python or shell code.
+"""
+from __future__ import annotations
+
+import json
+import re
+from datetime import datetime, timedelta
+from pathlib import Path
+from typing import Any, Optional
+
+import yaml
+from sqlalchemy import bindparam, text
+from sqlalchemy.engine import Connection
+
+from .core import create_blocking_decision, emit_event, json_hash, make_id, now_utc
+
+
+WORKFLOW_KINDS = {
+    "task",
+    "skill",
+    "integration",
+    "agent_group",
+    "decision",
+    "timer",
+    "subworkflow",
+    "condition",
+    "parallel",
+    "join",
+    "bounded_loop",
+}
+CONTROL_KINDS = {
+    "condition",
+    "parallel",
+    "join",
+    "bounded_loop",
+    "decision",
+    "timer",
+    "subworkflow",
+}
+TERMINAL_RUN_STATES = {
+    "completed",
+    "failed",
+    "deadlettered",
+    "cancelled",
+    "compensated",
+}
+TERMINAL_STEP_STATES = {"succeeded", "skipped", "failed", "deadlettered", "cancelled"}
+ACTIVE_STEP_STATES = {"ready", "leased", "running", "waiting"}
+_STEP_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
+
+
+class WorkflowError(RuntimeError):
+    pass
+
+
+class WorkflowNotFoundError(WorkflowError):
+    pass
+
+
+class WorkflowConflictError(WorkflowError):
+    pass
+
+
+class WorkflowValidationError(WorkflowError):
+    pass
+
+
+class WorkflowMappingNotFoundError(WorkflowError):
+    pass
+
+
+class WorkflowMappingAmbiguousError(WorkflowError):
+    pass
+
+
+class WorkflowLeaseError(WorkflowError):
+    pass
+
+
+class WorkflowBindingBlockedError(WorkflowError):
+    pass
+
+
+def _json(value: Any, default: Any) -> Any:
+    if value is None:
+        return default
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except (TypeError, ValueError):
+            return default
+    return value
+
+
+def _iso(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.isoformat()
+    return str(value)
+
+
+def _clean_text(value: Any, name: str) -> str:
+    cleaned = str(value or "").strip()
+    if not cleaned:
+        raise WorkflowValidationError(f"{name} is required.")
+    return cleaned
+
+
+def _step_map(spec: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    return {str(step["id"]): step for step in spec.get("steps", [])}
+
+
+def _targets(step: dict[str, Any]) -> list[str]:
+    targets: list[str] = []
+    next_value = step.get("next", [])
+    if isinstance(next_value, str):
+        targets.append(next_value)
+    elif isinstance(next_value, list):
+        targets.extend(str(item) for item in next_value)
+    kind = step.get("kind")
+    if kind == "condition":
+        targets.extend([str(step.get("on_true") or ""), str(step.get("on_false") or "")])
+    elif kind == "parallel":
+        targets.extend(str(item) for item in step.get("branches", []))
+        if step.get("join"):
+            targets.append(str(step["join"]))
+    elif kind == "bounded_loop" and step.get("body"):
+        targets.append(str(step["body"]))
+    return [target for target in targets if target]
+
+
+def validate_workflow_spec(spec: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(spec, dict):
+        raise WorkflowValidationError("workflow spec must be an object.")
+    raw_steps = spec.get("steps")
+    if not isinstance(raw_steps, list) or not raw_steps:
+        raise WorkflowValidationError("workflow spec must contain at least one step.")
+
+    normalized_steps: list[dict[str, Any]] = []
+    ids: set[str] = set()
+    for raw in raw_steps:
+        if not isinstance(raw, dict):
+            raise WorkflowValidationError("every workflow step must be an object.")
+        step = dict(raw)
+        step_id = _clean_text(step.get("id"), "step.id")
+        if not _STEP_ID.fullmatch(step_id):
+            raise WorkflowValidationError(
+                f"step id '{step_id}' must use letters, numbers, dot, underscore, or dash."
+            )
+        if step_id in ids:
+            raise WorkflowValidationError(f"duplicate workflow step id '{step_id}'.")
+        ids.add(step_id)
+        kind = _clean_text(step.get("kind"), f"step '{step_id}' kind").lower()
+        if kind not in WORKFLOW_KINDS:
+            raise WorkflowValidationError(
+                f"step '{step_id}' kind must be one of: {', '.join(sorted(WORKFLOW_KINDS))}."
+            )
+        step["id"] = step_id
+        step["kind"] = kind
+        step["max_attempts"] = int(step.get("max_attempts", 3))
+        if step["max_attempts"] < 1 or step["max_attempts"] > 25:
+            raise WorkflowValidationError(
+                f"step '{step_id}' max_attempts must be between 1 and 25."
+            )
+        if "next" in step and isinstance(step["next"], str):
+            step["next"] = [step["next"]]
+        elif "next" not in step:
+            step["next"] = []
+        elif not isinstance(step["next"], list):
+            raise WorkflowValidationError(f"step '{step_id}' next must be a list.")
+
+        binding = step.get("binding") or {}
+        if not isinstance(binding, dict):
+            raise WorkflowValidationError(f"step '{step_id}' binding must be an object.")
+        step["binding"] = binding
+        if kind == "skill" and not binding.get("skill_id"):
+            raise WorkflowValidationError(f"skill step '{step_id}' requires binding.skill_id.")
+        if kind == "integration" and not binding.get("integration_connection_id"):
+            raise WorkflowValidationError(
+                f"integration step '{step_id}' requires binding.integration_connection_id."
+            )
+        if kind == "agent_group" and not binding.get("agent_group_version_id"):
+            raise WorkflowValidationError(
+                f"agent_group step '{step_id}' requires binding.agent_group_version_id."
+            )
+        if kind == "subworkflow" and not binding.get("workflow_version_id"):
+            raise WorkflowValidationError(
+                f"subworkflow step '{step_id}' requires binding.workflow_version_id."
+            )
+        if kind == "condition":
+            if not isinstance(step.get("expression"), dict):
+                raise WorkflowValidationError(
+                    f"condition step '{step_id}' requires a declarative expression."
+                )
+            _clean_text(step.get("on_true"), f"condition step '{step_id}' on_true")
+            _clean_text(step.get("on_false"), f"condition step '{step_id}' on_false")
+        if kind == "parallel":
+            branches = step.get("branches")
+            if not isinstance(branches, list) or len(branches) < 2:
+                raise WorkflowValidationError(
+                    f"parallel step '{step_id}' requires at least two branches."
+                )
+            _clean_text(step.get("join"), f"parallel step '{step_id}' join")
+        if kind == "join":
+            wait_for = step.get("wait_for")
+            if not isinstance(wait_for, list) or not wait_for:
+                raise WorkflowValidationError(f"join step '{step_id}' requires wait_for.")
+            if step.get("success_policy", "all") not in {"all", "any"}:
+                raise WorkflowValidationError(
+                    f"join step '{step_id}' success_policy must be all or any."
+                )
+        if kind == "bounded_loop":
+            _clean_text(step.get("body"), f"bounded_loop step '{step_id}' body")
+            if not isinstance(step.get("expression"), dict):
+                raise WorkflowValidationError(
+                    f"bounded_loop step '{step_id}' requires a declarative expression."
+                )
+            maximum = int(step.get("max_iterations", 0))
+            if maximum < 1 or maximum > 100:
+                raise WorkflowValidationError(
+                    f"bounded_loop step '{step_id}' max_iterations must be between 1 and 100."
+                )
+            step["max_iterations"] = maximum
+        if kind == "timer":
+            seconds = int(step.get("wait_seconds", 0))
+            if seconds < 0 or seconds > 31_536_000:
+                raise WorkflowValidationError(
+                    f"timer step '{step_id}' wait_seconds must be between 0 and 31536000."
+                )
+            step["wait_seconds"] = seconds
+        if kind == "decision":
+            _clean_text(step.get("question"), f"decision step '{step_id}' question")
+        if "compensation" in step and not isinstance(step["compensation"], dict):
+            raise WorkflowValidationError(
+                f"step '{step_id}' compensation must be an object."
+            )
+        normalized_steps.append(step)
+
+    entry = _clean_text(spec.get("entry_step"), "entry_step")
+    if entry not in ids:
+        raise WorkflowValidationError(f"entry step '{entry}' does not exist.")
+
+    normalized = {
+        **spec,
+        "entry_step": entry,
+        "input_schema": spec.get("input_schema") or {},
+        "output_schema": spec.get("output_schema") or {},
+        "steps": normalized_steps,
+    }
+    steps = _step_map(normalized)
+    for step in normalized_steps:
+        for target in _targets(step):
+            if target not in steps:
+                raise WorkflowValidationError(
+                    f"step '{step['id']}' references missing step '{target}'."
+                )
+        if step["kind"] == "join":
+            for dependency in step["wait_for"]:
+                if dependency not in steps:
+                    raise WorkflowValidationError(
+                        f"join step '{step['id']}' waits for missing step '{dependency}'."
+                    )
+
+    # Declared edges must be acyclic.  Repetition is represented only by a
+    # bounded_loop controller, never by an arbitrary graph cycle.
+    visiting: set[str] = set()
+    visited: set[str] = set()
+
+    def visit(step_id: str) -> None:
+        if step_id in visiting:
+            raise WorkflowValidationError(
+                f"unbounded cycle detected at step '{step_id}'; use bounded_loop."
+            )
+        if step_id in visited:
+            return
+        visiting.add(step_id)
+        for target in _targets(steps[step_id]):
+            visit(target)
+        visiting.remove(step_id)
+        visited.add(step_id)
+
+    visit(entry)
+    unreachable = sorted(ids - visited)
+    if unreachable:
+        raise WorkflowValidationError(
+            "unreachable workflow steps: " + ", ".join(unreachable)
+        )
+    return normalized
+
+
+def _serialize_definition(row: Any) -> dict[str, Any]:
+    return {
+        "id": row["id"],
+        "project_id": row["project_id"],
+        "workflow_key": row["workflow_key"],
+        "name": row["name"],
+        "description": row.get("description"),
+        "status": row["status"],
+        "active_version_id": row.get("active_version_id"),
+        "created_by": row["created_by"],
+        "created_at": _iso(row["created_at"]),
+        "updated_at": _iso(row["updated_at"]),
+    }
+
+
+def _serialize_version(row: Any) -> dict[str, Any]:
+    return {
+        "id": row["id"],
+        "project_id": row["project_id"],
+        "workflow_definition_id": row["workflow_definition_id"],
+        "version": int(row["version"]),
+        "status": row["status"],
+        "spec": _json(row["spec"], {}),
+        "content_hash": row["content_hash"],
+        "created_by": row["created_by"],
+        "created_at": _iso(row["created_at"]),
+        "published_at": _iso(row["published_at"]),
+    }
+
+
+def _serialize_mapping(row: Any) -> dict[str, Any]:
+    return {
+        "id": row["id"],
+        "project_id": row["project_id"],
+        "workflow_version_id": row["workflow_version_id"],
+        "selector_kind": row["selector_kind"],
+        "selector_value": row["selector_value"],
+        "scope_type": row["scope_type"],
+        "scope_id": row["scope_id"],
+        "priority": int(row["priority"]),
+        "enabled": bool(row["enabled"]),
+        "created_by": row["created_by"],
+        "created_at": _iso(row["created_at"]),
+        "updated_at": _iso(row["updated_at"]),
+    }
+
+
+def create_definition(
+    connection: Connection,
+    *,
+    project_id: str,
+    workflow_key: str,
+    name: str,
+    description: Optional[str],
+    actor: str,
+) -> dict[str, Any]:
+    definition_id = make_id("wfd")
+    try:
+        row = connection.execute(
+            text(
+                """
+                INSERT INTO workflow_definitions (
+                    id, project_id, workflow_key, name, description, status, created_by
+                ) VALUES (:id, :project_id, :workflow_key, :name, :description, 'active', :actor)
+                RETURNING *
+                """
+            ),
+            {
+                "id": definition_id,
+                "project_id": project_id,
+                "workflow_key": _clean_text(workflow_key, "workflow_key"),
+                "name": _clean_text(name, "name"),
+                "description": description,
+                "actor": _clean_text(actor, "actor"),
+            },
+        ).mappings().one()
+    except Exception as error:
+        if "workflow_definitions_project_id_workflow_key_key" in str(error):
+            raise WorkflowConflictError(
+                f"workflow key '{workflow_key}' already exists in this project."
+            ) from error
+        raise
+    emit_event(
+        connection,
+        project_id,
+        "workflow.definition_created",
+        actor,
+        "workflow_definition",
+        definition_id,
+        {"workflow_key": workflow_key, "name": name},
+    )
+    return _serialize_definition(row)
+
+
+def list_definitions(
+    connection: Connection, project_id: str, *, include_retired: bool = False
+) -> list[dict[str, Any]]:
+    clause = "" if include_retired else "AND d.status <> 'retired'"
+    rows = connection.execute(
+        text(
+            f"""
+            SELECT d.*,
+                   COALESCE((SELECT count(*) FROM workflow_versions v
+                             WHERE v.workflow_definition_id=d.id), 0) AS version_count
+            FROM workflow_definitions d
+            WHERE d.project_id=:project_id {clause}
+            ORDER BY d.updated_at DESC, d.workflow_key
+            """
+        ),
+        {"project_id": project_id},
+    ).mappings().all()
+    items = []
+    for row in rows:
+        item = _serialize_definition(row)
+        item["version_count"] = int(row["version_count"])
+        items.append(item)
+    return items
+
+
+def get_definition(
+    connection: Connection, project_id: str, definition_id: str
+) -> dict[str, Any]:
+    row = connection.execute(
+        text("SELECT * FROM workflow_definitions WHERE id=:id AND project_id=:project_id"),
+        {"id": definition_id, "project_id": project_id},
+    ).mappings().first()
+    if not row:
+        raise WorkflowNotFoundError("Workflow definition not found.")
+    versions = connection.execute(
+        text(
+            """
+            SELECT * FROM workflow_versions
+            WHERE workflow_definition_id=:definition_id
+            ORDER BY version DESC
+            """
+        ),
+        {"definition_id": definition_id},
+    ).mappings().all()
+    result = _serialize_definition(row)
+    result["versions"] = [_serialize_version(version) for version in versions]
+    return result
+
+
+def publish_version(
+    connection: Connection,
+    *,
+    project_id: str,
+    definition_id: str,
+    spec: dict[str, Any],
+    actor: str,
+    activate: bool = True,
+) -> dict[str, Any]:
+    definition = connection.execute(
+        text("SELECT * FROM workflow_definitions WHERE id=:id AND project_id=:project_id FOR UPDATE"),
+        {"id": definition_id, "project_id": project_id},
+    ).mappings().first()
+    if not definition:
+        raise WorkflowNotFoundError("Workflow definition not found.")
+    normalized = validate_workflow_spec(spec)
+    digest = json_hash(normalized)
+    existing = connection.execute(
+        text(
+            """
+            SELECT * FROM workflow_versions
+            WHERE workflow_definition_id=:definition_id AND content_hash=:content_hash
+            """
+        ),
+        {"definition_id": definition_id, "content_hash": digest},
+    ).mappings().first()
+    if existing:
+        result = _serialize_version(existing)
+        result["duplicate"] = True
+        return result
+    next_version = int(
+        connection.execute(
+            text(
+                "SELECT COALESCE(max(version), 0) + 1 FROM workflow_versions "
+                "WHERE workflow_definition_id=:definition_id"
+            ),
+            {"definition_id": definition_id},
+        ).scalar_one()
+    )
+    version_id = make_id("wfv")
+    row = connection.execute(
+        text(
+            """
+            INSERT INTO workflow_versions (
+                id, project_id, workflow_definition_id, version, status,
+                spec, content_hash, created_by
+            ) VALUES (
+                :id, :project_id, :definition_id, :version, 'published',
+                CAST(:spec AS JSONB), :content_hash, :actor
+            ) RETURNING *
+            """
+        ),
+        {
+            "id": version_id,
+            "project_id": project_id,
+            "definition_id": definition_id,
+            "version": next_version,
+            "spec": json.dumps(normalized),
+            "content_hash": digest,
+            "actor": actor,
+        },
+    ).mappings().one()
+    if activate:
+        connection.execute(
+            text(
+                """
+                UPDATE workflow_definitions
+                SET active_version_id=:version_id, status='active', updated_at=now()
+                WHERE id=:definition_id
+                """
+            ),
+            {"version_id": version_id, "definition_id": definition_id},
+        )
+    emit_event(
+        connection,
+        project_id,
+        "workflow.version_published",
+        actor,
+        "workflow_definition",
+        definition_id,
+        {
+            "workflow_version_id": version_id,
+            "version": next_version,
+            "content_hash": digest,
+            "activated": activate,
+        },
+    )
+    result = _serialize_version(row)
+    result["duplicate"] = False
+    return result
+
+
+def create_mapping(
+    connection: Connection,
+    *,
+    project_id: str,
+    workflow_version_id: str,
+    selector_kind: str,
+    selector_value: str,
+    scope_type: str,
+    scope_id: str,
+    priority: int,
+    actor: str,
+) -> dict[str, Any]:
+    version = connection.execute(
+        text(
+            """
+            SELECT id FROM workflow_versions
+            WHERE id=:id AND project_id=:project_id AND status='published'
+            """
+        ),
+        {"id": workflow_version_id, "project_id": project_id},
+    ).first()
+    if not version:
+        raise WorkflowNotFoundError("Published workflow version not found.")
+    scope_type = _clean_text(scope_type, "scope_type").lower()
+    if scope_type not in {"org", "workspace", "project"}:
+        raise WorkflowValidationError("scope_type must be org, workspace, or project.")
+    ancestry = _project_ancestry(connection, project_id)
+    expected_scope = ancestry[f"{scope_type}_id"]
+    if scope_id != expected_scope:
+        raise WorkflowValidationError(
+            f"scope_id does not match the workflow project's {scope_type}."
+        )
+    mapping_id = make_id("wfm")
+    try:
+        row = connection.execute(
+            text(
+                """
+                INSERT INTO workflow_mappings (
+                    id, project_id, workflow_version_id, selector_kind, selector_value,
+                    scope_type, scope_id, priority, enabled, created_by
+                ) VALUES (
+                    :id, :project_id, :version_id, :selector_kind, :selector_value,
+                    :scope_type, :scope_id, :priority, true, :actor
+                ) RETURNING *
+                """
+            ),
+            {
+                "id": mapping_id,
+                "project_id": project_id,
+                "version_id": workflow_version_id,
+                "selector_kind": _clean_text(selector_kind, "selector_kind").lower(),
+                "selector_value": _clean_text(selector_value, "selector_value"),
+                "scope_type": scope_type,
+                "scope_id": scope_id,
+                "priority": int(priority),
+                "actor": actor,
+            },
+        ).mappings().one()
+    except Exception as error:
+        if "uq_workflow_mappings_active_selector" in str(error):
+            raise WorkflowConflictError(
+                "An enabled mapping already occupies this selector, scope, and priority."
+            ) from error
+        raise
+    emit_event(
+        connection,
+        project_id,
+        "workflow.mapping_created",
+        actor,
+        "workflow_mapping",
+        mapping_id,
+        {
+            "selector_kind": selector_kind,
+            "selector_value": selector_value,
+            "scope_type": scope_type,
+            "scope_id": scope_id,
+            "priority": int(priority),
+            "workflow_version_id": workflow_version_id,
+        },
+    )
+    return _serialize_mapping(row)
+
+
+def list_mappings(connection: Connection, project_id: str) -> list[dict[str, Any]]:
+    rows = connection.execute(
+        text(
+            """
+            SELECT * FROM workflow_mappings
+            WHERE project_id=:project_id
+            ORDER BY enabled DESC, selector_kind, selector_value, priority DESC, created_at
+            """
+        ),
+        {"project_id": project_id},
+    ).mappings().all()
+    return [_serialize_mapping(row) for row in rows]
+
+
+def _project_ancestry(connection: Connection, project_id: str) -> dict[str, str]:
+    row = connection.execute(
+        text(
+            """
+            SELECT p.id AS project_id, p.workspace_id, w.org_id
+            FROM projects p JOIN workspaces w ON w.id=p.workspace_id
+            WHERE p.id=:project_id
+            """
+        ),
+        {"project_id": project_id},
+    ).mappings().first()
+    if not row:
+        raise WorkflowNotFoundError("Project not found.")
+    return dict(row)
+
+
+def resolve_mapping(
+    connection: Connection,
+    *,
+    project_id: str,
+    selector_kind: str,
+    selector_value: str,
+) -> dict[str, Any]:
+    ancestry = _project_ancestry(connection, project_id)
+    rows = connection.execute(
+        text(
+            """
+            SELECT m.*, v.status AS version_status, d.status AS definition_status,
+                   d.workflow_key, d.name AS workflow_name
+            FROM workflow_mappings m
+            JOIN workflow_versions v ON v.id=m.workflow_version_id
+            JOIN workflow_definitions d ON d.id=v.workflow_definition_id
+            WHERE m.project_id=:project_id
+              AND m.selector_kind=:selector_kind
+              AND m.selector_value IN (:selector_value, '*')
+            ORDER BY m.created_at, m.id
+            """
+        ),
+        {
+            "project_id": project_id,
+            "selector_kind": _clean_text(selector_kind, "selector_kind").lower(),
+            "selector_value": _clean_text(selector_value, "selector_value"),
+        },
+    ).mappings().all()
+    scope_score = {"org": 1, "workspace": 2, "project": 3}
+    candidates: list[tuple[tuple[int, int, int], Any]] = []
+    rejected: list[dict[str, Any]] = []
+    for row in rows:
+        reason: Optional[str] = None
+        if not row["enabled"]:
+            reason = "mapping_disabled"
+        elif row["version_status"] != "published":
+            reason = "version_not_published"
+        elif row["definition_status"] != "active":
+            reason = "definition_not_active"
+        elif ancestry[f"{row['scope_type']}_id"] != row["scope_id"]:
+            reason = "scope_mismatch"
+        if reason:
+            rejected.append({**_serialize_mapping(row), "reason": reason})
+            continue
+        score = (
+            scope_score[row["scope_type"]],
+            1 if row["selector_value"] == selector_value else 0,
+            int(row["priority"]),
+        )
+        candidates.append((score, row))
+    if not candidates:
+        return {
+            "status": "unmapped",
+            "project_id": project_id,
+            "selector_kind": selector_kind,
+            "selector_value": selector_value,
+            "selected": None,
+            "rejected": rejected,
+            "reason": "No approved workflow mapping matched this class of work.",
+        }
+    candidates.sort(key=lambda item: item[0], reverse=True)
+    top_score = candidates[0][0]
+    tied = [row for score, row in candidates if score == top_score]
+    if len(tied) > 1:
+        ids = ", ".join(row["id"] for row in tied)
+        raise WorkflowMappingAmbiguousError(
+            f"Ambiguous workflow mappings at equal precedence: {ids}."
+        )
+    selected_row = candidates[0][1]
+    for score, row in candidates[1:]:
+        rejected.append(
+            {**_serialize_mapping(row), "reason": f"lower_precedence:{score}"}
+        )
+    selected = _serialize_mapping(selected_row)
+    selected.update(
+        {
+            "workflow_key": selected_row["workflow_key"],
+            "workflow_name": selected_row["workflow_name"],
+            "precedence": list(top_score),
+        }
+    )
+    return {
+        "status": "selected",
+        "project_id": project_id,
+        "selector_kind": selector_kind,
+        "selector_value": selector_value,
+        "selected": selected,
+        "rejected": rejected,
+        "reason": "Most-specific scope, exact selector, and highest priority won.",
+    }
+
+
+def _version_row(connection: Connection, project_id: str, version_id: str) -> Any:
+    row = connection.execute(
+        text(
+            """
+            SELECT v.*, d.workflow_key, d.name AS workflow_name,
+                   d.status AS definition_status
+            FROM workflow_versions v
+            JOIN workflow_definitions d ON d.id=v.workflow_definition_id
+            WHERE v.id=:id AND v.project_id=:project_id
+            """
+        ),
+        {"id": version_id, "project_id": project_id},
+    ).mappings().first()
+    if not row:
+        raise WorkflowNotFoundError("Workflow version not found.")
+    if row["status"] != "published" or row["definition_status"] != "active":
+        raise WorkflowConflictError("Workflow version is not active and published.")
+    return row
+
+
+def _table_exists(connection: Connection, table_name: str) -> bool:
+    return bool(
+        connection.execute(
+            text("SELECT to_regclass(:table_name) IS NOT NULL"),
+            {"table_name": table_name},
+        ).scalar_one()
+    )
+
+
+def _validate_bindings(
+    connection: Connection,
+    project_id: str,
+    version_id: str,
+    spec: dict[str, Any],
+) -> None:
+    for step in spec["steps"]:
+        binding = step.get("binding") or {}
+        role_key = binding.get("role_key")
+        if role_key:
+            row = connection.execute(
+                text(
+                    "SELECT 1 FROM roles WHERE project_id=:project_id AND role_key=:role_key"
+                ),
+                {"project_id": project_id, "role_key": role_key},
+            ).first()
+            if not row:
+                raise WorkflowBindingBlockedError(
+                    f"step '{step['id']}' references missing role '{role_key}'."
+                )
+        if step["kind"] == "skill":
+            skill_id = binding["skill_id"]
+            row = connection.execute(
+                text(
+                    """
+                    SELECT enabled FROM project_skills
+                    WHERE project_id=:project_id AND skill_id=:skill_id
+                    """
+                ),
+                {"project_id": project_id, "skill_id": skill_id},
+            ).mappings().first()
+            if not row or not bool(row["enabled"]):
+                raise WorkflowBindingBlockedError(
+                    f"step '{step['id']}' skill '{skill_id}' is missing or disabled."
+                )
+        if step["kind"] == "integration":
+            if not _table_exists(connection, "integration_connections"):
+                raise WorkflowBindingBlockedError(
+                    "Integration runtime is not installed; integration binding fails closed."
+                )
+            row = connection.execute(
+                text(
+                    """
+                    SELECT status FROM integration_connections
+                    WHERE id=:id AND project_id=:project_id
+                    """
+                ),
+                {"id": binding["integration_connection_id"], "project_id": project_id},
+            ).mappings().first()
+            if not row or row["status"] not in {"active", "healthy"}:
+                raise WorkflowBindingBlockedError(
+                    f"step '{step['id']}' integration is missing, revoked, or unhealthy."
+                )
+        if step["kind"] == "agent_group":
+            if not _table_exists(connection, "agent_group_versions"):
+                raise WorkflowBindingBlockedError(
+                    "Agent Group runtime is not installed; group binding fails closed."
+                )
+            row = connection.execute(
+                text(
+                    """
+                    SELECT status FROM agent_group_versions
+                    WHERE id=:id AND project_id=:project_id
+                    """
+                ),
+                {"id": binding["agent_group_version_id"], "project_id": project_id},
+            ).mappings().first()
+            if not row or row["status"] != "published":
+                raise WorkflowBindingBlockedError(
+                    f"step '{step['id']}' Agent Group version is unavailable."
+                )
+        if step["kind"] == "subworkflow":
+            child_id = str(binding["workflow_version_id"])
+            if child_id == version_id:
+                raise WorkflowBindingBlockedError(
+                    f"step '{step['id']}' cannot recursively invoke its own version."
+                )
+            _version_row(connection, project_id, child_id)
+
+
+def start_run(
+    connection: Connection,
+    *,
+    project_id: str,
+    actor: str,
+    input_data: dict[str, Any],
+    dedupe_key: str,
+    workflow_version_id: Optional[str] = None,
+    selector_kind: Optional[str] = None,
+    selector_value: Optional[str] = None,
+    policy_snapshot: Optional[dict[str, Any]] = None,
+    parent_run_id: Optional[str] = None,
+) -> dict[str, Any]:
+    dedupe_key = _clean_text(dedupe_key, "dedupe_key")
+    existing = connection.execute(
+        text(
+            "SELECT id FROM workflow_runs WHERE project_id=:project_id AND dedupe_key=:dedupe_key"
+        ),
+        {"project_id": project_id, "dedupe_key": dedupe_key},
+    ).mappings().first()
+    if existing:
+        result = get_run(connection, project_id, existing["id"])
+        result["duplicate"] = True
+        return result
+
+    mapping_id: Optional[str] = None
+    if not workflow_version_id:
+        if not selector_kind or not selector_value:
+            raise WorkflowValidationError(
+                "workflow_version_id or selector_kind/selector_value is required."
+            )
+        resolution = resolve_mapping(
+            connection,
+            project_id=project_id,
+            selector_kind=selector_kind,
+            selector_value=selector_value,
+        )
+        if resolution["status"] != "selected":
+            raise WorkflowMappingNotFoundError(resolution["reason"])
+        mapping_id = resolution["selected"]["id"]
+        workflow_version_id = resolution["selected"]["workflow_version_id"]
+    version = _version_row(connection, project_id, str(workflow_version_id))
+    spec = validate_workflow_spec(_json(version["spec"], {}))
+    _validate_bindings(connection, project_id, version["id"], spec)
+
+    run_id = make_id("wfr")
+    root_run_id = run_id
+    if parent_run_id:
+        parent = connection.execute(
+            text(
+                "SELECT root_run_id FROM workflow_runs WHERE id=:id AND project_id=:project_id"
+            ),
+            {"id": parent_run_id, "project_id": project_id},
+        ).mappings().first()
+        if not parent:
+            raise WorkflowNotFoundError("Parent workflow run not found.")
+        root_run_id = parent["root_run_id"] or parent_run_id
+    connection.execute(
+        text(
+            """
+            INSERT INTO workflow_runs (
+                id, project_id, workflow_definition_id, workflow_version_id,
+                workflow_mapping_id, parent_run_id, root_run_id, actor, status,
+                input, context, policy_snapshot, dedupe_key
+            ) VALUES (
+                :id, :project_id, :definition_id, :version_id, :mapping_id,
+                :parent_run_id, :root_run_id, :actor, 'validating',
+                CAST(:input AS JSONB), CAST(:context AS JSONB),
+                CAST(:policy AS JSONB), :dedupe_key
+            )
+            """
+        ),
+        {
+            "id": run_id,
+            "project_id": project_id,
+            "definition_id": version["workflow_definition_id"],
+            "version_id": version["id"],
+            "mapping_id": mapping_id,
+            "parent_run_id": parent_run_id,
+            "root_run_id": root_run_id,
+            "actor": actor,
+            "input": json.dumps(input_data or {}),
+            "context": json.dumps({}),
+            "policy": json.dumps(policy_snapshot or {}),
+            "dedupe_key": dedupe_key,
+        },
+    )
+    for step in spec["steps"]:
+        _insert_step_run(
+            connection,
+            project_id=project_id,
+            run_id=run_id,
+            step=step,
+            iteration=0,
+            status="pending",
+        )
+    connection.execute(
+        text("UPDATE workflow_runs SET status='running', updated_at=now() WHERE id=:id"),
+        {"id": run_id},
+    )
+    emit_event(
+        connection,
+        project_id,
+        "workflow.run_started",
+        actor,
+        "workflow_run",
+        run_id,
+        {
+            "workflow_definition_id": version["workflow_definition_id"],
+            "workflow_version_id": version["id"],
+            "workflow_mapping_id": mapping_id,
+            "dedupe_key": dedupe_key,
+            "parent_run_id": parent_run_id,
+        },
+    )
+    _activate_step(connection, run_id, spec["entry_step"], 0)
+    _drain_control_steps(connection, run_id)
+    result = get_run(connection, project_id, run_id)
+    result["duplicate"] = False
+    return result
+
+
+def _insert_step_run(
+    connection: Connection,
+    *,
+    project_id: str,
+    run_id: str,
+    step: dict[str, Any],
+    iteration: int,
+    status: str,
+) -> str:
+    step_run_id = make_id("wfs")
+    connection.execute(
+        text(
+            """
+            INSERT INTO workflow_step_runs (
+                id, project_id, workflow_run_id, step_id, step_kind, iteration,
+                status, input, binding_snapshot, max_attempts
+            ) VALUES (
+                :id, :project_id, :run_id, :step_id, :step_kind, :iteration,
+                :status, CAST(:input AS JSONB), CAST(:binding AS JSONB), :max_attempts
+            ) ON CONFLICT (workflow_run_id, step_id, iteration) DO NOTHING
+            """
+        ),
+        {
+            "id": step_run_id,
+            "project_id": project_id,
+            "run_id": run_id,
+            "step_id": step["id"],
+            "step_kind": step["kind"],
+            "iteration": iteration,
+            "status": status,
+            "input": json.dumps(step.get("input") or {}),
+            "binding": json.dumps(step.get("binding") or {}),
+            "max_attempts": int(step.get("max_attempts", 3)),
+        },
+    )
+    return step_run_id
+
+
+def _run_row(connection: Connection, run_id: str, *, lock: bool = False) -> Any:
+    lock_sql = " FOR UPDATE" if lock else ""
+    row = connection.execute(
+        text(f"SELECT * FROM workflow_runs WHERE id=:id{lock_sql}"),
+        {"id": run_id},
+    ).mappings().first()
+    if not row:
+        raise WorkflowNotFoundError("Workflow run not found.")
+    return row
+
+
+def _run_spec(connection: Connection, run_id: str) -> dict[str, Any]:
+    row = connection.execute(
+        text(
+            """
+            SELECT v.spec FROM workflow_runs r
+            JOIN workflow_versions v ON v.id=r.workflow_version_id
+            WHERE r.id=:run_id
+            """
+        ),
+        {"run_id": run_id},
+    ).mappings().first()
+    if not row:
+        raise WorkflowNotFoundError("Workflow run not found.")
+    return validate_workflow_spec(_json(row["spec"], {}))
+
+
+def _step_row(
+    connection: Connection,
+    run_id: str,
+    step_id: str,
+    iteration: int,
+    *,
+    lock: bool = False,
+) -> Any:
+    lock_sql = " FOR UPDATE" if lock else ""
+    return connection.execute(
+        text(
+            f"""
+            SELECT * FROM workflow_step_runs
+            WHERE workflow_run_id=:run_id AND step_id=:step_id AND iteration=:iteration
+            {lock_sql}
+            """
+        ),
+        {"run_id": run_id, "step_id": step_id, "iteration": iteration},
+    ).mappings().first()
+
+
+def _serialize_step(row: Any) -> dict[str, Any]:
+    return {
+        "id": row["id"],
+        "project_id": row["project_id"],
+        "workflow_run_id": row["workflow_run_id"],
+        "step_id": row["step_id"],
+        "step_kind": row["step_kind"],
+        "iteration": int(row["iteration"]),
+        "status": row["status"],
+        "input": _json(row["input"], {}),
+        "output": _json(row["output"], {}),
+        "binding_snapshot": _json(row["binding_snapshot"], {}),
+        "evidence": _json(row["evidence"], []),
+        "attempt": int(row["attempt"]),
+        "max_attempts": int(row["max_attempts"]),
+        "run_after": _iso(row["run_after"]),
+        "lease_owner": row.get("lease_owner"),
+        "lease_expires_at": _iso(row.get("lease_expires_at")),
+        "heartbeat_at": _iso(row.get("heartbeat_at")),
+        "decision_id": row.get("decision_id"),
+        "child_workflow_run_id": row.get("child_workflow_run_id"),
+        "last_error": row.get("last_error"),
+        "started_at": _iso(row.get("started_at")),
+        "completed_at": _iso(row.get("completed_at")),
+        "created_at": _iso(row["created_at"]),
+        "updated_at": _iso(row["updated_at"]),
+    }
+
+
+def _serialize_run(row: Any) -> dict[str, Any]:
+    return {
+        "id": row["id"],
+        "project_id": row["project_id"],
+        "workflow_definition_id": row["workflow_definition_id"],
+        "workflow_version_id": row["workflow_version_id"],
+        "workflow_mapping_id": row.get("workflow_mapping_id"),
+        "parent_run_id": row.get("parent_run_id"),
+        "root_run_id": row.get("root_run_id"),
+        "actor": row["actor"],
+        "status": row["status"],
+        "input": _json(row["input"], {}),
+        "output": _json(row["output"], {}),
+        "context": _json(row["context"], {}),
+        "policy_snapshot": _json(row["policy_snapshot"], {}),
+        "current_frontier": _json(row["current_frontier"], []),
+        "dedupe_key": row.get("dedupe_key"),
+        "blocked_reason": row.get("blocked_reason"),
+        "error": row.get("error"),
+        "paused_at": _iso(row.get("paused_at")),
+        "completed_at": _iso(row.get("completed_at")),
+        "created_at": _iso(row["created_at"]),
+        "updated_at": _iso(row["updated_at"]),
+    }
+
+
+def get_run(connection: Connection, project_id: str, run_id: str) -> dict[str, Any]:
+    row = connection.execute(
+        text(
+            """
+            SELECT r.*, d.workflow_key, d.name AS workflow_name, v.version
+            FROM workflow_runs r
+            JOIN workflow_definitions d ON d.id=r.workflow_definition_id
+            JOIN workflow_versions v ON v.id=r.workflow_version_id
+            WHERE r.id=:run_id AND r.project_id=:project_id
+            """
+        ),
+        {"run_id": run_id, "project_id": project_id},
+    ).mappings().first()
+    if not row:
+        raise WorkflowNotFoundError("Workflow run not found.")
+    steps = connection.execute(
+        text(
+            """
+            SELECT * FROM workflow_step_runs
+            WHERE workflow_run_id=:run_id
+            ORDER BY created_at, step_id, iteration
+            """
+        ),
+        {"run_id": run_id},
+    ).mappings().all()
+    migrations = connection.execute(
+        text(
+            """
+            SELECT * FROM workflow_migrations
+            WHERE workflow_run_id=:run_id ORDER BY created_at DESC
+            """
+        ),
+        {"run_id": run_id},
+    ).mappings().all()
+    compensations = connection.execute(
+        text(
+            """
+            SELECT * FROM workflow_compensation_runs
+            WHERE workflow_run_id=:run_id ORDER BY sequence DESC
+            """
+        ),
+        {"run_id": run_id},
+    ).mappings().all()
+    events = connection.execute(
+        text(
+            """
+            SELECT id, event_type, actor, entity_type, entity_id, data, created_at
+            FROM events
+            WHERE project_id=:project_id AND entity_type='workflow_run' AND entity_id=:run_id
+            ORDER BY created_at, id
+            """
+        ),
+        {"project_id": project_id, "run_id": run_id},
+    ).mappings().all()
+    result = _serialize_run(row)
+    result.update(
+        {
+            "workflow_key": row["workflow_key"],
+            "workflow_name": row["workflow_name"],
+            "version": int(row["version"]),
+            "steps": [_serialize_step(step) for step in steps],
+            "migrations": [_serialize_migration(item) for item in migrations],
+            "compensations": [_serialize_compensation(item) for item in compensations],
+            "timeline": [
+                {
+                    "id": event["id"],
+                    "event_type": event["event_type"],
+                    "actor": event["actor"],
+                    "data": _json(event["data"], {}),
+                    "created_at": _iso(event["created_at"]),
+                }
+                for event in events
+            ],
+        }
+    )
+    return result
+
+
+def list_runs(
+    connection: Connection,
+    project_id: str,
+    *,
+    status: Optional[str] = None,
+    limit: int = 50,
+) -> list[dict[str, Any]]:
+    if limit < 1 or limit > 200:
+        raise WorkflowValidationError("limit must be between 1 and 200.")
+    status_clause = "AND r.status=:status" if status else ""
+    params: dict[str, Any] = {"project_id": project_id, "limit": limit}
+    if status:
+        params["status"] = status
+    rows = connection.execute(
+        text(
+            f"""
+            SELECT r.*, d.workflow_key, d.name AS workflow_name, v.version
+            FROM workflow_runs r
+            JOIN workflow_definitions d ON d.id=r.workflow_definition_id
+            JOIN workflow_versions v ON v.id=r.workflow_version_id
+            WHERE r.project_id=:project_id {status_clause}
+            ORDER BY r.updated_at DESC LIMIT :limit
+            """
+        ),
+        params,
+    ).mappings().all()
+    items = []
+    for row in rows:
+        item = _serialize_run(row)
+        item.update(
+            {
+                "workflow_key": row["workflow_key"],
+                "workflow_name": row["workflow_name"],
+                "version": int(row["version"]),
+            }
+        )
+        items.append(item)
+    return items
+
+
+def _run_context(connection: Connection, run_id: str) -> dict[str, Any]:
+    run = _run_row(connection, run_id)
+    rows = connection.execute(
+        text(
+            """
+            SELECT step_id, iteration, status, output
+            FROM workflow_step_runs WHERE workflow_run_id=:run_id
+            ORDER BY iteration, created_at
+            """
+        ),
+        {"run_id": run_id},
+    ).mappings().all()
+    outputs: dict[str, Any] = {}
+    for row in rows:
+        key = row["step_id"]
+        value = {
+            "status": row["status"],
+            "iteration": int(row["iteration"]),
+            "output": _json(row["output"], {}),
+        }
+        if key in outputs:
+            existing = outputs[key]
+            if not isinstance(existing, list):
+                outputs[key] = [existing]
+            outputs[key].append(value)
+        else:
+            outputs[key] = value
+    return {
+        "input": _json(run["input"], {}),
+        "context": _json(run["context"], {}),
+        "steps": outputs,
+    }
+
+
+def _lookup_path(payload: Any, path: str) -> tuple[bool, Any]:
+    parts = path.strip().lstrip("$").lstrip(".").split(".") if path else []
+    value = payload
+    for part in parts:
+        if isinstance(value, dict) and part in value:
+            value = value[part]
+        elif isinstance(value, list) and part.isdigit() and int(part) < len(value):
+            value = value[int(part)]
+        else:
+            return False, None
+    return True, value
+
+
+def evaluate_expression(expression: dict[str, Any], payload: dict[str, Any]) -> bool:
+    if not isinstance(expression, dict):
+        raise WorkflowValidationError("expression must be an object.")
+    if "all" in expression:
+        values = expression["all"]
+        if not isinstance(values, list):
+            raise WorkflowValidationError("expression.all must be a list.")
+        return all(evaluate_expression(item, payload) for item in values)
+    if "any" in expression:
+        values = expression["any"]
+        if not isinstance(values, list):
+            raise WorkflowValidationError("expression.any must be a list.")
+        return any(evaluate_expression(item, payload) for item in values)
+    if "not" in expression:
+        return not evaluate_expression(expression["not"], payload)
+    path = _clean_text(expression.get("path"), "expression.path")
+    operator = str(expression.get("op", "truthy")).lower()
+    exists, actual = _lookup_path(payload, path)
+    expected = expression.get("value")
+    if operator == "exists":
+        return exists
+    if operator == "truthy":
+        return exists and bool(actual)
+    if operator == "eq":
+        return exists and actual == expected
+    if operator == "ne":
+        return not exists or actual != expected
+    if operator == "in":
+        return exists and isinstance(expected, list) and actual in expected
+    if operator == "not_in":
+        return not exists or not isinstance(expected, list) or actual not in expected
+    if operator in {"gt", "gte", "lt", "lte"}:
+        if not exists:
+            return False
+        try:
+            if operator == "gt":
+                return actual > expected
+            if operator == "gte":
+                return actual >= expected
+            if operator == "lt":
+                return actual < expected
+            return actual <= expected
+        except TypeError:
+            return False
+    raise WorkflowValidationError(
+        "expression.op must be exists, truthy, eq, ne, in, not_in, gt, gte, lt, or lte."
+    )
+
+
+def _emit_step_event(
+    connection: Connection,
+    run: Any,
+    event_type: str,
+    step: Any,
+    data: Optional[dict[str, Any]] = None,
+) -> None:
+    emit_event(
+        connection,
+        run["project_id"],
+        event_type,
+        run["actor"],
+        "workflow_run",
+        run["id"],
+        {
+            "workflow_step_run_id": step["id"],
+            "step_id": step["step_id"],
+            "step_kind": step["step_kind"],
+            "iteration": int(step["iteration"]),
+            **(data or {}),
+        },
+    )
+
+
+def _activate_step(
+    connection: Connection, run_id: str, step_id: str, iteration: int = 0
+) -> None:
+    run = _run_row(connection, run_id)
+    if run["status"] in TERMINAL_RUN_STATES or run["status"] in {"paused", "compensating"}:
+        return
+    spec = _run_spec(connection, run_id)
+    template = _step_map(spec).get(step_id)
+    if not template:
+        raise WorkflowValidationError(f"workflow step '{step_id}' is missing from the pinned version.")
+    row = _step_row(connection, run_id, step_id, iteration)
+    if row is None:
+        _insert_step_run(
+            connection,
+            project_id=run["project_id"],
+            run_id=run_id,
+            step=template,
+            iteration=iteration,
+            status="pending",
+        )
+        row = _step_row(connection, run_id, step_id, iteration)
+    if row["status"] != "pending":
+        return
+    connection.execute(
+        text(
+            """
+            UPDATE workflow_step_runs SET status='ready', run_after=now(), updated_at=now()
+            WHERE id=:id AND status='pending'
+            """
+        ),
+        {"id": row["id"]},
+    )
+    ready = _step_row(connection, run_id, step_id, iteration)
+    _emit_step_event(connection, run, "workflow.step_ready", ready)
+    _refresh_frontier(connection, run_id)
+
+
+def _mark_skipped(connection: Connection, run_id: str, step_id: str, reason: str) -> None:
+    row = _step_row(connection, run_id, step_id, 0)
+    if not row or row["status"] != "pending":
+        return
+    connection.execute(
+        text(
+            """
+            UPDATE workflow_step_runs
+            SET status='skipped', output=CAST(:output AS JSONB), completed_at=now(), updated_at=now()
+            WHERE id=:id AND status='pending'
+            """
+        ),
+        {"id": row["id"], "output": json.dumps({"reason": reason})},
+    )
+    run = _run_row(connection, run_id)
+    skipped = _step_row(connection, run_id, step_id, 0)
+    _emit_step_event(
+        connection, run, "workflow.step_skipped", skipped, {"reason": reason}
+    )
+
+
+def _succeed_internal(
+    connection: Connection,
+    run_id: str,
+    step_id: str,
+    iteration: int,
+    output: dict[str, Any],
+) -> Any:
+    connection.execute(
+        text(
+            """
+            UPDATE workflow_step_runs
+            SET status='succeeded', output=CAST(:output AS JSONB),
+                lease_owner=NULL, lease_expires_at=NULL, heartbeat_at=NULL,
+                completed_at=now(), updated_at=now()
+            WHERE workflow_run_id=:run_id AND step_id=:step_id AND iteration=:iteration
+            """
+        ),
+        {
+            "run_id": run_id,
+            "step_id": step_id,
+            "iteration": iteration,
+            "output": json.dumps(output or {}),
+        },
+    )
+    if output:
+        connection.execute(
+            text(
+                """
+                UPDATE workflow_runs
+                SET context=context || CAST(:output AS JSONB), updated_at=now()
+                WHERE id=:run_id
+                """
+            ),
+            {"run_id": run_id, "output": json.dumps(output)},
+        )
+    row = _step_row(connection, run_id, step_id, iteration)
+    run = _run_row(connection, run_id)
+    _emit_step_event(connection, run, "workflow.step_succeeded", row, {"output": output})
+    return row
+
+
+def _after_success(
+    connection: Connection,
+    run_id: str,
+    step_id: str,
+    iteration: int,
+) -> None:
+    run = _run_row(connection, run_id)
+    if run["status"] not in {"running", "waiting"}:
+        _refresh_frontier(connection, run_id)
+        return
+    spec = _run_spec(connection, run_id)
+    steps = _step_map(spec)
+    template = steps[step_id]
+
+    # A loop body returns to its controller rather than following ordinary
+    # downstream edges.  Each iteration gets distinct durable step rows.
+    for controller in spec["steps"]:
+        if controller["kind"] == "bounded_loop" and controller.get("body") == step_id:
+            waiting = _step_row(connection, run_id, controller["id"], iteration)
+            if waiting and waiting["status"] == "waiting":
+                _succeed_internal(
+                    connection,
+                    run_id,
+                    controller["id"],
+                    iteration,
+                    {"continued": True, "iteration": iteration},
+                )
+                _activate_step(connection, run_id, controller["id"], iteration + 1)
+                _drain_control_steps(connection, run_id)
+                return
+
+    for target in template.get("next", []):
+        _maybe_activate(connection, run_id, str(target), iteration)
+    _drain_control_steps(connection, run_id)
+    _maybe_finish_run(connection, run_id)
+
+
+def _maybe_activate(
+    connection: Connection, run_id: str, step_id: str, iteration: int = 0
+) -> None:
+    spec = _run_spec(connection, run_id)
+    template = _step_map(spec)[step_id]
+    if template["kind"] != "join":
+        _activate_step(connection, run_id, step_id, iteration)
+        return
+    dependency_rows = connection.execute(
+        text(
+            """
+            SELECT step_id, status FROM workflow_step_runs
+            WHERE workflow_run_id=:run_id AND iteration=:iteration
+              AND step_id IN :step_ids
+            """
+        ).bindparams(bindparam("step_ids", expanding=True)),
+        {
+            "run_id": run_id,
+            "iteration": iteration,
+            "step_ids": tuple(template["wait_for"]),
+        },
+    ).mappings().all()
+    statuses = {row["step_id"]: row["status"] for row in dependency_rows}
+    policy = template.get("success_policy", "all")
+    ready = (
+        all(statuses.get(item) == "succeeded" for item in template["wait_for"])
+        if policy == "all"
+        else any(statuses.get(item) == "succeeded" for item in template["wait_for"])
+    )
+    if ready:
+        _activate_step(connection, run_id, step_id, iteration)
+
+
+def _drain_control_steps(connection: Connection, run_id: str) -> None:
+    for _ in range(500):
+        run = _run_row(connection, run_id)
+        if run["status"] not in {"running", "waiting"}:
+            return
+        row = connection.execute(
+            text(
+                """
+                SELECT * FROM workflow_step_runs
+                WHERE workflow_run_id=:run_id AND status='ready'
+                  AND step_kind IN (
+                    'condition', 'parallel', 'join', 'bounded_loop',
+                    'decision', 'timer', 'subworkflow'
+                  )
+                  AND run_after <= now()
+                ORDER BY created_at, iteration, step_id LIMIT 1
+                """
+            ),
+            {"run_id": run_id},
+        ).mappings().first()
+        if not row:
+            break
+        _process_control_step(connection, run, row)
+    else:
+        raise WorkflowConflictError("Workflow control-step drain exceeded its safety bound.")
+    _refresh_frontier(connection, run_id)
+    _maybe_finish_run(connection, run_id)
+
+
+def _process_control_step(connection: Connection, run: Any, row: Any) -> None:
+    spec = _run_spec(connection, run["id"])
+    template = _step_map(spec)[row["step_id"]]
+    kind = template["kind"]
+    iteration = int(row["iteration"])
+    context = _run_context(connection, run["id"])
+    if kind == "condition":
+        passed = evaluate_expression(template["expression"], context)
+        selected = template["on_true"] if passed else template["on_false"]
+        rejected = template["on_false"] if passed else template["on_true"]
+        _succeed_internal(
+            connection,
+            run["id"],
+            row["step_id"],
+            iteration,
+            {"result": passed, "selected": selected},
+        )
+        _mark_skipped(connection, run["id"], rejected, "condition_not_selected")
+        _activate_step(connection, run["id"], selected, iteration)
+        return
+    if kind == "parallel":
+        _succeed_internal(
+            connection,
+            run["id"],
+            row["step_id"],
+            iteration,
+            {"branches": template["branches"], "join": template["join"]},
+        )
+        for branch in template["branches"]:
+            _activate_step(connection, run["id"], branch, iteration)
+        return
+    if kind == "join":
+        _succeed_internal(
+            connection,
+            run["id"],
+            row["step_id"],
+            iteration,
+            {"joined": template["wait_for"], "policy": template.get("success_policy", "all")},
+        )
+        _after_success(connection, run["id"], row["step_id"], iteration)
+        return
+    if kind == "bounded_loop":
+        should_continue = evaluate_expression(template["expression"], context)
+        maximum = int(template["max_iterations"])
+        if should_continue and iteration >= maximum:
+            reason = (
+                f"bounded loop '{row['step_id']}' exhausted max_iterations={maximum}."
+            )
+            connection.execute(
+                text(
+                    """
+                    UPDATE workflow_step_runs SET status='failed', last_error=:reason,
+                        completed_at=now(), updated_at=now() WHERE id=:id
+                    """
+                ),
+                {"id": row["id"], "reason": reason},
+            )
+            _block_run(connection, run["id"], reason)
+            return
+        if not should_continue:
+            _succeed_internal(
+                connection,
+                run["id"],
+                row["step_id"],
+                iteration,
+                {"continued": False, "iteration": iteration},
+            )
+            for target in template.get("next", []):
+                _maybe_activate(connection, run["id"], target, 0)
+            return
+        connection.execute(
+            text(
+                """
+                UPDATE workflow_step_runs SET status='waiting',
+                    output=CAST(:output AS JSONB), updated_at=now()
+                WHERE id=:id
+                """
+            ),
+            {
+                "id": row["id"],
+                "output": json.dumps({"continued": True, "iteration": iteration}),
+            },
+        )
+        _activate_step(connection, run["id"], template["body"], iteration)
+        return
+    if kind == "timer":
+        wake_at = now_utc() + timedelta(seconds=int(template.get("wait_seconds", 0)))
+        connection.execute(
+            text(
+                """
+                UPDATE workflow_step_runs
+                SET status='waiting', run_after=:wake_at,
+                    output=CAST(:output AS JSONB), updated_at=now()
+                WHERE id=:id
+                """
+            ),
+            {
+                "id": row["id"],
+                "wake_at": wake_at,
+                "output": json.dumps({"wake_at": wake_at.isoformat()}),
+            },
+        )
+        connection.execute(
+            text("UPDATE workflow_runs SET status='waiting', updated_at=now() WHERE id=:id"),
+            {"id": run["id"]},
+        )
+        _emit_step_event(
+            connection,
+            run,
+            "workflow.step_waiting_timer",
+            _step_row(connection, run["id"], row["step_id"], iteration),
+            {"wake_at": wake_at.isoformat()},
+        )
+        return
+    if kind == "decision":
+        decision_id = create_blocking_decision(
+            connection,
+            run["project_id"],
+            None,
+            template["question"],
+            template.get("recommendation") or {"action": "resume_workflow"},
+            template.get("cost_summary") or {},
+            f"Workflow {run['id']} is waiting at decision step {row['step_id']}.",
+            risk_tier=int(template.get("risk_tier", 2)),
+            default_action=str(template.get("default_action", "hold")),
+        )
+        connection.execute(
+            text(
+                """
+                UPDATE workflow_step_runs
+                SET status='waiting', decision_id=:decision_id, updated_at=now()
+                WHERE id=:id
+                """
+            ),
+            {"id": row["id"], "decision_id": decision_id},
+        )
+        connection.execute(
+            text("UPDATE workflow_runs SET status='waiting', updated_at=now() WHERE id=:id"),
+            {"id": run["id"]},
+        )
+        _emit_step_event(
+            connection,
+            run,
+            "workflow.step_waiting_decision",
+            _step_row(connection, run["id"], row["step_id"], iteration),
+            {"decision_id": decision_id},
+        )
+        return
+    if kind == "subworkflow":
+        binding = template["binding"]
+        child = start_run(
+            connection,
+            project_id=run["project_id"],
+            actor=run["actor"],
+            input_data=template.get("input") or {},
+            dedupe_key=f"subworkflow:{run['id']}:{row['step_id']}:{iteration}",
+            workflow_version_id=binding["workflow_version_id"],
+            policy_snapshot=_json(run["policy_snapshot"], {}),
+            parent_run_id=run["id"],
+        )
+        connection.execute(
+            text(
+                """
+                UPDATE workflow_step_runs
+                SET status='waiting', child_workflow_run_id=:child_id, updated_at=now()
+                WHERE id=:id
+                """
+            ),
+            {"id": row["id"], "child_id": child["id"]},
+        )
+        connection.execute(
+            text("UPDATE workflow_runs SET status='waiting', updated_at=now() WHERE id=:id"),
+            {"id": run["id"]},
+        )
+        return
+
+
+def advance_run(connection: Connection, project_id: str, run_id: str) -> dict[str, Any]:
+    run = _run_row(connection, run_id, lock=True)
+    if run["project_id"] != project_id:
+        raise WorkflowNotFoundError("Workflow run not found.")
+    if run["status"] in TERMINAL_RUN_STATES or run["status"] in {"paused", "compensating"}:
+        return get_run(connection, project_id, run_id)
+    waiting = connection.execute(
+        text(
+            """
+            SELECT * FROM workflow_step_runs
+            WHERE workflow_run_id=:run_id AND status='waiting'
+            ORDER BY created_at, iteration
+            """
+        ),
+        {"run_id": run_id},
+    ).mappings().all()
+    spec = _run_spec(connection, run_id)
+    templates = _step_map(spec)
+    progressed = False
+    for step in waiting:
+        template = templates[step["step_id"]]
+        if step["step_kind"] == "timer" and step["run_after"] <= now_utc():
+            _succeed_internal(
+                connection,
+                run_id,
+                step["step_id"],
+                int(step["iteration"]),
+                {"woke_at": now_utc().isoformat()},
+            )
+            _after_success(connection, run_id, step["step_id"], int(step["iteration"]))
+            progressed = True
+        elif step["step_kind"] == "decision" and step.get("decision_id"):
+            decision = connection.execute(
+                text("SELECT status FROM decisions WHERE id=:id"),
+                {"id": step["decision_id"]},
+            ).mappings().first()
+            if decision and decision["status"] == "approved":
+                _succeed_internal(
+                    connection,
+                    run_id,
+                    step["step_id"],
+                    int(step["iteration"]),
+                    {"decision_id": step["decision_id"], "outcome": "approved"},
+                )
+                _after_success(connection, run_id, step["step_id"], int(step["iteration"]))
+                progressed = True
+            elif decision and decision["status"] in {"rejected", "expired"}:
+                _block_run(
+                    connection,
+                    run_id,
+                    f"decision {step['decision_id']} was {decision['status']}",
+                )
+                progressed = True
+        elif step["step_kind"] == "subworkflow" and step.get("child_workflow_run_id"):
+            child = _run_row(connection, step["child_workflow_run_id"])
+            if child["status"] == "completed":
+                _succeed_internal(
+                    connection,
+                    run_id,
+                    step["step_id"],
+                    int(step["iteration"]),
+                    {"child_workflow_run_id": child["id"], "output": _json(child["output"], {})},
+                )
+                _after_success(connection, run_id, step["step_id"], int(step["iteration"]))
+                progressed = True
+            elif child["status"] in {"failed", "deadlettered", "cancelled"}:
+                _block_run(
+                    connection,
+                    run_id,
+                    f"subworkflow {child['id']} ended in {child['status']}",
+                )
+                progressed = True
+        # Loop waiting steps resume only when their body completes.
+        _ = template
+    if progressed:
+        connection.execute(
+            text(
+                """
+                UPDATE workflow_runs SET status='running', updated_at=now()
+                WHERE id=:id AND status='waiting'
+                """
+            ),
+            {"id": run_id},
+        )
+    _drain_control_steps(connection, run_id)
+    _maybe_finish_run(connection, run_id)
+    return get_run(connection, project_id, run_id)
+
+
+def _refresh_frontier(connection: Connection, run_id: str) -> None:
+    rows = connection.execute(
+        text(
+            """
+            SELECT id, step_id, step_kind, iteration, status, lease_owner,
+                   lease_expires_at, run_after, decision_id, child_workflow_run_id
+            FROM workflow_step_runs
+            WHERE workflow_run_id=:run_id
+              AND status IN ('ready', 'leased', 'running', 'waiting')
+            ORDER BY created_at, iteration, step_id
+            """
+        ),
+        {"run_id": run_id},
+    ).mappings().all()
+    frontier = [
+        {
+            "id": row["id"],
+            "step_id": row["step_id"],
+            "step_kind": row["step_kind"],
+            "iteration": int(row["iteration"]),
+            "status": row["status"],
+            "lease_owner": row.get("lease_owner"),
+            "lease_expires_at": _iso(row.get("lease_expires_at")),
+            "run_after": _iso(row.get("run_after")),
+            "decision_id": row.get("decision_id"),
+            "child_workflow_run_id": row.get("child_workflow_run_id"),
+        }
+        for row in rows
+    ]
+    connection.execute(
+        text(
+            """
+            UPDATE workflow_runs SET current_frontier=CAST(:frontier AS JSONB), updated_at=now()
+            WHERE id=:id
+            """
+        ),
+        {"id": run_id, "frontier": json.dumps(frontier)},
+    )
+
+
+def _maybe_finish_run(connection: Connection, run_id: str) -> None:
+    run = _run_row(connection, run_id)
+    if run["status"] not in {"running", "waiting"}:
+        _refresh_frontier(connection, run_id)
+        return
+    counts = connection.execute(
+        text(
+            """
+            SELECT status, count(*) AS count FROM workflow_step_runs
+            WHERE workflow_run_id=:run_id GROUP BY status
+            """
+        ),
+        {"run_id": run_id},
+    ).mappings().all()
+    by_status = {row["status"]: int(row["count"]) for row in counts}
+    if any(by_status.get(status, 0) for status in ACTIVE_STEP_STATES):
+        connection.execute(
+            text(
+                """
+                UPDATE workflow_runs
+                SET status=CASE
+                    WHEN EXISTS (
+                      SELECT 1 FROM workflow_step_runs
+                      WHERE workflow_run_id=:id AND status IN ('ready','leased','running')
+                    ) THEN 'running' ELSE 'waiting' END,
+                    updated_at=now()
+                WHERE id=:id AND status IN ('running','waiting')
+                """
+            ),
+            {"id": run_id},
+        )
+        _refresh_frontier(connection, run_id)
+        return
+    # Pending rows at this point are unreachable paths.  Record them as skipped
+    # before completing so no step disappears silently.
+    pending = connection.execute(
+        text(
+            "SELECT step_id FROM workflow_step_runs WHERE workflow_run_id=:id AND status='pending'"
+        ),
+        {"id": run_id},
+    ).scalars().all()
+    for step_id in pending:
+        _mark_skipped(connection, run_id, step_id, "path_not_reached")
+    connection.execute(
+        text(
+            """
+            UPDATE workflow_runs
+            SET status='completed', output=context, current_frontier='[]'::jsonb,
+                completed_at=now(), updated_at=now()
+            WHERE id=:id AND status IN ('running','waiting')
+            """
+        ),
+        {"id": run_id},
+    )
+    emit_event(
+        connection,
+        run["project_id"],
+        "workflow.run_completed",
+        run["actor"],
+        "workflow_run",
+        run_id,
+        {"status_counts": by_status},
+    )
+
+
+def _block_run(connection: Connection, run_id: str, reason: str) -> None:
+    run = _run_row(connection, run_id)
+    connection.execute(
+        text(
+            """
+            UPDATE workflow_runs SET status='blocked', blocked_reason=:reason, updated_at=now()
+            WHERE id=:id AND status NOT IN ('completed','cancelled','compensated')
+            """
+        ),
+        {"id": run_id, "reason": reason},
+    )
+    emit_event(
+        connection,
+        run["project_id"],
+        "workflow.run_blocked",
+        run["actor"],
+        "workflow_run",
+        run_id,
+        {"reason": reason},
+    )
+
+
+def claim_step(
+    connection: Connection,
+    *,
+    project_id: str,
+    run_id: str,
+    worker_id: str,
+    lease_seconds: int = 60,
+) -> Optional[dict[str, Any]]:
+    if lease_seconds < 5 or lease_seconds > 3600:
+        raise WorkflowValidationError("lease_seconds must be between 5 and 3600.")
+    run = _run_row(connection, run_id, lock=True)
+    if run["project_id"] != project_id:
+        raise WorkflowNotFoundError("Workflow run not found.")
+    if run["status"] not in {"running", "waiting"}:
+        return None
+    _drain_control_steps(connection, run_id)
+    row = connection.execute(
+        text(
+            """
+            SELECT * FROM workflow_step_runs
+            WHERE workflow_run_id=:run_id
+              AND step_kind NOT IN (
+                'condition','parallel','join','bounded_loop','decision','timer','subworkflow'
+              )
+              AND run_after <= now()
+              AND (
+                status='ready'
+                OR (status IN ('leased','running') AND lease_expires_at < now())
+              )
+            ORDER BY run_after, created_at, iteration, step_id
+            FOR UPDATE SKIP LOCKED LIMIT 1
+            """
+        ),
+        {"run_id": run_id},
+    ).mappings().first()
+    if not row:
+        return None
+    reclaimed = row["status"] in {"leased", "running"}
+    if reclaimed:
+        _emit_step_event(
+            connection,
+            run,
+            "workflow.step_lease_reclaimed",
+            row,
+            {"previous_owner": row.get("lease_owner")},
+        )
+    expires_at = now_utc() + timedelta(seconds=lease_seconds)
+    updated = connection.execute(
+        text(
+            """
+            UPDATE workflow_step_runs
+            SET status='leased', attempt=attempt+1, lease_owner=:worker_id,
+                lease_expires_at=:expires_at, heartbeat_at=now(),
+                started_at=COALESCE(started_at, now()), updated_at=now()
+            WHERE id=:id
+            RETURNING *
+            """
+        ),
+        {"id": row["id"], "worker_id": worker_id, "expires_at": expires_at},
+    ).mappings().one()
+    connection.execute(
+        text("UPDATE workflow_runs SET status='running', updated_at=now() WHERE id=:id"),
+        {"id": run_id},
+    )
+    _emit_step_event(
+        connection,
+        run,
+        "workflow.step_leased",
+        updated,
+        {"worker_id": worker_id, "lease_expires_at": expires_at.isoformat()},
+    )
+    _refresh_frontier(connection, run_id)
+    return _serialize_step(updated)
+
+
+def heartbeat_step(
+    connection: Connection,
+    *,
+    project_id: str,
+    step_run_id: str,
+    worker_id: str,
+    lease_seconds: int = 60,
+) -> dict[str, Any]:
+    expires_at = now_utc() + timedelta(seconds=lease_seconds)
+    row = connection.execute(
+        text(
+            """
+            UPDATE workflow_step_runs
+            SET status='running', heartbeat_at=now(), lease_expires_at=:expires_at,
+                updated_at=now()
+            WHERE id=:id AND project_id=:project_id AND lease_owner=:worker_id
+              AND status IN ('leased','running') AND lease_expires_at >= now()
+            RETURNING *
+            """
+        ),
+        {
+            "id": step_run_id,
+            "project_id": project_id,
+            "worker_id": worker_id,
+            "expires_at": expires_at,
+        },
+    ).mappings().first()
+    if not row:
+        raise WorkflowLeaseError("Workflow step lease is missing, expired, or owned by another worker.")
+    _refresh_frontier(connection, row["workflow_run_id"])
+    return _serialize_step(row)
+
+
+def complete_step(
+    connection: Connection,
+    *,
+    project_id: str,
+    step_run_id: str,
+    worker_id: str,
+    output: dict[str, Any],
+    evidence: list[dict[str, Any]],
+) -> dict[str, Any]:
+    row = connection.execute(
+        text(
+            """
+            SELECT * FROM workflow_step_runs
+            WHERE id=:id AND project_id=:project_id FOR UPDATE
+            """
+        ),
+        {"id": step_run_id, "project_id": project_id},
+    ).mappings().first()
+    if not row:
+        raise WorkflowNotFoundError("Workflow step run not found.")
+    if row["status"] == "succeeded":
+        return _serialize_step(row)
+    if row["status"] not in {"leased", "running"} or row["lease_owner"] != worker_id:
+        raise WorkflowLeaseError("Workflow step is not leased by this worker.")
+    if row["lease_expires_at"] and row["lease_expires_at"] < now_utc():
+        raise WorkflowLeaseError("Workflow step lease has expired.")
+    updated = connection.execute(
+        text(
+            """
+            UPDATE workflow_step_runs
+            SET status='succeeded', output=CAST(:output AS JSONB),
+                evidence=CAST(:evidence AS JSONB), lease_owner=NULL,
+                lease_expires_at=NULL, heartbeat_at=NULL,
+                completed_at=now(), updated_at=now()
+            WHERE id=:id RETURNING *
+            """
+        ),
+        {
+            "id": step_run_id,
+            "output": json.dumps(output or {}),
+            "evidence": json.dumps(evidence or []),
+        },
+    ).mappings().one()
+    if output:
+        connection.execute(
+            text(
+                """
+                UPDATE workflow_runs
+                SET context=context || CAST(:output AS JSONB), updated_at=now()
+                WHERE id=:run_id
+                """
+            ),
+            {"run_id": row["workflow_run_id"], "output": json.dumps(output)},
+        )
+    run = _run_row(connection, row["workflow_run_id"])
+    _emit_step_event(
+        connection,
+        run,
+        "workflow.step_succeeded",
+        updated,
+        {"evidence_count": len(evidence or [])},
+    )
+    spec = _run_spec(connection, row["workflow_run_id"])
+    template = _step_map(spec)[row["step_id"]]
+    compensation = template.get("compensation")
+    if compensation:
+        sequence = int(
+            connection.execute(
+                text(
+                    """
+                    SELECT COALESCE(max(sequence), -1) + 1
+                    FROM workflow_compensation_runs WHERE workflow_run_id=:run_id
+                    """
+                ),
+                {"run_id": row["workflow_run_id"]},
+            ).scalar_one()
+        )
+        connection.execute(
+            text(
+                """
+                INSERT INTO workflow_compensation_runs (
+                    id, project_id, workflow_run_id, workflow_step_run_id,
+                    sequence, status, action, dedupe_key, max_attempts
+                ) VALUES (
+                    :id, :project_id, :run_id, :step_run_id, :sequence,
+                    'pending', CAST(:action AS JSONB), :dedupe_key, :max_attempts
+                ) ON CONFLICT (project_id, dedupe_key) DO NOTHING
+                """
+            ),
+            {
+                "id": make_id("wfc"),
+                "project_id": project_id,
+                "run_id": row["workflow_run_id"],
+                "step_run_id": row["id"],
+                "sequence": sequence,
+                "action": json.dumps(compensation),
+                "dedupe_key": f"workflow-compensate:{row['id']}",
+                "max_attempts": int(compensation.get("max_attempts", 3)),
+            },
+        )
+    _after_success(
+        connection,
+        row["workflow_run_id"],
+        row["step_id"],
+        int(row["iteration"]),
+    )
+    return _serialize_step(updated)
+
+
+def fail_step(
+    connection: Connection,
+    *,
+    project_id: str,
+    step_run_id: str,
+    worker_id: str,
+    error: str,
+    retryable: bool = True,
+    retry_delay_seconds: int = 0,
+) -> dict[str, Any]:
+    row = connection.execute(
+        text(
+            """
+            SELECT * FROM workflow_step_runs
+            WHERE id=:id AND project_id=:project_id FOR UPDATE
+            """
+        ),
+        {"id": step_run_id, "project_id": project_id},
+    ).mappings().first()
+    if not row:
+        raise WorkflowNotFoundError("Workflow step run not found.")
+    if row["status"] not in {"leased", "running"} or row["lease_owner"] != worker_id:
+        raise WorkflowLeaseError("Workflow step is not leased by this worker.")
+    can_retry = retryable and int(row["attempt"]) < int(row["max_attempts"])
+    status = "ready" if can_retry else "deadlettered"
+    run_after = now_utc() + timedelta(seconds=max(0, int(retry_delay_seconds)))
+    updated = connection.execute(
+        text(
+            """
+            UPDATE workflow_step_runs
+            SET status=:status, last_error=:error, run_after=:run_after,
+                lease_owner=NULL, lease_expires_at=NULL, heartbeat_at=NULL,
+                completed_at=CASE WHEN :terminal THEN now() ELSE NULL END,
+                updated_at=now()
+            WHERE id=:id RETURNING *
+            """
+        ),
+        {
+            "id": row["id"],
+            "status": status,
+            "error": _clean_text(error, "error"),
+            "run_after": run_after,
+            "terminal": not can_retry,
+        },
+    ).mappings().one()
+    run = _run_row(connection, row["workflow_run_id"])
+    _emit_step_event(
+        connection,
+        run,
+        "workflow.step_retry_scheduled" if can_retry else "workflow.step_deadlettered",
+        updated,
+        {"error": error, "retryable": can_retry, "run_after": run_after.isoformat()},
+    )
+    if not can_retry:
+        connection.execute(
+            text(
+                """
+                INSERT INTO deadletters (id, project_id, source_kind, source_id, reason, payload)
+                VALUES (:id, :project_id, 'workflow_step', :source_id, :reason, CAST(:payload AS JSONB))
+                """
+            ),
+            {
+                "id": make_id("dlq"),
+                "project_id": project_id,
+                "source_id": row["id"],
+                "reason": error,
+                "payload": json.dumps(
+                    {"workflow_run_id": row["workflow_run_id"], "step_id": row["step_id"]}
+                ),
+            },
+        )
+        connection.execute(
+            text(
+                """
+                UPDATE workflow_runs SET status='deadlettered', error=:error,
+                    current_frontier='[]'::jsonb, updated_at=now()
+                WHERE id=:id
+                """
+            ),
+            {"id": row["workflow_run_id"], "error": error},
+        )
+    _refresh_frontier(connection, row["workflow_run_id"])
+    return _serialize_step(updated)
+
+
+def pause_run(
+    connection: Connection, project_id: str, run_id: str, actor: str
+) -> dict[str, Any]:
+    run = _run_row(connection, run_id, lock=True)
+    if run["project_id"] != project_id:
+        raise WorkflowNotFoundError("Workflow run not found.")
+    if run["status"] in TERMINAL_RUN_STATES:
+        raise WorkflowConflictError("Terminal workflow runs cannot be paused.")
+    if run["status"] != "paused":
+        connection.execute(
+            text(
+                "UPDATE workflow_runs SET status='paused', paused_at=now(), updated_at=now() WHERE id=:id"
+            ),
+            {"id": run_id},
+        )
+        emit_event(
+            connection,
+            project_id,
+            "workflow.run_paused",
+            actor,
+            "workflow_run",
+            run_id,
+            {},
+        )
+    return get_run(connection, project_id, run_id)
+
+
+def resume_run(
+    connection: Connection, project_id: str, run_id: str, actor: str
+) -> dict[str, Any]:
+    run = _run_row(connection, run_id, lock=True)
+    if run["project_id"] != project_id:
+        raise WorkflowNotFoundError("Workflow run not found.")
+    if run["status"] != "paused":
+        raise WorkflowConflictError("Only paused workflow runs can resume.")
+    connection.execute(
+        text(
+            """
+            UPDATE workflow_runs SET status='running', paused_at=NULL, updated_at=now()
+            WHERE id=:id
+            """
+        ),
+        {"id": run_id},
+    )
+    emit_event(
+        connection,
+        project_id,
+        "workflow.run_resumed",
+        actor,
+        "workflow_run",
+        run_id,
+        {},
+    )
+    return advance_run(connection, project_id, run_id)
+
+
+def cancel_run(
+    connection: Connection,
+    project_id: str,
+    run_id: str,
+    actor: str,
+    *,
+    reason: str,
+    compensate: bool = True,
+) -> dict[str, Any]:
+    run = _run_row(connection, run_id, lock=True)
+    if run["project_id"] != project_id:
+        raise WorkflowNotFoundError("Workflow run not found.")
+    if run["status"] in TERMINAL_RUN_STATES:
+        return get_run(connection, project_id, run_id)
+    connection.execute(
+        text(
+            """
+            UPDATE workflow_step_runs SET status='cancelled', completed_at=now(), updated_at=now()
+            WHERE workflow_run_id=:run_id AND status IN ('pending','ready','waiting')
+            """
+        ),
+        {"run_id": run_id},
+    )
+    connection.execute(
+        text(
+            """
+            UPDATE workflow_runs SET status='cancelled', error=:reason,
+                current_frontier='[]'::jsonb, completed_at=now(), updated_at=now()
+            WHERE id=:id
+            """
+        ),
+        {"id": run_id, "reason": reason},
+    )
+    emit_event(
+        connection,
+        project_id,
+        "workflow.run_cancelled",
+        actor,
+        "workflow_run",
+        run_id,
+        {"reason": reason, "compensate": compensate},
+    )
+    if compensate:
+        compensation_count = connection.execute(
+            text(
+                "SELECT count(*) FROM workflow_compensation_runs WHERE workflow_run_id=:run_id"
+            ),
+            {"run_id": run_id},
+        ).scalar_one()
+        if compensation_count:
+            begin_compensation(connection, project_id, run_id, actor, reason=reason)
+    return get_run(connection, project_id, run_id)
+
+
+def begin_compensation(
+    connection: Connection,
+    project_id: str,
+    run_id: str,
+    actor: str,
+    *,
+    reason: str,
+) -> dict[str, Any]:
+    run = _run_row(connection, run_id, lock=True)
+    if run["project_id"] != project_id:
+        raise WorkflowNotFoundError("Workflow run not found.")
+    rows = connection.execute(
+        text(
+            """
+            SELECT * FROM workflow_compensation_runs
+            WHERE workflow_run_id=:run_id AND status IN ('pending','ready')
+            ORDER BY sequence DESC
+            """
+        ),
+        {"run_id": run_id},
+    ).mappings().all()
+    if not rows:
+        raise WorkflowConflictError("Workflow run has no pending compensation actions.")
+    connection.execute(
+        text(
+            """
+            UPDATE workflow_compensation_runs SET status='pending', updated_at=now()
+            WHERE workflow_run_id=:run_id AND status='ready'
+            """
+        ),
+        {"run_id": run_id},
+    )
+    connection.execute(
+        text(
+            "UPDATE workflow_compensation_runs SET status='ready', updated_at=now() WHERE id=:id"
+        ),
+        {"id": rows[0]["id"]},
+    )
+    connection.execute(
+        text(
+            """
+            UPDATE workflow_runs SET status='compensating', error=:reason,
+                updated_at=now() WHERE id=:id
+            """
+        ),
+        {"id": run_id, "reason": reason},
+    )
+    emit_event(
+        connection,
+        project_id,
+        "workflow.compensation_started",
+        actor,
+        "workflow_run",
+        run_id,
+        {"reason": reason, "action_count": len(rows)},
+    )
+    return get_run(connection, project_id, run_id)
+
+
+def claim_compensation(
+    connection: Connection,
+    *,
+    project_id: str,
+    run_id: str,
+    worker_id: str,
+    lease_seconds: int = 60,
+) -> Optional[dict[str, Any]]:
+    run = _run_row(connection, run_id, lock=True)
+    if run["project_id"] != project_id:
+        raise WorkflowNotFoundError("Workflow run not found.")
+    if run["status"] != "compensating":
+        return None
+    row = connection.execute(
+        text(
+            """
+            SELECT * FROM workflow_compensation_runs
+            WHERE workflow_run_id=:run_id AND (
+              status='ready' OR (status IN ('leased','running') AND lease_expires_at < now())
+            ) ORDER BY sequence DESC FOR UPDATE SKIP LOCKED LIMIT 1
+            """
+        ),
+        {"run_id": run_id},
+    ).mappings().first()
+    if not row:
+        return None
+    updated = connection.execute(
+        text(
+            """
+            UPDATE workflow_compensation_runs
+            SET status='leased', attempt=attempt+1, lease_owner=:worker_id,
+                lease_expires_at=:expires_at, heartbeat_at=now(), updated_at=now()
+            WHERE id=:id RETURNING *
+            """
+        ),
+        {
+            "id": row["id"],
+            "worker_id": worker_id,
+            "expires_at": now_utc() + timedelta(seconds=lease_seconds),
+        },
+    ).mappings().one()
+    return _serialize_compensation(updated)
+
+
+def complete_compensation(
+    connection: Connection,
+    *,
+    project_id: str,
+    compensation_id: str,
+    worker_id: str,
+    output: dict[str, Any],
+) -> dict[str, Any]:
+    row = connection.execute(
+        text(
+            """
+            SELECT * FROM workflow_compensation_runs
+            WHERE id=:id AND project_id=:project_id FOR UPDATE
+            """
+        ),
+        {"id": compensation_id, "project_id": project_id},
+    ).mappings().first()
+    if not row:
+        raise WorkflowNotFoundError("Workflow compensation run not found.")
+    if row["status"] == "succeeded":
+        return _serialize_compensation(row)
+    if row["status"] not in {"leased", "running"} or row["lease_owner"] != worker_id:
+        raise WorkflowLeaseError("Compensation is not leased by this worker.")
+    updated = connection.execute(
+        text(
+            """
+            UPDATE workflow_compensation_runs
+            SET status='succeeded', output=CAST(:output AS JSONB), lease_owner=NULL,
+                lease_expires_at=NULL, heartbeat_at=NULL, updated_at=now()
+            WHERE id=:id RETURNING *
+            """
+        ),
+        {"id": compensation_id, "output": json.dumps(output or {})},
+    ).mappings().one()
+    next_row = connection.execute(
+        text(
+            """
+            SELECT * FROM workflow_compensation_runs
+            WHERE workflow_run_id=:run_id AND status='pending'
+            ORDER BY sequence DESC LIMIT 1
+            """
+        ),
+        {"run_id": row["workflow_run_id"]},
+    ).mappings().first()
+    run = _run_row(connection, row["workflow_run_id"])
+    if next_row:
+        connection.execute(
+            text(
+                "UPDATE workflow_compensation_runs SET status='ready', updated_at=now() WHERE id=:id"
+            ),
+            {"id": next_row["id"]},
+        )
+    else:
+        connection.execute(
+            text(
+                """
+                UPDATE workflow_runs SET status='compensated', completed_at=now(),
+                    updated_at=now() WHERE id=:id
+                """
+            ),
+            {"id": run["id"]},
+        )
+        emit_event(
+            connection,
+            project_id,
+            "workflow.compensation_completed",
+            run["actor"],
+            "workflow_run",
+            run["id"],
+            {},
+        )
+    return _serialize_compensation(updated)
+
+
+def fail_compensation(
+    connection: Connection,
+    *,
+    project_id: str,
+    compensation_id: str,
+    worker_id: str,
+    error: str,
+) -> dict[str, Any]:
+    row = connection.execute(
+        text(
+            """
+            SELECT * FROM workflow_compensation_runs
+            WHERE id=:id AND project_id=:project_id FOR UPDATE
+            """
+        ),
+        {"id": compensation_id, "project_id": project_id},
+    ).mappings().first()
+    if not row:
+        raise WorkflowNotFoundError("Workflow compensation run not found.")
+    if row["status"] not in {"leased", "running"} or row["lease_owner"] != worker_id:
+        raise WorkflowLeaseError("Compensation is not leased by this worker.")
+    retry = int(row["attempt"]) < int(row["max_attempts"])
+    status = "ready" if retry else "deadlettered"
+    updated = connection.execute(
+        text(
+            """
+            UPDATE workflow_compensation_runs
+            SET status=:status, last_error=:error, lease_owner=NULL,
+                lease_expires_at=NULL, heartbeat_at=NULL, updated_at=now()
+            WHERE id=:id RETURNING *
+            """
+        ),
+        {"id": compensation_id, "status": status, "error": error},
+    ).mappings().one()
+    if not retry:
+        connection.execute(
+            text(
+                """
+                UPDATE workflow_runs SET status='deadlettered',
+                    error=:error, updated_at=now() WHERE id=:id
+                """
+            ),
+            {"id": row["workflow_run_id"], "error": f"compensation failed: {error}"},
+        )
+        connection.execute(
+            text(
+                """
+                INSERT INTO deadletters (id, project_id, source_kind, source_id, reason, payload)
+                VALUES (:id, :project_id, 'workflow_compensation', :source_id,
+                        :reason, CAST(:payload AS JSONB))
+                """
+            ),
+            {
+                "id": make_id("dlq"),
+                "project_id": project_id,
+                "source_id": compensation_id,
+                "reason": error,
+                "payload": json.dumps({"workflow_run_id": row["workflow_run_id"]}),
+            },
+        )
+    return _serialize_compensation(updated)
+
+
+def _serialize_compensation(row: Any) -> dict[str, Any]:
+    return {
+        "id": row["id"],
+        "project_id": row["project_id"],
+        "workflow_run_id": row["workflow_run_id"],
+        "workflow_step_run_id": row["workflow_step_run_id"],
+        "sequence": int(row["sequence"]),
+        "status": row["status"],
+        "action": _json(row["action"], {}),
+        "output": _json(row["output"], {}),
+        "dedupe_key": row["dedupe_key"],
+        "attempt": int(row["attempt"]),
+        "max_attempts": int(row["max_attempts"]),
+        "lease_owner": row.get("lease_owner"),
+        "lease_expires_at": _iso(row.get("lease_expires_at")),
+        "last_error": row.get("last_error"),
+        "created_at": _iso(row["created_at"]),
+        "updated_at": _iso(row["updated_at"]),
+    }
+
+
+def migrate_run(
+    connection: Connection,
+    *,
+    project_id: str,
+    run_id: str,
+    target_version_id: str,
+    actor: str,
+    reason: str,
+) -> dict[str, Any]:
+    run = _run_row(connection, run_id, lock=True)
+    if run["project_id"] != project_id:
+        raise WorkflowNotFoundError("Workflow run not found.")
+    if run["status"] != "paused":
+        raise WorkflowConflictError("Only paused workflow runs can migrate.")
+    active = connection.execute(
+        text(
+            """
+            SELECT count(*) FROM workflow_step_runs
+            WHERE workflow_run_id=:run_id AND status IN ('leased','running')
+            """
+        ),
+        {"run_id": run_id},
+    ).scalar_one()
+    if active:
+        raise WorkflowConflictError("A paused run with active leases cannot migrate.")
+    target = _version_row(connection, project_id, target_version_id)
+    if target["workflow_definition_id"] != run["workflow_definition_id"]:
+        raise WorkflowValidationError("Target version belongs to another workflow definition.")
+    old_spec = _run_spec(connection, run_id)
+    new_spec = validate_workflow_spec(_json(target["spec"], {}))
+    old_steps = _step_map(old_spec)
+    new_steps = _step_map(new_spec)
+    rows = connection.execute(
+        text("SELECT * FROM workflow_step_runs WHERE workflow_run_id=:run_id ORDER BY created_at"),
+        {"run_id": run_id},
+    ).mappings().all()
+    incompatible: list[str] = []
+    for row in rows:
+        if row["status"] in {"succeeded", "ready", "waiting"}:
+            target_step = new_steps.get(row["step_id"])
+            if not target_step or target_step["kind"] != row["step_kind"]:
+                incompatible.append(row["step_id"])
+    if incompatible:
+        raise WorkflowConflictError(
+            "Target version is incompatible with completed/frontier steps: "
+            + ", ".join(sorted(set(incompatible)))
+        )
+    snapshot = {
+        "workflow_version_id": run["workflow_version_id"],
+        "steps": [
+            {"id": row["id"], "step_id": row["step_id"], "iteration": int(row["iteration"]), "status": row["status"]}
+            for row in rows
+        ],
+    }
+    migration_id = make_id("wfmg")
+    connection.execute(
+        text(
+            """
+            INSERT INTO workflow_migrations (
+                id, project_id, workflow_run_id, from_version_id, to_version_id,
+                status, compatibility, rollback_snapshot, reason, created_by
+            ) VALUES (
+                :id, :project_id, :run_id, :from_version_id, :to_version_id,
+                'completed', CAST(:compatibility AS JSONB), CAST(:snapshot AS JSONB),
+                :reason, :actor
+            )
+            """
+        ),
+        {
+            "id": migration_id,
+            "project_id": project_id,
+            "run_id": run_id,
+            "from_version_id": run["workflow_version_id"],
+            "to_version_id": target_version_id,
+            "compatibility": json.dumps({"compatible": True, "preserved_steps": len(rows)}),
+            "snapshot": json.dumps(snapshot),
+            "reason": _clean_text(reason, "reason"),
+            "actor": actor,
+        },
+    )
+    connection.execute(
+        text(
+            "UPDATE workflow_runs SET workflow_version_id=:version_id, updated_at=now() WHERE id=:id"
+        ),
+        {"version_id": target_version_id, "id": run_id},
+    )
+    existing_ids = {(row["step_id"], int(row["iteration"])) for row in rows}
+    for step in new_spec["steps"]:
+        if (step["id"], 0) not in existing_ids:
+            _insert_step_run(
+                connection,
+                project_id=project_id,
+                run_id=run_id,
+                step=step,
+                iteration=0,
+                status="pending",
+            )
+    for step_id in set(old_steps) - set(new_steps):
+        connection.execute(
+            text(
+                """
+                UPDATE workflow_step_runs SET status='cancelled', updated_at=now()
+                WHERE workflow_run_id=:run_id AND step_id=:step_id AND status='pending'
+                """
+            ),
+            {"run_id": run_id, "step_id": step_id},
+        )
+    emit_event(
+        connection,
+        project_id,
+        "workflow.run_migrated",
+        actor,
+        "workflow_run",
+        run_id,
+        {
+            "migration_id": migration_id,
+            "from_version_id": run["workflow_version_id"],
+            "to_version_id": target_version_id,
+            "reason": reason,
+        },
+    )
+    return get_run(connection, project_id, run_id)
+
+
+def rollback_migration(
+    connection: Connection,
+    *,
+    project_id: str,
+    run_id: str,
+    migration_id: str,
+    actor: str,
+) -> dict[str, Any]:
+    run = _run_row(connection, run_id, lock=True)
+    if run["project_id"] != project_id:
+        raise WorkflowNotFoundError("Workflow run not found.")
+    if run["status"] != "paused":
+        raise WorkflowConflictError("Only paused workflow runs can roll back migration.")
+    migration = connection.execute(
+        text(
+            """
+            SELECT * FROM workflow_migrations
+            WHERE id=:id AND workflow_run_id=:run_id AND project_id=:project_id
+            FOR UPDATE
+            """
+        ),
+        {"id": migration_id, "run_id": run_id, "project_id": project_id},
+    ).mappings().first()
+    if not migration:
+        raise WorkflowNotFoundError("Workflow migration not found.")
+    if migration["status"] == "rolled_back":
+        return get_run(connection, project_id, run_id)
+    if migration["status"] != "completed" or run["workflow_version_id"] != migration["to_version_id"]:
+        raise WorkflowConflictError("Migration is not the active completed migration.")
+    snapshot = _json(migration["rollback_snapshot"], {})
+    keep_ids = {item["id"] for item in snapshot.get("steps", [])}
+    rows = connection.execute(
+        text("SELECT id, status FROM workflow_step_runs WHERE workflow_run_id=:run_id"),
+        {"run_id": run_id},
+    ).mappings().all()
+    new_rows = [row for row in rows if row["id"] not in keep_ids]
+    if any(row["status"] not in {"pending", "cancelled", "skipped"} for row in new_rows):
+        raise WorkflowConflictError("New-version steps have executed; migration rollback is unsafe.")
+    if new_rows:
+        connection.execute(
+            text("DELETE FROM workflow_step_runs WHERE id IN :ids").bindparams(
+                bindparam("ids", expanding=True)
+            ),
+            {"ids": tuple(row["id"] for row in new_rows)},
+        )
+    for item in snapshot.get("steps", []):
+        connection.execute(
+            text("UPDATE workflow_step_runs SET status=:status, updated_at=now() WHERE id=:id"),
+            {"id": item["id"], "status": item["status"]},
+        )
+    connection.execute(
+        text(
+            "UPDATE workflow_runs SET workflow_version_id=:version_id, updated_at=now() WHERE id=:id"
+        ),
+        {"version_id": migration["from_version_id"], "id": run_id},
+    )
+    connection.execute(
+        text(
+            """
+            UPDATE workflow_migrations SET status='rolled_back', rolled_back_by=:actor,
+                rolled_back_at=now() WHERE id=:id
+            """
+        ),
+        {"id": migration_id, "actor": actor},
+    )
+    emit_event(
+        connection,
+        project_id,
+        "workflow.migration_rolled_back",
+        actor,
+        "workflow_run",
+        run_id,
+        {"migration_id": migration_id, "restored_version_id": migration["from_version_id"]},
+    )
+    return get_run(connection, project_id, run_id)
+
+
+def _serialize_migration(row: Any) -> dict[str, Any]:
+    return {
+        "id": row["id"],
+        "project_id": row["project_id"],
+        "workflow_run_id": row["workflow_run_id"],
+        "from_version_id": row["from_version_id"],
+        "to_version_id": row["to_version_id"],
+        "status": row["status"],
+        "compatibility": _json(row["compatibility"], {}),
+        "reason": row["reason"],
+        "created_by": row["created_by"],
+        "rolled_back_by": row.get("rolled_back_by"),
+        "created_at": _iso(row["created_at"]),
+        "rolled_back_at": _iso(row.get("rolled_back_at")),
+    }
+
+
+def seed_specpack_workflows(
+    connection: Connection,
+    *,
+    project_id: str,
+    workflow_root: Path,
+    actor: str = "bootstrap",
+) -> list[dict[str, Any]]:
+    """Register the shipped YAML workflow contracts as immutable runtime versions.
+
+    The historical specpack schema describes ordered ``phases`` rather than
+    executable runtime ``steps``.  The adapter preserves the complete source
+    contract as metadata while producing a conservative, sequential task graph;
+    future native runtime specs can use ``entry_step``/``steps`` directly.
+    """
+    registered: list[dict[str, Any]] = []
+    for path in sorted(workflow_root.glob("*.yaml")):
+        source = yaml.safe_load(path.read_text(encoding="utf-8"))
+        if not isinstance(source, dict):
+            continue
+        workflow_key = str(source.get("id") or path.stem).strip()
+        definition_row = connection.execute(
+            text(
+                """
+                SELECT * FROM workflow_definitions
+                WHERE project_id=:project_id AND workflow_key=:workflow_key
+                """
+            ),
+            {"project_id": project_id, "workflow_key": workflow_key},
+        ).mappings().first()
+        if definition_row:
+            definition = _serialize_definition(definition_row)
+        else:
+            definition = create_definition(
+                connection,
+                project_id=project_id,
+                workflow_key=workflow_key,
+                name=str(source.get("name") or workflow_key.replace("_", " ").title()),
+                description=source.get("description") or source.get("purpose"),
+                actor=actor,
+            )
+
+        if isinstance(source.get("steps"), list) and source.get("entry_step"):
+            runtime_spec = source
+        else:
+            raw_phases = source.get("phases") or source.get("states") or ["contract"]
+            phases = raw_phases if isinstance(raw_phases, list) else ["contract"]
+            steps: list[dict[str, Any]] = []
+            used_ids: set[str] = set()
+            for index, phase in enumerate(phases):
+                raw_id = phase.get("id") if isinstance(phase, dict) else phase
+                base_id = re.sub(r"[^A-Za-z0-9_.-]+", "-", str(raw_id or f"phase-{index + 1}"))
+                base_id = base_id.strip("-.") or f"phase-{index + 1}"
+                step_id = base_id
+                suffix = 2
+                while step_id in used_ids:
+                    step_id = f"{base_id}-{suffix}"
+                    suffix += 1
+                used_ids.add(step_id)
+                step: dict[str, Any] = {
+                    "id": step_id,
+                    "kind": "task",
+                    "input": {
+                        "source_phase": phase,
+                        "source_file": path.name,
+                    },
+                }
+                steps.append(step)
+            for current, following in zip(steps, steps[1:]):
+                current["next"] = [following["id"]]
+            runtime_spec = {
+                "entry_step": steps[0]["id"],
+                "steps": steps,
+                "source_contract": source,
+                "source_file": path.name,
+                "source_schema": "specpack.workflow.v0",
+            }
+        version = publish_version(
+            connection,
+            project_id=project_id,
+            definition_id=definition["id"],
+            spec=runtime_spec,
+            actor=actor,
+            activate=True,
+        )
+        registered.append(
+            {
+                "workflow_definition_id": definition["id"],
+                "workflow_version_id": version["id"],
+                "workflow_key": workflow_key,
+                "duplicate": bool(version.get("duplicate")),
+                "source_file": path.name,
+            }
+        )
+    return registered

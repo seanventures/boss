@@ -3073,6 +3073,308 @@ class RoleDetail(RoleSummary):
     spec: dict[str, Any]
 
 
+# Reusable mapped workflow runtime (WFL-001 / BOSS-134..143).
+WorkflowRunState = Literal[
+    "queued",
+    "validating",
+    "running",
+    "waiting",
+    "paused",
+    "blocked",
+    "completed",
+    "failed",
+    "deadlettered",
+    "cancelled",
+    "compensating",
+    "compensated",
+]
+
+
+class WorkflowDefinitionCreateRequest(BaseModel):
+    project_id: str
+    workflow_key: str
+    name: str
+    description: Optional[str] = None
+    actor: str = "ceo"
+
+    @model_validator(mode="after")
+    def validate_fields(self) -> "WorkflowDefinitionCreateRequest":
+        self.project_id = _require_text(self.project_id, "project_id")
+        self.workflow_key = _require_text(self.workflow_key, "workflow_key")
+        self.name = _require_text(self.name, "name")
+        self.actor = _require_text(self.actor, "actor")
+        return self
+
+
+class WorkflowDefinitionSummary(BaseModel):
+    id: str
+    project_id: str
+    workflow_key: str
+    name: str
+    description: Optional[str] = None
+    status: str
+    active_version_id: Optional[str] = None
+    created_by: str
+    created_at: str
+    updated_at: str
+    version_count: Optional[int] = None
+
+
+class WorkflowVersionCreateRequest(BaseModel):
+    project_id: str
+    spec: dict[str, Any]
+    activate: bool = True
+    actor: str = "ceo"
+
+    @model_validator(mode="after")
+    def validate_fields(self) -> "WorkflowVersionCreateRequest":
+        self.project_id = _require_text(self.project_id, "project_id")
+        self.actor = _require_text(self.actor, "actor")
+        self.spec = _require_non_empty_mapping(self.spec, "spec")
+        return self
+
+
+class WorkflowVersionSummary(BaseModel):
+    id: str
+    project_id: str
+    workflow_definition_id: str
+    version: int
+    status: str
+    spec: dict[str, Any]
+    content_hash: str
+    created_by: str
+    created_at: str
+    published_at: str
+    duplicate: Optional[bool] = None
+
+
+class WorkflowDefinitionDetail(WorkflowDefinitionSummary):
+    versions: list[WorkflowVersionSummary] = Field(default_factory=list)
+
+
+class WorkflowDefinitionListResponse(BaseModel):
+    project_id: str
+    items: list[WorkflowDefinitionSummary]
+
+
+class WorkflowMappingCreateRequest(BaseModel):
+    project_id: str
+    workflow_version_id: str
+    selector_kind: str
+    selector_value: str
+    scope_type: Literal["org", "workspace", "project"] = "project"
+    scope_id: str
+    priority: int = 100
+    actor: str = "ceo"
+
+    @model_validator(mode="after")
+    def validate_fields(self) -> "WorkflowMappingCreateRequest":
+        self.project_id = _require_text(self.project_id, "project_id")
+        self.workflow_version_id = _require_text(
+            self.workflow_version_id, "workflow_version_id"
+        )
+        self.selector_kind = _require_text(self.selector_kind, "selector_kind")
+        self.selector_value = _require_text(self.selector_value, "selector_value")
+        self.scope_id = _require_text(self.scope_id, "scope_id")
+        self.actor = _require_text(self.actor, "actor")
+        return self
+
+
+class WorkflowMappingSummary(BaseModel):
+    id: str
+    project_id: str
+    workflow_version_id: str
+    selector_kind: str
+    selector_value: str
+    scope_type: str
+    scope_id: str
+    priority: int
+    enabled: bool
+    created_by: str
+    created_at: str
+    updated_at: str
+
+
+class WorkflowMappingListResponse(BaseModel):
+    project_id: str
+    items: list[WorkflowMappingSummary]
+
+
+class WorkflowMappingResolveRequest(BaseModel):
+    project_id: str
+    selector_kind: str
+    selector_value: str
+    actor: str = "ceo"
+
+    @model_validator(mode="after")
+    def validate_fields(self) -> "WorkflowMappingResolveRequest":
+        self.project_id = _require_text(self.project_id, "project_id")
+        self.selector_kind = _require_text(self.selector_kind, "selector_kind")
+        self.selector_value = _require_text(self.selector_value, "selector_value")
+        self.actor = _require_text(self.actor, "actor")
+        return self
+
+
+class WorkflowRunStartRequest(BaseModel):
+    project_id: str
+    workflow_version_id: Optional[str] = None
+    selector_kind: Optional[str] = None
+    selector_value: Optional[str] = None
+    input: dict[str, Any] = Field(default_factory=dict)
+    policy_snapshot: dict[str, Any] = Field(default_factory=dict)
+    dedupe_key: str
+    parent_run_id: Optional[str] = None
+    actor: str = "ceo"
+
+    @model_validator(mode="after")
+    def validate_fields(self) -> "WorkflowRunStartRequest":
+        self.project_id = _require_text(self.project_id, "project_id")
+        self.dedupe_key = _require_text(self.dedupe_key, "dedupe_key")
+        self.actor = _require_text(self.actor, "actor")
+        if not self.workflow_version_id and not (
+            self.selector_kind and self.selector_value
+        ):
+            raise ValueError(
+                "workflow_version_id or selector_kind/selector_value is required."
+            )
+        return self
+
+
+class WorkflowRunActorRequest(BaseModel):
+    project_id: str
+    actor: str = "ceo"
+
+
+class WorkflowRunCancelRequest(WorkflowRunActorRequest):
+    reason: str
+    compensate: bool = True
+
+
+class WorkflowStepClaimRequest(BaseModel):
+    project_id: str
+    worker_id: str
+    lease_seconds: int = Field(default=60, ge=5, le=3600)
+
+
+class WorkflowStepHeartbeatRequest(BaseModel):
+    project_id: str
+    worker_id: str
+    lease_seconds: int = Field(default=60, ge=5, le=3600)
+
+
+class WorkflowStepCompleteRequest(BaseModel):
+    project_id: str
+    worker_id: str
+    output: dict[str, Any] = Field(default_factory=dict)
+    evidence: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class WorkflowStepFailRequest(BaseModel):
+    project_id: str
+    worker_id: str
+    error: str
+    retryable: bool = True
+    retry_delay_seconds: int = Field(default=0, ge=0, le=86400)
+
+
+class WorkflowRunMigrateRequest(WorkflowRunActorRequest):
+    target_version_id: str
+    reason: str
+
+
+class WorkflowMigrationRollbackRequest(WorkflowRunActorRequest):
+    migration_id: str
+
+
+class WorkflowCompensationBeginRequest(WorkflowRunActorRequest):
+    reason: str
+
+
+class WorkflowCompensationClaimRequest(BaseModel):
+    project_id: str
+    worker_id: str
+    lease_seconds: int = Field(default=60, ge=5, le=3600)
+
+
+class WorkflowCompensationCompleteRequest(BaseModel):
+    project_id: str
+    worker_id: str
+    output: dict[str, Any] = Field(default_factory=dict)
+
+
+class WorkflowCompensationFailRequest(BaseModel):
+    project_id: str
+    worker_id: str
+    error: str
+
+
+class WorkflowStepRunSummary(BaseModel):
+    id: str
+    project_id: str
+    workflow_run_id: str
+    step_id: str
+    step_kind: str
+    iteration: int
+    status: str
+    input: dict[str, Any]
+    output: dict[str, Any]
+    binding_snapshot: dict[str, Any]
+    evidence: list[dict[str, Any]]
+    attempt: int
+    max_attempts: int
+    run_after: str
+    lease_owner: Optional[str] = None
+    lease_expires_at: Optional[str] = None
+    heartbeat_at: Optional[str] = None
+    decision_id: Optional[str] = None
+    child_workflow_run_id: Optional[str] = None
+    last_error: Optional[str] = None
+    started_at: Optional[str] = None
+    completed_at: Optional[str] = None
+    created_at: str
+    updated_at: str
+
+
+class WorkflowRunSummary(BaseModel):
+    id: str
+    project_id: str
+    workflow_definition_id: str
+    workflow_version_id: str
+    workflow_mapping_id: Optional[str] = None
+    parent_run_id: Optional[str] = None
+    root_run_id: Optional[str] = None
+    actor: str
+    status: WorkflowRunState
+    input: dict[str, Any]
+    output: dict[str, Any]
+    context: dict[str, Any]
+    policy_snapshot: dict[str, Any]
+    current_frontier: list[dict[str, Any]]
+    dedupe_key: Optional[str] = None
+    blocked_reason: Optional[str] = None
+    error: Optional[str] = None
+    paused_at: Optional[str] = None
+    completed_at: Optional[str] = None
+    created_at: str
+    updated_at: str
+    workflow_key: str
+    workflow_name: str
+    version: int
+    duplicate: Optional[bool] = None
+
+
+class WorkflowRunDetail(WorkflowRunSummary):
+    steps: list[WorkflowStepRunSummary] = Field(default_factory=list)
+    migrations: list[dict[str, Any]] = Field(default_factory=list)
+    compensations: list[dict[str, Any]] = Field(default_factory=list)
+    timeline: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class WorkflowRunListResponse(BaseModel):
+    project_id: str
+    items: list[WorkflowRunSummary]
+
+
 class RoleListResponse(BaseModel):
     project_id: str
     items: list[RoleSummary]

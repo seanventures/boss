@@ -34,32 +34,48 @@ def test_rate_limit_detection():
 
 
 def test_aimd_decrease_and_recover():
-    lim = ModelRateLimiter(max_concurrency=8, floor_concurrency=1, recover_after=2,
-                           default_backoff_s=0.0)
+    lim = ModelRateLimiter(
+        max_concurrency=8,
+        floor_concurrency=1,
+        recover_after=2,
+        default_backoff_s=0.0,
+    )
     assert lim.limit_for("p") == 8
-    lim.report_rate_limited("p"); assert lim.limit_for("p") == 4   # multiplicative /2
-    lim.report_rate_limited("p"); assert lim.limit_for("p") == 2
-    lim.report_rate_limited("p"); assert lim.limit_for("p") == 1
-    lim.report_rate_limited("p"); assert lim.limit_for("p") == 1   # floor holds
-    lim.report_ok("p"); assert lim.limit_for("p") == 1             # not yet (recover_after=2)
-    lim.report_ok("p"); assert lim.limit_for("p") == 2             # additive +1 after 2 oks
+    lim.report_rate_limited("p")
+    assert lim.limit_for("p") == 4  # multiplicative /2
+    lim.report_rate_limited("p")
+    assert lim.limit_for("p") == 2
+    lim.report_rate_limited("p")
+    assert lim.limit_for("p") == 1
+    lim.report_rate_limited("p")
+    assert lim.limit_for("p") == 1  # floor holds
+    lim.report_ok("p")
+    assert lim.limit_for("p") == 1  # not yet (recover_after=2)
+    lim.report_ok("p")
+    assert lim.limit_for("p") == 2  # additive +1 after 2 oks
 
 
 def test_concurrency_is_bounded():
     lim = ModelRateLimiter(max_concurrency=2)
-    peak = [0]; cur = [0]; lock = threading.Lock()
+    peak = [0]
+    cur = [0]
+    lock = threading.Lock()
 
     def worker():
         with lim.slot("p"):
             with lock:
-                cur[0] += 1; peak[0] = max(peak[0], cur[0])
+                cur[0] += 1
+                peak[0] = max(peak[0], cur[0])
             time.sleep(0.05)
             with lock:
                 cur[0] -= 1
 
     ts = [threading.Thread(target=worker) for _ in range(6)]
-    [t.start() for t in ts]; [t.join() for t in ts]
-    assert peak[0] <= 2   # never more than the cap in flight at once
+    for thread in ts:
+        thread.start()
+    for thread in ts:
+        thread.join()
+    assert peak[0] <= 2  # never more than the cap in flight at once
 
 
 def test_pacing_spaces_call_starts():
@@ -91,19 +107,26 @@ def test_burst_mode_uses_null_limiter():
 
 class _FakeLimiter:
     def __init__(self):
-        self.ok = []; self.rl = []; self.slots = 0
+        self.ok = []
+        self.rl = []
+        self.slots = 0
+
     def slot(self, provider):
         self.slots += 1
         from contextlib import nullcontext
+
         return nullcontext()
+
     def report_rate_limited(self, provider, retry_after_s=None):
         self.rl.append(provider)
+
     def report_ok(self, provider):
         self.ok.append(provider)
 
 
 class _FakeAgent:
     engine = "claude_code"
+
     def run_role(self, prompt, cwd, **kw):
         if prompt == "boom":
             raise RuntimeError("claude exited 1: api_error_status:429 rate limit")

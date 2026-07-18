@@ -69,6 +69,108 @@
   --mono: "SFMono-Regular", "Menlo", "Monaco", ui-monospace, monospace;
 }
 
+/* Reusable workflow registry and durable run timeline. */
+.workflow-registry-grid {
+  grid-template-columns: minmax(0, 0.85fr) minmax(0, 0.85fr) minmax(0, 1.3fr);
+}
+
+.workflow-registry-list {
+  display: grid;
+  gap: 0;
+  margin-top: 0.75rem;
+}
+
+.workflow-registry-row {
+  align-items: center;
+  border-top: 1px solid var(--line, rgba(17, 24, 39, 0.1));
+  display: flex;
+  gap: 1rem;
+  justify-content: space-between;
+  padding: 0.8rem 0;
+}
+
+.workflow-registry-row:first-child {
+  border-top: 0;
+}
+
+.workflow-registry-row p,
+.workflow-step-node small,
+.workflow-event-row small {
+  display: block;
+  margin: 0.2rem 0 0;
+}
+
+.workflow-registry-meta {
+  align-items: flex-end;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  text-align: right;
+}
+
+.workflow-registry-mapping-summary {
+  align-items: baseline;
+  border-top: 1px solid var(--line, rgba(17, 24, 39, 0.1));
+  display: flex;
+  gap: 0.45rem;
+  margin-top: 0.4rem;
+  padding-top: 1rem;
+}
+
+.workflow-run-timeline {
+  min-width: 0;
+}
+
+.workflow-step-strip,
+.workflow-event-timeline {
+  display: grid;
+  gap: 0.65rem;
+  margin-top: 1rem;
+}
+
+.workflow-step-node,
+.workflow-event-row {
+  align-items: flex-start;
+  display: flex;
+  gap: 0.65rem;
+}
+
+.workflow-step-dot,
+.workflow-event-marker {
+  background: currentColor;
+  border-radius: 999px;
+  flex: 0 0 auto;
+  height: 0.55rem;
+  margin-top: 0.3rem;
+  width: 0.55rem;
+}
+
+.workflow-event-marker {
+  color: var(--muted, #7a8178);
+  height: 0.4rem;
+  width: 0.4rem;
+}
+
+@media (max-width: 1100px) {
+  .workflow-registry-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .workflow-run-timeline {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 720px) {
+  .workflow-registry-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .workflow-run-timeline {
+    grid-column: auto;
+  }
+}
+
 * {
   box-sizing: border-box;
 }

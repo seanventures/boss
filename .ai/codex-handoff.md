@@ -1,5 +1,38 @@
 # Codex Handoff
 
+## 2026-07-18 BOSS-134–143 reusable workflow runtime
+
+- Active branch: `ai/codex/boss-134-143-workflow-runtime`, stacked on the
+  BOSS-133 product-taxonomy branch/PR so implementation follows the accepted
+  separation among Workflows, Agent Groups, Skills/Integrations, and Assurance.
+- Added canonical immutable workflow definitions/versions, deterministic scoped
+  mappings, version-pinned durable runs/steps, leases/heartbeats/reclaim,
+  retries/deadletters, evidence, replay dedupe, conditions, fan-out/join,
+  bounded loops, timers, Decisions, subworkflows, capability-binding preflight,
+  pause/resume/cancel, reverse compensation, and explicit safe migration with
+  rollback snapshots.
+- All twelve shipped `packages/specpack/workflows/*.yaml` contracts now seed
+  idempotently into the registry. Mission Control renders definitions,
+  mappings, recent runs, pinned step state/frontier, and audit timeline through
+  the typed API client.
+- Plane BOSS-134–143 are In Progress and linked to parent BOSS-132. Keep them
+  open until the implementation PR merges; then attach the merge commit and
+  move the ten children and parent to Done.
+- Publication: implementation commit `c0f70b2` and concurrent-main lint repair
+  `220493d` are pushed in stacked draft PR
+  [#34](https://github.com/seanheiney/boss/pull/34). Merge product-taxonomy PR
+  #33 first, then retarget #34 to `main`.
+- Validation: 6 focused workflow tests, 186 non-legacy API/worker tests, 116 web
+  tests, repository lint/typecheck, production web build, double bootstrap,
+  OpenAPI YAML parse, and diff checks pass. Static OpenAPI includes every new
+  workflow route; the parity checker still reports only the repository's known
+  unrelated pre-existing route backlog.
+- GitHub Actions did not run branch code: PR #34 Documentation run
+  `29660195919` and parent PR #33 runs `29660065835` / `29660065842` created
+  zero-step jobs rejected by the account payment/spending-limit gate. Exact
+  annotations and local workflow-equivalent evidence are linked in both PRs and
+  Plane.
+
 ## 2026-07-18 BOSS-133 product-capability taxonomy
 
 - Active branch: `ai/codex/boss-133-product-capability-taxonomy`, based on

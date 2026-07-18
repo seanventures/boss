@@ -4055,6 +4055,136 @@ export type EventFeedResponse = {
   offset: number;
 };
 
+export type WorkflowDefinitionSummary = {
+  id: string;
+  project_id: string;
+  workflow_key: string;
+  name: string;
+  description?: string;
+  status: string;
+  active_version_id?: string;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+  version_count?: number;
+};
+
+export type WorkflowVersionSummary = {
+  id: string;
+  project_id: string;
+  workflow_definition_id: string;
+  version: number;
+  status: string;
+  spec: Record<string, unknown>;
+  content_hash: string;
+  created_by: string;
+  created_at: string;
+  published_at: string;
+  duplicate?: boolean;
+};
+
+export type WorkflowDefinitionDetail = WorkflowDefinitionSummary & {
+  versions: WorkflowVersionSummary[];
+};
+
+export type WorkflowMappingSummary = {
+  id: string;
+  project_id: string;
+  workflow_version_id: string;
+  selector_kind: string;
+  selector_value: string;
+  scope_type: string;
+  scope_id: string;
+  priority: number;
+  enabled: boolean;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type WorkflowStepRunSummary = {
+  id: string;
+  project_id: string;
+  workflow_run_id: string;
+  step_id: string;
+  step_kind: string;
+  iteration: number;
+  status: string;
+  input: Record<string, unknown>;
+  output: Record<string, unknown>;
+  binding_snapshot: Record<string, unknown>;
+  evidence: Record<string, unknown>[];
+  attempt: number;
+  max_attempts: number;
+  run_after: string;
+  lease_owner?: string;
+  lease_expires_at?: string;
+  heartbeat_at?: string;
+  decision_id?: string;
+  child_workflow_run_id?: string;
+  last_error?: string;
+  started_at?: string;
+  completed_at?: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type WorkflowRunSummary = {
+  id: string;
+  project_id: string;
+  workflow_definition_id: string;
+  workflow_version_id: string;
+  workflow_mapping_id?: string;
+  parent_run_id?: string;
+  root_run_id?: string;
+  actor: string;
+  status: string;
+  input: Record<string, unknown>;
+  output: Record<string, unknown>;
+  context: Record<string, unknown>;
+  policy_snapshot: Record<string, unknown>;
+  current_frontier: Record<string, unknown>[];
+  dedupe_key?: string;
+  blocked_reason?: string;
+  error?: string;
+  paused_at?: string;
+  completed_at?: string;
+  created_at: string;
+  updated_at: string;
+  workflow_key: string;
+  workflow_name: string;
+  version: number;
+  duplicate?: boolean;
+};
+
+export type WorkflowRunDetail = WorkflowRunSummary & {
+  steps: WorkflowStepRunSummary[];
+  migrations: Record<string, unknown>[];
+  compensations: Record<string, unknown>[];
+  timeline: Array<{
+    id: string;
+    event_type: string;
+    actor: string;
+    data: Record<string, unknown>;
+    created_at: string;
+  }>;
+};
+
+export type WorkflowDefinitionListResponse = {
+  project_id: string;
+  items: WorkflowDefinitionSummary[];
+};
+
+export type WorkflowMappingListResponse = {
+  project_id: string;
+  items: WorkflowMappingSummary[];
+};
+
+export type WorkflowRunListResponse = {
+  project_id: string;
+  items: WorkflowRunSummary[];
+};
+
 export class BossApiError extends Error {
   status: number;
   body?: unknown;
@@ -4135,6 +4265,189 @@ export function createBossApiClient(config: BossApiClientConfig) {
   }
 
   return {
+    getWorkflowDefinitions(projectId: string, includeRetired = false) {
+      return request<WorkflowDefinitionListResponse>("GET", "/v1/workflows", {
+        query: { project_id: projectId, include_retired: includeRetired },
+      });
+    },
+    createWorkflowDefinition(payload: {
+      project_id: string;
+      workflow_key: string;
+      name: string;
+      description?: string;
+      actor?: string;
+    }) {
+      return request<WorkflowDefinitionSummary>("POST", "/v1/workflows", {
+        body: payload,
+      });
+    },
+    getWorkflowDefinition(definitionId: string, projectId: string) {
+      return request<WorkflowDefinitionDetail>(
+        "GET",
+        `/v1/workflows/${encodeURIComponent(definitionId)}`,
+        { query: { project_id: projectId } },
+      );
+    },
+    publishWorkflowVersion(
+      definitionId: string,
+      payload: {
+        project_id: string;
+        spec: Record<string, unknown>;
+        activate?: boolean;
+        actor?: string;
+      },
+    ) {
+      return request<WorkflowVersionSummary>(
+        "POST",
+        `/v1/workflows/${encodeURIComponent(definitionId)}/versions`,
+        { body: payload },
+      );
+    },
+    getWorkflowMappings(projectId: string) {
+      return request<WorkflowMappingListResponse>("GET", "/v1/workflow-mappings", {
+        query: { project_id: projectId },
+      });
+    },
+    createWorkflowMapping(payload: {
+      project_id: string;
+      workflow_version_id: string;
+      selector_kind: string;
+      selector_value: string;
+      scope_type: "org" | "workspace" | "project";
+      scope_id: string;
+      priority?: number;
+      actor?: string;
+    }) {
+      return request<WorkflowMappingSummary>("POST", "/v1/workflow-mappings", {
+        body: payload,
+      });
+    },
+    resolveWorkflowMapping(payload: {
+      project_id: string;
+      selector_kind: string;
+      selector_value: string;
+      actor?: string;
+    }) {
+      return request<{
+        status: string;
+        selected?: WorkflowMappingSummary & {
+          workflow_key: string;
+          workflow_name: string;
+          version: number;
+        };
+        rejected: Record<string, unknown>[];
+        reason: string;
+      }>("POST", "/v1/workflow-mappings/resolve", { body: payload });
+    },
+    getWorkflowRuns(projectId: string, status?: string, limit = 50) {
+      return request<WorkflowRunListResponse>("GET", "/v1/workflow-runs", {
+        query: { project_id: projectId, status, limit },
+      });
+    },
+    getWorkflowRun(runId: string, projectId: string) {
+      return request<WorkflowRunDetail>(
+        "GET",
+        `/v1/workflow-runs/${encodeURIComponent(runId)}`,
+        { query: { project_id: projectId } },
+      );
+    },
+    startWorkflowRun(payload: {
+      project_id: string;
+      workflow_version_id?: string;
+      selector_kind?: string;
+      selector_value?: string;
+      input?: Record<string, unknown>;
+      policy_snapshot?: Record<string, unknown>;
+      dedupe_key: string;
+      parent_run_id?: string;
+      actor?: string;
+    }) {
+      return request<WorkflowRunSummary>("POST", "/v1/workflow-runs", {
+        body: payload,
+      });
+    },
+    advanceWorkflowRun(runId: string, projectId: string, actor = "ceo") {
+      return request<WorkflowRunDetail>(
+        "POST",
+        `/v1/workflow-runs/${encodeURIComponent(runId)}/advance`,
+        { body: { project_id: projectId, actor } },
+      );
+    },
+    pauseWorkflowRun(runId: string, projectId: string, actor = "ceo") {
+      return request<WorkflowRunDetail>(
+        "POST",
+        `/v1/workflow-runs/${encodeURIComponent(runId)}/pause`,
+        { body: { project_id: projectId, actor } },
+      );
+    },
+    resumeWorkflowRun(runId: string, projectId: string, actor = "ceo") {
+      return request<WorkflowRunDetail>(
+        "POST",
+        `/v1/workflow-runs/${encodeURIComponent(runId)}/resume`,
+        { body: { project_id: projectId, actor } },
+      );
+    },
+    cancelWorkflowRun(
+      runId: string,
+      payload: { project_id: string; actor?: string; reason: string; compensate?: boolean },
+    ) {
+      return request<WorkflowRunDetail>(
+        "POST",
+        `/v1/workflow-runs/${encodeURIComponent(runId)}/cancel`,
+        { body: payload },
+      );
+    },
+    claimWorkflowStep(
+      runId: string,
+      payload: { project_id: string; worker_id: string; lease_seconds?: number },
+    ) {
+      return request<WorkflowStepRunSummary | null>(
+        "POST",
+        `/v1/workflow-runs/${encodeURIComponent(runId)}/steps/claim`,
+        { body: payload },
+      );
+    },
+    heartbeatWorkflowStep(
+      stepRunId: string,
+      payload: { project_id: string; worker_id: string; lease_seconds?: number },
+    ) {
+      return request<WorkflowStepRunSummary>(
+        "POST",
+        `/v1/workflow-step-runs/${encodeURIComponent(stepRunId)}/heartbeat`,
+        { body: payload },
+      );
+    },
+    completeWorkflowStep(
+      stepRunId: string,
+      payload: {
+        project_id: string;
+        worker_id: string;
+        output?: Record<string, unknown>;
+        evidence?: Record<string, unknown>[];
+      },
+    ) {
+      return request<WorkflowStepRunSummary>(
+        "POST",
+        `/v1/workflow-step-runs/${encodeURIComponent(stepRunId)}/complete`,
+        { body: payload },
+      );
+    },
+    failWorkflowStep(
+      stepRunId: string,
+      payload: {
+        project_id: string;
+        worker_id: string;
+        error: string;
+        retryable?: boolean;
+        retry_delay_seconds?: number;
+      },
+    ) {
+      return request<WorkflowStepRunSummary>(
+        "POST",
+        `/v1/workflow-step-runs/${encodeURIComponent(stepRunId)}/fail`,
+        { body: payload },
+      );
+    },
     getReportSummary(projectId: string) {
       return request<ReportSummaryResponse>("GET", "/v1/reports/summary", {
         query: { project_id: projectId },

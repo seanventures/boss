@@ -7,11 +7,11 @@ This catalog is generated from the canonical product traceability ledger. It is 
 <div class="feature-summary">
   <div>
     <span class="boss-status boss-status--implemented">Implemented</span>
-    <strong>83</strong>
+    <strong>84</strong>
   </div>
   <div>
     <span class="boss-status boss-status--partial">Partial</span>
-    <strong>6</strong>
+    <strong>5</strong>
   </div>
   <div>
     <span class="boss-status boss-status--planned">Planned</span>
@@ -109,7 +109,7 @@ This catalog is generated from the canonical product traceability ledger. It is 
 | [NFR-002 — Accessibility baseline](implemented.md#nfr-002-accessibility-baseline) | <span class="boss-status boss-status--implemented">Implemented</span> | PRD Non-functional |
 | [AGP-001 — Versioned Agent Groups and collaboration protocols](planned.md#agp-001-versioned-agent-groups-and-collaboration-protocols) | <span class="boss-status boss-status--planned">Planned</span> | PRD v2.0 Agent Groups; Plane BOSS-129 |
 | [INT-001 — Integration registry and typed skill contracts](partial.md#int-001-integration-registry-and-typed-skill-contracts) | <span class="boss-status boss-status--partial">Partial</span> | PRD v2.0 Skills and Integrations; Plane BOSS-130; extends BOSS-44–56 |
-| [WFL-001 — Reusable mapped workflow registry and runtime](partial.md#wfl-001-reusable-mapped-workflow-registry-and-runtime) | <span class="boss-status boss-status--partial">Partial</span> | PRD v2.0 Reusable Mapped Workflows; Plane BOSS-132 |
+| [WFL-001 — Reusable mapped workflow registry and runtime](implemented.md#wfl-001-reusable-mapped-workflow-registry-and-runtime) | <span class="boss-status boss-status--implemented">Implemented</span> | PRD v2.0 Reusable Mapped Workflows; Plane BOSS-132/BOSS-134–143 |
 | [AST-001 — Ground-truth and Assurance runtime](partial.md#ast-001-ground-truth-and-assurance-runtime) | <span class="boss-status boss-status--partial">Partial</span> | PRD v2.0 Ground-truth and Assurance; Plane BOSS-123–128 and BOSS-131 |
 | [COM-PKG-001 — Open-core editions](partial.md#com-pkg-001-open-core-editions) | <span class="boss-status boss-status--partial">Partial</span> | PRD v2.0 Commercial Strategy |
 | [ACC-001 — BOSS Account Connect](partial.md#acc-001-boss-account-connect) | <span class="boss-status boss-status--partial">Partial</span> | PRD v2.0 BOSS Account Connect |

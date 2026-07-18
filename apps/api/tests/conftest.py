@@ -49,6 +49,13 @@ def clean_tables(engine):
         # Original explicit list preserved (in designed child-to-parent delete order to avoid FK violations);
         # missing tables (commercial/enterprise) are skipped. Enables budget/kpi/concurrent tests + full -k matrix.
         for tbl in [
+            "workflow_compensation_runs",
+            "workflow_migrations",
+            "workflow_step_runs",
+            "workflow_runs",
+            "workflow_mappings",
+            "workflow_versions",
+            "workflow_definitions",
             "agent_messages",
             "agent_threads",
             "account_connect_billing_portal_sessions",

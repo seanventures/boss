@@ -12,6 +12,7 @@ from .services.mcp_registry import ensure_mcp_server
 from .services.members import MemberDirectoryService
 from .services.skill_registry import seed_system_skills
 from .services.specpack import SpecPackService
+from .services.workflows import seed_specpack_workflows
 
 
 # Built-in MCP servers BOSS ships with — idempotently registered so they're
@@ -146,6 +147,12 @@ def seed_project_defaults(
         )
     seed_default_event_subscriptions(connection, project_id)
     FeatureCatalog(settings).seed_from_traceability(connection, project_id)
+    seed_specpack_workflows(
+        connection,
+        project_id=project_id,
+        workflow_root=settings.specpack_root / "workflows",
+        actor=actor,
+    )
 
 
 def onboard_org(connection, settings, name, *, entitlements, members, specpack, slug=None):

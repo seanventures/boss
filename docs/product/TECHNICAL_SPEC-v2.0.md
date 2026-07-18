@@ -372,17 +372,23 @@ Skills and Integrations:
 - `POST /v1/integration-connections/{id}/revoke`
 - `GET /v1/skill-invocations`
 
-Reusable Workflows (planned):
+Reusable Workflows:
 
 - `GET/POST /v1/workflows`
-- `GET/POST /v1/workflows/{id}/versions`
-- `GET/POST /v1/workflow-mappings`
+- `GET /v1/workflows/{id}` and `POST /v1/workflows/{id}/versions`
+- `GET/POST /v1/workflow-mappings` and `POST /v1/workflow-mappings/resolve`
 - `GET/POST /v1/workflow-runs`
+- `GET /v1/workflow-runs/{id}` and `POST /v1/workflow-runs/{id}/advance`
 - `POST /v1/workflow-runs/{id}/pause`
 - `POST /v1/workflow-runs/{id}/resume`
 - `POST /v1/workflow-runs/{id}/cancel`
 - `POST /v1/workflow-runs/{id}/migrate`
-- `GET /v1/workflow-runs/{id}/steps`
+- `POST /v1/workflow-runs/{id}/migrations/rollback`
+- `POST /v1/workflow-runs/{id}/steps/claim`
+- `POST /v1/workflow-step-runs/{id}/heartbeat|complete|fail`
+- `POST /v1/workflow-runs/{id}/compensate`
+- `POST /v1/workflow-runs/{id}/compensations/claim`
+- `POST /v1/workflow-compensation-runs/{id}/complete|fail`
 
 Ground-truth and Assurance (planned):
 
