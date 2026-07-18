@@ -52,6 +52,7 @@ installs:
     - cloudflare
     - digitalocean
     - supabase
+    - aws
     - model_providers
     - providerops
     - deployment
