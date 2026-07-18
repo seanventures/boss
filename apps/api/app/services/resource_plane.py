@@ -44,6 +44,20 @@ class ProviderAdapterError(RuntimeError):
 
 
 SUPPORTED_PROVIDERS = {
+    "aws": {
+        "credential_ref": "env:BOSS_AWS_SECRET_ACCESS_KEY",
+        "capabilities": [
+            "provider_connection_test",
+            "resource_inventory_sync",
+            "aws.ec2.instance.create",
+            "aws.ec2.instance.destroy",
+            "aws.s3.bucket.create",
+            "aws.rds.instance.create",
+            "aws.iam.role.upsert",
+            "aws.route53.record.upsert",
+            "aws.costs.sync",
+        ],
+    },
     "digitalocean": {
         "credential_ref": "env:BOSS_DIGITALOCEAN_TOKEN",
         "capabilities": [
@@ -4267,6 +4281,18 @@ class ResourcePlaneService:
             return self._ssh_host_workload_health_check(operation)
         if skill_id == "ssh_host.job.run":
             return self._ssh_host_job_run(operation)
+        if skill_id == "aws.ec2.instance.create":
+            return self._aws_ec2_instance_create(credential, operation)
+        if skill_id == "aws.ec2.instance.destroy":
+            return self._aws_ec2_instance_destroy(credential, operation)
+        if skill_id == "aws.s3.bucket.create":
+            return self._aws_s3_bucket_create(credential, operation)
+        if skill_id == "aws.rds.instance.create":
+            return self._aws_rds_instance_create(credential, operation)
+        if skill_id == "aws.iam.role.upsert":
+            return self._aws_iam_role_upsert(credential, operation)
+        if skill_id == "aws.route53.record.upsert":
+            return self._aws_route53_record_upsert(credential, operation)
         raise ProviderAdapterError(
             "Provider write adapter execution is not enabled for this skill. "
             "The action was recorded and deadlettered without calling the provider."
@@ -4608,6 +4634,426 @@ class ResourcePlaneService:
             "api_success": response_payload.get("success")
             if isinstance(response_payload, dict)
             else None,
+        }
+
+    def _aws_ec2_instance_create(
+        self,
+        credential: str,
+        operation: dict[str, Any],
+    ) -> dict[str, Any]:
+        desired = operation.get("desired_state") or {}
+        image_id = self._require_text(
+            str(desired.get("image_id") or desired.get("ami") or ""),
+            "image_id",
+        )
+        instance_type = self._require_text(
+            str(desired.get("instance_type") or ""),
+            "instance_type",
+        )
+        name = self._require_text(
+            str(
+                desired.get("name")
+                or operation.get("resource_ref")
+                or f"boss-providerops-{operation['id'][-8:]}"
+            ),
+            "name",
+        )
+        aws_tags = [
+            {"Key": "Name", "Value": name},
+            {"Key": "boss-managed", "Value": "true"},
+            {"Key": "boss-providerops", "Value": "true"},
+        ]
+        reserved_keys = {tag["Key"] for tag in aws_tags}
+        for tag in desired.get("tags") or []:
+            if not isinstance(tag, str) or not tag.strip():
+                continue
+            key, _, value = tag.strip().partition(":")
+            if key and key not in reserved_keys:
+                aws_tags.append({"Key": key, "Value": value})
+                reserved_keys.add(key)
+        params: dict[str, Any] = {
+            "ImageId": image_id,
+            "InstanceType": instance_type,
+            "MinCount": 1,
+            "MaxCount": 1,
+            "TagSpecifications": [
+                {"ResourceType": "instance", "Tags": aws_tags}
+            ],
+        }
+        subnet_id = desired.get("subnet_id")
+        if isinstance(subnet_id, str) and subnet_id.strip():
+            params["SubnetId"] = subnet_id.strip()
+        key_name = desired.get("key_name")
+        if isinstance(key_name, str) and key_name.strip():
+            params["KeyName"] = key_name.strip()
+        security_group_ids = desired.get("security_group_ids")
+        if isinstance(security_group_ids, list):
+            cleaned_groups = [
+                str(group).strip()
+                for group in security_group_ids
+                if str(group).strip()
+            ]
+            if cleaned_groups:
+                params["SecurityGroupIds"] = cleaned_groups
+
+        ec2 = self._aws_client("ec2", credential)
+        response = ec2.run_instances(**params)
+        instances = response.get("Instances") or []
+        instance = instances[0] if instances else {}
+        if not isinstance(instance, dict) or not instance.get("InstanceId"):
+            raise ProviderAdapterError(
+                "AWS run_instances response did not include an instance id."
+            )
+        instance_id = str(instance["InstanceId"])
+        status = str((instance.get("State") or {}).get("Name") or "pending")
+        return {
+            "provider_ref": f"aws:ec2_instance:{instance_id}",
+            "resource_external_id": instance_id,
+            "resource_name": name,
+            "resource_type": "ec2_instance",
+            "state": self._resource_state_from_provider_status(status),
+            "health_status": status,
+            "operation": "created",
+            "region": self.settings.aws_region,
+            "instance_type": instance_type,
+            "image_id": image_id,
+            "availability_zone": (instance.get("Placement") or {}).get(
+                "AvailabilityZone"
+            ),
+        }
+
+    def _aws_ec2_instance_destroy(
+        self,
+        credential: str,
+        operation: dict[str, Any],
+    ) -> dict[str, Any]:
+        desired = operation.get("desired_state") or {}
+        instance_id = self._require_text(
+            str(
+                desired.get("instance_id")
+                or desired.get("external_id")
+                or operation.get("resource_ref")
+                or ""
+            ),
+            "instance_id",
+        )
+        ec2 = self._aws_client("ec2", credential)
+        response = ec2.terminate_instances(InstanceIds=[instance_id])
+        terminating = response.get("TerminatingInstances") or []
+        current = terminating[0] if terminating else {}
+        status = str(
+            ((current.get("CurrentState") or {}).get("Name") if isinstance(current, dict) else None)
+            or "shutting-down"
+        )
+        return {
+            "provider_ref": f"aws:ec2_instance:{instance_id}",
+            "resource_external_id": instance_id,
+            "resource_name": str(desired.get("name") or instance_id),
+            "resource_type": "ec2_instance",
+            "state": "deleted",
+            "health_status": status,
+            "operation": "destroyed",
+            "region": self.settings.aws_region,
+        }
+
+    def _aws_s3_bucket_create(
+        self,
+        credential: str,
+        operation: dict[str, Any],
+    ) -> dict[str, Any]:
+        desired = operation.get("desired_state") or {}
+        bucket_name = self._require_text(
+            str(
+                desired.get("bucket_name")
+                or desired.get("name")
+                or operation.get("resource_ref")
+                or ""
+            ),
+            "bucket_name",
+        )
+        region = self.settings.aws_region
+        params: dict[str, Any] = {"Bucket": bucket_name}
+        if region != "us-east-1":
+            params["CreateBucketConfiguration"] = {"LocationConstraint": region}
+
+        s3 = self._aws_client("s3", credential)
+        s3.create_bucket(**params)
+        versioning_enabled = bool(desired.get("versioning"))
+        if versioning_enabled:
+            s3.put_bucket_versioning(
+                Bucket=bucket_name,
+                VersioningConfiguration={"Status": "Enabled"},
+            )
+        encryption = desired.get("encryption")
+        sse_algorithm: Optional[str] = None
+        if encryption:
+            sse_algorithm = (
+                "aws:kms"
+                if str(encryption).lower() in {"kms", "aws:kms"}
+                else "AES256"
+            )
+            s3.put_bucket_encryption(
+                Bucket=bucket_name,
+                ServerSideEncryptionConfiguration={
+                    "Rules": [
+                        {
+                            "ApplyServerSideEncryptionByDefault": {
+                                "SSEAlgorithm": sse_algorithm
+                            }
+                        }
+                    ]
+                },
+            )
+        return {
+            "provider_ref": f"aws:s3_bucket:{bucket_name}",
+            "resource_external_id": bucket_name,
+            "resource_name": bucket_name,
+            "resource_type": "s3_bucket",
+            "state": "active",
+            "health_status": "active",
+            "operation": "created",
+            "region": region,
+            "versioning_enabled": versioning_enabled,
+            "sse_algorithm": sse_algorithm,
+        }
+
+    def _aws_rds_instance_create(
+        self,
+        credential: str,
+        operation: dict[str, Any],
+    ) -> dict[str, Any]:
+        desired = operation.get("desired_state") or {}
+        for literal_key in ("master_password", "master_user_password", "password"):
+            if desired.get(literal_key):
+                raise ProviderAdapterError(
+                    "aws.rds.instance.create does not accept a literal master "
+                    "password in desired_state; provide "
+                    "master_password_secret_ref as an env SecretRef instead."
+                )
+        db_identifier = self._require_text(
+            str(
+                desired.get("db_instance_identifier")
+                or desired.get("name")
+                or operation.get("resource_ref")
+                or ""
+            ),
+            "db_instance_identifier",
+        )
+        engine = self._require_text(str(desired.get("engine") or ""), "engine")
+        instance_class = self._require_text(
+            str(
+                desired.get("db_instance_class")
+                or desired.get("instance_class")
+                or ""
+            ),
+            "db_instance_class",
+        )
+        allocated_storage = int(
+            desired.get("allocated_storage_gb")
+            or desired.get("allocated_storage")
+            or 0
+        )
+        if allocated_storage <= 0:
+            raise ValueError("allocated_storage_gb must be a positive integer.")
+        master_username = self._require_text(
+            str(desired.get("master_username") or ""),
+            "master_username",
+        )
+        secret_ref = self._require_text(
+            str(desired.get("master_password_secret_ref") or ""),
+            "master_password_secret_ref",
+        )
+        master_password = self._env_secret_value(secret_ref)
+
+        params: dict[str, Any] = {
+            "DBInstanceIdentifier": db_identifier,
+            "Engine": engine,
+            "DBInstanceClass": instance_class,
+            "AllocatedStorage": allocated_storage,
+            "MasterUsername": master_username,
+            "MasterUserPassword": master_password,
+        }
+        db_name = desired.get("db_name")
+        if isinstance(db_name, str) and db_name.strip():
+            params["DBName"] = db_name.strip()
+        if desired.get("multi_az") is not None:
+            params["MultiAZ"] = bool(desired["multi_az"])
+        if desired.get("publicly_accessible") is not None:
+            params["PubliclyAccessible"] = bool(desired["publicly_accessible"])
+        subnet_group = desired.get("db_subnet_group_name")
+        if isinstance(subnet_group, str) and subnet_group.strip():
+            params["DBSubnetGroupName"] = subnet_group.strip()
+        security_group_ids = desired.get("vpc_security_group_ids")
+        if isinstance(security_group_ids, list):
+            cleaned_groups = [
+                str(group).strip()
+                for group in security_group_ids
+                if str(group).strip()
+            ]
+            if cleaned_groups:
+                params["VpcSecurityGroupIds"] = cleaned_groups
+
+        rds = self._aws_client("rds", credential)
+        response = rds.create_db_instance(**params)
+        db_instance = response.get("DBInstance") or {}
+        status = str(db_instance.get("DBInstanceStatus") or "creating")
+        return {
+            "provider_ref": f"aws:rds_instance:{db_identifier}",
+            "resource_external_id": str(
+                db_instance.get("DBInstanceIdentifier") or db_identifier
+            ),
+            "resource_name": db_identifier,
+            "resource_type": "rds_instance",
+            "state": "active"
+            if status == "available"
+            else self._resource_state_from_provider_status(status),
+            "health_status": status,
+            "operation": "created",
+            "region": self.settings.aws_region,
+            "engine": engine,
+            "db_instance_class": instance_class,
+            "allocated_storage_gb": allocated_storage,
+        }
+
+    def _aws_iam_role_upsert(
+        self,
+        credential: str,
+        operation: dict[str, Any],
+    ) -> dict[str, Any]:
+        desired = operation.get("desired_state") or {}
+        role_name = self._require_text(
+            str(
+                desired.get("role_name")
+                or desired.get("name")
+                or operation.get("resource_ref")
+                or ""
+            ),
+            "role_name",
+        )
+        assume_document = (
+            desired.get("assume_role_policy_document")
+            or desired.get("assume_role_policy")
+        )
+        if isinstance(assume_document, dict):
+            assume_document_text = json.dumps(assume_document)
+        else:
+            assume_document_text = self._require_text(
+                str(assume_document or ""),
+                "assume_role_policy_document",
+            )
+
+        iam = self._aws_client("iam", credential)
+        existing: Optional[dict[str, Any]]
+        try:
+            existing = iam.get_role(RoleName=role_name)
+        except Exception as error:
+            if self._aws_error_code(error) != "NoSuchEntity":
+                raise
+            existing = None
+        if existing:
+            iam.update_assume_role_policy(
+                RoleName=role_name,
+                PolicyDocument=assume_document_text,
+            )
+            role = existing.get("Role") or {}
+            provider_operation = "updated"
+        else:
+            create_params: dict[str, Any] = {
+                "RoleName": role_name,
+                "AssumeRolePolicyDocument": assume_document_text,
+            }
+            description = desired.get("description")
+            if isinstance(description, str) and description.strip():
+                create_params["Description"] = description.strip()
+            response = iam.create_role(**create_params)
+            role = response.get("Role") or {}
+            provider_operation = "created"
+
+        attached_policy_arns: list[str] = []
+        for policy_arn in (
+            desired.get("attach_policy_arns")
+            or desired.get("policy_arns")
+            or []
+        ):
+            if isinstance(policy_arn, str) and policy_arn.strip():
+                iam.attach_role_policy(
+                    RoleName=role_name,
+                    PolicyArn=policy_arn.strip(),
+                )
+                attached_policy_arns.append(policy_arn.strip())
+        return {
+            "provider_ref": f"aws:iam_role:{role_name}",
+            "resource_external_id": str(role.get("RoleId") or role_name),
+            "resource_name": role_name,
+            "resource_type": "iam_role",
+            "state": "active",
+            "health_status": "active",
+            "operation": provider_operation,
+            "role_arn": role.get("Arn"),
+            "attached_policy_arns": attached_policy_arns,
+        }
+
+    def _aws_route53_record_upsert(
+        self,
+        credential: str,
+        operation: dict[str, Any],
+    ) -> dict[str, Any]:
+        desired = operation.get("desired_state") or {}
+        hosted_zone_id = self._require_text(
+            str(desired.get("hosted_zone_id") or desired.get("zone_id") or ""),
+            "hosted_zone_id",
+        )
+        record_type = self._require_text(
+            str(desired.get("record_type") or desired.get("type") or ""),
+            "record_type",
+        ).upper()
+        name = self._require_text(str(desired.get("name") or ""), "name")
+        raw_values = desired.get("values")
+        if not isinstance(raw_values, list):
+            raw_values = [desired.get("content") or desired.get("value")]
+        values = [str(value).strip() for value in raw_values if value and str(value).strip()]
+        if not values:
+            raise ValueError("values (or content) must not be blank.")
+        ttl = int(desired.get("ttl") or 300)
+
+        route53 = self._aws_client("route53", credential)
+        response = route53.change_resource_record_sets(
+            HostedZoneId=hosted_zone_id,
+            ChangeBatch={
+                "Comment": "boss-managed route53 upsert",
+                "Changes": [
+                    {
+                        "Action": "UPSERT",
+                        "ResourceRecordSet": {
+                            "Name": name,
+                            "Type": record_type,
+                            "TTL": ttl,
+                            "ResourceRecords": [
+                                {"Value": value} for value in values
+                            ],
+                        },
+                    }
+                ],
+            },
+        )
+        change_info = response.get("ChangeInfo") or {}
+        external_id = f"{hosted_zone_id}:{record_type}:{name}"
+        return {
+            "provider_ref": f"aws:route53_record:{external_id}",
+            "resource_external_id": external_id,
+            "resource_name": name,
+            "resource_type": "route53_record",
+            "state": "active",
+            "health_status": str(change_info.get("Status") or "PENDING").lower(),
+            "operation": "updated",
+            "hosted_zone_id": hosted_zone_id,
+            "change_id": change_info.get("Id"),
+            "record": {
+                "type": record_type,
+                "name": name,
+                "ttl": ttl,
+                "values": values,
+            },
         }
 
     def _digitalocean_droplet_create(self, operation: dict[str, Any]) -> dict[str, Any]:
@@ -6096,6 +6542,19 @@ class ResourcePlaneService:
         return deadletter_id
 
     def _test_connection(self, provider: str, credential: str) -> dict[str, Any]:
+        if provider == "aws":
+            sts = self._aws_client("sts", credential)
+            payload = sts.get_caller_identity()
+            status_code = int(
+                ((payload.get("ResponseMetadata") or {}).get("HTTPStatusCode") or 200)
+                if isinstance(payload, dict)
+                else 200
+            )
+            return {
+                "provider": provider,
+                "status_code": status_code,
+                "summary": self._connection_summary(provider, payload),
+            }
         headers = self._provider_headers(provider, credential)
         with httpx.Client(timeout=10) as client:
             if provider == "digitalocean":
@@ -6135,6 +6594,8 @@ class ResourcePlaneService:
         provider: str,
         credential: str,
     ) -> list[InventoryResource]:
+        if provider == "aws":
+            return self._aws_resources(credential)
         headers = self._provider_headers(provider, credential)
         with httpx.Client(timeout=20) as client:
             if provider == "digitalocean":
@@ -6170,6 +6631,8 @@ class ResourcePlaneService:
         provider: str,
         credential: str,
     ) -> list[ProviderCostRecord]:
+        if provider == "aws":
+            return self._aws_cost_records(credential)
         headers = self._provider_headers(provider, credential)
         start, end = self._default_billing_window()
         with httpx.Client(timeout=20) as client:
@@ -6215,7 +6678,7 @@ class ResourcePlaneService:
         )
 
     def _provider_supports_billing(self, provider: str) -> bool:
-        return provider in {"digitalocean", "openai", "anthropic"}
+        return provider in {"aws", "digitalocean", "openai", "anthropic"}
 
     def _provider_headers(self, provider: str, credential: str) -> dict[str, str]:
         if provider == "anthropic":
@@ -6229,7 +6692,75 @@ class ResourcePlaneService:
             "Accept": "application/json",
         }
 
+    def _aws_client(self, service: str, credential: str) -> Any:
+        try:
+            import boto3  # noqa: PLC0415 — lazy import; optional provider dependency
+        except ImportError as error:
+            raise ProviderAdapterError(
+                "The AWS provider adapter requires the 'boto3' package. "
+                "Install it (pip install boto3) to enable aws.* capabilities."
+            ) from error
+        access_key_id = self.settings.aws_access_key_id or os.environ.get(
+            "BOSS_AWS_ACCESS_KEY_ID"
+        )
+        if not access_key_id:
+            raise ProviderCredentialError(
+                "Missing AWS access key id (BOSS_AWS_ACCESS_KEY_ID)."
+            )
+        region = self.settings.aws_region
+        session = boto3.session.Session(
+            aws_access_key_id=access_key_id,
+            aws_secret_access_key=credential,
+            region_name=region,
+        )
+        role_arn = self.settings.aws_role_arn
+        if role_arn:
+            assumed = session.client("sts").assume_role(
+                RoleArn=role_arn,
+                RoleSessionName="boss-resource-plane",
+            )
+            assumed_credentials = assumed.get("Credentials") or {}
+            session = boto3.session.Session(
+                aws_access_key_id=assumed_credentials.get("AccessKeyId"),
+                aws_secret_access_key=assumed_credentials.get("SecretAccessKey"),
+                aws_session_token=assumed_credentials.get("SessionToken"),
+                region_name=region,
+            )
+        return session.client(service)
+
+    def _aws_error_code(self, error: Exception) -> Optional[str]:
+        response = getattr(error, "response", None)
+        if isinstance(response, dict):
+            error_payload = response.get("Error")
+            if isinstance(error_payload, dict):
+                code = error_payload.get("Code")
+                return str(code) if code else None
+        return None
+
+    def _aws_tag_strings(self, aws_tags: Any) -> list[str]:
+        tags: list[str] = []
+        for tag in aws_tags if isinstance(aws_tags, list) else []:
+            if not isinstance(tag, dict):
+                continue
+            key = str(tag.get("Key") or "").strip()
+            if not key:
+                continue
+            value = str(tag.get("Value") or "").strip()
+            if value and value.lower() not in {"true", "1", "yes"}:
+                tags.append(f"{key}:{value}")
+            else:
+                # Flag-like tags (boss-managed=true) collapse to the bare key so
+                # ownership/environment tag heuristics match them.
+                tags.append(key)
+        return tags
+
     def _connection_summary(self, provider: str, payload: Any) -> dict[str, Any]:
+        if provider == "aws":
+            identity = payload if isinstance(payload, dict) else {}
+            return {
+                "account_id": identity.get("Account"),
+                "arn": identity.get("Arn"),
+            }
         if provider == "digitalocean":
             account = payload.get("account") if isinstance(payload, dict) else {}
             return {
@@ -6320,6 +6851,169 @@ class ResourcePlaneService:
                 )
             )
         return resources
+
+    def _aws_resources(self, credential: str) -> list[InventoryResource]:
+        region = self.settings.aws_region
+        resources: list[InventoryResource] = []
+
+        ec2 = self._aws_client("ec2", credential)
+        ec2_payload = ec2.describe_instances()
+        for reservation in ec2_payload.get("Reservations") or []:
+            for instance in reservation.get("Instances") or []:
+                tags = self._aws_tag_strings(instance.get("Tags"))
+                name = next(
+                    (
+                        str(tag.get("Value"))
+                        for tag in instance.get("Tags") or []
+                        if isinstance(tag, dict) and tag.get("Key") == "Name"
+                    ),
+                    None,
+                )
+                status = str(
+                    (instance.get("State") or {}).get("Name") or "unknown"
+                )
+                resources.append(
+                    InventoryResource(
+                        provider="aws",
+                        resource_type="ec2_instance",
+                        external_id=str(instance.get("InstanceId")),
+                        name=str(name or instance.get("InstanceId")),
+                        state=self._resource_state_from_provider_status(status),
+                        ownership=self._ownership_from_tags(tags),
+                        environment=self._environment_from_tags(tags),
+                        health_status=status,
+                        tags=tags,
+                        metadata={
+                            "region": region,
+                            "instance_type": instance.get("InstanceType"),
+                            "availability_zone": (
+                                instance.get("Placement") or {}
+                            ).get("AvailabilityZone"),
+                            "image_id": instance.get("ImageId"),
+                            "vpc_id": instance.get("VpcId"),
+                            "subnet_id": instance.get("SubnetId"),
+                            "private_ip": instance.get("PrivateIpAddress"),
+                            "public_ip": instance.get("PublicIpAddress"),
+                        },
+                    )
+                )
+
+        s3 = self._aws_client("s3", credential)
+        s3_payload = s3.list_buckets()
+        for bucket in s3_payload.get("Buckets") or []:
+            bucket_name = str(bucket.get("Name"))
+            creation_date = bucket.get("CreationDate")
+            resources.append(
+                InventoryResource(
+                    provider="aws",
+                    resource_type="s3_bucket",
+                    external_id=bucket_name,
+                    name=bucket_name,
+                    state="active",
+                    ownership="discovered_unmanaged",
+                    environment="unknown",
+                    health_status="active",
+                    tags=[],
+                    metadata={
+                        "region": region,
+                        "creation_date": creation_date.isoformat()
+                        if hasattr(creation_date, "isoformat")
+                        else creation_date,
+                    },
+                )
+            )
+
+        rds = self._aws_client("rds", credential)
+        rds_payload = rds.describe_db_instances()
+        for db_instance in rds_payload.get("DBInstances") or []:
+            tags = self._aws_tag_strings(db_instance.get("TagList"))
+            status = str(db_instance.get("DBInstanceStatus") or "unknown")
+            resources.append(
+                InventoryResource(
+                    provider="aws",
+                    resource_type="rds_instance",
+                    external_id=str(db_instance.get("DBInstanceIdentifier")),
+                    name=str(db_instance.get("DBInstanceIdentifier")),
+                    state="active"
+                    if status == "available"
+                    else self._resource_state_from_provider_status(status),
+                    ownership=self._ownership_from_tags(tags),
+                    environment=self._environment_from_tags(tags),
+                    health_status=status,
+                    tags=tags,
+                    metadata={
+                        "region": region,
+                        "engine": db_instance.get("Engine"),
+                        "engine_version": db_instance.get("EngineVersion"),
+                        "instance_class": db_instance.get("DBInstanceClass"),
+                        "allocated_storage_gb": db_instance.get(
+                            "AllocatedStorage"
+                        ),
+                        "endpoint": (db_instance.get("Endpoint") or {}).get(
+                            "Address"
+                        ),
+                        "multi_az": db_instance.get("MultiAZ"),
+                    },
+                )
+            )
+        return resources
+
+    def _aws_cost_records(self, credential: str) -> list[ProviderCostRecord]:
+        start, end = self._default_billing_window()
+        cost_explorer = self._aws_client("ce", credential)
+        payload = cost_explorer.get_cost_and_usage(
+            TimePeriod={
+                "Start": start.date().isoformat(),
+                "End": end.date().isoformat(),
+            },
+            Granularity="DAILY",
+            Metrics=["UnblendedCost"],
+            GroupBy=[{"Type": "DIMENSION", "Key": "SERVICE"}],
+        )
+        records: list[ProviderCostRecord] = []
+        for bucket_index, bucket in enumerate(payload.get("ResultsByTime") or []):
+            time_period = bucket.get("TimePeriod") or {}
+            period_start = self._coerce_datetime(time_period.get("Start"))
+            period_end = self._coerce_datetime(time_period.get("End"))
+            for group_index, group in enumerate(bucket.get("Groups") or []):
+                keys = group.get("Keys") or []
+                service = str(keys[0]) if keys else f"group-{group_index}"
+                metric = (group.get("Metrics") or {}).get("UnblendedCost") or {}
+                unit = str(metric.get("Unit") or "USD").upper()
+                if unit != "USD":
+                    raise ProviderAdapterError(
+                        f"AWS cost unit '{unit}' cannot be stored as USD."
+                    )
+                amount = self._amount_to_usd_micros(metric.get("Amount"))
+                if amount is None or amount == 0:
+                    continue
+                records.append(
+                    ProviderCostRecord(
+                        provider="aws",
+                        category=service,
+                        amount_usd_micros=amount,
+                        cost_layer="observed",
+                        confidence="provider_reported",
+                        source_ref=(
+                            "aws.cost_explorer:"
+                            f"{time_period.get('Start') or bucket_index}:{service}"
+                        ),
+                        period_start=period_start,
+                        period_end=period_end,
+                        billing_account_external_id="aws:cost_explorer",
+                        billing_account_label="AWS Cost Explorer",
+                        metadata={
+                            "provider_source": "cost_explorer",
+                            "granularity": "DAILY",
+                            "metric": "UnblendedCost",
+                            "service": service,
+                            "amount": metric.get("Amount"),
+                            "unit": unit,
+                            "estimated": bucket.get("Estimated"),
+                        },
+                    )
+                )
+        return records
 
     def _digitalocean_cost_records(
         self,

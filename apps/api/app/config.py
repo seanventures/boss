@@ -127,6 +127,13 @@ class Settings(BaseSettings):
     supabase_access_token: Optional[str] = Field(
         default=None, alias="BOSS_SUPABASE_ACCESS_TOKEN"
     )
+    # AWS provider adapter (Resource Plane) — secret access key resolved via the
+    # provider account SecretRef (env:BOSS_AWS_SECRET_ACCESS_KEY), never stored here.
+    aws_access_key_id: Optional[str] = Field(
+        default=None, alias="BOSS_AWS_ACCESS_KEY_ID"
+    )
+    aws_region: str = Field(default="us-east-1", alias="BOSS_AWS_REGION")
+    aws_role_arn: Optional[str] = Field(default=None, alias="BOSS_AWS_ROLE_ARN")
     # SSH host (bring-your-own / customer-provided compute) — Docker workload deploys.
     # Gated like DO provisioning; private key held as a SecretRef, never in agent context.
     ssh_host_deploy_allowed: bool = Field(
