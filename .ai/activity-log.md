@@ -482,6 +482,11 @@ PR: https://github.com/seanheiney/boss/pull/3
   repository lint/typecheck; Next production build; schema/bootstrap twice;
   OpenAPI YAML and diff checks. OpenAPI route parity contains all new workflow
   routes and still reports only the known unrelated pre-existing backlog.
+- After rebasing onto the contributor-advanced `origin/main`, restored 18
+  mechanical Ruff/Python 3.9 test-collection regressions under separately
+  tracked Plane BOSS-144; 24 focused contributor tests pass with 1 expected
+  skip. Published `c0f70b2` / `220493d` in stacked draft PR
+  https://github.com/seanheiney/boss/pull/34 and linked Plane evidence.
 
 === CODEX PRODUCT TAXONOMY UPDATE 2026-07-18 ===
 Plane: BOSS-133 (In Progress); related root features BOSS-123, BOSS-129,

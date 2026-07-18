@@ -18,6 +18,10 @@
 - Plane BOSS-134–143 are In Progress and linked to parent BOSS-132. Keep them
   open until the implementation PR merges; then attach the merge commit and
   move the ten children and parent to Done.
+- Publication: implementation commit `c0f70b2` and concurrent-main lint repair
+  `220493d` are pushed in stacked draft PR
+  [#34](https://github.com/seanheiney/boss/pull/34). Merge product-taxonomy PR
+  #33 first, then retarget #34 to `main`.
 - Validation: 6 focused workflow tests, 186 non-legacy API/worker tests, 116 web
   tests, repository lint/typecheck, production web build, double bootstrap,
   OpenAPI YAML parse, and diff checks pass. Static OpenAPI includes every new

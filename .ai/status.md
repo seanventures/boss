@@ -21,7 +21,9 @@
   Decisions/timers and run controls, fail-closed capability/subworkflow
   bindings, reverse compensation, explicit migration/rollback, typed API/client
   contracts, and a Mission Control registry/run timeline. Focused and widened
-  validation is green; tickets remain In Progress until the stacked PR merges.
+  validation is green; implementation commit `c0f70b2` is published in stacked
+  draft PR [#34](https://github.com/seanheiney/boss/pull/34), and tickets remain
+  In Progress until it merges.
 - BOSS-133 separates Agent Groups, Skills/Integrations, Reusable Workflows, and
   Ground-truth/Assurance in the governing PRD/technical spec while defining how
   they compose. Plane root features are BOSS-129, BOSS-130, BOSS-132, and
