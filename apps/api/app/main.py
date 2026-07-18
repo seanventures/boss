@@ -377,6 +377,33 @@ from .schemas import (
     WorkerPoolUpsertRequest,
     WorkerPollRequest,
     WorkerPollResponse,
+    WorkflowCompensationBeginRequest,
+    WorkflowCompensationClaimRequest,
+    WorkflowCompensationCompleteRequest,
+    WorkflowCompensationFailRequest,
+    WorkflowDefinitionCreateRequest,
+    WorkflowDefinitionDetail,
+    WorkflowDefinitionListResponse,
+    WorkflowDefinitionSummary,
+    WorkflowMappingCreateRequest,
+    WorkflowMappingListResponse,
+    WorkflowMappingResolveRequest,
+    WorkflowMappingSummary,
+    WorkflowMigrationRollbackRequest,
+    WorkflowRunActorRequest,
+    WorkflowRunCancelRequest,
+    WorkflowRunDetail,
+    WorkflowRunListResponse,
+    WorkflowRunMigrateRequest,
+    WorkflowRunStartRequest,
+    WorkflowRunSummary,
+    WorkflowStepClaimRequest,
+    WorkflowStepCompleteRequest,
+    WorkflowStepFailRequest,
+    WorkflowStepHeartbeatRequest,
+    WorkflowStepRunSummary,
+    WorkflowVersionCreateRequest,
+    WorkflowVersionSummary,
 )
 from .services.audit import AuditTrailService
 from .services.agent_loop import conversation_from_messages, describe_native_tools
@@ -486,6 +513,7 @@ from .services.skill_runtime import (
     SkillRuntimeService,
 )
 from .services.skill_executors import SkillExecutorContext
+from .services import workflows as workflow_runtime
 from .services.skill_registry import (
     disable_skill,
     enable_skill,
@@ -10700,3 +10728,510 @@ def create_compliance_evidence_bundle(
             period=result["period"],
             counts=ComplianceEvidenceCounts(**result["counts"]),
         )
+
+
+def raise_workflow_error(error: workflow_runtime.WorkflowError) -> None:
+    if isinstance(error, workflow_runtime.WorkflowNotFoundError):
+        status_code = 404
+    elif isinstance(
+        error,
+        (
+            workflow_runtime.WorkflowConflictError,
+            workflow_runtime.WorkflowLeaseError,
+            workflow_runtime.WorkflowMappingAmbiguousError,
+            workflow_runtime.WorkflowBindingBlockedError,
+        ),
+    ):
+        status_code = 409
+    else:
+        status_code = 422
+    raise HTTPException(status_code=status_code, detail=str(error)) from error
+
+
+@app.get("/v1/workflows", response_model=WorkflowDefinitionListResponse)
+def list_workflow_definitions(
+    project_id: str, include_retired: bool = False
+) -> WorkflowDefinitionListResponse:
+    with begin(engine) as connection:
+        return WorkflowDefinitionListResponse(
+            project_id=project_id,
+            items=workflow_runtime.list_definitions(
+                connection, project_id, include_retired=include_retired
+            ),
+        )
+
+
+@app.post("/v1/workflows", response_model=WorkflowDefinitionSummary, status_code=201)
+def create_workflow_definition(
+    payload: WorkflowDefinitionCreateRequest,
+) -> WorkflowDefinitionSummary:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection, payload.project_id, payload.actor, "workflow_manage"
+        )
+        try:
+            return WorkflowDefinitionSummary(
+                **workflow_runtime.create_definition(
+                    connection,
+                    project_id=payload.project_id,
+                    workflow_key=payload.workflow_key,
+                    name=payload.name,
+                    description=payload.description,
+                    actor=payload.actor,
+                )
+            )
+        except workflow_runtime.WorkflowError as error:
+            raise_workflow_error(error)
+
+
+@app.get("/v1/workflows/{definition_id}", response_model=WorkflowDefinitionDetail)
+def get_workflow_definition(
+    definition_id: str, project_id: str
+) -> WorkflowDefinitionDetail:
+    with begin(engine) as connection:
+        try:
+            return WorkflowDefinitionDetail(
+                **workflow_runtime.get_definition(connection, project_id, definition_id)
+            )
+        except workflow_runtime.WorkflowError as error:
+            raise_workflow_error(error)
+
+
+@app.post(
+    "/v1/workflows/{definition_id}/versions",
+    response_model=WorkflowVersionSummary,
+    status_code=201,
+)
+def publish_workflow_version(
+    definition_id: str, payload: WorkflowVersionCreateRequest
+) -> WorkflowVersionSummary:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection, payload.project_id, payload.actor, "workflow_manage"
+        )
+        try:
+            return WorkflowVersionSummary(
+                **workflow_runtime.publish_version(
+                    connection,
+                    project_id=payload.project_id,
+                    definition_id=definition_id,
+                    spec=payload.spec,
+                    actor=payload.actor,
+                    activate=payload.activate,
+                )
+            )
+        except workflow_runtime.WorkflowError as error:
+            raise_workflow_error(error)
+
+
+@app.get("/v1/workflow-mappings", response_model=WorkflowMappingListResponse)
+def list_workflow_mappings(project_id: str) -> WorkflowMappingListResponse:
+    with begin(engine) as connection:
+        return WorkflowMappingListResponse(
+            project_id=project_id,
+            items=workflow_runtime.list_mappings(connection, project_id),
+        )
+
+
+@app.post(
+    "/v1/workflow-mappings",
+    response_model=WorkflowMappingSummary,
+    status_code=201,
+)
+def create_workflow_mapping(payload: WorkflowMappingCreateRequest) -> WorkflowMappingSummary:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection, payload.project_id, payload.actor, "workflow_manage"
+        )
+        try:
+            return WorkflowMappingSummary(
+                **workflow_runtime.create_mapping(
+                    connection,
+                    project_id=payload.project_id,
+                    workflow_version_id=payload.workflow_version_id,
+                    selector_kind=payload.selector_kind,
+                    selector_value=payload.selector_value,
+                    scope_type=payload.scope_type,
+                    scope_id=payload.scope_id,
+                    priority=payload.priority,
+                    actor=payload.actor,
+                )
+            )
+        except workflow_runtime.WorkflowError as error:
+            raise_workflow_error(error)
+
+
+@app.post("/v1/workflow-mappings/resolve")
+def resolve_workflow_mapping(payload: WorkflowMappingResolveRequest) -> dict[str, Any]:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection, payload.project_id, payload.actor, "workflow_execute"
+        )
+        try:
+            return workflow_runtime.resolve_mapping(
+                connection,
+                project_id=payload.project_id,
+                selector_kind=payload.selector_kind,
+                selector_value=payload.selector_value,
+            )
+        except workflow_runtime.WorkflowError as error:
+            raise_workflow_error(error)
+
+
+@app.get("/v1/workflow-runs", response_model=WorkflowRunListResponse)
+def list_workflow_runs(
+    project_id: str, status: Optional[str] = None, limit: int = 50
+) -> WorkflowRunListResponse:
+    with begin(engine) as connection:
+        try:
+            return WorkflowRunListResponse(
+                project_id=project_id,
+                items=workflow_runtime.list_runs(
+                    connection, project_id, status=status, limit=limit
+                ),
+            )
+        except workflow_runtime.WorkflowError as error:
+            raise_workflow_error(error)
+
+
+@app.post("/v1/workflow-runs", response_model=WorkflowRunSummary, status_code=201)
+def start_workflow_run(payload: WorkflowRunStartRequest) -> WorkflowRunSummary:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection, payload.project_id, payload.actor, "workflow_execute"
+        )
+        try:
+            return WorkflowRunSummary(
+                **workflow_runtime.start_run(
+                    connection,
+                    project_id=payload.project_id,
+                    actor=payload.actor,
+                    input_data=payload.input,
+                    dedupe_key=payload.dedupe_key,
+                    workflow_version_id=payload.workflow_version_id,
+                    selector_kind=payload.selector_kind,
+                    selector_value=payload.selector_value,
+                    policy_snapshot=payload.policy_snapshot,
+                    parent_run_id=payload.parent_run_id,
+                )
+            )
+        except workflow_runtime.WorkflowError as error:
+            raise_workflow_error(error)
+
+
+@app.get("/v1/workflow-runs/{run_id}", response_model=WorkflowRunDetail)
+def get_workflow_run(run_id: str, project_id: str) -> WorkflowRunDetail:
+    with begin(engine) as connection:
+        try:
+            return WorkflowRunDetail(
+                **workflow_runtime.get_run(connection, project_id, run_id)
+            )
+        except workflow_runtime.WorkflowError as error:
+            raise_workflow_error(error)
+
+
+@app.post("/v1/workflow-runs/{run_id}/advance", response_model=WorkflowRunDetail)
+def advance_workflow_run(
+    run_id: str, payload: WorkflowRunActorRequest
+) -> WorkflowRunDetail:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection, payload.project_id, payload.actor, "workflow_execute"
+        )
+        try:
+            return WorkflowRunDetail(
+                **workflow_runtime.advance_run(connection, payload.project_id, run_id)
+            )
+        except workflow_runtime.WorkflowError as error:
+            raise_workflow_error(error)
+
+
+@app.post("/v1/workflow-runs/{run_id}/pause", response_model=WorkflowRunDetail)
+def pause_workflow_run(
+    run_id: str, payload: WorkflowRunActorRequest
+) -> WorkflowRunDetail:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection, payload.project_id, payload.actor, "workflow_execute"
+        )
+        try:
+            return WorkflowRunDetail(
+                **workflow_runtime.pause_run(
+                    connection, payload.project_id, run_id, payload.actor
+                )
+            )
+        except workflow_runtime.WorkflowError as error:
+            raise_workflow_error(error)
+
+
+@app.post("/v1/workflow-runs/{run_id}/resume", response_model=WorkflowRunDetail)
+def resume_workflow_run(
+    run_id: str, payload: WorkflowRunActorRequest
+) -> WorkflowRunDetail:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection, payload.project_id, payload.actor, "workflow_execute"
+        )
+        try:
+            return WorkflowRunDetail(
+                **workflow_runtime.resume_run(
+                    connection, payload.project_id, run_id, payload.actor
+                )
+            )
+        except workflow_runtime.WorkflowError as error:
+            raise_workflow_error(error)
+
+
+@app.post("/v1/workflow-runs/{run_id}/cancel", response_model=WorkflowRunDetail)
+def cancel_workflow_run(
+    run_id: str, payload: WorkflowRunCancelRequest
+) -> WorkflowRunDetail:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection, payload.project_id, payload.actor, "workflow_execute"
+        )
+        try:
+            return WorkflowRunDetail(
+                **workflow_runtime.cancel_run(
+                    connection,
+                    payload.project_id,
+                    run_id,
+                    payload.actor,
+                    reason=payload.reason,
+                    compensate=payload.compensate,
+                )
+            )
+        except workflow_runtime.WorkflowError as error:
+            raise_workflow_error(error)
+
+
+@app.post(
+    "/v1/workflow-runs/{run_id}/steps/claim",
+    response_model=Optional[WorkflowStepRunSummary],
+)
+def claim_workflow_step(
+    run_id: str, payload: WorkflowStepClaimRequest
+) -> Optional[WorkflowStepRunSummary]:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection, payload.project_id, payload.worker_id, "workflow_execute"
+        )
+        try:
+            item = workflow_runtime.claim_step(
+                connection,
+                project_id=payload.project_id,
+                run_id=run_id,
+                worker_id=payload.worker_id,
+                lease_seconds=payload.lease_seconds,
+            )
+            return WorkflowStepRunSummary(**item) if item else None
+        except workflow_runtime.WorkflowError as error:
+            raise_workflow_error(error)
+
+
+@app.post(
+    "/v1/workflow-step-runs/{step_run_id}/heartbeat",
+    response_model=WorkflowStepRunSummary,
+)
+def heartbeat_workflow_step(
+    step_run_id: str, payload: WorkflowStepHeartbeatRequest
+) -> WorkflowStepRunSummary:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection, payload.project_id, payload.worker_id, "workflow_execute"
+        )
+        try:
+            return WorkflowStepRunSummary(
+                **workflow_runtime.heartbeat_step(
+                    connection,
+                    project_id=payload.project_id,
+                    step_run_id=step_run_id,
+                    worker_id=payload.worker_id,
+                    lease_seconds=payload.lease_seconds,
+                )
+            )
+        except workflow_runtime.WorkflowError as error:
+            raise_workflow_error(error)
+
+
+@app.post(
+    "/v1/workflow-step-runs/{step_run_id}/complete",
+    response_model=WorkflowStepRunSummary,
+)
+def complete_workflow_step(
+    step_run_id: str, payload: WorkflowStepCompleteRequest
+) -> WorkflowStepRunSummary:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection, payload.project_id, payload.worker_id, "workflow_execute"
+        )
+        try:
+            return WorkflowStepRunSummary(
+                **workflow_runtime.complete_step(
+                    connection,
+                    project_id=payload.project_id,
+                    step_run_id=step_run_id,
+                    worker_id=payload.worker_id,
+                    output=payload.output,
+                    evidence=payload.evidence,
+                )
+            )
+        except workflow_runtime.WorkflowError as error:
+            raise_workflow_error(error)
+
+
+@app.post(
+    "/v1/workflow-step-runs/{step_run_id}/fail",
+    response_model=WorkflowStepRunSummary,
+)
+def fail_workflow_step(
+    step_run_id: str, payload: WorkflowStepFailRequest
+) -> WorkflowStepRunSummary:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection, payload.project_id, payload.worker_id, "workflow_execute"
+        )
+        try:
+            return WorkflowStepRunSummary(
+                **workflow_runtime.fail_step(
+                    connection,
+                    project_id=payload.project_id,
+                    step_run_id=step_run_id,
+                    worker_id=payload.worker_id,
+                    error=payload.error,
+                    retryable=payload.retryable,
+                    retry_delay_seconds=payload.retry_delay_seconds,
+                )
+            )
+        except workflow_runtime.WorkflowError as error:
+            raise_workflow_error(error)
+
+
+@app.post("/v1/workflow-runs/{run_id}/migrate", response_model=WorkflowRunDetail)
+def migrate_workflow_run(
+    run_id: str, payload: WorkflowRunMigrateRequest
+) -> WorkflowRunDetail:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection, payload.project_id, payload.actor, "workflow_manage"
+        )
+        try:
+            return WorkflowRunDetail(
+                **workflow_runtime.migrate_run(
+                    connection,
+                    project_id=payload.project_id,
+                    run_id=run_id,
+                    target_version_id=payload.target_version_id,
+                    actor=payload.actor,
+                    reason=payload.reason,
+                )
+            )
+        except workflow_runtime.WorkflowError as error:
+            raise_workflow_error(error)
+
+
+@app.post(
+    "/v1/workflow-runs/{run_id}/migrations/rollback",
+    response_model=WorkflowRunDetail,
+)
+def rollback_workflow_migration(
+    run_id: str, payload: WorkflowMigrationRollbackRequest
+) -> WorkflowRunDetail:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection, payload.project_id, payload.actor, "workflow_manage"
+        )
+        try:
+            return WorkflowRunDetail(
+                **workflow_runtime.rollback_migration(
+                    connection,
+                    project_id=payload.project_id,
+                    run_id=run_id,
+                    migration_id=payload.migration_id,
+                    actor=payload.actor,
+                )
+            )
+        except workflow_runtime.WorkflowError as error:
+            raise_workflow_error(error)
+
+
+@app.post("/v1/workflow-runs/{run_id}/compensate", response_model=WorkflowRunDetail)
+def compensate_workflow_run(
+    run_id: str, payload: WorkflowCompensationBeginRequest
+) -> WorkflowRunDetail:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection, payload.project_id, payload.actor, "workflow_execute"
+        )
+        try:
+            return WorkflowRunDetail(
+                **workflow_runtime.begin_compensation(
+                    connection,
+                    payload.project_id,
+                    run_id,
+                    payload.actor,
+                    reason=payload.reason,
+                )
+            )
+        except workflow_runtime.WorkflowError as error:
+            raise_workflow_error(error)
+
+
+@app.post("/v1/workflow-runs/{run_id}/compensations/claim")
+def claim_workflow_compensation(
+    run_id: str, payload: WorkflowCompensationClaimRequest
+) -> Optional[dict[str, Any]]:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection, payload.project_id, payload.worker_id, "workflow_execute"
+        )
+        try:
+            return workflow_runtime.claim_compensation(
+                connection,
+                project_id=payload.project_id,
+                run_id=run_id,
+                worker_id=payload.worker_id,
+                lease_seconds=payload.lease_seconds,
+            )
+        except workflow_runtime.WorkflowError as error:
+            raise_workflow_error(error)
+
+
+@app.post("/v1/workflow-compensation-runs/{compensation_id}/complete")
+def complete_workflow_compensation(
+    compensation_id: str, payload: WorkflowCompensationCompleteRequest
+) -> dict[str, Any]:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection, payload.project_id, payload.worker_id, "workflow_execute"
+        )
+        try:
+            return workflow_runtime.complete_compensation(
+                connection,
+                project_id=payload.project_id,
+                compensation_id=compensation_id,
+                worker_id=payload.worker_id,
+                output=payload.output,
+            )
+        except workflow_runtime.WorkflowError as error:
+            raise_workflow_error(error)
+
+
+@app.post("/v1/workflow-compensation-runs/{compensation_id}/fail")
+def fail_workflow_compensation(
+    compensation_id: str, payload: WorkflowCompensationFailRequest
+) -> dict[str, Any]:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection, payload.project_id, payload.worker_id, "workflow_execute"
+        )
+        try:
+            return workflow_runtime.fail_compensation(
+                connection,
+                project_id=payload.project_id,
+                compensation_id=compensation_id,
+                worker_id=payload.worker_id,
+                error=payload.error,
+            )
+        except workflow_runtime.WorkflowError as error:
+            raise_workflow_error(error)

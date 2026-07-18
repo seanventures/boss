@@ -3216,4 +3216,88 @@ describe("createBossApiClient", () => {
     expect(queue.pending_decisions[0].risk_tier).toBe(2);
     expect(createdDigest.artifact_type).toBe("ops_digest");
   });
+
+  it("uses the reusable workflow registry and durable run contracts", async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const responses = [
+      { project_id: "boss-dogfood", items: [] },
+      { project_id: "boss-dogfood", items: [] },
+      { project_id: "boss-dogfood", items: [] },
+      {
+        id: "wfr_1",
+        project_id: "boss-dogfood",
+        workflow_definition_id: "wfd_1",
+        workflow_version_id: "wfv_1",
+        actor: "ceo",
+        status: "running",
+        input: {},
+        output: {},
+        context: {},
+        policy_snapshot: {},
+        current_frontier: [],
+        created_at: "2026-07-18T00:00:00Z",
+        updated_at: "2026-07-18T00:00:00Z",
+        workflow_key: "release",
+        workflow_name: "Release",
+        version: 1,
+      },
+      {
+        id: "wfs_1",
+        project_id: "boss-dogfood",
+        workflow_run_id: "wfr_1",
+        step_id: "build",
+        step_kind: "task",
+        iteration: 0,
+        status: "leased",
+        input: {},
+        output: {},
+        binding_snapshot: {},
+        evidence: [],
+        attempt: 1,
+        max_attempts: 3,
+        run_after: "2026-07-18T00:00:00Z",
+        created_at: "2026-07-18T00:00:00Z",
+        updated_at: "2026-07-18T00:00:00Z",
+      },
+    ];
+    const fetchImpl = async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({ url: String(input), init });
+      return new Response(JSON.stringify(responses.shift()), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    };
+    const client = createBossApiClient({
+      baseUrl: "http://127.0.0.1:8000",
+      fetchImpl,
+    });
+
+    await client.getWorkflowDefinitions("boss-dogfood");
+    await client.getWorkflowMappings("boss-dogfood");
+    await client.getWorkflowRuns("boss-dogfood", undefined, 25);
+    const run = await client.startWorkflowRun({
+      project_id: "boss-dogfood",
+      workflow_version_id: "wfv_1",
+      dedupe_key: "release:1",
+      actor: "ceo",
+    });
+    const step = await client.claimWorkflowStep("wfr_1", {
+      project_id: "boss-dogfood",
+      worker_id: "system",
+    });
+
+    expect(calls.map((call) => call.url)).toEqual([
+      "http://127.0.0.1:8000/v1/workflows?project_id=boss-dogfood&include_retired=false",
+      "http://127.0.0.1:8000/v1/workflow-mappings?project_id=boss-dogfood",
+      "http://127.0.0.1:8000/v1/workflow-runs?project_id=boss-dogfood&limit=25",
+      "http://127.0.0.1:8000/v1/workflow-runs",
+      "http://127.0.0.1:8000/v1/workflow-runs/wfr_1/steps/claim",
+    ]);
+    expect(JSON.parse(String(calls[3].init?.body))).toMatchObject({
+      workflow_version_id: "wfv_1",
+      dedupe_key: "release:1",
+    });
+    expect(run.workflow_version_id).toBe("wfv_1");
+    expect(step?.step_id).toBe("build");
+  });
 });

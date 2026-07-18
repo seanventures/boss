@@ -5334,6 +5334,134 @@ paths:
       responses:
         '200': { description: Feedback captured; dispatch still requires authenticated confirmation }
         '422': { description: Preview or feedback invalid }
+  /v1/workflows:
+    get:
+      summary: List reusable workflow definitions and active immutable versions
+      responses:
+        '200': { description: Workflow definition registry }
+    post:
+      summary: Create a reusable workflow definition
+      responses:
+        '201': { description: Workflow definition created }
+  /v1/workflows/{definition_id}:
+    get:
+      summary: Get a workflow definition and its immutable version history
+      responses:
+        '200': { description: Workflow definition detail }
+        '404': { description: Workflow definition not found }
+  /v1/workflows/{definition_id}/versions:
+    post:
+      summary: Validate and publish an immutable workflow version
+      responses:
+        '201': { description: Workflow version published or idempotently reused }
+        '422': { description: Invalid workflow graph or binding declaration }
+  /v1/workflow-mappings:
+    get:
+      summary: List deterministic work-class workflow mappings
+      responses:
+        '200': { description: Workflow mappings }
+    post:
+      summary: Map a class of work to a pinned workflow version and scope
+      responses:
+        '201': { description: Workflow mapping created }
+        '409': { description: Active mapping conflicts with an existing selector }
+  /v1/workflow-mappings/resolve:
+    post:
+      summary: Explain and resolve the most-specific workflow mapping
+      responses:
+        '200': { description: Selected and rejected mapping candidates }
+        '409': { description: Equal-precedence mappings are ambiguous }
+        '422': { description: No approved mapping matches }
+  /v1/workflow-runs:
+    get:
+      summary: List durable workflow runs and their current frontier
+      responses:
+        '200': { description: Workflow runs }
+    post:
+      summary: Start an idempotent version-pinned workflow run
+      responses:
+        '201': { description: Workflow run started or replayed }
+        '409': { description: A required capability binding fails closed }
+  /v1/workflow-runs/{run_id}:
+    get:
+      summary: Get a workflow run with steps, evidence, migrations, compensation, and timeline
+      responses:
+        '200': { description: Durable workflow run detail }
+        '404': { description: Workflow run not found }
+  /v1/workflow-runs/{run_id}/advance:
+    post:
+      summary: Reconcile timers, decisions, subworkflows, and the current run frontier
+      responses:
+        '200': { description: Advanced workflow run }
+  /v1/workflow-runs/{run_id}/pause:
+    post:
+      summary: Pause a non-terminal workflow run
+      responses:
+        '200': { description: Paused workflow run }
+  /v1/workflow-runs/{run_id}/resume:
+    post:
+      summary: Resume and reconcile a paused workflow run
+      responses:
+        '200': { description: Resumed workflow run }
+        '409': { description: Workflow run is not paused }
+  /v1/workflow-runs/{run_id}/cancel:
+    post:
+      summary: Cancel a workflow run and optionally begin compensation
+      responses:
+        '200': { description: Cancelled or compensating workflow run }
+  /v1/workflow-runs/{run_id}/steps/claim:
+    post:
+      summary: Lease or reclaim the next executable workflow step
+      responses:
+        '200': { description: Leased step, or null when no step is ready }
+  /v1/workflow-step-runs/{step_run_id}/heartbeat:
+    post:
+      summary: Heartbeat and extend an owned workflow step lease
+      responses:
+        '200': { description: Workflow step lease extended }
+        '409': { description: Lease expired or is owned by another worker }
+  /v1/workflow-step-runs/{step_run_id}/complete:
+    post:
+      summary: Complete a leased workflow step with output and evidence
+      responses:
+        '200': { description: Workflow step completed and frontier advanced }
+  /v1/workflow-step-runs/{step_run_id}/fail:
+    post:
+      summary: Fail a leased workflow step and retry or deadletter it deterministically
+      responses:
+        '200': { description: Workflow step retried or deadlettered }
+  /v1/workflow-runs/{run_id}/migrate:
+    post:
+      summary: Explicitly migrate a paused workflow run to a compatible version
+      responses:
+        '200': { description: Workflow run migrated with rollback snapshot }
+        '409': { description: Target version is incompatible or run is active }
+  /v1/workflow-runs/{run_id}/migrations/rollback:
+    post:
+      summary: Roll back the active safe workflow migration
+      responses:
+        '200': { description: Workflow migration rolled back }
+        '409': { description: New-version steps have executed and rollback is unsafe }
+  /v1/workflow-runs/{run_id}/compensate:
+    post:
+      summary: Begin reverse-order workflow compensation
+      responses:
+        '200': { description: Workflow compensation started }
+  /v1/workflow-runs/{run_id}/compensations/claim:
+    post:
+      summary: Lease the next reverse-order compensation action
+      responses:
+        '200': { description: Leased compensation action, or null }
+  /v1/workflow-compensation-runs/{compensation_id}/complete:
+    post:
+      summary: Complete a compensation action and advance the rollback chain
+      responses:
+        '200': { description: Compensation action completed }
+  /v1/workflow-compensation-runs/{compensation_id}/fail:
+    post:
+      summary: Retry or deadletter a failed compensation action
+      responses:
+        '200': { description: Compensation action retried or deadlettered }
 components:
   securitySchemes:
     BossBearerAuth:

@@ -89,7 +89,7 @@ to `main`; the Plane issues intentionally remain In Progress until merged.
 | --- | --- | --- | --- |
 | AGP-001 | BOSS-129 | Agent Group defines who collaborates and the reusable protocol | Planned |
 | INT-001 | BOSS-130; extends BOSS-44–56 | Skill defines the typed capability; IntegrationConnection defines the configured implementation | Partial foundation |
-| WFL-001 | BOSS-132 | Workflow defines the predetermined sequence, mappings, gates, and durable run state | Partial WorkflowSpec/purpose-built foundation |
+| WFL-001 | BOSS-132, BOSS-134–143 | Workflow defines the predetermined sequence, mappings, gates, and durable run state | Implemented: immutable registry/specpack seed, scoped resolver, pinned durable runs/steps, leases/retry/deadletter, control flow, Decisions/timers, capability bindings, compensation/migration, API/client/UI, and acceptance tests |
 | AST-001 | BOSS-123–128, BOSS-131 | Assurance measures and gates claims/outcomes; it references but does not own groups, workflows, skills, or integrations | Partial VAG foundation |
 
 Documentation implementation is tracked by BOSS-133 on

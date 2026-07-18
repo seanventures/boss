@@ -1,9 +1,9 @@
 # BOSS Autonomous Delivery Status
 
-**Last updated**: 2026-07-18 (BOSS-133 product-capability taxonomy)
+**Last updated**: 2026-07-18 (BOSS-134–143 reusable workflow runtime)
 **Repo root**: /Volumes/DataSSD1/test/boss
 **Git remote**: https://github.com/seanheiney/boss
-**Current branch**: ai/codex/boss-133-product-capability-taxonomy
+**Current branch**: ai/codex/boss-134-143-workflow-runtime
 **Base branch**: origin/main
 **Product**: BOSS v0.7.0 target (Business Operating System Sentinel)
 **Mission**: Complete product to production-grade, tested, documented, pushed, Codex-coordinated, ready for real users. Grind until all discovered PRD/spec features satisfy world-class DoD or truly blocked.
@@ -14,6 +14,14 @@
 - GitHub: draft PR #16 carries BOSS-22/BOSS-23 and is stacked on draft PR #15; other open PRs were inspected for overlap before implementation.
 
 ## Overall Product Status
+- BOSS-134–143 implement WFL-001 end to end: canonical workflow persistence,
+  immutable spec validation and specpack seeding, deterministic work-class
+  mappings, version-pinned replay-safe runs, leased/recoverable steps,
+  retry/deadletter visibility, branch/fan-out/join/bounded loops, durable
+  Decisions/timers and run controls, fail-closed capability/subworkflow
+  bindings, reverse compensation, explicit migration/rollback, typed API/client
+  contracts, and a Mission Control registry/run timeline. Focused and widened
+  validation is green; tickets remain In Progress until the stacked PR merges.
 - BOSS-133 separates Agent Groups, Skills/Integrations, Reusable Workflows, and
   Ground-truth/Assurance in the governing PRD/technical spec while defining how
   they compose. Plane root features are BOSS-129, BOSS-130, BOSS-132, and

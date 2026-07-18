@@ -462,6 +462,27 @@ Next autonomous actions:
 Blockers: Subagent runtime (long running ok, thorough); external 3 P0s (final report will document exact resume: "configure creds + make release-blockers green").
 PR: https://github.com/seanheiney/boss/pull/3
 
+## 2026-07-18 — BOSS-134–143 reusable workflow runtime
+
+- Created and activated ten Plane delivery slices under BOSS-132, then
+  implemented the complete WFL-001 vertical on
+  `ai/codex/boss-134-143-workflow-runtime` without touching the parallel
+  contributor branch.
+- Added immutable workflow persistence and lineage, scoped deterministic
+  mappings, pinned/deduplicated runs, durable leased steps, stale-lease reclaim,
+  bounded retries/deadletters, evidence, condition/fan-out/join/loop controls,
+  Decisions/timers, pause/resume/cancel, fail-closed Agent Group/Skill/
+  Integration/subworkflow references, reverse compensation, and explicit
+  compatible migration/rollback.
+- Registered all shipped specpack workflow YAML idempotently. Added complete
+  FastAPI/Pydantic/OpenAPI and typed client contracts plus a Mission Control
+  registry, run frontier, step state, and event timeline with explicit empty and
+  API-error states.
+- Validation: workflow 6/6; non-legacy API/worker 186/186; web 116/116;
+  repository lint/typecheck; Next production build; schema/bootstrap twice;
+  OpenAPI YAML and diff checks. OpenAPI route parity contains all new workflow
+  routes and still reports only the known unrelated pre-existing backlog.
+
 === CODEX PRODUCT TAXONOMY UPDATE 2026-07-18 ===
 Plane: BOSS-133 (In Progress); related root features BOSS-123, BOSS-129,
 BOSS-130, and BOSS-132.
