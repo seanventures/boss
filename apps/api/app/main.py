@@ -104,6 +104,8 @@ from .schemas import (
     ChangeSetCreateRequest,
     ChangeSetListResponse,
     ChangeSetSummary,
+    TerraformDriftReconcileRequest,
+    TerraformDriftReconcileResponse,
     TerraformExportArtifactResponse,
     TerraformExportRequest,
     TerraformExportResponse,
@@ -474,6 +476,7 @@ from .services.resource_plane import (
     ProviderAccountNotFoundError,
     ResourcePlaneService,
 )
+from .services import terraform_drift as terraform_drift_service
 from .services import terraform_export as terraform_export_service
 from .services.autonomy_engine import AutonomyEngine
 from .services.role_governance import RoleGovernanceService
@@ -8200,6 +8203,87 @@ def get_changeset_terraform_export(
                 row["created_at"].isoformat() if row.get("created_at") else None
             ),
             export=content,
+        )
+
+
+@app.post(
+    "/v1/projects/{project_id}/terraform-drift-reconcile",
+    response_model=TerraformDriftReconcileResponse,
+)
+def terraform_drift_reconcile(
+    project_id: str,
+    payload: TerraformDriftReconcileRequest,
+) -> TerraformDriftReconcileResponse:
+    """Track 1 inbound drift-sync (BOSS-69): three-way compare BOSS desired
+    state vs a customer-supplied .tf/plan JSON vs synced live inventory.
+
+    THE INVARIANT: the supplied .tf NEVER mutates the DB directly. Divergence
+    yields a drift report plus a PROPOSED corrective ChangeSet through the
+    normal dual-control approval gate; rejecting it changes nothing. Shares
+    the terraform_export opt-in gate (force is the audited escape hatch)."""
+    with begin(engine) as connection:
+        require_project_actor(
+            connection,
+            project_id,
+            payload.actor,
+            "providerops_manage",
+        )
+        if bool(payload.tf_json) == bool(payload.plan_json):
+            raise HTTPException(
+                status_code=422,
+                detail="Provide exactly one of tf_json or plan_json.",
+            )
+        opt_in_targets = terraform_export_service.count_terraform_export_targets(
+            connection, project_id
+        )
+        forced = False
+        if opt_in_targets == 0:
+            if not payload.force:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "Terraform drift-sync is opt-in and disabled for this "
+                        "project: no deployment target has terraform_export "
+                        "enabled. Enable a target or pass force=true "
+                        "(audited)."
+                    ),
+                )
+            forced = True
+            if not payload.dry_run:
+                emit_event(
+                    connection,
+                    project_id,
+                    "terraform_drift.forced",
+                    payload.actor,
+                    "project",
+                    project_id,
+                    {
+                        "reason": (
+                            "No deployment target has terraform_export "
+                            "enabled; actor forced the drift reconcile."
+                        ),
+                    },
+                )
+        try:
+            result = terraform_drift_service.terraform_drift_reconcile(
+                connection,
+                settings,
+                project_id,
+                tf_payload=payload.tf_json or payload.plan_json,
+                provider_account_id=payload.provider_account_id,
+                actor=payload.actor,
+                dry_run=payload.dry_run,
+                plane=resource_plane,
+            )
+        except (
+            ValueError,
+            terraform_drift_service.TerraformDriftError,
+        ) as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        return TerraformDriftReconcileResponse(
+            **result,
+            forced=forced,
+            opt_in_targets=opt_in_targets,
         )
 
 

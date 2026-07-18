@@ -3957,6 +3957,7 @@ class DriftReportSummary(BaseModel):
     security_impacting_count: int
     production_impacting_count: int
     recommendations: list[dict[str, Any]]
+    detail: dict[str, Any] = {}
     created_at: str
 
 
@@ -4526,6 +4527,36 @@ class TerraformExportArtifactResponse(BaseModel):
     content_hash: Optional[str] = None
     created_at: Optional[str] = None
     export: dict[str, Any]
+
+
+class TerraformDriftReconcileRequest(BaseModel):
+    actor: str = "ceo"
+    provider_account_id: Optional[str] = None
+    # Exactly one of tf_json (.tf.json dialect) or plan_json
+    # (`terraform show -json` / plan JSON) must be supplied.
+    tf_json: Optional[dict[str, Any]] = None
+    plan_json: Optional[dict[str, Any]] = None
+    # dry_run computes and returns the comparison WITHOUT persisting a drift
+    # report row or a proposed ChangeSet.
+    dry_run: bool = False
+    # Audited escape hatch mirroring terraform-export's opt-in gate.
+    force: bool = False
+
+
+class TerraformDriftReconcileResponse(BaseModel):
+    project_id: str
+    input_format: str
+    dry_run: bool
+    drift_report_id: Optional[str] = None
+    # The PROPOSED corrective ChangeSet (normal dual-control gate); never
+    # auto-approved, absent when the .tf did not diverge.
+    changeset_id: Optional[str] = None
+    counts: dict[str, int]
+    resources: list[dict[str, Any]]
+    resource_refs: list[str]
+    warnings: list[dict[str, Any]]
+    forced: bool = False
+    opt_in_targets: int = 0
 
 
 AuditExportResponse.model_rebuild()
