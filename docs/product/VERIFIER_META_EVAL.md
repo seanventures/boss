@@ -67,4 +67,25 @@ and the endpoint dry-run.
   defects) — the corpus IS the measurement, so its breadth caps what we can claim.
 - Once #104 (refute panel) merges, run `--real` with `BOSS_CODE_REVIEW_PANEL_SIZE>1` to quantify the
   panel's recall/FP lift over a single reviewer — the head-to-head the panel sweep couldn't finish.
-- Wire meta-eval into the cross-run eval ratchet (#107): human-rejected PRs become new bugged corpus items.
+
+## 7. Cross-run ratchet (#107)
+
+The corpus shouldn't stay hand-authored — it should **grow from the verifier's own mistakes**. The
+ratchet (`apps/api/app/services/verifier_ratchet.py`) captures every human↔gate disagreement as a
+labeled corpus item so the verifier is scored against it from then on:
+
+- **gate FAILED + human OVERRODE** → a **clean** item (a false-fail). Auto-captured in
+  `override_code_task` — the judged files are already in `finalize_ctx.pending_diff`.
+- **gate PASSED + human REJECTED the PR** → a **bugged** item (a false-pass — the highest-value
+  signal). Captured via `POST /v1/verifier-ratchet/capture {run_id, label:"bugged", files?}` (a
+  gate-passed run doesn't retain its diff, so supply the files or wire artifact recovery — the
+  documented follow-on).
+
+Items are tagged onto the run (`finalize_ctx.ratchet`, the bake-off idiom — no migration) with a
+self-contained copy of the files, and merged into the meta-eval corpus by `merged_corpus` (folded into
+`POST /v1/verifier-meta-eval` by default, scopeable by `project_id`). Each carries a ground-truth
+`stub_verdict` so the offline dry-run stays deterministic. Tests: `apps/api/tests/test_verifier_ratchet.py` (7).
+
+**Follow-on:** auto-capture on `decision.rejected` for a `review_pull_request` decision whose run's gate
+passed (needs the passed-run diff — persist it on pass, or read the PR's `diff_artifact_id`); feed the
+ratchet into the mutation-gate (#106) and independence (#110) work.

@@ -23,6 +23,7 @@ no-op (idempotent).
 from __future__ import annotations
 
 import json
+import logging
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -37,6 +38,8 @@ from .llm_telemetry import clear_llm_context, record_llm_call, set_llm_context
 from .sandbox import SandboxError
 from .sandbox_provider import make_sandbox_provider
 from .software_factory import SoftwareFactoryService
+
+logger = logging.getLogger(__name__)
 
 
 # --------------------------------------------------------------------------- #
@@ -280,6 +283,15 @@ def override_code_task(engine, settings: Settings, jobs, run_id: str, *,
         emit_event(c, project_id, "code_task.gate_overridden", actor, "code_task_run", run_id,
                    {"waived_gates": waive_gates, "reason": reason, "quality_gate_id": qg,
                     "pull_request_url": proposal.get("pull_request_url")})
+        # VAG #107 ratchet: a human overriding the gate means the gate was wrong to block —
+        # capture the (now-blessed) implementation as a CLEAN corpus item so the verifier is
+        # measured against this false-fail forever after. Never let it break the override.
+        try:
+            from .verifier_ratchet import tag_run
+            tag_run(c, run_id, label="clean", source="gate_override",
+                    files=pending, reason=reason or f"override waived {waive_gates}")
+        except Exception:  # noqa: BLE001
+            logger.exception("ratchet capture failed for override %s", run_id)
     return {"status": "completed", "run_id": run_id, "waived_gates": waive_gates,
             "pull_request_url": proposal.get("pull_request_url"),
             "pull_request_number": proposal.get("pull_request_number"),

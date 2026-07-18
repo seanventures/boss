@@ -5051,6 +5051,12 @@ def verifier_meta_eval_endpoint(payload: Optional[dict] = None):
     from .services import verifier_meta_eval as vme
     payload = payload or {}
     corpus = payload.get("corpus") or vme.load_corpus()
+    # VAG #107: fold in the ratchet corpus (human↔gate disagreements captured from real runs),
+    # so the verifier is scored against its own past misses. On by default; skip with a corpus override.
+    if payload.get("include_ratchet", True) and not payload.get("corpus"):
+        from .services import verifier_ratchet as vr
+        with begin(engine) as c:
+            corpus = vr.merged_corpus(c, corpus, payload.get("project_id"))
     min_recall = payload.get("min_recall", settings.verifier_meta_min_recall)
     max_fp_rate = payload.get("max_fp_rate", settings.verifier_meta_max_fp_rate)
     if payload.get("dry_run", True):
@@ -5065,6 +5071,29 @@ def verifier_meta_eval_endpoint(payload: Optional[dict] = None):
     report["markdown"] = vme.render_markdown(report)
     report["dry_run"] = bool(payload.get("dry_run", True))
     return report
+
+
+@app.post("/v1/verifier-ratchet/capture")
+def verifier_ratchet_capture_endpoint(payload: dict):
+    """VAG #107: capture a code-task run as a labeled verifier-meta-eval corpus item — the
+    growing "ratchet" of human↔gate disagreements. Overrides auto-capture as CLEAN; use this to
+    record a gate-PASSED run a human REJECTED as BUGGED (the false-pass the verifier missed).
+    payload: {run_id, label: 'bugged'|'clean', bug_class?, reason?, files?: [{path,content}]}.
+    Files are taken from the run's preserved diff when present, else supply them here."""
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    run_id = payload.get("run_id")
+    label = payload.get("label")
+    if not run_id or label not in ("bugged", "clean"):
+        raise HTTPException(status_code=422, detail="run_id and label ('bugged'|'clean') are required.")
+    from .services import verifier_ratchet as vr
+    with begin(engine) as c:
+        result = vr.capture_run(
+            c, run_id, label=label, source=payload.get("source", "manual"),
+            bug_class=payload.get("bug_class"), files=payload.get("files"),
+            reason=payload.get("reason"),
+        )
+    return result
 
 
 # --- Discovery pipeline: research-driven outcome discovery -------------------
