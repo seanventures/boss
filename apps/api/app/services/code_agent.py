@@ -34,6 +34,17 @@ from .redaction import redact as _redact_pii
 from .sandbox import CommandResult, DiffSummary, EphemeralSandbox
 
 
+# Core Terraform module files (spec 05 §3.2 / T4 "module-aware context packer"): a
+# module is cross-referential, so these are ALWAYS shown to the model — past the
+# 40-blob cap, and (truncated, with a marker) past the per-file size cap.
+_TF_CORE_BASENAMES = {"main.tf", "variables.tf", "outputs.tf", "versions.tf", "providers.tf"}
+
+
+def _is_core_tf_file(rel_path: str) -> bool:
+    base = rel_path.rsplit("/", 1)[-1]
+    return base in _TF_CORE_BASENAMES or base.endswith(".tfvars")
+
+
 def _as_text(v) -> str:
     """Coerce a model's summary/result field to text. Models sometimes return a JSON
     list (e.g. a bulleted list) or object instead of a string; don't crash on it."""
@@ -365,23 +376,37 @@ class NativeCodeAgent:
         self._llm = OpenAIAdapter(settings)
 
     def _repo_context(self, cwd: Path, *, limit: int = 40) -> str:
+        # IaC authoring (spec 05 §3.2 / T4): .tf/.tfvars/.hcl are context; .tf.json /
+        # .tfvars.json arrive via Path.suffix == ".json", which is already whitelisted.
         exts = {".py", ".js", ".ts", ".go", ".java", ".rb", ".rs", ".json", ".md", ".txt",
-                ".cfg", ".toml", ".yaml", ".yml", ".gradle", ".xml"}
+                ".cfg", ".toml", ".yaml", ".yml", ".gradle", ".xml",
+                ".tf", ".tfvars", ".hcl"}
         files: list[str] = []
         for p in sorted(cwd.rglob("*")):
             if not p.is_file() or ".git" in p.parts:
                 continue
             files.append(p.relative_to(cwd).as_posix())
+        core: list[str] = []   # Terraform module core — always included (module-aware packing)
         blobs: list[str] = []
         for rel in files:
             fp = cwd / rel
             try:
-                if fp.suffix in exts and fp.stat().st_size < 20000:
+                if fp.suffix not in exts:
+                    continue
+                if _is_core_tf_file(rel):
+                    body = fp.read_text(errors="ignore")
+                    if len(body) >= 20000:
+                        body = (body[:20000]
+                                + "\n# ... [truncated: core Terraform file exceeds the "
+                                  "20KB context cap; head shown] ...")
+                    core.append(f"--- {rel} ---\n{body}")
+                elif fp.stat().st_size < 20000:
                     blobs.append(f"--- {rel} ---\n{fp.read_text(errors='ignore')}")
             except OSError:
                 continue
         listing = "\n".join(files) or "(empty repo)"
-        return f"REPO FILES:\n{listing}\n\nFILE CONTENTS:\n" + "\n\n".join(blobs[:limit])
+        keep = blobs[:max(0, limit - len(core))]
+        return f"REPO FILES:\n{listing}\n\nFILE CONTENTS:\n" + "\n\n".join(core + keep)
 
     @staticmethod
     def _safe_json(content: str) -> dict:
