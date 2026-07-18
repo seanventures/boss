@@ -94,4 +94,6 @@ to `main`; the Plane issues intentionally remain In Progress until merged.
 
 Documentation implementation is tracked by BOSS-133 on
 `ai/codex/boss-133-product-capability-taxonomy`. Validation: generated feature
-docs current and strict MkDocs build passes.
+docs current and strict MkDocs build passes. PR #33 merged as `60ba2c8`; the
+complete WFL-001 runtime in PR #34 merged as `3637580`. Plane BOSS-132–144 carry
+the merge and validation evidence and are Done.

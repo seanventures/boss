@@ -3,6 +3,22 @@
 All 15-min terminal updates and major milestones appended here. Chronological, newest at top.
 
 ---
+## 2026-07-18 — Codex — BOSS-132–144 merged delivery
+
+- Merged product-capability taxonomy PR #33 to `main` as `60ba2c8`, then
+  retargeted and rebased workflow-runtime PR #34 onto that exact mainline.
+- Revalidated the rebased runtime: 30 focused workflow/model-pacing/Terraform
+  tests (one skipped), 37 workflow UI/client tests, repository lint, strict
+  docs checks, and production build pass. A parallel lint/build `.next/types`
+  race disappeared on the required serial rerun and was not a source defect.
+- Merged PR #34 to `main` as `3637580`; both source branch tips are verified
+  ancestors of remote `main`. GitHub Actions remained a zero-step external
+  account payment/spending-limit rejection, with local equivalent evidence in
+  GitHub and Plane.
+- Closed Plane BOSS-133 from PR #33 and BOSS-132/BOSS-134–144 from PR #34 with
+  merge commits, validation, risk, and CI-gate evidence attached.
+
+---
 ## 2026-07-16 — Codex — BOSS v0.7.0 integration and release
 
 - Created Plane BOSS-120 and advanced it through Todo to In Progress before

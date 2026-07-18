@@ -2,9 +2,11 @@
 
 ## 2026-07-18 BOSS-134–143 reusable workflow runtime
 
-- Active branch: `ai/codex/boss-134-143-workflow-runtime`, stacked on the
-  BOSS-133 product-taxonomy branch/PR so implementation follows the accepted
-  separation among Workflows, Agent Groups, Skills/Integrations, and Assurance.
+- Shipped to `main`: product-taxonomy PR
+  [#33](https://github.com/seanheiney/boss/pull/33) merged as `60ba2c8`, then
+  workflow-runtime PR [#34](https://github.com/seanheiney/boss/pull/34) was
+  retargeted, rebased, and merged as `3637580`. The remote merge contains both
+  contributor-safe histories without unresolved conflicts.
 - Added canonical immutable workflow definitions/versions, deterministic scoped
   mappings, version-pinned durable runs/steps, leases/heartbeats/reclaim,
   retries/deadletters, evidence, replay dedupe, conditions, fan-out/join,
@@ -15,13 +17,11 @@
   idempotently into the registry. Mission Control renders definitions,
   mappings, recent runs, pinned step state/frontier, and audit timeline through
   the typed API client.
-- Plane BOSS-134–143 are In Progress and linked to parent BOSS-132. Keep them
-  open until the implementation PR merges; then attach the merge commit and
-  move the ten children and parent to Done.
-- Publication: implementation commit `c0f70b2` and concurrent-main lint repair
-  `220493d` are pushed in stacked draft PR
-  [#34](https://github.com/seanheiney/boss/pull/34). Merge product-taxonomy PR
-  #33 first, then retarget #34 to `main`.
+- Plane BOSS-132 and BOSS-134–144 have shipped evidence attached and are Done;
+  BOSS-133 was closed with the PR #33 merge. BOSS-144 records the adjacent lint
+  repair included in PR #34.
+- Final rebased commits were `9a4d170` (runtime), `a0f194a` (lint repair),
+  `a025e15` (handoff), and `56571c8` (external CI-gate evidence).
 - Validation: 6 focused workflow tests, 186 non-legacy API/worker tests, 116 web
   tests, repository lint/typecheck, production web build, double bootstrap,
   OpenAPI YAML parse, and diff checks pass. Static OpenAPI includes every new

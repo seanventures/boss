@@ -1,9 +1,9 @@
 # BOSS Autonomous Delivery Status
 
-**Last updated**: 2026-07-18 (BOSS-134–143 reusable workflow runtime)
+**Last updated**: 2026-07-18 (BOSS-132–144 merged delivery)
 **Repo root**: /Volumes/DataSSD1/test/boss
 **Git remote**: https://github.com/seanheiney/boss
-**Current branch**: ai/codex/boss-134-143-workflow-runtime
+**Current branch**: ai/codex/boss-132-merge-handoff
 **Base branch**: origin/main
 **Product**: BOSS v0.7.0 target (Business Operating System Sentinel)
 **Mission**: Complete product to production-grade, tested, documented, pushed, Codex-coordinated, ready for real users. Grind until all discovered PRD/spec features satisfy world-class DoD or truly blocked.
@@ -21,9 +21,10 @@
   Decisions/timers and run controls, fail-closed capability/subworkflow
   bindings, reverse compensation, explicit migration/rollback, typed API/client
   contracts, and a Mission Control registry/run timeline. Focused and widened
-  validation is green; implementation commit `c0f70b2` is published in stacked
-  draft PR [#34](https://github.com/seanheiney/boss/pull/34), and tickets remain
-  In Progress until it merges.
+  validation is green. Product-taxonomy PR #33 merged as `60ba2c8`; rebased
+  workflow-runtime PR [#34](https://github.com/seanheiney/boss/pull/34) merged
+  to `main` as `3637580`. Plane BOSS-132–144 are closed with merge and validation
+  evidence, including the adjacent BOSS-144 lint repair.
 - BOSS-133 separates Agent Groups, Skills/Integrations, Reusable Workflows, and
   Ground-truth/Assurance in the governing PRD/technical spec while defining how
   they compose. Plane root features are BOSS-129, BOSS-130, BOSS-132, and
