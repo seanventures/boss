@@ -34,6 +34,7 @@ from ..db import begin
 from .code_agent import CodeTaskSpec, RepoContext, make_code_agent
 from .core import emit_event, make_id
 from .github_app_adapter import GitHubAppAdapter
+from .iac_verify import is_iac_task
 from .llm_telemetry import clear_llm_context, record_llm_call, set_llm_context
 from .sandbox import SandboxError
 from .sandbox_provider import make_sandbox_provider
@@ -357,7 +358,28 @@ def run_code_task(engine, settings: Settings, jobs, run_id: str) -> dict:
                          "Code tasks are disabled (BOSS_ENABLE_CODE_TASK=false).", status="blocked")
 
     # Default for all coding tasks: route through the governed, role-separated pipeline.
-    if settings.governed_coding_pipeline:
+    # IaC tasks are ALWAYS governed regardless of the flag (spec 05 §3.2 / T4): the
+    # native inline lane truncates repo context (40 files / 20KB) and has no IaC
+    # verify lane, so Terraform work must never run there.
+    iac_task = is_iac_task(run["spec"], run["title"])
+    if settings.governed_coding_pipeline or iac_task:
+        if iac_task:
+            # Auditable routing evidence (mirrors the execution_substrate pattern):
+            # record on the run WHY it went governed, not just that it did.
+            lane_routing = {
+                "lane": "governed",
+                "iac_task": True,
+                "forced": not settings.governed_coding_pipeline,
+                "reason": ("IaC task routed to the governed pipeline: the native lane "
+                           "truncates repo context and has no IaC verify lane (spec 05 T4)"),
+            }
+            with begin(engine) as c:
+                c.execute(
+                    text("UPDATE code_task_runs SET finalize_ctx=COALESCE(finalize_ctx, '{}'::jsonb) "
+                         "|| jsonb_build_object('lane_routing', CAST(:lr AS JSONB)), "
+                         "updated_at=now() WHERE id=:id"),
+                    {"lr": json.dumps(lane_routing), "id": run_id},
+                )
         from .governed_code_task_service import run_governed_code_task
         return run_governed_code_task(engine, settings, jobs, run_id)
 

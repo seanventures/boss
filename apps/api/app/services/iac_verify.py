@@ -27,6 +27,7 @@ ride quality-gate evidence / the review packet unchanged.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -123,6 +124,38 @@ def detect_iac_files(files: Union[Mapping[str, str], Iterable[str]]) -> list[str
     """Paths that make a change an IaC change: .tf / .tf.json / .tfvars / .hcl."""
     paths = files.keys() if isinstance(files, Mapping) else files
     return sorted(p for p in paths if str(p).lower().endswith(_IAC_SUFFIXES))
+
+
+# Task-level IaC detection (spec 05 §3.2 / T4). Deliberately conservative — only an
+# explicit task_type or an unambiguous word-boundary mention of the tooling / file
+# suffixes routes a task to the governed lane. `\.tf\b` matches "main.tf" / ".tf
+# modules" but NOT "platform" (no dot) or ".tfx" (no word boundary after "tf").
+_IAC_TASK_RE = re.compile(
+    r"\bterraform\b"
+    r"|\bopentofu\b"
+    r"|\binfrastructure[-\s]+as[-\s]+code\b"
+    r"|\.tf\b"
+    r"|\.tfvars\b"
+    r"|\.hcl\b",
+    re.IGNORECASE,
+)
+
+
+def is_iac_task(spec: Optional[Mapping], title: Optional[str]) -> bool:
+    """True when a code task is an IaC-authoring task and must run on the governed
+    lane (the native inline lane truncates repo context and has no IaC verify lane).
+
+    Positive when spec["task_type"] == "iac", or when the title / instructions /
+    acceptance criteria mention Terraform, OpenTofu, "infrastructure as code", or
+    .tf/.tfvars/.hcl files (word-boundary regex; no false positives on e.g.
+    "platform").
+    """
+    spec = spec or {}
+    if str(spec.get("task_type") or "").strip().lower() == "iac":
+        return True
+    parts = [str(title or ""), str(spec.get("instructions") or "")]
+    parts.extend(str(c) for c in (spec.get("acceptance_criteria") or []))
+    return bool(_IAC_TASK_RE.search("\n".join(parts)))
 
 
 def _scrubbed_env() -> dict[str, str]:

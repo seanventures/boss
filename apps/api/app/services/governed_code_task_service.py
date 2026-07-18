@@ -41,7 +41,7 @@ from .code_task_service import (
 )
 from .core import create_blocking_decision, emit_event, make_id, record_policy_eval
 from .github_app_adapter import GitHubAppAdapter
-from .iac_verify import IacVerifyResult, detect_iac_files, run_iac_verify_lane
+from .iac_verify import IacVerifyResult, detect_iac_files, is_iac_task, run_iac_verify_lane
 from .llm_telemetry import clear_llm_context, record_llm_call, set_llm_context
 from .pipeline_profile_service import resolve_for_run
 from .pipeline_profiles import infer_risk_tier, materialize_route, route_for_step
@@ -140,7 +140,45 @@ def _iac_gates(result: IacVerifyResult) -> dict[str, bool]:
 # --------------------------------------------------------------------------- #
 #  Stage prompts                                                              #
 # --------------------------------------------------------------------------- #
-def _qa_prompt(title, instructions, criteria, test_cmd):
+# Infrastructure persona (spec 05 §3.2 / T4): appended to the qa/impl/solo prompts
+# when the task is an IaC task (is_iac_task). Guidance only — the stage mechanics
+# (tests-first, frozen tests, authoritative re-run) are unchanged; the authoritative
+# Terraform verification is the T3 IaC verify lane.
+_IAC_GUIDANCE = (
+    "\nINFRASTRUCTURE ROLE — this is an Infrastructure-as-Code (Terraform) task. "
+    "Additional rules for any .tf/.tfvars/.hcl you write:\n"
+    "- Pin provider versions: a `required_providers` block with explicit version "
+    "constraints (and `required_version`) in versions.tf.\n"
+    "- NO hardcoded credentials or secret literals anywhere. Secrets enter only as "
+    "variables marked `sensitive = true`, resolved via SecretRef-style indirection "
+    "supplied by the operator at apply time.\n"
+    "- Least-privilege IAM: never `*` actions with `*` resources; scope every policy "
+    "to the specific actions and ARNs the module needs.\n"
+    "- Prefer `for_each` over `count` so resource addresses stay stable.\n"
+    "- Declare every variable in variables.tf with a `type` and `description`; expose "
+    "outputs in outputs.tf.\n"
+    "- Do NOT write a remote-backend block (`backend \"...\" {}`) — backend config is "
+    "operator-owned, and validation runs with -backend=false.\n"
+    "- Write files terraform fmt-clean (canonical 2-space HCL formatting); the fmt "
+    "gate fails otherwise.\n"
+)
+
+# QA-stage reframing for pure-Terraform work: there is no Python module-under-test to
+# import, so the unittest suite asserts on module STRUCTURE; the executable Terraform
+# verification (fmt/validate/lint/security-scan/plan-dry) is the T3 iac_verify lane,
+# which runs separately and gates the run.
+_IAC_QA_GUIDANCE = (
+    "\nIaC TASK NOTE: the deliverable is Terraform, so there is no Python module-under-"
+    "test to import. Author stdlib `unittest` tests that assert on the MODULE STRUCTURE "
+    "instead: read the .tf/.tfvars files as text (or parse .tf.json with the json "
+    "module) and assert that the expected files exist, required variables/outputs are "
+    "declared, provider versions are pinned, and no secret literals appear. The "
+    "authoritative Terraform verification (fmt, validate, lint, security scan, plan) "
+    "is BOSS's separate IaC verify lane — do not shell out to terraform yourself.\n"
+)
+
+
+def _qa_prompt(title, instructions, criteria, test_cmd, *, iac=False):
     crit = "\n".join(f"- {c}" for c in criteria) or "- (none specified)"
     return (
         "You are a QA engineer. Your ONLY job is to author tests for the task below, BEFORE any "
@@ -153,10 +191,11 @@ def _qa_prompt(title, instructions, criteria, test_cmd):
         "- Cover: happy path, the most likely failure, boundary/edge cases, and validation/error paths.\n"
         f"- Do NOT run anything and do NOT commit. (BOSS will run `{test_cmd}`.)\n"
         "- End with a one-line summary of the cases you wrote.\n"
+        + (_IAC_GUIDANCE + _IAC_QA_GUIDANCE if iac else "")
     )
 
 
-def _impl_prompt(title, instructions, test_files, test_cmd):
+def _impl_prompt(title, instructions, test_files, test_cmd, *, iac=False):
     tf = ", ".join(test_files) or "(the test files in this repo)"
     return (
         "You are a software engineer. QA has ALREADY written the tests; implement the change to make "
@@ -167,6 +206,7 @@ def _impl_prompt(title, instructions, test_files, test_cmd):
         f"({tf}) — they are the spec. If a test looks wrong, STOP and explain rather than change it.\n"
         f"- Run `{test_cmd}` and iterate until the tests pass.\n"
         "- Do NOT commit. End with a one-line summary of what you changed.\n"
+        + (_IAC_GUIDANCE if iac else "")
     )
 
 
@@ -185,7 +225,7 @@ def _repair_prompt(base_prompt: str, evidence: str, attempt: int) -> str:
     )
 
 
-def _solo_prompt(title, instructions, criteria, test_cmd):
+def _solo_prompt(title, instructions, criteria, test_cmd, *, iac=False):
     crit = "\n".join(f"- {c}" for c in criteria) or "- (none specified)"
     return (
         "You are a software engineer. Implement the task below AND write tests for it, then make "
@@ -195,6 +235,7 @@ def _solo_prompt(title, instructions, criteria, test_cmd):
         "- Create the implementation file(s) and stdlib `unittest` test file(s).\n"
         f"- Run `{test_cmd}` and iterate until it passes. Do NOT commit.\n"
         "- End with a one-line summary of what you built.\n"
+        + (_IAC_GUIDANCE + _IAC_QA_GUIDANCE if iac else "")
     )
 
 
@@ -427,6 +468,9 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
     title = run["title"]
     instructions = spec.get("instructions", "")
     criteria = spec.get("acceptance_criteria", [])
+    # Infrastructure persona (spec 05 §3.2 / T4): IaC tasks get Terraform-aware role
+    # guidance appended to the qa/impl/solo prompts; stage mechanics are unchanged.
+    iac_task = is_iac_task(spec, title)
     # Cost/rigor dial: resolve the profile (per-task override > project default > edition
     # default) and infer the risk tier, clamped to the profile's range. Scales effort to work.
     with begin(engine) as c:
@@ -672,7 +716,8 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
                 _set_phase(c, run_id, "write_tests")
             if use_microvm:
                 res1 = _guest_stage("write_tests", "write_tests",
-                                    _qa_prompt(title, instructions, criteria, test_cmd),
+                                    _qa_prompt(title, instructions, criteria, test_cmd,
+                                               iac=iac_task),
                                     test_cmds=[], stage_title=f"QA: author tests — {title}")
                 r1 = {"cost_usd_micros": res1.cost_usd_micros, "summary": res1.summary,
                       "usage": res1.usage, "model": stage_routes["write_tests"]["model"]}
@@ -684,7 +729,8 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
             else:
                 set_llm_context(stage="write_tests")
                 a, m = _route("write_tests")
-                r1 = a.run_role(_qa_prompt(title, instructions, criteria, test_cmd), root, model=m)
+                r1 = a.run_role(_qa_prompt(title, instructions, criteria, test_cmd,
+                                           iac=iac_task), root, model=m)
                 cost += int(r1.get("cost_usd_micros") or 0)
                 test_files = [fc.path for fc in sandbox.diff() if _is_test_path(fc.path)]
             if not test_files:
@@ -706,9 +752,11 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
         # pass but never soften the gate. 0 retries == the pre-Phase-3 single pass.
         with begin(engine) as c:
             _set_phase(c, run_id, "implement")
-        base_impl_prompt = (_impl_prompt(title, instructions, test_files, test_cmd)
+        base_impl_prompt = (_impl_prompt(title, instructions, test_files, test_cmd,
+                                         iac=iac_task)
                             if do_separate_tests
-                            else _solo_prompt(title, instructions, criteria, test_cmd))
+                            else _solo_prompt(title, instructions, criteria, test_cmd,
+                                              iac=iac_task))
         max_repair = max(0, min(5, int(
             spec.get("repair_retries", settings.code_repair_max_retries) or 0)))
         repair_attempts = 0
@@ -1024,6 +1072,9 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
             # evidence / review packet like the other stage summaries (None = no IaC in
             # the diff, lane not run).
             "iac_verify": iac_result.to_dict() if iac_result is not None else None,
+            # T4: whether the task itself was classified IaC (infrastructure persona
+            # applied to the qa/impl/solo prompts; routing recorded in finalize_ctx).
+            "iac_task": iac_task,
             "mutation_caught": mutation_caught,
             "regressions_ok": regressions_ok,
             "panel_parallel": panel_parallel,
