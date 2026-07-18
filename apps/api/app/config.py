@@ -638,6 +638,21 @@ class Settings(BaseSettings):
     governed_sandbox_provider: str = Field(
         default="local", alias="BOSS_GOVERNED_SANDBOX_PROVIDER"
     )
+    # --- IaC verify lane (spec 05 §3.2 / T3) --------------------------------
+    # Terraform-compatible binary for the IaC verify lane. "auto" prefers OpenTofu
+    # (`tofu`, the MPL-licensed choice — spec 05 Open Decision #2) and falls back to
+    # HashiCorp `terraform`; enterprises standardized on one can pin it explicitly.
+    iac_tf_binary: str = Field(default="auto", alias="BOSS_IAC_TF_BINARY")
+    # Security/compliance scanner for IaC changes: checkov (default) or tfsec. If the
+    # preferred scanner is not installed the lane falls back to the other one; with
+    # neither installed the security gate fails closed (an IaC change is never allowed
+    # through unscanned).
+    iac_security_scanner: str = Field(default="checkov", alias="BOSS_IAC_SECURITY_SCANNER")
+    # plan-live (scoped read-only creds against a real provider) is NOT part of the
+    # default lane. Even when enabled it requires an approval Decision before creds are
+    # used; the lane currently records it as a skipped placeholder step (T3 scope —
+    # spec 05 §3.2 step 5).
+    iac_plan_live_enabled: bool = Field(default=False, alias="BOSS_IAC_PLAN_LIVE_ENABLED")
     # Which SandboxProvider supplies the execution substrate:
     #   local   = per-task EphemeralSandbox as a local subprocess + temp clone (Phase 0/1)
     #   microvm = single-tenant sandbox on a Sandbox Host (container stand-in now,
