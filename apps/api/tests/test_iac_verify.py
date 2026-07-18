@@ -15,6 +15,7 @@ import os
 import pytest
 
 from apps.api.app.config import Settings
+from apps.api.app.services.governed_code_task_service import _iac_gates, _run_iac_lane
 from apps.api.app.services.iac_verify import detect_iac_files, run_iac_verify_lane
 
 
@@ -281,3 +282,43 @@ def test_plan_live_flag_changes_skip_reason_but_stays_skipped(bindir, workdir):
     assert step.skipped is True  # T3 scope: placeholder only, even when enabled
     assert "not implemented" in step.reason and "approval Decision" in step.reason
     assert res.ok is True  # skipped steps never count toward the verdict
+
+
+# --------------------------------------------------------------------------- #
+#  Pipeline wiring seam: _run_iac_lane + _iac_gates                           #
+#  (The full governed pipeline needs a live DB/GitHub/sandbox stack, so the   #
+#  gate plumbing is asserted at the helper seam instead — see module docstring.)
+# --------------------------------------------------------------------------- #
+def test_run_iac_lane_local_substrate_verifies_the_checkout(bindir, workdir):
+    _all_tools(bindir)
+    res = _run_iac_lane(_settings(), files={"main.tf": ""}, workdir=workdir)
+    assert res.ok is True and res.tf_binary == "tofu"
+
+
+def test_run_iac_lane_microvm_substrate_materializes_temp_dir(bindir):
+    _all_tools(bindir)
+    files = {
+        "infra/main.tf": 'resource "null_resource" "x" {}\n',
+        "infra/variables.tf": 'variable "name" { type = string }\n',
+        "app.py": "print('hi')\n",
+        "../escape.tf": "never written",  # traversal must be skipped, not written
+        "/abs/evil.tf": "never written",
+    }
+    res = _run_iac_lane(_settings(), files=files, workdir=None)
+    assert res.ok is True
+    assert "infra/main.tf" in res.files
+
+
+def test_iac_gates_names_and_red_lane_fails_rollup(bindir, workdir):
+    _all_tools(bindir, fmt_exit=3)
+    res = run_iac_verify_lane(workdir, _settings(), files={"main.tf": ""})
+    gates = _iac_gates(res)
+    # the exact gate vocabulary the final QualityGate sees; plan_live (skipped) is absent
+    assert set(gates) == {
+        "iac_fmt", "iac_validate", "iac_lint", "iac_security", "iac_plan_dry", "iac_verify"}
+    assert gates["iac_fmt"] is False
+    assert gates["iac_verify"] is False  # any red gate fails the fail-closed final gate
+    # rebuild an all-green toolchain to assert the pass shape
+    _all_tools(bindir, fmt_exit=0)
+    green = run_iac_verify_lane(workdir, _settings(), files={"main.tf": ""})
+    assert all(_iac_gates(green).values())

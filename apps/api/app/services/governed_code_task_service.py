@@ -41,6 +41,7 @@ from .code_task_service import (
 )
 from .core import create_blocking_decision, emit_event, make_id, record_policy_eval
 from .github_app_adapter import GitHubAppAdapter
+from .iac_verify import IacVerifyResult, detect_iac_files, run_iac_verify_lane
 from .llm_telemetry import clear_llm_context, record_llm_call, set_llm_context
 from .pipeline_profile_service import resolve_for_run
 from .pipeline_profiles import infer_risk_tier, materialize_route, route_for_step
@@ -102,6 +103,38 @@ def _record_quality_gate(connection, *, run_id, project_id, task_id, job_id, evi
                {"status": status, "gates_passed": passed, "gates_failed": failed,
                 "code_task_run_id": run_id})
     return qg_id, status
+
+
+def _run_iac_lane(settings: Settings, *, files: dict[str, str], workdir) -> IacVerifyResult:
+    """IaC verify lane (spec 05 §3.2 / T3) over the produced diff. Local substrate
+    (workdir set): verify the existing sandbox checkout in place. Micro-VM substrate
+    (workdir=None): materialize the accumulated diff into a host temp dir and verify
+    there — the sandbox guest image ships no terraform/tofu toolchain, so this one
+    verification runs host-side. TODO(spec 05 Open Decision #7): bundle a provider
+    mirror + IaC binaries into the sandbox image so the lane runs guest-side like the
+    test stages."""
+    if workdir is not None:
+        return run_iac_verify_lane(workdir, settings, files=files)
+    import tempfile
+    with tempfile.TemporaryDirectory(prefix="boss-iac-") as td:
+        base = Path(td)
+        for path, content in files.items():
+            rel = Path(path)
+            if rel.is_absolute() or ".." in rel.parts:
+                continue  # never write outside the scratch checkout
+            fp = base / rel
+            fp.parent.mkdir(parents=True, exist_ok=True)
+            fp.write_text(content, encoding="utf-8")
+        return run_iac_verify_lane(base, settings, files=files)
+
+
+def _iac_gates(result: IacVerifyResult) -> dict[str, bool]:
+    """Per-step iac_* gates + the iac_verify rollup for the fail-closed final gate.
+    Skipped steps (the plan-live placeholder) record no gate — they carry a reason in
+    the evidence instead."""
+    gates = {f"iac_{s.step}": s.ok for s in result.steps if not s.skipped}
+    gates["iac_verify"] = result.ok
+    return gates
 
 
 # --------------------------------------------------------------------------- #
@@ -928,6 +961,20 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
                     for p, content in orig.items():
                         (root / p).write_text(content, encoding="utf-8")
 
+        # IaC VERIFY LANE (spec 05 §3.2 / T3): whenever the produced diff touches
+        # Terraform/HCL files, run fmt/validate/lint/security/plan-dry with NO cloud
+        # credentials in the environment. Each step lands as its own iac_* gate in the
+        # fail-closed final gate below, so a red lane blocks the run exactly like
+        # failing tests do.
+        changed_files = (dict(accumulated) if use_microvm
+                         else {fc.path: fc.content for fc in sandbox.diff()})
+        iac_result = None
+        if detect_iac_files(changed_files):
+            with begin(engine) as c:
+                _set_phase(c, run_id, "iac_verify")
+            iac_result = _run_iac_lane(settings, files=changed_files,
+                                       workdir=None if use_microvm else root)
+
         # FINAL GATE — fail-closed; only the checks that apply at this tier.
         gates = {
             "code_written": bool(impl_files),
@@ -944,11 +991,14 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
             if regressions_ok is not None:
                 gates["nothing_broke"] = regressions_ok
             gates["consistent"] = cons_verdict != "drift"  # block only on explicit drift
+        if iac_result is not None:
+            gates.update(_iac_gates(iac_result))
 
         steps_run = (["standards", "spec", "plan", "review_plan"] if do_design else []) \
             + (["write_tests"] if do_separate_tests else []) + ["implement"] \
             + (["review_code", "security_check", "check_tests", "run_all_tests", "consistency_check"]
-               if do_review else [])
+               if do_review else []) \
+            + (["iac_verify"] if iac_result is not None else [])
         evidence = {
             "risk_tier": risk_tier,
             "profile": profile["name"],
@@ -970,6 +1020,10 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
             "review_confidence": review_confidence,
             "security_verdict": sec_verdict,
             "consistency_verdict": cons_verdict,
+            # IaC verify lane (T3): the full per-step JSON result rides the quality-gate
+            # evidence / review packet like the other stage summaries (None = no IaC in
+            # the diff, lane not run).
+            "iac_verify": iac_result.to_dict() if iac_result is not None else None,
             "mutation_caught": mutation_caught,
             "regressions_ok": regressions_ok,
             "panel_parallel": panel_parallel,

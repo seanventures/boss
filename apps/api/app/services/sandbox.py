@@ -141,6 +141,9 @@ class EphemeralSandbox:
         "__pycache__/", "*.pyc", "*.pyo", ".pytest_cache/", ".mypy_cache/",
         ".ruff_cache/", "node_modules/", ".DS_Store", "dist/", "build/",
         "*.egg-info/", ".coverage", "coverage.xml", ".tox/",
+        # IaC verify lane (spec 05 T3): terraform/tofu init+plan artifacts must never
+        # ride the PR diff (the lane also redirects TF_DATA_DIR out of the checkout).
+        ".terraform/", ".terraform.lock.hcl", "*.tfplan",
     )
 
     def _write_local_excludes(self) -> None:
