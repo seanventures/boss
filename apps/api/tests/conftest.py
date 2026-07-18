@@ -64,6 +64,7 @@ def clean_tables(engine):
             "enterprise_identity_providers",
             "enterprise_cluster_validation_runs",
             "enterprise_clusters",
+            "terraform_exports",
             "deployment_promotions",
             "deployment_rollouts",
             "resource_receipts",

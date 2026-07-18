@@ -1181,6 +1181,7 @@ CREATE TABLE IF NOT EXISTS deployment_targets (
   health_checks JSONB NOT NULL DEFAULT '[]'::jsonb,
   rollback_points JSONB NOT NULL DEFAULT '[]'::jsonb,
   status TEXT NOT NULL DEFAULT 'created',
+  terraform_export BOOLEAN NOT NULL DEFAULT false,
   created_by TEXT NOT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -1188,6 +1189,10 @@ CREATE TABLE IF NOT EXISTS deployment_targets (
 );
 CREATE INDEX IF NOT EXISTS idx_deployment_targets_project
   ON deployment_targets(project_id, app_name, environment, status);
+-- Track 1 Terraform export is opt-in per deployment target (default OFF): the BOSS DB
+-- stays canonical and .tf is only ever a downstream projection (spec 05 s3.1).
+ALTER TABLE deployment_targets
+  ADD COLUMN IF NOT EXISTS terraform_export BOOLEAN NOT NULL DEFAULT false;
 
 CREATE TABLE IF NOT EXISTS deployment_environment_policies (
   id TEXT PRIMARY KEY,
@@ -1358,6 +1363,25 @@ CREATE TABLE IF NOT EXISTS resource_receipts (
 );
 CREATE INDEX IF NOT EXISTS idx_resource_receipts_project
   ON resource_receipts(project_id, provider, status, created_at DESC);
+
+-- Stable resource_ref -> Terraform address mapping for the Track 1 exporter (BOSS-66).
+-- The BOSS database stays canonical; these rows only pin deterministic .tf.json
+-- addresses so re-exports diff cleanly and import blocks stay adoptable.
+CREATE TABLE IF NOT EXISTS terraform_exports (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id),
+  changeset_id TEXT REFERENCES changesets(id),
+  resource_ref TEXT NOT NULL,
+  tf_address TEXT NOT NULL,
+  provider TEXT NOT NULL,
+  artifact_id TEXT REFERENCES artifacts(id),
+  content_hash TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(project_id, resource_ref)
+);
+CREATE INDEX IF NOT EXISTS idx_terraform_exports_changeset
+  ON terraform_exports(project_id, changeset_id, created_at DESC);
 
 CREATE TABLE IF NOT EXISTS provider_health (
   id TEXT PRIMARY KEY,
