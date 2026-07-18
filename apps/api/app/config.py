@@ -570,6 +570,38 @@ class Settings(BaseSettings):
     docs_debounce_seconds: int = Field(
         default=300, alias="BOSS_DOCS_DEBOUNCE_SECONDS"
     )
+
+    # --- Plane <-> BOSS integration (inbound webhook -> auto code-task) --------
+    # A human files a Plane issue labelled boss:coding|boss:bug|boss:design; Plane fires a
+    # signed webhook -> we verify it, filter (watched project + boss: label + created),
+    # map the issue -> start_code_task, and (Phase 2) sync state back via the REST API.
+    # See docs/infra/BOSS_PLANE_INTEGRATION_SPEC.md. Fail-closed: OFF until configured.
+    plane_integration_enabled: bool = Field(
+        default=False, alias="PLANE_INTEGRATION_ENABLED"
+    )
+    # Base URL of the Plane instance, e.g. https://plane.local.sean.network (outbound Phase 2).
+    plane_base_url: Optional[str] = Field(default=None, alias="PLANE_BASE_URL")
+    # Full project URL already provisioned in the ops store (workspace + project id live here);
+    # base_url is derived from it when PLANE_BASE_URL is unset.
+    plane_project_url: Optional[str] = Field(default=None, alias="PLANE_PROJECT_URL")
+    # Outbound REST token. The ops store provisioned this as PLANE_API_KEY; accept the
+    # spec's PLANE_API_TOKEN name too so either env wins.
+    plane_api_token: Optional[str] = Field(
+        default=None, validation_alias=AliasChoices("PLANE_API_KEY", "PLANE_API_TOKEN")
+    )
+    # HMAC secret Plane signs each delivery with (X-Plane-Signature). Inbound requests whose
+    # signature doesn't match are rejected. Absent => the webhook endpoint stays fail-closed.
+    plane_webhook_secret: Optional[str] = Field(
+        default=None, alias="PLANE_WEBHOOK_SECRET"
+    )
+    # JSON map: {"<plane_project_id>": {"owner": "...", "repo": "..."}} — routes a ticket to the
+    # GitHub repo its PR opens against. Parsed defensively at use (a bad value never crashes boot).
+    plane_project_map: Optional[str] = Field(default=None, alias="PLANE_PROJECT_MAP")
+    # Comma-separated labels that arm BOSS. Only an issue carrying one of these ever starts a job.
+    plane_watch_labels: str = Field(
+        default="boss:coding,boss:bug,boss:design", alias="PLANE_WATCH_LABELS"
+    )
+
     # Execution substrate for the GOVERNED pipeline's working stages (write_tests /
     # implement / regression / mutation — the stages that EXECUTE generated code):
     #   local   = host-side EphemeralSandbox subprocesses (pre-hybrid behavior)
@@ -716,6 +748,15 @@ class Settings(BaseSettings):
             model.strip()
             for model in self.managed_cloud_model_gateway_models.replace("\n", ",").split(",")
             if model.strip()
+        )
+
+    @property
+    def plane_watch_label_values(self) -> tuple[str, ...]:
+        """The boss: labels that arm the Plane integration, split from the comma/newline string."""
+        return tuple(
+            value.strip()
+            for value in self.plane_watch_labels.replace("\n", ",").split(",")
+            if value.strip()
         )
 
     @property

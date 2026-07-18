@@ -423,6 +423,7 @@ from .services.webhooks import (
     WebhookEndpointNotFoundError,
     WebhookService,
 )
+from .services.plane_webhooks import PlaneWebhookService
 from .services.github_community_service import GitHubCommunityService
 from .services.infrastructure import (
     InfraResourceNotFoundError,
@@ -527,6 +528,7 @@ secret_refs = SecretRefService()
 receipts = ReceiptService()
 webhooks = WebhookService(settings)
 inbound_webhooks = InboundWebhookService(settings)
+plane_webhooks = PlaneWebhookService(settings)
 github_community = GitHubCommunityService(settings)
 software_factory = SoftwareFactoryService(settings)
 decisions = DecisionService(settings)
@@ -784,12 +786,16 @@ async def require_transport_auth_for_v1(request: Request, call_next):
         and _parts[3] == "inbound"
     )
     is_github_webhook = request.url.path == "/v1/webhooks/github"
+    # Plane's issue webhook is a machine callback that verifies its own X-Plane-Signature HMAC,
+    # so it is exempt from transport auth exactly like the GitHub webhook.
+    is_plane_webhook = request.url.path == "/v1/webhooks/plane"
     if (
         not request.url.path.startswith("/v1/")
         or not auth_required
         or is_preview_web
         or is_inbound_webhook
         or is_github_webhook
+        or is_plane_webhook
     ):
         principal_token = current_api_principal.set(None)
         authenticated_token = current_transport_authenticated.set(False)
@@ -4236,6 +4242,29 @@ async def receive_github_webhook(request: Request):
         status_code=202,
         content=InboundWebhookResponse(**result).model_dump(mode="json"),
     )
+
+
+@app.post("/v1/webhooks/plane", status_code=202)
+async def receive_plane_webhook(request: Request):
+    """Plane issue webhook → auto code-task (Phase 1). Auth-exempt but X-Plane-Signature verified;
+    a boss:coding/boss:bug issue in a watched project auto-starts a gated code task. See
+    docs/infra/BOSS_PLANE_INTEGRATION_SPEC.md."""
+    raw_body = await request.body()
+    headers = {key.lower(): value for key, value in request.headers.items()}
+    with begin(engine) as connection:
+        result = plane_webhooks.ingest(connection, raw_body, headers, jobs)
+    if result["status"] == "rejected":
+        raise HTTPException(status_code=401, detail="Invalid webhook signature.")
+    if result["status"] == "not_configured":
+        raise HTTPException(status_code=503, detail="Plane integration is not configured.")
+    if result["status"] == "invalid":
+        raise HTTPException(status_code=400, detail="Invalid webhook payload.")
+    if result["status"] == "ignored":
+        # A valid, signed delivery we deliberately don't act on (wrong label/project/action).
+        # 200 so Plane marks the delivery successful and doesn't retry.
+        return JSONResponse(status_code=200, content=result)
+    # accepted | duplicate
+    return JSONResponse(status_code=202, content=result)
 
 
 @app.post("/v1/github/community/jobs/{job_id}/execute")

@@ -1,6 +1,15 @@
 # BOSS ↔ Plane Integration Spec
 
-**Status:** DRAFT for review — not yet started. **Owner:** paramg. **Date:** 2026‑07‑03.
+**Status:** **Phase 1 implemented** (branch `feat/plane-webhook-intake`) — inbound signed webhook →
+auto code‑task, behind the `PLANE_INTEGRATION_ENABLED` flag (default off). Awaiting Sean's P0 setup
+(webhook + secret + reachability) to go live. Phases 2–4 not started. **Owner:** paramg. **Date:** 2026‑07‑03 (rev 2026‑07‑17).
+
+> **Implementation note (Phase 1).** The inbound endpoint is **`POST /v1/webhooks/plane`** (mirrors the
+> existing `/v1/webhooks/github` ingress and its auth‑exemption), **not** `/v1/integrations/plane/webhook`
+> as originally sketched below. It verifies **`X‑Plane‑Signature`** (hex HMAC‑SHA256 of the raw body,
+> `sha256=` prefix tolerated), filters (watched project + `boss:` label + `action==created`), maps the
+> issue → `start_code_task`, and dedupes on `plane_issue_id` stored in `finalize_ctx`. Service:
+> `apps/api/app/services/plane_webhooks.py`; tests: `apps/api/tests/test_plane_webhooks.py` (18).
 
 **Goal:** let a human file a ticket in **Plane** (self‑hosted Jira/Linear‑style tracker) and have **BOSS automatically pick it up and run the job** — starting with coding/bug/design tickets, filtered so BOSS ignores everything else. Plane becomes the **human intake + tracking layer**; BOSS's jobs pipeline is the **execution engine** underneath.
 
@@ -121,13 +130,16 @@
 ## 7. Config / secrets (BOSS side)
 
 ```
-PLANE_BASE_URL          e.g. https://plane.local.sean.network
-PLANE_API_TOKEN         (workspace/project scoped) — outbound calls (Phase 2+)
-PLANE_WEBHOOK_SECRET    HMAC secret to verify inbound webhooks
-PLANE_PROJECT_MAP       {"<plane_project_id>": {"owner": "...", "repo": "..."}}
-PLANE_WATCH_LABELS      boss:coding,boss:bug,boss:design
+PLANE_INTEGRATION_ENABLED  master flag — default false (fail-closed until Sean's P0 is done)
+PLANE_BASE_URL             e.g. https://plane.local.sean.network
+PLANE_API_TOKEN            outbound calls (Phase 2+). Accepts PLANE_API_KEY too (already in the store)
+PLANE_WEBHOOK_SECRET       HMAC secret to verify inbound webhooks  ← THE ONE STILL MISSING
+PLANE_PROJECT_MAP          {"<plane_project_id>": {"owner":"...","repo":"...","project_id":"..."}}
+PLANE_WATCH_LABELS         boss:coding,boss:bug,boss:design (comma/newline separated)
 ```
-All in the ops secret store; rendered into boss‑api's env (self‑serve deploy).
+All in the ops secret store; rendered into boss‑api's env (self‑serve deploy). As of 2026‑07‑17 the
+store already has `PLANE_API_KEY` + `PLANE_PROJECT_URL`; **`PLANE_WEBHOOK_SECRET` is not yet set**, and
+`PLANE_INTEGRATION_ENABLED`/`PLANE_PROJECT_MAP` need configuring before the flag is flipped on.
 
 ---
 
