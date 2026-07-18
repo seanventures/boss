@@ -4486,6 +4486,48 @@ class ChangeSetApplyResponse(BaseModel):
     decision_id: Optional[str] = None
 
 
+class TerraformExportRequest(BaseModel):
+    actor: str = "ceo"
+    # Audited escape hatch: export even when no deployment target opted in.
+    force: bool = False
+    # Optional, explicit repo mirror of the projection (never automatic).
+    commit_to_repo: bool = False
+    repo_branch: Optional[str] = None
+
+
+class TerraformExportMappingEntry(BaseModel):
+    operation_index: int
+    provider: str
+    resource_ref: Optional[str] = None
+    reused: bool
+    tf_address: str
+    tf_type: str
+
+
+class TerraformExportResponse(BaseModel):
+    artifact_id: str
+    changeset_id: str
+    project_id: str
+    content_hash: str
+    tf_json: dict[str, Any]
+    canonical: str
+    warnings: list[dict[str, Any]]
+    mapping: list[TerraformExportMappingEntry]
+    providers: list[str]
+    forced: bool = False
+    opt_in_targets: int = 0
+    commit: Optional[dict[str, Any]] = None
+
+
+class TerraformExportArtifactResponse(BaseModel):
+    artifact_id: str
+    changeset_id: str
+    project_id: str
+    content_hash: Optional[str] = None
+    created_at: Optional[str] = None
+    export: dict[str, Any]
+
+
 AuditExportResponse.model_rebuild()
 OpsQueueInspectionResponse.model_rebuild()
 ProviderConnectionTestResponse.model_rebuild()

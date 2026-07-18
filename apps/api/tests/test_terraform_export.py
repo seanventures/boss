@@ -317,3 +317,489 @@ def test_resource_type_map_covers_ticket_surface():
     assert RESOURCE_TYPE_MAP[("digitalocean", "droplet")] == "digitalocean_droplet"
     assert RESOURCE_TYPE_MAP[("digitalocean", "app")] == "digitalocean_app"
     assert RESOURCE_TYPE_MAP[("cloudflare", "dns_record")] == "cloudflare_record"
+
+
+# --------------------------------------------------------------------------- #
+# API integration (hermetic: fake AWS client seam, boss_test DB)              #
+# --------------------------------------------------------------------------- #
+
+import shutil
+import subprocess
+
+import pytest
+from sqlalchemy import text
+
+from apps.api.app import main as api_main
+
+PROJECT_ID = "boss-dogfood"
+
+
+class FakeAwsClient:
+    """Records calls and replays canned responses (as in test_aws_changeset_flow)."""
+
+    def __init__(self, responses: dict | None = None):
+        self.responses = responses or {}
+        self.calls: list[tuple[str, dict]] = []
+
+    def __getattr__(self, method_name: str):
+        def _call(**kwargs):
+            self.calls.append((method_name, kwargs))
+            value = self.responses.get(method_name)
+            if isinstance(value, Exception):
+                raise value
+            if callable(value):
+                return value(**kwargs)
+            return value or {}
+
+        return _call
+
+
+def install_fake_aws(monkeypatch, clients: dict[str, FakeAwsClient]) -> None:
+    monkeypatch.setenv("BOSS_AWS_SECRET_ACCESS_KEY", "test-aws-secret-key")
+
+    def fake_aws_client(service_name: str, _credential: str):
+        if service_name not in clients:
+            raise AssertionError(f"Unexpected AWS client requested: {service_name}")
+        return clients[service_name]
+
+    monkeypatch.setattr(api_main.resource_plane, "_aws_client", fake_aws_client)
+
+
+def enable_terraform_export(client, engine, app_name: str = "boss-app") -> str:
+    """Create a deployment target and flip its opt-in terraform_export switch."""
+    response = client.post(
+        "/v1/deployments",
+        json={
+            "project_id": PROJECT_ID,
+            "app_name": app_name,
+            "repo": "paramg/boss-app",
+            "environment": "staging",
+            "target_kind": "ssh_host",
+            "target_ref": "root@staging-host",
+            "actor": "ceo",
+        },
+    )
+    assert response.status_code == 201, response.text
+    target_id = response.json()["id"]
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "UPDATE deployment_targets SET terraform_export = true "
+                "WHERE id = :id"
+            ),
+            {"id": target_id},
+        )
+    return target_id
+
+
+def create_changeset_via_api(client, operations, title="Terraform export changeset"):
+    response = client.post(
+        "/v1/changesets",
+        json={
+            "project_id": PROJECT_ID,
+            "provider_account_id": None,
+            "title": title,
+            "summary": "ChangeSet used by terraform export tests.",
+            "expected_cost_usd_micros": 0,
+            "rollback_plan": ["Remove the exported resources via a cleanup ChangeSet."],
+            "operations": operations,
+            "actor": "ceo",
+        },
+    )
+    assert response.status_code == 201, response.text
+    return response.json()
+
+
+API_MIXED_OPERATIONS = [
+    {
+        "skill_id": "aws.ec2.instance.create",
+        "action": "create",
+        "resource_type": "ec2_instance",
+        "resource_ref": "boss-web",
+        "desired_state": {
+            "image_id": "ami-123",
+            "instance_type": "t3.micro",
+            "name": "boss-web",
+            "tags": ["env:preview"],
+        },
+        "risk_tier": 2,
+    },
+    {
+        "skill_id": "digitalocean.droplet.create",
+        "action": "create",
+        "resource_type": "droplet",
+        "resource_ref": "boss-worker",
+        "desired_state": {
+            "name": "boss-worker",
+            "region": "nyc3",
+            "size": "s-1vcpu-1gb",
+            "image": "ubuntu-22-04-x64",
+            "tags": ["worker"],
+        },
+        "risk_tier": 2,
+    },
+]
+
+
+def test_export_endpoint_is_opt_in_and_force_is_audited(client, engine):
+    changeset = create_changeset_via_api(client, API_MIXED_OPERATIONS)
+
+    # Default posture: no target opted in -> export refused, nothing stored.
+    refused = client.post(
+        f"/v1/changesets/{changeset['id']}/terraform-export",
+        json={"actor": "ceo"},
+    )
+    assert refused.status_code == 409
+    assert "opt-in" in refused.json()["detail"]
+    assert (
+        client.get(f"/v1/changesets/{changeset['id']}/terraform-export").status_code
+        == 404
+    )
+
+    # force=true is the audited escape hatch: marked in response + event log.
+    forced = client.post(
+        f"/v1/changesets/{changeset['id']}/terraform-export",
+        json={"actor": "ceo", "force": True},
+    )
+    assert forced.status_code == 200, forced.text
+    assert forced.json()["forced"] is True
+    assert forced.json()["opt_in_targets"] == 0
+    with engine.begin() as connection:
+        audit = connection.execute(
+            text(
+                "SELECT COUNT(*) AS n FROM events "
+                "WHERE event_type = 'terraform_export.forced' "
+                "AND entity_id = :changeset_id"
+            ),
+            {"changeset_id": changeset["id"]},
+        ).mappings().one()
+    assert audit["n"] == 1
+
+    # After a target opts in, plain export succeeds and is not marked forced.
+    enable_terraform_export(client, engine)
+    allowed = client.post(
+        f"/v1/changesets/{changeset['id']}/terraform-export",
+        json={"actor": "ceo"},
+    )
+    assert allowed.status_code == 200, allowed.text
+    assert allowed.json()["forced"] is False
+    assert allowed.json()["opt_in_targets"] == 1
+
+
+def test_export_endpoint_projects_mixed_changeset_and_stores_artifact(
+    client, engine
+):
+    enable_terraform_export(client, engine)
+    changeset = create_changeset_via_api(client, API_MIXED_OPERATIONS)
+
+    exported = client.post(
+        f"/v1/changesets/{changeset['id']}/terraform-export",
+        json={"actor": "ceo"},
+    )
+    assert exported.status_code == 200, exported.text
+    payload = exported.json()
+    tf = payload["tf_json"]
+    assert set(tf["terraform"]["required_providers"]) == {"aws", "digitalocean"}
+    assert tf["resource"]["aws_instance"]["boss-web"]["ami"] == "ami-123"
+    assert tf["resource"]["digitalocean_droplet"]["boss-worker"]["region"] == "nyc3"
+    assert payload["warnings"] == []
+    assert payload["artifact_id"].startswith("art")
+
+    # GET returns the stored artifact with the byte-exact canonical projection.
+    fetched = client.get(f"/v1/changesets/{changeset['id']}/terraform-export")
+    assert fetched.status_code == 200
+    artifact = fetched.json()
+    assert artifact["artifact_id"] == payload["artifact_id"]
+    assert artifact["content_hash"] == payload["content_hash"]
+    assert artifact["export"]["tf_json_canonical"] == payload["canonical"]
+    assert artifact["export"]["source_of_truth"] == "boss_database"
+
+    # Mapping rows were pinned for every resource_ref.
+    with engine.begin() as connection:
+        rows = connection.execute(
+            text(
+                "SELECT resource_ref, tf_address, provider, artifact_id "
+                "FROM terraform_exports WHERE project_id = :project_id "
+                "ORDER BY resource_ref"
+            ),
+            {"project_id": PROJECT_ID},
+        ).mappings().all()
+    assert [(row["resource_ref"], row["tf_address"]) for row in rows] == [
+        ("boss-web", "aws_instance.boss-web"),
+        ("boss-worker", "digitalocean_droplet.boss-worker"),
+    ]
+    assert all(row["artifact_id"] == payload["artifact_id"] for row in rows)
+
+
+def test_reexport_is_byte_stable_and_reuses_pinned_addresses(client, engine):
+    enable_terraform_export(client, engine)
+    changeset = create_changeset_via_api(client, API_MIXED_OPERATIONS)
+
+    first = client.post(
+        f"/v1/changesets/{changeset['id']}/terraform-export",
+        json={"actor": "ceo"},
+    )
+    assert first.status_code == 200, first.text
+    second = client.post(
+        f"/v1/changesets/{changeset['id']}/terraform-export",
+        json={"actor": "ceo"},
+    )
+    assert second.status_code == 200, second.text
+
+    # Byte-identical projection: same hash AND same serialized bytes.
+    assert first.json()["content_hash"] == second.json()["content_hash"]
+    assert first.json()["canonical"] == second.json()["canonical"]
+    assert first.json()["tf_json"] == second.json()["tf_json"]
+
+    # Second export reused every pinned address and mutated nothing.
+    assert all(entry["reused"] for entry in second.json()["mapping"])
+    assert [e["tf_address"] for e in first.json()["mapping"]] == [
+        e["tf_address"] for e in second.json()["mapping"]
+    ]
+    with engine.begin() as connection:
+        count = connection.execute(
+            text(
+                "SELECT COUNT(*) AS n FROM terraform_exports "
+                "WHERE project_id = :project_id"
+            ),
+            {"project_id": PROJECT_ID},
+        ).mappings().one()
+    assert count["n"] == 2
+
+
+def test_export_never_contains_secret_literals(client, engine, monkeypatch):
+    monkeypatch.setenv("BOSS_AWS_SECRET_ACCESS_KEY", "test-aws-secret-key-value")
+    monkeypatch.setenv("BOSS_AWS_ACCESS_KEY_ID", "AKIAFAKEACCESSKEYID")
+    monkeypatch.setenv("BOSS_TEST_RDS_MASTER_PASSWORD", "sup3r-secret-rds-value")
+    enable_terraform_export(client, engine)
+    changeset = create_changeset_via_api(
+        client,
+        [
+            {
+                "skill_id": "aws.rds.instance.create",
+                "action": "create",
+                "resource_type": "rds_instance",
+                "resource_ref": "boss-db",
+                "desired_state": {
+                    "db_instance_identifier": "boss-db",
+                    "engine": "postgres",
+                    "db_instance_class": "db.t3.micro",
+                    "allocated_storage_gb": 20,
+                    "master_username": "boss",
+                    "master_password_secret_ref": (
+                        "env:BOSS_TEST_RDS_MASTER_PASSWORD"
+                    ),
+                },
+                "risk_tier": 2,
+            }
+        ],
+        title="RDS changeset with secret refs",
+    )
+
+    exported = client.post(
+        f"/v1/changesets/{changeset['id']}/terraform-export",
+        json={"actor": "ceo"},
+    )
+    assert exported.status_code == 200, exported.text
+    payload = exported.json()
+
+    # The FULL serialized export (canonical bytes and the whole response body)
+    # contains no resolved secret value and no provider credential value.
+    serialized = exported.text
+    for secret in (
+        "sup3r-secret-rds-value",
+        "test-aws-secret-key-value",
+        "AKIAFAKEACCESSKEYID",
+    ):
+        assert secret not in serialized
+        assert secret not in payload["canonical"]
+
+    db = payload["tf_json"]["resource"]["aws_db_instance"]["boss-db"]
+    assert db["password"] == "${var.boss_test_rds_master_password}"
+    variable = payload["tf_json"]["variable"]["boss_test_rds_master_password"]
+    assert variable["sensitive"] is True
+    assert (
+        variable["//"]["boss:credential_ref"]
+        == "env:BOSS_TEST_RDS_MASTER_PASSWORD"
+    )
+
+
+def test_import_blocks_appear_exactly_for_succeeded_receipts(
+    client, engine, monkeypatch
+):
+    ec2 = FakeAwsClient(
+        {
+            "run_instances": {
+                "Instances": [
+                    {
+                        "InstanceId": "i-0abc1234567890def",
+                        "State": {"Name": "running"},
+                        "Placement": {"AvailabilityZone": "us-east-1a"},
+                    }
+                ]
+            }
+        }
+    )
+    install_fake_aws(monkeypatch, {"ec2": ec2})
+    enable_terraform_export(client, engine)
+
+    provider = client.post(
+        "/v1/providers",
+        json={
+            "project_id": PROJECT_ID,
+            "provider": "aws",
+            "account_label": "export-aws",
+            "scopes": ["ec2:write"],
+            "read_only": False,
+            "destructive_actions_disabled": False,
+            "actor": "ceo",
+        },
+    )
+    assert provider.status_code == 201, provider.text
+    reserve = client.post(
+        "/v1/budget/reserve",
+        json={
+            "project_id": PROJECT_ID,
+            "category": "infra",
+            "amount_usd_micros": 100_000,
+            "reason": "Reserve AWS EC2 ChangeSet budget for export test.",
+        },
+    )
+    assert reserve.status_code == 201, reserve.text
+    reservation_id = reserve.json()["reservation_id"]
+    assert reservation_id
+
+    applied_changeset = client.post(
+        "/v1/changesets",
+        json={
+            "project_id": PROJECT_ID,
+            "provider_account_id": provider.json()["id"],
+            "title": "Create EC2 instance for export",
+            "summary": "Applied ChangeSet whose receipt feeds import blocks.",
+            "expected_cost_usd_micros": 100_000,
+            "reservation_id": reservation_id,
+            "rollback_plan": ["Terminate via cleanup ChangeSet."],
+            "operations": [
+                {
+                    "skill_id": "aws.ec2.instance.create",
+                    "action": "create",
+                    "resource_type": "ec2_instance",
+                    "resource_ref": "boss-preview-web",
+                    "desired_state": {
+                        "image_id": "ami-123",
+                        "instance_type": "t3.micro",
+                        "name": "boss-preview-web",
+                    },
+                    "risk_tier": 3,
+                }
+            ],
+            "actor": "ceo",
+        },
+    ).json()
+    client.post(
+        f"/v1/changesets/{applied_changeset['id']}/approve", json={"actor": "ceo"}
+    )
+    client.post(
+        f"/v1/changesets/{applied_changeset['id']}/approve", json={"actor": "cto"}
+    )
+    applied = client.post(
+        f"/v1/changesets/{applied_changeset['id']}/apply", json={"actor": "ceo"}
+    )
+    assert applied.status_code == 200, applied.text
+    assert applied.json()["status"] == "applied"
+
+    exported = client.post(
+        f"/v1/changesets/{applied_changeset['id']}/terraform-export",
+        json={"actor": "ceo"},
+    )
+    assert exported.status_code == 200, exported.text
+    assert exported.json()["tf_json"]["import"] == [
+        {
+            "id": "i-0abc1234567890def",
+            "to": "aws_instance.boss-preview-web",
+        }
+    ]
+
+    # A ChangeSet that was never applied has no receipts -> no import blocks.
+    unapplied = create_changeset_via_api(client, API_MIXED_OPERATIONS)
+    exported_unapplied = client.post(
+        f"/v1/changesets/{unapplied['id']}/terraform-export",
+        json={"actor": "ceo"},
+    )
+    assert exported_unapplied.status_code == 200, exported_unapplied.text
+    assert "import" not in exported_unapplied.json()["tf_json"]
+
+
+def test_unmapped_operation_warns_via_api_but_export_succeeds(client, engine):
+    enable_terraform_export(client, engine)
+    changeset = create_changeset_via_api(
+        client,
+        [
+            {
+                "skill_id": "supabase.migration.apply",
+                "action": "apply",
+                "resource_type": "migration",
+                "resource_ref": "supabase-mig-1",
+                "desired_state": {
+                    "project_ref": "abc",
+                    "sql": "SELECT 1",
+                    "environment": "preview",
+                },
+                "risk_tier": 2,
+            },
+            API_MIXED_OPERATIONS[0],
+        ],
+        title="Mixed supabase + aws changeset",
+    )
+    exported = client.post(
+        f"/v1/changesets/{changeset['id']}/terraform-export",
+        json={"actor": "ceo"},
+    )
+    assert exported.status_code == 200, exported.text
+    payload = exported.json()
+    assert "aws_instance" in payload["tf_json"]["resource"]
+    assert len(payload["warnings"]) == 1
+    assert payload["warnings"][0]["kind"] == "unmapped_resource_type"
+    assert payload["warnings"][0]["resource_type"] == "migration"
+
+
+TF_BINARY = shutil.which("tofu") or shutil.which("terraform")
+
+
+@pytest.mark.skipif(TF_BINARY is None, reason="terraform/tofu not on PATH")
+def test_exported_tf_json_passes_terraform_validate(client, engine, tmp_path):
+    """Bonus: real `terraform init -backend=false` + `validate` on the export.
+
+    Provider downloads need the network; an init failure (offline sandbox)
+    skips rather than fails."""
+    enable_terraform_export(client, engine)
+    changeset = create_changeset_via_api(client, API_MIXED_OPERATIONS)
+    exported = client.post(
+        f"/v1/changesets/{changeset['id']}/terraform-export",
+        json={"actor": "ceo"},
+    )
+    assert exported.status_code == 200, exported.text
+    (tmp_path / "main.tf.json").write_text(
+        exported.json()["canonical"], encoding="utf-8"
+    )
+
+    init = subprocess.run(
+        [TF_BINARY, "init", "-backend=false", "-input=false", "-no-color"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        timeout=300,
+    )
+    if init.returncode != 0:
+        pytest.skip(
+            "terraform init could not fetch providers (offline?): "
+            + (init.stderr or init.stdout)[:300]
+        )
+    validate = subprocess.run(
+        [TF_BINARY, "validate", "-no-color"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert validate.returncode == 0, validate.stdout + validate.stderr

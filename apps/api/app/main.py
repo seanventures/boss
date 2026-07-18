@@ -104,6 +104,9 @@ from .schemas import (
     ChangeSetCreateRequest,
     ChangeSetListResponse,
     ChangeSetSummary,
+    TerraformExportArtifactResponse,
+    TerraformExportRequest,
+    TerraformExportResponse,
     CostAnomalyListResponse,
     CostAnomalySummary,
     CostEventListResponse,
@@ -471,6 +474,7 @@ from .services.resource_plane import (
     ProviderAccountNotFoundError,
     ResourcePlaneService,
 )
+from .services import terraform_export as terraform_export_service
 from .services.autonomy_engine import AutonomyEngine
 from .services.role_governance import RoleGovernanceService
 from .services.router_health import RouterHealthService
@@ -8078,6 +8082,124 @@ def apply_changeset(
             ],
             expected_receipts=result.get("expected_receipts"),
             decision_id=result.get("decision_id"),
+        )
+
+
+@app.post(
+    "/v1/changesets/{changeset_id}/terraform-export",
+    response_model=TerraformExportResponse,
+)
+def export_changeset_terraform(
+    changeset_id: str,
+    payload: TerraformExportRequest,
+) -> TerraformExportResponse:
+    """Track 1 Terraform export (BOSS-66): project a ChangeSet to .tf.json.
+
+    The BOSS DB stays canonical — the export is a deterministic downstream
+    projection. Opt-in: rejected unless at least one deployment target enabled
+    terraform_export, or the caller forces it (audited escape hatch)."""
+    with begin(engine) as connection:
+        project_id = project_id_for_changeset(connection, changeset_id)
+        require_project_actor(
+            connection,
+            project_id,
+            payload.actor,
+            "providerops_manage",
+        )
+        opt_in_targets = terraform_export_service.count_terraform_export_targets(
+            connection, project_id
+        )
+        forced = False
+        if opt_in_targets == 0:
+            if not payload.force:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "Terraform export is opt-in and disabled for this "
+                        "project: no deployment target has terraform_export "
+                        "enabled. Enable a target or pass force=true "
+                        "(audited)."
+                    ),
+                )
+            forced = True
+            emit_event(
+                connection,
+                project_id,
+                "terraform_export.forced",
+                payload.actor,
+                "changeset",
+                changeset_id,
+                {
+                    "reason": (
+                        "No deployment target has terraform_export enabled; "
+                        "actor forced the export."
+                    ),
+                },
+            )
+        try:
+            result = terraform_export_service.export_changeset(
+                connection,
+                settings,
+                changeset_id,
+                actor=payload.actor,
+            )
+        except (
+            ValueError,
+            terraform_export_service.TerraformExportError,
+        ) as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        commit_result = None
+        if payload.commit_to_repo:
+            try:
+                commit_result = terraform_export_service.commit_export_to_repo(
+                    settings,
+                    changeset_id,
+                    result["canonical"],
+                    branch=payload.repo_branch or "main",
+                )
+            except Exception as error:  # noqa: BLE001 — artifact is stored; report
+                raise HTTPException(
+                    status_code=502,
+                    detail=(
+                        "Terraform export artifact stored, but the repo "
+                        f"commit failed: {error}"
+                    ),
+                ) from error
+        return TerraformExportResponse(
+            **result,
+            forced=forced,
+            opt_in_targets=opt_in_targets,
+            commit=commit_result,
+        )
+
+
+@app.get(
+    "/v1/changesets/{changeset_id}/terraform-export",
+    response_model=TerraformExportArtifactResponse,
+)
+def get_changeset_terraform_export(
+    changeset_id: str,
+) -> TerraformExportArtifactResponse:
+    with begin(engine) as connection:
+        project_id = project_id_for_changeset(connection, changeset_id)
+        row = terraform_export_service.latest_export_artifact(
+            connection, project_id, changeset_id
+        )
+        if not row:
+            raise HTTPException(
+                status_code=404,
+                detail="No terraform export artifact exists for this ChangeSet.",
+            )
+        content = row.get("content") or {}
+        return TerraformExportArtifactResponse(
+            artifact_id=row["id"],
+            changeset_id=changeset_id,
+            project_id=project_id,
+            content_hash=content.get("content_hash") or row.get("content_hash"),
+            created_at=(
+                row["created_at"].isoformat() if row.get("created_at") else None
+            ),
+            export=content,
         )
 
 
