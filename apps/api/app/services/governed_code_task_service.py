@@ -31,7 +31,7 @@ from sqlalchemy import text
 from ..config import Settings
 from ..db import begin
 from ..schemas import FileChange
-from . import design_prompts
+from . import design_prompts, verification_target
 from .code_agent import make_code_agent
 from .code_task_service import (
     _fail,
@@ -467,8 +467,12 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
     # llm_calls row with the right attribution (stage is set before each step).
     set_llm_context(db_engine=engine, project_id=project_id, run_id=run_id)
     sf = SoftwareFactoryService(settings)
-    test_cmd = (spec.get("test_commands") or [_DEFAULT_TEST_CMD])[0]
     title = run["title"]
+    # APP-3 (#93): when the task didn't specify tests, resolve the target from the project type —
+    # web/TS gets build/typecheck/lint/e2e (the scaffold's scripts) so the repair loop optimizes a
+    # web-native signal; Python still defaults to unittest. Explicit test_commands always win.
+    test_cmd = (spec.get("test_commands")
+                or verification_target.default_test_commands(spec, title))[0]
     instructions = spec.get("instructions", "")
     criteria = spec.get("acceptance_criteria", [])
     # Infrastructure persona (spec 05 §3.2 / T4): IaC tasks get Terraform-aware role
@@ -948,12 +952,12 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
                     set_llm_context(db_engine=engine, project_id=project_id, run_id=run_id,
                                     stage="regression")
                     rr = _guest_stage("run_all_tests", "regression", "Run the full test suite.",
-                                      test_cmds=["python3 -m unittest discover -v"],
+                                      test_cmds=[test_cmd],   # APP-3: web-aware regression target
                                       stage_title=f"Regression — {title}",
                                       engine_override="echo")
                     panel["full"] = bool(rr.tests_passed)
                 else:
-                    panel["full"] = bool(sandbox.run("python3 -m unittest discover -v").ok)
+                    panel["full"] = bool(sandbox.run(test_cmd).ok)   # APP-3
 
             def _do_consistency():
                 set_llm_context(db_engine=engine, project_id=project_id, run_id=run_id,
