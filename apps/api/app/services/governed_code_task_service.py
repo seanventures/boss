@@ -31,6 +31,7 @@ from sqlalchemy import text
 from ..config import Settings
 from ..db import begin
 from ..schemas import FileChange
+from . import design_prompts
 from .code_agent import make_code_agent
 from .code_task_service import (
     _fail,
@@ -195,7 +196,7 @@ def _qa_prompt(title, instructions, criteria, test_cmd, *, iac=False):
     )
 
 
-def _impl_prompt(title, instructions, test_files, test_cmd, *, iac=False):
+def _impl_prompt(title, instructions, test_files, test_cmd, *, iac=False, ui=False):
     tf = ", ".join(test_files) or "(the test files in this repo)"
     return (
         "You are a software engineer. QA has ALREADY written the tests; implement the change to make "
@@ -207,6 +208,7 @@ def _impl_prompt(title, instructions, test_files, test_cmd, *, iac=False):
         f"- Run `{test_cmd}` and iterate until the tests pass.\n"
         "- Do NOT commit. End with a one-line summary of what you changed.\n"
         + (_IAC_GUIDANCE if iac else "")
+        + (design_prompts.design_impl_clause() if ui else "")  # APP-2: design axis for UI tasks
     )
 
 
@@ -239,7 +241,7 @@ def _solo_prompt(title, instructions, criteria, test_cmd, *, iac=False):
     )
 
 
-def _review_prompt(title, criteria):
+def _review_prompt(title, criteria, *, ui=False):
     crit = "\n".join(f"- {c}" for c in criteria) or "- (judge against the task description)"
     return (
         "You are an adversarial code reviewer with FRESH context — you did NOT write this code or "
@@ -250,7 +252,8 @@ def _review_prompt(title, criteria):
         "Judge ONLY against the stated task and acceptance criteria. A concern that is OUT OF SCOPE "
         "— a feature that was not asked for, or a spec stricter than what was agreed — is NOT a "
         "defect; note it but do not fail the change for it.\n\n"
-        "Do NOT edit any files. End your response with EXACTLY one final line:\n"
+        + (design_prompts.design_review_clause() + "\n\n" if ui else "")  # APP-2: incoherence in scope for UI
+        + "Do NOT edit any files. End your response with EXACTLY one final line:\n"
         "  VERDICT: REFUTED   — ONLY if you found a CONCRETE defect that violates the task/criteria.\n"
         "  VERDICT: SURVIVED  — if the change satisfies the task and criteria. This is the default "
         "when you did not find a real, in-scope defect.\n"
@@ -471,6 +474,8 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
     # Infrastructure persona (spec 05 §3.2 / T4): IaC tasks get Terraform-aware role
     # guidance appended to the qa/impl/solo prompts; stage mechanics are unchanged.
     iac_task = is_iac_task(spec, title)
+    # APP-2 (#92): UI-bearing tasks get the design axis appended to the impl + review prompts.
+    ui_task = design_prompts.is_ui_bearing(spec, title)
     # Cost/rigor dial: resolve the profile (per-task override > project default > edition
     # default) and infer the risk tier, clamped to the profile's range. Scales effort to work.
     with begin(engine) as c:
@@ -753,7 +758,7 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
         with begin(engine) as c:
             _set_phase(c, run_id, "implement")
         base_impl_prompt = (_impl_prompt(title, instructions, test_files, test_cmd,
-                                         iac=iac_task)
+                                         iac=iac_task, ui=ui_task)
                             if do_separate_tests
                             else _solo_prompt(title, instructions, criteria, test_cmd,
                                               iac=iac_task))
@@ -918,7 +923,7 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
                 def _run():
                     set_llm_context(db_engine=engine, project_id=project_id, run_id=run_id,
                                     stage="review_code")
-                    rr = seat_agent.run_role(_review_prompt(title, criteria), review_root,
+                    rr = seat_agent.run_role(_review_prompt(title, criteria, ui=ui_task), review_root,
                                              read_only=True, model=seat_model)
                     with lock:
                         panel_cost["v"] += int(rr.get("cost_usd_micros") or 0)
