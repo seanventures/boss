@@ -5202,6 +5202,20 @@ def repair_policy_endpoint(payload: Optional[dict] = None):
     return decision
 
 
+@app.post("/v1/scaffold")
+def scaffold_endpoint(payload: Optional[dict] = None):
+    """APP-1 (#91): framework-aware scaffolding. Returns a deterministic, buildable baseline project
+    (Vite+React+TS+Tailwind + shadcn-style primitives + a design-system token layer + web verification
+    scripts) that the design role (APP-2) then themes to the domain. payload: {name?, kind?: vite|spa}.
+    Templated — no model tokens, same input → same tree."""
+    from .services import scaffold_service as sc
+    payload = payload or {}
+    try:
+        return sc.scaffold_project(name=payload.get("name", "app"), kind=payload.get("kind", "vite"))
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+
+
 # --- Discovery pipeline: research-driven outcome discovery -------------------
 @app.post("/v1/discoveries")
 def start_discovery_endpoint(payload: dict):
