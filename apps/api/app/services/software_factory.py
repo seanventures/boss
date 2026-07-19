@@ -485,7 +485,8 @@ class SoftwareFactoryService:
             "review_method": "deterministic_path_and_content_scan",
         }
 
-    def _build_browser_validation_review(self, files: list[FileChange]) -> dict:
+    def _build_browser_validation_review(self, files: list[FileChange], *,
+                                         render_evidence: Optional[dict] = None) -> dict:
         browser_relevant_files = [
             file.path
             for file in files
@@ -498,6 +499,21 @@ class SoftwareFactoryService:
                 "browser_relevant_files": [],
                 "evidence_refs": [],
                 "required_follow_up": [],
+            }
+        # APP-4 (#94): if render evidence was captured (served HTML now, headless capture later),
+        # run the deterministic visual rubric and return a REAL passed|failed with findings —
+        # instead of the old hardcoded required_not_run no-op.
+        if render_evidence is not None:
+            from .visual_gate import evaluate_visual
+            verdict = evaluate_visual(render_evidence)
+            return {
+                "status": verdict["status"],
+                "browser_relevant_files": browser_relevant_files,
+                "evidence_refs": verdict["evidence_refs"],
+                "findings": verdict["findings"],
+                "checks": verdict["checks"],
+                "required_follow_up": ([] if verdict["status"] == "passed"
+                                       else ["Fix the visual/UX findings before a UI-affecting merge."]),
             }
         return {
             "status": "required_not_run",
@@ -525,7 +541,9 @@ class SoftwareFactoryService:
             blockers.append("security_dependency_review_failed")
         if security_dependency_review["status"] == "warning":
             warnings.append("security_or_dependency_reviewer_required")
-        if browser_validation["status"] == "required_not_run":
+        if browser_validation["status"] == "failed":
+            blockers.append("visual_gate_failed")   # APP-4: a real failed visual gate blocks the merge
+        elif browser_validation["status"] == "required_not_run":
             warnings.append("browser_validation_required_before_merge")
 
         if blockers:

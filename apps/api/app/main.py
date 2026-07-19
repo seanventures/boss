@@ -5216,6 +5216,16 @@ def scaffold_endpoint(payload: Optional[dict] = None):
         raise HTTPException(status_code=422, detail=str(e)) from e
 
 
+@app.post("/v1/visual-gate")
+def visual_gate_endpoint(payload: dict):
+    """APP-4 (#94): judge render evidence against the deterministic visual/UX rubric — renders without
+    an error overlay, has real (non-placeholder) content, has visual hierarchy, no mobile overflow.
+    payload: {evidence: {html, console_errors?, viewport?, route?, screenshot_ref?}}. Returns
+    passed|failed|not_applicable + findings. Model-free; a vision-model judge is the follow-on (APP-6)."""
+    from .services import visual_gate as vg
+    return vg.evaluate_visual((payload or {}).get("evidence"))
+
+
 # --- Discovery pipeline: research-driven outcome discovery -------------------
 @app.post("/v1/discoveries")
 def start_discovery_endpoint(payload: dict):

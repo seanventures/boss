@@ -99,11 +99,24 @@ def _descendant_pids(pid: int) -> list[int]:
     return pids
 
 
-def _url_ok(url: str, *, headers: Optional[dict[str, str]] = None) -> bool:
+def _url_ok(url: str, *, headers: Optional[dict[str, str]] = None, check_body: bool = False) -> bool:
     try:
         request = urllib.request.Request(url, headers=headers or {})
         response = urllib.request.urlopen(request, timeout=2)
-        return 200 <= int(response.status) < 400
+        status = int(response.status)
+        if not (200 <= status < 400):
+            return False
+        # APP-4 (#94): the primary-route smoke must see real served content, not just a socket. A
+        # blank body or a rendered error overlay on a 2xx no longer counts as healthy. (An SPA shell
+        # is non-blank and not an error page, so it still passes — full render rubric is the headless gate.)
+        if check_body and 200 <= status < 300:
+            body = response.read(65536).decode("utf-8", "ignore")
+            if not body.strip():
+                return False
+            from .visual_gate import is_error_page
+            if is_error_page(body):
+                return False
+        return True
     except urllib.error.HTTPError:
         # A framework error page is not a healthy preview.
         return False
@@ -112,7 +125,7 @@ def _url_ok(url: str, *, headers: Optional[dict[str, str]] = None) -> bool:
 
 
 def _http_ok(port: int) -> bool:
-    return _url_ok(f"http://127.0.0.1:{port}")
+    return _url_ok(f"http://127.0.0.1:{port}", check_body=True)
 
 
 def _classify_start_failure(message: str) -> tuple[str, str]:
