@@ -583,6 +583,12 @@ class Settings(BaseSettings):
     independence_required_level: str = Field(
         default="family", alias="BOSS_INDEPENDENCE_REQUIRED_LEVEL"
     )
+    # VAG #108 bounded generator↔verifier debate: when the panel's confidence lands in the contested
+    # band (low, high) — neither a clear survive nor refute — resolve it with a short debate instead of
+    # a fail-closed guess. max_rounds caps the cost (each round is up to two model calls).
+    debate_max_rounds: int = Field(default=2, alias="BOSS_DEBATE_MAX_ROUNDS")
+    debate_contested_low: float = Field(default=0.34, alias="BOSS_DEBATE_CONTESTED_LOW")
+    debate_contested_high: float = Field(default=0.66, alias="BOSS_DEBATE_CONTESTED_HIGH")
     # Per-task budget cap for a code task (model spend), reserved before work.
     code_task_budget_usd_micros: int = Field(
         default=2_000_000, alias="BOSS_CODE_TASK_BUDGET_USD_MICROS"
