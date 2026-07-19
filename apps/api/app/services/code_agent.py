@@ -30,6 +30,7 @@ from .model_rate_limiter import (
     is_rate_limit_error,
     provider_of,
 )
+from . import repo_retriever
 from .redaction import redact as _redact_pii
 from .sandbox import CommandResult, DiffSummary, EphemeralSandbox
 
@@ -375,38 +376,36 @@ class NativeCodeAgent:
 
         self._llm = OpenAIAdapter(settings)
 
-    def _repo_context(self, cwd: Path, *, limit: int = 40) -> str:
-        # IaC authoring (spec 05 §3.2 / T4): .tf/.tfvars/.hcl are context; .tf.json /
-        # .tfvars.json arrive via Path.suffix == ".json", which is already whitelisted.
-        exts = {".py", ".js", ".ts", ".go", ".java", ".rb", ".rs", ".json", ".md", ".txt",
-                ".cfg", ".toml", ".yaml", ".yml", ".gradle", ".xml",
-                ".tf", ".tfvars", ".hcl"}
+    def _repo_context(self, cwd: Path, *, task: str = "", limit: int = 120) -> str:
+        # IaC authoring (spec 05 §3.2 / T4): .tf/.tfvars/.hcl are context. APP-5 (#95): frontend exts
+        # added so the design system is visible, and selection is retrieval-driven (pin the design
+        # source-of-truth + Terraform core, rank the rest by relevance) instead of first-N-by-path.
+        exts = {".py", ".js", ".ts", ".tsx", ".jsx", ".go", ".java", ".rb", ".rs", ".json", ".md",
+                ".txt", ".cfg", ".toml", ".yaml", ".yml", ".gradle", ".xml", ".css", ".scss",
+                ".html", ".vue", ".svelte", ".tf", ".tfvars", ".hcl"}
+        skip = {"node_modules", "dist", "build", ".next", ".git", ".venv", "venv",
+                "__pycache__", "vendor", "target", "coverage", ".turbo"}
         files: list[str] = []
+        entries: list[dict] = []
         for p in sorted(cwd.rglob("*")):
-            if not p.is_file() or ".git" in p.parts:
+            if not p.is_file() or skip & set(p.parts):
                 continue
-            files.append(p.relative_to(cwd).as_posix())
-        core: list[str] = []   # Terraform module core — always included (module-aware packing)
-        blobs: list[str] = []
-        for rel in files:
-            fp = cwd / rel
+            rel = p.relative_to(cwd).as_posix()
+            files.append(rel)
+            if p.suffix not in exts:
+                continue
             try:
-                if fp.suffix not in exts:
-                    continue
-                if _is_core_tf_file(rel):
-                    body = fp.read_text(errors="ignore")
-                    if len(body) >= 20000:
-                        body = (body[:20000]
-                                + "\n# ... [truncated: core Terraform file exceeds the "
-                                  "20KB context cap; head shown] ...")
-                    core.append(f"--- {rel} ---\n{body}")
-                elif fp.stat().st_size < 20000:
-                    blobs.append(f"--- {rel} ---\n{fp.read_text(errors='ignore')}")
+                entries.append({"rel": rel, "content": p.read_text(errors="ignore"),
+                                "size": p.stat().st_size})
             except OSError:
                 continue
-        listing = "\n".join(files) or "(empty repo)"
-        keep = blobs[:max(0, limit - len(core))]
-        return f"REPO FILES:\n{listing}\n\nFILE CONTENTS:\n" + "\n\n".join(core + keep)
+        # Pin the design-system source of truth (when the repo has one) so a UI task always sees the
+        # tokens + component kit; Terraform core stays pinned too. The 40/20KB caps are gone as the
+        # selection mechanism — max_files/max_bytes are a large safety ceiling.
+        ui = any(repo_retriever.is_design_file(e["rel"]) for e in entries)
+        selection = repo_retriever.select_files(entries, task, ui=ui, pin=_is_core_tf_file,
+                                                 max_files=limit)
+        return repo_retriever.render_context(files, selection)
 
     @staticmethod
     def _safe_json(content: str) -> dict:
@@ -448,7 +447,7 @@ class NativeCodeAgent:
         try:
             msg, usage = self._llm.create_chat_completion(
                 [{"role": "system", "content": system},
-                 {"role": "user", "content": f"{prompt}\n\n{self._repo_context(cwd)}"}],
+                 {"role": "user", "content": f"{prompt}\n\n{self._repo_context(cwd, task=prompt)}"}],
                 model_override=model or None,
                 redact=getattr(self, "redact", False),  # data-boundary: mask PII for restricted tasks
             )
