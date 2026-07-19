@@ -5172,6 +5172,36 @@ def independence_check_endpoint(payload: Optional[dict] = None):
     return {**verdict, "gate": ind.independence_gate(verdict, required_level=level)}
 
 
+@app.post("/v1/repair-policy")
+def repair_policy_endpoint(payload: Optional[dict] = None):
+    """VAG #109: budget-variable repair. With `attempt` + `spent_usd_micros`, decide the next repair
+    action (stop / retry-cheap / escalate-to-strong); otherwise return the up-front plan (how deep the
+    budget allows, when the tier flips). payload: {budget_usd_micros?, spent_usd_micros?, attempt?,
+    est_attempt_cost?, max_retries?, escalate_after?, cheap_tier?, strong_tier?, verified_count?}."""
+    from .services import repair_policy as rp
+    payload = payload or {}
+    budget = payload.get("budget_usd_micros", settings.code_task_budget_usd_micros)
+    est = payload.get("est_attempt_cost", settings.repair_est_attempt_cost_usd_micros)
+    max_retries = payload.get("max_retries", settings.code_repair_max_retries)
+    escalate_after = payload.get("escalate_after", settings.repair_escalate_after)
+    cheap = payload.get("cheap_tier") or settings.code_agent_low_cost_engine or settings.code_agent_engine
+    strong = payload.get("strong_tier") or settings.code_agent_strong_engine or settings.code_review_engine or "strong"
+    if "attempt" not in payload:
+        return rp.plan_repair(remaining_usd_micros=budget, est_attempt_cost=est,
+                              max_retries=max_retries, escalate_after=escalate_after,
+                              cheap_tier=cheap, strong_tier=strong)
+    decision = rp.decide_repair(
+        attempt=int(payload["attempt"]), spent_usd_micros=payload.get("spent_usd_micros", 0),
+        budget_usd_micros=budget, est_attempt_cost=est, max_retries=max_retries,
+        escalate_after=escalate_after, cheap_tier=cheap, strong_tier=strong,
+        strong_attempt_cost=payload.get("strong_attempt_cost"),
+        last_gate_passed=payload.get("last_gate_passed", False),
+    )
+    decision["dollars_per_verified"] = rp.dollars_per_verified(
+        payload.get("spent_usd_micros", 0), payload.get("verified_count", 0))
+    return decision
+
+
 # --- Discovery pipeline: research-driven outcome discovery -------------------
 @app.post("/v1/discoveries")
 def start_discovery_endpoint(payload: dict):

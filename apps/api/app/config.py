@@ -589,6 +589,14 @@ class Settings(BaseSettings):
     debate_max_rounds: int = Field(default=2, alias="BOSS_DEBATE_MAX_ROUNDS")
     debate_contested_low: float = Field(default=0.34, alias="BOSS_DEBATE_CONTESTED_LOW")
     debate_contested_high: float = Field(default=0.66, alias="BOSS_DEBATE_CONTESTED_HIGH")
+    # VAG #109 budget-variable repair: escalate the implementer from the cheap tier to the strong tier
+    # after this many failed cheap repair attempts (nothing verified = infinite $/verified). The repair
+    # DEPTH is what the remaining budget affords (capped by code_repair_max_retries), using this per-
+    # attempt cost estimate for the affordability math.
+    repair_escalate_after: int = Field(default=1, alias="BOSS_REPAIR_ESCALATE_AFTER")
+    repair_est_attempt_cost_usd_micros: int = Field(
+        default=200_000, alias="BOSS_REPAIR_EST_ATTEMPT_COST_USD_MICROS"
+    )
     # Per-task budget cap for a code task (model spend), reserved before work.
     code_task_budget_usd_micros: int = Field(
         default=2_000_000, alias="BOSS_CODE_TASK_BUDGET_USD_MICROS"
