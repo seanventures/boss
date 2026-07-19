@@ -577,6 +577,12 @@ class Settings(BaseSettings):
     mutation_require_property_tests: bool = Field(
         default=False, alias="BOSS_MUTATION_REQUIRE_PROPERTY_TESTS"
     )
+    # VAG #110 generator/verifier independence contract: the minimum separation the review panel must
+    # have from the builder — off | model (diff model) | family (diff lineage, the default) | provider
+    # (diff vendor). A reviewer sharing the builder's family shares its blind spots.
+    independence_required_level: str = Field(
+        default="family", alias="BOSS_INDEPENDENCE_REQUIRED_LEVEL"
+    )
     # Per-task budget cap for a code task (model spend), reserved before work.
     code_task_budget_usd_micros: int = Field(
         default=2_000_000, alias="BOSS_CODE_TASK_BUDGET_USD_MICROS"

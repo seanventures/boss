@@ -5154,6 +5154,24 @@ def mutation_gate_endpoint(payload: dict):
     )
 
 
+@app.post("/v1/independence-check")
+def independence_check_endpoint(payload: Optional[dict] = None):
+    """VAG #110: check generator/verifier independence. With `builder` + `verifiers`, assess those;
+    with no payload, audit BOSS's CURRENT config (builder vs review engine). payload:
+    {builder: {engine, model}, verifiers: [{engine, model}], required_level?: off|model|family|provider}.
+    A verifier sharing the builder's model family shares its blind spots — the gate blocks it."""
+    from .services import independence as ind
+    payload = payload or {}
+    level = payload.get("required_level", settings.independence_required_level)
+    if not payload.get("builder"):
+        return ind.configured_contract(settings, required_level=level)
+    b = payload["builder"]
+    builder = (b.get("engine"), b.get("model"))
+    verifiers = [(v.get("engine"), v.get("model")) for v in payload.get("verifiers", [])]
+    verdict = ind.assess_independence(builder, verifiers)
+    return {**verdict, "gate": ind.independence_gate(verdict, required_level=level)}
+
+
 # --- Discovery pipeline: research-driven outcome discovery -------------------
 @app.post("/v1/discoveries")
 def start_discovery_endpoint(payload: dict):
