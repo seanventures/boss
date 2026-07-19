@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Plus+Jakarta+Sans:wght@500;600;700;800&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700;800&family=Manrope:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap');
 
 /* ============================================================
    BOSS Executive Console — Dark "impressive startup" theme
@@ -8,54 +8,54 @@
 
 :root {
   /* brand ramp */
-  --indigo-400: #818cf8;
-  --indigo-500: #6366f1;
-  --indigo-600: #4f46e5;
-  --violet-500: #8b5cf6;
-  --pink-500: #ec4899;
+  --indigo-400: #2EC5C5;
+  --indigo-500: #2F6FE0;
+  --indigo-600: #1B3A6B;
+  --violet-500: #2F6FE0;
+  --pink-500: #2EC5C5;
 
   /* surfaces */
-  --bg: #030712;
-  --bg-tint: #080b12;
-  --surface: #0d1117;
-  --surface-2: #11161e;
-  --surface-3: #181d26;
+  --bg: #090D17;
+  --bg-tint: #0C1424;
+  --surface: #101A30;
+  --surface-2: #0F1830;
+  --surface-3: #16213C;
 
   /* ink */
-  --ink: #f0f6fc;
-  --ink-soft: #c9d1d9;
-  --muted: #8b949e;
-  --faint: #5b626d;
+  --ink: #EEF3FB;
+  --ink-soft: #C3D0E8;
+  --muted: #9FB0CE;
+  --faint: #64769A;
 
   /* lines */
-  --border: rgba(255, 255, 255, 0.07);
-  --border-strong: rgba(255, 255, 255, 0.13);
+  --border: #1C2740;
+  --border-strong: #26365C;
 
   /* accent */
-  --accent: #6366f1;
-  --accent-text: #818cf8;
-  --accent-press: #4f46e5;
+  --accent: #2F6FE0;
+  --accent-text: #2EC5C5;
+  --accent-press: #1B3A6B;
   --accent-ink: #ffffff;
-  --accent-soft: rgba(99, 102, 241, 0.14);
-  --accent-line: rgba(99, 102, 241, 0.4);
-  --brand-grad: linear-gradient(135deg, #6366f1 0%, #8b5cf6 50%, #ec4899 100%);
-  --brand-grad-2: linear-gradient(135deg, #6366f1, #8b5cf6);
-  --glow: 0 0 24px rgba(99, 102, 241, 0.35);
+  --accent-soft: rgba(47, 111, 224, 0.14);
+  --accent-line: rgba(47, 111, 224, 0.4);
+  --brand-grad: linear-gradient(135deg, #2EC5C5 0%, #2F6FE0 55%, #1B3A6B 100%);
+  --brand-grad-2: linear-gradient(120deg, #2EC5C5, #2F6FE0);
+  --glow: 0 0 24px rgba(47, 111, 224, 0.35);
 
   /* status */
-  --green: #3fb950;
-  --green-soft: rgba(63, 185, 80, 0.12);
-  --amber: #d29922;
-  --amber-soft: rgba(210, 153, 34, 0.13);
-  --red: #f85149;
-  --red-soft: rgba(248, 81, 73, 0.12);
-  --blue: #58a6ff;
+  --green: #34D399;
+  --green-soft: rgba(52, 211, 153, 0.12);
+  --amber: #F5B544;
+  --amber-soft: rgba(245, 181, 68, 0.13);
+  --red: #F2647A;
+  --red-soft: rgba(242, 100, 122, 0.12);
+  --blue: #2F6FE0;
 
   /* shape */
-  --r-sm: 10px;
-  --r: 12px;
-  --r-lg: 16px;
-  --r-xl: 22px;
+  --r-sm: 8px;
+  --r: 8px;
+  --r-lg: 8px;
+  --r-xl: 12px;
 
   /* shadow */
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.5);
@@ -63,10 +63,10 @@
   --shadow-lg: 0 30px 80px rgba(0, 0, 0, 0.6);
 
   /* type */
-  --sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
-  --display: "Plus Jakarta Sans", "Inter", sans-serif;
+  --sans: "Manrope", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --display: "Sora", "Manrope", sans-serif;
   --serif: "Plus Jakarta Sans", "Inter", sans-serif;
-  --mono: "SFMono-Regular", "Menlo", "Monaco", ui-monospace, monospace;
+  --mono: "JetBrains Mono", "SFMono-Regular", ui-monospace, monospace;
 }
 
 /* Reusable workflow registry and durable run timeline. */
