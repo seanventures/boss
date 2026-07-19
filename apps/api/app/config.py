@@ -597,6 +597,17 @@ class Settings(BaseSettings):
     repair_est_attempt_cost_usd_micros: int = Field(
         default=200_000, alias="BOSS_REPAIR_EST_ATTEMPT_COST_USD_MICROS"
     )
+    # APP-6 (#96) hybrid design-axis routing: spend frontier tokens where design (taste/hierarchy/copy)
+    # is decided and cheap OSS on the verified fill-in. Empty engines fall back to strong/low-cost.
+    # The design pass is metered as a distinct budget line item (fraction of the task budget) capped at
+    # max_passes frontier passes before falling back to OSS.
+    design_frontier_engine: str = Field(default="", alias="BOSS_DESIGN_FRONTIER_ENGINE")
+    design_oss_engine: str = Field(default="", alias="BOSS_DESIGN_OSS_ENGINE")
+    design_pass_budget_fraction: float = Field(default=0.4, alias="BOSS_DESIGN_PASS_BUDGET_FRACTION")
+    design_max_passes: int = Field(default=2, alias="BOSS_DESIGN_MAX_PASSES")
+    design_est_pass_cost_usd_micros: int = Field(
+        default=300_000, alias="BOSS_DESIGN_EST_PASS_COST_USD_MICROS"
+    )
     # Per-task budget cap for a code task (model spend), reserved before work.
     code_task_budget_usd_micros: int = Field(
         default=2_000_000, alias="BOSS_CODE_TASK_BUDGET_USD_MICROS"

@@ -5226,6 +5226,30 @@ def visual_gate_endpoint(payload: dict):
     return vg.evaluate_visual((payload or {}).get("evidence"))
 
 
+@app.post("/v1/design-routing")
+def design_routing_endpoint(payload: Optional[dict] = None):
+    """APP-6 (#96): hybrid frontier+OSS routing for the design axis. With `step`, resolve its tier +
+    engine (design axis → frontier, fill-in → cheap OSS); otherwise return the design-pass budget plan
+    (a metered line item capped at N frontier passes). payload: {step?, budget_usd_micros?, overrides?}."""
+    from .services import design_routing as dr
+    payload = payload or {}
+    frontier = payload.get("frontier_engine") or settings.design_frontier_engine \
+        or settings.code_agent_strong_engine or settings.code_review_engine or "strong"
+    oss = payload.get("oss_engine") or settings.design_oss_engine \
+        or settings.code_agent_low_cost_engine or settings.code_agent_engine
+    if payload.get("step"):
+        step = payload["step"]
+        return {"step": step, "tier": dr.resolve_tier(step),
+                "engine": dr.resolve_engine(step, frontier_engine=frontier, oss_engine=oss,
+                                            default_engine=settings.code_agent_engine,
+                                            overrides=payload.get("overrides"))}
+    return dr.design_pass_plan(
+        payload.get("budget_usd_micros", settings.code_task_budget_usd_micros),
+        design_fraction=settings.design_pass_budget_fraction,
+        est_design_pass_cost=settings.design_est_pass_cost_usd_micros,
+        max_design_passes=settings.design_max_passes)
+
+
 # --- Discovery pipeline: research-driven outcome discovery -------------------
 @app.post("/v1/discoveries")
 def start_discovery_endpoint(payload: dict):
