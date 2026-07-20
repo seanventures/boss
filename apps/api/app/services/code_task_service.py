@@ -354,14 +354,33 @@ def _persist_sandbox_id(connection, run_id: str, sbx_id: Optional[str]) -> None:
     )
 
 
-def _fail(connection, run_id: str, project_id: str, reason: str, *, status: str = "failed") -> dict:
+def _fail(
+    connection, run_id: str, project_id: str, reason: str, *, status: str = "failed",
+    failure_class: str = "terminal", reason_code: str = "unknown",
+) -> dict:
+    """Fail a code task with a TAXONOMY so failures are legible + actionable, not opaque:
+
+      failure_class ∈ {recoverable, terminal, needs_human, infra}
+        recoverable — transient/external; a retry could succeed (provider blip, flake).
+        terminal    — a genuine dead-end for this attempt (produced nothing usable).
+        needs_human — a human decision is required to proceed (ambiguity, policy).
+        infra       — BOSS platform/harness problem (not the task's fault).
+      reason_code — a short machine code (no_diff, no_test_files, tests_failed, budget_denied,
+        provider_error, exception, …) for dashboards + auto-recovery routing.
+
+    Recorded on the run (finalize_ctx) and the event so the console/API can show WHY + WHAT."""
     connection.execute(
-        text("UPDATE code_task_runs SET status=:st, phase='done', error=:e, updated_at=now() WHERE id=:id"),
-        {"st": status, "e": reason[:2000], "id": run_id},
+        text("UPDATE code_task_runs SET status=:st, phase='done', error=:e, "
+             "finalize_ctx = COALESCE(finalize_ctx, '{}'::jsonb) || jsonb_build_object("
+             "  'failure_class', CAST(:fc AS text), 'reason_code', CAST(:rc AS text)), "
+             "updated_at=now() WHERE id=:id"),
+        {"st": status, "e": reason[:2000], "fc": failure_class, "rc": reason_code, "id": run_id},
     )
     emit_event(connection, project_id, "code_task.failed", "boss", "code_task_run", run_id,
-               {"reason": reason[:300], "status": status})
-    return {"status": status, "done": True, "error": reason}
+               {"reason": reason[:300], "status": status,
+                "failure_class": failure_class, "reason_code": reason_code})
+    return {"status": status, "done": True, "error": reason,
+            "failure_class": failure_class, "reason_code": reason_code}
 
 
 # --------------------------------------------------------------------------- #
@@ -381,7 +400,8 @@ def run_code_task(engine, settings: Settings, jobs, run_id: str) -> dict:
     if not settings.enable_code_task:
         with begin(engine) as c:
             return _fail(c, run_id, run["project_id"],
-                         "Code tasks are disabled (BOSS_ENABLE_CODE_TASK=false).", status="blocked")
+                         "Code tasks are disabled (BOSS_ENABLE_CODE_TASK=false).", status="blocked",
+                         failure_class="needs_human", reason_code="feature_disabled")
 
     # Default for all coding tasks: route through the governed, role-separated pipeline.
     # IaC tasks are ALWAYS governed regardless of the flag (spec 05 §3.2 / T4): the
@@ -426,7 +446,8 @@ def run_code_task(engine, settings: Settings, jobs, run_id: str) -> dict:
     if reservation.get("status") != "reserved":
         with begin(engine) as c:
             return _fail(c, run_id, project_id,
-                         f"Budget reservation denied: {reservation.get('status')}", status="blocked")
+                         f"Budget reservation denied: {reservation.get('status')}", status="blocked",
+                         failure_class="needs_human", reason_code="budget_denied")
     reservation_id = reservation["reservation_id"]
     with begin(engine) as c:
         c.execute(text("UPDATE code_task_runs SET reservation_id=:r WHERE id=:id"),
@@ -531,12 +552,14 @@ def run_code_task(engine, settings: Settings, jobs, run_id: str) -> dict:
         if not result.diff:
             with begin(engine) as c:
                 _release(sf, c, project_id, reservation_id, "no changes produced")
-                return _fail(c, run_id, project_id, "Agent produced no file changes.")
+                return _fail(c, run_id, project_id, "Agent produced no file changes.",
+                             failure_class="terminal", reason_code="no_diff")
         if not result.tests_passed:
             with begin(engine) as c:
                 _release(sf, c, project_id, reservation_id, "tests did not pass")
                 return _fail(c, run_id, project_id,
-                             "Tests did not pass; not opening a PR. See run state for details.")
+                             "Tests did not pass; not opening a PR. See run state for details.",
+                             failure_class="terminal", reason_code="tests_failed")
 
         # 6) Open the PR via the EXISTING software-factory path (receipt dedupe,
         #    CI wait, merge-gate Decision, budget settle all handled there).
@@ -589,7 +612,8 @@ def run_code_task(engine, settings: Settings, jobs, run_id: str) -> dict:
             _release(sf, c, project_id, reservation_id, f"code task error: {exc}")
             # Retain + record the micro-VM so the failure can be root-caused in the console.
             _persist_sandbox_id(c, run_id, getattr(provider, "last_sandbox_task_id", None))
-            return _fail(c, run_id, project_id, str(exc))
+            return _fail(c, run_id, project_id, str(exc),
+                         failure_class="infra", reason_code="pipeline_exception")
     finally:
         # Request/worker threads are pooled — a stale run_id here would mis-attribute
         # the next job's (or run_research's) llm_calls rows.

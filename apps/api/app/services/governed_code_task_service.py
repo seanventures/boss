@@ -535,7 +535,8 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
     if reservation.get("status") != "reserved":
         with begin(engine) as c:
             return _fail(c, run_id, project_id,
-                         f"Budget reservation denied: {reservation.get('status')}", status="blocked")
+                         f"Budget reservation denied: {reservation.get('status')}", status="blocked",
+                         failure_class="needs_human", reason_code="budget_denied")
     reservation_id = reservation["reservation_id"]
     with begin(engine) as c:
         c.execute(text("UPDATE code_task_runs SET reservation_id=:r WHERE id=:id"),
@@ -830,7 +831,8 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
                         c, run_id, project_id,
                         "Test author produced no test files even after escalating to a frontier "
                         "model — likely an ambiguous task or a repo without a test setup. Review "
-                        "the spec/acceptance criteria and retry.")
+                        "the spec/acceptance criteria and retry.",
+                        failure_class="needs_human", reason_code="no_test_files")
             if not use_microvm:
                 tests_before = _hash_files(root, test_files)
                 # Snapshot the frozen tests so a tamper-then-retry starts from clean tests
@@ -860,14 +862,27 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
         impl_files: list[str] = []
         tests_passed = False
         test_exit_code = None
-        for attempt in range(max_repair + 1):
+        # Escalate-recover (E4): the OSS lane gets attempts 0..max_repair; if the frozen
+        # tests still don't pass, take ONE final attempt on the FRONTIER engine before handing
+        # a failing result to the gate. A cheap implementer shouldn't sink an otherwise-sound
+        # task when a stronger model can pass the same frozen tests — reliability over cost.
+        escalated_recovered = False
+        for attempt in range(max_repair + 2):
+            escalate_impl = attempt == max_repair + 1
+            if escalate_impl:
+                with begin(engine) as c:
+                    emit_event(c, project_id, "code_task.step_escalating", "boss",
+                               "code_task_run", run_id,
+                               {"step": "implement", "reason": "tests_not_passing_on_oss",
+                                "action": "retry_on_frontier", "attempt": attempt})
             impl_prompt = (base_impl_prompt if attempt == 0
                            else _repair_prompt(base_impl_prompt, evidence_text, attempt))
             if use_microvm:
                 res2 = _guest_stage(
                     "implement", "implement" if do_separate_tests else "solo", impl_prompt,
                     test_cmds=[test_cmd],
-                    stage_title=f"SE: implement — {title}" + (f" (repair {attempt})" if attempt else ""))
+                    stage_title=f"SE: implement — {title}" + (f" (repair {attempt})" if attempt else ""),
+                    engine_override=(settings.code_agent_strong_engine if escalate_impl else ""))
                 r2 = {"cost_usd_micros": res2.cost_usd_micros, "summary": res2.summary,
                       "usage": res2.usage, "model": stage_routes["implement"]["model"]}
                 if do_separate_tests:
@@ -894,7 +909,7 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
                 fail_output = (res2.tests[0].stdout if res2.tests else "") or ""
             else:
                 set_llm_context(stage="implement" if do_separate_tests else "solo")
-                a, m = _route("implement")
+                a, m = _route_escalated("implement") if escalate_impl else _route("implement")
                 r2 = a.run_role(impl_prompt, root, model=m)
                 cost += int(r2.get("cost_usd_micros") or 0)
                 if do_separate_tests:
@@ -922,7 +937,14 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
                                "tests_untouched": tests_untouched,
                                "impl_files": len(impl_files),
                                "cost_usd_micros": int(r2.get("cost_usd_micros") or 0)})
-            if ok or attempt == max_repair:
+            if escalate_impl and ok:
+                escalated_recovered = True
+                with begin(engine) as c:
+                    emit_event(c, project_id, "code_task.step_recovered", "boss",
+                               "code_task_run", run_id,
+                               {"step": "implement", "recovered_by": "frontier_retry",
+                                "attempt": attempt})
+            if ok or attempt == max_repair + 1:
                 break
             repair_attempts += 1
             if not impl_files:
@@ -1246,7 +1268,7 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
             # VAG Phase 3 repair loop: how many evidence-fed retries the implementer used
             # (0 = passed/failed first try) and the per-attempt outcome trail.
             "repair_attempts": repair_attempts, "repair_max": max_repair,
-            "repair_log": repair_log,
+            "repair_log": repair_log, "impl_escalated_recovered": escalated_recovered,
             "qa_summary": r1.get("summary", "")[:400],
             "impl_summary": r2.get("summary", "")[:400],
             "review_summary": r3.get("summary", "")[:4000],
@@ -1339,7 +1361,8 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
             _release(sf, c, project_id, reservation_id, f"governed code task error: {exc}")
             if guest_vm_ids:
                 _persist_sandbox_id(c, run_id, guest_vm_ids[-1])
-            return _fail(c, run_id, project_id, str(exc))
+            return _fail(c, run_id, project_id, str(exc),
+                         failure_class="infra", reason_code="pipeline_exception")
     finally:
         # Request/worker threads are pooled — a stale run_id here would mis-attribute
         # the next job's (or run_research's) llm_calls rows.
