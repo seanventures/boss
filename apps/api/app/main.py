@@ -986,15 +986,31 @@ def require_authenticated_actor_binding(
     project_id: str,
     actor: str,
     permission: str,
+    connection=None,
 ) -> None:
     principal = current_api_principal.get()
-    if principal and principal != actor:
-        reason = (
-            f"Authenticated principal '{principal}' is not allowed to act as "
-            f"'{actor}'."
-        )
-        record_policy_denial(project_id, principal, permission, reason)
-        raise HTTPException(status_code=403, detail=reason)
+    if not principal or principal == actor:
+        return
+    # Bounded delegation: allow the authenticated principal to act as a member whose
+    # role_keys explicitly include the principal — e.g. the console's system actor
+    # 'executive_console' carries role_keys ['ceo', 'ceo_delegate'], so a 'ceo' key
+    # may act as it. This is NOT arbitrary impersonation: the target actor must carry
+    # the principal as one of its roles. Without a connection to check roles, fall
+    # back to the strict principal == actor rule.
+    if connection is not None:
+        try:
+            member = members.get_member(connection, project_id, actor)
+            role_keys = (member or {}).get("role_keys") or []
+        except Exception:  # noqa: BLE001 — any lookup failure ⇒ no delegation
+            role_keys = []
+        if principal in role_keys:
+            return
+    reason = (
+        f"Authenticated principal '{principal}' is not allowed to act as "
+        f"'{actor}'."
+    )
+    record_policy_denial(project_id, principal, permission, reason)
+    raise HTTPException(status_code=403, detail=reason)
 
 
 def require_project_actor(connection, project_id: str, actor: str, permission: str) -> None:
@@ -1020,11 +1036,11 @@ def require_project_actor(connection, project_id: str, actor: str, permission: s
             except (ProjectMemberNotFoundError, ProjectMemberPermissionError):
                 record_policy_denial(project_id, actor, permission, str(error))
                 raise HTTPException(status_code=403, detail=str(error)) from error
-            require_authenticated_actor_binding(project_id, actor, permission)
+            require_authenticated_actor_binding(project_id, actor, permission, connection)
             return
         record_policy_denial(project_id, actor, permission, str(error))
         raise HTTPException(status_code=403, detail=str(error)) from error
-    require_authenticated_actor_binding(project_id, actor, permission)
+    require_authenticated_actor_binding(project_id, actor, permission, connection)
 
 
 def require_decision_actor_binding(
