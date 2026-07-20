@@ -554,6 +554,9 @@ class DecisionService:
                 actor,
                 task_id=row["task_id"],
             )
+            # Meeting PRD publish → auto-start a governed code task so the
+            # approved outcome advances into coding (previously a dead-end).
+            self._start_code_task_after_prd(connection, row, actor, recommendation)
         elif action == "resume_agent_run":
             # A durable agent run paused for approval — resume it via a worker job
             # so the conversation continues with the approved tool's result.
@@ -712,6 +715,88 @@ class DecisionService:
             self.role_governance.apply_decision_outcome(
                 connection, row, action, actor, note
             )
+
+    def _start_code_task_after_prd(
+        self,
+        connection: Connection,
+        row: dict[str, Any],
+        actor: str,
+        recommendation: dict[str, Any],
+    ) -> None:
+        """After a meeting's PRD publish decision is approved, auto-start a
+        governed code task seeded from the PRD so the task advances into coding
+        (the meeting flow otherwise dead-ends at 'PRD published'). Idempotent —
+        emits a visible event on start, skip-duplicate, or no-repo."""
+        args = recommendation.get("args") or {}
+        is_prd_publish = recommendation.get("tool") == "publish_document" and (
+            bool(recommendation.get("start_code_task"))
+            or args.get("repo_subdir") == "docs/prd"
+        )
+        task_id = row.get("task_id")
+        if not is_prd_publish or not task_id:
+            return
+        # Idempotency: never double-start a code task for the same task.
+        existing = connection.execute(
+            text(
+                "SELECT id FROM code_task_runs "
+                "WHERE project_id = :p AND task_id = :t "
+                "AND status NOT IN ('failed', 'cancelled') "
+                "LIMIT 1"
+            ),
+            {"p": row["project_id"], "t": task_id},
+        ).first()
+        if existing is not None:
+            emit_event(
+                connection,
+                row["project_id"],
+                "code_task.already_started",
+                actor,
+                "code_task_run",
+                existing[0],
+                {"decision_id": row["id"], "task_id": task_id},
+            )
+            return
+        owner = getattr(self.settings, "target_github_owner", None)
+        repo = getattr(self.settings, "target_github_repo", None)
+        if not owner or not repo:
+            emit_event(
+                connection,
+                row["project_id"],
+                "code_task.not_started",
+                actor,
+                "task",
+                task_id,
+                {"decision_id": row["id"], "reason": "no_target_repo_configured"},
+            )
+            return
+        raw_title = str(args.get("title") or "Code task")
+        title = raw_title[5:].strip() if raw_title.startswith("PRD: ") else raw_title
+        prd_markdown = args.get("markdown") or ""
+        from .code_task_service import start_code_task
+
+        run_id = start_code_task(
+            connection,
+            project_id=row["project_id"],
+            task_id=task_id,
+            title=title or "Code task",
+            instructions=prd_markdown or f"Implement the approved plan: {title}",
+            acceptance_criteria=[],
+            test_commands=[],
+            owner=owner,
+            repo=repo,
+            base_branch="main",
+            finalize_ctx={},
+            jobs=self.jobs,
+        )
+        emit_event(
+            connection,
+            row["project_id"],
+            "code_task.started_from_prd",
+            actor,
+            "code_task_run",
+            run_id,
+            {"decision_id": row["id"], "task_id": task_id, "title": title},
+        )
 
     def _pull_request_ci_gate(
         self, connection: Connection, row: dict[str, Any]

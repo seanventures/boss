@@ -521,7 +521,7 @@ def _finalize_meeting(connection, settings, run_id) -> dict:
     )
     decision_id = create_blocking_decision(connection, project_id, task_id,
         "Approve publishing the PRD the team drafted",
-        {"action": "execute_agent_tool", "tool": "publish_document",
+        {"action": "execute_agent_tool", "tool": "publish_document", "start_code_task": True,
          "args": {"title": "PRD: " + run["directive"][:80].rstrip(), "markdown": state.get("prd_markdown") or "",
                   "subtitle": f"Drafted by a BOSS agent panel · source {run['url']}", "repo_subdir": "docs/prd"},
          "task_id": task_id}, {}, "meeting_prd_ready_to_publish", risk_tier=2)
