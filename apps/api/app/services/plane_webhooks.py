@@ -23,6 +23,9 @@ import hashlib
 import hmac
 import json
 import logging
+import re
+import ssl
+import urllib.request
 from secrets import compare_digest
 from typing import Any, Optional
 
@@ -45,6 +48,7 @@ class PlaneWebhookService:
 
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
+        self._label_cache: dict[str, dict[str, str]] = {}   # project_id -> {label_id: name}
 
     # --- config helpers -------------------------------------------------------
     def _watch_labels(self) -> set[str]:
@@ -68,6 +72,55 @@ class PlaneWebhookService:
             if isinstance(entry, dict):
                 out[str(pid)] = {str(k): str(v) for k, v in entry.items()}
         return out
+
+    # --- label resolution (Plane sends label UUIDs in the webhook, not names) -
+    _UUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+
+    def _api_ctx(self) -> tuple[str, str, str]:
+        """(base_url, workspace, token) for the Plane REST API — from config, deriving base+workspace
+        from PLANE_PROJECT_URL when PLANE_BASE_URL isn't set."""
+        base = (self.settings.plane_base_url or "").rstrip("/")
+        ws = getattr(self.settings, "plane_workspace", "") or ""
+        proj_url = self.settings.plane_project_url or ""
+        if (not base or not ws) and proj_url:
+            m = re.match(r"(https?://[^/]+)/([^/]+)/", proj_url)
+            if m:
+                base = base or m.group(1)
+                ws = ws or m.group(2)
+        return base, (ws or "goldeneye"), (self.settings.plane_api_token or "")
+
+    def _project_labels(self, project_id: str, *, force: bool = False) -> dict[str, str]:
+        """Cached {label_id: name} for a project, fetched from the Plane REST API. Empty on any
+        failure (the issue then simply won't match a watch label — fail-safe, not a crash)."""
+        if not force and project_id in self._label_cache:
+            return self._label_cache[project_id]
+        base, ws, token = self._api_ctx()
+        if not (base and token and project_id):
+            return {}
+        url = f"{base}/api/v1/workspaces/{ws}/projects/{project_id}/labels/"
+        try:
+            req = urllib.request.Request(url, headers={"X-API-Key": token})
+            with urllib.request.urlopen(req, timeout=10, context=ssl._create_unverified_context()) as r:
+                data = json.load(r)
+            rows = data.get("results", data) if isinstance(data, dict) else data
+            m = {str(x["id"]): str(x["name"]) for x in rows
+                 if isinstance(x, dict) and "id" in x and "name" in x}
+            self._label_cache[project_id] = m
+            return m
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("plane: could not fetch labels for project %s: %s", project_id, exc)
+            return {}
+
+    def _resolve_labels(self, project_id: Optional[str], raw: set[str]) -> set[str]:
+        """Map any label *UUIDs* in a webhook payload to their names (Plane sends ids, we watch by
+        name). Names pass through unchanged. Refetches once if a uuid misses the cache (new label)."""
+        uuids = {x for x in raw if self._UUID.match(x)}
+        if not uuids or not project_id:
+            return raw
+        id2name = self._project_labels(project_id)
+        if uuids - id2name.keys():                       # a new label the cache predates -> refetch
+            id2name = self._project_labels(project_id, force=True)
+        return {id2name.get(x, x).lower() for x in raw}
 
     # --- signature ------------------------------------------------------------
     def verify_signature(self, raw_body: bytes, signature: str) -> bool:
@@ -192,6 +245,8 @@ class PlaneWebhookService:
             return {"status": "invalid", "reason": "payload is not an object"}
 
         parsed = self.parse(payload)
+        # Plane's webhook carries label UUIDs, not names — resolve them so the boss: watch labels match.
+        parsed["labels"] = self._resolve_labels(parsed["plane_project_id"], parsed["labels"])
         decision = self.route(parsed)
         if decision["decision"] != "accept":
             logger.info(

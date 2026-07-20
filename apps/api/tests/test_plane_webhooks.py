@@ -79,6 +79,33 @@ def test_parse_flattens_nested_issue_and_labels():
     assert p["labels"] == {"boss:bug"}
 
 
+_UUID = "055f8484-ff76-4cdb-9446-27eb046d476d"
+
+
+def test_resolve_labels_maps_uuids_to_names(monkeypatch):
+    # Plane's real webhook sends label UUIDs, not names — resolve them via the (mocked) API.
+    svc = _svc()
+    monkeypatch.setattr(svc, "_project_labels", lambda pid, force=False: {_UUID: "boss:coding"})
+    assert svc._resolve_labels("proj-1", {_UUID}) == {"boss:coding"}
+    # plain names pass through untouched (no API call needed)
+    assert svc._resolve_labels("proj-1", {"boss:bug"}) == {"boss:bug"}
+    # no project id -> can't resolve, returns as-is
+    assert svc._resolve_labels(None, {_UUID}) == {_UUID}
+
+
+def test_ingest_accepts_uuid_labelled_issue_after_resolution(monkeypatch):
+    calls = []
+    _patch_start(monkeypatch, calls)
+    svc = _svc()
+    monkeypatch.setattr(svc, "_project_labels", lambda pid, force=False: {_UUID: "boss:coding"})
+    # a payload exactly like Plane's — labels are UUIDs
+    payload = _issue_payload(issue={"labels": [_UUID]})
+    body = json.dumps(payload).encode()
+    res = svc.ingest(_FakeConn(), body, {"x-plane-signature": _sign(body)}, jobs=object())
+    assert res["status"] == "accepted" and res["label"] == "boss:coding"
+    assert calls[0]["finalize_ctx"]["plane_label"] == "boss:coding"
+
+
 def test_labels_tolerates_string_and_dict_shapes_and_bare_ids():
     svc = _svc()
     assert svc._labels_of({"labels": ["boss:coding", "BOSS:Bug"]}) == {"boss:coding", "boss:bug"}

@@ -638,6 +638,9 @@ class Settings(BaseSettings):
     )
     # Base URL of the Plane instance, e.g. https://plane.local.sean.network (outbound Phase 2).
     plane_base_url: Optional[str] = Field(default=None, alias="PLANE_BASE_URL")
+    # Plane workspace slug (for the REST API that resolves webhook label UUIDs -> names). Derived from
+    # PLANE_PROJECT_URL when unset.
+    plane_workspace: str = Field(default="goldeneye", alias="PLANE_WORKSPACE")
     # Full project URL already provisioned in the ops store (workspace + project id live here);
     # base_url is derived from it when PLANE_BASE_URL is unset.
     plane_project_url: Optional[str] = Field(default=None, alias="PLANE_PROJECT_URL")
