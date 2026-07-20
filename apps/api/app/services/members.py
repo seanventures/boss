@@ -11,6 +11,15 @@ from sqlalchemy.engine import Connection
 from ..config import Settings
 from .core import emit_event
 
+# System/default member ids seeded by seed_default_members. Used to self-heal a
+# project that predates a default member or permission: a baseline actor that is
+# denied a permission can be re-seeded to its intended baseline and re-checked
+# before the request is refused (grants only what the defaults specify).
+DEFAULT_MEMBER_IDS = frozenset({
+    "ceo", "cto", "cao", "vp_agents", "release_manager",
+    "metatron", "coo", "executive_console", "system",
+})
+
 
 class ProjectMemberNotFoundError(RuntimeError):
     pass

@@ -469,6 +469,7 @@ from .services.agent_service import (
 )
 from .services.jobs import JobLeaseService, LeaseNotFoundError
 from .services.members import (
+    DEFAULT_MEMBER_IDS,
     MemberDirectoryService,
     ProjectMemberNotFoundError,
     ProjectMemberPermissionError,
@@ -1005,6 +1006,22 @@ def require_project_actor(connection, project_id: str, actor: str, permission: s
             permission=permission,
         )
     except (ProjectMemberNotFoundError, ProjectMemberPermissionError) as error:
+        # Self-heal: a project seeded before a default member/permission existed can
+        # leave a baseline system actor (e.g. executive_console) missing an intended
+        # permission. Re-seed the defaults once and retry before denying — this grants
+        # only what the defaults specify, so a genuinely-unauthorized actor is still
+        # refused.
+        if actor in DEFAULT_MEMBER_IDS:
+            try:
+                members.seed_default_members(connection, project_id, actor="bootstrap")
+                members.require_member(
+                    connection, project_id, actor, permission=permission
+                )
+            except (ProjectMemberNotFoundError, ProjectMemberPermissionError):
+                record_policy_denial(project_id, actor, permission, str(error))
+                raise HTTPException(status_code=403, detail=str(error)) from error
+            require_authenticated_actor_binding(project_id, actor, permission)
+            return
         record_policy_denial(project_id, actor, permission, str(error))
         raise HTTPException(status_code=403, detail=str(error)) from error
     require_authenticated_actor_binding(project_id, actor, permission)
