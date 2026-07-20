@@ -4842,6 +4842,43 @@ def run_code_task_step_endpoint(payload: dict):
     return run_code_task(engine, settings, jobs, payload["run_id"])
 
 
+@app.get("/v1/code-tasks/{run_id}/activity")
+def code_task_activity_endpoint(run_id: str):
+    """Per-stage model-call activity for a code task — the internal detail behind
+    each phase (model, latency, turns, retries, cost, ok/error). Written per call,
+    so it's live: use it to see WHY a phase (e.g. write_tests) is slow."""
+    with begin(engine) as connection:
+        rows = connection.execute(
+            text(
+                """
+                SELECT stage, engine, model, total_tokens, cost_usd_micros,
+                       latency_ms, retries, turns, ok, error, created_at
+                FROM llm_calls
+                WHERE code_task_run_id = :rid
+                ORDER BY created_at, id
+                """
+            ),
+            {"rid": run_id},
+        ).mappings().all()
+    calls = [
+        {
+            "stage": r["stage"],
+            "engine": r["engine"],
+            "model": r["model"],
+            "total_tokens": int(r["total_tokens"] or 0),
+            "cost_usd_micros": int(r["cost_usd_micros"] or 0),
+            "latency_ms": int(r["latency_ms"] or 0),
+            "retries": int(r["retries"] or 0),
+            "turns": int(r["turns"] or 0),
+            "ok": bool(r["ok"]),
+            "error": r["error"],
+            "created_at": r["created_at"].isoformat() if r["created_at"] else None,
+        }
+        for r in rows
+    ]
+    return {"run_id": run_id, "calls": calls}
+
+
 @app.post("/v1/code-tasks/{run_id}/retry")
 def retry_code_task_endpoint(run_id: str, payload: Optional[dict] = None):
     """Resume a failed/blocked code task as a new attempt in the same lineage, carrying its prior
