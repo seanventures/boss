@@ -45,7 +45,13 @@ from .github_app_adapter import GitHubAppAdapter
 from .iac_verify import IacVerifyResult, detect_iac_files, is_iac_task, run_iac_verify_lane
 from .llm_telemetry import clear_llm_context, record_llm_call, set_llm_context
 from .pipeline_profile_service import resolve_for_run
-from .pipeline_profiles import infer_risk_tier, materialize_route, route_for_step
+from .pipeline_profiles import (
+    infer_risk_tier,
+    materialize_route,
+    plan_gate_explanation,
+    route_for_step,
+    sensitive_markers_in,
+)
 from .sandbox_provider import LocalSubprocessProvider, MicroVMProvider
 from .software_factory import SoftwareFactoryService
 
@@ -432,10 +438,24 @@ def _requires_plan_approval(risk_tier: int) -> bool:
 
 
 def _block_for_plan_approval(engine, sf, *, run_id, project_id, task_id, reservation_id,
-                             design, risk_tier):
+                             design, risk_tier, title="", sensitive_markers=None):
     """Wire-Phase 2b: pause the run after the design phase, persist the design so the resumed run
     reuses it, release budget + sandbox during the wait, and raise a Decision whose approval
-    re-enqueues the code.task job (decisions._handle_approved_follow_on → resume_code_task)."""
+    re-enqueues the code.task job (decisions._handle_approved_follow_on → resume_code_task).
+
+    The decision explains WHY a human is needed (the concrete sensitive surfaces it touches) and
+    surfaces the actual plan + automated plan review, so the operator decides with real context —
+    not a naked 'approve the plan?' with nothing to look at."""
+    markers = sensitive_markers or []
+    plan_ok = bool(design.get("plan_ok", True))
+    why = plan_gate_explanation(markers, plan_ok=plan_ok)
+    if markers:
+        question = (
+            f"Approve the plan for “{(title or 'this task')[:70]}”? It touches "
+            f"{', '.join(markers)} — BOSS won't write code until you sign off on the approach."
+        )
+    else:
+        question = f"Approve the technical plan for “{(title or 'this task')[:70]}” before BOSS writes code?"
     with begin(engine) as c:
         c.execute(
             text("UPDATE code_task_runs SET state = COALESCE(state, '{}'::jsonb) || CAST(:s AS JSONB), "
@@ -444,10 +464,18 @@ def _block_for_plan_approval(engine, sf, *, run_id, project_id, task_id, reserva
         _release(sf, c, project_id, reservation_id, "Paused for human plan approval (Wire-Phase 2b).")
         dec_id = create_blocking_decision(
             c, project_id, task_id,
-            "Approve the technical plan before any code is written?",
-            {"action": "resume_code_task", "run_id": run_id, "plan": (design.get("plan") or "")[:4000]},
+            question,
+            {
+                "action": "resume_code_task",
+                "run_id": run_id,
+                "why": why,
+                "sensitive": markers,
+                "plan_ok": plan_ok,
+                "plan": (design.get("plan") or "")[:4000],
+                "plan_review": (design.get("plan_review") or "")[:2000],
+            },
             {"phase": "plan", "risk_tier": risk_tier},
-            "High-risk change: the plan needs human sign-off before implementation.",
+            why,
             risk_tier=risk_tier)
         c.execute(text("UPDATE code_task_runs SET status='blocked', phase='awaiting_plan_approval', "
                        "decision_id=:d, updated_at=now() WHERE id=:id"),
@@ -732,7 +760,9 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
             if _requires_plan_approval(risk_tier):
                 return _block_for_plan_approval(
                     engine, sf, run_id=run_id, project_id=project_id, task_id=task_id,
-                    reservation_id=reservation_id, design=design, risk_tier=risk_tier)
+                    reservation_id=reservation_id, design=design, risk_tier=risk_tier,
+                    title=title,
+                    sensitive_markers=sensitive_markers_in({**spec, "title": title}))
 
         r1 = {"cost_usd_micros": 0, "summary": "", "usage": {}, "model": None}
         test_files: list[str] = []
