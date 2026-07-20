@@ -309,8 +309,34 @@ def _release(sf, connection, project_id: str, reservation_id: Optional[str], rea
 
 
 def _set_phase(connection, run_id: str, phase: str) -> None:
+    # Record how long the phase we're LEAVING took, then start the clock on the new
+    # one. Timings live in finalize_ctx (merged with ||, so the mid-run state overwrite
+    # can't clobber them). Lets us see where a code task spends its time — especially
+    # the big 'coding' phase (the whole inner agent loop). Atomic in one statement.
     connection.execute(
-        text("UPDATE code_task_runs SET phase = :ph, updated_at = now() WHERE id = :id"),
+        text(
+            """
+            UPDATE code_task_runs SET
+              finalize_ctx = COALESCE(finalize_ctx, '{}'::jsonb)
+                || jsonb_build_object('phase_started_at', to_jsonb(now()))
+                || CASE
+                     WHEN finalize_ctx ? 'phase_started_at' AND phase IS NOT NULL THEN
+                       jsonb_build_object(
+                         'phase_timings',
+                         COALESCE(finalize_ctx->'phase_timings', '[]'::jsonb)
+                         || jsonb_build_array(jsonb_build_object(
+                              'phase', phase,
+                              'ms', GREATEST(0, EXTRACT(EPOCH FROM (
+                                      now() - (finalize_ctx->>'phase_started_at')::timestamptz)) * 1000)::bigint
+                            ))
+                       )
+                     ELSE '{}'::jsonb
+                   END,
+              phase = :ph,
+              updated_at = now()
+            WHERE id = :id
+            """
+        ),
         {"ph": phase, "id": run_id},
     )
 
