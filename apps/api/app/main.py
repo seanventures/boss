@@ -5831,6 +5831,35 @@ def agent_chat(payload: AgentChatRequest, request: Request) -> AgentChatResponse
         return AgentChatResponse(**result)
 
 
+@app.get("/v1/agent/threads")
+def list_agent_threads_endpoint(project_id: str, actor: str, since_days: int = 7):
+    """Recent chat threads (default last 7 days) for the console's history + resume."""
+    with begin(engine) as connection:
+        require_project_actor(connection, project_id, actor, "agent_chat")
+        return {
+            "threads": orchestration_agent.list_threads(
+                connection, project_id=project_id, actor=actor, since_days=since_days
+            )
+        }
+
+
+@app.get("/v1/agent/threads/{thread_id}/messages")
+def get_agent_thread_messages_endpoint(thread_id: str, project_id: str, actor: str):
+    """Full message history for one chat thread (to restore a conversation)."""
+    with begin(engine) as connection:
+        require_project_actor(connection, project_id, actor, "agent_chat")
+        owner = connection.execute(
+            text("SELECT project_id FROM agent_threads WHERE id = :id"),
+            {"id": thread_id},
+        ).mappings().first()
+        if not owner or owner["project_id"] != project_id:
+            raise HTTPException(status_code=404, detail="Agent thread not found.")
+        return {
+            "thread_id": thread_id,
+            "messages": orchestration_agent.list_messages(connection, thread_id),
+        }
+
+
 @app.get("/v1/tasks", response_model=TaskListResponse)
 def list_tasks(
     project_id: str, limit: int = 50, offset: int = 0

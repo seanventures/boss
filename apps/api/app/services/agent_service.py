@@ -165,6 +165,52 @@ class AgentService:
         ).mappings().all()
         return [self._serialize_message(row) for row in rows]
 
+    def list_threads(
+        self,
+        connection: Connection,
+        *,
+        project_id: str,
+        actor: str,
+        since_days: int = 7,
+        limit: int = 40,
+    ) -> list[dict[str, Any]]:
+        """Recent chat threads for a project+actor (default last 7 days), newest
+        first, each with a title (first user message) and message count — for the
+        console's conversation history + resume."""
+        rows = connection.execute(
+            text(
+                """
+                SELECT t.id, t.status, t.created_at, t.updated_at,
+                       (SELECT m.content FROM agent_messages m
+                          WHERE m.thread_id = t.id AND m.role = 'user'
+                          ORDER BY m.created_at, m.id LIMIT 1) AS first_user,
+                       (SELECT count(*) FROM agent_messages m
+                          WHERE m.thread_id = t.id) AS message_count
+                FROM agent_threads t
+                WHERE t.project_id = :p AND t.actor = :a AND t.surface = 'chat'
+                  AND t.updated_at >= now() - make_interval(days => :days)
+                ORDER BY t.updated_at DESC
+                LIMIT :limit
+                """
+            ),
+            {"p": project_id, "a": actor, "days": int(since_days), "limit": int(limit)},
+        ).mappings().all()
+        threads: list[dict[str, Any]] = []
+        for r in rows:
+            first = (r["first_user"] or "").strip()
+            title = first.splitlines()[0][:80] if first else "New conversation"
+            threads.append(
+                {
+                    "thread_id": r["id"],
+                    "title": title or "New conversation",
+                    "message_count": int(r["message_count"] or 0),
+                    "status": r["status"],
+                    "created_at": r["created_at"].isoformat() if r["created_at"] else None,
+                    "updated_at": r["updated_at"].isoformat() if r["updated_at"] else None,
+                }
+            )
+        return threads
+
     def record_turn(
         self,
         connection: Connection,
