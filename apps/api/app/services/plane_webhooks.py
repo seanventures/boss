@@ -206,16 +206,25 @@ class PlaneWebhookService:
         matched = parsed["labels"] & watch
         if not matched:
             return {"decision": "ignore", "reason": "no boss: label on the issue"}
+        entry = pmap[parsed["plane_project_id"]]
         if matched == {_DESIGN_LABEL}:
-            # boss:design alone → the Phase-3 PRD/design flow, not a v1 code task.
-            return {"decision": "ignore", "reason": "boss:design deferred to Phase 3"}
+            # boss:design → convene a governed PRD meeting (agent panel → PRD →
+            # human approval → auto-started code task), not a v1 code task.
+            return {
+                "decision": "accept",
+                "mode": "meeting",
+                "label": _DESIGN_LABEL,
+                "project_id": entry.get("project_id") or self.settings.default_project_id,
+                "owner": entry.get("owner") or self.settings.target_github_owner,
+                "repo": entry.get("repo") or self.settings.target_github_repo,
+            }
         code_labels = matched & _CODE_TASK_LABELS
         if not code_labels:
             return {"decision": "ignore", "reason": f"no code-task label among {sorted(matched)}"}
-        entry = pmap[parsed["plane_project_id"]]
         label = sorted(code_labels)[0]
         return {
             "decision": "accept",
+            "mode": "code",
             "label": label,
             "is_bug": label == "boss:bug",                       # P3: bug -> repro-seeded framing
             "risk_tier": _PRIORITY_RISK.get(str(parsed.get("priority") or "").lower()),  # P3: priority hint
@@ -234,6 +243,60 @@ class PlaneWebhookService:
             ),
             {"p": project_id, "iid": plane_issue_id},
         ).scalar_one_or_none()
+
+    def _existing_meeting(self, connection: Connection, project_id: str, plane_issue_id: str) -> Optional[str]:
+        return connection.execute(
+            text(
+                "SELECT id FROM meeting_runs "
+                "WHERE project_id = :p AND constraints->>'plane_issue_id' = :iid "
+                "ORDER BY created_at DESC LIMIT 1"
+            ),
+            {"p": project_id, "iid": plane_issue_id},
+        ).scalar_one_or_none()
+
+    def _convene_meeting_for_issue(
+        self, connection: Connection, parsed: dict[str, Any],
+        decision: dict[str, Any], jobs,
+    ) -> dict[str, Any]:
+        """boss:design → create a task and convene a governed PRD meeting. The
+        meeting's PRD-approval then auto-starts the code task (decisions
+        follow-on), completing Plane → meeting → approval → coding. Idempotent."""
+        existing = self._existing_meeting(
+            connection, decision["project_id"], parsed["plane_issue_id"]
+        )
+        if existing:
+            return {"status": "duplicate", "mode": "meeting", "run_id": existing,
+                    "plane_issue_id": parsed["plane_issue_id"]}
+        from .budget import BudgetGovernor
+        from .intake import CommandIntakeService
+        from .meeting_service import convene_prd_meeting_core
+
+        title = parsed["title"] or f"Plane issue {parsed['sequence_id'] or parsed['plane_issue_id']}"
+        directive = f"{title}\n\n{parsed['description']}" if parsed.get("description") else title
+        result = convene_prd_meeting_core(
+            connection,
+            settings=self.settings,
+            budget=BudgetGovernor(self.settings),
+            intake=CommandIntakeService(self.settings),
+            jobs=jobs,
+            project_id=decision["project_id"],
+            directive=directive,
+            constraints={
+                "source": "plane",
+                "plane_issue_id": parsed["plane_issue_id"],
+                "plane_project_id": parsed["plane_project_id"],
+                "plane_sequence_id": parsed["sequence_id"],
+            },
+            role_keys=[],
+        )
+        logger.info(
+            "plane webhook accepted (meeting): issue=%s (#%s) -> meeting_run=%s task=%s",
+            parsed["plane_issue_id"], parsed["sequence_id"],
+            result["run_id"], result["task_id"],
+        )
+        return {"status": "accepted", "mode": "meeting", "run_id": result["run_id"],
+                "task_id": result["task_id"],
+                "plane_issue_id": parsed["plane_issue_id"], "label": decision["label"]}
 
     def ingest(
         self, connection: Connection, raw_body: bytes, headers: dict[str, str], jobs
@@ -270,6 +333,11 @@ class PlaneWebhookService:
             )
             return {"status": "ignored", "reason": decision["reason"],
                     "plane_issue_id": parsed["plane_issue_id"]}
+
+        # boss:design → convene a governed PRD meeting instead of a direct code task.
+        # (The meeting's PRD-approval then auto-starts the code task.)
+        if decision.get("mode") == "meeting":
+            return self._convene_meeting_for_issue(connection, parsed, decision, jobs)
 
         # Idempotency: one Plane issue → at most one run. A redelivery/edit returns the same run.
         existing = self._existing_run(connection, decision["project_id"], parsed["plane_issue_id"])
