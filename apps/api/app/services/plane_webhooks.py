@@ -41,6 +41,17 @@ logger = logging.getLogger(__name__)
 # not silently dropped) but deferred to the Phase-3 PRD/design flow rather than run as a code task.
 _CODE_TASK_LABELS = {"boss:coding", "boss:bug"}
 _DESIGN_LABEL = "boss:design"
+# P3 (#116): Plane priority -> BOSS risk_tier hint (higher tier = more rigor/gates). Unknown -> default.
+_PRIORITY_RISK = {"urgent": 3, "high": 3, "medium": 2, "low": 2}
+
+
+def _frame_instructions(description: str, *, is_bug: bool = False) -> str:
+    """P3: a boss:bug ticket is framed as a bug — reproduce → root-cause → fix → regression test —
+    rather than a plain 'implement this'. boss:coding passes through unchanged."""
+    if is_bug:
+        return ("BUG REPORT — reproduce the issue, find the root cause, fix it, and add a regression "
+                "test that FAILS before your fix and passes after.\n\n" + description)
+    return description
 
 
 class PlaneWebhookService:
@@ -202,9 +213,12 @@ class PlaneWebhookService:
         if not code_labels:
             return {"decision": "ignore", "reason": f"no code-task label among {sorted(matched)}"}
         entry = pmap[parsed["plane_project_id"]]
+        label = sorted(code_labels)[0]
         return {
             "decision": "accept",
-            "label": sorted(code_labels)[0],
+            "label": label,
+            "is_bug": label == "boss:bug",                       # P3: bug -> repro-seeded framing
+            "risk_tier": _PRIORITY_RISK.get(str(parsed.get("priority") or "").lower()),  # P3: priority hint
             "owner": entry.get("owner") or self.settings.target_github_owner,
             "repo": entry.get("repo") or self.settings.target_github_repo,
             "project_id": entry.get("project_id") or self.settings.default_project_id,
@@ -264,17 +278,19 @@ class PlaneWebhookService:
                     "plane_issue_id": parsed["plane_issue_id"]}
 
         title = parsed["title"] or f"Plane issue {parsed['sequence_id'] or parsed['plane_issue_id']}"
+        instructions = _frame_instructions(parsed["description"] or title, is_bug=decision.get("is_bug"))
         run_id = start_code_task(
             connection,
             project_id=decision["project_id"],
             task_id=None,
             title=title,
-            instructions=parsed["description"] or title,
+            instructions=instructions,
             acceptance_criteria=[],
             test_commands=[],
             owner=decision["owner"],
             repo=decision["repo"],
             base_branch="main",
+            risk_tier=decision.get("risk_tier"),                  # P3: priority -> risk hint
             finalize_ctx={
                 "source": "plane",
                 "plane_issue_id": parsed["plane_issue_id"],
@@ -289,5 +305,16 @@ class PlaneWebhookService:
             parsed["plane_issue_id"], parsed["sequence_id"], run_id,
             decision["owner"], decision["repo"], decision["label"],
         )
+        # P2 (#115): immediately move the Plane ticket to In Progress + comment that BOSS picked it up.
+        # Best-effort — a Plane API hiccup must not fail the accepted webhook.
+        try:
+            from . import plane_sync
+            from .plane_client import PlaneClient
+            run_stub = {"id": run_id, "finalize_ctx": {
+                "source": "plane", "plane_issue_id": parsed["plane_issue_id"],
+                "plane_project_id": parsed["plane_project_id"]}}
+            plane_sync.sync_run(PlaneClient(self.settings), run_stub, "code_task.started")
+        except Exception:  # noqa: BLE001
+            logger.warning("plane: could not sync 'started' for issue %s", parsed["plane_issue_id"])
         return {"status": "accepted", "run_id": run_id,
                 "plane_issue_id": parsed["plane_issue_id"], "label": decision["label"]}

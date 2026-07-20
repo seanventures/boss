@@ -4302,6 +4302,23 @@ async def receive_plane_webhook(request: Request):
     return JSONResponse(status_code=202, content=result)
 
 
+@app.post("/v1/integrations/plane/sync")
+def plane_sync_endpoint(payload: dict):
+    """Plane status sync-back (Phase 2 #115 / Phase 4 #117): mirror a code-task lifecycle event onto
+    its Plane ticket — PATCH the state + comment (PR link, failure, merged→Done). payload:
+    {run_id, event}. `started`/`pr_opened`/`completed_no_pr` auto-fire in the pipeline; this drives the
+    rest (`code_task.failed`, `code_task.gate_overridden`, `software_factory.pull_request_merged`) and
+    backfill. No-op for non-Plane runs."""
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    run_id = payload.get("run_id")
+    event = payload.get("event")
+    if not run_id or not event:
+        raise HTTPException(status_code=422, detail="run_id and event are required.")
+    from .services import plane_sync
+    return plane_sync.on_event(engine, settings, run_id, event)
+
+
 @app.post("/v1/github/community/jobs/{job_id}/execute")
 def execute_github_community_job(
     job_id: str, payload: GitHubCommunityJobExecuteRequest

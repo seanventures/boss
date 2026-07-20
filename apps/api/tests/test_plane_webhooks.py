@@ -147,6 +147,41 @@ def test_route_ignores_issue_without_boss_label():
     assert d["decision"] == "ignore" and "no boss: label" in d["reason"]
 
 
+# --- P3 richer mapping -------------------------------------------------------
+def test_route_flags_bug_and_maps_priority():
+    from apps.api.app.services import plane_webhooks as pw
+    bug = _svc().route(_svc().parse(
+        _issue_payload(issue={"labels": [{"name": "boss:bug"}], "priority": "high"})))
+    assert bug["decision"] == "accept" and bug["is_bug"] is True and bug["risk_tier"] == 3
+    coding = _svc().route(_svc().parse(
+        _issue_payload(issue={"labels": [{"name": "boss:coding"}], "priority": "low"})))
+    assert coding["is_bug"] is False and coding["risk_tier"] == 2
+    none = _svc().route(_svc().parse(
+        _issue_payload(issue={"labels": [{"name": "boss:coding"}], "priority": None})))
+    assert none["risk_tier"] is None                     # unknown priority -> default (None)
+    assert pw._PRIORITY_RISK["urgent"] == 3
+
+
+def test_frame_instructions_bug_vs_coding():
+    from apps.api.app.services.plane_webhooks import _frame_instructions
+    assert "BUG REPORT" in _frame_instructions("app crashes", is_bug=True)
+    assert "regression test" in _frame_instructions("x", is_bug=True).lower()
+    assert _frame_instructions("just build it", is_bug=False) == "just build it"
+
+
+def test_ingest_bug_frames_instructions_and_passes_risk(monkeypatch):
+    calls = []
+    _patch_start(monkeypatch, calls)
+    payload = _issue_payload(issue={"labels": [{"name": "boss:bug"}], "priority": "urgent",
+                                    "description_stripped": "Login returns 500 on empty password"})
+    body = json.dumps(payload).encode()
+    res = _svc().ingest(_FakeConn(), body, {"x-plane-signature": _sign(body)}, jobs=object())
+    assert res["status"] == "accepted" and res["label"] == "boss:bug"
+    kw = calls[0]
+    assert "BUG REPORT" in kw["instructions"] and "Login returns 500" in kw["instructions"]
+    assert kw["risk_tier"] == 3                            # urgent -> 3
+
+
 def test_route_defers_design_only_to_phase_3():
     payload = _issue_payload(issue={"labels": [{"name": "boss:design"}]})
     d = _svc().route(_svc().parse(payload))

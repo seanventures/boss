@@ -31,7 +31,7 @@ from sqlalchemy import text
 from ..config import Settings
 from ..db import begin
 from ..schemas import FileChange
-from . import design_prompts, verification_target
+from . import design_prompts, plane_sync, verification_target
 from .code_agent import make_code_agent
 from .code_task_service import (
     _fail,
@@ -1165,6 +1165,7 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
                                "updated_at=now() WHERE id=:id"), {"id": run_id})
                 emit_event(c, project_id, "code_task.completed_no_pr", "boss",
                            "code_task_run", run_id, {"quality_gate_id": qg_id})
+            plane_sync.on_event(engine, settings, run_id, "code_task.completed_no_pr")  # P2
             return {"status": "completed", "done": True, "quality_gate_id": qg_id,
                     "pr_suppressed": True}
 
@@ -1196,6 +1197,7 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
             emit_event(c, project_id, "code_task.pr_opened", "boss", "code_task_run", run_id,
                        {"pull_request_url": proposal.get("pull_request_url"),
                         "decision_id": proposal.get("decision_id"), "quality_gate_id": qg_id})
+        plane_sync.on_event(engine, settings, run_id, "code_task.pr_opened")  # P2: comment the PR link
         return {"status": "completed", "done": True, "quality_gate_id": qg_id, **proposal}
 
     except Exception as exc:  # noqa: BLE001 — fail the run gracefully on any agent/model error
