@@ -1055,7 +1055,12 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
                 panel["consistency"] = (rr, _parse_consistency(rr.get("summary", "")))
 
             checks = review_checks + [_do_security, _do_full, _do_consistency]
-            max_workers = min(max(1, settings.code_agent_max_concurrency), len(checks))
+            # Panel checks are independent + read-only, so run them ALL in parallel rather
+            # than in slow batches of code_agent_max_concurrency (which is tuned for the
+            # general lane). A low general concurrency was serializing the panel into ~2-3
+            # batches of ~7-10min each → ~20min wall-clock. Provider 429s are handled by the
+            # adapter's retry, so wider parallelism here is safe.
+            max_workers = min(len(checks), max(int(settings.code_agent_max_concurrency), 6))
             panel_parallel = max_workers > 1
             with ThreadPoolExecutor(max_workers=max_workers) as pool:
                 list(pool.map(lambda fn: fn(), checks))

@@ -539,6 +539,10 @@ class Settings(BaseSettings):
     code_review_panel_engines: str = Field(default="", alias="BOSS_CODE_REVIEW_PANEL_ENGINES")
     # Max agent turns inside the sandbox before we stop and take the diff.
     code_agent_max_turns: int = Field(default=40, alias="BOSS_CODE_AGENT_MAX_TURNS")
+    # Read-only stages (adversarial/security/consistency review) don't edit code and don't
+    # need 40 turns of exploration — a tighter cap cuts review latency a lot without losing
+    # rigor (they read the diff + relevant files + judge).
+    code_agent_review_max_turns: int = Field(default=16, alias="BOSS_CODE_AGENT_REVIEW_MAX_TURNS")
     # Wall-clock cap for a single CodeAgent invocation.
     code_agent_timeout_seconds: int = Field(
         default=900, alias="BOSS_CODE_AGENT_TIMEOUT_SECONDS"

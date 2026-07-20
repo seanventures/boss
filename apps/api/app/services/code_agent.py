@@ -185,11 +185,15 @@ class ClaudeCodeAgent:
         else:
             allowed = "Read,Grep,Glob,Bash" if read_only else self.settings.code_agent_allowed_tools
         permission = "default" if read_only else "acceptEdits"
+        _max_turns = int(self.settings.code_agent_max_turns or 40)
+        if read_only:
+            # Reviews read + judge; they don't need the full edit-loop turn budget.
+            _max_turns = min(_max_turns, int(getattr(self.settings, "code_agent_review_max_turns", 16) or 16))
         cmd = [
             self._claude_bin(),
             "-p", prompt,
             "--output-format", "json",
-            "--max-turns", str(int(self.settings.code_agent_max_turns or 40)),
+            "--max-turns", str(_max_turns),
             "--allowedTools", allowed,
             "--permission-mode", permission,
         ]
