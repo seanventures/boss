@@ -402,11 +402,17 @@ def _plan_prompt(title, spec):
 
 def _review_plan_prompt(title, plan):
     return (
-        "You are a design reviewer with FRESH context. FIRST decide whether this is even a CODING "
-        "task for THIS repository. If the deliverable is a document, research, or a specification "
-        "(e.g. a PRD or a discovery write-up), or the repository is unrelated boilerplate that the "
-        "task does not actually ask you to modify, then this is NOT a coding task — respond with "
-        "ONLY this single line and nothing else:\n"
+        "You are a design reviewer with FRESH context. FIRST decide whether this task ASKS FOR "
+        "CODE at all. It is NOT a coding task ONLY when its deliverable is inherently a document, "
+        "research, or a written specification — e.g. 'write a PRD', 'research the options', "
+        "'produce a discovery report' — where the task does not call for creating or modifying "
+        "source code.\n"
+        "IMPORTANT: a task that asks you to add or change code IS a coding task and goes through "
+        "full review — EVEN IF the new code is a standalone/new module, or the repository already "
+        "contains unrelated or messy code. Repo tidiness and how 'connected' the new module is are "
+        "NOT reasons to reject; they are normal review feedback at most.\n"
+        "If and ONLY if the deliverable is not code at all, respond with ONLY this single line and "
+        "nothing else:\n"
         "  ROUTING: NOT_A_CODE_TASK — <one-line reason>\n\n"
         "Otherwise, critique the plan below for gaps, missing edge cases, or risky choices, judged "
         "against the task. Do NOT edit any files. End with EXACTLY one final line:\n"
