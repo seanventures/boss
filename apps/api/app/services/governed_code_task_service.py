@@ -570,6 +570,16 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
         stage_routes[step] = {"engine": eng, "model": model}
         return _agent_for(eng), model
 
+    def _route_escalated(step: str):
+        """Force the STRONG (frontier) engine/model for a step — auto-recovery when the
+        default route produced no usable output. Call from the MAIN thread only."""
+        eng = (settings.code_agent_strong_engine
+               or stage_routes.get(step, {}).get("engine") or build_engine)
+        model = (settings.code_agent_strong_model
+                 or stage_routes.get(step, {}).get("model"))
+        stage_routes[step] = {"engine": eng, "model": model, "escalated": True}
+        return _agent_for(eng), model
+
     def _route_names(step: str):
         """Like _route but returns (engine_name, model) without building a host agent —
         the micro-VM substrate maps the route onto guest engine env instead."""
@@ -732,29 +742,65 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
             # STEP write tests (qa), tests only.
             with begin(engine) as c:
                 _set_phase(c, run_id, "write_tests")
-            if use_microvm:
-                res1 = _guest_stage("write_tests", "write_tests",
-                                    _qa_prompt(title, instructions, criteria, test_cmd,
-                                               iac=iac_task),
-                                    test_cmds=[], stage_title=f"QA: author tests — {title}")
-                r1 = {"cost_usd_micros": res1.cost_usd_micros, "summary": res1.summary,
-                      "usage": res1.usage, "model": stage_routes["write_tests"]["model"]}
-                test_changes = [fc for fc in res1.diff if _is_test_path(fc.path)]
-                test_files = [fc.path for fc in test_changes]
-                # Commit ONLY test files — anything else the QA role wrote is discarded,
-                # which is the micro-VM equivalent of the tests-first separation.
-                _commit_stage(test_changes, f"governed: tests-first (qa) — {title[:60]}")
-            else:
+
+            def _attempt_write_tests(escalate: bool):
+                """One QA/write-tests pass → (r1, test_files, test_changes|None). escalate
+                forces the frontier model + a sharper prompt to recover a weak first pass."""
+                nonlocal cost
+                prompt = _qa_prompt(title, instructions, criteria, test_cmd, iac=iac_task)
+                if escalate:
+                    prompt = (
+                        "Your previous attempt produced NO recognizable test files. Author "
+                        "real, runnable tests NOW as actual FILES in this project's test "
+                        "convention and directory (e.g. *.test.ts, *_test.py, tests/…), not a "
+                        "description or plan.\n\n" + prompt
+                    )
+                if use_microvm:
+                    res = _guest_stage(
+                        "write_tests", "write_tests", prompt, test_cmds=[],
+                        stage_title=f"QA: author tests — {title}",
+                        engine_override=(settings.code_agent_strong_engine if escalate else ""),
+                    )
+                    r = {"cost_usd_micros": res.cost_usd_micros, "summary": res.summary,
+                         "usage": res.usage, "model": stage_routes["write_tests"]["model"]}
+                    changes = [fc for fc in res.diff if _is_test_path(fc.path)]
+                    return r, [fc.path for fc in changes], changes
                 set_llm_context(stage="write_tests")
-                a, m = _route("write_tests")
-                r1 = a.run_role(_qa_prompt(title, instructions, criteria, test_cmd,
-                                           iac=iac_task), root, model=m)
-                cost += int(r1.get("cost_usd_micros") or 0)
-                test_files = [fc.path for fc in sandbox.diff() if _is_test_path(fc.path)]
+                a, m = _route_escalated("write_tests") if escalate else _route("write_tests")
+                r = a.run_role(prompt, root, model=m)
+                cost += int(r.get("cost_usd_micros") or 0)
+                return r, [fc.path for fc in sandbox.diff() if _is_test_path(fc.path)], None
+
+            r1, test_files, test_changes = _attempt_write_tests(escalate=False)
+            if not test_files:
+                # SELF-HEAL: don't hard-fail on a weak/empty first pass — escalate to a
+                # frontier model and retry once, visibly, before giving up.
+                with begin(engine) as c:
+                    emit_event(c, project_id, "code_task.step_escalating", "boss",
+                               "code_task_run", run_id,
+                               {"step": "write_tests", "reason": "no_test_files",
+                                "action": "retry_on_frontier"})
+                r1, test_files, test_changes = _attempt_write_tests(escalate=True)
+                if test_files:
+                    with begin(engine) as c:
+                        emit_event(c, project_id, "code_task.step_recovered", "boss",
+                                   "code_task_run", run_id,
+                                   {"step": "write_tests", "recovered_by": "frontier_retry"})
+            if use_microvm:
+                # Commit ONLY test files — anything else the QA role wrote is discarded.
+                _commit_stage(test_changes or [], f"governed: tests-first (qa) — {title[:60]}")
             if not test_files:
                 with begin(engine) as c:
+                    emit_event(c, project_id, "code_task.step_exhausted", "boss",
+                               "code_task_run", run_id,
+                               {"step": "write_tests",
+                                "reason": "no_test_files_after_escalation"})
                     _release(sf, c, project_id, reservation_id, "no independent tests authored")
-                    return _fail(c, run_id, project_id, "Gate fail: test author produced no test files.")
+                    return _fail(
+                        c, run_id, project_id,
+                        "Test author produced no test files even after escalating to a frontier "
+                        "model — likely an ambiguous task or a repo without a test setup. Review "
+                        "the spec/acceptance criteria and retry.")
             if not use_microvm:
                 tests_before = _hash_files(root, test_files)
                 # Snapshot the frozen tests so a tamper-then-retry starts from clean tests
