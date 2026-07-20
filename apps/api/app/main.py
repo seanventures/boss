@@ -5267,6 +5267,27 @@ def design_routing_endpoint(payload: Optional[dict] = None):
         max_design_passes=settings.design_max_passes)
 
 
+@app.post("/v1/concurrency-load")
+def concurrency_load_endpoint(payload: Optional[dict] = None):
+    """#103: drive N concurrent tasks and report throughput / latency / saturation for the Go-services
+    concurrency layer. Defaults to a **stub** runner (simulated task, **zero model cost**). payload:
+    {n, concurrency, stub_duration_ms?, fail_every?, sweep?: [concurrency levels]}."""
+    from .services import concurrency_harness as ch
+    payload = payload or {}
+    dur = float(payload.get("stub_duration_ms", 20)) / 1000.0
+    fail_every = int(payload.get("fail_every", 0))
+    n = min(2000, max(0, int(payload.get("n", 100))))          # cap to keep it a smoke, not a DoS
+    conc = min(500, max(1, int(payload.get("concurrency", 20))))
+
+    def task_fn(i):
+        return ch.stub_task(i, duration_s=dur, fail_every=fail_every)
+
+    if payload.get("sweep"):
+        levels = [min(500, max(1, int(c))) for c in payload["sweep"]][:12]
+        return ch.sweep(task_fn, levels, n_per_level=min(500, n or 50))
+    return ch.run_load(task_fn, n, conc)
+
+
 # --- Discovery pipeline: research-driven outcome discovery -------------------
 @app.post("/v1/discoveries")
 def start_discovery_endpoint(payload: dict):

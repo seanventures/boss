@@ -145,41 +145,11 @@ class MicroVMProvider:
         )
 
     def _submit_body(self, spec: dict, tenant_id: Optional[str]) -> dict:
-        """Map BOSS's internal flat guest_spec -> the sandbox-service §2 submit body.
-        Model creds ride in engine_env (per task, never baked into the guest image)."""
-        engine = (spec.get("engine") or "openai").lower()
-        env: dict = {}
-        for key, field in (
-            ("CLAUDE_CODE_OAUTH_TOKEN", "claude_oauth_token"),
-            ("OPENAI_API_KEY", "openai_api_key"),
-            ("OPENAI_BASE_URL", "openai_base_url"),
-            ("OPENAI_MODEL", "model"),
-            ("AZURE_OPENAI_ENDPOINT", "azure_endpoint"),
-            ("AZURE_OPENAI_DEPLOYMENT", "azure_deployment"),
-            ("AZURE_OPENAI_API_VERSION", "azure_api_version"),
-            ("AZURE_OPENAI_KEY", "azure_key"),
-        ):
-            val = spec.get(field)
-            if val:
-                env[key] = val
+        """Map BOSS's internal flat guest_spec -> the versioned sandbox-service submit body (#99
+        contract). Model creds ride in engine_env (per task, never baked into the guest image)."""
+        from .sandbox_contract import build_submit_request
         task_id = spec.get("task_id") or make_id("crun")
-        return {
-            "task_id": task_id,
-            "tenant_id": tenant_id or "default",
-            "repo": {
-                "owner": spec.get("owner"), "name": spec.get("repo"),
-                "base_branch": spec.get("base_branch") or "main",
-                "work_branch": spec.get("work_branch") or f"boss/code/{task_id}",
-            },
-            "git_token": spec.get("token") or "",
-            "instructions": spec.get("instructions", ""),
-            "acceptance_criteria": spec.get("acceptance_criteria", []),
-            "test_commands": spec.get("test_commands", []),
-            "engine": engine,
-            "engine_env": env,
-            "run_mutation": bool(spec.get("run_mutation", False)),
-            "resources": spec.get("resources") or {},
-        }
+        return build_submit_request(spec, tenant_id, task_id=task_id)
 
     def run_code_task(self, spec: dict, *, tenant_id: Optional[str] = None):
         """Dispatch the task to the sandbox-service over the async §2 contract
