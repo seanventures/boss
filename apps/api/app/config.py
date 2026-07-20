@@ -543,6 +543,13 @@ class Settings(BaseSettings):
     # need 40 turns of exploration — a tighter cap cuts review latency a lot without losing
     # rigor (they read the diff + relevant files + judge).
     code_agent_review_max_turns: int = Field(default=16, alias="BOSS_CODE_AGENT_REVIEW_MAX_TURNS")
+    # Hard wall-clock deadline for the whole review panel AND for a single read-only review
+    # invocation — so a slow/rate-limited review (e.g. an OpenAI-gateway retry storm) can't
+    # blow the review phase out to 20min. On deadline a check degrades to 'not_run' (security
+    # stays strict; adversarial/consistency proceed) rather than hanging or crashing.
+    code_agent_review_timeout_seconds: int = Field(
+        default=420, alias="BOSS_CODE_AGENT_REVIEW_TIMEOUT_SECONDS"
+    )
     # Wall-clock cap for a single CodeAgent invocation.
     code_agent_timeout_seconds: int = Field(
         default=900, alias="BOSS_CODE_AGENT_TIMEOUT_SECONDS"

@@ -23,7 +23,7 @@ import hashlib
 import json
 import re
 import threading
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, wait as _futures_wait
 from pathlib import Path
 
 from sqlalchemy import text
@@ -1062,8 +1062,51 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
             # adapter's retry, so wider parallelism here is safe.
             max_workers = min(len(checks), max(int(settings.code_agent_max_concurrency), 6))
             panel_parallel = max_workers > 1
-            with ThreadPoolExecutor(max_workers=max_workers) as pool:
-                list(pool.map(lambda fn: fn(), checks))
+            # Safe defaults so a check that times out / errors DEGRADES instead of crashing or
+            # auto-passing: security 'not_run' still BLOCKS (security_clean requires 'clean');
+            # adversarial/consistency 'not_run' proceed (they block only on refuted/drift).
+            panel.setdefault("security", (None, "not_run"))
+            panel.setdefault("consistency", (None, "not_run"))
+            panel.setdefault("full", True)
+            review_errors: list[str] = []
+
+            def _guarded(fn, label):
+                def _run():
+                    try:
+                        fn()
+                    except Exception as exc:  # noqa: BLE001 — a failed review must not crash the run
+                        with lock:
+                            review_errors.append(f"{label}: {exc.__class__.__name__}: {exc}"[:200])
+                return _run
+
+            guarded = (
+                [_guarded(c, f"review[{i}]") for i, c in enumerate(review_checks)]
+                + [_guarded(_do_security, "security"),
+                   _guarded(_do_full, "regression"),
+                   _guarded(_do_consistency, "consistency")]
+            )
+            # Hard wall-clock deadline for the WHOLE panel — an engine-agnostic bound so a slow
+            # review (e.g. an OpenAI-gateway retry storm the per-call timeout can't catch) can't
+            # stall the phase to ~20min. Unfinished checks keep their safe defaults; the pool is
+            # shut down without waiting so a leaked call finishes harmlessly in the background.
+            review_deadline = int(getattr(settings, "code_agent_review_timeout_seconds", 420) or 420)
+            pool = ThreadPoolExecutor(max_workers=max_workers)
+            try:
+                futs = [pool.submit(g) for g in guarded]
+                _done, not_done = _futures_wait(futs, timeout=review_deadline + 60)
+                if not_done:
+                    with lock:
+                        review_errors.append(
+                            f"{len(not_done)} review check(s) exceeded {review_deadline}s — degraded")
+                    for f in not_done:
+                        f.cancel()
+            finally:
+                pool.shutdown(wait=False)
+            if review_errors:
+                with begin(engine) as c:
+                    emit_event(c, project_id, "code_task.review_degraded", "boss",
+                               "code_task_run", run_id,
+                               {"errors": review_errors[:8], "deadline_s": review_deadline})
             cost += panel_cost["v"]
             # Aggregate the refute panel -> (verdict, confidence). Keep a representative
             # reviewer result for the evidence/summary — prefer a refuting seat so a human

@@ -177,6 +177,10 @@ class ClaudeCodeAgent:
         allowed_tools: Optional[str] = None,
     ) -> dict:
         timeout = int(self.settings.code_agent_timeout_seconds or 900)
+        if read_only:
+            # A review shouldn't run as long as an implementation — cap it tighter so a slow
+            # reviewer can't stall the panel.
+            timeout = min(timeout, int(getattr(self.settings, "code_agent_review_timeout_seconds", 420) or 420))
         # Review stages run read-only (no Edit/Write tools, no auto-accept) so a reviewer
         # cannot mutate the change it is judging. `allowed_tools` lets non-coding callers
         # (e.g. the Discovery research pipeline) opt into WebSearch/WebFetch instead.
