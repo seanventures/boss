@@ -53,13 +53,22 @@ _DEFAULT_TEST_CMD = "python3 -m unittest discover -v"
 
 
 def _is_test_path(path: str) -> bool:
-    base = path.rsplit("/", 1)[-1]
-    return (
-        base.startswith("test_")
-        or base.endswith("_test.py")
-        or "/tests/" in f"/{path}"
-        or path.startswith("tests/")
-    )
+    # Recognize test files across languages — NOT just Python. Previously a JS/TS/Go/…
+    # project's tests (e.g. foo.test.ts, foo.spec.tsx, __tests__/…) were not matched, so
+    # a valid test author got "no test files" and the gate hard-failed. Match by dir
+    # convention + common per-language suffixes.
+    p = path.replace("\\", "/").lower()
+    base = p.rsplit("/", 1)[-1]
+    if any(seg in f"/{p}" for seg in ("/tests/", "/test/", "/spec/", "/__tests__/", "/e2e/")):
+        return True
+    if base.startswith("test_") or base.startswith("test."):
+        return True
+    return base.endswith((
+        "_test.py", "_test.go", "_test.rs", "_test.rb", "_spec.rb",
+        ".test.js", ".test.jsx", ".test.ts", ".test.tsx", ".test.mjs", ".test.cjs",
+        ".spec.js", ".spec.jsx", ".spec.ts", ".spec.tsx", ".spec.mjs", ".spec.cjs",
+        "test.java", "tests.java", "test.kt", "test.cs", "tests.cs",
+    ))
 
 
 def _hash_files(root: Path, paths: list[str]) -> dict[str, str]:

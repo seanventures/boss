@@ -19,12 +19,16 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-# Where taste/hierarchy/copy are decided — always worth a frontier model.
+# Where taste/hierarchy/copy — or the CORRECTNESS BAR — are decided: worth a frontier
+# model. write_tests authors the tests the whole gate is judged against, so a weak
+# test-author undermines everything downstream; route it to frontier for stability
+# (favouring reliability over cost).
 DESIGN_AXIS_STEPS = frozenset({
     "spec", "plan", "review_plan", "product_design", "scaffold_theme", "visual_judge",
+    "write_tests",
 })
 # Correctness fill-in against a frozen design + tests — cheap OSS is enough.
-FILL_IN_STEPS = frozenset({"implement", "repair", "write_tests"})
+FILL_IN_STEPS = frozenset({"implement", "repair"})
 
 
 def is_design_axis(step: str) -> bool:
