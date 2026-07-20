@@ -415,11 +415,18 @@ def _review_plan_prompt(title, plan):
     )
 
 
+# Match ONLY the affirmative verdict line "ROUTING: NOT_A_CODE_TASK ..." at line start — NOT a
+# prose mention of the token (e.g. "...so it's not the NOT_A_CODE_TASK route"), which a plain
+# substring check false-fired on. The token must immediately follow "ROUTING:".
+_NOT_A_CODE_TASK_RE = re.compile(r"^\s*ROUTING:\s*NOT_A_CODE_TASK\b", re.IGNORECASE | re.MULTILINE)
+
+
 def _is_not_a_code_task(plan_review: str) -> bool:
     """The plan reviewer flags a mis-routed task (deliverable is a doc/research/spec, or the repo
     is unrelated) so the pipeline can fail FAST instead of hallucinating a codebase and only
-    discovering the mistake at the quality gate ~an hour later."""
-    return "NOT_A_CODE_TASK" in (plan_review or "").upper()
+    discovering the mistake at the quality gate ~an hour later. Triggers ONLY on the affirmative
+    'ROUTING: NOT_A_CODE_TASK' verdict line — a prose mention of the token does not count."""
+    return bool(_NOT_A_CODE_TASK_RE.search(plan_review or ""))
 
 
 def _consistency_prompt(title, criteria, design, *, change=""):
