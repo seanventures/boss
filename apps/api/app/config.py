@@ -486,6 +486,13 @@ class Settings(BaseSettings):
     governed_coding_pipeline: bool = Field(
         default=False, alias="BOSS_GOVERNED_CODING_PIPELINE"
     )
+    # When a PRD panel publishes, whether to AUTO-start a governed code task seeded from the whole
+    # PRD. Default OFF: a PRD is a multi-feature product spec (and discovery tasks yield a document,
+    # not code) — auto-dumping it as one code task mis-routes research/spec work into codegen. With
+    # this off, the PRD is the deliverable and a human creates scoped coding tasks explicitly.
+    auto_code_task_after_prd: bool = Field(
+        default=False, alias="BOSS_AUTO_CODE_TASK_AFTER_PRD"
+    )
     # Cost/rigor dial for the governed pipeline: lean | balanced | strict (or a custom profile
     # name once the profiles API lands). Scales which steps run and which models run them.
     pipeline_profile: str = Field(default="balanced", alias="BOSS_PIPELINE_PROFILE")

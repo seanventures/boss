@@ -735,6 +735,24 @@ class DecisionService:
         task_id = row.get("task_id")
         if not is_prd_publish or not task_id:
             return
+        # Publishing the PRD IS the deliverable. Auto-dumping a whole multi-feature PRD (or a
+        # discovery task's write-up) into a single governed code task mis-routes research/spec work
+        # into codegen — the pipeline then authors a sprawling, unfocused codebase that fails the
+        # quality gate. Default OFF: stop at 'published' and let a human create scoped coding tasks.
+        if not getattr(self.settings, "auto_code_task_after_prd", False):
+            emit_event(
+                connection,
+                row["project_id"],
+                "code_task.not_started",
+                actor,
+                "task",
+                task_id,
+                {"decision_id": row["id"],
+                 "reason": "auto_codegen_after_prd_disabled",
+                 "detail": "PRD published. Create scoped coding tasks explicitly rather than "
+                           "auto-implementing the whole PRD."},
+            )
+            return
         # Idempotency: never double-start a code task for the same task.
         existing = connection.execute(
             text(

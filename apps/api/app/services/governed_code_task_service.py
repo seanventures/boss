@@ -256,7 +256,39 @@ def _solo_prompt(title, instructions, criteria, test_cmd, *, iac=False):
     )
 
 
-def _review_prompt(title, criteria, *, ui=False):
+def _render_change_for_review(files, *, max_total: int = 48000, max_per_file: int = 12000) -> str:
+    """The exact files this task added/modified, inlined into the review prompt so a reviewer
+    JUDGES the change instead of spending dozens of agentic turns (git diff / ls / cat / grep) to
+    REDISCOVER what changed. That rediscovery — not model quality or retries — was the dominant
+    review latency. Capped so a large diff can't blow the context; the reviewer can still open any
+    file in the read-only tree for more depth."""
+    items = (sorted(files.items()) if isinstance(files, dict)
+             else sorted((fc.path, fc.content) for fc in files))
+    parts, total = [], 0
+    for path, content in items:
+        body = content or ""
+        if len(body) > max_per_file:
+            body = body[:max_per_file] + f"\n… [truncated {len(content) - max_per_file} chars]"
+        block = f"\n=== FILE: {path} ===\n{body}\n"
+        if total + len(block) > max_total:
+            parts.append(f"\n… [further changed files omitted to fit context, starting at {path}]")
+            break
+        parts.append(block)
+        total += len(block)
+    return "".join(parts).strip() or "(no file changes detected)"
+
+
+def _change_clause(change: str) -> str:
+    """The 'here is the change, judge THIS' preamble shared by every reviewer."""
+    if not change:
+        return ""
+    return ("THE CHANGE UNDER REVIEW — the exact files this task added or modified is inlined "
+            "below. Judge THIS change directly; you already have it, so do NOT spend turns running "
+            "git diff or hunting the repo. Open another file in the read-only tree ONLY if you "
+            f"genuinely need more context.\n{change}\n\n")
+
+
+def _review_prompt(title, criteria, *, ui=False, change=""):
     crit = "\n".join(f"- {c}" for c in criteria) or "- (judge against the task description)"
     return (
         "You are an adversarial code reviewer with FRESH context — you did NOT write this code or "
@@ -264,7 +296,8 @@ def _review_prompt(title, criteria, *, ui=False):
         "for a REAL correctness or edge-case failure (invalid inputs, empty/boundary values, case "
         "sensitivity, error handling, off-by-one).\n\n"
         f"TASK UNDER REVIEW: {title}\n\nACCEPTANCE CRITERIA (the agreed scope):\n{crit}\n\n"
-        "Judge ONLY against the stated task and acceptance criteria. A concern that is OUT OF SCOPE "
+        + _change_clause(change)
+        + "Judge ONLY against the stated task and acceptance criteria. A concern that is OUT OF SCOPE "
         "— a feature that was not asked for, or a spec stricter than what was agreed — is NOT a "
         "defect; note it but do not fail the change for it.\n\n"
         + (design_prompts.design_review_clause() + "\n\n" if ui else "")  # APP-2: incoherence in scope for UI
@@ -303,14 +336,15 @@ def _aggregate_panel(verdicts: list[str], quorum: float) -> tuple[str, float]:
     return ("survived" if confidence >= quorum else "refuted"), confidence
 
 
-def _security_prompt(title):
+def _security_prompt(title, *, change=""):
     return (
         "You are a security reviewer. Assess the change for EXPLOITABLE vulnerabilities — things an "
         "attacker could actually use: injection (SQL / command / HTML-XSS), auth or access-control "
         "bypass, unsafe secret/credential handling, unsafe deserialization or parsing, SSRF, path "
         "traversal, or a denial-of-service vector reachable from untrusted input.\n\n"
         f"TASK UNDER REVIEW: {title}\n\n"
-        "Read the change and the implementation. Classify each finding by severity "
+        + _change_clause(change)
+        + "Read the change and the implementation. Classify each finding by severity "
         "(CRITICAL / HIGH / MEDIUM / LOW / ADVISORY). Do NOT edit any files.\n\n"
         "Calibrate the VERDICT by SEVERITY — not by whether further hardening is conceivable. A "
         "thorough review can always suggest more defense-in-depth; that alone must NOT fail the gate:\n"
@@ -368,14 +402,27 @@ def _plan_prompt(title, spec):
 
 def _review_plan_prompt(title, plan):
     return (
-        "You are a design reviewer with FRESH context. Critique the plan below for gaps, missing "
-        "edge cases, or risky choices, judged against the task. Do NOT edit any files. End with "
-        "EXACTLY one final line:\n  PLAN: OK\n  PLAN: REVISE\n\n"
+        "You are a design reviewer with FRESH context. FIRST decide whether this is even a CODING "
+        "task for THIS repository. If the deliverable is a document, research, or a specification "
+        "(e.g. a PRD or a discovery write-up), or the repository is unrelated boilerplate that the "
+        "task does not actually ask you to modify, then this is NOT a coding task — respond with "
+        "ONLY this single line and nothing else:\n"
+        "  ROUTING: NOT_A_CODE_TASK — <one-line reason>\n\n"
+        "Otherwise, critique the plan below for gaps, missing edge cases, or risky choices, judged "
+        "against the task. Do NOT edit any files. End with EXACTLY one final line:\n"
+        "  PLAN: OK\n  PLAN: REVISE\n\n"
         f"TASK: {title}\n\nPLAN:\n{plan}"
     )
 
 
-def _consistency_prompt(title, criteria, design):
+def _is_not_a_code_task(plan_review: str) -> bool:
+    """The plan reviewer flags a mis-routed task (deliverable is a doc/research/spec, or the repo
+    is unrelated) so the pipeline can fail FAST instead of hallucinating a codebase and only
+    discovering the mistake at the quality gate ~an hour later."""
+    return "NOT_A_CODE_TASK" in (plan_review or "").upper()
+
+
+def _consistency_prompt(title, criteria, design, *, change=""):
     crit = "\n".join(f"- {c}" for c in criteria) or "- (the task description)"
     spec = (design or {}).get("spec", "")
     extra = f"\n\nAGREED SPEC:\n{spec}" if spec else ""
@@ -385,7 +432,8 @@ def _consistency_prompt(title, criteria, design):
         "implemented and tested, names and behaviour match the spec, and nothing contradicts. Do "
         "NOT edit any files. End with EXACTLY one final line:\n"
         "  CONSISTENT: YES\n  CONSISTENT: NO\n\n"
-        f"TASK: {title}\n\nACCEPTANCE CRITERIA:\n{crit}{extra}"
+        + _change_clause(change)
+        + f"TASK: {title}\n\nACCEPTANCE CRITERIA:\n{crit}{extra}"
     )
 
 
@@ -754,6 +802,28 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
             design = {"standards": d1.get("summary", ""), "spec": d2.get("summary", ""),
                       "plan": d3.get("summary", ""), "plan_review": d4.get("summary", ""),
                       "plan_ok": plan_ok}
+            # FAIL FAST: if the design reviewer says this isn't a coding task for this repo (a
+            # research/PRD/spec deliverable, or an unrelated repo) it was mis-routed into codegen.
+            # Stop NOW — in one design pass — instead of authoring tests + a whole codebase and only
+            # catching the mismatch at the quality gate ~an hour later.
+            if _is_not_a_code_task(design["plan_review"]):
+                _finish_vms(success=False)
+                reason_line = next((ln.strip() for ln in design["plan_review"].splitlines()
+                                    if "NOT_A_CODE_TASK" in ln.upper()), "")
+                with begin(engine) as c:
+                    _release(sf, c, project_id, reservation_id,
+                             "not a coding task — mis-routed into the code pipeline")
+                    emit_event(c, project_id, "code_task.not_a_code_task", "boss",
+                               "code_task_run", run_id, {"reason": reason_line[:300]})
+                    return _fail(
+                        c, run_id, project_id,
+                        "This task's deliverable is a document / research / specification (e.g. a "
+                        "PRD or discovery write-up), not a code change in this repository — it was "
+                        "routed to the coding pipeline by mistake, so no code was written. "
+                        f"Reviewer: {reason_line[:200]}. Produce it as a discovery/PRD document, or "
+                        "re-target a repository the change actually applies to.",
+                        status="blocked", failure_class="needs_human",
+                        reason_code="not_a_code_task")
             # feed the refined spec + plan forward so write-tests/implement are spec-driven
             instructions = (f"{instructions}\n\nREFINED SPEC:\n{d2.get('summary', '')}"
                             f"\n\nTECHNICAL PLAN:\n{d3.get('summary', '')}")
@@ -1030,12 +1100,19 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
                     review_members.append((review_agent, review_model))
             panel["review_votes"] = [None] * panel_size
 
+            # Hand every reviewer the actual change inline so it JUDGES instead of burning agentic
+            # turns rediscovering the diff (the real review-latency root cause). Reviewers still
+            # run in the read-only tree and can open any file for deeper context.
+            change_block = _render_change_for_review(
+                accumulated if use_microvm else {fc.path: fc.content for fc in sandbox.diff()})
+
             def _make_review(seat, seat_agent, seat_model):
                 def _run():
                     set_llm_context(db_engine=engine, project_id=project_id, run_id=run_id,
                                     stage="review_code")
-                    rr = seat_agent.run_role(_review_prompt(title, criteria, ui=ui_task), review_root,
-                                             read_only=True, model=seat_model)
+                    rr = seat_agent.run_role(
+                        _review_prompt(title, criteria, ui=ui_task, change=change_block),
+                        review_root, read_only=True, model=seat_model)
                     with lock:
                         panel_cost["v"] += int(rr.get("cost_usd_micros") or 0)
                     panel["review_votes"][seat] = (rr, _parse_verdict(rr.get("summary", "")))
@@ -1046,8 +1123,8 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
             def _do_security():
                 set_llm_context(db_engine=engine, project_id=project_id, run_id=run_id,
                                 stage="security_check")
-                rr = security_agent.run_role(_security_prompt(title), review_root,
-                                             read_only=True, model=security_model)
+                rr = security_agent.run_role(_security_prompt(title, change=change_block),
+                                             review_root, read_only=True, model=security_model)
                 with lock:
                     panel_cost["v"] += int(rr.get("cost_usd_micros") or 0)
                 panel["security"] = (rr, _parse_security(rr.get("summary", "")))
@@ -1069,9 +1146,9 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
             def _do_consistency():
                 set_llm_context(db_engine=engine, project_id=project_id, run_id=run_id,
                                 stage="consistency_check")
-                rr = consistency_agent.run_role(_consistency_prompt(title, criteria, design),
-                                                review_root, read_only=True,
-                                                model=consistency_model)
+                rr = consistency_agent.run_role(
+                    _consistency_prompt(title, criteria, design, change=change_block),
+                    review_root, read_only=True, model=consistency_model)
                 with lock:
                     panel_cost["v"] += int(rr.get("cost_usd_micros") or 0)
                 panel["consistency"] = (rr, _parse_consistency(rr.get("summary", "")))
