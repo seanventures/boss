@@ -1,12 +1,19 @@
-# 12 — Signal→Fix SRE Agent: implementation design
+# 12 — AI SRE for Autonomous Oncall: implementation design
 
 > **Status:** BUILD SPEC — approved for build (extends spec 11). **Owner:** paramg. **Date:** 2026-07-21.
-> **Decision:** build the flagship **Signal→Fix SRE agent** at the **system level** in BOSS, as the
-> **enterprise sales wedge**, with **out-of-the-box connectors** (skills/MCP) for the popular observability
-> tools and a **BOSS-native learning loop**.
+> **Reframe (2026-07-21):** repositioned from "Signal→Fix / data-mining" to **AI SRE for autonomous
+> oncall**, benchmarked against **Cleric** (cleric.ai / docs.cleric.ai). Heavy log/trace *data-mining* is
+> out of scope; we keep **anomaly detection over integrated metrics (Grafana/Prometheus) + logs** as the
+> SRE signal layer. The BOSS **engine stays generic** — autonomous oncall is one use case it builds, not a
+> bespoke product. Emphasis added on **autonomy**: autonomous investigation, verification, and a governed
+> auto-remediation spectrum. See **§1.5** for the Cleric gap analysis.
+> **Decision:** build the flagship **AI SRE agent** at the **system level** in BOSS, as the **enterprise
+> sales wedge**, with **out-of-the-box connectors** (skills/MCP) for the popular observability tools and a
+> **BOSS-native learning loop**.
 
-> **The pitch (one line):** *Connect your Splunk / Grafana / Datadog + your repo → BOSS turns production
-> incidents into reviewed, tested fix PRs, and learns your systems. Self-hosted, model-agnostic, governed.*
+> **The pitch (one line):** *Connect your Grafana / Datadog / Splunk + your repo → BOSS autonomously
+> investigates production alerts, finds root cause with confidence, ships a reviewed & tested fix PR, and
+> verifies recovery — then learns your systems. Self-hosted, model-agnostic, governed.*
 
 ---
 
@@ -32,6 +39,45 @@ Three build pillars, each a real subsystem:
 Everything downstream of "named incident" reuses shipped machinery: APP-5 retriever (RCA), the governed code
 pipeline + Plane bug-framing (remediation), the budget governor + pacing (cost), decisions/gates
 (governance), the skills framework + MCP registry (connectors).
+
+---
+
+## 1.5 Benchmark vs Cleric (cleric.ai) — match, win, and the gaps we're closing
+
+Cleric is the closest competitor: an **AI SRE that autonomously investigates production alerts**. It's the
+right yardstick. Their shape (from cleric.ai + docs.cleric.ai): read-only agent deployed in the customer
+VPC; ingests PagerDuty/Slack alerts and **groups related alerts into one investigation case**; a
+**reasoning engine** (plan → execute → reflect) that **branches multiple hypotheses in parallel** and
+"tests causation, not correlation"; a **layered knowledge graph** of infra (deterministic layers via
+`kubectl`/cloud walk + fuzzy inferred service-dependency layers); **confidence-scored** ranked hypotheses
+with evidence; **read-only by default**, autonomous only for *routine* fixes (config flips, env reverts,
+line patches), otherwise **hands off to Claude Code / Cursor**; **production verification** (re-watch the
+signal, 30-min no-recurrence window); **continuous learning via LangSmith** (compare strategies, feedback
+API on traces, a knowledge hierarchy that strips env-specifics into generalized patterns). ~20 read-only
+integrations (Grafana/Prometheus/Datadog/New Relic/Sentry, Splunk/Elasticsearch, k8s/EKS, AWS/GCP,
+PagerDuty, GitHub, Unleash…), plus an MCP server exposing investigations.
+
+### Where BOSS already **wins** (lean into these — they are the wedge)
+| Dimension | Cleric | BOSS |
+|---|---|---|
+| **Remediation depth** | Autonomous only for *routine* fixes; complex work is **handed off** to Claude Code/Cursor | **Remediation-as-code is the product**: incident → bug-framed governed code task → **tested, review-paneled, fail-closed gated PR**. We *are* the coding agent Cleric hands off to. |
+| **Governance of autonomy** | Read-only + human accept/reject | VAG + review panel + decision gates + budget governor make autonomous action **safe by construction**, with receipts/audit |
+| **Engine** | Purpose-built SRE product | **Generic BOSS engine** — SRE is one use case; the same pipeline builds any autonomous agent |
+| **Deployment** | Their VPC agent | Self-hosted, **model-agnostic** (not tied to one LLM vendor) |
+
+### Where Cleric is **ahead** → the gaps we're closing (new tickets RB-15…RB-20)
+| Gap | Cleric has | Our answer |
+|---|---|---|
+| **Infra knowledge graph** | Layered topology (deterministic k8s/cloud walk + inferred service deps) | **RB-15** service & infra dependency map — scopes anomalies to a service/repo and powers RCA |
+| **Autonomous reasoning** | Parallel multi-hypothesis plan/execute/reflect, causation-not-correlation, confidence scores | **RB-16** upgrade `diagnose` into a parallel-hypothesis engine with ranked, confidence-scored root causes |
+| **Causal signal** | Correlates deploys / config / feature-flags with onset | **RB-17** change-correlation layer (deploys/CI, config drift, flag flips ↔ anomaly onset) |
+| **Close the loop** | Post-fix verification + stability window | **RB-18** production verification loop (re-watch signal, no-recurrence window, else reopen/escalate) |
+| **Autonomy spectrum** | Auto for routine, handoff for complex | **RB-19** governed autonomy tiers (auto-apply reversible ops → gated code PR → human handoff, chosen by confidence × blast radius) |
+| **Meet oncall where they are** | Slack + PagerDuty threads; investigation MCP | **RB-20** oncall conversational surface (Slack/PagerDuty/Mattermost) + investigation MCP endpoint |
+
+**Net:** we reach *parity* on autonomous investigate → knowledge-graph → verify → learn, and keep a
+**structural lead on remediation** (we ship the tested, governed fix; they hand it off) — all on a **generic
+engine** that also builds every other autonomous use case. "AI SRE" is the wedge; the engine is the moat.
 
 ---
 
@@ -216,14 +262,16 @@ route to the **IaC verify lane** instead.
 
 ## 8. Phased plan + tickets
 
-New Plane module: **"Data-Mining & Reliability Agents."**
+Plane module: **"AI SRE — Autonomous Oncall"** (renamed 2026-07-21; was "Data-Mining & Reliability Agents").
+Phases 0–4 are the original loop (detect → incident → RCA → gated fix → learn); **Phase 5** adds the
+Cleric-parity autonomy layer (RB-15…RB-20). RB-13 (trace-judge data-mining) is **dropped** in the reframe.
 
-### Phase 0 — mining foundation + Insight (read-only) *(no remediation risk)*
-- **RB-1** `telemetry_mining/` lib: Drain-style templating + span/metric aggregation + the statistical
-  detector cascade (rate/seasonal/z-score/iforest). Pure, model-free, unit-tested. *AC:* templates a raw log
-  batch deterministically; detectors flag injected anomalies; benchmarked on a fixture.
-- **RB-2** `TelemetrySource` protocol + canonical shapes + **one** connector (OTel or a log-file/Splunk-export
-  adapter). *AC:* pulls a bounded window; normalizes to `LogEvent[]`.
+### Phase 0 — anomaly substrate + Insight (read-only) ✅ *done* *(no remediation risk)*
+- **RB-1** `telemetry_mining/` lib: templating + metric/log statistical detector cascade
+  (rate/z-score, new/spiking templates, metric z-score). Pure, model-free, unit-tested. *AC:* templates a
+  raw log batch deterministically; detectors flag injected anomalies. **✅ merged (PR #48), 11 tests.**
+- **RB-2** `TelemetrySource` protocol + canonical shapes + first adapters (in-memory + log-export). *AC:*
+  pulls a bounded window; normalizes to `LogEvent[]`. **✅ merged (PR #48).**
 - **RB-3** Insight agent (read-only): scan goldeneye logs → templated "top issues / what changed" report +
   `POST /v1/reliability/scan` (dry, no incidents persisted yet). *AC:* a real report from goldeneye's stream.
 
@@ -248,8 +296,22 @@ New Plane module: **"Data-Mining & Reliability Agents."**
 
 ### Phase 4 — learning-loop tuning + quality
 - **RB-12** auto-threshold tuning + confirmed-few-shot selection (per project).
-- **RB-13** fine-tuned "trace-judge" export for volume/cost (the LangChain move).
+- ~~**RB-13** fine-tuned "trace-judge" export~~ — **dropped** (heavy trace data-mining, out of scope in the
+  AI-SRE reframe; metrics+log anomaly detection stays).
 - **RB-14** anomaly-agent **meta-eval** (precision/recall of the SRE agent itself — measure the measurer).
+
+### Phase 5 — autonomous-oncall parity (close the Cleric gaps) — see §1.5
+- **RB-15** service & infra **dependency map** (layered knowledge graph: deterministic k8s/cloud walk +
+  inferred service deps). *AC:* an anomaly resolves to a named service + owning repo.
+- **RB-16** **autonomous investigation engine**: `diagnose` becomes a parallel plan/execute/reflect loop with
+  multiple hypotheses, causation-not-correlation testing, and **confidence-scored** ranked root causes.
+- **RB-17** **change-correlation** layer (deploys/CI, config drift, feature-flag flips ↔ anomaly onset).
+- **RB-18** **production verification loop** (post-fix re-watch the signal + no-recurrence stability window;
+  else auto-reopen/escalate). *AC:* a shipped fix is auto-confirmed or auto-reopened.
+- **RB-19** **autonomy tiers & policy** (Tier-0 auto-apply reversible ops → Tier-1 gated code PR → Tier-2
+  human handoff, chosen by confidence × blast radius; every action receipted/audited).
+- **RB-20** **oncall conversational surface** (Slack/PagerDuty/Mattermost investigation threads) +
+  **investigation MCP endpoint** (Claude Code/Cursor pull incident context).
 
 ---
 
