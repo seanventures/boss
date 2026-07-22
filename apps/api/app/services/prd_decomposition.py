@@ -29,19 +29,24 @@ from .core import emit_event
 logger = logging.getLogger(__name__)
 
 _DECOMP_SYSTEM = (
-    "You are a staff engineer breaking a product spec into a SMALL number of scoped coding tasks "
-    "for an autonomous coding pipeline. Rules:\n"
-    "- Prefer 3 to 6 tasks. Fewer is better if the product is small.\n"
-    "- ORDER them so foundational tasks (scaffold, shared types/engine, data) come first, then "
-    "features that build on them, and the LAST task WIRES everything into the finished, runnable "
-    "product (e.g. the UI that calls the engine, or the server that serves it).\n"
-    "- Each task builds ON TOP of the previous tasks' code on a shared branch, so later tasks may "
-    "reference files/modules earlier tasks create — say so explicitly in the instructions.\n"
-    "- Each task must be self-contained, independently reviewable, and have concrete, testable "
-    "acceptance criteria.\n"
-    "- Keep the SAME tech stack / conventions across all tasks (state it in each task).\n"
-    "Output ONLY a JSON array, no prose or markdown fences:\n"
-    '[{"title": "...", "instructions": "...", "acceptance_criteria": ["...", "..."], "order": 1}]'
+    "You are a staff engineer deciding how to break a product spec into coding tasks for an "
+    "autonomous coding pipeline. FIRST judge complexity, then use AS FEW tasks as correctly "
+    "deliver it:\n"
+    "- If the product is SIMPLE (one module, a small utility, a single component/endpoint), return "
+    "EXACTLY ONE task. Do NOT invent scaffolding/finalize steps for something small.\n"
+    "- Split into multiple tasks ONLY when there are genuinely separable components (e.g. a real "
+    "app: scaffold, shared types, engine/logic, UI, wire-up). Use up to the given max, no more.\n"
+    "- ORDER them so foundational tasks (scaffold, shared types/engine) come first and the LAST "
+    "task WIRES everything into the finished, runnable product.\n"
+    "- For each task add a `depends_on` array of the order-numbers it needs (empty [] if none). "
+    "Tasks with disjoint depends_on and disjoint files CAN run in parallel; be honest about real "
+    "dependencies so the executor can parallelize what's independent.\n"
+    "- Each task builds ON TOP of prior tasks' code on a shared branch — later tasks may reference "
+    "files earlier tasks create; say so in the instructions. Keep ONE tech stack across all tasks.\n"
+    "- Each task must be self-contained, independently reviewable, with concrete testable criteria.\n"
+    "Output ONLY a JSON array, no prose or fences:\n"
+    '[{"title": "...", "instructions": "...", "acceptance_criteria": ["..."], "order": 1, '
+    '"depends_on": []}]'
 )
 
 
@@ -79,11 +84,13 @@ def decompose_prd_into_tasks(settings: Settings, prd_or_directive: str, *,
     for i, t in enumerate(_extract_json_array(raw)[:max_tasks]):
         if not isinstance(t, dict) or not t.get("title") or not t.get("instructions"):
             continue
+        deps = t.get("depends_on") or []
         out.append({
             "title": str(t["title"])[:180],
             "instructions": str(t["instructions"]),
             "acceptance_criteria": [str(c) for c in (t.get("acceptance_criteria") or [])][:8],
             "order": int(t.get("order", i + 1)) if str(t.get("order", "")).isdigit() else i + 1,
+            "depends_on": [int(x) for x in deps if str(x).isdigit()],
         })
     out.sort(key=lambda x: x["order"])
     return out
