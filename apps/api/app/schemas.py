@@ -4986,3 +4986,28 @@ class ReliabilityRemediateResponse(BaseModel):
     incident_id: str
     code_task_run_id: str
     status: str
+
+
+class ReliabilityVerifyRequest(BaseModel):
+    project_id: str
+    actor: str = "system"
+    source: dict[str, Any] = Field(default_factory=lambda: {"kind": "memory"})
+    window: ReliabilityWindow
+    query: str = ""
+    stability_minutes: float = 30.0
+
+    @model_validator(mode="after")
+    def _validate(self) -> "ReliabilityVerifyRequest":
+        self.project_id = _require_text(self.project_id, "project_id")
+        self.actor = _require_text(self.actor, "actor")
+        return self
+
+
+class ReliabilityVerifyResponse(BaseModel):
+    incident_id: str
+    state: str                                   # recurred | stabilizing | recovered
+    status: str                                  # the incident status after this check
+    checks: int
+    recurred_signatures: list[str] = Field(default_factory=list)
+    first_clear: Optional[str] = None
+    stable_at: Optional[str] = None
