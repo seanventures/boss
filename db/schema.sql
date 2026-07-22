@@ -2455,3 +2455,39 @@ CREATE TABLE IF NOT EXISTS incident_evidence (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_incident_evidence_incident ON incident_evidence(incident_id, created_at);
+
+-- ── Native LearningLoop primitive (RB-6) ──────────────────────────────────────
+-- A BOSS-wide learning corpus: any agent appends labeled examples + outcomes; the
+-- primitive computes metrics and suggests tuning. The SRE agent is the first heavy
+-- consumer (incident feedback), generalizing the VAG verifier ratchet (#107).
+CREATE TABLE IF NOT EXISTS learning_examples (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id),
+  agent TEXT NOT NULL,                       -- sre | verifier | ...
+  kind TEXT NOT NULL,                        -- incident_feedback | remediation_outcome | ...
+  label TEXT NOT NULL DEFAULT '',            -- verdict / class
+  outcome TEXT NOT NULL DEFAULT '',          -- confirmed | dismissed | fix_good | fix_bad | ...
+  ref TEXT NOT NULL DEFAULT '',              -- e.g. incident_id
+  source TEXT NOT NULL DEFAULT 'manual',
+  payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_learning_examples_project
+  ON learning_examples(project_id, agent, kind, created_at DESC);
+
+-- ── Remediation linkage (RB-7) ────────────────────────────────────────────────
+-- Links a diagnosed incident to the governed code task that fixes it (and, on success,
+-- the gated PR). The fix runs through the SAME governed pipeline as any code task —
+-- design → tests → implement → review panel → security → fail-closed gate → PR.
+CREATE TABLE IF NOT EXISTS remediations (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id),
+  incident_id TEXT NOT NULL REFERENCES incidents(id) ON DELETE CASCADE,
+  code_task_run_id TEXT,
+  decision_id TEXT,
+  status TEXT NOT NULL DEFAULT 'queued',     -- queued|running|blocked|completed|failed
+  pull_request_url TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_remediations_incident ON remediations(incident_id, created_at DESC);

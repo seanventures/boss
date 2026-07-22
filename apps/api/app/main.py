@@ -51,6 +51,10 @@ from .schemas import (
     ReliabilityIncidentDetail,
     ReliabilityDiagnoseRequest,
     ReliabilityDiagnoseResponse,
+    ReliabilityFeedbackRequest,
+    ReliabilityFeedbackResponse,
+    ReliabilityRemediateRequest,
+    ReliabilityRemediateResponse,
     AccountConnectSyncResponse,
     AccountConnectTeamInviteCreateRequest,
     AccountConnectTeamInviteListResponse,
@@ -2538,6 +2542,43 @@ def reliability_diagnose(
         if not result:
             raise HTTPException(status_code=404, detail="incident not found")
         return ReliabilityDiagnoseResponse(**result)
+
+
+@app.post("/v1/reliability/incidents/{incident_id}/remediate",
+          response_model=ReliabilityRemediateResponse)
+def reliability_remediate(
+    incident_id: str, payload: ReliabilityRemediateRequest
+) -> ReliabilityRemediateResponse:
+    """Diagnosed incident → bug-framed governed code task → gated fix PR (via the standard pipeline)."""
+    with begin(engine) as connection:
+        require_project_actor(connection, payload.project_id, payload.actor, "providerops_manage")
+        result = reliability.remediate(
+            connection, payload.project_id, incident_id, jobs=jobs,
+            owner=payload.owner, repo=payload.repo, base_branch=payload.base_branch,
+            actor=payload.actor,
+        )
+        if not result:
+            raise HTTPException(status_code=404, detail="incident not found")
+        return ReliabilityRemediateResponse(**result)
+
+
+@app.post("/v1/reliability/incidents/{incident_id}/feedback",
+          response_model=ReliabilityFeedbackResponse)
+def reliability_feedback(
+    incident_id: str, payload: ReliabilityFeedbackRequest
+) -> ReliabilityFeedbackResponse:
+    """Capture a verdict (real|false_alarm|fix_good|fix_bad) into the LearningLoop; a confirmed cause is
+    written back to the knowledge graph."""
+    with begin(engine) as connection:
+        require_project_actor(connection, payload.project_id, payload.actor, "providerops_manage")
+        try:
+            result = reliability.feedback(connection, payload.project_id, incident_id,
+                                          payload.verdict, cause=payload.cause, actor=payload.actor)
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        if not result:
+            raise HTTPException(status_code=404, detail="incident not found")
+        return ReliabilityFeedbackResponse(**result)
 
 
 @app.get(

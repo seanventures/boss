@@ -115,10 +115,39 @@ adapter, never a pipeline change.
   `Loki: {app="x"}`) so a customer connects and it works with defaults, tunable later.
 - **Read-only + bounded** — every query carries a time window + row cap; no unbounded pulls.
 
-### 2.4 Launch connector set (priority order)
-`OTel` (vendor-neutral, first) → `Splunk` + `Grafana`/`Loki`/`Prometheus` (your named priorities) →
-`Datadog` → `ELK/OpenSearch` → `CloudWatch` → `PagerDuty` (alert intake). Ship OTel + one log + one metric
-source in Phase 0/3; the rest are additive adapters.
+### 2.4 Connector matrix (full target set — parity with Cleric's supported list)
+
+**Yes — we plan the whole supported-connector set, not a subset.** Every one implements the same
+`TelemetrySource` surface, so breadth is additive adapters, never pipeline changes. Capability columns map to
+the protocol: **L**=`query_logs`, **M**=`query_metrics`, **T**=`query_traces`, **A**=`list_alerts`,
+**W**=`comment_back`/write-back. All read-only except where noted.
+
+| Category | Connector | L | M | T | A | Notes |
+|---|---|:-:|:-:|:-:|:-:|---|
+| **Metrics/APM** | Grafana (+ Loki) | ✓ | ✓ |  | ✓ | your named priority; Prometheus/Loki datasources + dashboards |
+| | Prometheus | | ✓ | | ✓ | PromQL + alert rules |
+| | Datadog | ✓ | ✓ | ✓ | ✓ | metrics/logs/monitors/dashboards/SLOs |
+| | New Relic | ✓ | ✓ | ✓ | ✓ | NRQL |
+| | Sentry | ✓ | | ✓ | ✓ | issues/events/stack traces/releases |
+| **Logs** | Splunk | ✓ | | | ✓ | your named priority; SPL, index-scoped |
+| | Elasticsearch / OpenSearch | ✓ | | | | Lucene |
+| | OTel collector | ✓ | ✓ | ✓ | | vendor-neutral on-ramp |
+| **Cloud** | AWS CloudWatch | ✓ | ✓ | | ✓ | logs/metrics + EC2/LB/DNS/cert inventory (→ graph) |
+| | GCP Cloud Logging/Monitoring | ✓ | ✓ | | ✓ | + Compute/LB/DNS inventory (→ graph) |
+| | Cloudflare | ✓ | ✓ | | | DNS/WAF/Workers/analytics |
+| **Kubernetes** | Kubernetes / EKS | ✓ | ✓ | | ✓ | events/logs/resources/metrics; **feeds the RB-15 deterministic graph walk** |
+| **Incident/alert** | PagerDuty | | | | ✓ | incidents + services; alert-driven trigger (RB-10) |
+| **Datastore** | MongoDB Atlas | ✓ | ✓ | | | slow queries/perf (no data access) |
+| **Source/CI** | GitHub | | | | | repos/PRs **read-write** (remediation + change-correlation RB-17) |
+| | BuildKite | ✓ | | | | pipeline/build/job logs (change-correlation) |
+| **Feature flags** | Unleash | | | | | flag state/changes (change-correlation RB-17) |
+| **Knowledge/ticket** | Confluence / Jira | | | | | runbooks + Jira **write** (ticket create); Linear/Notion similar |
+| **Custom** | Generic **MCP** | ✓ | ✓ | ✓ | ✓ | any MCP server via the registry — the open-ended escape hatch |
+
+**Sequencing** (breadth is RB-9, additive): ship **OTel + Grafana/Prometheus + Splunk** first (named
+priorities + the k8s walk that seeds the graph), then Datadog → CloudWatch/GCP → PagerDuty (alert intake) →
+the long tail. GitHub/BuildKite/Unleash land with change-correlation (RB-17); Kubernetes doubles as the
+deterministic graph walker (RB-15).
 
 ---
 

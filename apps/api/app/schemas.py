@@ -4920,6 +4920,7 @@ class ReliabilityIncidentListResponse(BaseModel):
 class ReliabilityIncidentDetail(ReliabilityIncidentSummary):
     signals: list[dict[str, Any]] = Field(default_factory=list)
     evidence: list[dict[str, Any]] = Field(default_factory=list)
+    remediations: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class ReliabilityDiagnoseRequest(BaseModel):
@@ -4939,3 +4940,47 @@ class ReliabilityDiagnoseResponse(BaseModel):
     hypothesis: dict[str, Any]
     context: dict[str, Any] = Field(default_factory=dict)
     known_causes: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class ReliabilityFeedbackRequest(BaseModel):
+    project_id: str
+    actor: str = "system"
+    verdict: str                                    # real | false_alarm | fix_good | fix_bad
+    cause: Optional[dict[str, Any]] = None          # {kind,key,name,confidence,evidence} for verdict=real
+
+    @model_validator(mode="after")
+    def _validate(self) -> "ReliabilityFeedbackRequest":
+        self.project_id = _require_text(self.project_id, "project_id")
+        self.actor = _require_text(self.actor, "actor")
+        self.verdict = _require_text(self.verdict, "verdict")
+        return self
+
+
+class ReliabilityFeedbackResponse(BaseModel):
+    incident_id: str
+    verdict: str
+    outcome: str
+    status: str
+    learning_example_id: str
+    tuning: dict[str, Any] = Field(default_factory=dict)
+
+
+class ReliabilityRemediateRequest(BaseModel):
+    project_id: str
+    actor: str = "system"
+    owner: Optional[str] = None
+    repo: Optional[str] = None
+    base_branch: str = "main"
+
+    @model_validator(mode="after")
+    def _validate(self) -> "ReliabilityRemediateRequest":
+        self.project_id = _require_text(self.project_id, "project_id")
+        self.actor = _require_text(self.actor, "actor")
+        return self
+
+
+class ReliabilityRemediateResponse(BaseModel):
+    remediation_id: str
+    incident_id: str
+    code_task_run_id: str
+    status: str

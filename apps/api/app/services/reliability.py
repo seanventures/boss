@@ -23,9 +23,18 @@ from sqlalchemy.engine import Connection
 from . import telemetry_mining as tm
 from .core import make_id, now_utc
 from .knowledge_graph import KnowledgeGraphService
+from .learning_loop import LearningLoopService
 from .telemetry_source import InMemorySource, LogEvent, LogExportSource, TelemetrySource, TimeWindow
 
 _CRITICAL_KINDS = ("error_surge", "new_template")
+
+# incident feedback verdict → learning-example outcome + the incident status it drives
+_VERDICT = {
+    "real": ("confirmed", "triaged"),
+    "false_alarm": ("dismissed", "dismissed"),
+    "fix_good": ("fix_good", "resolved"),
+    "fix_bad": ("fix_bad", "remediating"),
+}
 
 
 def build_source(spec: dict[str, Any]) -> TelemetrySource:
@@ -48,6 +57,20 @@ def _severity_for(kind: str) -> str:
     return "critical" if kind in _CRITICAL_KINDS else "warning"
 
 
+def _bug_frame(inc: dict[str, Any], hypothesis: dict[str, Any]) -> str:
+    """Frame the incident as a BUG for the governed pipeline (same preamble as the Plane bug path):
+    reproduce → root-cause → fix → regression test, with the RCA hypothesis as the starting lead."""
+    return (
+        "BUG REPORT — reproduce the issue, find the root cause, fix it, and add a regression test that "
+        "FAILS before your fix and passes after.\n\n"
+        f"Incident: {inc.get('title', '')}\n"
+        f"Service: {inc.get('service', '') or 'unknown'}\n"
+        f"Suspected root cause: {hypothesis.get('root_cause', 'unknown')} "
+        f"(basis={hypothesis.get('basis', 'n/a')}, confidence={hypothesis.get('confidence', 'n/a')}).\n"
+        f"Rationale: {hypothesis.get('rationale', '')}\n"
+    )
+
+
 def _service_by_template(events: list[LogEvent]) -> dict[str, str]:
     """Most-common service per template — so a clustered incident is attributed to a real service."""
     m: dict[str, Counter] = defaultdict(Counter)
@@ -60,6 +83,7 @@ class ReliabilityService:
     def __init__(self, settings=None):
         self.settings = settings
         self.kg = KnowledgeGraphService(settings)
+        self.learning = LearningLoopService(settings)
 
     # --- scan (RB-3 read-only / RB-4 persist+cluster) ------------------------
     def scan(self, connection: Connection, project_id: str, source_spec: dict[str, Any],
@@ -171,9 +195,15 @@ class ReliabilityService:
                  "WHERE incident_id = :id ORDER BY created_at"),
             {"id": incident_id},
         ).mappings().all()
+        remediations = connection.execute(
+            text("SELECT id, code_task_run_id, status, pull_request_url, created_at FROM remediations "
+                 "WHERE incident_id = :id ORDER BY created_at DESC"),
+            {"id": incident_id},
+        ).mappings().all()
         out = dict(inc)
         out["signals"] = [dict(s) for s in signals]
         out["evidence"] = [dict(e) for e in evidence]
+        out["remediations"] = [dict(r) for r in remediations]
         return out
 
     # --- diagnose (RB-5 — RCA over the knowledge graph) ----------------------
@@ -224,6 +254,99 @@ class ReliabilityService:
         )
         return {"incident_id": incident_id, "service": service, "hypothesis": hypothesis,
                 "context": context, "known_causes": known}
+
+    # --- remediate (RB-7 — diagnosed incident → governed fix PR) -------------
+    def remediate(self, connection: Connection, project_id: str, incident_id: str, *, jobs,
+                  owner: Optional[str] = None, repo: Optional[str] = None,
+                  base_branch: str = "main", actor: str = "system") -> Optional[dict[str, Any]]:
+        """Turn a diagnosed incident into a **bug-framed governed code task** → gated PR. The fix runs
+        through the same design→tests→implement→review→gate pipeline as any code task — this is the wedge
+        (we ship the tested, governed fix, not just a plan)."""
+        inc = connection.execute(
+            text("SELECT id, title, service FROM incidents WHERE project_id = :p AND id = :id"),
+            {"p": project_id, "id": incident_id},
+        ).mappings().first()
+        if not inc:
+            return None
+        hyp = connection.execute(
+            text("SELECT payload FROM incident_evidence WHERE incident_id = :id AND kind = 'rca_hypothesis' "
+                 "ORDER BY created_at DESC LIMIT 1"),
+            {"id": incident_id},
+        ).mappings().first()
+        hypothesis = (hyp["payload"] if hyp else None) or {}
+
+        from .code_task_service import start_code_task
+        run_id = start_code_task(
+            connection, project_id=project_id, task_id=None,
+            title=f"Fix: {inc['title']}"[:200],
+            instructions=_bug_frame(dict(inc), hypothesis),
+            acceptance_criteria=[
+                "A regression test reproduces the incident and FAILS before the fix, passes after.",
+                "The fix eliminates the incident's error signature at the root cause.",
+                "No unrelated behavior changes.",
+            ],
+            test_commands=[],
+            owner=owner or getattr(self.settings, "target_github_owner", "") or "",
+            repo=repo or getattr(self.settings, "target_github_repo", "") or "",
+            base_branch=base_branch,
+            finalize_ctx={"source": "reliability", "incident_id": incident_id, "service": inc["service"]},
+            jobs=jobs, risk_tier=3, open_pr=True,        # bug rigor + open the gated PR
+        )
+        rem_id = make_id("rem")
+        connection.execute(
+            text("INSERT INTO remediations (id, project_id, incident_id, code_task_run_id, status, "
+                 "created_at, updated_at) VALUES (:id, :p, :inc, :run, 'queued', :now, :now)"),
+            {"id": rem_id, "p": project_id, "inc": incident_id, "run": run_id, "now": now_utc()},
+        )
+        connection.execute(
+            text("UPDATE incidents SET status = 'remediating', last_seen = :now WHERE id = :id"),
+            {"now": now_utc(), "id": incident_id},
+        )
+        self._add_evidence(connection, incident_id, "remediation", ref=run_id,
+                           payload={"code_task_run_id": run_id, "remediation_id": rem_id})
+        return {"remediation_id": rem_id, "incident_id": incident_id,
+                "code_task_run_id": run_id, "status": "queued"}
+
+    # --- feedback → learn (RB-6/RB-8) ----------------------------------------
+    def feedback(self, connection: Connection, project_id: str, incident_id: str, verdict: str, *,
+                 cause: Optional[dict] = None, actor: str = "system") -> Optional[dict[str, Any]]:
+        """Capture a human verdict on an incident into the LearningLoop, drive the incident status, and —
+        on a confirmed cause — write it back to the knowledge graph so the next investigation recalls it.
+        `verdict`: real | false_alarm | fix_good | fix_bad. Optional `cause` = {kind,key,name,confidence,evidence}."""
+        if verdict not in _VERDICT:
+            raise ValueError(f"unknown verdict {verdict!r}")
+        inc = connection.execute(
+            text("SELECT id, service FROM incidents WHERE project_id = :p AND id = :id"),
+            {"p": project_id, "id": incident_id},
+        ).mappings().first()
+        if not inc:
+            return None
+        service = inc["service"] or ""
+        signatures = [r[0] for r in connection.execute(
+            text("SELECT DISTINCT signature FROM anomaly_signals WHERE incident_id = :id"),
+            {"id": incident_id},
+        ).all()]
+        outcome, new_status = _VERDICT[verdict]
+
+        example_id = self.learning.record(
+            connection, project_id, agent="sre", kind="incident_feedback", label=verdict,
+            outcome=outcome, ref=incident_id, source=actor,
+            payload={"service": service, "signatures": signatures, "cause": cause or {}},
+        )
+        # a confirmed real cause is the learning write-back into the graph
+        if verdict == "real" and cause and service:
+            self.kg.record_root_cause(
+                connection, project_id, service,
+                cause.get("kind", "root_cause"), cause["key"], cause.get("name", cause["key"]),
+                confidence=float(cause.get("confidence", 0.8)), evidence=cause.get("evidence"),
+            )
+        connection.execute(
+            text("UPDATE incidents SET status = :s, last_seen = :now WHERE id = :id"),
+            {"s": new_status, "now": now_utc(), "id": incident_id},
+        )
+        return {"incident_id": incident_id, "verdict": verdict, "outcome": outcome,
+                "status": new_status, "learning_example_id": example_id,
+                "tuning": self.learning.suggest_tuning(connection, project_id, "sre")}
 
     def _add_evidence(self, connection: Connection, incident_id: str, kind: str, *,
                       ref: str = "", payload: Optional[dict] = None) -> None:

@@ -49,6 +49,15 @@ def clean_tables(engine):
         # Original explicit list preserved (in designed child-to-parent delete order to avoid FK violations);
         # missing tables (commercial/enterprise) are skipped. Enables budget/kpi/concurrent tests + full -k matrix.
         for tbl in [
+            # AI SRE reliability pipeline + knowledge graph + learning loop (child → parent)
+            "incident_evidence",
+            "remediations",
+            "anomaly_signals",
+            "incidents",
+            "telemetry_sources",
+            "learning_examples",
+            "kg_edges",
+            "kg_nodes",
             "workflow_compensation_runs",
             "workflow_migrations",
             "workflow_step_runs",
