@@ -89,7 +89,11 @@ def build_submit_request(spec: dict[str, Any], tenant_id: Optional[str], *,
         "engine": engine,
         "engine_env": env,
         "run_mutation": bool(spec.get("run_mutation", False)),
-        "resources": spec.get("resources") or {},
+        # Requested guest agent turn cap. The sandbox-service must honor it (top-level or via
+        # resources.max_turns) to override its own ~40 default; harmless if unsupported.
+        "max_turns": spec.get("max_turns"),
+        "resources": {**(spec.get("resources") or {}),
+                      **({"max_turns": spec["max_turns"]} if spec.get("max_turns") else {})},
     }
 
 
