@@ -2748,6 +2748,19 @@ def reliability_investigation(incident_id: str, project_id: str):
         return JSONResponse(content=jsonable_encoder(bundle))
 
 
+@app.get("/v1/reliability/learning")
+def reliability_learning(project_id: str):
+    """RB-11 learning panel: false-alarm rate, fix-success rate, tuned signatures, few-shot size."""
+    with begin(engine) as connection:
+        ev = reliability.learning.evaluate(connection, project_id, "sre")
+        tuning = reliability.learning.suggest_tuning(connection, project_id, "sre")
+        return JSONResponse(content=jsonable_encoder({
+            "evaluation": ev,
+            "raise_threshold": tuning["raise_threshold"],
+            "few_shot_count": len(tuning["few_shot_candidates"]),
+        }))
+
+
 @app.post("/v1/reliability/meta-eval")
 def reliability_meta_eval():
     """RB-14 — measure the measurer: detection precision/recall/F1 + RCA top-1 accuracy against

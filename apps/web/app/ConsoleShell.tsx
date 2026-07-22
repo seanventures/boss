@@ -22,6 +22,7 @@ import {
   House,
   List,
   MagnifyingGlass,
+  Heartbeat,
   Pulse,
   Robot,
   Rows,
@@ -43,6 +44,7 @@ type AreaId =
   | "discovery"
   | "meetings"
   | "code_tasks"
+  | "reliability"
   | "reports"
   | "budget"
   | "pipeline"
@@ -79,6 +81,7 @@ const ICONS = {
   capabilities: Wrench,
   meetings: UsersThree,
   code_tasks: Code,
+  reliability: Heartbeat,
   discovery: MagnifyingGlass,
   sandboxes: TerminalWindow,
 } as const;
@@ -92,6 +95,7 @@ const AREAS: AreaDef[] = [
   { id: "discovery", label: "Discovery", sub: "Research a signal — cited dossier & candidate outcomes", group: "Run", icon: ICONS.discovery },
   { id: "meetings", label: "Meetings", sub: "Cross-functional agent panels — debate to a PRD", group: "Run", icon: ICONS.meetings },
   { id: "code_tasks", label: "Code Tasks", sub: "Agent edits code in a sandbox — tested, gated PRs", group: "Run", icon: ICONS.code_tasks },
+  { id: "reliability", label: "Reliability", sub: "AI SRE — incidents, root cause, governed fixes, learning", group: "Run", icon: ICONS.reliability },
   { id: "reports", label: "Evidence", sub: "Throughput, receipts, cost, and agent scorecards", group: "Run", icon: ICONS.reports },
   { id: "budget", label: "Budget", sub: "Live spend, reservations, and cap pressure", group: "Govern", icon: ICONS.budget },
   { id: "pipeline", label: "Coding Pipeline", sub: "VAG — cheap models build, frontier models verify · profiles, tiers & run costs", group: "Govern", icon: ICONS.pipeline },

@@ -2144,3 +2144,34 @@ export async function overrideCodeTaskAction(
     return { error: e instanceof Error ? e.message : String(e) };
   }
 }
+
+// ---- AI SRE reliability (RB-11) ----
+
+export async function reliabilityDiagnoseAction(formData: FormData): Promise<void> {
+  const incidentId = String(formData.get("incident_id") ?? "");
+  if (!incidentId) return;
+  await postJson(`/v1/reliability/incidents/${incidentId}/diagnose`, {
+    project_id: getProjectId(formData),
+    actor: getActor(formData),
+  });
+}
+
+export async function reliabilityFeedbackAction(formData: FormData): Promise<void> {
+  const incidentId = String(formData.get("incident_id") ?? "");
+  const verdict = String(formData.get("verdict") ?? "");
+  if (!incidentId || !verdict) return;
+  await postJson(`/v1/reliability/incidents/${incidentId}/feedback`, {
+    project_id: getProjectId(formData),
+    actor: getActor(formData),
+    verdict,
+  });
+}
+
+export async function reliabilityRemediateAction(formData: FormData): Promise<void> {
+  const incidentId = String(formData.get("incident_id") ?? "");
+  if (!incidentId) return;
+  await postJson(`/v1/reliability/incidents/${incidentId}/remediate`, {
+    project_id: getProjectId(formData),
+    actor: getActor(formData),
+  });
+}

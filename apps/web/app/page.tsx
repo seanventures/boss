@@ -123,6 +123,8 @@ import { fetchMeetingRooms } from "../lib/meeting-rooms";
 import { MeetingsHome } from "./meeting-room-ui";
 import { fetchCodeTasksFeed, fetchPreviews } from "../lib/code-tasks";
 import { CodeTasksHome } from "./code-tasks-ui";
+import { fetchReliabilityFeed } from "../lib/reliability";
+import { ReliabilityHome } from "./reliability-ui";
 import { fetchDiscoveriesFeed } from "../lib/discoveries";
 import { DiscoveriesHome } from "./discoveries-ui";
 import { fetchPipelineData } from "../lib/pipeline-profiles";
@@ -597,6 +599,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
       fetchCommitmentReconciliations(activeProjectId),
       fetchWorkflowFeed(activeProjectId),
     ]);
+  const reliabilityFeed = await fetchReliabilityFeed(activeProjectId);
 
   const deadletterCount = deadletters.items.length;
   const disableCommandEntry = !status.apiReachable || !status.databaseConnected;
@@ -6142,6 +6145,16 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             apiReachable={codeTasksFeed.apiReachable}
             previews={previewFeed}
           />
+        </section>
+
+        <section className="panel-stack" data-area="reliability" aria-label="Reliability">
+          <div className="section-head">
+            <div>
+              <span className="eyebrow">Reliability</span>
+              <h2>AI SRE — anomalies become incidents, incidents become governed fix PRs, and the loop learns.</h2>
+            </div>
+          </div>
+          <ReliabilityHome feed={reliabilityFeed} />
         </section>
 
         <section className="panel-stack" data-area="discovery" aria-label="Discovery">
