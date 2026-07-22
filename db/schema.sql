@@ -2350,3 +2350,45 @@ CREATE TABLE IF NOT EXISTS workflow_compensation_runs (
 );
 CREATE INDEX IF NOT EXISTS idx_workflow_compensation_claim
   ON workflow_compensation_runs(project_id, workflow_run_id, status, sequence);
+
+-- ── AI SRE knowledge graph (RB-15) ────────────────────────────────────────────
+-- A layered service/infra topology used to (a) build root-cause CONTEXT (the
+-- subgraph around a failing service) and (b) capture LEARNING — confirmed causes
+-- are written back as `caused_by` edges so future investigations start smarter.
+-- `layer` = 'deterministic' (walked from k8s/cloud/infra_resources) or 'inferred'
+-- (derived from traces/heuristics, carries a confidence < 1).
+CREATE TABLE IF NOT EXISTS kg_nodes (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id),
+  kind TEXT NOT NULL,               -- service|resource|repo|deployment|datastore|external|incident|root_cause
+  node_key TEXT NOT NULL,           -- stable natural key within (project, kind)
+  name TEXT NOT NULL,
+  attrs JSONB NOT NULL DEFAULT '{}'::jsonb,
+  layer TEXT NOT NULL DEFAULT 'deterministic'
+    CHECK (layer IN ('deterministic', 'inferred')),
+  source TEXT NOT NULL DEFAULT 'manual',
+  confidence DOUBLE PRECISION NOT NULL DEFAULT 1.0 CHECK (confidence >= 0 AND confidence <= 1),
+  first_seen TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_seen TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (project_id, kind, node_key)
+);
+CREATE INDEX IF NOT EXISTS idx_kg_nodes_project
+  ON kg_nodes(project_id, kind, last_seen DESC);
+
+CREATE TABLE IF NOT EXISTS kg_edges (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id),
+  src_id TEXT NOT NULL REFERENCES kg_nodes(id) ON DELETE CASCADE,
+  dst_id TEXT NOT NULL REFERENCES kg_nodes(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL,               -- depends_on|runs_on|deployed_from|owns|emits|caused_by|correlates_with
+  attrs JSONB NOT NULL DEFAULT '{}'::jsonb,
+  layer TEXT NOT NULL DEFAULT 'deterministic'
+    CHECK (layer IN ('deterministic', 'inferred')),
+  source TEXT NOT NULL DEFAULT 'manual',
+  confidence DOUBLE PRECISION NOT NULL DEFAULT 1.0 CHECK (confidence >= 0 AND confidence <= 1),
+  first_seen TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_seen TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (project_id, src_id, dst_id, kind)
+);
+CREATE INDEX IF NOT EXISTS idx_kg_edges_src ON kg_edges(src_id, kind);
+CREATE INDEX IF NOT EXISTS idx_kg_edges_dst ON kg_edges(dst_id, kind);

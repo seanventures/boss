@@ -173,6 +173,32 @@ summary before the detail (per the design guidance for dashboards).
 
 ---
 
+### 3.6 The knowledge graph (RB-15) — RCA context + learning substrate
+
+The topology the agent reasons over, and the memory it learns into. Two tables, two layers, two consumers.
+
+```
+kg_nodes (id, project_id, kind, node_key, name, attrs, layer, source, confidence, first_seen, last_seen)
+kg_edges (id, project_id, src_id, dst_id, kind, attrs, layer, source, confidence, first_seen, last_seen)
+   kind(node): service | resource | repo | deployment | datastore | external | incident | root_cause
+   kind(edge): depends_on | runs_on | deployed_from | owns | emits | caused_by | correlates_with
+   layer:      deterministic (k8s/cloud/infra_resources walk, conf 1.0)  |  inferred (traces/heuristics, <1)
+```
+
+- **Context for RCA** — `subgraph(service, depth)` returns the failing service's neighborhood (its
+  dependencies, the resources it runs on, the owning repo). The investigation engine (RB-16) reasons over
+  *this* subgraph + the repo (APP-5), not a blank page. An anomaly's `service` resolves to a graph node, so a
+  signal immediately carries its blast radius.
+- **Feedback & learning** — a confirmed investigation calls `record_root_cause(service, cause, confidence,
+  evidence)`, written as a `caused_by` edge; `known_causes(service)` replays those on the next incident, so
+  recurring failures are recognized fast and the graph compounds accuracy (the Cleric "operational memory"
+  property, but owned by the customer).
+- **Idempotent & layered** — upserts converge on repeated walks; a deterministic sighting outranks a prior
+  inferred guess. Foundation shipped (service + schema + 7 tests); live k8s/cloud walkers + the trace-inferred
+  layer are the remaining RB-15 work.
+
+---
+
 ## 4. The native learning loop (BOSS-wide primitive — your explicit ask)
 
 Generalize the VAG ratchet (#107) from "verifier corpus" into a **first-class `LearningLoop` primitive that
@@ -275,10 +301,17 @@ Cleric-parity autonomy layer (RB-15…RB-20). RB-13 (trace-judge data-mining) is
 - **RB-3** Insight agent (read-only): scan goldeneye logs → templated "top issues / what changed" report +
   `POST /v1/reliability/scan` (dry, no incidents persisted yet). *AC:* a real report from goldeneye's stream.
 
-### Phase 1 — incident model + clustering + RCA + the LearningLoop primitive
+### Phase 1 — incident model + **knowledge graph** + RCA + the LearningLoop primitive
+- **RB-15** *(pulled forward from Phase 5 — it's foundational, not a late add).* **Knowledge graph**
+  (`kg_nodes`/`kg_edges`) + `KnowledgeGraphService`: the service/infra topology RCA reads context *from* and
+  the learning loop writes confirmed causes *back into*. `subgraph()` = RCA-context bundle around a failing
+  service; `record_root_cause()`/`known_causes()` = the learning write-back; `seed_from_infra_resources()` =
+  deterministic first layer. **✅ foundation merged + 7 tests** (walkers/inferred layer/read-endpoint next).
 - **RB-4** data model (`telemetry_sources`, `anomaly_signals`, `incidents`, `incident_evidence`) + upsert +
-  **dedupe/cluster into named incidents**. *AC:* recurring signals collapse to one incident with a stable key.
-- **RB-5** `reliability.diagnose`: RCA vs repo (reuse APP-5) → hypothesis + evidence + confidence.
+  **dedupe/cluster into named incidents**; incidents/services land as graph nodes. *AC:* recurring signals
+  collapse to one incident with a stable key.
+- **RB-5** `reliability.diagnose`: RCA over **the knowledge-graph subgraph + the repo (APP-5)** + prior
+  `known_causes()` → hypothesis + evidence + confidence.
 - **RB-6** **`LearningLoop` primitive** (`learning_examples` + record/corpus/evaluate/suggest_tuning),
   retro-fit the VAG ratchet onto it. *AC:* one primitive, two consumers (verifier + SRE).
 
@@ -301,8 +334,9 @@ Cleric-parity autonomy layer (RB-15…RB-20). RB-13 (trace-judge data-mining) is
 - **RB-14** anomaly-agent **meta-eval** (precision/recall of the SRE agent itself — measure the measurer).
 
 ### Phase 5 — autonomous-oncall parity (close the Cleric gaps) — see §1.5
-- **RB-15** service & infra **dependency map** (layered knowledge graph: deterministic k8s/cloud walk +
-  inferred service deps). *AC:* an anomaly resolves to a named service + owning repo.
+- **RB-15** ~~knowledge graph~~ — **moved to Phase 1** (foundational; foundation already merged). What
+  remains here: the **live walkers** (k8s RBAC / cloud inventory) + the **inferred layer** (service deps from
+  traces) + a read endpoint. *AC:* an anomaly resolves to a named service + owning repo automatically.
 - **RB-16** **autonomous investigation engine**: `diagnose` becomes a parallel plan/execute/reflect loop with
   multiple hypotheses, causation-not-correlation testing, and **confidence-scored** ranked root causes.
 - **RB-17** **change-correlation** layer (deploys/CI, config drift, feature-flag flips ↔ anomaly onset).

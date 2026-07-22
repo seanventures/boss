@@ -1142,7 +1142,8 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
             _REPAIRABLE_GATES = {"code_review_passed", "security_clean", "consistent",
                                  "tests_strong_enough", "nothing_broke"}
             rounds_used = max(0, int(fctx.get("attempt", 1)) - 1)
-            max_repair_rounds = max(0, int(getattr(settings, "code_review_repair_max_rounds", 0) or 0))
+            # Fallback 2 (not 0): a missing/blank config field must never SILENTLY disable the moat.
+            max_repair_rounds = max(0, int(getattr(settings, "code_review_repair_max_rounds", 2) or 2))
             if (failing and all(g in _REPAIRABLE_GATES for g in failing)
                     and rounds_used < max_repair_rounds
                     and spec.get("open_pr", True) is not False):
