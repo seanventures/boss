@@ -2737,6 +2737,25 @@ def reliability_decision(incident_id: str, project_id: str) -> ReliabilityDecisi
             **reliability.decide_action(connection, project_id, incident_id))
 
 
+@app.get("/v1/reliability/incidents/{incident_id}/investigation")
+def reliability_investigation(incident_id: str, project_id: str):
+    """RB-20 — the consolidated investigation bundle (the MCP surface): incident + signals +
+    evidence + remediations + graph neighborhood + autonomy decision in one call."""
+    with begin(engine) as connection:
+        bundle = reliability.investigation(connection, project_id, incident_id)
+        if not bundle:
+            raise HTTPException(status_code=404, detail="incident not found")
+        return JSONResponse(content=jsonable_encoder(bundle))
+
+
+@app.post("/v1/reliability/meta-eval")
+def reliability_meta_eval():
+    """RB-14 — measure the measurer: detection precision/recall/F1 + RCA top-1 accuracy against
+    the labeled synthetic corpus. Pure — writes nothing."""
+    from .services.reliability_meta_eval import run_meta_eval
+    return JSONResponse(content=jsonable_encoder(run_meta_eval()))
+
+
 @app.post("/v1/reliability/incidents/{incident_id}/verify",
           response_model=ReliabilityVerifyResponse)
 def reliability_verify(

@@ -691,6 +691,11 @@ class Settings(BaseSettings):
     reliability_alert_secret: Optional[str] = Field(
         default=None, alias="RELIABILITY_ALERT_SECRET"
     )
+    # Mattermost/Slack incoming-webhook URL for oncall investigation cards (RB-20). Absent => no
+    # notifications, everything else unaffected (notify is always best-effort).
+    reliability_oncall_webhook: Optional[str] = Field(
+        default=None, alias="RELIABILITY_ONCALL_WEBHOOK"
+    )
     # JSON map: {"<plane_project_id>": {"owner": "...", "repo": "..."}} — routes a ticket to the
     # GitHub repo its PR opens against. Parsed defensively at use (a bad value never crashes boot).
     plane_project_map: Optional[str] = Field(default=None, alias="PLANE_PROJECT_MAP")
