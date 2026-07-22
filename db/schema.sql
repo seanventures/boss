@@ -2491,3 +2491,18 @@ CREATE TABLE IF NOT EXISTS remediations (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_remediations_incident ON remediations(incident_id, created_at DESC);
+
+-- ── Reliability autonomy policy (RB-19) ───────────────────────────────────────
+-- Governed autonomy spectrum per project: how far the SRE agent may go on its own.
+-- Tier-0 auto_remediate: auto-launch the (still fail-closed, gated) remediation PR when
+-- confidence/severity/blast-radius bounds hold. Tier-1: remediation only on operator request.
+-- Tier-2: notify/handoff only. Every action remains receipted + gated by the pipeline.
+CREATE TABLE IF NOT EXISTS reliability_policies (
+  project_id TEXT PRIMARY KEY REFERENCES projects(id),
+  auto_remediate BOOLEAN NOT NULL DEFAULT FALSE,
+  min_confidence DOUBLE PRECISION NOT NULL DEFAULT 0.8,
+  max_blast_radius INTEGER NOT NULL DEFAULT 5,      -- subgraph size cap for autonomous action
+  max_auto_severity TEXT NOT NULL DEFAULT 'critical'
+    CHECK (max_auto_severity IN ('info', 'warning', 'critical')),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
