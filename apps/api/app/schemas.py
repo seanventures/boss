@@ -5043,3 +5043,29 @@ class ReliabilitySourceSummary(BaseModel):
 class ReliabilitySourceListResponse(BaseModel):
     project_id: str
     items: list[ReliabilitySourceSummary] = Field(default_factory=list)
+
+
+class ReliabilityGraphWalkRequest(BaseModel):
+    project_id: str
+    actor: str = "system"
+    walker: str                                  # kubernetes | infra | cooccurrence
+    config: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def _validate(self) -> "ReliabilityGraphWalkRequest":
+        self.project_id = _require_text(self.project_id, "project_id")
+        self.actor = _require_text(self.actor, "actor")
+        self.walker = _require_text(self.walker, "walker")
+        return self
+
+
+class ReliabilityGraphWalkResponse(BaseModel):
+    walker: str
+    counts: dict[str, int] = Field(default_factory=dict)
+
+
+class ReliabilityGraphResponse(BaseModel):
+    project_id: str
+    root: Optional[dict[str, Any]] = None
+    nodes: list[dict[str, Any]] = Field(default_factory=list)
+    edges: list[dict[str, Any]] = Field(default_factory=list)

@@ -61,6 +61,9 @@ from .schemas import (
     ReliabilitySourceRequest,
     ReliabilitySourceSummary,
     ReliabilitySourceListResponse,
+    ReliabilityGraphWalkRequest,
+    ReliabilityGraphWalkResponse,
+    ReliabilityGraphResponse,
     AccountConnectSyncResponse,
     AccountConnectTeamInviteCreateRequest,
     AccountConnectTeamInviteListResponse,
@@ -2621,6 +2624,44 @@ def reliability_feedback(
         if not result:
             raise HTTPException(status_code=404, detail="incident not found")
         return ReliabilityFeedbackResponse(**result)
+
+
+@app.get("/v1/reliability/graph", response_model=ReliabilityGraphResponse)
+def reliability_graph(project_id: str, service: str, depth: int = 2) -> ReliabilityGraphResponse:
+    """The knowledge-graph subgraph around a service — the same context bundle RCA reasons over."""
+    with begin(engine) as connection:
+        sub = reliability.kg.subgraph(connection, project_id, "service", service, depth=depth)
+        return ReliabilityGraphResponse(project_id=project_id, root=sub["root"],
+                                        nodes=sub["nodes"], edges=sub["edges"])
+
+
+@app.post("/v1/reliability/graph/walk", response_model=ReliabilityGraphWalkResponse)
+def reliability_graph_walk(payload: ReliabilityGraphWalkRequest) -> ReliabilityGraphWalkResponse:
+    """Run a topology walker: kubernetes (deterministic, read-only RBAC), infra (BOSS inventory),
+    or cooccurrence (inferred correlates_with edges from overlapping incidents)."""
+    from .services import graph_walkers
+    walker = graph_walkers.WALKERS.get(payload.walker)
+    if not walker:
+        raise HTTPException(status_code=400, detail=f"unknown walker {payload.walker!r}")
+    with begin(engine) as connection:
+        require_project_actor(connection, payload.project_id, payload.actor, "providerops_manage")
+        try:
+            if payload.walker == "kubernetes":
+                counts = walker(connection, payload.project_id, reliability.kg,
+                                payload.config["base_url"],
+                                bearer_env=payload.config.get("bearer_env", ""),
+                                namespace=payload.config.get("namespace", ""))
+            elif payload.walker == "cooccurrence":
+                counts = walker(connection, payload.project_id, reliability.kg,
+                                window_minutes=int(payload.config.get("window_minutes", 30)),
+                                min_overlap=int(payload.config.get("min_overlap", 2)))
+            else:
+                counts = walker(connection, payload.project_id, reliability.kg)
+        except KeyError as error:
+            raise HTTPException(status_code=400, detail=f"missing walker config: {error}") from error
+        except OSError as error:
+            raise HTTPException(status_code=502, detail=f"walker target unreachable: {error}") from error
+        return ReliabilityGraphWalkResponse(walker=payload.walker, counts=counts)
 
 
 @app.post("/v1/reliability/sources", response_model=ReliabilitySourceSummary, status_code=201)
