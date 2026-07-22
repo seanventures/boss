@@ -149,6 +149,21 @@ priorities + the k8s walk that seeds the graph), then Datadog → CloudWatch/GCP
 the long tail. GitHub/BuildKite/Unleash land with change-correlation (RB-17); Kubernetes doubles as the
 deterministic graph walker (RB-15).
 
+### 2.5 Build-vs-adopt decision (2026-07-22) — build the brain, consume the ecosystem via MCP
+
+Evaluated the open-source AI-SRE field (github.com/agamm/awesome-ai-sre: HolmesGPT, K8sGPT, Aurora, Coroot,
+Keep, LogAI…). **Decision: keep the core ours; consume ecosystem tools as data sources through MCP, never
+as the brain.** Rationale: (a) every OSS tool stops at *diagnosis* — none has our wedge (governed
+remediation → tested, gated fix PR → verify → learn); (b) embedding a foreign agentic loop (HolmesGPT)
+bypasses the single governance plane (budget governor, receipts, model routing, VAG) that we sell on;
+(c) feedback only compounds if it lands in **our** LearningLoop + knowledge graph; (d) "BOSS built its own
+AI SRE on the BOSS engine" is the engine-is-generic proof point. Concretely:
+- **K8sGPT (Apache-2.0, CNCF)** — consume its **MCP server** as an optional k8s evidence source: 34 codified
+  analyzers feed RB-15's deterministic k8s layer with zero vendoring.
+- **HolmesGPT (CNCF sandbox)** — its 50+ toolsets are the reference map validating our §2.4 matrix; consume
+  select toolsets via MCP where convenient; do not embed its investigation loop.
+- **awesome-ai-sre "Agent Benchmarks"** — input corpus for RB-14 (meta-eval of our agent).
+
 ---
 
 ## 3. The reliability pipeline (system-level)

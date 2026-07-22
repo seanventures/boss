@@ -14,7 +14,9 @@ The system-level surface of the AI SRE agent. Three moves, all here:
 from __future__ import annotations
 
 import hashlib
+import json
 from collections import Counter, defaultdict
+from datetime import datetime, timedelta
 from typing import Any, Optional
 
 from sqlalchemy import text
@@ -348,6 +350,84 @@ class ReliabilityService:
         return {"incident_id": incident_id, "verdict": verdict, "outcome": outcome,
                 "status": new_status, "learning_example_id": example_id,
                 "tuning": self.learning.suggest_tuning(connection, project_id, "sre")}
+
+    # --- verify (RB-18 — production verification loop) ------------------------
+    def verify(self, connection: Connection, project_id: str, incident_id: str,
+               source_spec: dict[str, Any], window: dict[str, float], *,
+               stability_minutes: float = 30.0, query: str = "",
+               actor: str = "system") -> Optional[dict[str, Any]]:
+        """Close the loop autonomously: re-watch the SAME signals that raised the incident.
+        * signature still present  → **recurred**: reopen the incident (+ learning example, evidence).
+        * signal clear             → start/continue a no-recurrence **stability window**; once it has
+          elapsed with every check clear → **recovered**: auto-resolve. Until then → **stabilizing**.
+        Verification bookkeeping lives in `incidents.finalize_ctx.verification` so repeated checks
+        (manual or scheduled) converge on one durable state machine."""
+        inc = connection.execute(
+            text("SELECT id, service, status, finalize_ctx FROM incidents "
+                 "WHERE project_id = :p AND id = :id"),
+            {"p": project_id, "id": incident_id},
+        ).mappings().first()
+        if not inc:
+            return None
+        sigs = connection.execute(
+            text("SELECT DISTINCT kind, signature FROM anomaly_signals WHERE incident_id = :id"),
+            {"id": incident_id},
+        ).all()
+
+        source = build_source(source_spec)
+        win = TimeWindow(window["start"], window["end"])
+        events = source.query_logs(query, win)
+        counts = Counter(tm.template_of(e.message) for e in events)
+
+        recurred: list[str] = []
+        for kind, signature in sigs:
+            if kind in ("new_template", "template_spike"):
+                if counts.get(signature, 0) >= 3:
+                    recurred.append(signature)
+            elif kind == "error_surge":
+                if tm.error_surge_signal(events, baseline_error_rate=None) is not None:
+                    recurred.append(signature)
+            elif kind == "metric_spike":
+                if any(s.key == signature
+                       for s in tm.metric_signals(source.query_metrics(query, win))):
+                    recurred.append(signature)
+
+        ctx = dict(inc["finalize_ctx"] or {})
+        ver = dict(ctx.get("verification") or {})
+        now = now_utc()
+        checks = int(ver.get("checks", 0)) + 1
+
+        if recurred:
+            # the fix did not hold — reopen and reset the stability window
+            ver = {"state": "recurred", "checks": checks, "last_check": now.isoformat(),
+                   "recurred_signatures": recurred}
+            new_status = "open"
+        else:
+            first_clear = (datetime.fromisoformat(ver["first_clear"])
+                           if ver.get("first_clear") else now)
+            stable_at = first_clear + timedelta(minutes=stability_minutes)
+            state = "recovered" if now >= stable_at else "stabilizing"
+            ver = {"state": state, "checks": checks, "last_check": now.isoformat(),
+                   "first_clear": first_clear.isoformat(), "stable_at": stable_at.isoformat()}
+            new_status = "resolved" if state == "recovered" else inc["status"]
+
+        ctx["verification"] = ver
+        connection.execute(
+            text("UPDATE incidents SET status = :s, finalize_ctx = CAST(:ctx AS JSONB), "
+                 "last_seen = :now WHERE id = :id"),
+            {"s": new_status, "ctx": json.dumps(ctx, default=str), "now": now, "id": incident_id},
+        )
+        self._add_evidence(connection, incident_id, "verification", ref=ver["state"], payload=ver)
+        if ver["state"] in ("recurred", "recovered"):     # terminal outcomes feed the learning loop
+            self.learning.record(
+                connection, project_id, agent="sre", kind="verification", label=ver["state"],
+                outcome=("recurred" if ver["state"] == "recurred" else "verified_recovered"),
+                ref=incident_id, source=actor,
+                payload={"service": inc["service"], "recurred_signatures": recurred, "checks": checks},
+            )
+        return {"incident_id": incident_id, "state": ver["state"], "status": new_status,
+                "checks": checks, "recurred_signatures": recurred,
+                "first_clear": ver.get("first_clear"), "stable_at": ver.get("stable_at")}
 
     def _add_evidence(self, connection: Connection, incident_id: str, kind: str, *,
                       ref: str = "", payload: Optional[dict] = None) -> None:

@@ -55,6 +55,8 @@ from .schemas import (
     ReliabilityFeedbackResponse,
     ReliabilityRemediateRequest,
     ReliabilityRemediateResponse,
+    ReliabilityVerifyRequest,
+    ReliabilityVerifyResponse,
     AccountConnectSyncResponse,
     AccountConnectTeamInviteCreateRequest,
     AccountConnectTeamInviteListResponse,
@@ -2612,6 +2614,29 @@ def reliability_feedback(
         if not result:
             raise HTTPException(status_code=404, detail="incident not found")
         return ReliabilityFeedbackResponse(**result)
+
+
+@app.post("/v1/reliability/incidents/{incident_id}/verify",
+          response_model=ReliabilityVerifyResponse)
+def reliability_verify(
+    incident_id: str, payload: ReliabilityVerifyRequest
+) -> ReliabilityVerifyResponse:
+    """Production verification loop: re-watch the incident's own signals; a recurrence reopens it,
+    a clear stability window auto-resolves it."""
+    with begin(engine) as connection:
+        require_project_actor(connection, payload.project_id, payload.actor, "providerops_manage")
+        try:
+            result = reliability.verify(
+                connection, payload.project_id, incident_id, payload.source,
+                {"start": payload.window.start, "end": payload.window.end},
+                stability_minutes=payload.stability_minutes, query=payload.query,
+                actor=payload.actor,
+            )
+        except (ValueError, KeyError) as error:
+            raise HTTPException(status_code=400, detail=f"invalid verify request: {error}") from error
+        if not result:
+            raise HTTPException(status_code=404, detail="incident not found")
+        return ReliabilityVerifyResponse(**result)
 
 
 @app.get(
