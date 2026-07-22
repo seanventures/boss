@@ -207,9 +207,13 @@ def start_web_app_build(engine, settings: Settings, jobs, *, project_id: str,
                 "Only a handful of new files were added on top of the scaffold; config/build files "
                 "were not rewritten.",
             ],
-            test_commands=[], owner=owner, repo=repo, base_branch=f"boss/code/{root}",
+            test_commands=["npm run build"], owner=owner, repo=repo,
+            base_branch=f"boss/code/{root}",
             finalize_ctx={"root_run_id": root, "web_app_build": True},
-            jobs=jobs, profile="balanced", risk_tier=(2 if review else 1))
+            # tier 0 (review=False): implement ONLY — no design, no separate write_tests stage
+            # (which mis-generated Python unittest files for this JS/React app), no adversarial
+            # gate. The guest validates itself with `npm run build`. review=True -> tier 2 hardens.
+            jobs=jobs, profile="balanced", risk_tier=(2 if review else 0))
         emit_event(c, project_id, "web_app.build_started", "boss", "code_task_run", run_id,
                    {"scaffold_seeded": seeded, "review": review, "branch": f"boss/code/{root}"})
     return {"started": True, "run_id": run_id, "scaffold_seeded": seeded, "review": review,
