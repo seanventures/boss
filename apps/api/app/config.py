@@ -554,6 +554,10 @@ class Settings(BaseSettings):
     # but too few for APP-SCALE work (scaffolding a whole Vite/React app is more file-writes than
     # that) — a too-low cap surfaces as error_max_turns and fails the task. 90 fits real app tasks.
     code_agent_max_turns: int = Field(default=90, alias="BOSS_CODE_AGENT_MAX_TURNS")
+    # Turn cap for the MICRO-VM GUEST agent (a separate limit from the host cap above). BOSS sends
+    # this in the sandbox submit contract; the sandbox-service must honor it to take effect (else it
+    # falls back to the service's own ~40 default). Higher lets app-scale tasks finish.
+    code_agent_guest_max_turns: int = Field(default=120, alias="BOSS_CODE_AGENT_GUEST_MAX_TURNS")
     # Read-only stages (adversarial/security/consistency review) don't edit code and don't
     # need 40 turns of exploration — a tighter cap cuts review latency a lot without losing
     # rigor (they read the diff + relevant files + judge).

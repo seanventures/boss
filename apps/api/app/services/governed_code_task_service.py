@@ -739,6 +739,7 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
                              "in your JSON reply."),
             "acceptance_criteria": [], "test_commands": test_cmds,
             "token": token, "timeout": settings.code_agent_timeout_seconds,
+            "max_turns": int(getattr(settings, "code_agent_guest_max_turns", 120) or 120),
             **_guest_engine_fields(settings, eng_name, model),
         }
         set_llm_context(stage=stage_name)
