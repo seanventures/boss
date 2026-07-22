@@ -51,6 +51,7 @@ def clean_tables(engine):
         for tbl in [
             # AI SRE reliability pipeline + knowledge graph + learning loop (child → parent)
             "incident_evidence",
+            "reliability_policies",
             "remediations",
             "anomaly_signals",
             "incidents",

@@ -31,6 +31,8 @@ from .learning_loop import LearningLoopService
 from .telemetry_source import InMemorySource, LogEvent, LogExportSource, TelemetrySource, TimeWindow
 
 _CRITICAL_KINDS = ("error_surge", "new_template")
+_TUNED_MIN_COUNT = 9        # a raise-listed signature needs 3x the default floor to fire again
+_SEV_RANK = {"info": 0, "warning": 1, "critical": 2}
 
 # incident feedback verdict → learning-example outcome + the incident status it drives
 _VERDICT = {
@@ -119,14 +121,23 @@ class ReliabilityService:
         if not persist:
             return report                          # RB-3: read-only Insight, nothing written
 
+        # RB-12 auto-tuning: signatures repeatedly dismissed as false alarms need a higher bar
+        raised = {t["signature"]
+                  for t in self.learning.suggest_tuning(connection, project_id, "sre")["raise_threshold"]}
         svc_by_tmpl = _service_by_template(events)
         touched: dict[str, dict] = {}
+        suppressed: list[dict[str, Any]] = []
         for sig in report["signals"]:
+            if sig["key"] in raised and int(sig.get("count") or 0) < _TUNED_MIN_COUNT:
+                suppressed.append({"kind": sig["kind"], "key": sig["key"],
+                                   "count": sig.get("count"), "reason": "tuned_threshold"})
+                continue
             service = svc_by_tmpl.get(sig["key"], "") if sig["kind"] in ("new_template", "template_spike") else ""
             inc = self._upsert_incident(connection, project_id, sig, service)
             self._insert_signal(connection, project_id, source_id, sig, service, inc["id"])
             touched[inc["id"]] = inc
         report["incidents"] = list(touched.values())
+        report["suppressed"] = suppressed          # transparency: tuned-out, not silently dropped
         return report
 
     def _upsert_incident(self, connection: Connection, project_id: str, sig: dict[str, Any],
@@ -257,9 +268,12 @@ class ReliabilityService:
         hypothesis = result["winner"]
         hypotheses = result["hypotheses"]
 
+        # RB-12: confirmed prior examples ride along as few-shot context (for the LLM stage)
+        few_shot = self.learning.suggest_tuning(connection, project_id, "sre")["few_shot_candidates"]
         self._add_evidence(connection, incident_id, "context", ref=service,
                            payload={"nodes": context["nodes"], "edges": context["edges"],
-                                    "known_causes": known, "changes": changes, "hypotheses": hypotheses})
+                                    "known_causes": known, "changes": changes,
+                                    "hypotheses": hypotheses, "few_shot": few_shot})
         self._add_evidence(connection, incident_id, "rca_hypothesis", ref=hypothesis["cause_key"],
                            payload=hypothesis)
         connection.execute(
@@ -364,6 +378,72 @@ class ReliabilityService:
                 "status": new_status, "learning_example_id": example_id,
                 "tuning": self.learning.suggest_tuning(connection, project_id, "sre")}
 
+    # --- autonomy policy & tiers (RB-19) --------------------------------------
+    def get_policy(self, connection: Connection, project_id: str) -> dict[str, Any]:
+        row = connection.execute(
+            text("SELECT project_id, auto_remediate, min_confidence, max_blast_radius, "
+                 "max_auto_severity, updated_at FROM reliability_policies WHERE project_id = :p"),
+            {"p": project_id},
+        ).mappings().first()
+        if row:
+            return dict(row)
+        return {"project_id": project_id, "auto_remediate": False, "min_confidence": 0.8,
+                "max_blast_radius": 5, "max_auto_severity": "critical", "updated_at": None}
+
+    def set_policy(self, connection: Connection, project_id: str, *, auto_remediate: bool,
+                   min_confidence: float, max_blast_radius: int,
+                   max_auto_severity: str = "critical") -> dict[str, Any]:
+        connection.execute(
+            text(
+                """
+                INSERT INTO reliability_policies
+                    (project_id, auto_remediate, min_confidence, max_blast_radius,
+                     max_auto_severity, updated_at)
+                VALUES (:p, :ar, :mc, :mbr, :mas, :now)
+                ON CONFLICT (project_id) DO UPDATE SET
+                    auto_remediate = EXCLUDED.auto_remediate,
+                    min_confidence = EXCLUDED.min_confidence,
+                    max_blast_radius = EXCLUDED.max_blast_radius,
+                    max_auto_severity = EXCLUDED.max_auto_severity,
+                    updated_at = EXCLUDED.updated_at
+                """
+            ),
+            {"p": project_id, "ar": auto_remediate, "mc": min_confidence, "mbr": max_blast_radius,
+             "mas": max_auto_severity, "now": now_utc()},
+        )
+        return self.get_policy(connection, project_id)
+
+    def decide_action(self, connection: Connection, project_id: str, incident_id: str) -> dict[str, Any]:
+        """The governed autonomy spectrum: pick the tier by confidence × blast radius × severity.
+        Tier-0 auto_remediate (auto-launch the still-gated fix PR) · Tier-1 gated_pr (operator
+        launches) · Tier-2 handoff (notify only). Every path stays receipted + fail-closed."""
+        inc = connection.execute(
+            text("SELECT id, service, severity, confidence FROM incidents "
+                 "WHERE project_id = :p AND id = :id"),
+            {"p": project_id, "id": incident_id},
+        ).mappings().first()
+        if not inc:
+            return {"tier": 2, "action": "handoff", "reason": "incident not found"}
+        policy = self.get_policy(connection, project_id)
+        blast = len(self.kg.subgraph(connection, project_id, "service", inc["service"] or "",
+                                     depth=1)["nodes"]) if inc["service"] else 0
+        conf = float(inc["confidence"] or 0.0)
+        if not policy["auto_remediate"]:
+            tier, action, reason = 1, "gated_pr", "auto_remediate disabled by policy"
+        elif conf < float(policy["min_confidence"]):
+            tier, action, reason = 1, "gated_pr", \
+                f"confidence {conf} below policy floor {policy['min_confidence']}"
+        elif blast > int(policy["max_blast_radius"]):
+            tier, action, reason = 2, "handoff", \
+                f"blast radius {blast} exceeds cap {policy['max_blast_radius']} — human judgment"
+        elif _SEV_RANK.get(inc["severity"], 1) > _SEV_RANK.get(policy["max_auto_severity"], 2):
+            tier, action, reason = 2, "handoff", "severity above the autonomous cap"
+        else:
+            tier, action, reason = 0, "auto_remediate", \
+                f"confidence {conf} ≥ {policy['min_confidence']}, blast {blast} within bounds"
+        return {"tier": tier, "action": action, "reason": reason,
+                "confidence": conf, "blast_radius": blast, "policy": policy}
+
     # --- telemetry sources (RB-9/RB-10 — registered connections) --------------
     def register_source(self, connection: Connection, project_id: str, kind: str, name: str, *,
                         config: Optional[dict] = None, secret_ref: str = "",
@@ -440,9 +520,11 @@ class ReliabilityService:
         return None
 
     def ingest_alert(self, connection: Connection, project_id: str, payload: dict[str, Any], *,
-                     scan_window_minutes: int = 30) -> Optional[dict[str, Any]]:
-        """Alert → incident → scoped scan of every enabled source → diagnose. The event-driven
-        entry to the loop: an alert firing anywhere becomes an investigated incident here."""
+                     scan_window_minutes: int = 30, jobs=None) -> Optional[dict[str, Any]]:
+        """Alert → incident → scoped scan of every enabled source → diagnose → **autonomy decision**
+        (RB-19: with `jobs` and a Tier-0 policy verdict, the gated remediation PR auto-launches).
+        The event-driven entry to the loop: an alert firing anywhere becomes an investigated
+        incident here."""
         alert = self._parse_alert(payload)
         if not alert:
             return None
@@ -465,9 +547,15 @@ class ReliabilityService:
                 scans.append({"source": src["name"], "error": str(exc)[:200]})
 
         diagnosis = self.diagnose(connection, project_id, inc["id"])
+        decision = self.decide_action(connection, project_id, inc["id"])
+        remediation = None
+        if decision["action"] == "auto_remediate" and jobs is not None:      # Tier-0, still gated
+            remediation = self.remediate(connection, project_id, inc["id"], jobs=jobs)
         return {"incident_id": inc["id"], "alert": alert, "scans": scans,
                 "hypothesis": (diagnosis or {}).get("hypothesis"),
-                "status": "diagnosing"}
+                "autonomy": {k: decision[k] for k in ("tier", "action", "reason")},
+                "remediation": remediation,
+                "status": "remediating" if remediation else "diagnosing"}
 
     # --- verify (RB-18 — production verification loop) ------------------------
     def verify(self, connection: Connection, project_id: str, incident_id: str,

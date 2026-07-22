@@ -64,6 +64,9 @@ from .schemas import (
     ReliabilityGraphWalkRequest,
     ReliabilityGraphWalkResponse,
     ReliabilityGraphResponse,
+    ReliabilityPolicyRequest,
+    ReliabilityPolicyResponse,
+    ReliabilityDecisionResponse,
     AccountConnectSyncResponse,
     AccountConnectTeamInviteCreateRequest,
     AccountConnectTeamInviteListResponse,
@@ -2699,10 +2702,39 @@ async def reliability_alert_webhook(request: Request):
         raise HTTPException(status_code=400, detail="Invalid alert payload.") from error
     project_id = payload.get("project_id") or settings.default_project_id
     with begin(engine) as connection:
-        result = reliability.ingest_alert(connection, project_id, payload)
+        result = reliability.ingest_alert(connection, project_id, payload, jobs=jobs)
     if not result:
         raise HTTPException(status_code=400, detail="Unrecognized alert shape.")
     return JSONResponse(status_code=202, content=jsonable_encoder(result))
+
+
+@app.get("/v1/reliability/policy", response_model=ReliabilityPolicyResponse)
+def reliability_get_policy(project_id: str) -> ReliabilityPolicyResponse:
+    with begin(engine) as connection:
+        return ReliabilityPolicyResponse(**reliability.get_policy(connection, project_id))
+
+
+@app.post("/v1/reliability/policy", response_model=ReliabilityPolicyResponse)
+def reliability_set_policy(payload: ReliabilityPolicyRequest) -> ReliabilityPolicyResponse:
+    """RB-19 — the governed autonomy spectrum, per project. Tier-0 auto-launch stays fail-closed:
+    the remediation it triggers is the same gated pipeline PR."""
+    with begin(engine) as connection:
+        require_project_actor(connection, payload.project_id, payload.actor, "providerops_manage")
+        row = reliability.set_policy(
+            connection, payload.project_id, auto_remediate=payload.auto_remediate,
+            min_confidence=payload.min_confidence, max_blast_radius=payload.max_blast_radius,
+            max_auto_severity=payload.max_auto_severity,
+        )
+        return ReliabilityPolicyResponse(**row)
+
+
+@app.get("/v1/reliability/incidents/{incident_id}/decision",
+         response_model=ReliabilityDecisionResponse)
+def reliability_decision(incident_id: str, project_id: str) -> ReliabilityDecisionResponse:
+    """What the autonomy policy would do with this incident right now (tier + action + why)."""
+    with begin(engine) as connection:
+        return ReliabilityDecisionResponse(
+            **reliability.decide_action(connection, project_id, incident_id))
 
 
 @app.post("/v1/reliability/incidents/{incident_id}/verify",

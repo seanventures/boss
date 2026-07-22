@@ -5069,3 +5069,40 @@ class ReliabilityGraphResponse(BaseModel):
     root: Optional[dict[str, Any]] = None
     nodes: list[dict[str, Any]] = Field(default_factory=list)
     edges: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class ReliabilityPolicyRequest(BaseModel):
+    project_id: str
+    actor: str = "system"
+    auto_remediate: bool = False
+    min_confidence: float = 0.8
+    max_blast_radius: int = 5
+    max_auto_severity: str = "critical"
+
+    @model_validator(mode="after")
+    def _validate(self) -> "ReliabilityPolicyRequest":
+        self.project_id = _require_text(self.project_id, "project_id")
+        self.actor = _require_text(self.actor, "actor")
+        if self.max_auto_severity not in ("info", "warning", "critical"):
+            raise ValueError("max_auto_severity must be info|warning|critical")
+        if not 0.0 <= self.min_confidence <= 1.0:
+            raise ValueError("min_confidence must be within [0,1]")
+        return self
+
+
+class ReliabilityPolicyResponse(BaseModel):
+    project_id: str
+    auto_remediate: bool
+    min_confidence: float
+    max_blast_radius: int
+    max_auto_severity: str
+    updated_at: Optional[datetime] = None
+
+
+class ReliabilityDecisionResponse(BaseModel):
+    tier: int
+    action: str                                  # auto_remediate | gated_pr | handoff
+    reason: str
+    confidence: float = 0.0
+    blast_radius: int = 0
+    policy: dict[str, Any] = Field(default_factory=dict)
