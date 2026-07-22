@@ -4939,6 +4939,7 @@ class ReliabilityDiagnoseResponse(BaseModel):
     service: str
     hypothesis: dict[str, Any]                                  # the top-ranked (winner)
     hypotheses: list[dict[str, Any]] = Field(default_factory=list)   # full ranked list w/ confidence
+    changes: list[dict[str, Any]] = Field(default_factory=list)      # correlated recent changes (RB-17)
     context: dict[str, Any] = Field(default_factory=dict)
     known_causes: list[dict[str, Any]] = Field(default_factory=list)
 

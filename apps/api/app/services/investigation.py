@@ -112,7 +112,9 @@ class InvestigationEngine:
         if c.basis == "memory":
             base = min(1.0, _BASIS_PRIOR["memory"] * c.confidence / 0.9) if c.confidence else _BASIS_PRIOR["memory"]
         elif c.basis == "change":
-            base = _BASIS_PRIOR["change"]
+            # a change right at onset is a strong suspect; the signal decays over the lookback window
+            prox = c.evidence.get("proximity_minutes")
+            base = _BASIS_PRIOR["change"] if prox is None else max(0.50, 0.80 - 0.30 * min(prox, 60) / 60)
         else:                                    # context prior already folded edge+proximity in
             base = min(_BASIS_PRIOR["context"] + c.confidence, 0.85)
         corroborated = self._corroborates(c, signals)
