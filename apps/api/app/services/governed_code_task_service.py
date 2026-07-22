@@ -1377,6 +1377,48 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
 
         if qg_status != "pass":
             failing = [k for k, v in gates.items() if not v]
+            # AUTONOMOUS REVIEW-REPAIR (BOSS's moat: agents converge in a loop, not a human). If
+            # EVERY failing gate is a REPAIRABLE review-stage finding — a substantiated adversarial
+            # defect, a security issue, weak tests, consistency drift, or a regression — and we have
+            # not spent the repair-round budget, iterate autonomously: feed the findings back and
+            # rebuild on the work branch (retry_code_task carries security/review/consistency
+            # summaries forward as ITERATION FEEDBACK and clones the prior code). Only genuinely
+            # stuck runs (a non-repairable failure, or the budget exhausted) fall through to a human.
+            _REPAIRABLE_GATES = {"code_review_passed", "security_clean", "consistent",
+                                 "tests_strong_enough", "nothing_broke"}
+            rounds_used = max(0, int(fctx.get("attempt", 1)) - 1)
+            max_repair_rounds = max(0, int(getattr(settings, "code_review_repair_max_rounds", 0) or 0))
+            if (failing and all(g in _REPAIRABLE_GATES for g in failing)
+                    and rounds_used < max_repair_rounds
+                    and spec.get("open_pr", True) is not False):
+                _finish_vms(success=False)  # retain this round's VMs for inspection
+                with begin(engine) as c:
+                    _release(sf, c, project_id, reservation_id,
+                             f"auto review-repair (round {rounds_used + 1}): {failing}")
+                    emit_event(c, project_id, "code_task.review_repair_round", "boss",
+                               "code_task_run", run_id,
+                               {"round": rounds_used + 1, "of": max_repair_rounds,
+                                "failing_gates": failing})
+                from .code_task_service import retry_code_task
+                nxt = retry_code_task(
+                    engine, settings, jobs, run_id,
+                    fix_note=("Autonomous review-repair: the quality gate blocked on "
+                              f"{', '.join(failing)}. Address EVERY review finding below so ALL "
+                              "gates pass, and do NOT regress the checks that already passed. If "
+                              "'tests_strong_enough' failed, STRENGTHEN the tests so a one-line "
+                              "mutation to the logic is caught."))
+                with begin(engine) as c:
+                    c.execute(text(
+                        "UPDATE code_task_runs SET status='repairing', phase='done', error=:e, "
+                        "finalize_ctx=COALESCE(finalize_ctx, '{}'::jsonb) || jsonb_build_object("
+                        "  'review_repair_next_run', CAST(:nx AS text), "
+                        "  'review_repair_round', CAST(:rd AS int)), updated_at=now() WHERE id=:id"),
+                        {"e": f"Auto review-repair round {rounds_used + 1} (gates: {failing}); "
+                              f"iterating autonomously in {nxt.get('run_id')}.",
+                         "nx": nxt.get("run_id"), "rd": rounds_used + 1, "id": run_id})
+                return {"status": "repairing", "done": True, "review_repair": True,
+                        "next_run_id": nxt.get("run_id"), "round": rounds_used + 1,
+                        "failing_gates": failing}
             _finish_vms(success=False)  # retain the stage VMs for inspection
             # Human escape hatch: preserve the produced diff so an operator can WAIVE the failing
             # gate(s) and open the PR without a re-run. Governance is kept — gates the human does
