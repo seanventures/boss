@@ -427,7 +427,19 @@ def run_code_task(engine, settings: Settings, jobs, run_id: str) -> dict:
                     {"lr": json.dumps(lane_routing), "id": run_id},
                 )
         from .governed_code_task_service import run_governed_code_task
-        return run_governed_code_task(engine, settings, jobs, run_id)
+        result = run_governed_code_task(engine, settings, jobs, run_id)
+        # Autonomous decomposition chain: when a decomposed build task lands successfully, start
+        # the NEXT task in the plan (as a continuation on the shared branch) so BOSS delivers the
+        # whole product itself, scaffold -> features -> wire-up, without a human between steps.
+        if result.get("status") == "completed":
+            try:
+                from .prd_decomposition import advance_decomposition
+                nxt = advance_decomposition(engine, settings, jobs, run_id)
+                if nxt:
+                    result = {**result, "decomposition_next_run": nxt}
+            except Exception:  # noqa: BLE001 — the chain is best-effort; never fail the finished task
+                logger.exception("decomposition advance failed for %s", run_id)
+        return result
 
     project_id = run["project_id"]
     task_id = run["task_id"]

@@ -4875,6 +4875,40 @@ def start_code_task_endpoint(payload: dict):
     return {"status": "queued", "run_id": run_id}
 
 
+@app.post("/v1/prd/decompose", status_code=201)
+def decompose_prd_endpoint(payload: dict):
+    """Autonomous PRD -> scoped coding tasks -> build. BOSS reads a PRD (or a feature directive),
+    decomposes it into a SMALL ordered set of composable coding tasks, and runs them as ONE branch
+    lineage (scaffold -> features -> wire-up) — each task auto-starts when the prior lands. Body:
+    {project_id, prd | directive, owner?, repo?, base_branch?, task_id?, profile?, risk_tier?,
+    max_tasks?, plan_only?}. plan_only=true returns the decomposition WITHOUT starting the build."""
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    project_id = payload.get("project_id")
+    if not project_id:
+        raise HTTPException(status_code=422, detail="project_id is required.")
+    prd = (payload.get("prd") or payload.get("directive") or "").strip()
+    if not prd:
+        raise HTTPException(status_code=422, detail="prd (or directive) is required.")
+    from .services.prd_decomposition import decompose_prd_into_tasks, start_decomposed_build
+    max_tasks = int(payload.get("max_tasks") or 6)
+    if payload.get("plan_only"):
+        tasks = decompose_prd_into_tasks(settings, prd, max_tasks=max_tasks)
+        if not tasks:
+            raise HTTPException(status_code=422, detail="could not decompose the PRD into tasks.")
+        return {"plan_only": True, "total": len(tasks), "tasks": tasks}
+    result = start_decomposed_build(
+        engine, settings, jobs, project_id=project_id, task_id=payload.get("task_id"),
+        prd_or_directive=prd,
+        owner=payload.get("owner") or settings.target_github_owner,
+        repo=payload.get("repo") or settings.target_github_repo,
+        base_branch=payload.get("base_branch") or "main",
+        profile=payload.get("profile"), risk_tier=payload.get("risk_tier"), max_tasks=max_tasks)
+    if not result.get("started"):
+        raise HTTPException(status_code=422, detail=result.get("reason") or "decomposition failed.")
+    return result
+
+
 @app.get("/v1/pipeline-profiles")
 def list_pipeline_profiles_endpoint(project_id: str):
     """List the cost/rigor profiles available to a project: built-in presets plus any custom
