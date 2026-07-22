@@ -550,8 +550,10 @@ class Settings(BaseSettings):
     code_review_repair_max_rounds: int = Field(
         default=2, alias="BOSS_CODE_REVIEW_REPAIR_MAX_ROUNDS"
     )
-    # Max agent turns inside the sandbox before we stop and take the diff.
-    code_agent_max_turns: int = Field(default=40, alias="BOSS_CODE_AGENT_MAX_TURNS")
+    # Max agent turns inside the sandbox before we stop and take the diff. 40 is fine for a module
+    # but too few for APP-SCALE work (scaffolding a whole Vite/React app is more file-writes than
+    # that) — a too-low cap surfaces as error_max_turns and fails the task. 90 fits real app tasks.
+    code_agent_max_turns: int = Field(default=90, alias="BOSS_CODE_AGENT_MAX_TURNS")
     # Read-only stages (adversarial/security/consistency review) don't edit code and don't
     # need 40 turns of exploration — a tighter cap cuts review latency a lot without losing
     # rigor (they read the diff + relevant files + judge).
