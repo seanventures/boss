@@ -393,7 +393,15 @@ def run_code_task(engine, settings: Settings, jobs, run_id: str) -> dict:
     if run is None:
         return {"status": "not_found", "done": True}
     if run["status"] != "running" or run["pull_request_url"]:
-        # already terminal or PR already opened — idempotent no-op
+        # already terminal or PR already opened — idempotent no-op. BUT if this is a COMPLETED
+        # decomposition step, still advance the chain (a reclaim/re-invoke lands here after the
+        # step finished, and the in-process advance may have been lost) — advance() is idempotent.
+        if run["status"] == "completed" and (run.get("finalize_ctx") or {}).get("decomposition_plan"):
+            try:
+                from .prd_decomposition import advance_decomposition
+                advance_decomposition(engine, settings, jobs, run_id)
+            except Exception:  # noqa: BLE001 — best-effort chain advance
+                logger.exception("decomposition advance (idempotent path) failed for %s", run_id)
         return {"status": run["status"], "done": True,
                 "pull_request_url": run["pull_request_url"], "decision_id": run["decision_id"]}
 
