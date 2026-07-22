@@ -309,13 +309,25 @@ def _review_prompt(title, criteria, *, ui=False, change=""):
 
 
 def _parse_verdict(summary: str) -> str:
-    up = summary.upper()
+    up = (summary or "").upper()
     m = re.findall(r"VERDICT:\s*(SURVIVED|REFUTED)", up)
     if not m:  # the model sometimes omits the "VERDICT:" prefix — accept the keyword anywhere
         m = re.findall(r"\b(SURVIVED|REFUTED)\b", up)
     if not m:
         return "not_run"
-    return "survived" if m[-1] == "SURVIVED" else "refuted"
+    verdict = "survived" if m[-1] == "SURVIVED" else "refuted"
+    if verdict == "refuted" and not _refutation_is_substantiated(summary):
+        # A refutation MUST cite a CONCRETE defect (the reviewer's own instruction). A bare
+        # "VERDICT: REFUTED" with no articulated defect must NOT autonomously fail-close the gate.
+        return "survived"
+    return verdict
+
+
+def _refutation_is_substantiated(summary: str) -> bool:
+    """True only if the reviewer articulated an actual defect, not just the verdict token."""
+    body = re.sub(r"(?im)^\s*(?:#+\s*)?(?:review findings|verdict)\b.*$", "", summary or "")
+    body = re.sub(r"(?im)\bVERDICT:\s*(?:SURVIVED|REFUTED)\b", "", body)
+    return len(body.strip()) >= 40
 
 
 def _aggregate_panel(verdicts: list[str], quorum: float) -> tuple[str, float]:
@@ -1278,8 +1290,12 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
                                        workdir=None if use_microvm else root)
 
         # FINAL GATE — fail-closed; only the checks that apply at this tier.
+        # A REPAIR continuation that finds the prior code already correct makes NO new diff
+        # (impl_files empty) — but the work branch still HAS that test-passing code. Treat a no-op
+        # iteration on already-good code as "code present" so a CONVERGED run isn't false-failed.
+        _is_repair_iteration = root_run != run_id
         gates = {
-            "code_written": bool(impl_files),
+            "code_written": bool(impl_files) or (_is_repair_iteration and tests_passed),
             "written_tests_pass": tests_passed,
         }
         if do_separate_tests:
