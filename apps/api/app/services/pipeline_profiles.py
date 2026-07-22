@@ -18,6 +18,56 @@ SENSITIVE_MARKERS = (
     "schema change", "deploy", "infra", "permission", "access control",
 )
 
+# Human-readable names for the markers — so a review gate can explain WHY, in plain terms.
+_MARKER_HUMAN = {
+    "auth": "authentication", "login": "login / user accounts", "password": "passwords",
+    "credential": "credentials", "payment": "payments", "billing": "billing",
+    "invoice": "invoicing", "secret": "secrets", "token": "tokens / API keys",
+    "api key": "API keys", "encrypt": "encryption", "crypto": "cryptography",
+    "migration": "a data migration", "migrate": "a data migration",
+    "schema change": "a schema change", "deploy": "deployment", "infra": "infrastructure",
+    "permission": "permissions", "access control": "access control",
+}
+
+
+def sensitive_markers_in(spec: dict) -> list[str]:
+    """Which sensitive markers a task's text matches — the concrete reason it may need review."""
+    haystack = " ".join(
+        [
+            str(spec.get("title", "")),
+            str(spec.get("instructions", "")),
+            " ".join(spec.get("acceptance_criteria", []) or []),
+            str(spec.get("repo", "")),
+        ]
+    ).lower()
+    return [m for m in SENSITIVE_MARKERS if m in haystack]
+
+
+def plan_gate_explanation(markers: list[str], *, plan_ok: bool) -> str:
+    """A specific, plain-language explanation of WHY a plan needs human sign-off and WHAT to
+    check — so the operator approves with a reason, not blind. Uses the actual matched markers
+    + whether the automated plan review flagged concerns."""
+    named = sorted({_MARKER_HUMAN.get(m, m) for m in markers})
+    if named:
+        why = (
+            "This task touches " + ", ".join(named) + " — sensitive areas where a wrong "
+            "approach can expose user data, accounts, or money, and is costly to unwind once "
+            "the code ships. That's why BOSS wants your sign-off on the approach before it "
+            "writes any code."
+        )
+    else:
+        why = (
+            "This is a high-risk change, so BOSS wants you to confirm the approach before it "
+            "writes any code."
+        )
+    what = (
+        " An automated plan review flagged concerns — read the plan review below and decide "
+        "whether the approach is sound before approving."
+        if not plan_ok
+        else " Skim the technical plan below and confirm the approach is right, then approve."
+    )
+    return why + what
+
 # Each profile clamps the inferred risk tier, hints a model per step (low_cost|strong), and toggles
 # the efficiency levers wired in Phase 2.
 PROFILES: dict[str, dict] = {

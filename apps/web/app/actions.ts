@@ -2101,9 +2101,9 @@ export async function confirmCodeTaskFeedbackAction(
 }
 
 export async function startPreviewAction(
-  _prev: { url?: string; error?: string } | null,
+  _prev: { url?: string; error?: string; note?: string } | null,
   formData: FormData,
-): Promise<{ url?: string; error?: string }> {
+): Promise<{ url?: string; error?: string; note?: string }> {
   const runId = String(formData.get("run_id") ?? "").trim();
   if (!runId) return { error: "missing run_id" };
   try {
@@ -2113,6 +2113,14 @@ export async function startPreviewAction(
     // browser on a remote box, so the api reverse-proxies to it. Works locally too.
     if (res.status === "running" && res.id) {
       return { url: `${API_URL}/v1/previews/${encodeURIComponent(res.id)}/web/` };
+    }
+    // Library/CLI build — there is no live web app to serve, so it was "run" by executing its
+    // tests. Show that outcome instead of mislabeling a passing test run as a failure.
+    if (res.mode === "test" || res.kind === "library" || res.status === "verified") {
+      const head = res.message
+        || `Library build — ran \`${res.command ?? "tests"}\`: ${res.passed ? "PASSED ✓" : "FAILED ✗"} (exit ${res.exit_code ?? "?"}).`;
+      const body = res.output ? `\n\n${res.output}` : "";
+      return res.passed ? { note: head + body } : { error: head + body };
     }
     return { error: res.error || "preview failed to start" };
   } catch (e) {

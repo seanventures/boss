@@ -6702,6 +6702,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                           <button className="button" name="action" value="approve">
                             Approve
                           </button>
+                          <button className="button secondary" name="action" value="revise">
+                            Request changes
+                          </button>
                           <button
                             className="button secondary"
                             name="action"

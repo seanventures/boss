@@ -4570,7 +4570,12 @@ export function createBossApiClient(config: BossApiClientConfig) {
         { body: { waive_gates: waiveGates, reason: reason ?? "" } });
     },
     startPreview(runId: string, ttlMinutes?: number) {
-      return request<{ id: string; status: string; url?: string; error?: string }>(
+      return request<{
+        id: string; status: string; url?: string; error?: string;
+        // library/CLI builds have no live URL — they are "run" by executing their tests:
+        mode?: string; kind?: string; command?: string; exit_code?: number;
+        passed?: boolean; output?: string; message?: string;
+      }>(
         "POST", `/v1/code-tasks/${encodeURIComponent(runId)}/preview`,
         { body: { ttl_minutes: ttlMinutes ?? 60 } });
     },

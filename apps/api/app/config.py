@@ -486,6 +486,13 @@ class Settings(BaseSettings):
     governed_coding_pipeline: bool = Field(
         default=False, alias="BOSS_GOVERNED_CODING_PIPELINE"
     )
+    # When a PRD panel publishes, whether to AUTO-start a governed code task seeded from the whole
+    # PRD. Default OFF: a PRD is a multi-feature product spec (and discovery tasks yield a document,
+    # not code) — auto-dumping it as one code task mis-routes research/spec work into codegen. With
+    # this off, the PRD is the deliverable and a human creates scoped coding tasks explicitly.
+    auto_code_task_after_prd: bool = Field(
+        default=False, alias="BOSS_AUTO_CODE_TASK_AFTER_PRD"
+    )
     # Cost/rigor dial for the governed pipeline: lean | balanced | strict (or a custom profile
     # name once the profiles API lands). Scales which steps run and which models run them.
     pipeline_profile: str = Field(default="balanced", alias="BOSS_PIPELINE_PROFILE")
@@ -538,14 +545,24 @@ class Settings(BaseSettings):
     code_review_panel_quorum: float = Field(default=0.5, alias="BOSS_CODE_REVIEW_PANEL_QUORUM")
     code_review_panel_engines: str = Field(default="", alias="BOSS_CODE_REVIEW_PANEL_ENGINES")
     # AUTONOMOUS REVIEW-REPAIR (BOSS's moat: agents resolve issues in a loop, not a human). When the
-    # quality gate fails on REPAIRABLE review findings (a substantiated adversarial defect, a security
-    # issue, weak tests, consistency drift, or a regression), feed that feedback back into the build
-    # and re-review up to this many rounds BEFORE blocking for a human. 0 = legacy (block on first fail).
+    # quality gate fails, feed the findings back into the build and re-review up to this many rounds
+    # BEFORE blocking for a human. 0 = legacy (block on first fail).
     code_review_repair_max_rounds: int = Field(
         default=2, alias="BOSS_CODE_REVIEW_REPAIR_MAX_ROUNDS"
     )
     # Max agent turns inside the sandbox before we stop and take the diff.
     code_agent_max_turns: int = Field(default=40, alias="BOSS_CODE_AGENT_MAX_TURNS")
+    # Read-only stages (adversarial/security/consistency review) don't edit code and don't
+    # need 40 turns of exploration — a tighter cap cuts review latency a lot without losing
+    # rigor (they read the diff + relevant files + judge).
+    code_agent_review_max_turns: int = Field(default=16, alias="BOSS_CODE_AGENT_REVIEW_MAX_TURNS")
+    # Hard wall-clock deadline for the whole review panel AND for a single read-only review
+    # invocation — so a slow/rate-limited review (e.g. an OpenAI-gateway retry storm) can't
+    # blow the review phase out to 20min. On deadline a check degrades to 'not_run' (security
+    # stays strict; adversarial/consistency proceed) rather than hanging or crashing.
+    code_agent_review_timeout_seconds: int = Field(
+        default=420, alias="BOSS_CODE_AGENT_REVIEW_TIMEOUT_SECONDS"
+    )
     # Wall-clock cap for a single CodeAgent invocation.
     code_agent_timeout_seconds: int = Field(
         default=900, alias="BOSS_CODE_AGENT_TIMEOUT_SECONDS"
