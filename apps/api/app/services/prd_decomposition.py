@@ -24,9 +24,32 @@ from ..config import Settings
 from ..db import begin
 from .claude_cli_adapter import make_chat_adapter
 from .code_task_service import load_code_task_run, start_code_task
-from .core import emit_event
+from .core import emit_event, make_id
 
 logger = logging.getLogger(__name__)
+
+_WEB_APP_RE = re.compile(
+    r"\b(vite|react|next\.?js|svelte|vue|frontend|front-end|website|web ?app|tailwind|"
+    r"single-page|\bspa\b|\bui\b|dashboard)\b", re.I)
+
+
+def _looks_like_web_app(text_v: str) -> bool:
+    return bool(_WEB_APP_RE.search(text_v or ""))
+
+
+def seed_web_scaffold(settings: Settings, *, work_branch: str, name: str = "app",
+                      kind: str = "vite") -> int:
+    """Commit a DETERMINISTIC Vite+React+TS+Tailwind+shadcn scaffold to work_branch — no agent, no
+    turns, can't hit error_max_turns. Feature tasks then build on it. Returns the file count."""
+    from .scaffold_service import scaffold_project
+    from .software_factory import SoftwareFactoryService
+    files = scaffold_project(name=name, kind=kind)["files"]
+    gh = SoftwareFactoryService(settings).github
+    gh.ensure_branch(work_branch)
+    for path, content in files.items():
+        gh.upsert_file(work_branch, path, content,
+                       "scaffold: deterministic Vite+React+TS+Tailwind base")
+    return len(files)
 
 _DECOMP_SYSTEM = (
     "You are a staff engineer deciding how to break a product spec into coding tasks for an "
@@ -99,28 +122,55 @@ def decompose_prd_into_tasks(settings: Settings, prd_or_directive: str, *,
 def start_decomposed_build(engine, settings: Settings, jobs, *, project_id: str,
                            task_id: Optional[str], prd_or_directive: str, owner: str, repo: str,
                            base_branch: str = "main", profile: Optional[str] = None,
-                           risk_tier: Optional[int] = None, max_tasks: int = 6) -> dict:
-    """Decompose the PRD and START the build as one lineage: task 1 is the root run (carries the
-    full ordered plan in its finalize_ctx); each subsequent task auto-starts as a continuation when
-    the previous one lands (see advance_decomposition). Returns the plan + the first run_id."""
-    tasks = decompose_prd_into_tasks(settings, prd_or_directive, max_tasks=max_tasks)
+                           risk_tier: Optional[int] = None, max_tasks: int = 6,
+                           seed_scaffold: bool = True) -> dict:
+    """Decompose the PRD and START the build as one lineage. For a WEB APP, first SEED a
+    deterministic Vite+React+TS+Tailwind scaffold onto a fresh lineage branch (no agent, no
+    micro-VM turn limit — the exact thing that kept failing an agent-authored scaffold), then
+    decompose FEATURE tasks that build on it. Each subsequent task auto-starts as a continuation
+    on the shared branch when the previous lands (advance_decomposition)."""
+    root: Optional[str] = None
+    seeded = 0
+    decomp_input = prd_or_directive
+    if seed_scaffold and _looks_like_web_app(prd_or_directive):
+        root = make_id("crun")
+        try:
+            seeded = seed_web_scaffold(settings, work_branch=f"boss/code/{root}",
+                                       name=(repo or "app"))
+            decomp_input = (
+                "IMPORTANT: a buildable Vite + React + TypeScript + Tailwind + shadcn-style scaffold "
+                "ALREADY EXISTS on the branch (package.json with dev/build/typecheck/lint/test:e2e "
+                "scripts, vite.config.ts, tailwind.config.ts, tsconfig.json, index.html, "
+                "src/main.tsx, src/App.tsx, src/index.css design tokens, src/lib/utils.ts (cn), "
+                "src/components/ui/button.tsx + card.tsx, e2e/home.spec.ts). Do NOT create a scaffold "
+                "task and do NOT re-init the project. Decompose ONLY the FEATURE tasks that build on "
+                "this scaffold (types/taxonomy, engine, feature components, wire-up in src/App.tsx).\n\n"
+                + prd_or_directive)
+        except Exception as exc:  # noqa: BLE001 — seed failure degrades to an agent-authored scaffold
+            logger.warning("deterministic scaffold seed failed, falling back to agent: %s", exc)
+            root, seeded, decomp_input = None, 0, prd_or_directive
+    tasks = decompose_prd_into_tasks(settings, decomp_input, max_tasks=max_tasks)
     if not tasks:
         return {"tasks": [], "started": False, "reason": "decomposition produced no tasks"}
     first, rest = tasks[0], tasks[1:]
+    fctx = {"decomposition_plan": rest, "decomposition_index": 1, "decomposition_total": len(tasks)}
+    task_base = base_branch
+    if root:  # build the first feature ON the seeded scaffold branch (shared lineage)
+        fctx["root_run_id"] = root
+        task_base = f"boss/code/{root}"
     with begin(engine) as c:
         run_id = start_code_task(
             c, project_id=project_id, task_id=task_id,
             title=f"[1/{len(tasks)}] {first['title']}",
             instructions=first["instructions"],
             acceptance_criteria=first["acceptance_criteria"], test_commands=[],
-            owner=owner, repo=repo, base_branch=base_branch,
-            finalize_ctx={"decomposition_plan": rest, "decomposition_index": 1,
-                          "decomposition_total": len(tasks)},
-            jobs=jobs, profile=profile, risk_tier=risk_tier)
+            owner=owner, repo=repo, base_branch=task_base,
+            finalize_ctx=fctx, jobs=jobs, profile=profile, risk_tier=risk_tier)
         emit_event(c, project_id, "prd.decomposed", "boss", "code_task_run", run_id,
-                   {"total_tasks": len(tasks),
-                    "titles": [t["title"] for t in tasks], "first_run_id": run_id})
-    return {"tasks": tasks, "started": True, "total": len(tasks), "first_run_id": run_id}
+                   {"total_tasks": len(tasks), "titles": [t["title"] for t in tasks],
+                    "first_run_id": run_id, "scaffold_seeded": seeded})
+    return {"tasks": tasks, "started": True, "total": len(tasks), "first_run_id": run_id,
+            "scaffold_seeded": seeded}
 
 
 def advance_decomposition(engine, settings: Settings, jobs, run_id: str) -> Optional[str]:
