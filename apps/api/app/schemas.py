@@ -4937,7 +4937,8 @@ class ReliabilityDiagnoseRequest(BaseModel):
 class ReliabilityDiagnoseResponse(BaseModel):
     incident_id: str
     service: str
-    hypothesis: dict[str, Any]
+    hypothesis: dict[str, Any]                                  # the top-ranked (winner)
+    hypotheses: list[dict[str, Any]] = Field(default_factory=list)   # full ranked list w/ confidence
     context: dict[str, Any] = Field(default_factory=dict)
     known_causes: list[dict[str, Any]] = Field(default_factory=list)
 

@@ -22,6 +22,7 @@ from sqlalchemy.engine import Connection
 
 from . import telemetry_mining as tm
 from .core import make_id, now_utc
+from .investigation import InvestigationEngine
 from .knowledge_graph import KnowledgeGraphService
 from .learning_loop import LearningLoopService
 from .telemetry_source import InMemorySource, LogEvent, LogExportSource, TelemetrySource, TimeWindow
@@ -84,6 +85,7 @@ class ReliabilityService:
         self.settings = settings
         self.kg = KnowledgeGraphService(settings)
         self.learning = LearningLoopService(settings)
+        self.engine = InvestigationEngine()
 
     # --- scan (RB-3 read-only / RB-4 persist+cluster) ------------------------
     def scan(self, connection: Connection, project_id: str, source_spec: dict[str, Any],
@@ -209,9 +211,10 @@ class ReliabilityService:
     # --- diagnose (RB-5 — RCA over the knowledge graph) ----------------------
     def diagnose(self, connection: Connection, project_id: str,
                  incident_id: str) -> Optional[dict[str, Any]]:
-        """Propose a root cause using the graph: context from `subgraph()`, memory from `known_causes()`.
-        A recurring cause is recognized instantly (high confidence); a novel one falls back to a
-        context-based suspect. The hypothesis + context are persisted as incident evidence."""
+        """Autonomous RCA (RB-16): the investigation engine enumerates candidates from memory
+        (`known_causes`), change-correlation, and the graph `subgraph()`, scores each by confidence
+        (corroborated against the incident's own signals), and ranks them. The winner + full ranking +
+        context are persisted as incident evidence."""
         inc = connection.execute(
             text("SELECT id, service, title FROM incidents WHERE project_id = :p AND id = :id"),
             {"p": project_id, "id": incident_id},
@@ -222,29 +225,22 @@ class ReliabilityService:
         context = self.kg.subgraph(connection, project_id, "service", service, depth=2) if service else \
             {"root": None, "nodes": [], "edges": []}
         known = self.kg.known_causes(connection, project_id, service) if service else []
+        signals = [
+            {"signature": r["signature"], "service": r["service"],
+             "sample": (r["sample"] or {}).get("sample", "")}
+            for r in connection.execute(
+                text("SELECT signature, service, sample FROM anomaly_signals WHERE incident_id = :id"),
+                {"id": incident_id}).mappings().all()
+        ]
 
-        if known:
-            top = known[0]
-            hypothesis = {
-                "root_cause": top["name"], "cause_kind": top["kind"], "cause_key": top["node_key"],
-                "confidence": round(float(top["confidence"]), 3), "basis": "memory",
-                "rationale": f"Recurring cause for service '{service}' — matched a prior confirmed root cause.",
-            }
-        else:
-            suspects = [n for n in context["nodes"] if n["node_key"] != service]
-            suspect = suspects[0] if suspects else None
-            hypothesis = {
-                "root_cause": (suspect["name"] if suspect else "unknown"),
-                "cause_kind": (suspect["kind"] if suspect else "unknown"),
-                "cause_key": (suspect["node_key"] if suspect else ""),
-                "confidence": 0.4 if suspect else 0.1, "basis": "context",
-                "rationale": ("No prior confirmed cause; nearest suspect from the dependency graph."
-                              if suspect else "No graph context yet — connect topology / walkers (RB-15)."),
-            }
+        result = self.engine.investigate(service=service, signals=signals,
+                                          known_causes=known, subgraph=context)
+        hypothesis = result["winner"]
+        hypotheses = result["hypotheses"]
 
         self._add_evidence(connection, incident_id, "context", ref=service,
                            payload={"nodes": context["nodes"], "edges": context["edges"],
-                                    "known_causes": known})
+                                    "known_causes": known, "hypotheses": hypotheses})
         self._add_evidence(connection, incident_id, "rca_hypothesis", ref=hypothesis["cause_key"],
                            payload=hypothesis)
         connection.execute(
@@ -253,6 +249,7 @@ class ReliabilityService:
             {"c": hypothesis["confidence"], "now": now_utc(), "id": incident_id},
         )
         return {"incident_id": incident_id, "service": service, "hypothesis": hypothesis,
+                "hypotheses": hypotheses,
                 "context": context, "known_causes": known}
 
     # --- remediate (RB-7 — diagnosed incident → governed fix PR) -------------
