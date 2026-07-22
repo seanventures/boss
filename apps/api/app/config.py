@@ -544,6 +544,12 @@ class Settings(BaseSettings):
     code_review_panel_size: int = Field(default=1, alias="BOSS_CODE_REVIEW_PANEL_SIZE")
     code_review_panel_quorum: float = Field(default=0.5, alias="BOSS_CODE_REVIEW_PANEL_QUORUM")
     code_review_panel_engines: str = Field(default="", alias="BOSS_CODE_REVIEW_PANEL_ENGINES")
+    # AUTONOMOUS REVIEW-REPAIR (BOSS's moat: agents resolve issues in a loop, not a human). When the
+    # quality gate fails, feed the findings back into the build and re-review up to this many rounds
+    # BEFORE blocking for a human. 0 = legacy (block on first fail).
+    code_review_repair_max_rounds: int = Field(
+        default=2, alias="BOSS_CODE_REVIEW_REPAIR_MAX_ROUNDS"
+    )
     # Max agent turns inside the sandbox before we stop and take the diff.
     code_agent_max_turns: int = Field(default=40, alias="BOSS_CODE_AGENT_MAX_TURNS")
     # Read-only stages (adversarial/security/consistency review) don't edit code and don't

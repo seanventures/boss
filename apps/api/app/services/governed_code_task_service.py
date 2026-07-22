@@ -1377,19 +1377,18 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
 
         if qg_status != "pass":
             failing = [k for k, v in gates.items() if not v]
-            # AUTONOMOUS REVIEW-REPAIR (BOSS's moat: agents converge in a loop, not a human). If
-            # EVERY failing gate is a REPAIRABLE review-stage finding — a substantiated adversarial
-            # defect, a security issue, weak tests, consistency drift, or a regression — and we have
-            # not spent the repair-round budget, iterate autonomously: feed the findings back and
-            # rebuild on the work branch (retry_code_task carries security/review/consistency
-            # summaries forward as ITERATION FEEDBACK and clones the prior code). Only genuinely
-            # stuck runs (a non-repairable failure, or the budget exhausted) fall through to a human.
-            _REPAIRABLE_GATES = {"code_review_passed", "security_clean", "consistent",
-                                 "tests_strong_enough", "nothing_broke"}
+            # AUTONOMOUS REVIEW-REPAIR (BOSS's moat: agents converge in a loop, not a human). EVERY
+            # failure that reaches this quality gate is a code-quality issue a fresh full re-run with
+            # the findings fed back can plausibly fix — failing tests, a regression, an adversarial
+            # defect, a security issue, weak tests, or drift. (Genuinely needs-human/mis-routed tasks
+            # never reach this gate — they exit earlier via _fail / NOT_A_CODE_TASK / plan-approval.)
+            # So iterate autonomously up to the round budget before blocking a human; retry_code_task
+            # carries the review summaries forward as ITERATION FEEDBACK and clones the prior code.
+            # Bounded by max_repair_rounds so it can never run away.
             rounds_used = max(0, int(fctx.get("attempt", 1)) - 1)
-            max_repair_rounds = max(0, int(getattr(settings, "code_review_repair_max_rounds", 0) or 0))
-            if (failing and all(g in _REPAIRABLE_GATES for g in failing)
-                    and rounds_used < max_repair_rounds
+            # Fallback 2 (not 0): a missing/blank config field must never SILENTLY disable the moat.
+            max_repair_rounds = max(0, int(getattr(settings, "code_review_repair_max_rounds", 2) or 2))
+            if (failing and rounds_used < max_repair_rounds
                     and spec.get("open_pr", True) is not False):
                 _finish_vms(success=False)  # retain this round's VMs for inspection
                 with begin(engine) as c:
