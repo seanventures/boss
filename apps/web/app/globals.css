@@ -572,6 +572,7 @@ h1, h2, h3, h4, h5, h6 {
 .bx-content[data-active] .frame > section {
   display: none;
 }
+.bx-content[data-active="agent"] .frame > section:is([data-area="agent"], :has([data-area="agent"])),
 .bx-content[data-active="dashboard"] .frame > section:is([data-area="dashboard"], :has([data-area="dashboard"])),
 .bx-content[data-active="overview"] .frame > section:is([data-area="overview"], :has([data-area="overview"])),
 .bx-content[data-active="decisions"] .frame > section:is([data-area="decisions"], :has([data-area="decisions"])),
