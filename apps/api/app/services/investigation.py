@@ -115,8 +115,11 @@ class InvestigationEngine:
             # a change right at onset is a strong suspect; the signal decays over the lookback window
             prox = c.evidence.get("proximity_minutes")
             base = _BASIS_PRIOR["change"] if prox is None else max(0.50, 0.80 - 0.30 * min(prox, 60) / 60)
-        else:                                    # context prior already folded edge+proximity in
-            base = min(_BASIS_PRIOR["context"] + c.confidence, 0.85)
+        else:
+            # context prior already folded edge+proximity in; scale (don't add wholesale) so an
+            # uncorroborated static dependency can NOT outrank a fresh change near onset — the
+            # meta-eval (RB-14) pins this ordering.
+            base = min(_BASIS_PRIOR["context"] + 0.5 * c.confidence, 0.75)
         corroborated = self._corroborates(c, signals)
         score = min(1.0, base + (_CORROBORATION_BUMP if corroborated else 0.0))
         c.confidence = round(score, 3)

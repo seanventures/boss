@@ -236,6 +236,26 @@ class ReliabilityService:
         out["remediations"] = [dict(r) for r in remediations]
         return out
 
+    def investigation(self, connection: Connection, project_id: str,
+                      incident_id: str) -> Optional[dict[str, Any]]:
+        """RB-20 — the consolidated investigation bundle for agent consumption (the MCP surface):
+        the incident + signals + evidence + remediations + the graph neighborhood + what the
+        autonomy policy would do right now. One call, full context."""
+        inc = self.get_incident(connection, project_id, incident_id)
+        if not inc:
+            return None
+        service = inc.get("service") or ""
+        return {
+            "incident": {k: inc[k] for k in ("id", "title", "service", "severity", "status",
+                                             "confidence", "signal_count", "first_seen",
+                                             "last_seen")},
+            "signals": inc["signals"], "evidence": inc["evidence"],
+            "remediations": inc["remediations"],
+            "graph": (self.kg.subgraph(connection, project_id, "service", service, depth=2)
+                      if service else {"root": None, "nodes": [], "edges": []}),
+            "decision": self.decide_action(connection, project_id, incident_id),
+        }
+
     # --- diagnose (RB-5 — RCA over the knowledge graph) ----------------------
     def diagnose(self, connection: Connection, project_id: str,
                  incident_id: str) -> Optional[dict[str, Any]]:
@@ -551,10 +571,15 @@ class ReliabilityService:
         remediation = None
         if decision["action"] == "auto_remediate" and jobs is not None:      # Tier-0, still gated
             remediation = self.remediate(connection, project_id, inc["id"], jobs=jobs)
+        autonomy = {k: decision[k] for k in ("tier", "action", "reason")}
+        # RB-20: investigation card to the oncall channel (always best-effort)
+        from .oncall_notify import notify_incident
+        notified = notify_incident(self.settings, inc["id"], alert,
+                                   hypothesis=(diagnosis or {}).get("hypothesis"),
+                                   autonomy=autonomy, remediation=remediation)
         return {"incident_id": inc["id"], "alert": alert, "scans": scans,
                 "hypothesis": (diagnosis or {}).get("hypothesis"),
-                "autonomy": {k: decision[k] for k in ("tier", "action", "reason")},
-                "remediation": remediation,
+                "autonomy": autonomy, "remediation": remediation, "notified": notified,
                 "status": "remediating" if remediation else "diagnosing"}
 
     # --- verify (RB-18 — production verification loop) ------------------------
