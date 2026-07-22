@@ -4864,3 +4864,78 @@ class TerraformDriftReconcileResponse(BaseModel):
 AuditExportResponse.model_rebuild()
 OpsQueueInspectionResponse.model_rebuild()
 ProviderConnectionTestResponse.model_rebuild()
+
+
+# ── AI SRE reliability pipeline (RB-3/RB-4/RB-5) ─────────────────────────────
+class ReliabilityWindow(BaseModel):
+    start: float
+    end: float
+
+
+class ReliabilityScanRequest(BaseModel):
+    project_id: str
+    actor: str = "system"
+    source: dict[str, Any] = Field(default_factory=lambda: {"kind": "memory"})
+    window: ReliabilityWindow
+    query: str = ""
+    baseline: Optional[dict[str, float]] = None
+    source_id: Optional[str] = None
+    persist: bool = False
+
+    @model_validator(mode="after")
+    def _validate(self) -> "ReliabilityScanRequest":
+        self.project_id = _require_text(self.project_id, "project_id")
+        self.actor = _require_text(self.actor, "actor")
+        return self
+
+
+class ReliabilityScanResponse(BaseModel):
+    events: int
+    distinct_templates: int
+    reduction_ratio: Optional[float] = None
+    top_templates: list[dict[str, Any]] = Field(default_factory=list)
+    signals: list[dict[str, Any]] = Field(default_factory=list)
+    signal_count: int = 0
+    incidents: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class ReliabilityIncidentSummary(BaseModel):
+    id: str
+    dedupe_key: str
+    title: str
+    service: str
+    severity: str
+    status: str
+    confidence: float
+    signal_count: int
+    first_seen: datetime
+    last_seen: datetime
+
+
+class ReliabilityIncidentListResponse(BaseModel):
+    project_id: str
+    items: list[ReliabilityIncidentSummary] = Field(default_factory=list)
+
+
+class ReliabilityIncidentDetail(ReliabilityIncidentSummary):
+    signals: list[dict[str, Any]] = Field(default_factory=list)
+    evidence: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class ReliabilityDiagnoseRequest(BaseModel):
+    project_id: str
+    actor: str = "system"
+
+    @model_validator(mode="after")
+    def _validate(self) -> "ReliabilityDiagnoseRequest":
+        self.project_id = _require_text(self.project_id, "project_id")
+        self.actor = _require_text(self.actor, "actor")
+        return self
+
+
+class ReliabilityDiagnoseResponse(BaseModel):
+    incident_id: str
+    service: str
+    hypothesis: dict[str, Any]
+    context: dict[str, Any] = Field(default_factory=dict)
+    known_causes: list[dict[str, Any]] = Field(default_factory=list)

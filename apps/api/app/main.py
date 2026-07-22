@@ -45,6 +45,12 @@ from .schemas import (
     AccountConnectBillingPortalSessionSummary,
     AccountConnectMutationResponse,
     AccountConnectSyncRequest,
+    ReliabilityScanRequest,
+    ReliabilityScanResponse,
+    ReliabilityIncidentListResponse,
+    ReliabilityIncidentDetail,
+    ReliabilityDiagnoseRequest,
+    ReliabilityDiagnoseResponse,
     AccountConnectSyncResponse,
     AccountConnectTeamInviteCreateRequest,
     AccountConnectTeamInviteListResponse,
@@ -461,6 +467,7 @@ from .services.infrastructure import (
     InfraResourceNotFoundError,
     InfrastructureService,
 )
+from .services.reliability import ReliabilityService
 from .services.intake import CommandIntakeService
 from .services.agent_service import (
     AgentService,
@@ -576,6 +583,7 @@ enterprise = EnterpriseService(settings)
 audit = AuditTrailService(settings)
 comms = CommsService(settings)
 infrastructure = InfrastructureService(settings)
+reliability = ReliabilityService(settings)
 self_improvement = SelfImprovementService(settings)
 health_snapshots = HealthSnapshotService(settings)
 metatron = MetatronService(settings)
@@ -2480,6 +2488,56 @@ def sync_account_connect(
             edition=edition_status_from_service(result["edition"]),
             synced_entitlement_count=result["synced_entitlement_count"],
         )
+
+
+# ── AI SRE reliability pipeline (RB-3/RB-4/RB-5) ─────────────────────────────
+@app.post("/v1/reliability/scan", response_model=ReliabilityScanResponse)
+def reliability_scan(payload: ReliabilityScanRequest) -> ReliabilityScanResponse:
+    """Distill a telemetry window into the Insight report; when `persist`, cluster into incidents."""
+    with begin(engine) as connection:
+        require_project_actor(connection, payload.project_id, payload.actor, "providerops_manage")
+        try:
+            report = reliability.scan(
+                connection, payload.project_id, payload.source,
+                {"start": payload.window.start, "end": payload.window.end},
+                source_id=payload.source_id, baseline=payload.baseline,
+                query=payload.query, persist=payload.persist,
+            )
+        except (ValueError, KeyError) as error:
+            raise HTTPException(status_code=400, detail=f"invalid scan request: {error}") from error
+        return ReliabilityScanResponse(**report)
+
+
+@app.get("/v1/reliability/incidents", response_model=ReliabilityIncidentListResponse)
+def reliability_list_incidents(
+    project_id: str, status: Optional[str] = None, limit: int = 50
+) -> ReliabilityIncidentListResponse:
+    with begin(engine) as connection:
+        items = reliability.list_incidents(connection, project_id, status=status, limit=limit)
+        return ReliabilityIncidentListResponse(project_id=project_id, items=items)
+
+
+@app.get("/v1/reliability/incidents/{incident_id}", response_model=ReliabilityIncidentDetail)
+def reliability_get_incident(incident_id: str, project_id: str) -> ReliabilityIncidentDetail:
+    with begin(engine) as connection:
+        inc = reliability.get_incident(connection, project_id, incident_id)
+        if not inc:
+            raise HTTPException(status_code=404, detail="incident not found")
+        return ReliabilityIncidentDetail(**inc)
+
+
+@app.post("/v1/reliability/incidents/{incident_id}/diagnose",
+          response_model=ReliabilityDiagnoseResponse)
+def reliability_diagnose(
+    incident_id: str, payload: ReliabilityDiagnoseRequest
+) -> ReliabilityDiagnoseResponse:
+    """RCA over the knowledge graph: subgraph context + prior known_causes → ranked hypothesis."""
+    with begin(engine) as connection:
+        require_project_actor(connection, payload.project_id, payload.actor, "providerops_manage")
+        result = reliability.diagnose(connection, payload.project_id, incident_id)
+        if not result:
+            raise HTTPException(status_code=404, detail="incident not found")
+        return ReliabilityDiagnoseResponse(**result)
 
 
 @app.get(

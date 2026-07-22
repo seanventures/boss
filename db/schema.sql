@@ -2392,3 +2392,66 @@ CREATE TABLE IF NOT EXISTS kg_edges (
 );
 CREATE INDEX IF NOT EXISTS idx_kg_edges_src ON kg_edges(src_id, kind);
 CREATE INDEX IF NOT EXISTS idx_kg_edges_dst ON kg_edges(dst_id, kind);
+
+-- ── AI SRE reliability pipeline (RB-3/RB-4) ───────────────────────────────────
+-- A telemetry source (a connected observability tool). Scan can also run against an
+-- inline/ephemeral source, in which case anomaly_signals.source_id is NULL.
+CREATE TABLE IF NOT EXISTS telemetry_sources (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id),
+  kind TEXT NOT NULL,                       -- memory|log_export|grafana|splunk|datadog|...
+  name TEXT NOT NULL,
+  config JSONB NOT NULL DEFAULT '{}'::jsonb,
+  secret_ref TEXT,                          -- scoped read-only creds (never inlined)
+  enabled BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (project_id, kind, name)
+);
+
+-- One distilled anomaly signal from a scan (the mine() output, persisted).
+CREATE TABLE IF NOT EXISTS anomaly_signals (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id),
+  source_id TEXT REFERENCES telemetry_sources(id) ON DELETE SET NULL,
+  incident_id TEXT,                         -- set once clustered
+  kind TEXT NOT NULL,                       -- new_template|template_spike|error_surge|metric_spike
+  signature TEXT NOT NULL,                  -- the template / metric name
+  service TEXT NOT NULL DEFAULT '',
+  score DOUBLE PRECISION,
+  count INTEGER NOT NULL DEFAULT 0,
+  sample JSONB NOT NULL DEFAULT '{}'::jsonb,
+  ts TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_anomaly_signals_incident ON anomaly_signals(incident_id);
+CREATE INDEX IF NOT EXISTS idx_anomaly_signals_project ON anomaly_signals(project_id, ts DESC);
+
+-- A named incident: recurring signals with the same dedupe_key collapse into one.
+CREATE TABLE IF NOT EXISTS incidents (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id),
+  dedupe_key TEXT NOT NULL,
+  title TEXT NOT NULL,
+  service TEXT NOT NULL DEFAULT '',
+  severity TEXT NOT NULL DEFAULT 'warning'
+    CHECK (severity IN ('info', 'warning', 'critical')),
+  status TEXT NOT NULL DEFAULT 'open'
+    CHECK (status IN ('open', 'triaged', 'diagnosing', 'remediating', 'resolved', 'dismissed')),
+  confidence DOUBLE PRECISION NOT NULL DEFAULT 0.0,
+  signal_count INTEGER NOT NULL DEFAULT 0,
+  first_seen TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_seen TIMESTAMPTZ NOT NULL DEFAULT now(),
+  finalize_ctx JSONB NOT NULL DEFAULT '{}'::jsonb,
+  UNIQUE (project_id, dedupe_key)
+);
+CREATE INDEX IF NOT EXISTS idx_incidents_project ON incidents(project_id, status, last_seen DESC);
+
+-- Evidence attached to an incident (templates, subgraph context, RCA hypotheses, traces).
+CREATE TABLE IF NOT EXISTS incident_evidence (
+  id TEXT PRIMARY KEY,
+  incident_id TEXT NOT NULL REFERENCES incidents(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL,                       -- signal|rca_hypothesis|context|trace|remediation
+  ref TEXT NOT NULL DEFAULT '',
+  payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_incident_evidence_incident ON incident_evidence(incident_id, created_at);
