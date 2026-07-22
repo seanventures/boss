@@ -5011,3 +5011,35 @@ class ReliabilityVerifyResponse(BaseModel):
     recurred_signatures: list[str] = Field(default_factory=list)
     first_clear: Optional[str] = None
     stable_at: Optional[str] = None
+
+
+class ReliabilitySourceRequest(BaseModel):
+    project_id: str
+    actor: str = "system"
+    kind: str                                    # prometheus | loki | grafana | log_export | memory
+    name: str
+    config: dict[str, Any] = Field(default_factory=dict)
+    secret_ref: str = ""
+    enabled: bool = True
+
+    @model_validator(mode="after")
+    def _validate(self) -> "ReliabilitySourceRequest":
+        self.project_id = _require_text(self.project_id, "project_id")
+        self.actor = _require_text(self.actor, "actor")
+        self.kind = _require_text(self.kind, "kind")
+        self.name = _require_text(self.name, "name")
+        return self
+
+
+class ReliabilitySourceSummary(BaseModel):
+    id: str
+    kind: str
+    name: str
+    config: dict[str, Any] = Field(default_factory=dict)
+    enabled: bool
+    created_at: datetime
+
+
+class ReliabilitySourceListResponse(BaseModel):
+    project_id: str
+    items: list[ReliabilitySourceSummary] = Field(default_factory=list)

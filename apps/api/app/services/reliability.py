@@ -130,10 +130,10 @@ class ReliabilityService:
         return report
 
     def _upsert_incident(self, connection: Connection, project_id: str, sig: dict[str, Any],
-                         service: str) -> dict[str, Any]:
+                         service: str, *, severity: Optional[str] = None) -> dict[str, Any]:
         key = _dedupe_key(service, sig["kind"], sig["key"])
         title = f"{sig['kind']}: {sig['key']}"[:200]
-        severity = _severity_for(sig["kind"])
+        severity = severity or _severity_for(sig["kind"])
         count = int(sig.get("count") or 0)
         row = connection.execute(
             text(
@@ -363,6 +363,111 @@ class ReliabilityService:
         return {"incident_id": incident_id, "verdict": verdict, "outcome": outcome,
                 "status": new_status, "learning_example_id": example_id,
                 "tuning": self.learning.suggest_tuning(connection, project_id, "sre")}
+
+    # --- telemetry sources (RB-9/RB-10 — registered connections) --------------
+    def register_source(self, connection: Connection, project_id: str, kind: str, name: str, *,
+                        config: Optional[dict] = None, secret_ref: str = "",
+                        enabled: bool = True) -> dict[str, Any]:
+        """Register/enable a telemetry source. `config` is connector config (base_url, uids,
+        bearer_env…) — never credentials; auth stays indirect via env-var names / SecretRefs."""
+        row = connection.execute(
+            text(
+                """
+                INSERT INTO telemetry_sources (id, project_id, kind, name, config, secret_ref, enabled)
+                VALUES (:id, :p, :kind, :name, CAST(:config AS JSONB), :sr, :enabled)
+                ON CONFLICT (project_id, kind, name) DO UPDATE SET
+                    config = EXCLUDED.config, secret_ref = EXCLUDED.secret_ref,
+                    enabled = EXCLUDED.enabled
+                RETURNING id, project_id, kind, name, config, enabled, created_at
+                """
+            ),
+            {"id": make_id("tsrc"), "p": project_id, "kind": kind, "name": name,
+             "config": json.dumps(config or {}, default=str), "sr": secret_ref, "enabled": enabled},
+        ).mappings().one()
+        return dict(row)
+
+    def list_sources(self, connection: Connection, project_id: str, *,
+                     enabled_only: bool = False) -> list[dict[str, Any]]:
+        clause = " AND enabled" if enabled_only else ""
+        rows = connection.execute(
+            text(f"SELECT id, kind, name, config, enabled, created_at FROM telemetry_sources "
+                 f"WHERE project_id = :p{clause} ORDER BY created_at"),
+            {"p": project_id},
+        ).mappings().all()
+        return [dict(r) for r in rows]
+
+    # --- alert intake (RB-10 — the incident-response trigger) -----------------
+    def verify_alert_signature(self, raw_body: bytes, signature: str) -> bool:
+        """HMAC-sha256 over the raw body, hex; fail-closed when the secret is unset."""
+        import hmac as _hmac
+        from hashlib import sha256
+        from hmac import compare_digest
+        secret = (getattr(self.settings, "reliability_alert_secret", None) or "").strip()
+        if not secret or not signature:
+            return False
+        digest = _hmac.new(secret.encode(), raw_body, sha256).hexdigest()
+        candidate = signature.strip()
+        if candidate.startswith("sha256="):
+            candidate = candidate[len("sha256="):]
+        return compare_digest(candidate, digest)
+
+    @staticmethod
+    def _parse_alert(payload: dict[str, Any]) -> Optional[dict[str, Any]]:
+        """Normalize the common alert shapes into {title, service, severity, description}:
+        Alertmanager/Grafana ({alerts:[{labels,annotations}…]}), PagerDuty ({event:{data:…}}),
+        and a generic {title|alertname, service, severity, description}."""
+        if isinstance(payload.get("alerts"), list) and payload["alerts"]:
+            a = payload["alerts"][0]
+            labels = a.get("labels") or {}
+            ann = a.get("annotations") or {}
+            return {"title": labels.get("alertname", "alert"),
+                    "service": labels.get("service", labels.get("job", "")),
+                    "severity": labels.get("severity", "warning"),
+                    "description": ann.get("summary", ann.get("description", ""))}
+        if isinstance(payload.get("event"), dict):                    # PagerDuty v3 webhook
+            data = payload["event"].get("data") or {}
+            svc = (data.get("service") or {})
+            return {"title": data.get("title", "alert"),
+                    "service": svc.get("summary", svc.get("name", "")),
+                    "severity": {"P1": "critical", "P2": "critical"}.get(
+                        (data.get("priority") or {}).get("summary", ""), "warning"),
+                    "description": data.get("title", "")}
+        title = payload.get("title") or payload.get("alertname")
+        if title:
+            return {"title": title, "service": payload.get("service", ""),
+                    "severity": payload.get("severity", "warning"),
+                    "description": payload.get("description", "")}
+        return None
+
+    def ingest_alert(self, connection: Connection, project_id: str, payload: dict[str, Any], *,
+                     scan_window_minutes: int = 30) -> Optional[dict[str, Any]]:
+        """Alert → incident → scoped scan of every enabled source → diagnose. The event-driven
+        entry to the loop: an alert firing anywhere becomes an investigated incident here."""
+        alert = self._parse_alert(payload)
+        if not alert:
+            return None
+        severity = alert["severity"] if alert["severity"] in ("info", "warning", "critical") else "warning"
+        sig = {"kind": "alert", "key": alert["title"], "count": 1, "score": None,
+               "sample": alert["description"] or alert["title"]}
+        inc = self._upsert_incident(connection, project_id, sig, alert["service"], severity=severity)
+        self._insert_signal(connection, project_id, None, sig, alert["service"], inc["id"])
+
+        now = now_utc().timestamp()
+        window = {"start": now - scan_window_minutes * 60, "end": now}
+        scans = []
+        for src in self.list_sources(connection, project_id, enabled_only=True):
+            try:
+                rep = self.scan(connection, project_id, {"kind": src["kind"], **(src["config"] or {})},
+                                window, source_id=src["id"], persist=True)
+                scans.append({"source": src["name"], "signals": rep["signal_count"],
+                              "incidents": [i["id"] for i in rep["incidents"]]})
+            except Exception as exc:  # a broken source must not kill alert intake
+                scans.append({"source": src["name"], "error": str(exc)[:200]})
+
+        diagnosis = self.diagnose(connection, project_id, inc["id"])
+        return {"incident_id": inc["id"], "alert": alert, "scans": scans,
+                "hypothesis": (diagnosis or {}).get("hypothesis"),
+                "status": "diagnosing"}
 
     # --- verify (RB-18 — production verification loop) ------------------------
     def verify(self, connection: Connection, project_id: str, incident_id: str,

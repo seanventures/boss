@@ -11,6 +11,7 @@ from typing import Any, Optional
 from urllib.parse import parse_qs
 
 from fastapi import FastAPI, HTTPException, Query, Request, Response, WebSocket, WebSocketDisconnect
+from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse, StreamingResponse
 from sqlalchemy import text
 
@@ -57,6 +58,9 @@ from .schemas import (
     ReliabilityRemediateResponse,
     ReliabilityVerifyRequest,
     ReliabilityVerifyResponse,
+    ReliabilitySourceRequest,
+    ReliabilitySourceSummary,
+    ReliabilitySourceListResponse,
     AccountConnectSyncResponse,
     AccountConnectTeamInviteCreateRequest,
     AccountConnectTeamInviteListResponse,
@@ -839,6 +843,8 @@ async def require_transport_auth_for_v1(request: Request, call_next):
     # Plane's issue webhook is a machine callback that verifies its own X-Plane-Signature HMAC,
     # so it is exempt from transport auth exactly like the GitHub webhook.
     is_plane_webhook = request.url.path == "/v1/webhooks/plane"
+    # Alerting tools sign reliability alert deliveries (X-Reliability-Signature HMAC) — same model.
+    is_reliability_alert = request.url.path == "/v1/reliability/alert"
     if (
         not request.url.path.startswith("/v1/")
         or not auth_required
@@ -846,6 +852,7 @@ async def require_transport_auth_for_v1(request: Request, call_next):
         or is_inbound_webhook
         or is_github_webhook
         or is_plane_webhook
+        or is_reliability_alert
     ):
         principal_token = current_api_principal.set(None)
         authenticated_token = current_transport_authenticated.set(False)
@@ -2614,6 +2621,47 @@ def reliability_feedback(
         if not result:
             raise HTTPException(status_code=404, detail="incident not found")
         return ReliabilityFeedbackResponse(**result)
+
+
+@app.post("/v1/reliability/sources", response_model=ReliabilitySourceSummary, status_code=201)
+def reliability_register_source(payload: ReliabilitySourceRequest) -> ReliabilitySourceSummary:
+    """Register/enable a telemetry source (config only — creds stay indirect via env/SecretRef)."""
+    with begin(engine) as connection:
+        require_project_actor(connection, payload.project_id, payload.actor, "providerops_manage")
+        row = reliability.register_source(
+            connection, payload.project_id, payload.kind, payload.name,
+            config=payload.config, secret_ref=payload.secret_ref, enabled=payload.enabled,
+        )
+        return ReliabilitySourceSummary(**{k: row[k] for k in
+                                           ("id", "kind", "name", "config", "enabled", "created_at")})
+
+
+@app.get("/v1/reliability/sources", response_model=ReliabilitySourceListResponse)
+def reliability_list_sources(project_id: str) -> ReliabilitySourceListResponse:
+    with begin(engine) as connection:
+        items = reliability.list_sources(connection, project_id)
+        return ReliabilitySourceListResponse(project_id=project_id, items=items)
+
+
+@app.post("/v1/reliability/alert", status_code=202)
+async def reliability_alert_webhook(request: Request):
+    """RB-10 — the incident-response trigger: a signed alert (Alertmanager/Grafana/PagerDuty/generic)
+    becomes an incident, every enabled source is scan-scoped to the alert window, and diagnose runs
+    immediately. Auth-exempt but X-Reliability-Signature (HMAC-sha256) verified; fail-closed."""
+    raw_body = await request.body()
+    signature = request.headers.get("x-reliability-signature", "")
+    if not reliability.verify_alert_signature(raw_body, signature):
+        raise HTTPException(status_code=401, detail="Invalid alert signature.")
+    try:
+        payload = json.loads(raw_body.decode() or "{}")
+    except json.JSONDecodeError as error:
+        raise HTTPException(status_code=400, detail="Invalid alert payload.") from error
+    project_id = payload.get("project_id") or settings.default_project_id
+    with begin(engine) as connection:
+        result = reliability.ingest_alert(connection, project_id, payload)
+    if not result:
+        raise HTTPException(status_code=400, detail="Unrecognized alert shape.")
+    return JSONResponse(status_code=202, content=jsonable_encoder(result))
 
 
 @app.post("/v1/reliability/incidents/{incident_id}/verify",

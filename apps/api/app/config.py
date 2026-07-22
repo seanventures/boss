@@ -686,6 +686,11 @@ class Settings(BaseSettings):
     plane_webhook_secret: Optional[str] = Field(
         default=None, alias="PLANE_WEBHOOK_SECRET"
     )
+    # HMAC secret alerting tools sign reliability alert deliveries with (X-Reliability-Signature,
+    # sha256 hex over the raw body). Absent => POST /v1/reliability/alert stays fail-closed (RB-10).
+    reliability_alert_secret: Optional[str] = Field(
+        default=None, alias="RELIABILITY_ALERT_SECRET"
+    )
     # JSON map: {"<plane_project_id>": {"owner": "...", "repo": "..."}} — routes a ticket to the
     # GitHub repo its PR opens against. Parsed defensively at use (a bad value never crashes boot).
     plane_project_map: Optional[str] = Field(default=None, alias="PLANE_PROJECT_MAP")
