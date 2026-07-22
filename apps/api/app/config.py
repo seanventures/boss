@@ -569,9 +569,11 @@ class Settings(BaseSettings):
     code_agent_review_timeout_seconds: int = Field(
         default=420, alias="BOSS_CODE_AGENT_REVIEW_TIMEOUT_SECONDS"
     )
-    # Wall-clock cap for a single CodeAgent invocation.
+    # Wall-clock cap for a single CodeAgent invocation. Sized for the raised guest turn cap
+    # (~120 turns at ~20s/turn ≈ 2400s + headroom); the sandbox-service scales the VM TTL to
+    # this value (VMs live up to 7200s), so a high max_turns is not killed mid-build.
     code_agent_timeout_seconds: int = Field(
-        default=900, alias="BOSS_CODE_AGENT_TIMEOUT_SECONDS"
+        default=2700, alias="BOSS_CODE_AGENT_TIMEOUT_SECONDS"
     )
     # Tools the sandboxed Claude Code agent may use (its OWN native tools here —
     # the inverse of claude_cli_adapter, which denies them). Bash is constrained
