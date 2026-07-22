@@ -65,6 +65,22 @@ def build_source(spec: dict[str, Any]) -> TelemetrySource:
                              loki_uid=spec.get("loki_uid", ""),
                              bearer_env=spec.get("bearer_env", ""),
                              step_seconds=int(spec.get("step_seconds", 60)))
+    if kind == "splunk":
+        from .telemetry_connectors import SplunkSource
+        return SplunkSource(spec["base_url"], bearer_env=spec.get("bearer_env", ""),
+                            index=spec.get("index", ""))
+    if kind == "datadog":
+        from .telemetry_connectors import DatadogSource
+        return DatadogSource(spec.get("base_url", "https://api.datadoghq.com"),
+                             api_key_env=spec.get("api_key_env", "DD_API_KEY"),
+                             app_key_env=spec.get("app_key_env", "DD_APP_KEY"))
+    if kind == "cloudwatch":
+        from .telemetry_connectors import CloudWatchSource
+        return CloudWatchSource(spec["log_group"], region=spec.get("region", "us-east-1"))
+    if kind == "pagerduty":
+        from .telemetry_connectors import PagerDutySource
+        return PagerDutySource(spec.get("base_url", "https://api.pagerduty.com"),
+                               token_env=spec.get("token_env", "PAGERDUTY_TOKEN"))
     raise ValueError(f"unsupported source kind {kind!r}")
 
 

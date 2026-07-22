@@ -106,3 +106,74 @@ def test_scan_through_grafana_connector(wire, engine):
         assert rep["distinct_templates"] == 1
         # error lines -> a signal (novel error template on cold start)
         assert any(s["kind"] in ("new_template", "error_surge") for s in rep["signals"])
+
+
+# --- Splunk / Datadog / CloudWatch / PagerDuty (RB-9 completion) --------------
+def test_splunk_normalizes_export_rows(monkeypatch):
+    rows = [{"result": {"_time": "1500.5", "_raw": "db timeout on order 9",
+                        "source": "orders-app", "log_level": "ERROR"}},
+            {"preview": True},                                    # non-result rows skipped
+            {"result": {"_time": "bad", "_raw": "fallback ts line", "host": "h1"}}]
+    captured = {}
+    def fake(url, form, *, headers=None):
+        captured.update(url=url, form=form)
+        return rows
+    monkeypatch.setattr(tc, "_http_ndjson_post", fake)
+    events = tc.SplunkSource("https://splunk:8089", index="prod").query_logs("error", WIN)
+    assert len(events) == 2
+    assert events[0].service == "orders-app" and events[0].level == "error"
+    assert events[0].ts == 1500.5
+    assert events[1].ts == WIN.start                              # bad _time -> window floor
+    assert captured["form"]["search"].startswith("search error")  # SPL prefix added
+    assert "output_mode=json" in captured["url"]
+
+
+def test_datadog_logs_and_metrics(monkeypatch):
+    def fake_post(url, body, *, headers=None):
+        assert headers["DD-API-KEY"] == "k1"                      # env-name indirection resolved
+        return {"data": [{"attributes": {"timestamp_epoch": 1500, "message": "oom",
+                                         "service": "worker", "status": "error"}}]}
+    def fake_get(url, *, headers=None):
+        return {"series": [{"metric": "sys.cpu", "scope": "host:a",
+                            "pointlist": [[1500000, 90.0], [1560000, None], [1620000, 95.0]]}]}
+    monkeypatch.setenv("DD_API_KEY", "k1")
+    monkeypatch.setenv("DD_APP_KEY", "k2")
+    monkeypatch.setattr(tc, "_http_json_post", fake_post)
+    monkeypatch.setattr(tc, "_http_json", fake_get)
+    src = tc.DatadogSource()
+    logs = src.query_logs("service:worker", WIN)
+    assert logs[0].message == "oom" and logs[0].level == "error"
+    series = src.query_metrics("avg:sys.cpu{*}", WIN)
+    assert series[0].name == "sys.cpu"
+    assert [p.value for p in series[0].points] == [90.0, 95.0]    # None points dropped
+
+
+def test_cloudwatch_logs_via_injected_client():
+    class FakeLogs:
+        def filter_log_events(self, **kw):
+            assert kw["logGroupName"] == "/app/prod" and kw["startTime"] == 1000000
+            return {"events": [{"timestamp": 1500000, "message": "task crashed",
+                                "logStreamName": "svc-a"}]}
+    src = tc.CloudWatchSource("/app/prod", client_factory=lambda svc: FakeLogs())
+    events = src.query_logs("", WIN)
+    assert events[0].message == "task crashed" and events[0].service == "svc-a"
+    assert events[0].ts == 1500.0
+
+
+def test_pagerduty_alerts(monkeypatch):
+    def fake(url, *, headers=None):
+        assert "since=" in url and "until=" in url
+        return {"incidents": [{"id": "PD1", "title": "DB down",
+                               "priority": {"summary": "P1"},
+                               "service": {"summary": "orders"}}]}
+    monkeypatch.setattr(tc, "_http_json", fake)
+    alerts = tc.PagerDutySource().list_alerts(WIN)
+    assert alerts[0].title == "DB down" and alerts[0].severity == "critical"
+    assert alerts[0].service == "orders"
+
+
+def test_build_source_new_kinds():
+    assert build_source({"kind": "splunk", "base_url": "http://s"}).kind == "splunk"
+    assert build_source({"kind": "datadog"}).kind == "datadog"
+    assert build_source({"kind": "cloudwatch", "log_group": "/g"}).kind == "cloudwatch"
+    assert build_source({"kind": "pagerduty"}).kind == "pagerduty"
