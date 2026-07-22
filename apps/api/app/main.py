@@ -4909,6 +4909,27 @@ def decompose_prd_endpoint(payload: dict):
     return result
 
 
+@app.post("/v1/web-app", status_code=201)
+def build_web_app_endpoint(payload: dict):
+    """SINGLE-TASK web-app build — the robust path for a website. Seeds a deterministic
+    Vite+React+TS+Tailwind scaffold (0 agent turns), then ONE governed task builds the whole app on
+    top (fits the guest turn cap; no fragile decomposition chain). Body: {project_id, directive,
+    owner?, repo?, task_id?, review?}. review defaults to false so the FIRST pass just works."""
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    project_id = payload.get("project_id")
+    directive = (payload.get("directive") or payload.get("prd") or "").strip()
+    if not project_id or not directive:
+        raise HTTPException(status_code=422, detail="project_id and directive are required.")
+    from .services.prd_decomposition import start_web_app_build
+    return start_web_app_build(
+        engine, settings, jobs, project_id=project_id, task_id=payload.get("task_id"),
+        directive=directive,
+        owner=payload.get("owner") or settings.target_github_owner,
+        repo=payload.get("repo") or settings.target_github_repo,
+        review=bool(payload.get("review", False)))
+
+
 @app.get("/v1/pipeline-profiles")
 def list_pipeline_profiles_endpoint(project_id: str):
     """List the cost/rigor profiles available to a project: built-in presets plus any custom

@@ -173,6 +173,49 @@ def start_decomposed_build(engine, settings: Settings, jobs, *, project_id: str,
             "scaffold_seeded": seeded}
 
 
+def start_web_app_build(engine, settings: Settings, jobs, *, project_id: str,
+                        task_id: Optional[str], directive: str, owner: str, repo: str,
+                        review: bool = False) -> dict:
+    """SINGLE-TASK web-app build (the robust default for a website). Seed a deterministic
+    Vite+React+TS+Tailwind scaffold (zero agent turns), then ONE governed task builds the whole app
+    feature on top — a handful of files that fit comfortably under the guest's ~40-turn cap. No
+    decomposition chain, no coordination. review=False runs it light (tier 1: no adversarial gate)
+    so the FIRST pass just works; re-run with review=True to harden."""
+    root = make_id("crun")
+    seeded = seed_web_scaffold(settings, work_branch=f"boss/code/{root}", name=(repo or "app"))
+    instructions = (
+        "A buildable Vite + React + TypeScript + Tailwind + shadcn-style scaffold ALREADY EXISTS on "
+        "this branch: package.json (scripts: dev='vite --host', build='tsc -b && vite build', "
+        "typecheck, lint, test:e2e), vite.config.ts, tailwind.config.ts, tsconfig.json, index.html, "
+        "src/main.tsx, src/App.tsx (placeholder), src/index.css (design tokens), src/lib/utils.ts "
+        "(cn), src/components/ui/button.tsx + card.tsx. Do NOT re-init the project or edit the "
+        "config/build files.\n\n"
+        "Build the WHOLE feature ON this scaffold in a FEW focused files (aim for < 8 new files): "
+        "put types/logic under src/lib/, presentational pieces under src/components/, and WIRE the "
+        "finished feature into src/App.tsx so `npm run dev` shows the working app. Reuse the existing "
+        "Button/Card and Tailwind tokens for a professional look. `npm run build` MUST pass.\n\n"
+        "THE APP TO BUILD:\n" + directive)
+    with begin(engine) as c:
+        run_id = start_code_task(
+            c, project_id=project_id, task_id=task_id,
+            title=("Web app — " + directive[:70]).strip(),
+            instructions=instructions,
+            acceptance_criteria=[
+                "npm run build passes (tsc clean + vite production build).",
+                "The app renders a working, professional UI wired into src/App.tsx; the core "
+                "interaction produces a correct, sensible result on screen.",
+                "Only a handful of new files were added on top of the scaffold; config/build files "
+                "were not rewritten.",
+            ],
+            test_commands=[], owner=owner, repo=repo, base_branch=f"boss/code/{root}",
+            finalize_ctx={"root_run_id": root, "web_app_build": True},
+            jobs=jobs, profile="balanced", risk_tier=(2 if review else 1))
+        emit_event(c, project_id, "web_app.build_started", "boss", "code_task_run", run_id,
+                   {"scaffold_seeded": seeded, "review": review, "branch": f"boss/code/{root}"})
+    return {"started": True, "run_id": run_id, "scaffold_seeded": seeded, "review": review,
+            "branch": f"boss/code/{root}"}
+
+
 def advance_decomposition(engine, settings: Settings, jobs, run_id: str) -> Optional[str]:
     """Called when a decomposed task lands. If the run carries a remaining plan, start the NEXT
     task as a continuation (same lineage/branch, so it builds on the just-finished code). Returns
