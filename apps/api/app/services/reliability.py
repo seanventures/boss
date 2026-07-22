@@ -42,14 +42,27 @@ _VERDICT = {
 
 
 def build_source(spec: dict[str, Any]) -> TelemetrySource:
-    """Construct a source from a request spec. Inline adapters today (memory/log_export); a persisted
-    telemetry_source resolves its connector the same way once live connectors land (RB-9)."""
+    """Construct a source from a request spec. All connectors are read-only; auth is indirect
+    (`bearer_env` = env-var NAME, resolved at call time — creds never in the spec)."""
     kind = (spec or {}).get("kind", "memory")
     if kind == "memory":
         logs = [LogEvent(**e) if isinstance(e, dict) else e for e in spec.get("logs", [])]
         return InMemorySource(logs=logs)
     if kind == "log_export":
         return LogExportSource(spec["path"])
+    if kind == "prometheus":                      # RB-9 native connectors
+        from .telemetry_connectors import PrometheusSource
+        return PrometheusSource(spec["base_url"], bearer_env=spec.get("bearer_env", ""),
+                                step_seconds=int(spec.get("step_seconds", 60)))
+    if kind == "loki":
+        from .telemetry_connectors import LokiSource
+        return LokiSource(spec["base_url"], bearer_env=spec.get("bearer_env", ""))
+    if kind == "grafana":
+        from .telemetry_connectors import GrafanaSource
+        return GrafanaSource(spec["base_url"], prometheus_uid=spec.get("prometheus_uid", ""),
+                             loki_uid=spec.get("loki_uid", ""),
+                             bearer_env=spec.get("bearer_env", ""),
+                             step_seconds=int(spec.get("step_seconds", 60)))
     raise ValueError(f"unsupported source kind {kind!r}")
 
 
