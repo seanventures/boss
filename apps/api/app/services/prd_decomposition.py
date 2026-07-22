@@ -190,6 +190,17 @@ def advance_decomposition(engine, settings: Settings, jobs, run_id: str) -> Opti
     total = int(fctx.get("decomposition_total", idx))
     root = fctx.get("root_run_id") or run_id  # keep the whole build in ONE branch lineage
     spec = run.get("spec") or {}
+    # IDEMPOTENCY: a long run can be reclaimed/re-invoked, so advance() may be called more than
+    # once for the same completed step. Never start a DUPLICATE next step — bail if a run for this
+    # lineage+index already exists.
+    with begin(engine) as c:
+        dup = c.execute(text(
+            "SELECT id FROM code_task_runs WHERE project_id = :p "
+            "AND finalize_ctx->>'root_run_id' = :root "
+            "AND (finalize_ctx->>'decomposition_index') = :idx LIMIT 1"),
+            {"p": run["project_id"], "root": str(root), "idx": str(idx)}).first()
+    if dup is not None:
+        return None
     with begin(engine) as c:
         new_id = start_code_task(
             c, project_id=run["project_id"], task_id=run.get("task_id"),
