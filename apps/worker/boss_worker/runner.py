@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 from typing import Any
 
 from .config import WorkerSettings
@@ -806,6 +807,33 @@ def run_worker_cycle(client: ControlPlaneClient, settings: WorkerSettings) -> bo
         settings.lease_ttl_seconds,
     )
 
+    # Keep the lease alive for the WHOLE (possibly many-minute) job. execute_job is a
+    # single blocking call — e.g. code.task runs the entire governed pipeline, whose
+    # write_tests/implement phases can each run minutes (code_agent_timeout is 900s).
+    # Without renewing the lease mid-run it expires (default 300s) and the reclaimer
+    # restarts the STILL-running job → an infinite loop on the longest phase. A daemon
+    # thread renews every lease_ttl/2 (its OWN client — the main one is busy in
+    # execute_job) until the job finishes.
+    hb_stop = threading.Event()
+    hb_client = ControlPlaneClient(settings.control_plane_url, api_key=settings.api_key)
+
+    def _renew_lease() -> None:
+        interval = max(15, settings.lease_ttl_seconds // 2)
+        while not hb_stop.wait(interval):
+            try:
+                hb_client.heartbeat(
+                    settings.worker_id, job.id, job.lease_token,
+                    settings.lease_ttl_seconds,
+                )
+            except Exception:  # noqa: BLE001 — a transient heartbeat failure must not kill the job
+                LOGGER.warning(
+                    "heartbeat_renew_failed worker_id=%s job_id=%s",
+                    settings.worker_id, job.id,
+                )
+
+    hb_thread = threading.Thread(target=_renew_lease, name=f"lease-hb-{job.id}", daemon=True)
+    hb_thread.start()
+
     try:
         result = execute_job(job, client)
     except Exception as error:
@@ -833,6 +861,13 @@ def run_worker_cycle(client: ControlPlaneClient, settings: WorkerSettings) -> bo
             retry_delay_seconds=retry_delay_seconds,
         )
         return True
+    finally:
+        hb_stop.set()
+        hb_thread.join(timeout=3)
+        try:
+            hb_client.close()
+        except Exception:  # noqa: BLE001
+            pass
 
     completion = client.complete(
         settings.worker_id,

@@ -480,6 +480,7 @@ from .services.agent_service import (
 )
 from .services.jobs import JobLeaseService, LeaseNotFoundError
 from .services.members import (
+    DEFAULT_MEMBER_IDS,
     MemberDirectoryService,
     ProjectMemberNotFoundError,
     ProjectMemberPermissionError,
@@ -997,15 +998,31 @@ def require_authenticated_actor_binding(
     project_id: str,
     actor: str,
     permission: str,
+    connection=None,
 ) -> None:
     principal = current_api_principal.get()
-    if principal and principal != actor:
-        reason = (
-            f"Authenticated principal '{principal}' is not allowed to act as "
-            f"'{actor}'."
-        )
-        record_policy_denial(project_id, principal, permission, reason)
-        raise HTTPException(status_code=403, detail=reason)
+    if not principal or principal == actor:
+        return
+    # Bounded delegation: allow the authenticated principal to act as a member whose
+    # role_keys explicitly include the principal — e.g. the console's system actor
+    # 'executive_console' carries role_keys ['ceo', 'ceo_delegate'], so a 'ceo' key
+    # may act as it. This is NOT arbitrary impersonation: the target actor must carry
+    # the principal as one of its roles. Without a connection to check roles, fall
+    # back to the strict principal == actor rule.
+    if connection is not None:
+        try:
+            member = members.get_member(connection, project_id, actor)
+            role_keys = (member or {}).get("role_keys") or []
+        except Exception:  # noqa: BLE001 — any lookup failure ⇒ no delegation
+            role_keys = []
+        if principal in role_keys:
+            return
+    reason = (
+        f"Authenticated principal '{principal}' is not allowed to act as "
+        f"'{actor}'."
+    )
+    record_policy_denial(project_id, principal, permission, reason)
+    raise HTTPException(status_code=403, detail=reason)
 
 
 def require_project_actor(connection, project_id: str, actor: str, permission: str) -> None:
@@ -1017,9 +1034,25 @@ def require_project_actor(connection, project_id: str, actor: str, permission: s
             permission=permission,
         )
     except (ProjectMemberNotFoundError, ProjectMemberPermissionError) as error:
+        # Self-heal: a project seeded before a default member/permission existed can
+        # leave a baseline system actor (e.g. executive_console) missing an intended
+        # permission. Re-seed the defaults once and retry before denying — this grants
+        # only what the defaults specify, so a genuinely-unauthorized actor is still
+        # refused.
+        if actor in DEFAULT_MEMBER_IDS:
+            try:
+                members.seed_default_members(connection, project_id, actor="bootstrap")
+                members.require_member(
+                    connection, project_id, actor, permission=permission
+                )
+            except (ProjectMemberNotFoundError, ProjectMemberPermissionError):
+                record_policy_denial(project_id, actor, permission, str(error))
+                raise HTTPException(status_code=403, detail=str(error)) from error
+            require_authenticated_actor_binding(project_id, actor, permission, connection)
+            return
         record_policy_denial(project_id, actor, permission, str(error))
         raise HTTPException(status_code=403, detail=str(error)) from error
-    require_authenticated_actor_binding(project_id, actor, permission)
+    require_authenticated_actor_binding(project_id, actor, permission, connection)
 
 
 def require_decision_actor_binding(
@@ -4908,6 +4941,43 @@ def run_code_task_step_endpoint(payload: dict):
     return run_code_task(engine, settings, jobs, payload["run_id"])
 
 
+@app.get("/v1/code-tasks/{run_id}/activity")
+def code_task_activity_endpoint(run_id: str):
+    """Per-stage model-call activity for a code task — the internal detail behind
+    each phase (model, latency, turns, retries, cost, ok/error). Written per call,
+    so it's live: use it to see WHY a phase (e.g. write_tests) is slow."""
+    with begin(engine) as connection:
+        rows = connection.execute(
+            text(
+                """
+                SELECT stage, engine, model, total_tokens, cost_usd_micros,
+                       latency_ms, retries, turns, ok, error, created_at
+                FROM llm_calls
+                WHERE code_task_run_id = :rid
+                ORDER BY created_at, id
+                """
+            ),
+            {"rid": run_id},
+        ).mappings().all()
+    calls = [
+        {
+            "stage": r["stage"],
+            "engine": r["engine"],
+            "model": r["model"],
+            "total_tokens": int(r["total_tokens"] or 0),
+            "cost_usd_micros": int(r["cost_usd_micros"] or 0),
+            "latency_ms": int(r["latency_ms"] or 0),
+            "retries": int(r["retries"] or 0),
+            "turns": int(r["turns"] or 0),
+            "ok": bool(r["ok"]),
+            "error": r["error"],
+            "created_at": r["created_at"].isoformat() if r["created_at"] else None,
+        }
+        for r in rows
+    ]
+    return {"run_id": run_id, "calls": calls}
+
+
 @app.post("/v1/code-tasks/{run_id}/retry")
 def retry_code_task_endpoint(run_id: str, payload: Optional[dict] = None):
     """Resume a failed/blocked code task as a new attempt in the same lineage, carrying its prior
@@ -5895,6 +5965,35 @@ def agent_chat(payload: AgentChatRequest, request: Request) -> AgentChatResponse
         except AgentThreadOwnershipError as error:
             raise HTTPException(status_code=403, detail=str(error)) from error
         return AgentChatResponse(**result)
+
+
+@app.get("/v1/agent/threads")
+def list_agent_threads_endpoint(project_id: str, actor: str, since_days: int = 7):
+    """Recent chat threads (default last 7 days) for the console's history + resume."""
+    with begin(engine) as connection:
+        require_project_actor(connection, project_id, actor, "agent_chat")
+        return {
+            "threads": orchestration_agent.list_threads(
+                connection, project_id=project_id, actor=actor, since_days=since_days
+            )
+        }
+
+
+@app.get("/v1/agent/threads/{thread_id}/messages")
+def get_agent_thread_messages_endpoint(thread_id: str, project_id: str, actor: str):
+    """Full message history for one chat thread (to restore a conversation)."""
+    with begin(engine) as connection:
+        require_project_actor(connection, project_id, actor, "agent_chat")
+        owner = connection.execute(
+            text("SELECT project_id FROM agent_threads WHERE id = :id"),
+            {"id": thread_id},
+        ).mappings().first()
+        if not owner or owner["project_id"] != project_id:
+            raise HTTPException(status_code=404, detail="Agent thread not found.")
+        return {
+            "thread_id": thread_id,
+            "messages": orchestration_agent.list_messages(connection, thread_id),
+        }
 
 
 @app.get("/v1/tasks", response_model=TaskListResponse)

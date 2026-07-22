@@ -379,6 +379,53 @@ def start_meeting_run(connection, *, project_id, task_id, directive, url, constr
     return run_id
 
 
+def convene_prd_meeting_core(
+    connection, *, settings: Settings, budget, intake, jobs,
+    project_id: str, directive: str, url: str = "",
+    constraints: Optional[dict] = None, role_keys: Optional[list] = None,
+    task_id: Optional[str] = None,
+) -> dict:
+    """Shared core for convening a durable multi-agent PRD meeting: create the
+    task (if needed), reserve budget, start the run, enqueue the first step.
+    Used by the /v1/meetings/prd endpoint and the Plane ``boss:design`` intake so
+    both routes are governed identically."""
+    constraints = constraints or {}
+    if task_id is None:
+        task = intake.create_task(
+            connection,
+            project_id=project_id,
+            title=f"PRD meeting: {directive[:90]}",
+            description=directive,
+            dedupe_key=make_id("mtg"),
+            priority="p1",
+            risk_tier=2,
+            inputs={"directive": directive, "url": url, "constraints": constraints},
+            required_artifacts=["meeting_minutes"],
+            data_boundary=str(constraints.get("data_boundary") or "internal"),
+        )
+        task_id = task["task_id"]
+    reservation = budget.reserve(
+        connection, project_id, "model",
+        settings.plan_budget_usd_micros * 4,
+        "Multi-agent PRD meeting.", 120,
+    )
+    reservation_id = (
+        reservation.get("reservation_id")
+        if reservation.get("status") == "reserved"
+        else None
+    )
+    run_id = start_meeting_run(
+        connection, project_id=project_id, task_id=task_id,
+        directive=directive, url=url, constraints=constraints,
+        role_keys=role_keys or [], finalize_ctx={"reservation_id": reservation_id},
+    )
+    job = jobs.create_job(
+        connection, project_id=project_id, task_id=task_id,
+        kind="meeting.step", priority=48, payload={"run_id": run_id},
+    )
+    return {"task_id": task_id, "run_id": run_id, "job_id": job["id"]}
+
+
 def _save_phase(connection, run_id, state, add_cost, model, next_phase) -> None:
     connection.execute(
         text("""
@@ -521,7 +568,7 @@ def _finalize_meeting(connection, settings, run_id) -> dict:
     )
     decision_id = create_blocking_decision(connection, project_id, task_id,
         "Approve publishing the PRD the team drafted",
-        {"action": "execute_agent_tool", "tool": "publish_document",
+        {"action": "execute_agent_tool", "tool": "publish_document", "start_code_task": True,
          "args": {"title": "PRD: " + run["directive"][:80].rstrip(), "markdown": state.get("prd_markdown") or "",
                   "subtitle": f"Drafted by a BOSS agent panel · source {run['url']}", "repo_subdir": "docs/prd"},
          "task_id": task_id}, {}, "meeting_prd_ready_to_publish", risk_tier=2)

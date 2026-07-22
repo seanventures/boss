@@ -23,7 +23,7 @@ import hashlib
 import json
 import re
 import threading
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, wait as _futures_wait
 from pathlib import Path
 
 from sqlalchemy import text
@@ -45,7 +45,13 @@ from .github_app_adapter import GitHubAppAdapter
 from .iac_verify import IacVerifyResult, detect_iac_files, is_iac_task, run_iac_verify_lane
 from .llm_telemetry import clear_llm_context, record_llm_call, set_llm_context
 from .pipeline_profile_service import resolve_for_run
-from .pipeline_profiles import infer_risk_tier, materialize_route, route_for_step
+from .pipeline_profiles import (
+    infer_risk_tier,
+    materialize_route,
+    plan_gate_explanation,
+    route_for_step,
+    sensitive_markers_in,
+)
 from .sandbox_provider import LocalSubprocessProvider, MicroVMProvider
 from .software_factory import SoftwareFactoryService
 
@@ -53,13 +59,22 @@ _DEFAULT_TEST_CMD = "python3 -m unittest discover -v"
 
 
 def _is_test_path(path: str) -> bool:
-    base = path.rsplit("/", 1)[-1]
-    return (
-        base.startswith("test_")
-        or base.endswith("_test.py")
-        or "/tests/" in f"/{path}"
-        or path.startswith("tests/")
-    )
+    # Recognize test files across languages — NOT just Python. Previously a JS/TS/Go/…
+    # project's tests (e.g. foo.test.ts, foo.spec.tsx, __tests__/…) were not matched, so
+    # a valid test author got "no test files" and the gate hard-failed. Match by dir
+    # convention + common per-language suffixes.
+    p = path.replace("\\", "/").lower()
+    base = p.rsplit("/", 1)[-1]
+    if any(seg in f"/{p}" for seg in ("/tests/", "/test/", "/spec/", "/__tests__/", "/e2e/")):
+        return True
+    if base.startswith("test_") or base.startswith("test."):
+        return True
+    return base.endswith((
+        "_test.py", "_test.go", "_test.rs", "_test.rb", "_spec.rb",
+        ".test.js", ".test.jsx", ".test.ts", ".test.tsx", ".test.mjs", ".test.cjs",
+        ".spec.js", ".spec.jsx", ".spec.ts", ".spec.tsx", ".spec.mjs", ".spec.cjs",
+        "test.java", "tests.java", "test.kt", "test.cs", "tests.cs",
+    ))
 
 
 def _hash_files(root: Path, paths: list[str]) -> dict[str, str]:
@@ -241,7 +256,39 @@ def _solo_prompt(title, instructions, criteria, test_cmd, *, iac=False):
     )
 
 
-def _review_prompt(title, criteria, *, ui=False):
+def _render_change_for_review(files, *, max_total: int = 48000, max_per_file: int = 12000) -> str:
+    """The exact files this task added/modified, inlined into the review prompt so a reviewer
+    JUDGES the change instead of spending dozens of agentic turns (git diff / ls / cat / grep) to
+    REDISCOVER what changed. That rediscovery — not model quality or retries — was the dominant
+    review latency. Capped so a large diff can't blow the context; the reviewer can still open any
+    file in the read-only tree for more depth."""
+    items = (sorted(files.items()) if isinstance(files, dict)
+             else sorted((fc.path, fc.content) for fc in files))
+    parts, total = [], 0
+    for path, content in items:
+        body = content or ""
+        if len(body) > max_per_file:
+            body = body[:max_per_file] + f"\n… [truncated {len(content) - max_per_file} chars]"
+        block = f"\n=== FILE: {path} ===\n{body}\n"
+        if total + len(block) > max_total:
+            parts.append(f"\n… [further changed files omitted to fit context, starting at {path}]")
+            break
+        parts.append(block)
+        total += len(block)
+    return "".join(parts).strip() or "(no file changes detected)"
+
+
+def _change_clause(change: str) -> str:
+    """The 'here is the change, judge THIS' preamble shared by every reviewer."""
+    if not change:
+        return ""
+    return ("THE CHANGE UNDER REVIEW — the exact files this task added or modified is inlined "
+            "below. Judge THIS change directly; you already have it, so do NOT spend turns running "
+            "git diff or hunting the repo. Open another file in the read-only tree ONLY if you "
+            f"genuinely need more context.\n{change}\n\n")
+
+
+def _review_prompt(title, criteria, *, ui=False, change=""):
     crit = "\n".join(f"- {c}" for c in criteria) or "- (judge against the task description)"
     return (
         "You are an adversarial code reviewer with FRESH context — you did NOT write this code or "
@@ -249,7 +296,8 @@ def _review_prompt(title, criteria, *, ui=False):
         "for a REAL correctness or edge-case failure (invalid inputs, empty/boundary values, case "
         "sensitivity, error handling, off-by-one).\n\n"
         f"TASK UNDER REVIEW: {title}\n\nACCEPTANCE CRITERIA (the agreed scope):\n{crit}\n\n"
-        "Judge ONLY against the stated task and acceptance criteria. A concern that is OUT OF SCOPE "
+        + _change_clause(change)
+        + "Judge ONLY against the stated task and acceptance criteria. A concern that is OUT OF SCOPE "
         "— a feature that was not asked for, or a spec stricter than what was agreed — is NOT a "
         "defect; note it but do not fail the change for it.\n\n"
         + (design_prompts.design_review_clause() + "\n\n" if ui else "")  # APP-2: incoherence in scope for UI
@@ -261,13 +309,25 @@ def _review_prompt(title, criteria, *, ui=False):
 
 
 def _parse_verdict(summary: str) -> str:
-    up = summary.upper()
+    up = (summary or "").upper()
     m = re.findall(r"VERDICT:\s*(SURVIVED|REFUTED)", up)
     if not m:  # the model sometimes omits the "VERDICT:" prefix — accept the keyword anywhere
         m = re.findall(r"\b(SURVIVED|REFUTED)\b", up)
     if not m:
         return "not_run"
-    return "survived" if m[-1] == "SURVIVED" else "refuted"
+    verdict = "survived" if m[-1] == "SURVIVED" else "refuted"
+    if verdict == "refuted" and not _refutation_is_substantiated(summary):
+        # A refutation MUST cite a CONCRETE defect (the reviewer's own instruction). A bare
+        # "VERDICT: REFUTED" with no articulated defect must NOT autonomously fail-close the gate.
+        return "survived"
+    return verdict
+
+
+def _refutation_is_substantiated(summary: str) -> bool:
+    """True only if the reviewer articulated an actual defect, not just the verdict token."""
+    body = re.sub(r"(?im)^\s*(?:#+\s*)?(?:review findings|verdict)\b.*$", "", summary or "")
+    body = re.sub(r"(?im)\bVERDICT:\s*(?:SURVIVED|REFUTED)\b", "", body)
+    return len(body.strip()) >= 40
 
 
 def _aggregate_panel(verdicts: list[str], quorum: float) -> tuple[str, float]:
@@ -288,14 +348,15 @@ def _aggregate_panel(verdicts: list[str], quorum: float) -> tuple[str, float]:
     return ("survived" if confidence >= quorum else "refuted"), confidence
 
 
-def _security_prompt(title):
+def _security_prompt(title, *, change=""):
     return (
         "You are a security reviewer. Assess the change for EXPLOITABLE vulnerabilities — things an "
         "attacker could actually use: injection (SQL / command / HTML-XSS), auth or access-control "
         "bypass, unsafe secret/credential handling, unsafe deserialization or parsing, SSRF, path "
         "traversal, or a denial-of-service vector reachable from untrusted input.\n\n"
         f"TASK UNDER REVIEW: {title}\n\n"
-        "Read the change and the implementation. Classify each finding by severity "
+        + _change_clause(change)
+        + "Read the change and the implementation. Classify each finding by severity "
         "(CRITICAL / HIGH / MEDIUM / LOW / ADVISORY). Do NOT edit any files.\n\n"
         "Calibrate the VERDICT by SEVERITY — not by whether further hardening is conceivable. A "
         "thorough review can always suggest more defense-in-depth; that alone must NOT fail the gate:\n"
@@ -353,14 +414,40 @@ def _plan_prompt(title, spec):
 
 def _review_plan_prompt(title, plan):
     return (
-        "You are a design reviewer with FRESH context. Critique the plan below for gaps, missing "
-        "edge cases, or risky choices, judged against the task. Do NOT edit any files. End with "
-        "EXACTLY one final line:\n  PLAN: OK\n  PLAN: REVISE\n\n"
+        "You are a design reviewer with FRESH context. FIRST decide whether this task ASKS FOR "
+        "CODE at all. It is NOT a coding task ONLY when its deliverable is inherently a document, "
+        "research, or a written specification — e.g. 'write a PRD', 'research the options', "
+        "'produce a discovery report' — where the task does not call for creating or modifying "
+        "source code.\n"
+        "IMPORTANT: a task that asks you to add or change code IS a coding task and goes through "
+        "full review — EVEN IF the new code is a standalone/new module, or the repository already "
+        "contains unrelated or messy code. Repo tidiness and how 'connected' the new module is are "
+        "NOT reasons to reject; they are normal review feedback at most.\n"
+        "If and ONLY if the deliverable is not code at all, respond with ONLY this single line and "
+        "nothing else:\n"
+        "  ROUTING: NOT_A_CODE_TASK — <one-line reason>\n\n"
+        "Otherwise, critique the plan below for gaps, missing edge cases, or risky choices, judged "
+        "against the task. Do NOT edit any files. End with EXACTLY one final line:\n"
+        "  PLAN: OK\n  PLAN: REVISE\n\n"
         f"TASK: {title}\n\nPLAN:\n{plan}"
     )
 
 
-def _consistency_prompt(title, criteria, design):
+# Match ONLY the affirmative verdict line "ROUTING: NOT_A_CODE_TASK ..." at line start — NOT a
+# prose mention of the token (e.g. "...so it's not the NOT_A_CODE_TASK route"), which a plain
+# substring check false-fired on. The token must immediately follow "ROUTING:".
+_NOT_A_CODE_TASK_RE = re.compile(r"^\s*ROUTING:\s*NOT_A_CODE_TASK\b", re.IGNORECASE | re.MULTILINE)
+
+
+def _is_not_a_code_task(plan_review: str) -> bool:
+    """The plan reviewer flags a mis-routed task (deliverable is a doc/research/spec, or the repo
+    is unrelated) so the pipeline can fail FAST instead of hallucinating a codebase and only
+    discovering the mistake at the quality gate ~an hour later. Triggers ONLY on the affirmative
+    'ROUTING: NOT_A_CODE_TASK' verdict line — a prose mention of the token does not count."""
+    return bool(_NOT_A_CODE_TASK_RE.search(plan_review or ""))
+
+
+def _consistency_prompt(title, criteria, design, *, change=""):
     crit = "\n".join(f"- {c}" for c in criteria) or "- (the task description)"
     spec = (design or {}).get("spec", "")
     extra = f"\n\nAGREED SPEC:\n{spec}" if spec else ""
@@ -370,7 +457,8 @@ def _consistency_prompt(title, criteria, design):
         "implemented and tested, names and behaviour match the spec, and nothing contradicts. Do "
         "NOT edit any files. End with EXACTLY one final line:\n"
         "  CONSISTENT: YES\n  CONSISTENT: NO\n\n"
-        f"TASK: {title}\n\nACCEPTANCE CRITERIA:\n{crit}{extra}"
+        + _change_clause(change)
+        + f"TASK: {title}\n\nACCEPTANCE CRITERIA:\n{crit}{extra}"
     )
 
 
@@ -423,10 +511,24 @@ def _requires_plan_approval(risk_tier: int) -> bool:
 
 
 def _block_for_plan_approval(engine, sf, *, run_id, project_id, task_id, reservation_id,
-                             design, risk_tier):
+                             design, risk_tier, title="", sensitive_markers=None):
     """Wire-Phase 2b: pause the run after the design phase, persist the design so the resumed run
     reuses it, release budget + sandbox during the wait, and raise a Decision whose approval
-    re-enqueues the code.task job (decisions._handle_approved_follow_on → resume_code_task)."""
+    re-enqueues the code.task job (decisions._handle_approved_follow_on → resume_code_task).
+
+    The decision explains WHY a human is needed (the concrete sensitive surfaces it touches) and
+    surfaces the actual plan + automated plan review, so the operator decides with real context —
+    not a naked 'approve the plan?' with nothing to look at."""
+    markers = sensitive_markers or []
+    plan_ok = bool(design.get("plan_ok", True))
+    why = plan_gate_explanation(markers, plan_ok=plan_ok)
+    if markers:
+        question = (
+            f"Approve the plan for “{(title or 'this task')[:70]}”? It touches "
+            f"{', '.join(markers)} — BOSS won't write code until you sign off on the approach."
+        )
+    else:
+        question = f"Approve the technical plan for “{(title or 'this task')[:70]}” before BOSS writes code?"
     with begin(engine) as c:
         c.execute(
             text("UPDATE code_task_runs SET state = COALESCE(state, '{}'::jsonb) || CAST(:s AS JSONB), "
@@ -435,10 +537,18 @@ def _block_for_plan_approval(engine, sf, *, run_id, project_id, task_id, reserva
         _release(sf, c, project_id, reservation_id, "Paused for human plan approval (Wire-Phase 2b).")
         dec_id = create_blocking_decision(
             c, project_id, task_id,
-            "Approve the technical plan before any code is written?",
-            {"action": "resume_code_task", "run_id": run_id, "plan": (design.get("plan") or "")[:4000]},
+            question,
+            {
+                "action": "resume_code_task",
+                "run_id": run_id,
+                "why": why,
+                "sensitive": markers,
+                "plan_ok": plan_ok,
+                "plan": (design.get("plan") or "")[:4000],
+                "plan_review": (design.get("plan_review") or "")[:2000],
+            },
             {"phase": "plan", "risk_tier": risk_tier},
-            "High-risk change: the plan needs human sign-off before implementation.",
+            why,
             risk_tier=risk_tier)
         c.execute(text("UPDATE code_task_runs SET status='blocked', phase='awaiting_plan_approval', "
                        "decision_id=:d, updated_at=now() WHERE id=:id"),
@@ -498,7 +608,8 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
     if reservation.get("status") != "reserved":
         with begin(engine) as c:
             return _fail(c, run_id, project_id,
-                         f"Budget reservation denied: {reservation.get('status')}", status="blocked")
+                         f"Budget reservation denied: {reservation.get('status')}", status="blocked",
+                         failure_class="needs_human", reason_code="budget_denied")
     reservation_id = reservation["reservation_id"]
     with begin(engine) as c:
         c.execute(text("UPDATE code_task_runs SET reservation_id=:r WHERE id=:id"),
@@ -559,6 +670,16 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
             strong_model=settings.code_agent_strong_model,
             low_cost_model=settings.code_agent_low_cost_model)
         stage_routes[step] = {"engine": eng, "model": model}
+        return _agent_for(eng), model
+
+    def _route_escalated(step: str):
+        """Force the STRONG (frontier) engine/model for a step — auto-recovery when the
+        default route produced no usable output. Call from the MAIN thread only."""
+        eng = (settings.code_agent_strong_engine
+               or stage_routes.get(step, {}).get("engine") or build_engine)
+        model = (settings.code_agent_strong_model
+                 or stage_routes.get(step, {}).get("model"))
+        stage_routes[step] = {"engine": eng, "model": model, "escalated": True}
         return _agent_for(eng), model
 
     def _route_names(step: str):
@@ -706,6 +827,28 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
             design = {"standards": d1.get("summary", ""), "spec": d2.get("summary", ""),
                       "plan": d3.get("summary", ""), "plan_review": d4.get("summary", ""),
                       "plan_ok": plan_ok}
+            # FAIL FAST: if the design reviewer says this isn't a coding task for this repo (a
+            # research/PRD/spec deliverable, or an unrelated repo) it was mis-routed into codegen.
+            # Stop NOW — in one design pass — instead of authoring tests + a whole codebase and only
+            # catching the mismatch at the quality gate ~an hour later.
+            if _is_not_a_code_task(design["plan_review"]):
+                _finish_vms(success=False)
+                reason_line = next((ln.strip() for ln in design["plan_review"].splitlines()
+                                    if "NOT_A_CODE_TASK" in ln.upper()), "")
+                with begin(engine) as c:
+                    _release(sf, c, project_id, reservation_id,
+                             "not a coding task — mis-routed into the code pipeline")
+                    emit_event(c, project_id, "code_task.not_a_code_task", "boss",
+                               "code_task_run", run_id, {"reason": reason_line[:300]})
+                    return _fail(
+                        c, run_id, project_id,
+                        "This task's deliverable is a document / research / specification (e.g. a "
+                        "PRD or discovery write-up), not a code change in this repository — it was "
+                        "routed to the coding pipeline by mistake, so no code was written. "
+                        f"Reviewer: {reason_line[:200]}. Produce it as a discovery/PRD document, or "
+                        "re-target a repository the change actually applies to.",
+                        status="blocked", failure_class="needs_human",
+                        reason_code="not_a_code_task")
             # feed the refined spec + plan forward so write-tests/implement are spec-driven
             instructions = (f"{instructions}\n\nREFINED SPEC:\n{d2.get('summary', '')}"
                             f"\n\nTECHNICAL PLAN:\n{d3.get('summary', '')}")
@@ -713,7 +856,9 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
             if _requires_plan_approval(risk_tier):
                 return _block_for_plan_approval(
                     engine, sf, run_id=run_id, project_id=project_id, task_id=task_id,
-                    reservation_id=reservation_id, design=design, risk_tier=risk_tier)
+                    reservation_id=reservation_id, design=design, risk_tier=risk_tier,
+                    title=title,
+                    sensitive_markers=sensitive_markers_in({**spec, "title": title}))
 
         r1 = {"cost_usd_micros": 0, "summary": "", "usage": {}, "model": None}
         test_files: list[str] = []
@@ -723,29 +868,66 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
             # STEP write tests (qa), tests only.
             with begin(engine) as c:
                 _set_phase(c, run_id, "write_tests")
-            if use_microvm:
-                res1 = _guest_stage("write_tests", "write_tests",
-                                    _qa_prompt(title, instructions, criteria, test_cmd,
-                                               iac=iac_task),
-                                    test_cmds=[], stage_title=f"QA: author tests — {title}")
-                r1 = {"cost_usd_micros": res1.cost_usd_micros, "summary": res1.summary,
-                      "usage": res1.usage, "model": stage_routes["write_tests"]["model"]}
-                test_changes = [fc for fc in res1.diff if _is_test_path(fc.path)]
-                test_files = [fc.path for fc in test_changes]
-                # Commit ONLY test files — anything else the QA role wrote is discarded,
-                # which is the micro-VM equivalent of the tests-first separation.
-                _commit_stage(test_changes, f"governed: tests-first (qa) — {title[:60]}")
-            else:
+
+            def _attempt_write_tests(escalate: bool):
+                """One QA/write-tests pass → (r1, test_files, test_changes|None). escalate
+                forces the frontier model + a sharper prompt to recover a weak first pass."""
+                nonlocal cost
+                prompt = _qa_prompt(title, instructions, criteria, test_cmd, iac=iac_task)
+                if escalate:
+                    prompt = (
+                        "Your previous attempt produced NO recognizable test files. Author "
+                        "real, runnable tests NOW as actual FILES in this project's test "
+                        "convention and directory (e.g. *.test.ts, *_test.py, tests/…), not a "
+                        "description or plan.\n\n" + prompt
+                    )
+                if use_microvm:
+                    res = _guest_stage(
+                        "write_tests", "write_tests", prompt, test_cmds=[],
+                        stage_title=f"QA: author tests — {title}",
+                        engine_override=(settings.code_agent_strong_engine if escalate else ""),
+                    )
+                    r = {"cost_usd_micros": res.cost_usd_micros, "summary": res.summary,
+                         "usage": res.usage, "model": stage_routes["write_tests"]["model"]}
+                    changes = [fc for fc in res.diff if _is_test_path(fc.path)]
+                    return r, [fc.path for fc in changes], changes
                 set_llm_context(stage="write_tests")
-                a, m = _route("write_tests")
-                r1 = a.run_role(_qa_prompt(title, instructions, criteria, test_cmd,
-                                           iac=iac_task), root, model=m)
-                cost += int(r1.get("cost_usd_micros") or 0)
-                test_files = [fc.path for fc in sandbox.diff() if _is_test_path(fc.path)]
+                a, m = _route_escalated("write_tests") if escalate else _route("write_tests")
+                r = a.run_role(prompt, root, model=m)
+                cost += int(r.get("cost_usd_micros") or 0)
+                return r, [fc.path for fc in sandbox.diff() if _is_test_path(fc.path)], None
+
+            r1, test_files, test_changes = _attempt_write_tests(escalate=False)
+            if not test_files:
+                # SELF-HEAL: don't hard-fail on a weak/empty first pass — escalate to a
+                # frontier model and retry once, visibly, before giving up.
+                with begin(engine) as c:
+                    emit_event(c, project_id, "code_task.step_escalating", "boss",
+                               "code_task_run", run_id,
+                               {"step": "write_tests", "reason": "no_test_files",
+                                "action": "retry_on_frontier"})
+                r1, test_files, test_changes = _attempt_write_tests(escalate=True)
+                if test_files:
+                    with begin(engine) as c:
+                        emit_event(c, project_id, "code_task.step_recovered", "boss",
+                                   "code_task_run", run_id,
+                                   {"step": "write_tests", "recovered_by": "frontier_retry"})
+            if use_microvm:
+                # Commit ONLY test files — anything else the QA role wrote is discarded.
+                _commit_stage(test_changes or [], f"governed: tests-first (qa) — {title[:60]}")
             if not test_files:
                 with begin(engine) as c:
+                    emit_event(c, project_id, "code_task.step_exhausted", "boss",
+                               "code_task_run", run_id,
+                               {"step": "write_tests",
+                                "reason": "no_test_files_after_escalation"})
                     _release(sf, c, project_id, reservation_id, "no independent tests authored")
-                    return _fail(c, run_id, project_id, "Gate fail: test author produced no test files.")
+                    return _fail(
+                        c, run_id, project_id,
+                        "Test author produced no test files even after escalating to a frontier "
+                        "model — likely an ambiguous task or a repo without a test setup. Review "
+                        "the spec/acceptance criteria and retry.",
+                        failure_class="needs_human", reason_code="no_test_files")
             if not use_microvm:
                 tests_before = _hash_files(root, test_files)
                 # Snapshot the frozen tests so a tamper-then-retry starts from clean tests
@@ -775,14 +957,27 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
         impl_files: list[str] = []
         tests_passed = False
         test_exit_code = None
-        for attempt in range(max_repair + 1):
+        # Escalate-recover (E4): the OSS lane gets attempts 0..max_repair; if the frozen
+        # tests still don't pass, take ONE final attempt on the FRONTIER engine before handing
+        # a failing result to the gate. A cheap implementer shouldn't sink an otherwise-sound
+        # task when a stronger model can pass the same frozen tests — reliability over cost.
+        escalated_recovered = False
+        for attempt in range(max_repair + 2):
+            escalate_impl = attempt == max_repair + 1
+            if escalate_impl:
+                with begin(engine) as c:
+                    emit_event(c, project_id, "code_task.step_escalating", "boss",
+                               "code_task_run", run_id,
+                               {"step": "implement", "reason": "tests_not_passing_on_oss",
+                                "action": "retry_on_frontier", "attempt": attempt})
             impl_prompt = (base_impl_prompt if attempt == 0
                            else _repair_prompt(base_impl_prompt, evidence_text, attempt))
             if use_microvm:
                 res2 = _guest_stage(
                     "implement", "implement" if do_separate_tests else "solo", impl_prompt,
                     test_cmds=[test_cmd],
-                    stage_title=f"SE: implement — {title}" + (f" (repair {attempt})" if attempt else ""))
+                    stage_title=f"SE: implement — {title}" + (f" (repair {attempt})" if attempt else ""),
+                    engine_override=(settings.code_agent_strong_engine if escalate_impl else ""))
                 r2 = {"cost_usd_micros": res2.cost_usd_micros, "summary": res2.summary,
                       "usage": res2.usage, "model": stage_routes["implement"]["model"]}
                 if do_separate_tests:
@@ -809,7 +1004,7 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
                 fail_output = (res2.tests[0].stdout if res2.tests else "") or ""
             else:
                 set_llm_context(stage="implement" if do_separate_tests else "solo")
-                a, m = _route("implement")
+                a, m = _route_escalated("implement") if escalate_impl else _route("implement")
                 r2 = a.run_role(impl_prompt, root, model=m)
                 cost += int(r2.get("cost_usd_micros") or 0)
                 if do_separate_tests:
@@ -837,7 +1032,14 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
                                "tests_untouched": tests_untouched,
                                "impl_files": len(impl_files),
                                "cost_usd_micros": int(r2.get("cost_usd_micros") or 0)})
-            if ok or attempt == max_repair:
+            if escalate_impl and ok:
+                escalated_recovered = True
+                with begin(engine) as c:
+                    emit_event(c, project_id, "code_task.step_recovered", "boss",
+                               "code_task_run", run_id,
+                               {"step": "implement", "recovered_by": "frontier_retry",
+                                "attempt": attempt})
+            if ok or attempt == max_repair + 1:
                 break
             repair_attempts += 1
             if not impl_files:
@@ -923,12 +1125,19 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
                     review_members.append((review_agent, review_model))
             panel["review_votes"] = [None] * panel_size
 
+            # Hand every reviewer the actual change inline so it JUDGES instead of burning agentic
+            # turns rediscovering the diff (the real review-latency root cause). Reviewers still
+            # run in the read-only tree and can open any file for deeper context.
+            change_block = _render_change_for_review(
+                accumulated if use_microvm else {fc.path: fc.content for fc in sandbox.diff()})
+
             def _make_review(seat, seat_agent, seat_model):
                 def _run():
                     set_llm_context(db_engine=engine, project_id=project_id, run_id=run_id,
                                     stage="review_code")
-                    rr = seat_agent.run_role(_review_prompt(title, criteria, ui=ui_task), review_root,
-                                             read_only=True, model=seat_model)
+                    rr = seat_agent.run_role(
+                        _review_prompt(title, criteria, ui=ui_task, change=change_block),
+                        review_root, read_only=True, model=seat_model)
                     with lock:
                         panel_cost["v"] += int(rr.get("cost_usd_micros") or 0)
                     panel["review_votes"][seat] = (rr, _parse_verdict(rr.get("summary", "")))
@@ -939,8 +1148,8 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
             def _do_security():
                 set_llm_context(db_engine=engine, project_id=project_id, run_id=run_id,
                                 stage="security_check")
-                rr = security_agent.run_role(_security_prompt(title), review_root,
-                                             read_only=True, model=security_model)
+                rr = security_agent.run_role(_security_prompt(title, change=change_block),
+                                             review_root, read_only=True, model=security_model)
                 with lock:
                     panel_cost["v"] += int(rr.get("cost_usd_micros") or 0)
                 panel["security"] = (rr, _parse_security(rr.get("summary", "")))
@@ -962,18 +1171,66 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
             def _do_consistency():
                 set_llm_context(db_engine=engine, project_id=project_id, run_id=run_id,
                                 stage="consistency_check")
-                rr = consistency_agent.run_role(_consistency_prompt(title, criteria, design),
-                                                review_root, read_only=True,
-                                                model=consistency_model)
+                rr = consistency_agent.run_role(
+                    _consistency_prompt(title, criteria, design, change=change_block),
+                    review_root, read_only=True, model=consistency_model)
                 with lock:
                     panel_cost["v"] += int(rr.get("cost_usd_micros") or 0)
                 panel["consistency"] = (rr, _parse_consistency(rr.get("summary", "")))
 
             checks = review_checks + [_do_security, _do_full, _do_consistency]
-            max_workers = min(max(1, settings.code_agent_max_concurrency), len(checks))
+            # Panel checks are independent + read-only, so run them ALL in parallel rather
+            # than in slow batches of code_agent_max_concurrency (which is tuned for the
+            # general lane). A low general concurrency was serializing the panel into ~2-3
+            # batches of ~7-10min each → ~20min wall-clock. Provider 429s are handled by the
+            # adapter's retry, so wider parallelism here is safe.
+            max_workers = min(len(checks), max(int(settings.code_agent_max_concurrency), 6))
             panel_parallel = max_workers > 1
-            with ThreadPoolExecutor(max_workers=max_workers) as pool:
-                list(pool.map(lambda fn: fn(), checks))
+            # Safe defaults so a check that times out / errors DEGRADES instead of crashing or
+            # auto-passing: security 'not_run' still BLOCKS (security_clean requires 'clean');
+            # adversarial/consistency 'not_run' proceed (they block only on refuted/drift).
+            panel.setdefault("security", (None, "not_run"))
+            panel.setdefault("consistency", (None, "not_run"))
+            panel.setdefault("full", True)
+            review_errors: list[str] = []
+
+            def _guarded(fn, label):
+                def _run():
+                    try:
+                        fn()
+                    except Exception as exc:  # noqa: BLE001 — a failed review must not crash the run
+                        with lock:
+                            review_errors.append(f"{label}: {exc.__class__.__name__}: {exc}"[:200])
+                return _run
+
+            guarded = (
+                [_guarded(c, f"review[{i}]") for i, c in enumerate(review_checks)]
+                + [_guarded(_do_security, "security"),
+                   _guarded(_do_full, "regression"),
+                   _guarded(_do_consistency, "consistency")]
+            )
+            # Hard wall-clock deadline for the WHOLE panel — an engine-agnostic bound so a slow
+            # review (e.g. an OpenAI-gateway retry storm the per-call timeout can't catch) can't
+            # stall the phase to ~20min. Unfinished checks keep their safe defaults; the pool is
+            # shut down without waiting so a leaked call finishes harmlessly in the background.
+            review_deadline = int(getattr(settings, "code_agent_review_timeout_seconds", 420) or 420)
+            pool = ThreadPoolExecutor(max_workers=max_workers)
+            try:
+                futs = [pool.submit(g) for g in guarded]
+                _done, not_done = _futures_wait(futs, timeout=review_deadline + 60)
+                if not_done:
+                    with lock:
+                        review_errors.append(
+                            f"{len(not_done)} review check(s) exceeded {review_deadline}s — degraded")
+                    for f in not_done:
+                        f.cancel()
+            finally:
+                pool.shutdown(wait=False)
+            if review_errors:
+                with begin(engine) as c:
+                    emit_event(c, project_id, "code_task.review_degraded", "boss",
+                               "code_task_run", run_id,
+                               {"errors": review_errors[:8], "deadline_s": review_deadline})
             cost += panel_cost["v"]
             # Aggregate the refute panel -> (verdict, confidence). Keep a representative
             # reviewer result for the evidence/summary — prefer a refuting seat so a human
@@ -1033,8 +1290,12 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
                                        workdir=None if use_microvm else root)
 
         # FINAL GATE — fail-closed; only the checks that apply at this tier.
+        # A REPAIR continuation that finds the prior code already correct makes NO new diff
+        # (impl_files empty) — but the work branch still HAS that test-passing code. Treat a no-op
+        # iteration on already-good code as "code present" so a CONVERGED run isn't false-failed.
+        _is_repair_iteration = root_run != run_id
         gates = {
-            "code_written": bool(impl_files),
+            "code_written": bool(impl_files) or (_is_repair_iteration and tests_passed),
             "written_tests_pass": tests_passed,
         }
         if do_separate_tests:
@@ -1113,7 +1374,7 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
             # VAG Phase 3 repair loop: how many evidence-fed retries the implementer used
             # (0 = passed/failed first try) and the per-attempt outcome trail.
             "repair_attempts": repair_attempts, "repair_max": max_repair,
-            "repair_log": repair_log,
+            "repair_log": repair_log, "impl_escalated_recovered": escalated_recovered,
             "qa_summary": r1.get("summary", "")[:400],
             "impl_summary": r2.get("summary", "")[:400],
             "review_summary": r3.get("summary", "")[:4000],
@@ -1132,20 +1393,18 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
 
         if qg_status != "pass":
             failing = [k for k, v in gates.items() if not v]
-            # AUTONOMOUS REVIEW-REPAIR (BOSS's moat: agents converge in a loop, not a human). If
-            # EVERY failing gate is a REPAIRABLE review-stage finding — a substantiated adversarial
-            # defect, a security issue, weak tests, consistency drift, or a regression — and we have
-            # not spent the repair-round budget, iterate autonomously: feed the findings back and
-            # rebuild on the work branch (retry_code_task carries security/review/consistency
-            # summaries forward as ITERATION FEEDBACK and clones the prior code). Only genuinely
-            # stuck runs (a non-repairable failure, or the budget exhausted) fall through to a human.
-            _REPAIRABLE_GATES = {"code_review_passed", "security_clean", "consistent",
-                                 "tests_strong_enough", "nothing_broke"}
+            # AUTONOMOUS REVIEW-REPAIR (BOSS's moat: agents converge in a loop, not a human). EVERY
+            # failure that reaches this quality gate is a code-quality issue a fresh full re-run with
+            # the findings fed back can plausibly fix — failing tests, a regression, an adversarial
+            # defect, a security issue, weak tests, or drift. (Genuinely needs-human/mis-routed tasks
+            # never reach this gate — they exit earlier via _fail / NOT_A_CODE_TASK / plan-approval.)
+            # So iterate autonomously up to the round budget before blocking a human; retry_code_task
+            # carries the review summaries forward as ITERATION FEEDBACK and clones the prior code.
+            # Bounded by max_repair_rounds so it can never run away.
             rounds_used = max(0, int(fctx.get("attempt", 1)) - 1)
             # Fallback 2 (not 0): a missing/blank config field must never SILENTLY disable the moat.
             max_repair_rounds = max(0, int(getattr(settings, "code_review_repair_max_rounds", 2) or 2))
-            if (failing and all(g in _REPAIRABLE_GATES for g in failing)
-                    and rounds_used < max_repair_rounds
+            if (failing and rounds_used < max_repair_rounds
                     and spec.get("open_pr", True) is not False):
                 _finish_vms(success=False)  # retain this round's VMs for inspection
                 with begin(engine) as c:
@@ -1249,7 +1508,8 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
             _release(sf, c, project_id, reservation_id, f"governed code task error: {exc}")
             if guest_vm_ids:
                 _persist_sandbox_id(c, run_id, guest_vm_ids[-1])
-            return _fail(c, run_id, project_id, str(exc))
+            return _fail(c, run_id, project_id, str(exc),
+                         failure_class="infra", reason_code="pipeline_exception")
     finally:
         # Request/worker threads are pooled — a stale run_id here would mis-attribute
         # the next job's (or run_research's) llm_calls rows.

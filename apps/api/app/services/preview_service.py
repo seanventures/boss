@@ -88,6 +88,32 @@ def _detect_command(workdir: Path) -> Optional[list[str]]:
     return None
 
 
+def _detect_verification(workdir: Path) -> Optional[str]:
+    """A library/CLI/module build has no server to preview — the way you 'run' it is its test
+    suite. Detect that so the preview can report an honest 'verified by tests' result instead of a
+    misleading 'you forgot to add a preview command' error. Returns a human-readable test command."""
+    package = workdir / "package.json"
+    if package.is_file():
+        try:
+            scripts = (json.loads(package.read_text()).get("scripts") or {})
+        except (OSError, json.JSONDecodeError):
+            scripts = {}
+        if scripts.get("test"):
+            return "npm test"
+    makefile = workdir / "Makefile"
+    if makefile.is_file() and re.search(r"(?m)^test\s*:", makefile.read_text(errors="ignore")):
+        return "make test"
+    has_py_tests = (
+        any(workdir.glob("test_*.py")) or any(workdir.glob("*_test.py"))
+        or any(workdir.glob("**/test_*.py")) or (workdir / "tests").is_dir()
+    )
+    if has_py_tests:
+        if (workdir / "pytest.ini").is_file() or (workdir / "pyproject.toml").is_file():
+            return "python3 -m pytest -q"
+        return "python3 -m unittest discover -v"
+    return None
+
+
 def _descendant_pids(pid: int) -> list[int]:
     pids = [pid]
     try:
@@ -222,11 +248,55 @@ def start_preview(engine, settings: Settings, run_id: str, *, ttl_minutes: int =
     if clone.returncode != 0:
         return _fail(f"git clone failed: {(clone.stderr or '')[-300:]}")
 
+    def _verify(cmd_str: str) -> dict:
+        """Library/CLI/module build — there is no web server to serve. 'Run it' means run its
+        tests: execute the suite one-shot, capture output, and return the result so the user sees
+        it work, instead of a misleading 'add a preview command' error."""
+        try:
+            proc = subprocess.run(["sh", "-lc", cmd_str], cwd=str(workdir),
+                                  capture_output=True, text=True, timeout=300)
+            output = (proc.stdout or "") + (proc.stderr or "")
+            exit_code = proc.returncode
+        except subprocess.TimeoutExpired:
+            output, exit_code = "test run exceeded 300s and was stopped", 124
+        try:
+            Path(log_path).write_text(output, encoding="utf-8")
+        except OSError:
+            pass
+        passed = exit_code == 0
+        status = "verified" if passed else "failed"
+        with begin(engine) as c:
+            c.execute(text(
+                "INSERT INTO app_previews (id,project_id,run_id,repo,branch,command,mode,substrate,"
+                "build_substrate,status,failure_kind,error,log_path,expires_at) "
+                "VALUES (:id,:p,:r,:repo,:b,:cmd,'test',:sub,:build,:st,:fk,:err,:lg,now())"),
+                {"id": preview_id, "p": project_id, "r": run_id, "repo": f"{owner}/{repo}",
+                 "b": branch, "cmd": cmd_str, "sub": ExecutionSubstrate.PREVIEW_HOST.value,
+                 "build": build_substrate, "st": status,
+                 "fk": None if passed else "tests_failed",
+                 "err": None if passed else "tests failed — see output", "lg": log_path})
+        return {
+            "id": preview_id, "status": status, "mode": "test", "kind": "library",
+            "command": cmd_str, "exit_code": exit_code, "passed": passed,
+            "output": output[-6000:],
+            "message": (
+                f"This build is a library/module — there is no web app to serve, so nothing runs "
+                f"as a live URL. Instead I ran its test suite (`{cmd_str}`): "
+                f"{'PASSED ✓' if passed else 'FAILED ✗'} (exit {exit_code}). See the output below "
+                f"and the PR to review the code."),
+        }
+
     command = _detect_command(workdir)
     if not command:
+        # No web server, but a library still has a way to 'run it' — its tests. Prefer the test
+        # command the pipeline already recorded on the run, else detect one from the repo.
+        test_cmd = (run.get("state") or {}).get("test_command") or _detect_verification(workdir)
+        if test_cmd:
+            return _verify(test_cmd)
         return _fail(
-            "could not detect a preview command (add boss.preview.command, a package.json "
-            "dev/start script, Procfile web command, Makefile dev/run target, or Python entrypoint)"
+            "no runnable app or test suite found in this build (add boss.preview.command, a "
+            "package.json dev/start/test script, a Procfile web command, a Makefile dev/run/test "
+            "target, or a Python entrypoint/tests)"
         )
 
     port_hint = _free_port()

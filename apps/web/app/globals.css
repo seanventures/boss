@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Plus+Jakarta+Sans:wght@500;600;700;800&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700;800&family=Manrope:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap');
 
 /* ============================================================
    BOSS Executive Console — Dark "impressive startup" theme
@@ -8,54 +8,55 @@
 
 :root {
   /* brand ramp */
-  --indigo-400: #818cf8;
-  --indigo-500: #6366f1;
-  --indigo-600: #4f46e5;
-  --violet-500: #8b5cf6;
-  --pink-500: #ec4899;
+  --indigo-400: #2EC5C5;
+  --indigo-500: #2F6FE0;
+  --indigo-600: #1B3A6B;
+  --violet-500: #2F6FE0;
+  --pink-500: #2EC5C5;
 
   /* surfaces */
-  --bg: #030712;
-  --bg-tint: #080b12;
-  --surface: #0d1117;
-  --surface-2: #11161e;
-  --surface-3: #181d26;
+  --bg: #090D17;
+  --bg-tint: #0C1424;
+  --surface: #101A30;
+  --surface-2: #0F1830;
+  --surface-3: #16213C;
 
   /* ink */
-  --ink: #f0f6fc;
-  --ink-soft: #c9d1d9;
-  --muted: #8b949e;
-  --faint: #5b626d;
+  --ink: #EEF3FB;
+  --ink-soft: #D4E0F4;
+  --muted: #B4C4E0;
+  --faint: #8092B3;
 
   /* lines */
-  --border: rgba(255, 255, 255, 0.07);
-  --border-strong: rgba(255, 255, 255, 0.13);
+  --border: #1C2740;
+  --border-strong: #26365C;
 
   /* accent */
-  --accent: #6366f1;
-  --accent-text: #818cf8;
-  --accent-press: #4f46e5;
+  --accent: #2F6FE0;
+  --accent-text: #2EC5C5;
+  --accent-press: #1B3A6B;
   --accent-ink: #ffffff;
-  --accent-soft: rgba(99, 102, 241, 0.14);
-  --accent-line: rgba(99, 102, 241, 0.4);
-  --brand-grad: linear-gradient(135deg, #6366f1 0%, #8b5cf6 50%, #ec4899 100%);
-  --brand-grad-2: linear-gradient(135deg, #6366f1, #8b5cf6);
-  --glow: 0 0 24px rgba(99, 102, 241, 0.35);
+  --accent-soft: rgba(47, 111, 224, 0.14);
+  --accent-line: rgba(47, 111, 224, 0.4);
+  --brand-grad: linear-gradient(135deg, #2EC5C5 0%, #2F6FE0 55%, #1B3A6B 100%);
+  --brand-grad-2: linear-gradient(120deg, #2EC5C5, #2F6FE0);
+  --glow: 0 0 24px rgba(47, 111, 224, 0.35);
 
   /* status */
-  --green: #3fb950;
-  --green-soft: rgba(63, 185, 80, 0.12);
-  --amber: #d29922;
-  --amber-soft: rgba(210, 153, 34, 0.13);
-  --red: #f85149;
-  --red-soft: rgba(248, 81, 73, 0.12);
-  --blue: #58a6ff;
+  --green: #34D399;
+  --green-soft: rgba(52, 211, 153, 0.12);
+  --amber: #F5B544;
+  --amber-soft: rgba(245, 181, 68, 0.13);
+  --red: #F2647A;
+  --red-soft: rgba(242, 100, 122, 0.12);
+  --blue: #2F6FE0;
+  --teal: #2EC5C5;
 
   /* shape */
-  --r-sm: 10px;
-  --r: 12px;
-  --r-lg: 16px;
-  --r-xl: 22px;
+  --r-sm: 8px;
+  --r: 8px;
+  --r-lg: 8px;
+  --r-xl: 12px;
 
   /* shadow */
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.5);
@@ -63,10 +64,10 @@
   --shadow-lg: 0 30px 80px rgba(0, 0, 0, 0.6);
 
   /* type */
-  --sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
-  --display: "Plus Jakarta Sans", "Inter", sans-serif;
+  --sans: "Manrope", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --display: "Sora", "Manrope", sans-serif;
   --serif: "Plus Jakarta Sans", "Inter", sans-serif;
-  --mono: "SFMono-Regular", "Menlo", "Monaco", ui-monospace, monospace;
+  --mono: "JetBrains Mono", "SFMono-Regular", ui-monospace, monospace;
 }
 
 /* Reusable workflow registry and durable run timeline. */
@@ -181,6 +182,8 @@ html {
 
 html,
 body {
+  /* Root size scales every rem-based text in the app. Larger = more legible for demos/reviews. */
+  font-size: 19px;
   margin: 0;
   min-height: 100%;
   background: var(--bg);
@@ -189,8 +192,8 @@ body {
 
 body {
   font-family: var(--sans);
-  font-size: 15px;
-  line-height: 1.55;
+  font-size: 1rem;
+  line-height: 1.6;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
@@ -201,7 +204,7 @@ a {
 }
 
 ::selection {
-  background: rgba(99, 102, 241, 0.32);
+  background: rgba(47, 111, 224, 0.32);
   color: #fff;
 }
 
@@ -256,9 +259,9 @@ h1, h2, h3, h4, h5, h6 {
   z-index: -1;
   pointer-events: none;
   background:
-    radial-gradient(42% 48% at 10% 4%, rgba(99, 102, 241, 0.2), transparent 60%),
-    radial-gradient(40% 46% at 92% 96%, rgba(139, 92, 246, 0.16), transparent 60%),
-    radial-gradient(34% 40% at 82% 2%, rgba(236, 72, 153, 0.09), transparent 60%),
+    radial-gradient(42% 48% at 10% 4%, rgba(47, 111, 224, 0.2), transparent 60%),
+    radial-gradient(40% 46% at 92% 96%, rgba(47, 111, 224, 0.16), transparent 60%),
+    radial-gradient(34% 40% at 82% 2%, rgba(46, 197, 197, 0.09), transparent 60%),
     var(--bg);
 }
 
@@ -390,9 +393,9 @@ h1, h2, h3, h4, h5, h6 {
 }
 
 .bx-nav-item.active {
-  background: rgba(99, 102, 241, 0.13);
+  background: rgba(47, 111, 224, 0.13);
   color: var(--accent-text);
-  border-color: rgba(99, 102, 241, 0.22);
+  border-color: rgba(47, 111, 224, 0.22);
 }
 
 .bx-nav-item svg {
@@ -413,7 +416,7 @@ h1, h2, h3, h4, h5, h6 {
   height: 20px;
   padding: 0 6px;
   border-radius: 999px;
-  background: rgba(99, 102, 241, 0.18);
+  background: rgba(47, 111, 224, 0.18);
   color: var(--accent-text);
   font-size: 0.7rem;
   font-weight: 700;
@@ -1032,7 +1035,7 @@ details.wf-turn[open] > summary { border-bottom: 1px solid var(--border); margin
    ============================================================ */
 .org-gate {
   min-height: 100vh; display: flex; align-items: center; justify-content: center;
-  padding: 40px 20px; background: radial-gradient(1200px 600px at 50% -10%, rgba(99,102,241,0.14), transparent), var(--bg);
+  padding: 40px 20px; background: radial-gradient(1200px 600px at 50% -10%, rgba(47, 111, 224,0.14), transparent), var(--bg);
 }
 .org-gate-inner { width: 100%; max-width: 760px; display: grid; gap: 14px; }
 .org-gate-brand { display: flex; flex-direction: column; align-items: center; gap: 6px; margin-bottom: 4px; }
@@ -1406,8 +1409,8 @@ details.wf-turn[open] > summary { border-bottom: 1px solid var(--border); margin
   padding: 38px;
   border-radius: var(--r-xl);
   background:
-    radial-gradient(60% 120% at 100% 0%, rgba(139, 92, 246, 0.14), transparent 55%),
-    radial-gradient(50% 100% at 0% 0%, rgba(99, 102, 241, 0.12), transparent 50%),
+    radial-gradient(60% 120% at 100% 0%, rgba(47, 111, 224, 0.14), transparent 55%),
+    radial-gradient(50% 100% at 0% 0%, rgba(47, 111, 224, 0.12), transparent 50%),
     var(--surface);
 }
 
@@ -1418,7 +1421,7 @@ details.wf-turn[open] > summary { border-bottom: 1px solid var(--border); margin
   left: 0;
   right: 0;
   height: 1px;
-  background: linear-gradient(90deg, transparent, rgba(99, 102, 241, 0.6), rgba(139, 92, 246, 0.5), transparent);
+  background: linear-gradient(90deg, transparent, rgba(47, 111, 224, 0.6), rgba(47, 111, 224, 0.5), transparent);
 }
 
 .hero-grid {
@@ -1457,7 +1460,7 @@ details.wf-turn[open] > summary { border-bottom: 1px solid var(--border); margin
 }
 
 .eyebrow {
-  font-size: 0.7rem;
+  font-size: 0.75rem;
   letter-spacing: 0.16em;
   text-transform: uppercase;
   color: var(--accent-text);
@@ -1487,7 +1490,7 @@ details.wf-turn[open] > summary { border-bottom: 1px solid var(--border); margin
   left: 0;
   right: 0;
   height: 1px;
-  background: linear-gradient(90deg, transparent, rgba(99, 102, 241, 0.5), transparent);
+  background: linear-gradient(90deg, transparent, rgba(47, 111, 224, 0.5), transparent);
   opacity: 0;
   transition: opacity 160ms ease;
 }
@@ -1495,7 +1498,7 @@ details.wf-turn[open] > summary { border-bottom: 1px solid var(--border); margin
 .grid article:hover {
   border-color: var(--accent-line);
   transform: translateY(-2px);
-  box-shadow: 0 14px 40px rgba(99, 102, 241, 0.12);
+  box-shadow: 0 14px 40px rgba(47, 111, 224, 0.12);
 }
 
 .grid article:hover::after {
@@ -1554,7 +1557,7 @@ details.wf-turn[open] > summary { border-bottom: 1px solid var(--border); margin
 
 .section-head h2 {
   margin: 5px 0 0;
-  font-size: 1.34rem;
+  font-size: 1.55rem;
   font-weight: 700;
   letter-spacing: -0.02em;
   max-width: 46ch;
@@ -1832,8 +1835,8 @@ select.input {
 select.input:focus {
   outline: none;
   border-color: var(--accent);
-  background: rgba(99, 102, 241, 0.06);
-  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.12);
+  background: rgba(47, 111, 224, 0.06);
+  box-shadow: 0 0 0 3px rgba(47, 111, 224, 0.12);
 }
 
 .textarea::placeholder,
@@ -1870,12 +1873,12 @@ select.input:focus {
   font-weight: 600;
   cursor: pointer;
   transition: transform 120ms ease, box-shadow 160ms ease, filter 160ms ease;
-  box-shadow: 0 0 18px rgba(99, 102, 241, 0.28);
+  box-shadow: 0 0 18px rgba(47, 111, 224, 0.28);
 }
 
 .button:hover:not(:disabled) {
   transform: translateY(-1px);
-  box-shadow: 0 0 30px rgba(99, 102, 241, 0.5);
+  box-shadow: 0 0 30px rgba(47, 111, 224, 0.5);
 }
 
 .button:active:not(:disabled) {
@@ -1918,7 +1921,7 @@ select.input:focus {
 }
 
 .button.ghost:hover:not(:disabled) {
-  background: rgba(99, 102, 241, 0.1);
+  background: rgba(47, 111, 224, 0.1);
   transform: none;
 }
 
@@ -1996,9 +1999,9 @@ select.input:focus {
   place-items: center;
   font-size: 0.72rem;
   font-weight: 800;
-  background: rgba(99, 102, 241, 0.16);
+  background: rgba(47, 111, 224, 0.16);
   color: var(--accent-text);
-  border: 1px solid rgba(99, 102, 241, 0.22);
+  border: 1px solid rgba(47, 111, 224, 0.22);
 }
 
 /* ============================================================
@@ -2022,7 +2025,7 @@ select.input:focus {
   background: var(--surface-3);
   border: 1px solid var(--border-strong);
   border-radius: var(--r-lg);
-  box-shadow: var(--shadow-lg), 0 0 0 1px rgba(99, 102, 241, 0.08);
+  box-shadow: var(--shadow-lg), 0 0 0 1px rgba(47, 111, 224, 0.08);
   overflow: hidden;
   animation: bx-fade 160ms ease both;
 }
@@ -2062,7 +2065,7 @@ select.input:focus {
 
 .bx-palette-item.active,
 .bx-palette-item:hover {
-  background: rgba(99, 102, 241, 0.13);
+  background: rgba(47, 111, 224, 0.13);
   color: var(--accent-text);
 }
 
@@ -2201,8 +2204,8 @@ select.input:focus {
 .ct-flow-step { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
 .ct-flow-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--border); display: inline-block; }
 .ct-flow-dot.on { background: var(--accent); }
-.ct-flow-dot.pulse { box-shadow: 0 0 0 0 rgba(99,102,241,.6); animation: ctpulse 1.4s infinite; }
-@keyframes ctpulse { 70% { box-shadow: 0 0 0 6px rgba(99,102,241,0); } 100% { box-shadow: 0 0 0 0 rgba(99,102,241,0); } }
+.ct-flow-dot.pulse { box-shadow: 0 0 0 0 rgba(47, 111, 224,.6); animation: ctpulse 1.4s infinite; }
+@keyframes ctpulse { 70% { box-shadow: 0 0 0 6px rgba(47, 111, 224,0); } 100% { box-shadow: 0 0 0 0 rgba(47, 111, 224,0); } }
 .ct-flow-arrow { color: var(--border); margin: 0 2px; }
 
 .ct-block { display: grid; gap: 8px; padding: 14px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); }
@@ -2582,3 +2585,56 @@ select.input:focus {
     flex-direction: column;
   }
 }
+
+/* ============================================================
+   Design-system primitives — mission-control component language
+   (KPI strip, status-as-text, agent orb, hairline lists).
+   Flat, hairline-structured; status is colored mono text, not pills.
+   ============================================================ */
+.kpi-strip {
+  display: flex; flex-wrap: wrap;
+  border: 1px solid var(--border); border-radius: var(--r-sm);
+  background: var(--surface); overflow: hidden;
+}
+.kpi-cell { flex: 1 1 150px; min-width: 150px; padding: 16px 18px; border-left: 1px solid var(--border); }
+.kpi-cell:first-child { border-left: 0; }
+.kpi-label { font-family: var(--mono); text-transform: uppercase; letter-spacing: 0.16em; font-size: 0.64rem; color: var(--muted); }
+.kpi-value { font-family: var(--display); font-weight: 800; font-size: 33px; line-height: 1.1; margin-top: 6px; letter-spacing: -0.01em; color: var(--ink); }
+.kpi-hint { font-size: 0.74rem; color: var(--muted); margin-top: 4px; }
+
+.status-text { font-family: var(--mono); text-transform: uppercase; font-weight: 700; letter-spacing: 0.06em; font-size: 0.72rem; display: inline-flex; align-items: center; gap: 7px; color: var(--muted); }
+.status-text::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; flex: none; }
+.status-text.pulse::before { animation: bx-pulse 2s ease-in-out infinite; }
+@keyframes bx-pulse { 0%,100% { transform: scale(1); opacity: 1; } 50% { transform: scale(1.55); opacity: 0.35; } }
+
+.hairline-list { display: flex; flex-direction: column; }
+.hairline-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 11px 16px; border-top: 1px solid var(--border); }
+.hairline-row:first-child { border-top: 0; }
+
+/* Agent orb — signature element: gradient body + Sora initials, ring shows state */
+.orb { width: 40px; height: 40px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center;
+  background: linear-gradient(140deg, #1E3A63, #122845); color: var(--ink); font-family: var(--display); font-weight: 700; font-size: 13px;
+  border: 1px solid var(--border-strong); flex: none; }
+.orb.running { box-shadow: 0 0 0 2px var(--teal, #2EC5C5); }
+.orb.verified { box-shadow: 0 0 0 2px var(--green); }
+.orb.blocked { box-shadow: 0 0 0 2px var(--red); }
+
+/* ============================================================
+   Phase 3 — Decision Queue / Approvals: flat hairline proposal
+   rows, status-as-mono-text, design Approve/Request/Reject buttons.
+   ============================================================ */
+.decision-list { border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--surface); overflow: hidden; display: flex; flex-direction: column; }
+.decision-card { border-top: 1px solid var(--border); border-radius: 0; background: transparent; padding: 20px 22px; }
+.decision-card:first-child { border-top: 0; }
+.decision-card::before { display: none; }
+.decision-card.empty { border: 1px solid var(--border); border-radius: var(--r-sm); }
+.decision-card .pill,
+.decision-card .pill.warn { background: transparent; border: 0; padding: 0; font-family: var(--mono); text-transform: uppercase; font-weight: 700; letter-spacing: 0.06em; font-size: 0.66rem; }
+.decision-card .pill { color: var(--muted); }
+.decision-card .pill.warn { color: var(--amber); }
+.decision-actions button[value="approve"] { background: transparent; border: 1px solid var(--green); color: var(--green); box-shadow: none; }
+.decision-actions button[value="approve"]:hover:not(:disabled) { background: rgba(52, 211, 153, 0.12); box-shadow: none; transform: none; }
+.decision-actions button[value="reject"] { background: transparent; border: 1px solid var(--red); color: var(--red); box-shadow: none; }
+.decision-actions button[value="reject"]:hover:not(:disabled) { background: rgba(242, 100, 122, 0.12); transform: none; }
+.decision-actions button[value="revise"] { background: transparent; border: 1px solid var(--border-strong); color: var(--ink-soft); box-shadow: none; }
+.decision-actions button[value="revise"]:hover:not(:disabled) { background: rgba(255, 255, 255, 0.06); transform: none; }

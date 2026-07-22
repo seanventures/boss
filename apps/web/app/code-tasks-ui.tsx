@@ -85,7 +85,19 @@ function PreviewControls({ runId, livePreviews = [] }: { runId: string; livePrev
       {state?.url && livePreviews.length === 0 ? (
         <a className="cap-btn primary" href={state.url} target="_blank" rel="noreferrer">Open preview ↗</a>
       ) : null}
-      {state?.error ? <span className="detail" style={{ color: "#f85149" }}>⚠ {state.error}</span> : null}
+      {/* Library/CLI build: no live URL — show the test-run result (passed) instead of an error. */}
+      {state?.note ? (
+        <details open className="detail" style={{ color: "#3fb950", width: "100%" }}>
+          <summary style={{ cursor: "pointer" }}>✓ Ran tests — passed (library build, no live app)</summary>
+          <pre style={{ whiteSpace: "pre-wrap", fontSize: 12, marginTop: 6, maxHeight: 320, overflow: "auto" }}>{state.note}</pre>
+        </details>
+      ) : null}
+      {state?.error ? (
+        <details open className="detail" style={{ color: "#f85149", width: "100%" }}>
+          <summary style={{ cursor: "pointer" }}>⚠ Preview / tests failed</summary>
+          <pre style={{ whiteSpace: "pre-wrap", fontSize: 12, marginTop: 6, maxHeight: 320, overflow: "auto" }}>{state.error}</pre>
+        </details>
+      ) : null}
     </span>
   );
 }

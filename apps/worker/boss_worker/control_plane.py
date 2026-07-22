@@ -32,9 +32,14 @@ class ControlPlaneClient:
         # Long-running jobs (software-factory PR proposals run the model + create a
         # GitHub PR + poll CI) can take a few minutes server-side. Keep connect short
         # but allow a generous read timeout so the worker doesn't abandon the call.
+        # read must exceed the LONGEST single control-plane call. A code.task runs the WHOLE
+        # governed pipeline (design → tests → implement → review → mutation → PR) in ONE
+        # request — many stages, each up to code_agent_timeout — so 900s was shorter than a
+        # real pipeline and the worker abandoned still-running jobs. The lease heartbeat keeps
+        # the lease alive; this keeps the HTTP call alive too.
         self._client = httpx.Client(
             base_url=self.base_url,
-            timeout=httpx.Timeout(connect=10.0, read=900.0, write=30.0, pool=30.0),
+            timeout=httpx.Timeout(connect=10.0, read=3600.0, write=30.0, pool=30.0),
             headers=headers,
         )
 
