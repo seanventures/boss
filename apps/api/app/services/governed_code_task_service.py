@@ -794,11 +794,20 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
         do_separate_tests = risk_tier >= 1
         do_review = risk_tier >= 2
 
+        # WEB-APP BUILDS: a deterministic Vite/React/TS scaffold where `npm run build` (tsc + vite)
+        # IS the test. The separate write_tests stage mis-generated Python unittest files for this
+        # JS project (polluting the branch), and design adds cost without value here. So the guest
+        # just implements on the scaffold and self-validates via the build command; keep review only
+        # when the tier explicitly asked for it (review=True -> tier 2).
+        is_web_app = bool(fctx.get("web_app_build"))
+        if is_web_app:
+            do_separate_tests = False
+
         # DESIGN PHASE (tier >= 2): standards -> spec -> plan -> review plan, BEFORE any code.
         # Spec-driven: the refined spec + plan are fed into the downstream coding steps. (The human
         # approve-plan gate is Wire-Phase 2b; for now review plan records a PLAN: OK/REVISE note.)
         design: dict = {}
-        do_design = risk_tier >= 2
+        do_design = risk_tier >= 2 and not is_web_app
         if do_design and resume_design:
             # Resuming after human plan approval — reuse the approved design, skip re-running it.
             design = resume_design
