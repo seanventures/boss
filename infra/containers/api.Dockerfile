@@ -19,6 +19,15 @@ RUN apt-get update \
     && npm cache clean --force \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
+# Playwright Chromium + its system libs, at a SHARED path readable by the non-root `boss` user:
+# the web verification target's e2e step (`npm run test:e2e`) must actually launch a browser —
+# without this it "runs" as a skip/failure the review panel can't execute, i.e. an unverifiable
+# check. Sandboxed projects resolve browsers via PLAYWRIGHT_BROWSERS_PATH (persisted as ENV).
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/pw-browsers
+RUN npx -y playwright install --with-deps chromium \
+    && chmod -R a+rX /opt/pw-browsers \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
 COPY apps/api/requirements.txt /tmp/api-requirements.txt
 RUN pip install --no-cache-dir --upgrade pip \
     && pip install --no-cache-dir -r /tmp/api-requirements.txt
