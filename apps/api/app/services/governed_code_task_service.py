@@ -33,6 +33,7 @@ from ..db import begin
 from ..schemas import FileChange
 from . import design_prompts, plane_sync, verification_target
 from .code_agent import make_code_agent
+from .model_rate_limiter import get_rate_limiter, provider_of, is_rate_limit_error
 from .code_task_service import (
     _fail,
     _persist_sandbox_id,
@@ -743,7 +744,19 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
             **_guest_engine_fields(settings, eng_name, model),
         }
         set_llm_context(stage=stage_name)
-        res = mv.run_code_task(guest_spec, tenant_id=project_id)
+        # BURST CONTROL (#111 extended to the guest lane): a whole guest build is one long,
+        # turn-dense Anthropic consumer. Dispatch it under the model rate limiter's per-provider
+        # slot so concurrent guest builds are bounded and a rolling-window burst can't happen.
+        # The guest surfaces a 429/usage-limit in its RESULT (not as an exception), so classify
+        # res.error too — that feeds the AIMD backoff (halve concurrency + wait) on the next call.
+        limiter = get_rate_limiter(settings)
+        provider = provider_of(eng_name)
+        with limiter.slot(provider):
+            res = mv.run_code_task(guest_spec, tenant_id=project_id)
+            if is_rate_limit_error(getattr(res, "error", None) or getattr(res, "summary", "")):
+                limiter.report_rate_limited(provider)
+            else:
+                limiter.report_ok(provider)
         if mv.last_sandbox_task_id:
             guest_vm_ids.append(mv.last_sandbox_task_id)
             with begin(engine) as c:
