@@ -6,6 +6,15 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
+# The LOCAL execution substrate runs working stages as subprocesses in THIS container, so the
+# worker needs the toolchains those stages shell out to: git (EphemeralSandbox clone/diff) and
+# node/npm (the web verification target: npm run build / typecheck / lint). Node 20 via NodeSource.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends git curl ca-certificates \
+    && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
 RUN addgroup --system boss && adduser --system --ingroup boss boss
 
 COPY apps/api/requirements.txt /tmp/api-requirements.txt

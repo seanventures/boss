@@ -26,8 +26,12 @@ PYTHON_TEST_CMD = "python3 -m unittest discover -v"
 
 # One shell command so it fits the pipeline's single-command model; `&&` short-circuits on the first
 # failure, so the repair evidence points at the earliest broken stage (compile before lint before e2e).
+# The install guard makes the target self-sufficient on a FRESH clone (authoritative re-runs can
+# happen in a clean tree where node_modules doesn't exist yet — without it, `npm run build` exits
+# 127 and the failure reads as the task's fault when it's the environment's).
+_WEB_INSTALL = "[ -d node_modules ] || npm install --no-audit --no-fund --loglevel=error"
 _WEB_STEPS = ["npm run build", "npm run typecheck", "npm run lint", "npm run test:e2e"]
-WEB_TEST_CMD = " && ".join(_WEB_STEPS)
+WEB_TEST_CMD = " && ".join([_WEB_INSTALL, *_WEB_STEPS])
 
 _WEB_KINDS = {"web", "spa", "frontend", "site", "landing", "nextjs", "vite"}
 
