@@ -211,7 +211,18 @@ def _run_agent(spec) -> str:
             cwd=WORK, timeout=spec.get("timeout", 900),
         )
         if rc != 0:
-            raise RuntimeError("claude agent failed: " + (e or o or "")[:300])
+            # NEVER raise with an empty message — a blank error makes every retry blind.
+            # rc<0 = killed by signal (in a small guest that's almost always the OOM killer);
+            # empty output with rc>0 usually means the CLI died before it could print.
+            detail = "\n".join(s for s in ((e or "").strip(), (o or "").strip()) if s)
+            if not detail:
+                if rc < 0:
+                    detail = (f"killed by signal {-rc} with no output — likely the guest OOM "
+                              f"killer or an external kill; check guest memory/timeout sizing")
+                else:
+                    detail = (f"exited {rc} with no output — the CLI died before printing; "
+                              f"check the claude binary, auth token, and guest resources")
+            raise RuntimeError(f"claude agent failed (rc={rc}): {detail[:300]}")
         try:
             return (json.loads(o).get("result") or "").strip()
         except Exception:
