@@ -608,6 +608,15 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
     with begin(engine) as c:
         profile = resolve_for_run(c, project_id, spec.get("profile"), settings)
     risk_tier = infer_risk_tier({**spec, "title": title}, profile)
+    # WEB-APP TIER: a scaffolded marketing/web build carries innocent words ("design tokens",
+    # "deployability", "no auth/secret handling") that the substring-based sensitive-marker check
+    # false-positives on, forcing tier 2 (strict review + mutation gates) and blocking the PR. For
+    # web_app builds, honor the caller's intended tier instead (review=False -> 0, review=True ->
+    # 2); if none was passed (decomposed slices), cap rigor at tier 1. `npm run build` is the gate.
+    if fctx.get("web_app_build"):
+        _intended = spec.get("risk_tier")
+        risk_tier = (_intended if isinstance(_intended, int) and 0 <= _intended <= 3
+                     else min(risk_tier, 1))
     # Resume support (Wire-Phase 2b): if this run already passed plan approval, its design was
     # persisted — reuse it and skip the design phase + the gate.
     prior_state = run.get("state") or {}

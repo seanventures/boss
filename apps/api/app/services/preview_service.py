@@ -300,7 +300,13 @@ def start_preview(engine, settings: Settings, run_id: str, *, ttl_minutes: int =
         )
 
     port_hint = _free_port()
-    env = {**os.environ, "PORT": str(port_hint), "HOST": "0.0.0.0", "PYTHONUNBUFFERED": "1"}
+    # Point HOME + the npm cache at the (writable) workdir: the container's /home/boss/.npm is
+    # owned by root (from the global claude-code install), so `npm install` in the preview would
+    # fail with EACCES ("chown -R 100:101 /home/boss/.npm"). Keeps all npm writes inside workdir.
+    env = {**os.environ, "PORT": str(port_hint), "HOST": "0.0.0.0", "PYTHONUNBUFFERED": "1",
+           "HOME": str(workdir), "npm_config_cache": str(workdir / ".npm-cache"),
+           "npm_config_fund": "false", "npm_config_audit": "false",
+           "npm_config_update_notifier": "false"}
     logf = open(log_path, "w")
     proc = subprocess.Popen(command, cwd=str(workdir), env=env, stdout=logf, stderr=subprocess.STDOUT,
                             stdin=subprocess.DEVNULL, start_new_session=True)
