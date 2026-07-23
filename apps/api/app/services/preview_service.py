@@ -16,6 +16,7 @@ import shutil
 import socket
 import subprocess
 import tempfile
+import threading
 import time
 import urllib.request
 from datetime import datetime, timedelta, timezone
@@ -570,6 +571,66 @@ def _docker_alive(container_id: Optional[str]) -> bool:
     return result.returncode == 0 and result.stdout.strip().lower() == "true"
 
 
+def _respawn_process_preview(engine, settings: Settings, preview_id: str) -> None:
+    """Re-launch a dead process-mode preview IN PLACE — same preview id, so its
+    /v1/previews/<id>/web URL survives an api restart/redeploy. Re-clones the branch, rebuilds,
+    serves, then flips the SAME row back to 'running' with the new pid/port. Runs in a background
+    thread (the clone+build takes ~60s) so it never blocks api boot."""
+    try:
+        with begin(engine) as c:
+            row = c.execute(text(
+                "SELECT run_id,repo,branch,build_substrate,expires_at FROM app_previews WHERE id=:id"
+            ), {"id": preview_id}).mappings().first()
+        if row is None:
+            return
+        repo_full = row["repo"] or ""
+        owner, _, repo = repo_full.partition("/")
+        branch = row["branch"]
+        if not owner or not repo or not branch:
+            return
+        PREVIEW_ROOT.mkdir(parents=True, exist_ok=True)
+        workdir = Path(tempfile.mkdtemp(prefix=f"{preview_id}-", dir=str(PREVIEW_ROOT)))
+        log_path = str(workdir / "_preview.log")
+        token = settings.github_token
+        clone_url = (f"https://x-access-token:{token}@github.com/{owner}/{repo}.git"
+                     if token else f"https://github.com/{owner}/{repo}.git")
+        clone = subprocess.run(
+            ["git", "clone", "--depth", "1", "--branch", branch, clone_url, str(workdir)],
+            capture_output=True, text=True, timeout=120)
+        if clone.returncode != 0:
+            return
+        command = _detect_command(workdir)
+        if not command:
+            return
+        port_hint = _free_port()
+        env = {**os.environ, "PORT": str(port_hint), "HOST": "0.0.0.0", "PYTHONUNBUFFERED": "1",
+               "HOME": str(workdir), "npm_config_cache": str(workdir / ".npm-cache"),
+               "npm_config_fund": "false", "npm_config_audit": "false",
+               "npm_config_update_notifier": "false"}
+        logf = open(log_path, "w")
+        proc = subprocess.Popen(command, cwd=str(workdir), env=env, stdout=logf,
+                                stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+                                start_new_session=True)
+        logf.close()
+        port = _discover_working_port(log_path, port_hint, timeout=180.0)
+        if port is None:
+            _kill(proc.pid)
+            return
+        url = f"http://127.0.0.1:{port}"
+        with begin(engine) as c:
+            c.execute(text(
+                "UPDATE app_previews SET status='running', pid=:pid, port=:port, url=:url, "
+                "log_path=:lg WHERE id=:id"),
+                {"pid": proc.pid, "port": port, "url": url, "lg": log_path, "id": preview_id})
+    except Exception:  # noqa: BLE001 — best-effort; a failed respawn just leaves it 'stopped'
+        return
+
+
+# How many dead process previews to auto-respawn on boot (newest first) — bounds the rebuild
+# cost so a restart with many historical previews doesn't stampede npm builds.
+_RESPAWN_ON_BOOT_LIMIT = 3
+
+
 def reconcile_previews(engine, settings: Settings) -> dict[str, int]:
     """Idempotently reconcile durable preview rows against their live substrate."""
     with begin(engine) as c:
@@ -581,13 +642,14 @@ def reconcile_previews(engine, settings: Settings) -> dict[str, int]:
     alive = stopped = expired = 0
     headers = ({"X-Sandbox-Token": settings.sandbox_token}
                if settings.sandbox_token else {})
+    respawn_candidates: list[str] = []   # dead process-mode previews to relaunch in place
     for raw in rows:
         row = dict(raw)
         expires_at = row.get("expires_at")
+        mode = row.get("mode") or "process"
         if expires_at and expires_at <= now:
             target_status = "expired"
         else:
-            mode = row.get("mode") or "process"
             substrate_alive = (
                 _docker_alive(row.get("container_id")) if mode == "docker"
                 else _url_ok(row.get("url") or "", headers=headers) if mode == "rootfs"
@@ -611,7 +673,24 @@ def reconcile_previews(engine, settings: Settings) -> dict[str, int]:
             expired += 1
         else:
             stopped += 1
-    return {"checked": len(rows), "running": alive, "stopped": stopped, "expired": expired}
+            # A process preview (web app) that died with the old container — respawn it IN PLACE so
+            # its URL survives the restart. rootfs/docker/test modes reconcile on their own.
+            if mode == "process":
+                respawn_candidates.append(row["id"])
+
+    # Bound the rebuild cost: only relaunch the newest few (they're the ones anyone is looking at).
+    respawned = 0
+    if respawn_candidates:
+        with begin(engine) as c:
+            ordered = [r[0] for r in c.execute(text(
+                "SELECT id FROM app_previews WHERE id = ANY(:ids) ORDER BY created_at DESC LIMIT :lim"
+            ), {"ids": respawn_candidates, "lim": _RESPAWN_ON_BOOT_LIMIT}).all()]
+        for pid in ordered:
+            threading.Thread(target=_respawn_process_preview, args=(engine, settings, pid),
+                             daemon=True).start()
+            respawned += 1
+    return {"checked": len(rows), "running": alive, "stopped": stopped, "expired": expired,
+            "respawning": respawned}
 
 
 def preview_log_snapshot(engine, preview_id: str, *, tail_chars: int = 12000) -> dict:
