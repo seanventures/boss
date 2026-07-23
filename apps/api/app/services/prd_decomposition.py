@@ -155,15 +155,20 @@ def start_decomposed_build(engine, settings: Settings, jobs, *, project_id: str,
     first, rest = tasks[0], tasks[1:]
     fctx = {"decomposition_plan": rest, "decomposition_index": 1, "decomposition_total": len(tasks)}
     task_base = base_branch
+    web_tests: list = []
     if root:  # build the first feature ON the seeded scaffold branch (shared lineage)
         fctx["root_run_id"] = root
+        # A scaffolded web build: `npm run build` IS the test, so downstream stages skip the
+        # separate (Python-defaulting) write_tests stage. Propagated to every chained task below.
+        fctx["web_app_build"] = True
+        web_tests = ["npm run build"]
         task_base = f"boss/code/{root}"
     with begin(engine) as c:
         run_id = start_code_task(
             c, project_id=project_id, task_id=task_id,
             title=f"[1/{len(tasks)}] {first['title']}",
             instructions=first["instructions"],
-            acceptance_criteria=first["acceptance_criteria"], test_commands=[],
+            acceptance_criteria=first["acceptance_criteria"], test_commands=web_tests,
             owner=owner, repo=repo, base_branch=task_base,
             finalize_ctx=fctx, jobs=jobs, profile=profile, risk_tier=risk_tier)
         emit_event(c, project_id, "prd.decomposed", "boss", "code_task_run", run_id,
@@ -255,12 +260,15 @@ def advance_decomposition(engine, settings: Settings, jobs, run_id: str) -> Opti
             instructions=("This task BUILDS ON the code already produced by the earlier tasks in "
                           "this project (present in your working tree on the shared branch). Add to "
                           "it; do not rebuild from scratch.\n\n" + nxt["instructions"]),
-            acceptance_criteria=nxt.get("acceptance_criteria") or [], test_commands=[],
+            acceptance_criteria=nxt.get("acceptance_criteria") or [],
+            test_commands=(["npm run build"] if fctx.get("web_app_build") else []),
             owner=spec.get("owner") or settings.target_github_owner,
             repo=spec.get("repo") or settings.target_github_repo,
             base_branch=spec.get("base_branch") or "main",
             finalize_ctx={"decomposition_plan": remaining, "decomposition_index": idx,
                           "decomposition_total": total, "root_run_id": root,
+                          # carry the web-app flag down the chain so every slice skips write_tests
+                          "web_app_build": bool(fctx.get("web_app_build")),
                           "attempt": int(fctx.get("attempt", 1))},
             jobs=jobs, profile=spec.get("profile"), risk_tier=spec.get("risk_tier"))
         emit_event(c, run["project_id"], "prd.decomposition_advanced", "boss", "code_task_run",
