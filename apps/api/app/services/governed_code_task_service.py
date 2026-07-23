@@ -59,6 +59,18 @@ from .software_factory import SoftwareFactoryService
 _DEFAULT_TEST_CMD = "python3 -m unittest discover -v"
 
 
+def _resolve_use_microvm(settings, spec: dict) -> bool:
+    """Substrate selection for the working stages. A per-run `spec.substrate` override wins —
+    it's how the retry fallback moves a run OFF a broken micro-VM path (degraded mode) without
+    a config change; else the project-level setting applies."""
+    spec_substrate = str((spec or {}).get("substrate") or "").lower()
+    if spec_substrate in ("local", "subprocess", "local_subprocess"):
+        return False
+    if spec_substrate in ("microvm", "firecracker"):
+        return True
+    return (settings.governed_sandbox_provider or "local").lower() in ("microvm", "firecracker")
+
+
 def _is_test_path(path: str) -> bool:
     # Recognize test files across languages — NOT just Python. Previously a JS/TS/Go/…
     # project's tests (e.g. foo.test.ts, foo.spec.tsx, __tests__/…) were not matched, so
@@ -703,8 +715,9 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
     # next stage's VM clones it. Judgment (design, review panel, gates, PR) stays here.
     # Constraint honored: the sandbox-service contract is one-shot submit->poll->release
     # (no live exec), and the guest never pushes — only the control plane writes git.
-    use_microvm = (settings.governed_sandbox_provider or "local").lower() in (
-        "microvm", "firecracker")
+    # Per-run override wins (set by the retry fallback after a micro-VM infra failure, or
+    # explicitly on the task); else the project-level setting applies.
+    use_microvm = _resolve_use_microvm(settings, spec)
     from .execution_substrate import normalize_build_substrate
     execution_substrate = normalize_build_substrate(
         "microvm" if use_microvm else "local"
@@ -1527,11 +1540,15 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
 
     except Exception as exc:  # noqa: BLE001 — fail the run gracefully on any agent/model error
         _finish_vms(success=False)  # retain stage VMs for root-causing via the console
+        # A blank reason makes every retry blind — always record at least the exception type
+        # and the substrate the run was on (that's the first question when root-causing).
+        reason = (str(exc).strip() or f"{type(exc).__name__} with no message")
+        reason = f"{reason} [substrate={execution_substrate}]"
         with begin(engine) as c:
-            _release(sf, c, project_id, reservation_id, f"governed code task error: {exc}")
+            _release(sf, c, project_id, reservation_id, f"governed code task error: {reason}")
             if guest_vm_ids:
                 _persist_sandbox_id(c, run_id, guest_vm_ids[-1])
-            return _fail(c, run_id, project_id, str(exc),
+            return _fail(c, run_id, project_id, reason,
                          failure_class="infra", reason_code="pipeline_exception")
     finally:
         # Request/worker threads are pooled — a stale run_id here would mis-attribute

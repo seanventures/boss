@@ -101,6 +101,7 @@ def start_code_task(
     jobs, profile: Optional[str] = None, risk_tier: Optional[int] = None,
     model_config: Optional[dict] = None, open_pr: Optional[bool] = None,
     repair_retries: Optional[int] = None, review_panel_size: Optional[int] = None,
+    substrate: Optional[str] = None,
 ) -> str:
     """Create the durable run row and enqueue the single `code.task` job."""
     run_id = make_id("crun")
@@ -110,6 +111,8 @@ def start_code_task(
         "test_commands": test_commands or [],
         "owner": owner, "repo": repo, "base_branch": base_branch,
     }
+    if substrate:  # per-run substrate override (retry fallback: microvm infra-failure -> local)
+        spec["substrate"] = substrate
     if profile:  # per-task cost/rigor override (else the project setting applies)
         spec["profile"] = profile
     if isinstance(risk_tier, int):
@@ -154,6 +157,29 @@ def retry_code_task(
     fctx_prev = prev.get("finalize_ctx") or {}
     attempt = int(fctx_prev.get("attempt", 1)) + 1
     root = fctx_prev.get("root_run_id") or run_id
+
+    # ---- Failure-loop guardrails (release blocker fix) -----------------------------------
+    # An `infra` failure is NOT the task's fault, so re-running the same task on the same
+    # broken substrate is a blind loop. Two mechanisms:
+    #   1. Substrate fallback: previous attempt died `infra` on the micro-VM substrate ->
+    #      this attempt runs the working stages on the LOCAL substrate (degraded mode, flagged).
+    #   2. Circuit breaker: already on local and still failing `infra` repeatedly -> refuse the
+    #      blind retry with a diagnosis instead of burning another expensive attempt.
+    prev_infra = (fctx_prev.get("failure_class") == "infra")
+    prev_substrate = (fctx_prev.get("execution_substrate") or "").lower()
+    substrate_override = spec.get("substrate")
+    substrate_fallback_note = ""
+    if prev_infra and prev_substrate == "microvm":
+        substrate_override = "local"
+        substrate_fallback_note = (
+            "NOTE: the previous attempt failed with an infrastructure error on the micro-VM "
+            "substrate; this attempt runs on the local substrate (degraded mode).")
+    elif prev_infra and prev_substrate == "local_subprocess" and attempt >= 3 and not fix_note:
+        raise ValueError(
+            f"circuit breaker: {attempt - 1} attempts in this lineage have failed with "
+            f"infrastructure errors (last: {str(prev.get('error') or '')[:200]!r}) and the run is "
+            "already on the local substrate. A blind retry will fail the same way — fix the "
+            "platform issue (see the error above) or pass an explicit fix_note to proceed.")
 
     work_branch = f"boss/code/{root}"
     pr_url = prev.get("pull_request_url")
@@ -205,6 +231,7 @@ def retry_code_task(
     history.append({
         "attempt": attempt, "parent_run_id": run_id, "prev_status": prev.get("status"),
         "fix_note": fix_note or "", "at": datetime.now(timezone.utc).isoformat(),
+        **({"substrate_fallback": substrate_fallback_note} if substrate_fallback_note else {}),
     })
 
     with begin(engine) as c:
@@ -222,6 +249,7 @@ def retry_code_task(
             model_config=spec.get("model_config"), open_pr=spec.get("open_pr"),
             repair_retries=(repair_retries if isinstance(repair_retries, int)
                             else spec.get("repair_retries")),
+            substrate=substrate_override,
         )
     return {"status": "queued", "run_id": new_id, "attempt": attempt,
             "parent_run_id": run_id, "root_run_id": root}
@@ -628,11 +656,13 @@ def run_code_task(engine, settings: Settings, jobs, run_id: str) -> dict:
         return {"status": "completed", "done": True, **proposal}
 
     except (SandboxError, RuntimeError) as exc:
+        # A blank reason makes every retry blind — always record at least the exception type.
+        reason = str(exc).strip() or f"{type(exc).__name__} with no message"
         with begin(engine) as c:
-            _release(sf, c, project_id, reservation_id, f"code task error: {exc}")
+            _release(sf, c, project_id, reservation_id, f"code task error: {reason}")
             # Retain + record the micro-VM so the failure can be root-caused in the console.
             _persist_sandbox_id(c, run_id, getattr(provider, "last_sandbox_task_id", None))
-            return _fail(c, run_id, project_id, str(exc),
+            return _fail(c, run_id, project_id, reason,
                          failure_class="infra", reason_code="pipeline_exception")
     finally:
         # Request/worker threads are pooled — a stale run_id here would mis-attribute
