@@ -382,6 +382,16 @@ def _persist_sandbox_id(connection, run_id: str, sbx_id: Optional[str]) -> None:
     )
 
 
+def classify_pipeline_exception(reason: str) -> tuple[str, str]:
+    """Map a pipeline exception onto the failure taxonomy. Most unexpected exceptions ARE infra
+    (platform's fault) — but an agent that exhausted its turn cap is a RECOVERABLE task-shaped
+    failure: retrying with more turns / on the existing branch is the fix, and it must NOT trigger
+    the infra substrate-fallback or circuit breaker."""
+    if "error_max_turns" in reason:
+        return "recoverable", "max_turns_exhausted"
+    return "infra", "pipeline_exception"
+
+
 def _fail(
     connection, run_id: str, project_id: str, reason: str, *, status: str = "failed",
     failure_class: str = "terminal", reason_code: str = "unknown",
@@ -658,12 +668,13 @@ def run_code_task(engine, settings: Settings, jobs, run_id: str) -> dict:
     except (SandboxError, RuntimeError) as exc:
         # A blank reason makes every retry blind — always record at least the exception type.
         reason = str(exc).strip() or f"{type(exc).__name__} with no message"
+        fclass, rcode = classify_pipeline_exception(reason)
         with begin(engine) as c:
             _release(sf, c, project_id, reservation_id, f"code task error: {reason}")
             # Retain + record the micro-VM so the failure can be root-caused in the console.
             _persist_sandbox_id(c, run_id, getattr(provider, "last_sandbox_task_id", None))
             return _fail(c, run_id, project_id, reason,
-                         failure_class="infra", reason_code="pipeline_exception")
+                         failure_class=fclass, reason_code=rcode)
     finally:
         # Request/worker threads are pooled — a stale run_id here would mis-attribute
         # the next job's (or run_research's) llm_calls rows.

@@ -1544,12 +1544,14 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
         # and the substrate the run was on (that's the first question when root-causing).
         reason = (str(exc).strip() or f"{type(exc).__name__} with no message")
         reason = f"{reason} [substrate={execution_substrate}]"
+        from .code_task_service import classify_pipeline_exception
+        fclass, rcode = classify_pipeline_exception(reason)
         with begin(engine) as c:
             _release(sf, c, project_id, reservation_id, f"governed code task error: {reason}")
             if guest_vm_ids:
                 _persist_sandbox_id(c, run_id, guest_vm_ids[-1])
             return _fail(c, run_id, project_id, reason,
-                         failure_class="infra", reason_code="pipeline_exception")
+                         failure_class=fclass, reason_code=rcode)
     finally:
         # Request/worker threads are pooled — a stale run_id here would mis-attribute
         # the next job's (or run_research's) llm_calls rows.
