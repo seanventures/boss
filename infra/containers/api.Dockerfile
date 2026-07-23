@@ -27,6 +27,11 @@ ENV PLAYWRIGHT_BROWSERS_PATH=/opt/pw-browsers
 RUN npx -y playwright install --with-deps chromium \
     && chmod -R a+rX /opt/pw-browsers \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
+# The npx above ran as root with HOME=/home/boss already set, leaving a ROOT-owned npm cache that
+# breaks every runtime `npm install` for the boss user ("chown -R 100:101 /home/boss/.npm").
+# Drop the stale cache (a separate tiny layer so the heavy browser layer above stays cached) —
+# npm recreates it owned by boss on first use.
+RUN rm -rf /home/boss/.npm /home/boss/.cache && chown -R boss:boss /home/boss
 
 COPY apps/api/requirements.txt /tmp/api-requirements.txt
 RUN pip install --no-cache-dir --upgrade pip \
