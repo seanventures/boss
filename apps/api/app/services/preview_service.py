@@ -62,6 +62,22 @@ def _detect_command(workdir: Path) -> Optional[list[str]]:
         if isinstance(configured, str) and configured.strip():
             return ["sh", "-lc", configured.strip()]
         scripts = payload.get("scripts") or {}
+        deps = {**(payload.get("dependencies") or {}), **(payload.get("devDependencies") or {})}
+        is_vite = ("vite" in deps or (workdir / "vite.config.ts").exists()
+                   or (workdir / "vite.config.js").exists())
+        # A Vite app: BUILD it and serve the STATIC output — do NOT run the dev server. The dev
+        # server emits origin-absolute ES-module imports (/node_modules/.vite/deps, /src, /@vite)
+        # that the browser resolves against the API origin root, NOT the /v1/previews/<id>/web
+        # proxy prefix, so every module 404s and the page renders blank. A production build bundles
+        # to RELATIVE-path assets (base=./) that resolve correctly under any proxy prefix via the
+        # injected <base href>. Served by Python's stdlib http.server (guaranteed present).
+        if is_vite and (scripts.get("build") or "vite" in deps):
+            return [
+                "sh", "-lc",
+                "npm install --no-audit --no-fund --loglevel=error && "
+                "npx vite build --base=./ && "
+                'python3 -m http.server "$PORT" --bind 0.0.0.0 --directory dist',
+            ]
         script = "dev" if scripts.get("dev") else "start" if scripts.get("start") else None
         if script:
             suffix = " -- --host 0.0.0.0" if script == "dev" else ""
@@ -312,7 +328,10 @@ def start_preview(engine, settings: Settings, run_id: str, *, ttl_minutes: int =
                             stdin=subprocess.DEVNULL, start_new_session=True)
     logf.close()
 
-    port = _discover_working_port(log_path, port_hint)
+    # Web builds do `npm install` + `vite build` before the static server binds — well past the
+    # default 20s window — so give discovery generous headroom (it returns as soon as the port
+    # answers, so this never slows the fast case).
+    port = _discover_working_port(log_path, port_hint, timeout=180.0)
     if port is None:
         _kill(proc.pid)
         tail = ""
