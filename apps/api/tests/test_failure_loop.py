@@ -119,3 +119,27 @@ def test_guest_agent_error_never_blank(monkeypatch, rc, o, e, needle):
     msg = str(ei.value)
     assert needle in msg and f"rc={rc}" in msg
     assert msg.strip() != "claude agent failed:"        # the old blind failure is impossible now
+
+
+# --- pipeline-exception classification ----------------------------------------
+def test_classify_pipeline_exception():
+    from apps.api.app.services.code_task_service import classify_pipeline_exception
+    # max-turns exhaustion is the TASK needing more turns — recoverable, no substrate fallback
+    fc, rc = classify_pipeline_exception(
+        'claude code agent exited 1: {"subtype":"error_max_turns","num_turns":41}')
+    assert (fc, rc) == ("recoverable", "max_turns_exhausted")
+    # anything else unexpected stays infra
+    assert classify_pipeline_exception("claude agent failed (rc=-9): killed by signal 9") == (
+        "infra", "pipeline_exception")
+
+
+def test_max_turns_retry_does_not_trip_breaker_or_fallback(engine):
+    with begin(engine) as c:
+        prev = _insert_failed_run(c, failure_class="recoverable", substrate="local_subprocess",
+                                  attempt=3, error="error_max_turns at 41")
+    out = retry_code_task(engine, get_settings(), JOBS, prev)     # no fix_note needed
+    assert out["status"] == "queued"
+    with begin(engine) as c:
+        spec = c.execute(text("SELECT spec FROM code_task_runs WHERE id=:id"),
+                         {"id": out["run_id"]}).scalar_one()
+    assert "substrate" not in spec                                # no fallback for task-shaped failures
