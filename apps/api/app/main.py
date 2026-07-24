@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import re
+import subprocess
 from secrets import compare_digest
 import time
 from collections import defaultdict, deque
@@ -5295,7 +5296,7 @@ def deploy_code_task_endpoint(run_id: str, payload: Optional[dict] = None):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
     p = payload or {}
     mode = str(p.get("mode", "dry_run")).lower()
-    from .services.deploy_service import plan_ssh_deploy, render_plan_markdown
+    from .services.deploy_service import deploy_ssh, plan_ssh_deploy, render_plan_markdown
     try:
         plan = plan_ssh_deploy(
             engine, settings, run_id,
@@ -5303,15 +5304,25 @@ def deploy_code_task_endpoint(run_id: str, payload: Optional[dict] = None):
             port=int(p.get("port", 8080)), user=str(p.get("user") or "root"))
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
-    if mode != "dry_run":
-        # Phase 2 actuation is deliberately not wired yet — never touch a real host without an
-        # explicit host+key and the ssh_host_deploy gate. Return the plan + the reason it's held.
-        raise HTTPException(status_code=501, detail={
-            "error": "ssh actuation not enabled",
-            "reason": ("Phase 2 (real SSH deploy) requires a host + BOSS_SSH_HOST_PRIVATE_KEY and "
-                       "BOSS_SSH_HOST_DEPLOY_ALLOWED=true. Here is the dry-run plan."),
+    if mode == "dry_run":
+        return {"plan": plan, "markdown": render_plan_markdown(plan)}
+
+    # mode == 'ssh' — actuate on a real host (Phase 2/3). Requires an explicit host, the SSH key,
+    # and the outward gate; otherwise return the plan + the reason it's held (never touch a host).
+    host = str(p.get("host") or "").strip()
+    if not host or host == "<HOST>":
+        raise HTTPException(status_code=422, detail="a real 'host' is required for mode='ssh'")
+    try:
+        result = deploy_ssh(
+            engine, settings, run_id, host=host, user=str(p.get("user") or "root"),
+            ssh_port=int(p.get("ssh_port", 22)), app_port=int(p.get("port", 8080)), name=p.get("name"))
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail={
+            "error": str(exc), "reason": "outward deploy gate off / no key",
             "plan": plan, "markdown": render_plan_markdown(plan)})
-    return {"plan": plan, "markdown": render_plan_markdown(plan)}
+    except (RuntimeError, OSError, subprocess.SubprocessError) as exc:
+        raise HTTPException(status_code=502, detail={"error": f"deploy failed: {exc}", "plan": plan})
+    return {"result": result, "plan": plan}
 
 
 @app.post("/v1/code-tasks/{run_id}/preview")
