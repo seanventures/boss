@@ -288,6 +288,14 @@ function GateRow({ label, ok, note, skipped }: { label: string; ok?: boolean; no
   );
 }
 
+function fmtDuration(ms: number): string {
+  const s = Math.max(0, Math.round(ms / 1000));
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  const rs = s % 60;
+  return rs ? `${m}m ${rs}s` : `${m}m`;
+}
+
 function CodeTaskDetail({ run, previews = [], onBack }: { run: CodeTaskRun; previews?: PreviewRec[]; onBack: () => void }) {
   const st = run.state ?? {};
   const tests = st.tests ?? [];
@@ -298,6 +306,14 @@ function CodeTaskDetail({ run, previews = [], onBack }: { run: CodeTaskRun; prev
     .slice(0, 1);
   const live = run.status === "running" || run.status === "queued";
   useLiveRefresh(live);
+  // Step timing: completed phases carry their duration; the current phase's elapsed is computed
+  // live from phase_started_at (re-renders every ~4s via useLiveRefresh, so it ticks up).
+  const _fc = (run.finalize_ctx ?? {}) as Record<string, unknown>;
+  const phaseTimings = (_fc.phase_timings as { ms: number; phase: string }[] | undefined) ?? [];
+  const _phaseStartedAt = _fc.phase_started_at as string | undefined;
+  const currentPhaseMs = live && _phaseStartedAt
+    ? Math.max(0, Date.now() - new Date(_phaseStartedAt).getTime()) : null;
+  const totalMs = phaseTimings.reduce((s, t) => s + (t.ms || 0), 0) + (currentPhaseMs ?? 0);
   const hasGateEvidence = Boolean(
     st.review_summary || st.adversarial_verdict || st.security_verdict || st.qa_summary || st.impl_summary,
   );
@@ -330,8 +346,32 @@ function CodeTaskDetail({ run, previews = [], onBack }: { run: CodeTaskRun; prev
       {live ? (
         <div className="detail" style={{ margin: "8px 0", color: "#58a6ff", fontWeight: 600 }}>
           <span style={{ animation: "pulse 1.5s infinite" }}>●</span>{" "}
-          {PHASE_LABEL[run.phase] ?? run.phase} — in progress…{" "}
+          {PHASE_LABEL[run.phase] ?? run.phase} — running {currentPhaseMs != null ? fmtDuration(currentPhaseMs) : "…"}{" "}
           <span className="detail" style={{ fontWeight: 400 }}>(auto‑refreshing every 4s)</span>
+        </div>
+      ) : null}
+
+      {(phaseTimings.length > 0 || currentPhaseMs != null) ? (
+        <div className="ct-block" style={{ margin: "8px 0" }}>
+          <div className="ct-block-title">Step timing</div>
+          <div style={{ display: "grid", gap: 4, marginTop: 6 }}>
+            {phaseTimings.map((t, i) => (
+              <div key={i} style={{ display: "flex", justifyContent: "space-between", fontSize: 13 }}>
+                <span style={{ color: "var(--ink)" }}>✓ {PHASE_LABEL[t.phase] ?? t.phase}</span>
+                <span className="detail">{fmtDuration(t.ms)}</span>
+              </div>
+            ))}
+            {live && currentPhaseMs != null ? (
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13 }}>
+                <span style={{ color: "#58a6ff", fontWeight: 600 }}>● {PHASE_LABEL[run.phase] ?? run.phase} (running)</span>
+                <span style={{ color: "#58a6ff", fontWeight: 600 }}>{fmtDuration(currentPhaseMs)}</span>
+              </div>
+            ) : null}
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, borderTop: "1px solid var(--border)", paddingTop: 4, marginTop: 2 }}>
+              <span style={{ color: "var(--muted)" }}>Total{live ? " so far" : ""}</span>
+              <span className="detail">{fmtDuration(totalMs)}</span>
+            </div>
+          </div>
         </div>
       ) : null}
 
