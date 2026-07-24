@@ -274,12 +274,16 @@ function NewCodeTaskForm({ projectId, defaultOwner, defaultRepo }: {
   );
 }
 
-function GateRow({ label, ok, note }: { label: string; ok?: boolean; note?: string }) {
+// Three states, not two: passed (green ✓), failed (red ✗), or NOT RUN (muted –). A skipped
+// check must never read as a failure — that's what made a lean build look like it "failed".
+function GateRow({ label, ok, note, skipped }: { label: string; ok?: boolean; note?: string; skipped?: boolean }) {
+  const mark = skipped ? "–" : ok ? "✓" : "✗";
+  const color = skipped ? "var(--muted)" : ok ? "#3fb950" : "#f85149";
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13 }}>
-      <span style={{ color: ok ? "#3fb950" : "#f85149", fontWeight: 700, width: 14, textAlign: "center" }}>{ok ? "✓" : "✗"}</span>
-      <span style={{ color: "var(--ink)" }}>{label}</span>
-      {note ? <span className="detail">— {note}</span> : null}
+      <span style={{ color, fontWeight: 700, width: 14, textAlign: "center" }}>{mark}</span>
+      <span style={{ color: skipped ? "var(--muted)" : "var(--ink)" }}>{label}</span>
+      <span className="detail">— {skipped ? (note && note !== "skipped" ? note : "not run at this rigor") : (note || (ok ? "passed" : "needs attention"))}</span>
     </div>
   );
 }
@@ -342,17 +346,23 @@ function CodeTaskDetail({ run, previews = [], onBack }: { run: CodeTaskRun; prev
       {hasGateEvidence ? (
         <div className="ct-block">
           <div className="ct-block-title">
-            Review &amp; quality gate{" "}
+            Steps &amp; quality checks{" "}
             <span className={`cap-badge tone-${gateTone}`}>{gateLabel}</span>
           </div>
+          {(run.finalize_ctx?.advisory_failing_gates as unknown[] | undefined)?.length ? (
+            <p className="detail" style={{ marginTop: 4 }}>
+              ⓘ First-pass build: quality checks below are <b>advisory</b> — a ✗ did not block the PR.
+              Shipped so you can preview now; use <b>Retry</b> to improve and clear the ✗.
+            </p>
+          ) : null}
           <div style={{ display: "grid", gap: 6, margin: "8px 0" }}>
-            <GateRow label="Written tests pass" ok={st.tests_passed} note={st.test_exit_code != null ? `exit ${st.test_exit_code}` : undefined} />
-            <GateRow label="Code review (adversarial)" ok={st.adversarial_verdict === "survived"} note={st.adversarial_verdict} />
-            <GateRow label="Security clean" ok={st.security_verdict === "clean"} note={st.security_verdict} />
-            <GateRow label="No regressions" ok={st.regressions_ok} note={st.mutation_caught ? "mutation caught" : undefined} />
-            {st.consistency_verdict ? (
-              <GateRow label="Consistency" ok={["consistent", "pass", "survived"].includes(st.consistency_verdict)} note={st.consistency_verdict} />
-            ) : null}
+            <GateRow label="Code built / tests pass" ok={st.tests_passed} skipped={st.tests_passed == null && st.test_exit_code == null} note={st.test_exit_code != null ? `exit ${st.test_exit_code}` : undefined} />
+            <GateRow label="Code review (adversarial)" ok={st.adversarial_verdict === "survived"} skipped={!st.adversarial_verdict || st.adversarial_verdict === "skipped" || st.adversarial_verdict === "not_run"} note={st.adversarial_verdict} />
+            <GateRow label="Security clean" ok={st.security_verdict === "clean"} skipped={!st.security_verdict || st.security_verdict === "skipped" || st.security_verdict === "not_run"} note={st.security_verdict} />
+            <GateRow label="No regressions" ok={st.regressions_ok} skipped={st.regressions_ok == null} note={st.mutation_caught ? "mutation caught" : undefined} />
+            <GateRow label="Consistency" ok={["consistent", "pass", "survived"].includes(st.consistency_verdict)} skipped={!st.consistency_verdict || st.consistency_verdict === "skipped"} note={st.consistency_verdict} />
+            <GateRow label="Pull request opened" ok={!!run.pull_request_url} skipped={!run.pull_request_url && run.status !== "completed"} note={run.pull_request_number ? `PR #${run.pull_request_number}` : undefined} />
+            <GateRow label="Preview available" ok={livePreviews.length > 0} skipped={livePreviews.length === 0} note={livePreviews.length > 0 ? "running — open below" : "run a preview"} />
           </div>
           <p className="detail">
             Independent reviewer: {st.reviewer_independent ? "yes" : "no"} · Independent test author:{" "}
