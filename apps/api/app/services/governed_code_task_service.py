@@ -68,11 +68,15 @@ def _resolve_use_microvm(settings, spec: dict) -> bool:
         return False
     if spec_substrate in ("microvm", "firecracker"):
         return True
-    # Substrate is operator-chosen via governed_sandbox_provider (default 'local' = the in-container
-    # local_subprocess sandbox). NOTE: the in-container path does NOT survive an api restart (a
-    # deploy / platform self-deploy / OOM kills the in-flight build), so avoid restarting the api
-    # while a build runs. The isolated micro-VM survives restarts but is opt-in here.
-    return (settings.governed_sandbox_provider or "local").lower() in ("microvm", "firecracker")
+    # Prefer the ISOLATED micro-VM whenever a sandbox-service is configured. Running builds in the
+    # api container (local_subprocess) starves the api under load -> 404 flapping -> failed model/
+    # review calls -> crashed builds (a vicious cycle proven repeatedly). The micro-VM runs each
+    # build in its own Firecracker VM, so the api stays responsive, the 2700s cap applies, and the
+    # build survives an api restart. Honor EITHER provider knob so the working sandbox
+    # (sandbox_provider=microvm) is used even when governed_sandbox_provider is left at 'local'.
+    providers = ((settings.governed_sandbox_provider or "local").lower(),
+                 (getattr(settings, "sandbox_provider", "local") or "local").lower())
+    return any(p in ("microvm", "firecracker") for p in providers)
 
 
 def _is_test_path(path: str) -> bool:
