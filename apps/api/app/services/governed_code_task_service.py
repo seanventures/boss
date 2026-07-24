@@ -828,15 +828,22 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
         # code + tests; tier >=1 = a separate tester; tier >=2 = add a fresh-context code review.
         do_separate_tests = risk_tier >= 1
         do_review = risk_tier >= 2
+        # ADVISORY GATE: when True, failing quality checks are SURFACED but do NOT block the PR —
+        # the build still ships a PR + preview and the user retries-to-improve. Quality feedback
+        # without a dead-end (product decision: always produce a result on the first pass).
+        advisory_gate = False
 
         # WEB-APP BUILDS: a deterministic Vite/React/TS scaffold where `npm run build` (tsc + vite)
         # IS the test. The separate write_tests stage mis-generated Python unittest files for this
-        # JS project (polluting the branch), and design adds cost without value here. So the guest
-        # just implements on the scaffold and self-validates via the build command; keep review only
-        # when the tier explicitly asked for it (review=True -> tier 2).
+        # JS project (polluting the branch), and design adds cost without value here — so those stay
+        # off. But we DO run the adversarial/security/consistency review for a quality SIGNAL, made
+        # ADVISORY on a first pass (review=False -> tier < 2) so it never blocks the PR; review=True
+        # (tier 2) keeps the checks BLOCKING for a hardened pass.
         is_web_app = bool(fctx.get("web_app_build"))
         if is_web_app:
             do_separate_tests = False
+            do_review = True
+            advisory_gate = risk_tier < 2
 
         # DESIGN PHASE (tier >= 2): standards -> spec -> plan -> review plan, BEFORE any code.
         # Spec-driven: the refined spec + plan are fed into the downstream coding steps. (The human
@@ -1438,6 +1445,19 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
 
         if qg_status != "pass":
             failing = [k for k, v in gates.items() if not v]
+            if failing and advisory_gate:
+                # ADVISORY first pass: surface the failing checks (their verdicts are already
+                # recorded on the run, so the UI shows exactly which failed) but PROCEED to open the
+                # PR + preview. No block, no dead-end — the user retries-to-improve when they want.
+                with begin(engine) as c:
+                    c.execute(text(
+                        "UPDATE code_task_runs SET finalize_ctx=COALESCE(finalize_ctx,'{}'::jsonb) "
+                        "|| jsonb_build_object('advisory_failing_gates', CAST(:f AS JSONB)), "
+                        "updated_at=now() WHERE id=:id"),
+                        {"f": json.dumps(failing), "id": run_id})
+                    emit_event(c, project_id, "code_task.gate_advisory", "boss",
+                               "code_task_run", run_id, {"advisory_failing_gates": failing})
+                failing = []  # treat as pass for flow control — ship the PR, keep the signal
             # AUTONOMOUS REVIEW-REPAIR (BOSS's moat: agents converge in a loop, not a human). EVERY
             # failure that reaches this quality gate is a code-quality issue a fresh full re-run with
             # the findings fed back can plausibly fix — failing tests, a regression, an adversarial
