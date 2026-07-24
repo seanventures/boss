@@ -13,12 +13,20 @@ host only needs Docker (which ssh_host_adapter already assumes) — nothing else
 """
 from __future__ import annotations
 
+import os
 import re
+import shlex
+import shutil
+import subprocess
+import tempfile
+import time
+from pathlib import Path
 from typing import Optional
 
 from ..config import Settings
 from ..db import begin
 from .code_task_service import load_code_task_run
+from .core import emit_event
 
 
 def _app_name(repo: str, name: Optional[str]) -> str:
@@ -106,3 +114,113 @@ def render_plan_markdown(plan: dict) -> str:
     lines += [f"- {p}" for p in plan["prerequisites"]]
     lines += ["", f"> {plan['note']}"]
     return "\n".join(lines)
+
+
+# --- Phase 2 (actuate) + Phase 3 (health-gate + rollback) --------------------------------------
+def _ssh_key_file(settings: Settings) -> str:
+    key = (getattr(settings, "ssh_host_private_key", "") or "").strip()
+    if not key:
+        raise RuntimeError("BOSS_SSH_HOST_PRIVATE_KEY is not set (SecretRef required to reach the host)")
+    fd, path = tempfile.mkstemp(suffix=".pem")
+    with os.fdopen(fd, "w") as h:
+        h.write(key if key.endswith("\n") else key + "\n")
+    os.chmod(path, 0o600)
+    return path
+
+
+def _ssh(key_path: str, host: str, user: str, port: int, command: str, timeout: int = 180):
+    return subprocess.run(
+        ["ssh", "-i", key_path, "-o", "StrictHostKeyChecking=no", "-o", "BatchMode=yes",
+         "-p", str(port), f"{user}@{host}", command],
+        capture_output=True, text=True, timeout=timeout)
+
+
+def _resolve_repo_branch(run: dict, settings: Settings) -> tuple[str, str, str]:
+    spec = run.get("spec") or {}
+    owner = spec.get("owner") or settings.target_github_owner
+    repo = spec.get("repo") or settings.target_github_repo
+    fctx = run.get("finalize_ctx") or {}
+    branch = fctx.get("work_branch") or f"boss/code/{fctx.get('root_run_id') or run['id']}"
+    return owner, repo, branch
+
+
+def _build_dist(settings: Settings, owner: str, repo: str, branch: str) -> Path:
+    """Clone the run's branch and `npm run build` -> ./dist (in-container Node; no docker)."""
+    token = settings.github_token
+    url = (f"https://x-access-token:{token}@github.com/{owner}/{repo}.git" if token
+           else f"https://github.com/{owner}/{repo}.git")
+    work = Path(tempfile.mkdtemp(prefix="boss-deploy-"))
+    subprocess.run(["git", "clone", "--depth", "1", "--branch", branch, url, str(work)],
+                   capture_output=True, text=True, timeout=180, check=True)
+    env = {**os.environ, "HOME": str(work), "npm_config_cache": str(work / ".npm"),
+           "npm_config_fund": "false", "npm_config_audit": "false"}
+    subprocess.run(["sh", "-lc", "npm ci --no-audit --no-fund && npm run build"],
+                   cwd=str(work), env=env, capture_output=True, text=True, timeout=900, check=True)
+    if not (work / "dist").is_dir():
+        raise RuntimeError("build did not produce ./dist")
+    return work
+
+
+def deploy_ssh(engine, settings: Settings, run_id: str, *, host: str, user: str = "root",
+               ssh_port: int = 22, app_port: int = 8080, name: Optional[str] = None) -> dict:
+    """Actuate the deploy plan on a real host: build dist -> transfer -> nginx -> health-gate.
+    On a failed health check, ROLL BACK to the previously-staged build (Phase 3). Gated behind the
+    outward-action flag + an SSH key; NEVER touches a host otherwise."""
+    if not bool(getattr(settings, "ssh_host_deploy_allowed", False)):
+        raise PermissionError("BOSS_SSH_HOST_DEPLOY_ALLOWED is false — the outward deploy gate is off")
+    with begin(engine) as c:
+        run = load_code_task_run(c, run_id)
+    if run is None:
+        raise ValueError(f"code task run not found: {run_id}")
+    owner, repo, branch = _resolve_repo_branch(run, settings)
+    project_id = run["project_id"]
+    app = _app_name(repo, name)
+    remote = f"/opt/boss-apps/{app}"
+    key_path = _ssh_key_file(settings)
+    work: Optional[Path] = None
+    try:
+        work = _build_dist(settings, owner, repo, branch)                       # 1 build
+        ct = _ssh(key_path, host, user, ssh_port, "docker version --format '{{.Server.Version}}'")
+        if ct.returncode != 0:                                                  # 2 connection test
+            raise RuntimeError(f"host unreachable or docker missing: {(ct.stderr or '')[:200]}")
+        _ssh(key_path, host, user, ssh_port,                                    # 3 stage previous
+             f"mkdir -p {remote} && ([ -d {remote}/dist ] && rm -rf {remote}/dist.prev && "
+             f"cp -a {remote}/dist {remote}/dist.prev || true)")
+        tar = subprocess.run(                                                   # 4 transfer (tar|ssh)
+            f"tar czf - -C {shlex.quote(str(work))} dist | ssh -i {shlex.quote(key_path)} "
+            f"-o StrictHostKeyChecking=no -o BatchMode=yes -p {ssh_port} {user}@{host} "
+            f"'rm -rf {remote}/dist && mkdir -p {remote} && tar xzf - -C {remote}'",
+            shell=True, capture_output=True, text=True, timeout=600)
+        if tar.returncode != 0:
+            raise RuntimeError(f"transfer failed: {(tar.stderr or '')[:200]}")
+        dep = _ssh(key_path, host, user, ssh_port,                              # 5 deploy nginx
+                   f"docker rm -f {app} 2>/dev/null; docker run -d --name {app} "
+                   f"--restart unless-stopped -p {app_port}:80 "
+                   f"-v {remote}/dist:/usr/share/nginx/html:ro nginx:alpine")
+        if dep.returncode != 0:
+            raise RuntimeError(f"docker run failed: {(dep.stderr or '')[:200]}")
+        time.sleep(3)
+        hc = _ssh(key_path, host, user, ssh_port,                              # 6 health gate
+                  f"curl -fsS -o /dev/null -w '%{{http_code}}' http://localhost:{app_port}/")
+        code = (hc.stdout or "").strip()
+        if not code.startswith("2"):                                           # 3(Phase3) rollback
+            _ssh(key_path, host, user, ssh_port,
+                 f"[ -d {remote}/dist.prev ] && rm -rf {remote}/dist && mv {remote}/dist.prev "
+                 f"{remote}/dist && docker restart {app} || true")
+            with begin(engine) as c:
+                emit_event(c, project_id, "deploy.rolled_back", "boss", "code_task_run", run_id,
+                           {"app": app, "host": host, "health": code})
+            return {"status": "rolled_back", "app": app, "host": host, "health": code,
+                    "detail": f"health check returned {code or 'no response'}; rolled back to previous build"}
+        url = f"http://{host}:{app_port}/"
+        with begin(engine) as c:
+            emit_event(c, project_id, "deploy.succeeded", "boss", "code_task_run", run_id,
+                       {"app": app, "host": host, "url": url, "health": code})
+        return {"status": "deployed", "app": app, "host": host, "url": url, "health": code}
+    finally:
+        try:
+            os.unlink(key_path)
+        except OSError:
+            pass
+        if work is not None:
+            shutil.rmtree(work, ignore_errors=True)
