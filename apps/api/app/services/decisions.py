@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import threading
 from typing import Any, Optional
 
 from sqlalchemy import text
@@ -790,30 +791,40 @@ class DecisionService:
         raw_title = str(args.get("title") or "Code task")
         title = raw_title[5:].strip() if raw_title.startswith("PRD: ") else raw_title
         prd_markdown = args.get("markdown") or ""
-        from .code_task_service import start_code_task
+        directive = prd_markdown or f"Implement the approved plan: {title}"
 
-        run_id = start_code_task(
-            connection,
-            project_id=row["project_id"],
-            task_id=task_id,
-            title=title or "Code task",
-            instructions=prd_markdown or f"Implement the approved plan: {title}",
-            acceptance_criteria=[],
-            test_commands=[],
-            owner=owner,
-            repo=repo,
-            base_branch="main",
-            finalize_ctx={},
-            jobs=self.jobs,
-        )
+        # Route the approved PRD through a DECOMPOSED build, NOT one giant governed code task.
+        # Dumping a whole multi-feature PRD into a single task mis-routes and produces sprawling
+        # code that fails the quality gate; start_decomposed_build seeds a web scaffold (for web
+        # apps) and decomposes into scoped, chained slices (the path that actually lands). It makes
+        # an LLM decompose call, so run it OFF the approve request thread (mirrors start_discovery).
+        project_id = row["project_id"]
+        settings = self.settings
+        jobs = self.jobs
+
+        def _launch_decomposed_build() -> None:
+            try:
+                from ..db import get_engine
+                from .prd_decomposition import start_decomposed_build
+
+                start_decomposed_build(
+                    get_engine(), settings, jobs,
+                    project_id=project_id, task_id=task_id,
+                    prd_or_directive=directive, owner=owner, repo=repo, base_branch="main",
+                )
+            except Exception:  # noqa: BLE001 — best-effort; failure is visible via run status
+                return
+
+        threading.Thread(target=_launch_decomposed_build, daemon=True).start()
         emit_event(
             connection,
             row["project_id"],
             "code_task.started_from_prd",
             actor,
-            "code_task_run",
-            run_id,
-            {"decision_id": row["id"], "task_id": task_id, "title": title},
+            "task",
+            task_id,
+            {"decision_id": row["id"], "task_id": task_id, "title": title,
+             "mode": "decomposed_build"},
         )
 
     def _pull_request_ci_gate(
