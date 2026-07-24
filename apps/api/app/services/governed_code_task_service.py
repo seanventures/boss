@@ -1449,12 +1449,13 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
                 c, run_id=run_id, project_id=project_id, task_id=task_id, job_id=job_id,
                 evidence=evidence, gates=gates)
 
-        if qg_status != "pass":
+        # ADVISORY first pass (web build, review=False): a failing quality check is SURFACED
+        # (advisory_failing_gates → shown in the UI) but must NOT block. Record it and FALL THROUGH
+        # to the PR-open path below so there's always a result to iterate on. (The earlier bug set
+        # failing=[] but stayed inside the `!= pass` block, so it still blocked with an empty list.)
+        if qg_status != "pass" and advisory_gate:
             failing = [k for k, v in gates.items() if not v]
-            if failing and advisory_gate:
-                # ADVISORY first pass: surface the failing checks (their verdicts are already
-                # recorded on the run, so the UI shows exactly which failed) but PROCEED to open the
-                # PR + preview. No block, no dead-end — the user retries-to-improve when they want.
+            if failing:
                 with begin(engine) as c:
                     c.execute(text(
                         "UPDATE code_task_runs SET finalize_ctx=COALESCE(finalize_ctx,'{}'::jsonb) "
@@ -1463,7 +1464,9 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
                         {"f": json.dumps(failing), "id": run_id})
                     emit_event(c, project_id, "code_task.gate_advisory", "boss",
                                "code_task_run", run_id, {"advisory_failing_gates": failing})
-                failing = []  # treat as pass for flow control — ship the PR, keep the signal
+
+        if qg_status != "pass" and not advisory_gate:
+            failing = [k for k, v in gates.items() if not v]
             # AUTONOMOUS REVIEW-REPAIR (BOSS's moat: agents converge in a loop, not a human). EVERY
             # failure that reaches this quality gate is a code-quality issue a fresh full re-run with
             # the findings fed back can plausibly fix — failing tests, a regression, an adversarial

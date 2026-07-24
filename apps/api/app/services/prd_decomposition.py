@@ -218,7 +218,17 @@ def start_web_app_build(engine, settings: Settings, jobs, *, project_id: str,
         "• PAYMENTS (Stripe): add a 'Buy / Book / Pay' button that opens a Stripe Payment Link — put "
         "the URL in a clearly-marked config const (e.g. STRIPE_PAYMENT_LINK = 'https://buy.stripe.com/"
         "test_XXXX') for the owner to replace. NO backend needed. (Only if a real cart/dynamic price "
-        "is required, note that a serverless checkout endpoint would be a follow-up.)\n\n"
+        "is required, note that a serverless checkout endpoint would be a follow-up.)\n"
+        "• DATABASE / PERSISTENCE (Supabase): if the app must SAVE data (leads, quote/booking "
+        "requests, form submissions, results) use Supabase (`@supabase/supabase-js`, add it to "
+        "package.json) — a hosted Postgres the frontend talks to DIRECTLY, NO backend server. Put "
+        "the keys in clearly-marked consts for the owner to replace:\n"
+        "    const SUPABASE_URL = 'https://YOUR_PROJECT.supabase.co'; // TODO owner replaces\n"
+        "    const SUPABASE_ANON_KEY = 'YOUR_ANON_KEY'; // TODO owner replaces\n"
+        "  Create the client and `insert` submissions into a table (e.g. 'leads'). CRITICAL: if the "
+        "keys are still the YOUR_… placeholders, DO NOT call Supabase — keep the mock success state "
+        "so the app still builds and works out of the box; only hit the DB once real keys are set. "
+        "Leave a code comment noting the SQL for the table the owner should create.\n\n"
         "THE APP TO BUILD:\n" + directive)
     with begin(engine) as c:
         run_id = start_code_task(
