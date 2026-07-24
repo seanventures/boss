@@ -5284,6 +5284,36 @@ def override_code_task_endpoint(run_id: str, payload: dict):
         raise HTTPException(status_code=400, detail=str(exc))
 
 
+@app.post("/v1/code-tasks/{run_id}/deploy")
+def deploy_code_task_endpoint(run_id: str, payload: Optional[dict] = None):
+    """Deploy a sandbox-built app to a customer's own host (governed SSH-host path).
+
+    Phase 1: mode='dry_run' (default) returns the exact deploy PLAN — steps, SSH/docker commands,
+    health check, rollback — WITHOUT touching any host. Phase 2 (mode='ssh') will actuate via
+    ssh_host_adapter once a host + SSH key are provided and the outward-action gate is enabled."""
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    p = payload or {}
+    mode = str(p.get("mode", "dry_run")).lower()
+    from .services.deploy_service import plan_ssh_deploy, render_plan_markdown
+    try:
+        plan = plan_ssh_deploy(
+            engine, settings, run_id,
+            host=str(p.get("host") or "<HOST>"), name=p.get("name"),
+            port=int(p.get("port", 8080)), user=str(p.get("user") or "root"))
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    if mode != "dry_run":
+        # Phase 2 actuation is deliberately not wired yet — never touch a real host without an
+        # explicit host+key and the ssh_host_deploy gate. Return the plan + the reason it's held.
+        raise HTTPException(status_code=501, detail={
+            "error": "ssh actuation not enabled",
+            "reason": ("Phase 2 (real SSH deploy) requires a host + BOSS_SSH_HOST_PRIVATE_KEY and "
+                       "BOSS_SSH_HOST_DEPLOY_ALLOWED=true. Here is the dry-run plan."),
+            "plan": plan, "markdown": render_plan_markdown(plan)})
+    return {"plan": plan, "markdown": render_plan_markdown(plan)}
+
+
 @app.post("/v1/code-tasks/{run_id}/preview")
 def start_preview_endpoint(run_id: str, payload: Optional[dict] = None):
     """Preview a built app from retained rootfs, Docker, or a managed host process."""
