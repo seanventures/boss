@@ -511,6 +511,7 @@ export function CodeTasksHome({ projectId, codeTasks, apiReachable, previews = [
 }) {
   const [selected, setSelected] = useState<string | null>(null);
   const [showNew, setShowNew] = useState(false);
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
   // Live-refresh while any task is queued/running so phases update without a manual reload.
   const anyLive = codeTasks.some((c) => c.status === "running" || c.status === "queued");
   useLiveRefresh(anyLive);
@@ -545,45 +546,95 @@ export function CodeTasksHome({ projectId, codeTasks, apiReachable, previews = [
         <p className="detail">No code tasks yet. Start one — the agent clones the repo, edits files, runs your tests, and opens a gated PR.</p>
       ) : (
         <div style={{ display: "grid", gap: 10 }}>
-          {codeTasks.map((c, i) => {
-            const st = c.state ?? {};
-            const failing = (c.error ?? "").match(/failing gates: (\[[^\]]*\])/)?.[1];
-            // One-line outcome so the row says what happened, not just the status.
-            let outcome: string;
-            if (c.status === "completed") {
-              const gp = [
-                st.tests_passed ? "tests ✓" : null,
-                st.adversarial_verdict === "survived" ? "review ✓" : null,
-                st.security_verdict === "clean" ? "security ✓" : null,
-                st.mutation_caught ? "mutation ✓" : null,
-              ].filter(Boolean).join(" · ");
-              outcome = gp || "all gates passed";
-            } else if (c.status === "blocked" && c.phase === "awaiting_gate_override") {
-              outcome = `⚖ gate blocked — ${failing ? `failing: ${failing}` : "needs override/retry"}`;
-            } else if (c.status === "failed" || c.status === "blocked") {
-              outcome = failing ? `✗ failing: ${failing}` : (c.error ?? c.status).slice(0, 80);
-            } else {
-              outcome = `running — ${PHASE_LABEL[c.phase] ?? c.phase}`;
-            }
-            return (
-              <button key={c.id} className="ct-card" onClick={() => setSelected(c.id)} style={{ gap: 6 }}>
-                <div style={{ display: "flex", gap: 10, alignItems: "flex-start", justifyContent: "space-between" }}>
-                  <div style={{ fontWeight: 700, fontSize: 16, lineHeight: 1.35, color: "var(--ink)", flex: 1, minWidth: 0 }}>
-                    <span style={{ color: "var(--muted)", fontWeight: 600, marginRight: 8 }}>{i + 1}.</span>
-                    {c.title || "(untitled task)"}
+          {(() => {
+            // Render one run as a card. `label` is the row prefix (a number, or "n/N" for a slice).
+            const renderCard = (c: CodeTaskRun, label: string) => {
+              const st = c.state ?? {};
+              const failing = (c.error ?? "").match(/failing gates: (\[[^\]]*\])/)?.[1];
+              let outcome: string;
+              if (c.status === "completed") {
+                const gp = [
+                  st.tests_passed ? "tests ✓" : null,
+                  st.adversarial_verdict === "survived" ? "review ✓" : null,
+                  st.security_verdict === "clean" ? "security ✓" : null,
+                  st.mutation_caught ? "mutation ✓" : null,
+                ].filter(Boolean).join(" · ");
+                outcome = gp || "all gates passed";
+              } else if (c.status === "blocked" && c.phase === "awaiting_gate_override") {
+                outcome = `⚖ gate blocked — ${failing ? `failing: ${failing}` : "needs override/retry"}`;
+              } else if (c.status === "failed" || c.status === "blocked") {
+                outcome = failing ? `✗ failing: ${failing}` : (c.error ?? c.status).slice(0, 80);
+              } else {
+                outcome = `running — ${PHASE_LABEL[c.phase] ?? c.phase}`;
+              }
+              return (
+                <button key={c.id} className="ct-card" onClick={() => setSelected(c.id)} style={{ gap: 6 }}>
+                  <div style={{ display: "flex", gap: 10, alignItems: "flex-start", justifyContent: "space-between" }}>
+                    <div style={{ fontWeight: 700, fontSize: 16, lineHeight: 1.35, color: "var(--ink)", flex: 1, minWidth: 0 }}>
+                      <span style={{ color: "var(--muted)", fontWeight: 600, marginRight: 8 }}>{label}</span>
+                      {c.title || "(untitled task)"}
+                    </div>
+                    <span className={`cap-badge tone-${statusTone(c.status)}`} style={{ flexShrink: 0 }}>{c.status}</span>
                   </div>
-                  <span className={`cap-badge tone-${statusTone(c.status)}`} style={{ flexShrink: 0 }}>{c.status}</span>
+                  <div className="detail">{outcome}</div>
+                  <div className="ct-card-foot">
+                    <span className="detail">{c.spec?.owner}/{c.spec?.repo}{c.spec?.base_branch && c.spec.base_branch !== "main" ? ` @ ${c.spec.base_branch}` : ""}</span>
+                    {st.profile ? <span className="detail">{st.profile}{st.risk_tier != null ? ` · t${st.risk_tier}` : ""}</span> : null}
+                    {c.pull_request_url ? <span className="ct-card-pr">PR #{c.pull_request_number}</span> : null}
+                    {(st.cost_usd_micros != null) ? <span className="detail">{fmtUsd(st.cost_usd_micros)}</span> : null}
+                  </div>
+                </button>
+              );
+            };
+            // Group runs by lineage (finalize_ctx.root_run_id) so a decomposed build shows as ONE
+            // collapsible bucket — one thing to look at, not N loose rows. Singletons render flat.
+            const fc = (c: CodeTaskRun) => (c.finalize_ctx ?? {}) as Record<string, unknown>;
+            const order: string[] = [];
+            const groups = new Map<string, CodeTaskRun[]>();
+            for (const c of codeTasks) {
+              const key = (fc(c).root_run_id as string) || c.id;
+              if (!groups.has(key)) { groups.set(key, []); order.push(key); }
+              groups.get(key)!.push(c);
+            }
+            return order.map((key, gi) => {
+              const members = groups.get(key)!;
+              if (members.length === 1) return renderCard(members[0], `${gi + 1}.`);
+              // Decomposed build → one bucket. Aggregate status + one PR/approval for the whole thing.
+              const total = (fc(members[0]).decomposition_total as number) || members.length;
+              const doneN = members.filter((m) => m.status === "completed").length;
+              const groupStatus = members.some((m) => m.status === "blocked" || m.status === "failed")
+                ? "blocked" : members.some((m) => m.status === "running" || m.status === "queued")
+                ? "running" : doneN >= total ? "completed" : "running";
+              const prRun = members.find((m) => m.pull_request_url);
+              const name = (members.find((m) => m.title)?.title || "Decomposed build").replace(/^\[\d+\/\d+\]\s*/, "");
+              const open = expandedGroups.has(key);
+              return (
+                <div key={key} className="ct-card" style={{ gap: 6, cursor: "default" }}>
+                  <div
+                    role="button"
+                    onClick={() => setExpandedGroups((s) => { const n = new Set(s); if (n.has(key)) n.delete(key); else n.add(key); return n; })}
+                    style={{ display: "flex", gap: 10, alignItems: "center", justifyContent: "space-between", cursor: "pointer" }}
+                  >
+                    <div style={{ fontWeight: 700, fontSize: 16, color: "var(--ink)", flex: 1, minWidth: 0 }}>
+                      <span style={{ color: "var(--muted)", fontWeight: 600, marginRight: 8 }}>{gi + 1}. {open ? "▾" : "▸"}</span>
+                      {name} <span style={{ color: "var(--muted)", fontWeight: 600 }}>· build ({total} tasks)</span>
+                    </div>
+                    <span className={`cap-badge tone-${statusTone(groupStatus)}`} style={{ flexShrink: 0 }}>{doneN}/{total} done</span>
+                  </div>
+                  <div className="ct-card-foot">
+                    <span className="detail">{members[0].spec?.owner}/{members[0].spec?.repo}</span>
+                    {prRun?.pull_request_url ? <span className="ct-card-pr">PR #{prRun.pull_request_number}</span>
+                      : <span className="detail">one approval when the build finishes</span>}
+                  </div>
+                  {open ? (
+                    <div style={{ display: "grid", gap: 8, marginTop: 6, paddingLeft: 10, borderLeft: "2px solid var(--border)" }}>
+                      {members.map((m) => renderCard(m, `${(fc(m).decomposition_index as number) ?? "•"}/${total}`))}
+                    </div>
+                  ) : null}
                 </div>
-                <div className="detail">{outcome}</div>
-                <div className="ct-card-foot">
-                  <span className="detail">{c.spec?.owner}/{c.spec?.repo}{c.spec?.base_branch && c.spec.base_branch !== "main" ? ` @ ${c.spec.base_branch}` : ""}</span>
-                  {st.profile ? <span className="detail">{st.profile}{st.risk_tier != null ? ` · t${st.risk_tier}` : ""}</span> : null}
-                  {c.pull_request_url ? <span className="ct-card-pr">PR #{c.pull_request_number}</span> : null}
-                  {(st.cost_usd_micros != null) ? <span className="detail">{fmtUsd(st.cost_usd_micros)}</span> : null}
-                </div>
-              </button>
-            );
-          })}
+              );
+            });
+          })()}
         </div>
       )}
     </div>

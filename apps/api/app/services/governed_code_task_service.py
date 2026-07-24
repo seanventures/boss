@@ -1502,19 +1502,32 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
 
         # GATE PASSED — open the PR via the existing software-factory path.
         _finish_vms(success=True)
-        if spec.get("open_pr", True) is False:
-            # Eval/bake-off runs measure the gate, not the delivery — record the verified
-            # outcome without opening a PR on the target repo (VAG spec §8).
+        # ONE APPROVAL PER BUILD, not per slice. A decomposed build breaks a product into ordered
+        # slices that all commit to the SAME lineage branch (via _commit_stage). Opening a PR +
+        # human approval on every slice is what a customer never wants — 6 tasks, 6 PRs, 6 gates
+        # for one website. So only the FINAL slice opens a PR (the whole accumulated site, one
+        # approval); earlier slices complete silently on the shared branch and advance the chain.
+        _didx, _dtot = fctx.get("decomposition_index"), fctx.get("decomposition_total")
+        _nonfinal_slice = (isinstance(_didx, int) and isinstance(_dtot, int)
+                           and _dtot > 1 and _didx < _dtot)
+        if spec.get("open_pr", True) is False or _nonfinal_slice:
+            # Eval/bake-off runs (open_pr=false) measure the gate not the delivery; a non-final
+            # decomposition slice defers its PR to the final slice. Either way: record the verified
+            # outcome, keep the work on the shared branch, and let the chain advance.
             with begin(engine) as c:
                 _release(sf, c, project_id, reservation_id,
-                         "gate passed; PR suppressed (open_pr=false)")
+                         ("gate passed; non-final decomposition slice — PR deferred to final slice"
+                          if _nonfinal_slice else "gate passed; PR suppressed (open_pr=false)"))
                 c.execute(text("UPDATE code_task_runs SET status='completed', phase='done', "
                                "updated_at=now() WHERE id=:id"), {"id": run_id})
                 emit_event(c, project_id, "code_task.completed_no_pr", "boss",
-                           "code_task_run", run_id, {"quality_gate_id": qg_id})
+                           "code_task_run", run_id,
+                           {"quality_gate_id": qg_id,
+                            "reason": "decomposition_slice" if _nonfinal_slice else "open_pr_false",
+                            "slice": f"{_didx}/{_dtot}" if _nonfinal_slice else None})
             plane_sync.on_event(engine, settings, run_id, "code_task.completed_no_pr")  # P2
             return {"status": "completed", "done": True, "quality_gate_id": qg_id,
-                    "pr_suppressed": True}
+                    "pr_suppressed": True, "decomposition_nonfinal": _nonfinal_slice}
 
         with begin(engine) as c:
             _set_phase(c, run_id, "opening_pr")
