@@ -177,6 +177,11 @@ class ClaudeCodeAgent:
         allowed_tools: Optional[str] = None,
     ) -> dict:
         timeout = int(self.settings.code_agent_timeout_seconds or 900)
+        # A full web build (in-container / local_subprocess) needs well beyond the legacy 900s that
+        # the prod env still pins (BOSS_CODE_AGENT_TIMEOUT_SECONDS=900) — a big single-page site was
+        # dying mid-implement. Floor the BUILD timeout so it can finish; review stages stay capped.
+        if not read_only:
+            timeout = max(timeout, 2400)
         if read_only:
             # A review shouldn't run as long as an implementation — cap it tighter so a slow
             # reviewer can't stall the panel.
