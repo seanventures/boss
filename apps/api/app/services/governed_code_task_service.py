@@ -1297,9 +1297,16 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
             verdict, review_confidence = _aggregate_panel([vd for _, vd in votes], review_quorum)
             r3 = next((rr for rr, vd in votes if vd == "refuted"),
                       votes[0][0] if votes else r3)
-            review_cost = sum(int(rr.get("cost_usd_micros") or 0) for rr, _ in votes)
+            review_cost = sum(int((rr or {}).get("cost_usd_micros") or 0) for rr, _ in votes)
             r4, sec_verdict = panel["security"]
             r6, cons_verdict = panel["consistency"]
+            # A degraded/failed check leaves a (None, "not_run") slot; downstream builds the
+            # evidence dict with r4.get(...)/r6.get(...). Never let a None result crash the run —
+            # normalize to an empty result so the check just reads as "not_run" (still gated).
+            _empty = {"cost_usd_micros": 0, "summary": "", "model": None}
+            r3 = r3 or _empty
+            r4 = r4 or _empty
+            r6 = r6 or _empty
             regressions_ok = panel["full"]
 
             # check tests (mutation) — plant one bug, expect the tests to FAIL. In the
