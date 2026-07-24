@@ -793,29 +793,39 @@ class DecisionService:
         prd_markdown = args.get("markdown") or ""
         directive = prd_markdown or f"Implement the approved plan: {title}"
 
-        # Route the approved PRD through a DECOMPOSED build, NOT one giant governed code task.
-        # Dumping a whole multi-feature PRD into a single task mis-routes and produces sprawling
-        # code that fails the quality gate; start_decomposed_build seeds a web scaffold (for web
-        # apps) and decomposes into scoped, chained slices (the path that actually lands). It makes
-        # an LLM decompose call, so run it OFF the approve request thread (mirrors start_discovery).
+        # Turn the approved PRD into a build. Never dump a whole multi-feature PRD into ONE giant
+        # governed task (mis-routes -> sprawling code -> gate fail). Two proven paths:
+        #  - WEB APP  -> start_web_app_build: scaffold + ONE focused task -> one PR + one approval.
+        #                This is the reliable, end-to-end-verified path for a website (no fragile
+        #                multi-slice chain), so prefer it whenever the PRD looks like a web app.
+        #  - OTHERWISE -> start_decomposed_build: scoped, chained slices for genuinely complex work.
+        # Both make an LLM call, so run OFF the approve request thread (mirrors start_discovery).
         project_id = row["project_id"]
         settings = self.settings
         jobs = self.jobs
 
-        def _launch_decomposed_build() -> None:
+        def _launch_build() -> None:
             try:
                 from ..db import get_engine
-                from .prd_decomposition import start_decomposed_build
-
-                start_decomposed_build(
-                    get_engine(), settings, jobs,
-                    project_id=project_id, task_id=task_id,
-                    prd_or_directive=directive, owner=owner, repo=repo, base_branch="main",
+                from .prd_decomposition import (
+                    _looks_like_web_app, start_decomposed_build, start_web_app_build,
                 )
+
+                engine = get_engine()
+                if _looks_like_web_app(directive):
+                    start_web_app_build(
+                        engine, settings, jobs,
+                        project_id=project_id, task_id=task_id, directive=directive,
+                        owner=owner, repo=repo, review=False)
+                else:
+                    start_decomposed_build(
+                        engine, settings, jobs,
+                        project_id=project_id, task_id=task_id,
+                        prd_or_directive=directive, owner=owner, repo=repo, base_branch="main")
             except Exception:  # noqa: BLE001 — best-effort; failure is visible via run status
                 return
 
-        threading.Thread(target=_launch_decomposed_build, daemon=True).start()
+        threading.Thread(target=_launch_build, daemon=True).start()
         emit_event(
             connection,
             row["project_id"],
