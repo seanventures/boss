@@ -490,8 +490,11 @@ class Settings(BaseSettings):
     # PRD. Default OFF: a PRD is a multi-feature product spec (and discovery tasks yield a document,
     # not code) — auto-dumping it as one code task mis-routes research/spec work into codegen. With
     # this off, the PRD is the deliverable and a human creates scoped coding tasks explicitly.
+    # Approving a PRD in the console auto-starts a DECOMPOSED build (scaffold + scoped, chained
+    # slices — see decisions._start_code_task_after_prd). Safe to enable by default now that the
+    # handoff decomposes instead of dumping the whole PRD into one gate-failing task.
     auto_code_task_after_prd: bool = Field(
-        default=False, alias="BOSS_AUTO_CODE_TASK_AFTER_PRD"
+        default=True, alias="BOSS_AUTO_CODE_TASK_AFTER_PRD"
     )
     # Cost/rigor dial for the governed pipeline: lean | balanced | strict (or a custom profile
     # name once the profiles API lands). Scales which steps run and which models run them.
