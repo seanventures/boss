@@ -175,10 +175,45 @@ function metadataString(
 }
 
 function formatRecommendation(decision: DecisionFeedItem): string {
-  const action = decision.recommendation.action;
-  if (typeof action === "string" && action) {
-    return action.replaceAll("_", " ");
+  const r = decision.recommendation || {};
+  const str = (k: string): string => (typeof r[k] === "string" ? (r[k] as string) : "");
+  const action = str("action");
+  const title = str("title");
+  const pr = str("pull_request_url");
+  const prNum = pr ? `#${pr.split("/").pop()}` : "";
+  const vstatus = str("validation_status");
+  const vsummary = str("validation_summary");
+
+  // A code-change / PR review — spell out WHAT is being approved and its check status.
+  if (action === "review_pull_request") {
+    return [
+      title ? `Approve the code change “${title}”.` : "Approve this code change.",
+      pr ? `Pull request ${prNum} is open on GitHub with the full diff to review.` : "",
+      vstatus
+        ? `Automated checks: ${vstatus.replaceAll("_", " ")}${vsummary ? ` — ${vsummary}` : ""}.`
+        : "",
+      "Approving opens/merges the PR; rejecting keeps it blocked for changes.",
+    ]
+      .filter(Boolean)
+      .join(" ");
   }
+  // A gated agent tool (e.g. publishing the PRD and kicking off the build).
+  if (action === "execute_agent_tool") {
+    const tool = str("tool");
+    if (tool === "publish_document") {
+      return `Publish the drafted document${title ? ` “${title}”` : ""}${
+        r["start_code_task"] ? " and start the build from it" : ""
+      }.`;
+    }
+    return `Run the gated agent action${tool ? `: ${tool.replaceAll("_", " ")}` : ""}.`;
+  }
+  if (action === "review_plan_draft") {
+    return `Review the drafted plan${title ? ` for “${title}”` : ""} before any code is written.`;
+  }
+  if (action === "review_deployment") {
+    return `Approve deploying${title ? ` “${title}”` : " this change"} to its target environment.`;
+  }
+  if (action) return action.replaceAll("_", " ");
   return "review required";
 }
 

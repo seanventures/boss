@@ -1759,9 +1759,15 @@ class SoftwareFactoryService:
             connection,
             project_id,
             task_id,
-            f"Review and approve sandbox PR: {title}",
+            f"Approve code change: {title} (PR #{pr.number})",
             {
                 "action": "review_pull_request",
+                "summary": (
+                    f"BOSS built “{title}” in a sandbox and opened pull request #{pr.number}. "
+                    f"Automated checks: {validation_status}"
+                    + (f" — {validation_summary}" if validation_summary else "")
+                    + ". Review the diff on GitHub, then approve to merge or reject to send back."
+                ),
                 "artifact_id": artifact_id,
                 "diff_artifact_id": diff_artifact_id,
                 "test_report_artifact_id": test_report_artifact_id,
