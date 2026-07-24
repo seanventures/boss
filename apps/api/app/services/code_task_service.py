@@ -244,7 +244,12 @@ def retry_code_task(
             repo=spec.get("repo") or settings.target_github_repo,
             base_branch=spec.get("base_branch") or "main",
             finalize_ctx={"parent_run_id": run_id, "root_run_id": root, "attempt": attempt,
-                          "feedback_history": history},
+                          "feedback_history": history,
+                          # Carry the web-app treatment across retries — else the retry loses
+                          # web_app_build, infer_risk_tier re-derives tier 2, and it runs the full
+                          # design+write_tests+blocking-review pipeline (wrong for a scaffolded app,
+                          # and loops on repair). Keep it a lean advisory web build on every attempt.
+                          **({"web_app_build": True} if fctx_prev.get("web_app_build") else {})},
             jobs=jobs, profile=profile or spec.get("profile"), risk_tier=spec.get("risk_tier"),
             model_config=spec.get("model_config"), open_pr=spec.get("open_pr"),
             repair_retries=(repair_retries if isinstance(repair_retries, int)
