@@ -512,7 +512,13 @@ def advance_meeting_run(engine, settings: Settings, jobs, run_id: str) -> dict:
                    "Now write the complete PRD in markdown. Include: Summary, Problem & Context, Goals & "
                    "Non-Goals, Target Users, Functional & Non-Functional Requirements, Proposed Solution, "
                    "Risks & Mitigations (note which role raised each), Acceptance Criteria, Rollout, Open "
-                   "Questions, and the single decision needing human approval.")
+                   "Questions, and the single decision needing human approval.\n\n"
+                   "VISUALS — do NOT write a wall of text. Include at least: (1) a **Mermaid** "
+                   "architecture/flow diagram in a ```mermaid code block (GitHub renders it inline) — "
+                   "e.g. `flowchart LR` of the user journey or the system components; (2) for a UI/"
+                   "website product, a simple page-layout sketch (a Mermaid block or an ASCII "
+                   "wireframe of the key screen) so a reader sees the intended structure. Keep "
+                   "diagrams accurate to the proposed solution.")
         state["prd_markdown"] = prd
         next_phase = "finalize"
     else:
