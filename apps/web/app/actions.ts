@@ -150,9 +150,63 @@ export async function agentChatAction(
     message,
     confirm_plan_id: confirmPlanId || undefined,
     surface: "chat",
+    // Scope the turn to a task: external_ref = task_id -> the backend find-or-creates ONE thread
+    // per task (agent_service.start_or_load_thread), so a task's chat stays with that task.
+    external_ref: String(formData.get("external_ref") ?? "").trim() || undefined,
   });
   revalidatePath("/");
   return result;
+}
+
+// ---- Agent workspace: task/thread list, per-task history, task context (task-scoped chat) ----
+async function getJsonReturn(path: string): Promise<ActionResult> {
+  try {
+    const r = await fetch(`${API_URL}${path}`, {
+      headers: authHeaders({ "Content-Type": "application/json" }),
+      cache: "no-store",
+    });
+    if (!r.ok) {
+      let detail = "";
+      try { detail = String((await r.json()).detail ?? ""); } catch {}
+      return { ok: false, error: detail || `HTTP ${r.status}` };
+    }
+    return { ok: true, data: await r.json() };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : "request failed" };
+  }
+}
+
+export async function loadAgentWorkspaceAction(projectId: string, actor: string): Promise<ActionResult> {
+  const p = encodeURIComponent(projectId), a = encodeURIComponent(actor);
+  const [tasks, threads] = await Promise.all([
+    getJsonReturn(`/v1/tasks?project_id=${p}&limit=60`),
+    getJsonReturn(`/v1/agent/threads?project_id=${p}&actor=${a}&since_days=10`),
+  ]);
+  const td = tasks.data as Record<string, unknown> | undefined;
+  const thd = threads.data as Record<string, unknown> | undefined;
+  return { ok: true, data: {
+    tasks: (td?.tasks ?? td?.items ?? []) as unknown[],
+    threads: (thd?.threads ?? []) as unknown[],
+  } };
+}
+
+export async function loadThreadMessagesAction(threadId: string, projectId: string, actor: string): Promise<ActionResult> {
+  return getJsonReturn(
+    `/v1/agent/threads/${encodeURIComponent(threadId)}/messages` +
+    `?project_id=${encodeURIComponent(projectId)}&actor=${encodeURIComponent(actor)}`);
+}
+
+export async function loadTaskContextAction(taskId: string, projectId: string): Promise<ActionResult> {
+  const p = encodeURIComponent(projectId);
+  const [task, codeTasks] = await Promise.all([
+    getJsonReturn(`/v1/tasks/${encodeURIComponent(taskId)}?project_id=${p}`),
+    getJsonReturn(`/v1/code-tasks?project_id=${p}&limit=40`),
+  ]);
+  const ct = ((codeTasks.data as Record<string, unknown> | undefined)?.code_tasks ?? []) as Array<Record<string, unknown>>;
+  return { ok: true, data: {
+    task: task.data ?? null,
+    code_tasks: ct.filter((c) => c.task_id === taskId),
+  } };
 }
 
 export async function tallyVotesAction(_prev: ActionResult | null, formData: FormData): Promise<ActionResult> {

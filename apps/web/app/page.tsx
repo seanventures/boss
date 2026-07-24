@@ -695,7 +695,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
     >
       <div className="frame">
         <section className="panel-stack" data-area="agent" aria-label="BOSS conversational agent">
-          <AgentChat projectId={activeProjectId} actor={activeActorId} />
+          <AgentChat projectId={activeProjectId} actor={activeActorId} initialTaskId={requestedWorkTask || undefined} />
         </section>
         <section className="panel-stack" data-area="dashboard" aria-label="Live dashboard">
           <div className="section-head">
