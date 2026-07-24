@@ -349,7 +349,7 @@ function CodeTaskDetail({ run, previews = [], onBack }: { run: CodeTaskRun; prev
             Steps &amp; quality checks{" "}
             <span className={`cap-badge tone-${gateTone}`}>{gateLabel}</span>
           </div>
-          {(run.finalize_ctx?.advisory_failing_gates as unknown[] | undefined)?.length ? (
+          {((run.finalize_ctx as Record<string, unknown> | undefined)?.advisory_failing_gates as unknown[] | undefined)?.length ? (
             <p className="detail" style={{ marginTop: 4 }}>
               ⓘ First-pass build: quality checks below are <b>advisory</b> — a ✗ did not block the PR.
               Shipped so you can preview now; use <b>Retry</b> to improve and clear the ✗.
