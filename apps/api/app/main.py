@@ -5320,6 +5320,9 @@ def deploy_code_task_endpoint(run_id: str, payload: Optional[dict] = None):
         raise HTTPException(status_code=403, detail={
             "error": str(exc), "reason": "outward deploy gate off / no key",
             "plan": plan, "markdown": render_plan_markdown(plan)})
+    except ValueError as exc:
+        # Invalid host/user (shell-metacharacter rejection) — never actuate.
+        raise HTTPException(status_code=422, detail=str(exc))
     except (RuntimeError, OSError, subprocess.SubprocessError) as exc:
         raise HTTPException(status_code=502, detail={"error": f"deploy failed: {exc}", "plan": plan})
     return {"result": result, "plan": plan}
