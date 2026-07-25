@@ -582,13 +582,13 @@ class IntentRouter:
         lowered = message.lower()
         if not lowered:
             return None, {}
-        # A question / discussion is NOT a build order. Only a clear build verb (or a non-question
-        # imperative) actuates work; everything else falls through to a conversational answer.
-        is_question = message.strip().endswith("?") or bool(re.match(
-            r"^\s*(how|what|why|when|where|who|which|is|are|am|do|does|did|can|could|would|should"
-            r"|explain|tell me|show me)\b", lowered))
-        has_build_verb = bool(re.search(
-            r"\b(build|create|implement|deploy|refactor|generate|scaffold|integrate|wire up)\b", lowered))
+        # A leading DISCUSSION question ("how/what/why … ?") is NOT a build order — even if it
+        # mentions a build verb ("what can you BUILD?"). A polite imperative ("can you add…",
+        # "could you build…") IS an action, so it's deliberately excluded from lead_question.
+        starts_discussion = bool(re.match(
+            r"^\s*(how|what|why|when|where|who|which|whose|explain|tell me|show me)\b", lowered))
+        polite_imperative = bool(re.match(r"^\s*(can|could|would|will|please)\b", lowered))
+        lead_question = starts_discussion or (message.strip().endswith("?") and not polite_imperative)
         if self._looks_multi_phase(lowered):
             return "propose_command", {"command": message}
         if re.search(r"\b(prd|product requirements?|requirements document|write a spec)\b", lowered):
@@ -604,7 +604,7 @@ class IntentRouter:
                 "seed": message,
             }
         if re.search(r"\b(fix|implement|build|change|refactor|add|remove|update)\b", lowered) and (
-                has_build_verb or not is_question):
+                not lead_question):
             return "create_code_task", {
                 "title": self._short_title(message, "Code task"),
                 "instructions": message,
