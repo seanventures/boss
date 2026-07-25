@@ -278,6 +278,9 @@ class AgentService:
             manifest=manifest,
             confirm_plan_id=confirm_plan_id,
             pending_plan_id=thread.get("pending_plan_id"),
+            # A task-scoped thread carries its task_id -> the router builds ON that task's existing
+            # app branch (extend the PR) instead of a fresh build on main.
+            external_ref=thread.get("external_ref"),
         )
         assistant = self.append_message(
             connection,
