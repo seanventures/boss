@@ -6295,7 +6295,7 @@ def list_tasks(
                        owner_role_id, parent_task_id, dependency_task_ids, due_at,
                        data_boundary, dedupe_key, created_at, updated_at
                 FROM tasks
-                WHERE project_id = :project_id
+                WHERE project_id = :project_id AND status <> 'archived'
                 ORDER BY created_at DESC
                 LIMIT :limit OFFSET :offset
                 """
@@ -6312,6 +6312,29 @@ def list_tasks(
             limit=limit,
             offset=offset,
         )
+
+
+@app.delete("/v1/tasks/{task_id}")
+def archive_task_endpoint(task_id: str, project_id: str):
+    """Archive a task (soft delete) — hide it from lists/rails without breaking child rows (plans,
+    code tasks reference it). Used to clear junk/mis-created tasks."""
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    with begin(engine) as connection:
+        row = connection.execute(
+            text("UPDATE tasks SET status='archived', updated_at=now() "
+                 "WHERE id = :id AND project_id = :p RETURNING id"),
+            {"id": task_id, "p": project_id},
+        ).first()
+        if row is None:
+            raise HTTPException(status_code=404, detail="task not found in project")
+        # Also close any agent chat thread bound to this task so it drops from the workspace rail.
+        connection.execute(
+            text("UPDATE agent_threads SET status='closed' "
+                 "WHERE project_id = :p AND external_ref = :ref"),
+            {"p": project_id, "ref": task_id},
+        )
+    return {"status": "archived", "task_id": task_id}
 
 
 @app.post("/v1/tasks", response_model=TaskSummary, status_code=201)

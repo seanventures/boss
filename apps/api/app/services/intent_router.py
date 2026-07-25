@@ -196,10 +196,10 @@ class IntentRouter:
             if selected:
                 name, arguments = selected
         if name is None:
-            name, arguments = "create_code_task", {
-                "title": self._short_title(latest, "Code task"),
-                "instructions": latest,
-            }
+            # DISCUSS BY DEFAULT: an unclassified message is a question / discussion, NOT a build
+            # order. Answer it conversationally and DON'T spawn a task (that spawned junk tasks for
+            # every greeting, question, or test string). Work starts only on an explicit intent.
+            return self._answer(connection, project_id, messages)
 
         capability_id = {
             "create_code_task": "code_task",
@@ -225,6 +225,44 @@ class IntentRouter:
             return RouterTurn(reply=f"I can’t start that work: {error}")
         except ValueError as error:
             return RouterTurn(reply=f"I couldn’t start that work: {error}")
+
+    def _answer(self, connection, project_id: str, messages: list) -> RouterTurn:
+        """Conversational answer — DISCUSS/answer without creating any task. Grounded in the recent
+        thread (a task-scoped thread carries that task's history), gated on the model budget. Only an
+        explicit build intent (handled in route_turn) actuates work."""
+        system = (
+            "You are BOSS, the assistant for an autonomous software factory. Answer the user's "
+            "question or discuss their request clearly and concisely, grounded in the conversation. "
+            "If they clearly want you to BUILD or CHANGE something, briefly say what you'd do and that "
+            "you'll start once they confirm (e.g. 'build it' / 'go') — do NOT claim you already "
+            "started anything, and do NOT invent facts."
+        )
+        convo = [{"role": "system", "content": system}] + [
+            {"role": m["role"], "content": m["content"]}
+            for m in messages[-12:]
+            if isinstance(m, dict) and m.get("role") in ("user", "assistant") and m.get("content")
+        ]
+        reply = ""
+        try:
+            reservation = self.budget.reserve(
+                connection, project_id, "model",
+                self.settings.agent_router_budget_usd_micros,
+                "Orchestration conversational answer.", 10)
+            if reservation.get("status") == "reserved":
+                try:
+                    response, _usage = make_chat_adapter(self.settings).create_chat_completion(convo)
+                    reply = str((response.get("content") if isinstance(response, dict) else response) or "").strip()
+                finally:
+                    try:
+                        self.budget.release(connection, project_id, reservation["reservation_id"], "answer")
+                    except Exception:  # noqa: BLE001
+                        pass
+        except Exception:  # noqa: BLE001 — a model/budget hiccup must never break the chat
+            reply = ""
+        if not reply:
+            reply = ("I can help discuss this. When you want me to act, tell me explicitly — e.g. "
+                     "“build it”, “add a currency picker”, or “deploy it” — and I’ll start the governed flow.")
+        return RouterTurn(reply=reply)
 
     def _dispatch(
         self,
@@ -544,6 +582,13 @@ class IntentRouter:
         lowered = message.lower()
         if not lowered:
             return None, {}
+        # A question / discussion is NOT a build order. Only a clear build verb (or a non-question
+        # imperative) actuates work; everything else falls through to a conversational answer.
+        is_question = message.strip().endswith("?") or bool(re.match(
+            r"^\s*(how|what|why|when|where|who|which|is|are|am|do|does|did|can|could|would|should"
+            r"|explain|tell me|show me)\b", lowered))
+        has_build_verb = bool(re.search(
+            r"\b(build|create|implement|deploy|refactor|generate|scaffold|integrate|wire up)\b", lowered))
         if self._looks_multi_phase(lowered):
             return "propose_command", {"command": message}
         if re.search(r"\b(prd|product requirements?|requirements document|write a spec)\b", lowered):
@@ -558,7 +603,8 @@ class IntentRouter:
                 "title": self._short_title(message, "Discovery"),
                 "seed": message,
             }
-        if re.search(r"\b(fix|implement|build|change|refactor|add|remove|update)\b", lowered):
+        if re.search(r"\b(fix|implement|build|change|refactor|add|remove|update)\b", lowered) and (
+                has_build_verb or not is_question):
             return "create_code_task", {
                 "title": self._short_title(message, "Code task"),
                 "instructions": message,
