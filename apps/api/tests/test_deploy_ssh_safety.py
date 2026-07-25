@@ -7,6 +7,7 @@ Covers:
 """
 from __future__ import annotations
 
+import shlex
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -49,10 +50,10 @@ def test_transfer_shell_cmd_quotes_user_host_so_injection_cannot_reach_shell():
         ssh_port=22,
         remote="/opt/boss-apps/demo",
     )
-    # The metacharacter host must appear only inside a single shell-quoted token.
-    assert "root@evil.com;id" not in cmd
-    assert "'root@evil.com;id'" in cmd or '"root@evil.com;id"' in cmd
-    # A benign host is still present (quoted).
+    # Metacharacter host must be a single shell-quoted token, or `;id` runs on the API host.
+    assert shlex.quote("root@evil.com;id") in cmd
+    assert cmd.count(";") == 1  # only inside the quoted destination, not a bare shell separator
+    # Benign destinations may be unquoted by shlex (no metacharacters) — still present as one token.
     benign = ds._transfer_shell_cmd(
         work=Path("/tmp/boss-deploy-abc"),
         key_path="/tmp/key.pem",
@@ -61,7 +62,7 @@ def test_transfer_shell_cmd_quotes_user_host_so_injection_cannot_reach_shell():
         ssh_port=2222,
         remote="/opt/boss-apps/demo",
     )
-    assert "'deploy@app.example.com'" in benign or '"deploy@app.example.com"' in benign
+    assert shlex.quote("deploy@app.example.com") in benign
     assert "-p 2222" in benign
 
 
