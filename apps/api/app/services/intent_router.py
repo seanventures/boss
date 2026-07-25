@@ -137,6 +137,7 @@ class IntentRouter:
         manifest: CapabilityManifest,
         confirm_plan_id: Optional[str] = None,
         pending_plan_id: Optional[str] = None,
+        external_ref: Optional[str] = None,
     ) -> RouterTurn:
         latest = str(messages[-1].get("content") or "").strip() if messages else ""
         if confirm_plan_id:
@@ -220,6 +221,7 @@ class IntentRouter:
                 arguments,
                 project_id=project_id,
                 actor=actor,
+                external_ref=external_ref,
             )
         except (ProjectMemberNotFoundError, ProjectMemberPermissionError) as error:
             return RouterTurn(reply=f"I can’t start that work: {error}")
@@ -264,6 +266,30 @@ class IntentRouter:
                      "“build it”, “add a currency picker”, or “deploy it” — and I’ll start the governed flow.")
         return RouterTurn(reply=reply)
 
+    def _existing_app_for_task(self, connection: Connection, project_id: str,
+                               task_id: Optional[str]) -> tuple[Optional[str], Optional[str]]:
+        """If this task already has a built app (a completed code task with a PR/branch), return that
+        branch + its lineage root — so a chat enhancement MODIFIES the existing code instead of
+        building fresh on `main`. Simple: existing task -> its PR/branch -> keep building on top."""
+        if not task_id:
+            return None, None
+        row = connection.execute(
+            text("SELECT finalize_ctx FROM code_task_runs "
+                 "WHERE project_id = :p AND task_id = :t AND status = 'completed' "
+                 "AND pull_request_url IS NOT NULL ORDER BY created_at DESC LIMIT 1"),
+            {"p": project_id, "t": task_id},
+        ).mappings().first()
+        if not row:
+            return None, None
+        fc = row["finalize_ctx"]
+        if isinstance(fc, str):
+            try:
+                fc = json.loads(fc)
+            except (ValueError, TypeError):
+                fc = {}
+        root = (fc or {}).get("root_run_id")
+        return (f"boss/code/{root}", root) if root else (None, None)
+
     def _dispatch(
         self,
         connection: Connection,
@@ -272,22 +298,34 @@ class IntentRouter:
         *,
         project_id: str,
         actor: str,
+        external_ref: Optional[str] = None,
     ) -> RouterTurn:
         if name == "create_code_task":
             self._require(connection, project_id, actor, "task_create")
             title = str(arguments.get("title") or "Code task")[:300]
             instructions = str(arguments.get("instructions") or title)
-            task = self.intake.create_task(
-                connection,
-                project_id=project_id,
-                title=title,
-                description=instructions,
-                dedupe_key=make_id("agent-code"),
-                priority="p1",
-                risk_tier=1,
-                inputs={"source": "orchestration_agent", "instructions": instructions},
-                required_artifacts=["pull_request"],
-            )
+            # BUILD-ON-EXISTING: if the chat is scoped to a task that already shipped an app, extend
+            # THAT app's branch (one lean web build on top) instead of a new task built on main.
+            base_branch, root = self._existing_app_for_task(connection, project_id, external_ref)
+            extend = base_branch is not None
+            if extend:
+                task = {"task_id": external_ref}
+                instructions = (
+                    "The repo ALREADY CONTAINS a working app on this branch — EXTEND it, do NOT "
+                    "re-scaffold or rebuild from scratch. Change only what the request needs and keep "
+                    "`npm run build` green.\n\nREQUEST:\n" + instructions)
+            else:
+                task = self.intake.create_task(
+                    connection,
+                    project_id=project_id,
+                    title=title,
+                    description=instructions,
+                    dedupe_key=make_id("agent-code"),
+                    priority="p1",
+                    risk_tier=1,
+                    inputs={"source": "orchestration_agent", "instructions": instructions},
+                    required_artifacts=["pull_request"],
+                )
             run_id = start_code_task(
                 connection,
                 project_id=project_id,
@@ -295,11 +333,14 @@ class IntentRouter:
                 title=title,
                 instructions=instructions,
                 acceptance_criteria=[],
-                test_commands=[],
+                test_commands=(["npm run build"] if extend else []),
                 owner=self.settings.target_github_owner,
                 repo=self.settings.target_github_repo,
-                base_branch="main",
-                finalize_ctx={"source": "orchestration_agent", "actor": actor},
+                base_branch=base_branch or "main",
+                finalize_ctx=({"source": "orchestration_agent", "actor": actor,
+                               "web_app_build": True, "root_run_id": root} if extend
+                              else {"source": "orchestration_agent", "actor": actor}),
+                risk_tier=(0 if extend else None),
                 jobs=self.jobs,
             )
             action = {
@@ -309,7 +350,9 @@ class IntentRouter:
                 "href": f"/?area=code_tasks&run={run_id}",
             }
             return RouterTurn(
-                reply=f"Started the governed code task “{title}”.",
+                reply=(f"On it — extending the existing app for this task (building on top of its "
+                       f"current branch). I'll open a PR with just the change."
+                       if extend else f"Started the governed code task “{title}”."),
                 actions=[action],
                 tool_calls=[{"name": name, "arguments": arguments}],
             )
