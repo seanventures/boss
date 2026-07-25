@@ -51,7 +51,11 @@ export function AgentChat({ projectId, actor, initialTaskId }: { projectId: stri
     const jobs: Promise<unknown>[] = [];
     if (th?.thread_id) {
       jobs.push(loadThreadMessagesAction(th.thread_id, projectId, actor).then((r) => {
-        if (r.ok && r.data) setMessages(((r.data as Record<string, unknown>).messages as Msg[]) ?? []);
+        if (r.ok && r.data) {
+          const d = r.data as Record<string, unknown>;
+          setMessages((d.messages as Msg[]) ?? []);
+          setPendingPlan((d.pending_confirmation as Record<string, unknown>) ?? null);
+        }
       }));
     }
     if (id !== GENERAL) {
@@ -189,8 +193,14 @@ export function AgentChat({ projectId, actor, initialTaskId }: { projectId: stri
 
         {pendingPlan ? (
           <div className="ct-block" style={{ margin: "8px 0" }}>
-            <div className="detail" style={{ marginBottom: 6 }}>BOSS drafted a multi-step plan — confirm to proceed.</div>
-            <button type="button" className="button" onClick={confirmPlan} disabled={busy}>Confirm plan</button>
+            <div style={{ fontWeight: 600, marginBottom: 4 }}>⏸ BOSS drafted a plan — nothing runs until you confirm.</div>
+            {typeof pendingPlan.summary === "string" ? (
+              <p className="detail" style={{ whiteSpace: "pre-wrap", marginBottom: 8 }}>{pendingPlan.summary as string}</p>
+            ) : null}
+            <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+              <button type="button" className="button" onClick={confirmPlan} disabled={busy}>{busy ? "…" : "✓ Confirm & run"}</button>
+              <span className="detail">or type a change below to revise it (e.g. “no, do it as one task”).</span>
+            </div>
           </div>
         ) : null}
 
