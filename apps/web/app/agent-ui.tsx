@@ -11,7 +11,7 @@ import {
 
 type Msg = { role: string; content: string; actions?: Array<{ kind: string }>; created_at?: string };
 type Task = { id?: string; task_id?: string; title?: string; status?: string };
-type Thread = { id: string; external_ref?: string | null; updated_at?: string };
+type Thread = { thread_id: string; external_ref?: string | null; updated_at?: string };
 type CodeTask = { id?: string; status?: string; phase?: string; pull_request_url?: string; pull_request_number?: number; task_id?: string };
 
 const GENERAL = "__general__";
@@ -47,10 +47,10 @@ export function AgentChat({ projectId, actor, initialTaskId }: { projectId: stri
   const openThreadAndContext = useCallback((id: string, list: Thread[]) => {
     setSel(id); setMessages([]); setContext(null); setPendingPlan(null); setLoadingThread(true);
     const th = threadFor(id, list);
-    setThreadId(th?.id ?? null);
+    setThreadId(th?.thread_id ?? null);
     const jobs: Promise<unknown>[] = [];
-    if (th?.id) {
-      jobs.push(loadThreadMessagesAction(th.id, projectId, actor).then((r) => {
+    if (th?.thread_id) {
+      jobs.push(loadThreadMessagesAction(th.thread_id, projectId, actor).then((r) => {
         if (r.ok && r.data) setMessages(((r.data as Record<string, unknown>).messages as Msg[]) ?? []);
       }));
     }

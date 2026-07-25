@@ -48,7 +48,9 @@ class AgentService:
             ).mappings().first()
             if row is None:
                 raise AgentThreadNotFoundError("Agent thread not found.")
-            if row["project_id"] != project_id or row["actor"] != actor:
+            # A task thread (external_ref set) is SHARED — any authorized project actor may use it
+            # (the endpoint already checked agent_chat). Only a private general thread is actor-owned.
+            if row["project_id"] != project_id or (row["actor"] != actor and not row["external_ref"]):
                 raise AgentThreadOwnershipError(
                     "Agent thread belongs to a different project or actor."
                 )
@@ -74,10 +76,9 @@ class AgentService:
                 },
             ).mappings().first()
             if row:
-                if row["actor"] != actor:
-                    raise AgentThreadOwnershipError(
-                        "Agent thread belongs to a different actor."
-                    )
+                # Shared per-task thread (unique per project+surface+external_ref). Any authorized
+                # project actor may post — do NOT reject on actor mismatch (that broke task chat when
+                # the thread was first created by a different console actor).
                 return dict(row)
 
         new_id = make_id("athr")
@@ -180,14 +181,17 @@ class AgentService:
         rows = connection.execute(
             text(
                 """
-                SELECT t.id, t.status, t.created_at, t.updated_at,
+                SELECT t.id, t.status, t.external_ref, t.created_at, t.updated_at,
                        (SELECT m.content FROM agent_messages m
                           WHERE m.thread_id = t.id AND m.role = 'user'
                           ORDER BY m.created_at, m.id LIMIT 1) AS first_user,
                        (SELECT count(*) FROM agent_messages m
                           WHERE m.thread_id = t.id) AS message_count
                 FROM agent_threads t
-                WHERE t.project_id = :p AND t.actor = :a AND t.surface = 'chat'
+                WHERE t.project_id = :p AND t.surface = 'chat'
+                  -- Task threads (external_ref set) are SHARED per task -> visible to every project
+                  -- actor; general threads (no external_ref) stay private to their actor.
+                  AND (t.actor = :a OR t.external_ref IS NOT NULL)
                   AND t.updated_at >= now() - make_interval(days => :days)
                 ORDER BY t.updated_at DESC
                 LIMIT :limit
@@ -202,6 +206,7 @@ class AgentService:
             threads.append(
                 {
                     "thread_id": r["id"],
+                    "external_ref": r["external_ref"],
                     "title": title or "New conversation",
                     "message_count": int(r["message_count"] or 0),
                     "status": r["status"],
