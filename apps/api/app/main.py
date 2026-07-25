@@ -6259,14 +6259,23 @@ def get_agent_thread_messages_endpoint(thread_id: str, project_id: str, actor: s
     with begin(engine) as connection:
         require_project_actor(connection, project_id, actor, "agent_chat")
         owner = connection.execute(
-            text("SELECT project_id FROM agent_threads WHERE id = :id"),
+            text("SELECT project_id, pending_plan_id, pending_plan_summary "
+                 "FROM agent_threads WHERE id = :id"),
             {"id": thread_id},
         ).mappings().first()
         if not owner or owner["project_id"] != project_id:
             raise HTTPException(status_code=404, detail="Agent thread not found.")
+        # Re-surface a pending plan on reload so the UI can show the Confirm/Revise controls (else a
+        # plan proposed in a prior turn is unreachable — you land on "waiting for confirmation" with
+        # no button).
+        pending = None
+        if owner["pending_plan_id"]:
+            pending = {"plan_id": owner["pending_plan_id"],
+                       **(owner["pending_plan_summary"] or {})}
         return {
             "thread_id": thread_id,
             "messages": orchestration_agent.list_messages(connection, thread_id),
+            "pending_confirmation": pending,
         }
 
 

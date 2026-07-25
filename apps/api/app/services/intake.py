@@ -398,17 +398,22 @@ class CommandIntakeService:
             if normalized:
                 return normalized
 
-        clauses = [
-            clause.strip(" .,:-")
-            for clause in re.split(
-                r"\s*(?:;|\band then\b|\bthen\b|\band\b)\s*",
-                command,
-                flags=re.IGNORECASE,
-            )
-            if clause.strip(" .,:-")
-        ][:8]
-        if not clauses:
-            clauses = [command.strip() or "Complete the requested outcome"]
+        # Only treat a directive as MULTI-phase when the user CLEARLY asked for a sequence: an
+        # explicit numbered/bulleted list, or a strong "… and then …" / ";" separator. Splitting on
+        # a bare "and"/"then" shredded ordinary prose — "add currency conversion … keep it clean AND
+        # minimal" became 3 junk phases. A single coherent request now stays ONE phase (one task).
+        text = command.strip()
+        numbered = re.findall(r"(?m)^\s*(?:\d+[.)]|[-*])\s+(.+?)\s*$", text)
+        if len(numbered) >= 2:
+            clauses = [c.strip(" .,:-") for c in numbered if c.strip(" .,:-")][:8]
+        else:
+            clauses = [
+                clause.strip(" .,:-")
+                for clause in re.split(r"\s*(?:;|\band then\b)\s*", text, flags=re.IGNORECASE)
+                if clause.strip(" .,:-")
+            ][:8]
+        if len(clauses) <= 1:
+            clauses = [text or "Complete the requested outcome"]
         return [
             {
                 "title": clause[0].upper() + clause[1:] if clause else f"Phase {index + 1}",
