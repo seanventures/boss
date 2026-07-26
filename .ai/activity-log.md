@@ -3,6 +3,21 @@
 All 15-min terminal updates and major milestones appended here. Chronological, newest at top.
 
 ---
+## 2026-07-26 — Codex — Paramg catch-up and safe Mission Control slices
+
+- Reconciled rewritten `origin/main`, all active branches, open GitHub PRs, the
+  full 173-issue Plane project, mandatory product specs, and `.ai` handoffs.
+- Mapped Paramg's active `feat/oss-engine-split` and excluded its API services,
+  schemas, bootstrap, agent, preview, reliability, Plane-sync, and engine files;
+  also excluded open Cursor PR #23/#68/#69/#70 paths.
+- Claimed BOSS-148 and BOSS-149 through Todo to In Progress as a web-only slice.
+  Extracted the roster/task board from the monolithic page, derived role status
+  and current work from canonical tasks, and linked task receipt counts through
+  actual job lineage.
+- Validation: 119 web tests, TypeScript/route generation, production Next build,
+  and diff checks pass.
+
+---
 ## 2026-07-18 — Codex — BOSS-132–144 merged delivery
 
 - Merged product-capability taxonomy PR #33 to `main` as `60ba2c8`, then

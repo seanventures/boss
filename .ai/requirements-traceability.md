@@ -97,3 +97,10 @@ Documentation implementation is tracked by BOSS-133 on
 docs current and strict MkDocs build passes. PR #33 merged as `60ba2c8`; the
 complete WFL-001 runtime in PR #34 merged as `3637580`. Plane BOSS-132–144 carry
 the merge and validation evidence and are Done.
+
+## Mission Control redesign tail (2026-07-26)
+
+| Plane | Requirement | Implementation | Evidence |
+| --- | --- | --- | --- |
+| BOSS-148 | Agent Roster shows Agent / Now / State with truthful state rings and current work | `mission-operations-ui.tsx` resolves role ownership against canonical tasks; no synthetic activity endpoint | `mission-operations.test.tsx`; web lint/typecheck; production build |
+| BOSS-149 | Five-column Task Board shows stable IDs, owner, state, and receipt coverage | Board maps canonical task states and counts receipts only through matching task jobs | `mission-operations.test.tsx`; 119 web tests; production build |

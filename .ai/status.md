@@ -1,9 +1,9 @@
 # BOSS Autonomous Delivery Status
 
-**Last updated**: 2026-07-18 (BOSS-132–144 merged delivery)
+**Last updated**: 2026-07-26 (Paramg catch-up; BOSS-148/BOSS-149 safe UI tail)
 **Repo root**: /Volumes/DataSSD1/test/boss
 **Git remote**: https://github.com/seanheiney/boss
-**Current branch**: ai/codex/boss-132-merge-handoff
+**Current branch**: ai/codex/boss-148-151-ui-tail
 **Base branch**: origin/main
 **Product**: BOSS v0.7.0 target (Business Operating System Sentinel)
 **Mission**: Complete product to production-grade, tested, documented, pushed, Codex-coordinated, ready for real users. Grind until all discovered PRD/spec features satisfy world-class DoD or truly blocked.
@@ -14,6 +14,14 @@
 - GitHub: draft PR #16 carries BOSS-22/BOSS-23 and is stacked on draft PR #15; other open PRs were inspected for overlap before implementation.
 
 ## Overall Product Status
+- Paramg's July 19–26 mainline delivery adds the design-aware app pipeline,
+  task-scoped agent workspace, preview/deploy hardening, Plane closed-loop
+  sync, AI SRE/reliability surfaces, and VAG extensions. His active
+  `feat/oss-engine-split` owns the API service relocation, so Codex selected the
+  non-overlapping Mission Control UI tail. Plane BOSS-148/BOSS-149 now complete
+  the roster and five-column task board with canonical task state and real
+  job-to-receipt lineage; 119 web tests, lint/typecheck, and production build
+  pass.
 - BOSS-134–143 implement WFL-001 end to end: canonical workflow persistence,
   immutable spec validation and specpack seeding, deterministic work-class
   mappings, version-pinned replay-safe runs, leased/recoverable steps,
