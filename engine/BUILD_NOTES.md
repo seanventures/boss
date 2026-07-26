@@ -70,12 +70,15 @@ Verified (via `engine/scripts/verify_engine.py --with-api 397 --live`):
 engine imports standalone (no apps/); apps.api.app.main == 397 routes (baseline);
 `apps.api.app.services.X is boss_engine.services.X`; 17/17 tests; live read ok.
 
-## Phase 3 — packaging DONE ✅ / runtime gate PENDING
+## Phase 3 — DONE ✅ (standalone image builds + runs live)
 - `engine/requirements.txt` (api deps minus fastapi/uvicorn/dev), `engine/Dockerfile`
-  (standalone image, copies only `boss_engine/`), `engine/scripts/verify_engine.py`.
-- REMAINING (the deploy+test gate the user wants to run together): build the engine
-  image, run `serve-mcp` / `ask` against a reachable Postgres, and exercise the
-  agent end-to-end in a container; then merge to main.
+  (standalone image, copies only `boss_engine/` — no apps/), `engine/scripts/verify_engine.py`.
+- **Image builds (441MB) and runs standalone**: `docker run boss-engine:dev tools`
+  lists all 15 tools; `docker run -e DATABASE_URL=… boss-engine:dev status` returned
+  live `project_status` from Postgres — NO API, NO console in the image. Req #1 proven.
+- REMAINING for the merge gate (deploy+test the user wants to run together): push the
+  engine image to a registry, run `serve-mcp` and drive the agent end-to-end in the
+  target environment, then merge `feat/oss-engine-split` to main.
 
 ## Not done / next candidates
 - Repoint API + worker to import `boss_engine.*` directly and delete the shims
