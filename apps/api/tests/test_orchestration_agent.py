@@ -158,7 +158,7 @@ def test_discovery_tool_reserves_budget_and_creates_receipt_before_start(
 def test_broad_ask_proposes_then_explicit_confirmation_dispatches(client, engine):
     proposed_response = client.post(
         "/v1/agent/chat",
-        json=_payload("First research auth providers then implement the login page"),
+        json=_payload("First research auth providers and then implement the login page"),
     )
     assert proposed_response.status_code == 200, proposed_response.text
     proposed = proposed_response.json()
@@ -200,21 +200,26 @@ def test_broad_ask_proposes_then_explicit_confirmation_dispatches(client, engine
     assert second["dependency_task_ids"] == [first["id"]]
 
 
-def test_revision_and_ambiguous_replies_never_dispatch(client, engine):
+def test_revision_and_discussion_replies_never_dispatch(client, engine):
     proposed = client.post(
         "/v1/agent/chat",
-        json=_payload("First research auth providers then implement login"),
+        json=_payload("First research auth providers and then implement login"),
     ).json()
     old_plan_id = proposed["pending_confirmation"]["plan_id"]
     parent_id = proposed["actions"][0]["task_id"]
 
     ambiguous = client.post(
         "/v1/agent/chat",
-        json=_payload("Looks interesting", thread_id=proposed["thread_id"]),
+        json=_payload("What does this plan cover?", thread_id=proposed["thread_id"]),
     )
     assert ambiguous.status_code == 200, ambiguous.text
     assert ambiguous.json()["actions"] == []
-    assert ambiguous.json()["pending_confirmation"]["plan_id"] == old_plan_id
+    assert ambiguous.json()["pending_confirmation"] is None
+    with engine.begin() as connection:
+        assert connection.execute(
+            text("SELECT pending_plan_id FROM agent_threads WHERE id = :thread_id"),
+            {"thread_id": proposed["thread_id"]},
+        ).scalar_one() == old_plan_id
 
     revised = client.post(
         "/v1/agent/chat",
