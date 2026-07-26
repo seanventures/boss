@@ -112,6 +112,8 @@ def clean_tables(engine):
             "billing_accounts",
             "capabilities",
             "provider_accounts",
+            "github_repository_bindings",
+            "github_connections",
             "secret_refs",
             "resource_policies",
             "capacity_receipts",

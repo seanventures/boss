@@ -1,5 +1,28 @@
 # Codex Handoff
 
+## 2026-07-26 BOSS-246/BOSS-247 GitHub project sync foundation
+
+- Branch `ai/codex/boss-247-github-project-connection` starts from rewritten
+  `origin/main` at `1c6de8e`. The rewrite changed commit identities without
+  changing the tree; no contributor branch was reset or force-pushed.
+- Plane BOSS-246 is the governing feature. BOSS-247 implements project-scoped
+  GitHub App/PAT connections, SecretRef-only credentials, repository bindings,
+  permission/capability discovery, connection lifecycle, tenant/RBAC checks,
+  and receipted idempotent health tests.
+- Product and technical contracts define BOSS-248–255 as the remaining branch
+  policy, snapshot, lease/worktree, safe sync, conflict-resolution branch,
+  merge queue, reconciler, and Mission Control slices. This PR does not claim
+  those behaviors are implemented.
+- Existing process-wide GitHub automation remains backward compatible; the new
+  adapter constructor overrides allow scoped execution without mutating global
+  settings.
+- Validation: schema applied twice; 54 focused/widened API tests; 36 API-client
+  tests; Ruff; TypeScript; OpenAPI YAML/route checks; feature-doc generation
+  and drift test; strict MkDocs; and diff checks all pass.
+- The workstation `.venv` is Python 3.9, while the repository now requires
+  Python 3.11+. Generation used the bundled Python 3.12 runtime; installed test
+  dependencies remained in the existing virtualenv.
+
 ## 2026-07-26 BOSS-236 provider credential lifecycle
 
 - Branch `ai/codex/boss-236-provider-credential-lifecycle` starts from

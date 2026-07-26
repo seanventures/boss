@@ -7,7 +7,7 @@ This catalog is generated from the canonical product traceability ledger. It is 
 <div class="feature-summary">
   <div>
     <span class="boss-status boss-status--implemented">Implemented</span>
-    <strong>84</strong>
+    <strong>85</strong>
   </div>
   <div>
     <span class="boss-status boss-status--partial">Partial</span>
@@ -48,6 +48,7 @@ This catalog is generated from the canonical product traceability ledger. It is 
 | [GH-004 — GitHub pull-request review](implemented.md#gh-004-github-pull-request-review) | <span class="boss-status boss-status--implemented">Implemented</span> | OSS readiness spec 08 T4; BOSS-87 |
 | [GH-005 — GitHub community decision gates](implemented.md#gh-005-github-community-decision-gates) | <span class="boss-status boss-status--implemented">Implemented</span> | OSS readiness spec 08 T5; BOSS-88 |
 | [GH-006 — GitHub App community enablement](implemented.md#gh-006-github-app-community-enablement) | <span class="boss-status boss-status--implemented">Implemented</span> | OSS readiness spec 08 T6; BOSS-89 |
+| [GHX-001 — Project GitHub connection and repository binding](implemented.md#ghx-001-project-github-connection-and-repository-binding) | <span class="boss-status boss-status--implemented">Implemented</span> | PRD GitHub Project Sync; BOSS-246/BOSS-247 |
 | [ORC-001 — Conversational thread store/API](implemented.md#orc-001-conversational-thread-store-api) | <span class="boss-status boss-status--implemented">Implemented</span> | OSS readiness spec 07 T1; BOSS-78 |
 | [ORC-002 — Surface-agnostic intent routing](implemented.md#orc-002-surface-agnostic-intent-routing) | <span class="boss-status boss-status--implemented">Implemented</span> | OSS readiness spec 07 T2; BOSS-79 |
 | [ORC-003 — Capability-aware routing](implemented.md#orc-003-capability-aware-routing) | <span class="boss-status boss-status--implemented">Implemented</span> | OSS readiness spec 07 T3; BOSS-80 |

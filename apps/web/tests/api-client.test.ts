@@ -3300,4 +3300,73 @@ describe("createBossApiClient", () => {
     expect(run.workflow_version_id).toBe("wfv_1");
     expect(step?.step_id).toBe("build");
   });
+
+  it("uses project-scoped GitHub connection and repository binding contracts", async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const fetchImpl = async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({ url: String(input), init });
+      return new Response(JSON.stringify({ items: [] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    };
+    const client = createBossApiClient({
+      baseUrl: "http://127.0.0.1:8000",
+      fetchImpl,
+    });
+
+    await client.listGitHubConnections("boss-dogfood");
+    await client.createGitHubConnection({
+      project_id: "boss-dogfood",
+      connection_label: "BOSS GitHub App",
+      auth_method: "github_app",
+      credential_ref: "env:BOSS_GITHUB_APP_PRIVATE_KEY",
+      app_id: "123",
+      installation_id: "456",
+      required_permissions: ["pull", "push"],
+      actor: "ceo",
+    });
+    await client.getGitHubConnection("boss-dogfood", "ghconn_1");
+    await client.disableGitHubConnection("ghconn_1", {
+      project_id: "boss-dogfood",
+      actor: "ceo",
+    });
+    await client.testGitHubConnection("ghconn_1", {
+      project_id: "boss-dogfood",
+      repository_binding_id: "ghrepo_1",
+      dedupe_key: "github-test:1",
+      actor: "ceo",
+    });
+    await client.listGitHubRepositoryBindings("boss-dogfood", "ghconn_1");
+    await client.createGitHubRepositoryBinding({
+      project_id: "boss-dogfood",
+      connection_id: "ghconn_1",
+      repository: "seanheiney/boss",
+      role: "primary",
+      actor: "ceo",
+    });
+    await client.getGitHubRepositoryBinding("boss-dogfood", "ghrepo_1");
+    await client.updateGitHubRepositoryBinding("ghrepo_1", {
+      project_id: "boss-dogfood",
+      status: "disabled",
+      actor: "ceo",
+    });
+
+    expect(calls.map((call) => call.url)).toEqual([
+      "http://127.0.0.1:8000/v1/github/connections?project_id=boss-dogfood",
+      "http://127.0.0.1:8000/v1/github/connections",
+      "http://127.0.0.1:8000/v1/github/connections/ghconn_1?project_id=boss-dogfood",
+      "http://127.0.0.1:8000/v1/github/connections/ghconn_1/disable",
+      "http://127.0.0.1:8000/v1/github/connections/ghconn_1/test",
+      "http://127.0.0.1:8000/v1/github/repository-bindings?project_id=boss-dogfood&connection_id=ghconn_1",
+      "http://127.0.0.1:8000/v1/github/repository-bindings",
+      "http://127.0.0.1:8000/v1/github/repository-bindings/ghrepo_1?project_id=boss-dogfood",
+      "http://127.0.0.1:8000/v1/github/repository-bindings/ghrepo_1",
+    ]);
+    expect(JSON.parse(String(calls[1].init?.body))).not.toHaveProperty("token");
+    expect(JSON.parse(String(calls[4].init?.body))).toMatchObject({
+      repository_binding_id: "ghrepo_1",
+      dedupe_key: "github-test:1",
+    });
+  });
 });

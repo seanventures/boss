@@ -1029,6 +1029,78 @@ ALTER TABLE secret_refs ADD COLUMN IF NOT EXISTS revoked_by TEXT;
 CREATE INDEX IF NOT EXISTS idx_secret_refs_project
   ON secret_refs(project_id, provider, status);
 
+-- Project-scoped GitHub connectivity. Credential material remains outside BOSS;
+-- github_connections stores only a SecretRef pointer and non-secret installation
+-- identity. Repository bindings are the canonical target boundary consumed by
+-- future branch-policy, sync, lease, and merge-orchestration slices.
+CREATE TABLE IF NOT EXISTS github_connections (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  connection_label TEXT NOT NULL,
+  auth_method TEXT NOT NULL,
+  credential_ref TEXT NOT NULL,
+  app_id TEXT,
+  installation_id TEXT,
+  api_base_url TEXT NOT NULL DEFAULT 'https://api.github.com',
+  status TEXT NOT NULL DEFAULT 'configured',
+  required_permissions JSONB NOT NULL DEFAULT '["pull"]'::jsonb,
+  granted_permissions JSONB NOT NULL DEFAULT '[]'::jsonb,
+  missing_permissions JSONB NOT NULL DEFAULT '[]'::jsonb,
+  account_login TEXT,
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+  last_test_status TEXT,
+  last_tested_at TIMESTAMPTZ,
+  last_error JSONB,
+  disabled_at TIMESTAMPTZ,
+  disabled_by TEXT,
+  revoked_at TIMESTAMPTZ,
+  revoked_by TEXT,
+  created_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(project_id, connection_label),
+  CHECK (auth_method IN ('github_app', 'personal_access_token')),
+  CHECK (status IN ('configured', 'active', 'error', 'disabled', 'revoked'))
+);
+CREATE INDEX IF NOT EXISTS idx_github_connections_project
+  ON github_connections(project_id, status, updated_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_github_connections_project_label_ci
+  ON github_connections(project_id, lower(connection_label));
+
+CREATE TABLE IF NOT EXISTS github_repository_bindings (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  connection_id TEXT NOT NULL REFERENCES github_connections(id) ON DELETE CASCADE,
+  repository_id BIGINT,
+  owner TEXT NOT NULL,
+  name TEXT NOT NULL,
+  full_name TEXT NOT NULL,
+  role TEXT NOT NULL DEFAULT 'primary',
+  default_branch TEXT,
+  visibility TEXT,
+  archived BOOLEAN NOT NULL DEFAULT false,
+  status TEXT NOT NULL DEFAULT 'active',
+  permissions JSONB NOT NULL DEFAULT '{}'::jsonb,
+  capabilities JSONB NOT NULL DEFAULT '[]'::jsonb,
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+  last_synced_at TIMESTAMPTZ,
+  created_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(project_id, full_name),
+  CHECK (role IN ('primary', 'source', 'upstream', 'mirror')),
+  CHECK (status IN ('active', 'disabled'))
+);
+CREATE INDEX IF NOT EXISTS idx_github_repository_bindings_project
+  ON github_repository_bindings(project_id, status, role, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_github_repository_bindings_connection
+  ON github_repository_bindings(connection_id, status, updated_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_github_repository_bindings_project_name_ci
+  ON github_repository_bindings(project_id, lower(full_name));
+CREATE UNIQUE INDEX IF NOT EXISTS uq_github_repository_binding_primary
+  ON github_repository_bindings(project_id)
+  WHERE role = 'primary' AND status = 'active';
+
 CREATE TABLE IF NOT EXISTS provider_adapters (
   id TEXT PRIMARY KEY,
   provider TEXT NOT NULL,

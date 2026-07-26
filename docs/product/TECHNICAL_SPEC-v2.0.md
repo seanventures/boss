@@ -2,7 +2,7 @@
 
 Status: Technical companion to `docs/product/PRD-v2.0.md`
 Date: June 3, 2026
-Last updated: July 18, 2026
+Last updated: July 26, 2026
 Supersedes: `docs/product/TECHNICAL_SPEC-v1.1.md`
 
 ## Architecture Overview
@@ -23,6 +23,72 @@ BOSS is a durable, API-first control plane for accountable AI labor. The technic
 - Enterprise Identity Runtime: OIDC/SAML/SCIM provider metadata, SecretRefs, certificate/JWKS configuration, and explicit per-project rollout policies. Provider metadata alone is not sufficient for live SSO or SCIM; runtime paths require matching rollout policy.
 
 OpenClaw is not the BOSS foundation or durable runtime. External runtimes, legacy systems, and coding agents are adapters behind BOSS-owned state, policy, budget, routing, receipt, and observability layers.
+
+## Project GitHub Integration and Branch Orchestration
+
+GitHub execution resolves from project state, never directly from global
+`BOSS_TARGET_GITHUB_*` values once a project binding exists. Global settings
+remain a bootstrap compatibility lane until all callers migrate.
+
+Canonical records:
+
+- `ProjectGitHubConnection`: project, label, auth method, SecretRef pointer,
+  non-secret App/installation identity, API origin, required/effective/missing
+  permissions, health, lifecycle, and audit evidence.
+- `GitHubRepositoryBinding`: project, connection, provider repository ID,
+  owner/name/full name, primary/source/upstream/mirror role, default branch,
+  visibility, capabilities, lifecycle, and last reconciliation time.
+- `BranchPolicy`: protected refs, allowed name templates, update/merge methods,
+  force-push prohibition, required checks/review/evidence, stale-snapshot
+  threshold, and conflict escalation rules.
+- `BranchLease`: repository/ref owner, worktree/run, fencing token, TTL,
+  heartbeat, release/reclaim state, and attempt lineage.
+- `BranchSnapshot`: immutable remote refs, commit graph references, tree IDs,
+  merge bases, ahead/behind counts, protection/check state, fetched time, and
+  provenance.
+- `CodeSyncRun`: pinned policy/snapshot, source/target, classification,
+  selected action, ChangeSet/receipt links, result snapshot, retry/deadletter,
+  and rollback evidence.
+- `ConflictSet` and `ResolutionPlan`: base/ours/theirs identities, typed
+  file-level conflicts, proposed resolutions, validation evidence, dissent,
+  review, and Decision.
+- `MergeAuthorization`: exact head/base snapshots, required checks, approvals,
+  ownership, evidence bundle, expiry, actor, policy snapshot, and merge result.
+
+Connection state machine:
+
+`configured -> active|error -> disabled -> configured`, with `revoked`
+terminal. Enabling requires a usable project-scoped SecretRef and returns to
+`configured` until retested. Revocation disables every bound repository and
+cannot be reversed.
+
+Connection tests resolve secret material only inside the execution node, call
+the deterministic GitHub adapter, and persist a `github.repository.read`
+Receipt. Read models expose only `credential_configured`; they never return the
+SecretRef pointer. Repository identity and effective permissions update only
+from a successful provider response.
+
+Branch mutation pipeline:
+
+`Resolve binding -> acquire BranchLease -> fetch BranchSnapshot -> evaluate BranchPolicy -> classify topology -> plan ChangeSet -> authorize -> mutate through adapter -> ResourceReceipt -> fetch result snapshot -> verify -> release lease`.
+
+Topology classification distinguishes `equal`, `tree_equivalent_rewrite`,
+`fast_forward`, `behind`, `diverged`, `missing`, and `protected_blocked`.
+`tree_equivalent_rewrite` compares tree identities and patch equivalence before
+classifying a history rewrite as a content conflict. Only owned, explicitly
+authorized branches can be replaced; other contributor branches remain
+untouched.
+
+Diverged branches create a dedicated resolution branch. The resolver records a
+typed `ConflictSet`, applies a `ResolutionPlan`, runs the repository's
+red-to-green verification contract, and requires independent review. Ambiguous
+ownership, destructive updates, protected refs, validation failures, and
+unresolved conflicts create safe-HOLD Decisions. No branch mutation is
+performed inline in a webhook request.
+
+Webhook deliveries are the low-latency signal; a polling reconciler is the
+completeness backstop. Both converge through the same dedupe keys, leased jobs,
+snapshots, retry/deadletter behavior, and audit events.
 
 ## Resource Plane Kernel
 
@@ -387,6 +453,19 @@ Skills and Integrations:
 - `POST /v1/integration-connections/{id}/test`
 - `POST /v1/integration-connections/{id}/revoke`
 - `GET /v1/skill-invocations`
+
+GitHub project integration:
+
+- `GET/POST /v1/github/connections`
+- `GET /v1/github/connections/{id}`
+- `POST /v1/github/connections/{id}/enable|disable|revoke|test`
+- `GET/POST /v1/github/repository-bindings`
+- `GET/PATCH /v1/github/repository-bindings/{id}`
+- Planned under BOSS-248 through BOSS-255:
+  `/v1/github/branch-policies`, `/v1/github/branch-leases`,
+  `/v1/github/branch-snapshots`, `/v1/github/code-sync-runs`,
+  `/v1/github/conflict-sets`, `/v1/github/merge-authorizations`, and the
+  reconciler/operations read models.
 
 Reusable Workflows:
 

@@ -3,6 +3,21 @@
 All 15-min terminal updates and major milestones appended here. Chronological, newest at top.
 
 ---
+## 2026-07-26 — Codex — BOSS-246/BOSS-247 GitHub project sync
+
+- Created the BOSS-246 parent and BOSS-247–255 delivery slices in Plane before
+  implementation; advanced BOSS-246/BOSS-247 to In Progress.
+- Added project-scoped GitHub App/PAT connections and repository bindings using
+  SecretRefs only, capability/permission discovery, lifecycle controls,
+  receipted idempotent tests, tenant scope, RBAC, and audit events.
+- Added typed API/client/OpenAPI contracts and governing PRD/technical/user
+  stories for safe branch automation. BOSS-248–255 retain the unimplemented
+  branch/sync/conflict/merge/reconciliation/UI work.
+- Validation passes schema reapplication, 54 API tests, 36 client tests, Ruff,
+  TypeScript, OpenAPI parsing, generated-doc checks, strict docs, and diff
+  checks.
+
+---
 ## 2026-07-26 — Codex — BOSS-236 provider credential lifecycle
 
 - Advanced BOSS-236 Backlog → Todo → In Progress in Plane after deduping the

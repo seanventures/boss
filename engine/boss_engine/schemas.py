@@ -4066,6 +4066,176 @@ class ModelRouteDecisionSimulateResponse(BaseModel):
     decision: ModelRouteDecisionSummary
 
 
+class GitHubConnectionSummary(BaseModel):
+    id: str
+    project_id: str
+    connection_label: str
+    auth_method: Literal["github_app", "personal_access_token"]
+    credential_configured: bool
+    app_id: Optional[str] = None
+    installation_id: Optional[str] = None
+    api_base_url: str
+    status: Literal["configured", "active", "error", "disabled", "revoked"]
+    required_permissions: list[str] = Field(default_factory=list)
+    granted_permissions: list[str] = Field(default_factory=list)
+    missing_permissions: list[str] = Field(default_factory=list)
+    account_login: Optional[str] = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    last_test_status: Optional[str] = None
+    last_tested_at: Optional[str] = None
+    last_error: Optional[dict[str, Any]] = None
+    disabled_at: Optional[str] = None
+    disabled_by: Optional[str] = None
+    revoked_at: Optional[str] = None
+    revoked_by: Optional[str] = None
+    created_by: str
+    created_at: str
+    updated_at: str
+
+
+class GitHubConnectionListResponse(BaseModel):
+    project_id: str
+    items: list[GitHubConnectionSummary]
+
+
+class GitHubConnectionCreateRequest(BaseModel):
+    project_id: str
+    connection_label: str
+    auth_method: Literal["github_app", "personal_access_token"]
+    credential_ref: str
+    app_id: Optional[str] = None
+    installation_id: Optional[str] = None
+    api_base_url: str = "https://api.github.com"
+    required_permissions: list[str] = Field(default_factory=lambda: ["pull"])
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    actor: str = "ceo"
+
+    @model_validator(mode="after")
+    def validate_github_connection(self) -> "GitHubConnectionCreateRequest":
+        self.project_id = _require_text(self.project_id, "project_id")
+        self.connection_label = _require_text(
+            self.connection_label, "connection_label"
+        )
+        self.credential_ref = _require_text(self.credential_ref, "credential_ref")
+        self.api_base_url = _require_text(self.api_base_url, "api_base_url")
+        self.required_permissions = _require_non_empty_string_list(
+            self.required_permissions, "required_permissions"
+        )
+        self.actor = _require_text(self.actor, "actor")
+        return self
+
+
+class GitHubConnectionLifecycleRequest(BaseModel):
+    project_id: str
+    actor: str = "ceo"
+
+    @model_validator(mode="after")
+    def validate_github_connection_lifecycle(
+        self,
+    ) -> "GitHubConnectionLifecycleRequest":
+        self.project_id = _require_text(self.project_id, "project_id")
+        self.actor = _require_text(self.actor, "actor")
+        return self
+
+
+class GitHubRepositoryBindingSummary(BaseModel):
+    id: str
+    project_id: str
+    connection_id: str
+    repository_id: Optional[int] = None
+    owner: str
+    name: str
+    full_name: str
+    role: Literal["primary", "source", "upstream", "mirror"]
+    default_branch: Optional[str] = None
+    visibility: Optional[str] = None
+    archived: bool
+    status: Literal["active", "disabled"]
+    permissions: dict[str, bool] = Field(default_factory=dict)
+    capabilities: list[str] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    last_synced_at: Optional[str] = None
+    created_by: str
+    created_at: str
+    updated_at: str
+
+
+class GitHubRepositoryBindingListResponse(BaseModel):
+    project_id: str
+    items: list[GitHubRepositoryBindingSummary]
+
+
+class GitHubRepositoryBindingCreateRequest(BaseModel):
+    project_id: str
+    connection_id: str
+    repository: str
+    role: Literal["primary", "source", "upstream", "mirror"] = "primary"
+    default_branch: Optional[str] = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    actor: str = "ceo"
+
+    @model_validator(mode="after")
+    def validate_github_repository_binding(
+        self,
+    ) -> "GitHubRepositoryBindingCreateRequest":
+        self.project_id = _require_text(self.project_id, "project_id")
+        self.connection_id = _require_text(self.connection_id, "connection_id")
+        self.repository = _require_text(self.repository, "repository")
+        if self.default_branch is not None:
+            self.default_branch = _require_text(
+                self.default_branch, "default_branch"
+            )
+        self.actor = _require_text(self.actor, "actor")
+        return self
+
+
+class GitHubRepositoryBindingUpdateRequest(BaseModel):
+    project_id: str
+    role: Optional[Literal["primary", "source", "upstream", "mirror"]] = None
+    status: Optional[Literal["active", "disabled"]] = None
+    default_branch: Optional[str] = None
+    metadata: Optional[dict[str, Any]] = None
+    actor: str = "ceo"
+
+    @model_validator(mode="after")
+    def validate_github_repository_binding_update(
+        self,
+    ) -> "GitHubRepositoryBindingUpdateRequest":
+        self.project_id = _require_text(self.project_id, "project_id")
+        if self.default_branch is not None:
+            self.default_branch = _require_text(
+                self.default_branch, "default_branch"
+            )
+        self.actor = _require_text(self.actor, "actor")
+        return self
+
+
+class GitHubConnectionTestRequest(BaseModel):
+    project_id: str
+    repository_binding_id: str
+    dedupe_key: str
+    actor: str = "ceo"
+
+    @model_validator(mode="after")
+    def validate_github_connection_test(self) -> "GitHubConnectionTestRequest":
+        self.project_id = _require_text(self.project_id, "project_id")
+        self.repository_binding_id = _require_text(
+            self.repository_binding_id, "repository_binding_id"
+        )
+        self.dedupe_key = _require_text(self.dedupe_key, "dedupe_key")
+        self.actor = _require_text(self.actor, "actor")
+        return self
+
+
+class GitHubConnectionTestResponse(BaseModel):
+    status: Literal["passed", "failed"]
+    duplicate: bool
+    receipt_id: str
+    connection: GitHubConnectionSummary
+    repository_binding: GitHubRepositoryBindingSummary
+    detail: dict[str, Any] = Field(default_factory=dict)
+
+
 class ProviderAccountSummary(BaseModel):
     id: str
     project_id: str

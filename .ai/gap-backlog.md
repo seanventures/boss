@@ -1,5 +1,18 @@
 # BOSS Gap Backlog (.ai Autonomous Version)
 
+## 2026-07-26 GitHub project sync delivery map
+
+- BOSS-247 closes the project-scoped connection/repository-binding foundation
+  once its PR merges.
+- BOSS-248–255 remain the explicit implementation backlog for branch policy,
+  repository snapshots/topology, branch leases/worktrees, safe synchronization,
+  conflict-resolution branches, merge orchestration/rollback, webhook/poll
+  reconciliation, and Mission Control operations.
+- The governing GHX-001 contract requires immutable observed SHAs, no silent
+  reset/force-push, visible rewrite/divergence classification, provider writes
+  through ChangeSets/ResourceReceipts, unique dedupe keys, and approval gates
+  for protected/destructive operations.
+
 ## 2026-07-26 Provider suite foundation
 
 - BOSS-236 closes the connection/credential lifecycle foundation for BOSS-235.

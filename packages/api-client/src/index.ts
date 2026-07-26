@@ -2852,6 +2852,118 @@ export type SecretRefUpdateRequest = {
   actor?: string;
 };
 
+export type GitHubConnectionSummary = {
+  id: string;
+  project_id: string;
+  connection_label: string;
+  auth_method: "github_app" | "personal_access_token";
+  credential_configured: boolean;
+  app_id?: string;
+  installation_id?: string;
+  api_base_url: string;
+  status: "configured" | "active" | "error" | "disabled" | "revoked";
+  required_permissions: string[];
+  granted_permissions: string[];
+  missing_permissions: string[];
+  account_login?: string;
+  metadata: Record<string, unknown>;
+  last_test_status?: string;
+  last_tested_at?: string;
+  last_error?: Record<string, unknown>;
+  disabled_at?: string;
+  disabled_by?: string;
+  revoked_at?: string;
+  revoked_by?: string;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type GitHubConnectionListResponse = {
+  project_id: string;
+  items: GitHubConnectionSummary[];
+};
+
+export type GitHubConnectionCreateRequest = {
+  project_id: string;
+  connection_label: string;
+  auth_method: "github_app" | "personal_access_token";
+  credential_ref: string;
+  app_id?: string;
+  installation_id?: string;
+  api_base_url?: string;
+  required_permissions?: string[];
+  metadata?: Record<string, unknown>;
+  actor?: string;
+};
+
+export type GitHubConnectionLifecycleRequest = {
+  project_id: string;
+  actor?: string;
+};
+
+export type GitHubRepositoryBindingSummary = {
+  id: string;
+  project_id: string;
+  connection_id: string;
+  repository_id?: number;
+  owner: string;
+  name: string;
+  full_name: string;
+  role: "primary" | "source" | "upstream" | "mirror";
+  default_branch?: string;
+  visibility?: string;
+  archived: boolean;
+  status: "active" | "disabled";
+  permissions: Record<string, boolean>;
+  capabilities: string[];
+  metadata: Record<string, unknown>;
+  last_synced_at?: string;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type GitHubRepositoryBindingListResponse = {
+  project_id: string;
+  items: GitHubRepositoryBindingSummary[];
+};
+
+export type GitHubRepositoryBindingCreateRequest = {
+  project_id: string;
+  connection_id: string;
+  repository: string;
+  role?: "primary" | "source" | "upstream" | "mirror";
+  default_branch?: string;
+  metadata?: Record<string, unknown>;
+  actor?: string;
+};
+
+export type GitHubRepositoryBindingUpdateRequest = {
+  project_id: string;
+  role?: "primary" | "source" | "upstream" | "mirror";
+  status?: "active" | "disabled";
+  default_branch?: string;
+  metadata?: Record<string, unknown>;
+  actor?: string;
+};
+
+export type GitHubConnectionTestRequest = {
+  project_id: string;
+  repository_binding_id: string;
+  dedupe_key: string;
+  actor?: string;
+};
+
+export type GitHubConnectionTestResponse = {
+  status: "passed" | "failed";
+  duplicate: boolean;
+  receipt_id: string;
+  connection: GitHubConnectionSummary;
+  repository_binding: GitHubRepositoryBindingSummary;
+  detail: Record<string, unknown>;
+};
+
 export type AgentModuleSummary = {
   module_id: string;
   version: string;
@@ -5611,6 +5723,105 @@ export function createBossApiClient(config: BossApiClientConfig) {
       return request<ProviderAccountListResponse>("GET", "/v1/providers", {
         query: { project_id: projectId },
       });
+    },
+    listGitHubConnections(projectId: string) {
+      return request<GitHubConnectionListResponse>(
+        "GET",
+        "/v1/github/connections",
+        { query: { project_id: projectId } },
+      );
+    },
+    createGitHubConnection(payload: GitHubConnectionCreateRequest) {
+      return request<GitHubConnectionSummary>(
+        "POST",
+        "/v1/github/connections",
+        { body: payload },
+      );
+    },
+    getGitHubConnection(projectId: string, connectionId: string) {
+      return request<GitHubConnectionSummary>(
+        "GET",
+        `/v1/github/connections/${encodeURIComponent(connectionId)}`,
+        { query: { project_id: projectId } },
+      );
+    },
+    enableGitHubConnection(
+      connectionId: string,
+      payload: GitHubConnectionLifecycleRequest,
+    ) {
+      return request<GitHubConnectionSummary>(
+        "POST",
+        `/v1/github/connections/${encodeURIComponent(connectionId)}/enable`,
+        { body: payload },
+      );
+    },
+    disableGitHubConnection(
+      connectionId: string,
+      payload: GitHubConnectionLifecycleRequest,
+    ) {
+      return request<GitHubConnectionSummary>(
+        "POST",
+        `/v1/github/connections/${encodeURIComponent(connectionId)}/disable`,
+        { body: payload },
+      );
+    },
+    revokeGitHubConnection(
+      connectionId: string,
+      payload: GitHubConnectionLifecycleRequest,
+    ) {
+      return request<GitHubConnectionSummary>(
+        "POST",
+        `/v1/github/connections/${encodeURIComponent(connectionId)}/revoke`,
+        { body: payload },
+      );
+    },
+    testGitHubConnection(
+      connectionId: string,
+      payload: GitHubConnectionTestRequest,
+    ) {
+      return request<GitHubConnectionTestResponse>(
+        "POST",
+        `/v1/github/connections/${encodeURIComponent(connectionId)}/test`,
+        { body: payload },
+      );
+    },
+    listGitHubRepositoryBindings(projectId: string, connectionId?: string) {
+      return request<GitHubRepositoryBindingListResponse>(
+        "GET",
+        "/v1/github/repository-bindings",
+        {
+          query: {
+            project_id: projectId,
+            connection_id: connectionId,
+          },
+        },
+      );
+    },
+    createGitHubRepositoryBinding(
+      payload: GitHubRepositoryBindingCreateRequest,
+    ) {
+      return request<GitHubRepositoryBindingSummary>(
+        "POST",
+        "/v1/github/repository-bindings",
+        { body: payload },
+      );
+    },
+    getGitHubRepositoryBinding(projectId: string, bindingId: string) {
+      return request<GitHubRepositoryBindingSummary>(
+        "GET",
+        `/v1/github/repository-bindings/${encodeURIComponent(bindingId)}`,
+        { query: { project_id: projectId } },
+      );
+    },
+    updateGitHubRepositoryBinding(
+      bindingId: string,
+      payload: GitHubRepositoryBindingUpdateRequest,
+    ) {
+      return request<GitHubRepositoryBindingSummary>(
+        "PATCH",
+        `/v1/github/repository-bindings/${encodeURIComponent(bindingId)}`,
+        { body: payload },
+      );
     },
     listProviderDefinitions() {
       return request<ProviderDefinitionListResponse>("GET", "/v1/provider-definitions");

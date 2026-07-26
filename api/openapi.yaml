@@ -2849,6 +2849,242 @@ paths:
       responses:
         '204': { description: SecretRef revoked }
         '404': { description: SecretRef not found }
+  /v1/github/connections:
+    get:
+      summary: List project-scoped GitHub connections
+      parameters:
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: GitHub connections without SecretRef pointers or secret material }
+    post:
+      summary: Register a project-scoped GitHub App or PAT connection
+      description: Stores only a validated SecretRef pointer plus non-secret installation identity. Raw tokens and private keys are rejected from metadata and omitted from responses.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id, connection_label, auth_method, credential_ref]
+              properties:
+                project_id: { type: string }
+                connection_label: { type: string }
+                auth_method:
+                  type: string
+                  enum: [github_app, personal_access_token]
+                credential_ref:
+                  type: string
+                  description: Project-scoped SecretRef pointer; never raw credential material.
+                app_id: { type: string }
+                installation_id: { type: string }
+                api_base_url:
+                  type: string
+                  format: uri
+                  default: https://api.github.com
+                required_permissions:
+                  type: array
+                  default: [pull]
+                  items:
+                    type: string
+                    enum: [pull, triage, push, maintain, admin]
+                metadata:
+                  type: object
+                  description: Non-secret connection metadata; secret-shaped fields are rejected.
+                actor: { type: string, default: ceo }
+      responses:
+        '201': { description: GitHub connection configured }
+        '403': { description: Actor lacks github_manage permission }
+        '422': { description: Invalid auth method, SecretRef, permissions, URL, or secret-shaped metadata }
+  /v1/github/connections/{connection_id}:
+    get:
+      summary: Get a tenant-scoped GitHub connection
+      parameters:
+        - name: connection_id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: GitHub connection posture without credential pointer or secret material }
+        '404': { description: GitHub connection not found in the project }
+  /v1/github/connections/{connection_id}/enable:
+    post:
+      summary: Re-enable a disabled GitHub connection for required retesting
+      parameters:
+        - name: connection_id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id]
+              properties:
+                project_id: { type: string }
+                actor: { type: string, default: ceo }
+      responses:
+        '200': { description: Connection returned to configured state }
+        '409': { description: SecretRef unusable or connection permanently revoked }
+  /v1/github/connections/{connection_id}/disable:
+    post:
+      summary: Disable a GitHub connection before future adapter invocation
+      parameters:
+        - name: connection_id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id]
+              properties:
+                project_id: { type: string }
+                actor: { type: string, default: ceo }
+      responses:
+        '200': { description: GitHub connection disabled }
+  /v1/github/connections/{connection_id}/revoke:
+    post:
+      summary: Permanently revoke a GitHub connection and disable its repository bindings
+      parameters:
+        - name: connection_id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id]
+              properties:
+                project_id: { type: string }
+                actor: { type: string, default: ceo }
+      responses:
+        '200': { description: GitHub connection irreversibly revoked }
+        '409': { description: Connection was already revoked }
+  /v1/github/connections/{connection_id}/test:
+    post:
+      summary: Test a project repository binding through a receipt-backed GitHub adapter call
+      parameters:
+        - name: connection_id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id, repository_binding_id, dedupe_key]
+              properties:
+                project_id: { type: string }
+                repository_binding_id: { type: string }
+                dedupe_key: { type: string }
+                actor: { type: string, default: ceo }
+      responses:
+        '200': { description: Connection health, effective permissions, repository metadata, and Receipt identity }
+        '404': { description: Connection or repository binding not found in the project }
+        '409': { description: Connection or repository binding is disabled or revoked }
+  /v1/github/repository-bindings:
+    get:
+      summary: List canonical project repository bindings
+      parameters:
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+        - name: connection_id
+          in: query
+          required: false
+          schema: { type: string }
+      responses:
+        '200': { description: Project repository target list and discovered capabilities }
+    post:
+      summary: Bind a repository to a project GitHub connection
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id, connection_id, repository]
+              properties:
+                project_id: { type: string }
+                connection_id: { type: string }
+                repository:
+                  type: string
+                  example: seanheiney/boss
+                role:
+                  type: string
+                  enum: [primary, source, upstream, mirror]
+                  default: primary
+                default_branch: { type: string }
+                metadata:
+                  type: object
+                  description: Non-secret binding metadata.
+                actor: { type: string, default: ceo }
+      responses:
+        '201': { description: Repository binding created }
+        '403': { description: Actor lacks github_manage permission }
+        '409': { description: Connection inactive, repository duplicate, or active primary already exists }
+  /v1/github/repository-bindings/{binding_id}:
+    get:
+      summary: Get a tenant-scoped GitHub repository binding
+      parameters:
+        - name: binding_id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Repository binding detail }
+        '404': { description: Repository binding not found in the project }
+    patch:
+      summary: Update repository role, lifecycle, default branch, or non-secret metadata
+      parameters:
+        - name: binding_id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id]
+              properties:
+                project_id: { type: string }
+                role:
+                  type: string
+                  enum: [primary, source, upstream, mirror]
+                status:
+                  type: string
+                  enum: [active, disabled]
+                default_branch: { type: string }
+                metadata: { type: object }
+                actor: { type: string, default: ceo }
+      responses:
+        '200': { description: Updated repository binding }
+        '404': { description: Repository binding not found in the project }
+        '409': { description: Invalid lifecycle, revoked connection, or primary conflict }
   /v1/provider-definitions:
     get:
       summary: List infrastructure provider connection and authentication contracts

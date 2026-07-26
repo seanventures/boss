@@ -225,6 +225,16 @@ from .schemas import (
     FileChange,
     InboundWebhookResponse,
     GitHubCommunityJobExecuteRequest,
+    GitHubConnectionCreateRequest,
+    GitHubConnectionLifecycleRequest,
+    GitHubConnectionListResponse,
+    GitHubConnectionSummary,
+    GitHubConnectionTestRequest,
+    GitHubConnectionTestResponse,
+    GitHubRepositoryBindingCreateRequest,
+    GitHubRepositoryBindingListResponse,
+    GitHubRepositoryBindingSummary,
+    GitHubRepositoryBindingUpdateRequest,
     WebhookDeliveryCreateRequest,
     WebhookDeliveryExecuteRequest,
     WebhookDeliveryListResponse,
@@ -490,6 +500,12 @@ from .services.webhooks import (
 )
 from .services.plane_webhooks import PlaneWebhookService
 from .services.github_community_service import GitHubCommunityService
+from .services.github_connections import (
+    GitHubConnectionNotFoundError,
+    GitHubConnectionService,
+    GitHubConnectionStateError,
+    GitHubRepositoryBindingNotFoundError,
+)
 from .services.infrastructure import (
     InfraResourceNotFoundError,
     InfrastructureService,
@@ -603,6 +619,7 @@ webhooks = WebhookService(settings)
 inbound_webhooks = InboundWebhookService(settings)
 plane_webhooks = PlaneWebhookService(settings)
 github_community = GitHubCommunityService(settings)
+github_connections = GitHubConnectionService(settings)
 software_factory = SoftwareFactoryService(settings, ports=engine_ports)
 decisions = DecisionService(settings)
 specpack = SpecPackService(settings)
@@ -8498,6 +8515,287 @@ def delete_secret_ref(
         except SecretRefNotFoundError as error:
             raise HTTPException(status_code=404, detail=str(error)) from error
     return Response(status_code=204)
+
+
+@app.get(
+    "/v1/github/connections",
+    response_model=GitHubConnectionListResponse,
+)
+def list_github_connections(project_id: str) -> GitHubConnectionListResponse:
+    with begin(engine) as connection:
+        return GitHubConnectionListResponse(
+            project_id=project_id,
+            items=[
+                GitHubConnectionSummary(**item)
+                for item in github_connections.list_connections(
+                    connection, project_id
+                )
+            ],
+        )
+
+
+@app.post(
+    "/v1/github/connections",
+    response_model=GitHubConnectionSummary,
+    status_code=201,
+)
+def create_github_connection(
+    payload: GitHubConnectionCreateRequest,
+) -> GitHubConnectionSummary:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection,
+            payload.project_id,
+            payload.actor,
+            "github_manage",
+        )
+        try:
+            item = github_connections.create_connection(
+                connection,
+                project_id=payload.project_id,
+                connection_label=payload.connection_label,
+                auth_method=payload.auth_method,
+                credential_ref=payload.credential_ref,
+                app_id=payload.app_id,
+                installation_id=payload.installation_id,
+                api_base_url=payload.api_base_url,
+                required_permissions=payload.required_permissions,
+                metadata=payload.metadata,
+                actor=payload.actor,
+            )
+        except (SecretRefNotFoundError, ValueError) as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        return GitHubConnectionSummary(**item)
+
+
+@app.get(
+    "/v1/github/connections/{connection_id}",
+    response_model=GitHubConnectionSummary,
+)
+def get_github_connection(
+    connection_id: str,
+    project_id: str,
+) -> GitHubConnectionSummary:
+    with begin(engine) as connection:
+        try:
+            item = github_connections.get_connection(
+                connection, project_id, connection_id
+            )
+        except GitHubConnectionNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        return GitHubConnectionSummary(**item)
+
+
+def _transition_github_connection(
+    connection_id: str,
+    payload: GitHubConnectionLifecycleRequest,
+    action: str,
+) -> GitHubConnectionSummary:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection,
+            payload.project_id,
+            payload.actor,
+            "github_manage",
+        )
+        try:
+            item = github_connections.transition_connection(
+                connection,
+                project_id=payload.project_id,
+                connection_id=connection_id,
+                action=action,
+                actor=payload.actor,
+            )
+        except GitHubConnectionNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except (GitHubConnectionStateError, ValueError) as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        return GitHubConnectionSummary(**item)
+
+
+@app.post(
+    "/v1/github/connections/{connection_id}/enable",
+    response_model=GitHubConnectionSummary,
+)
+def enable_github_connection(
+    connection_id: str,
+    payload: GitHubConnectionLifecycleRequest,
+) -> GitHubConnectionSummary:
+    return _transition_github_connection(connection_id, payload, "enable")
+
+
+@app.post(
+    "/v1/github/connections/{connection_id}/disable",
+    response_model=GitHubConnectionSummary,
+)
+def disable_github_connection(
+    connection_id: str,
+    payload: GitHubConnectionLifecycleRequest,
+) -> GitHubConnectionSummary:
+    return _transition_github_connection(connection_id, payload, "disable")
+
+
+@app.post(
+    "/v1/github/connections/{connection_id}/revoke",
+    response_model=GitHubConnectionSummary,
+)
+def revoke_github_connection(
+    connection_id: str,
+    payload: GitHubConnectionLifecycleRequest,
+) -> GitHubConnectionSummary:
+    return _transition_github_connection(connection_id, payload, "revoke")
+
+
+@app.get(
+    "/v1/github/repository-bindings",
+    response_model=GitHubRepositoryBindingListResponse,
+)
+def list_github_repository_bindings(
+    project_id: str,
+    connection_id: Optional[str] = None,
+) -> GitHubRepositoryBindingListResponse:
+    with begin(engine) as connection:
+        return GitHubRepositoryBindingListResponse(
+            project_id=project_id,
+            items=[
+                GitHubRepositoryBindingSummary(**item)
+                for item in github_connections.list_repository_bindings(
+                    connection,
+                    project_id,
+                    connection_id=connection_id,
+                )
+            ],
+        )
+
+
+@app.post(
+    "/v1/github/repository-bindings",
+    response_model=GitHubRepositoryBindingSummary,
+    status_code=201,
+)
+def create_github_repository_binding(
+    payload: GitHubRepositoryBindingCreateRequest,
+) -> GitHubRepositoryBindingSummary:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection,
+            payload.project_id,
+            payload.actor,
+            "github_manage",
+        )
+        try:
+            item = github_connections.create_repository_binding(
+                connection,
+                project_id=payload.project_id,
+                connection_id=payload.connection_id,
+                repository=payload.repository,
+                role=payload.role,
+                default_branch=payload.default_branch,
+                metadata=payload.metadata,
+                actor=payload.actor,
+            )
+        except GitHubConnectionNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except (GitHubConnectionStateError, ValueError) as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        return GitHubRepositoryBindingSummary(**item)
+
+
+@app.get(
+    "/v1/github/repository-bindings/{binding_id}",
+    response_model=GitHubRepositoryBindingSummary,
+)
+def get_github_repository_binding(
+    binding_id: str,
+    project_id: str,
+) -> GitHubRepositoryBindingSummary:
+    with begin(engine) as connection:
+        try:
+            item = github_connections.get_repository_binding(
+                connection, project_id, binding_id
+            )
+        except GitHubRepositoryBindingNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        return GitHubRepositoryBindingSummary(**item)
+
+
+@app.patch(
+    "/v1/github/repository-bindings/{binding_id}",
+    response_model=GitHubRepositoryBindingSummary,
+)
+def update_github_repository_binding(
+    binding_id: str,
+    payload: GitHubRepositoryBindingUpdateRequest,
+) -> GitHubRepositoryBindingSummary:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection,
+            payload.project_id,
+            payload.actor,
+            "github_manage",
+        )
+        try:
+            item = github_connections.update_repository_binding(
+                connection,
+                project_id=payload.project_id,
+                binding_id=binding_id,
+                role=payload.role,
+                status=payload.status,
+                default_branch=payload.default_branch,
+                metadata=payload.metadata,
+                actor=payload.actor,
+            )
+        except (
+            GitHubConnectionNotFoundError,
+            GitHubRepositoryBindingNotFoundError,
+        ) as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except (GitHubConnectionStateError, ValueError) as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        return GitHubRepositoryBindingSummary(**item)
+
+
+@app.post(
+    "/v1/github/connections/{connection_id}/test",
+    response_model=GitHubConnectionTestResponse,
+)
+def test_github_connection(
+    connection_id: str,
+    payload: GitHubConnectionTestRequest,
+) -> GitHubConnectionTestResponse:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection,
+            payload.project_id,
+            payload.actor,
+            "github_manage",
+        )
+        try:
+            result = github_connections.test_connection(
+                connection,
+                project_id=payload.project_id,
+                connection_id=connection_id,
+                binding_id=payload.repository_binding_id,
+                dedupe_key=payload.dedupe_key,
+                actor=payload.actor,
+            )
+        except (
+            GitHubConnectionNotFoundError,
+            GitHubRepositoryBindingNotFoundError,
+        ) as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except (GitHubConnectionStateError, ValueError) as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        return GitHubConnectionTestResponse(
+            status=result["status"],
+            duplicate=result["duplicate"],
+            receipt_id=result["receipt_id"],
+            connection=GitHubConnectionSummary(**result["connection"]),
+            repository_binding=GitHubRepositoryBindingSummary(
+                **result["repository_binding"]
+            ),
+            detail=result["detail"],
+        )
 
 
 @app.get("/v1/provider-definitions", response_model=ProviderDefinitionListResponse)

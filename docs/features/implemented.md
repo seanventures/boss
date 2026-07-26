@@ -2,7 +2,7 @@
 
 # Implemented features
 
-<span class="boss-status boss-status--implemented">Implemented</span> **84 features**
+<span class="boss-status boss-status--implemented">Implemented</span> **85 features**
 
 ## MET-001 — CEO command intake {#met-001-ceo-command-intake}
 
@@ -279,6 +279,18 @@
 **Automated evidence:** `apps/api/tests/test_github_community_adapter.py`, `apps/api/tests/test_webhook_foundation.py`
 
 **Ledger detail:** Implemented: repository-scoped issue/PR write permissions, four community subscriptions, canonical webhook setup, source-specific secret mapping, and fail-closed 503/no-persistence behavior when unconfigured
+
+## GHX-001 — Project GitHub connection and repository binding {#ghx-001-project-github-connection-and-repository-binding}
+
+<span class="boss-status boss-status--implemented">Implemented</span>
+
+**Source:** PRD GitHub Project Sync; BOSS-246/BOSS-247
+
+**Implementation:** `db/schema.sql`, `engine/boss_engine/services/github_connections.py`, `engine/boss_engine/services/github_adapter.py`, `engine/boss_engine/services/github_app_adapter.py`, `apps/api/app/main.py`, `engine/boss_engine/schemas.py`, `api/openapi.yaml`, `packages/api-client/src/index.ts`, `docs/product/GITHUB_PROJECT_SYNC.md`
+
+**Automated evidence:** `apps/api/tests/test_github_project_connections.py`, `apps/web/tests/api-client.test.ts`
+
+**Ledger detail:** Implemented foundation: project-scoped App/PAT SecretRefs, canonical primary/source/upstream/mirror bindings, `github_manage`, permission discovery, receipted/idempotent tests, tenant isolation, audited disable/enable, and irreversible revoke. Branch policy/snapshot/lease/sync/conflict/merge/reconciliation/UX remain BOSS-248–255.
 
 ## ORC-001 — Conversational thread store/API {#orc-001-conversational-thread-store-api}
 

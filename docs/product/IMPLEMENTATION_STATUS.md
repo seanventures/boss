@@ -1,6 +1,6 @@
 # BOSS Implementation Status
 
-Last updated: July 15, 2026
+Last updated: July 26, 2026
 Release target: `v0.4.0`
 
 This document summarizes the currently implemented BOSS runtime surfaces in this repository so the codebase, README, and product intent stay aligned.
@@ -50,6 +50,7 @@ This document summarizes the currently implemented BOSS runtime surfaces in this
   - artifact, receipt, event, and audit export access
   - event-subscription list/create/update/delete APIs with exact or prefix matching, enabled-state filtering, OpenAPI contract coverage, and data-boundary enforcement
   - GitHub community adapter primitives for issue/PR comments, inline reviews, and unified-diff reads through the existing repository-scoped App identity; App manifest/setup now includes issue and pull-request write permissions, four community subscriptions, and fail-closed unconfigured webhook behavior
+  - project-scoped GitHub App/PAT connection and repository-binding foundation with SecretRef-only credential handling, primary/source/upstream/mirror roles, `github_manage` authorization, effective-permission discovery, Receipt-backed connection tests, tenant isolation, audited disable/enable, and irreversible revoke; branch policy, topology snapshots, leases, synchronization, conflict resolution, merge authorization, reconciliation, and topology UX remain tracked in BOSS-248 through BOSS-255
   - replay bundle creation
   - Metatron status query
   - comms inbox and outbox

@@ -74,13 +74,25 @@ class PullRequestValidationResult:
 
 
 class GitHubAdapter:
-    def __init__(self, settings: Settings):
+    def __init__(
+        self,
+        settings: Settings,
+        *,
+        owner: Optional[str] = None,
+        repo: Optional[str] = None,
+        token: Optional[str] = None,
+        api_base_url: str = "https://api.github.com",
+    ):
         self.settings = settings
+        self.owner = (owner or settings.target_github_owner).strip()
+        self.repo = (repo or settings.target_github_repo).strip()
+        self._token_override = token
+        self.api_base_url = api_base_url.rstrip("/")
         self._app = None
 
     @property
     def repository_full_name(self) -> str:
-        return f"{self.settings.target_github_owner}/{self.settings.target_github_repo}"
+        return f"{self.owner}/{self.repo}"
 
     def _auth_token(self) -> str:
         """Prefer a short-lived, repo-scoped GitHub-App installation token
@@ -88,11 +100,14 @@ class GitHubAdapter:
         from .github_app_adapter import GitHubAppAdapter  # optional dependency
 
         if self._app is None:
-            self._app = GitHubAppAdapter(self.settings)
-        if self._app.configured:
-            return self._app.token_for_repo(
-                self.settings.target_github_owner, self.settings.target_github_repo
+            self._app = GitHubAppAdapter(
+                self.settings,
+                api_base_url=self.api_base_url,
             )
+        if self._token_override:
+            return self._token_override
+        if self._app.configured:
+            return self._app.token_for_repo(self.owner, self.repo)
         if not self.settings.github_token:
             raise IntegrationConfigurationError(
                 "No GitHub credentials configured (need a GitHub App installation "
@@ -122,7 +137,7 @@ class GitHubAdapter:
             headers["Accept"] = accept
         response = httpx.request(
             method,
-            f"https://api.github.com{path}",
+            f"{self.api_base_url}{path}",
             headers=headers,
             json=json_body,
             timeout=30.0,
@@ -208,7 +223,7 @@ class GitHubAdapter:
             sha = None
 
         response = httpx.put(
-            f"https://api.github.com/repos/{self.repository_full_name}/contents/{path}",
+            f"{self.api_base_url}/repos/{self.repository_full_name}/contents/{path}",
             headers=self._headers(),
             json={
                 "message": message,

@@ -100,6 +100,47 @@ Acceptance criteria:
 - Given a UI-affecting change, when browser validation evidence is missing, then BOSS marks the release gate conditional until browser validation evidence is attached.
 - Given failing or missing validation, when merge is considered, then BOSS blocks merge and creates visible evidence instead of silently proceeding.
 
+### Story ENG-002: Govern Project GitHub Repositories and Branches
+
+As an engineering lead, I want GitHub connections, repositories, branches,
+sync, conflicts, and merges governed per project, so parallel contributors and
+agents cannot overwrite one another or merge against stale remote truth.
+
+Acceptance criteria:
+
+- Given a project-scoped GitHub App or PAT SecretRef, when an actor with
+  `github_manage` registers a connection, then BOSS stores only the SecretRef
+  pointer and non-secret App/installation identity and never returns the
+  pointer or raw credential.
+- Given secret-shaped connection or repository metadata, when registration is
+  attempted, then BOSS rejects it before persistence.
+- Given a configured connection and primary/source/upstream/mirror repository,
+  when the connection is tested, then BOSS calls the deterministic adapter,
+  records a deduplicated `github.repository.read` Receipt, updates canonical
+  repository identity and effective/missing permissions, and emits an audit
+  event.
+- Given the same test dedupe key, when the request is replayed, then BOSS
+  returns the prior Receipt and does not repeat the provider call.
+- Given a disabled or revoked connection, when any GitHub operation is
+  attempted, then BOSS fails before adapter invocation; a revoked connection
+  cannot be re-enabled and its bindings remain disabled.
+- Given another project ID, when a connection or repository binding is read or
+  mutated, then BOSS does not expose or change the original project's record.
+- Given a mutable branch operation, when BOSS begins work, then it owns a
+  current fenced TTL lease and fresh remote `BranchSnapshot` before deciding.
+- Given different commit identities with equal tree content, when topology is
+  classified, then BOSS records a tree-equivalent rewrite rather than a
+  content conflict.
+- Given a true divergence, when synchronization is requested, then BOSS creates
+  a dedicated resolution branch and typed `ConflictSet` instead of rewriting
+  the contributor or protected branch in place.
+- Given a proposed resolution, when merge is considered, then red-to-green
+  tests, independent review, current checks, ownership, policy, approval,
+  `MergeAuthorization`, ChangeSet, receipt, and rollback evidence are required.
+- Given a webhook is missed or duplicated, when reconciliation runs, then
+  scheduled polling converges through the same dedupe/jobs/state machine and
+  every exhausted failure becomes a visible deadletter or Decision.
+
 ### Story ENG-002: Package Agent Logic
 
 As a VP Agents or marketplace operator, I want worker agents packaged as modules, so that roles, prompts, skills, and runtime defaults can be versioned and distributed.
