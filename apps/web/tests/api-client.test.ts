@@ -3505,4 +3505,112 @@ describe("createBossApiClient", () => {
       fencing_token: 7,
     });
   });
+
+  it("uses receipted GitHub sync and reviewed conflict resolution contracts", async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const fetchImpl = async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({ url: String(input), init });
+      return new Response(JSON.stringify({ items: [] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    };
+    const client = createBossApiClient({
+      baseUrl: "http://127.0.0.1:8000",
+      fetchImpl,
+    });
+
+    await client.listGitHubCodeSyncRuns("boss-dogfood", {
+      repository_binding_id: "ghrepo_1",
+      status: "conflicted",
+      limit: 25,
+    });
+    await client.planGitHubCodeSync({
+      project_id: "boss-dogfood",
+      repository_binding_id: "ghrepo_1",
+      snapshot_id: "ghsnap_1",
+      dedupe_key: "sync:1",
+      resolution_branch: "ai/boss/resolve/work-into-main",
+      actor: "ceo",
+    });
+    await client.getGitHubCodeSyncRun("boss-dogfood", "ghsync_1");
+    await client.applyGitHubCodeSync("ghsync_1", {
+      project_id: "boss-dogfood",
+      lease_id: "ghlease_1",
+      lease_token: "lease-token",
+      fencing_token: 7,
+      actor: "ceo",
+    });
+    await client.listGitHubConflictSets("boss-dogfood", {
+      status: "open",
+      limit: 25,
+    });
+    await client.getGitHubConflictSet("boss-dogfood", "ghconflict_1");
+    await client.listGitHubResolutionPlans("boss-dogfood", {
+      conflict_set_id: "ghconflict_1",
+      limit: 25,
+    });
+    await client.createGitHubResolutionPlan("ghconflict_1", {
+      project_id: "boss-dogfood",
+      resolved_files: [
+        {
+          path: "engine/example.py",
+          content: "resolved = true\n",
+          mode: "100644",
+        },
+      ],
+      validation_evidence: {
+        red: {
+          command: "pytest test_example.py",
+          exit_code: 1,
+          evidence_ref: "artifact://red",
+        },
+        green: {
+          command: "pytest test_example.py",
+          exit_code: 0,
+          evidence_ref: "artifact://green",
+        },
+      },
+      actor: "ceo",
+    });
+    await client.getGitHubResolutionPlan("boss-dogfood", "ghresolve_1");
+    await client.approveGitHubResolutionPlan("ghresolve_1", {
+      project_id: "boss-dogfood",
+      review_evidence: {
+        verdict: "approved",
+        summary: "Independent review passed.",
+      },
+      actor: "cto",
+    });
+    await client.applyGitHubResolutionPlan("ghresolve_1", {
+      project_id: "boss-dogfood",
+      lease_id: "ghlease_1",
+      lease_token: "lease-token",
+      fencing_token: 7,
+      actor: "ceo",
+    });
+
+    expect(calls.map((call) => call.url)).toEqual([
+      "http://127.0.0.1:8000/v1/github/code-sync-runs?project_id=boss-dogfood&repository_binding_id=ghrepo_1&status=conflicted&limit=25",
+      "http://127.0.0.1:8000/v1/github/code-sync-runs/plan",
+      "http://127.0.0.1:8000/v1/github/code-sync-runs/ghsync_1?project_id=boss-dogfood",
+      "http://127.0.0.1:8000/v1/github/code-sync-runs/ghsync_1/apply",
+      "http://127.0.0.1:8000/v1/github/conflict-sets?project_id=boss-dogfood&status=open&limit=25",
+      "http://127.0.0.1:8000/v1/github/conflict-sets/ghconflict_1?project_id=boss-dogfood",
+      "http://127.0.0.1:8000/v1/github/resolution-plans?project_id=boss-dogfood&conflict_set_id=ghconflict_1&limit=25",
+      "http://127.0.0.1:8000/v1/github/conflict-sets/ghconflict_1/resolution-plans",
+      "http://127.0.0.1:8000/v1/github/resolution-plans/ghresolve_1?project_id=boss-dogfood",
+      "http://127.0.0.1:8000/v1/github/resolution-plans/ghresolve_1/approve",
+      "http://127.0.0.1:8000/v1/github/resolution-plans/ghresolve_1/apply",
+    ]);
+    expect(JSON.parse(String(calls[3].init?.body))).toMatchObject({
+      lease_id: "ghlease_1",
+      lease_token: "lease-token",
+      fencing_token: 7,
+    });
+    expect(JSON.parse(String(calls[9].init?.body))).toMatchObject({
+      actor: "cto",
+      review_evidence: { verdict: "approved" },
+    });
+  });
 });

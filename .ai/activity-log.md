@@ -3,6 +3,28 @@
 All 15-min terminal updates and major milestones appended here. Chronological, newest at top.
 
 ---
+## 2026-07-26 — Codex — BOSS-251/BOSS-252 safe sync and conflict resolution
+
+- Advanced BOSS-251 and BOSS-252 Backlog → Todo → In Progress in Plane before
+  implementation and based the work on the published BOSS-250 stack without
+  touching Paramg's BOSS-237 branch.
+- Added canonical CodeSyncRun, ConflictSet, and ResolutionPlan persistence and
+  typed API/client/OpenAPI contracts.
+- Implemented deterministic topology planning, tree-rewrite no-op, exact
+  policy/lease/fence/fresh-snapshot gates, non-force owned-branch sync,
+  protected-target hold, rollback identity, result verification, bounded
+  retry, redacted failure, and terminal deadletter.
+- Routed every GitHub write attempt through a canonical ChangeSet operation,
+  Receipt, and ResourceReceipt. Zero-cost GitHub ref effects explicitly require
+  no BudgetReservation.
+- Implemented dedicated resolution branches, immutable base/ours/theirs/file
+  evidence, failing-red/passing-green proof, independent reviewer enforcement,
+  two-parent resolution commits, and resolution-ref-only non-force updates.
+- Validation: 31 widened GitHub API/adapter tests, 39 typed-client tests,
+  focused Ruff, TypeScript/Next route generation, production web build, schema
+  applied twice, OpenAPI YAML/GitHub route coverage, generated docs, strict
+  MkDocs, compile, and diff checks pass.
+
 ## 2026-07-26 — Codex — BOSS-250 fenced branch leases
 
 - Advanced BOSS-250 Backlog → Todo → In Progress in Plane after publishing

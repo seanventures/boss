@@ -1,9 +1,9 @@
 # BOSS Autonomous Delivery Status
 
-**Last updated**: 2026-07-26 (BOSS-246–250 GitHub project sync)
+**Last updated**: 2026-07-26 (BOSS-246–252 GitHub project sync)
 **Repo root**: /Volumes/DataSSD1/test/boss
 **Git remote**: https://github.com/seanheiney/boss
-**Current branch**: ai/codex/boss-250-branch-leases
+**Current branch**: ai/codex/boss-251-252-safe-sync-conflicts
 **Base branch**: origin/main
 **Product**: BOSS v0.7.0 target (Business Operating System Sentinel)
 **Mission**: Complete product to production-grade, tested, documented, pushed, Codex-coordinated, ready for real users. Grind until all discovered PRD/spec features satisfy world-class DoD or truly blocked.
@@ -21,8 +21,13 @@
   equal/rewrite/fast-forward/behind/diverged/missing/protected-blocked
   classification. BOSS-250 adds serialized one-owner branch/worktree leases
   with hashed one-time tokens, monotonic fencing, heartbeat, release,
-  expiry/reclaim lineage, tenant scope, RBAC and audit. Sync, conflict branches,
-  merge orchestration, reconciliation, and Mission Control remain BOSS-251–255.
+  expiry/reclaim lineage, tenant scope, RBAC and audit. BOSS-251/BOSS-252 add
+  deterministic CodeSyncRuns, canonical ChangeSets, exact lease/fence and fresh
+  topology gates, non-force owned-branch sync, protected-target holds, typed
+  ConflictSets, dedicated resolution branches, mandatory red-to-green proof,
+  independent review, and receipted two-parent resolution commits without
+  writing the protected target. Merge authorization/queue, reconciliation, and
+  Mission Control remain BOSS-253–255.
 - BOSS-236 implements the provider-account credential lifecycle foundation
   beneath BOSS-235: truthful initial-cloud auth definitions, multi-slot
   SecretRefs, safe metadata, rotation lineage/overlap, disable/revoke gates,

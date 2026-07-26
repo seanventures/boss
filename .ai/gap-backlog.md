@@ -9,9 +9,12 @@
   merges.
 - BOSS-250 implements fenced TTL branch/worktree ownership and closes once its
   stacked PR merges.
-- BOSS-251–255 remain the explicit implementation backlog for safe
-  synchronization, conflict-resolution branches, merge
-  orchestration/rollback, webhook/poll reconciliation, and Mission Control.
+- BOSS-251/BOSS-252 implement safe synchronization, typed conflict-resolution
+  branches, red-to-green proof, independent review, and receipted non-force
+  resolution commits; they close once their stacked PR merges.
+- BOSS-253–255 remain the explicit implementation backlog for exact-snapshot
+  merge authorization/queue and rollback, webhook/poll reconciliation, and
+  Mission Control.
 - The governing GHX-001 contract requires immutable observed SHAs, no silent
   reset/force-push, visible rewrite/divergence classification, provider writes
   through ChangeSets/ResourceReceipts, unique dedupe keys, and approval gates

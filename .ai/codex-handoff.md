@@ -1,5 +1,29 @@
 # Codex Handoff
 
+## 2026-07-26 BOSS-251/BOSS-252 safe sync and conflict resolution
+
+- Stacked branch `ai/codex/boss-251-252-safe-sync-conflicts` starts from
+  BOSS-250 draft PR #83 and preserves the BOSS-247→250 PR stack.
+- `CodeSyncRun` maps immutable topology to no-op, preserved tree-equivalent
+  identity, non-force owned-branch fast-forward, protected approval hold,
+  block, or a dedicated policy-approved resolution branch.
+- Apply verifies the exact raw lease token and monotonic fence, requires the
+  pinned policy to remain active, and captures a fresh snapshot before every
+  mutation. Commit/tree/topology drift fails before provider writes.
+- Every GitHub provider write attempt has a canonical ChangeSet operation,
+  Receipt, and ResourceReceipt. GitHub ref writes are explicitly zero-cost,
+  never force, retain rollback identity, retry three times, then deadletter.
+- Divergence creates a typed ConflictSet with immutable base/ours/theirs and
+  bounded file evidence. ResolutionPlans require failing-red/passing-green
+  proof and a reviewer different from the creator.
+- Approved resolution apply creates a two-parent commit through the Git Data
+  adapter and fast-forwards only the resolution branch. The protected target
+  remains unchanged for BOSS-253's exact-snapshot MergeAuthorization.
+- Validation: 31 widened GitHub API/adapter tests and 39 typed-client tests
+  pass; focused Ruff, TypeScript/Next route generation, production web build,
+  schema idempotency, OpenAPI YAML plus complete GitHub route coverage,
+  generated-doc drift, strict MkDocs, compile, and diff checks pass.
+
 ## 2026-07-26 BOSS-250 fenced branch/worktree leases
 
 - Stacked branch `ai/codex/boss-250-branch-leases` starts from BOSS-248/BOSS-249

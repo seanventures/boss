@@ -72,14 +72,15 @@ every operation from a `ProjectGitHubConnection` and
 
 ```text
 Resolve project binding
-  -> acquire fenced BranchLease
   -> fetch BranchSnapshot
   -> evaluate BranchPolicy
   -> classify topology
   -> no-op / fast-forward / resolution branch / Decision
-  -> plan ChangeSet and authorization
+  -> plan ChangeSet and rollback
+  -> acquire fenced BranchLease for the exact mutable ref
+  -> refetch and reject stale topology/policy
   -> execute adapter effect
-  -> write ResourceReceipt
+  -> write Receipt + ResourceReceipt for every provider write attempt
   -> refetch and verify result snapshot
   -> attach evidence and rollback point
   -> release lease
@@ -147,6 +148,52 @@ administratively reclaimed, and reacquisition after expiry retains
 `reclaimed_from_lease_id` lineage with a higher fence. Lease state carries
 owner kind/ID, run, worktree, ref, TTL, actor, heartbeat, release/reclaim reason,
 and audit events without putting the raw token in events or read models.
+
+## BOSS-251 implemented contract
+
+`CodeSyncRun` planning consumes one immutable `BranchSnapshot` and pins its
+repository binding, exact policy ID/version, source/target commit and tree
+identities, topology, dedupe key, rollback ref/SHA, and canonical `ChangeSet`.
+Equal topology is a no-op and a tree-equivalent rewrite preserves remote commit
+identity. An owned branch that is behind can be advanced without force.
+Protected-target updates remain `pending_approval`; this slice cannot bypass
+the later `MergeAuthorization` gate.
+
+Apply requires the raw lease token and current monotonic fence for the exact
+mutable ref. Immediately before any provider write BOSS verifies that the
+active policy is still the pinned version and captures a fresh remote snapshot.
+Changed commits, trees, refs, or topology fail safely before mutation.
+
+Every GitHub mutation is an adapter operation backed by one `ChangeSet`
+operation, `Receipt`, and `ResourceReceipt`. Zero-cost GitHub ref operations
+record that no `BudgetReservation` is required. Ref updates always use
+`force=false`. Provider failures are redacted, retryable for a bounded three
+attempts, and terminal failure creates a visible deadletter. Successful
+fast-forwards capture a result snapshot and retain an explicit rollback point.
+
+## BOSS-252 implemented contract
+
+Divergence creates a policy-approved `ai/` resolution branch at the immutable
+source head and attempts to merge the immutable target head there. The
+protected target is never touched. A clean provider merge leaves the resolution
+branch ready for the later merge-authorization slice. A provider conflict
+creates a typed `ConflictSet` containing base/ours/theirs commit and tree
+identities, the resolution-branch head, and bounded changed-file/patch
+evidence.
+
+A `ResolutionPlan` may modify only files represented by the conflict evidence,
+accepts bounded UTF-8 text and executable/non-executable file modes, and
+requires reproducible red-to-green evidence: the named red command must have a
+failing exit code and the green command must pass, with evidence references for
+both. Approval must come from a `github_manage` actor other than the plan
+creator and must attach an approved review verdict and summary.
+
+Apply re-verifies the exact resolution-branch and target identities, active
+policy, lease token, and fence. It constructs an explicit two-parent commit
+through the Git Data adapter, then advances only the resolution branch with a
+non-force update. Both provider actions have independent ChangeSet operations,
+Receipts, and ResourceReceipts. The protected target remains unchanged until
+BOSS-253 supplies a current `MergeAuthorization`.
 
 ## Completion criteria
 

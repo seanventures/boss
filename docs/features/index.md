@@ -7,7 +7,7 @@ This catalog is generated from the canonical product traceability ledger. It is 
 <div class="feature-summary">
   <div>
     <span class="boss-status boss-status--implemented">Implemented</span>
-    <strong>88</strong>
+    <strong>90</strong>
   </div>
   <div>
     <span class="boss-status boss-status--partial">Partial</span>
@@ -52,6 +52,8 @@ This catalog is generated from the canonical product traceability ledger. It is 
 | [GHX-002 — Versioned branch policy](implemented.md#ghx-002-versioned-branch-policy) | <span class="boss-status boss-status--implemented">Implemented</span> | PRD GitHub Project Sync; BOSS-248 |
 | [GHX-003 — Immutable remote topology snapshot](implemented.md#ghx-003-immutable-remote-topology-snapshot) | <span class="boss-status boss-status--implemented">Implemented</span> | PRD GitHub Project Sync; BOSS-249 |
 | [GHX-004 — Fenced branch and worktree lease](implemented.md#ghx-004-fenced-branch-and-worktree-lease) | <span class="boss-status boss-status--implemented">Implemented</span> | PRD GitHub Project Sync; BOSS-250 |
+| [GHX-005 — Safe code synchronization](implemented.md#ghx-005-safe-code-synchronization) | <span class="boss-status boss-status--implemented">Implemented</span> | PRD GitHub Project Sync; BOSS-251 |
+| [GHX-006 — Conflict branch and reviewed resolution](implemented.md#ghx-006-conflict-branch-and-reviewed-resolution) | <span class="boss-status boss-status--implemented">Implemented</span> | PRD GitHub Project Sync; BOSS-252 |
 | [ORC-001 — Conversational thread store/API](implemented.md#orc-001-conversational-thread-store-api) | <span class="boss-status boss-status--implemented">Implemented</span> | OSS readiness spec 07 T1; BOSS-78 |
 | [ORC-002 — Surface-agnostic intent routing](implemented.md#orc-002-surface-agnostic-intent-routing) | <span class="boss-status boss-status--implemented">Implemented</span> | OSS readiness spec 07 T2; BOSS-79 |
 | [ORC-003 — Capability-aware routing](implemented.md#orc-003-capability-aware-routing) | <span class="boss-status boss-status--implemented">Implemented</span> | OSS readiness spec 07 T3; BOSS-80 |

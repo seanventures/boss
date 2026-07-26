@@ -4579,6 +4579,218 @@ class GitHubBranchLeaseReclaimRequest(BaseModel):
         return self
 
 
+class GitHubCodeSyncRunSummary(BaseModel):
+    id: str
+    project_id: str
+    repository_binding_id: str
+    branch_policy_id: str
+    branch_policy_version: int
+    initial_snapshot_id: str
+    result_snapshot_id: Optional[str] = None
+    branch_lease_id: Optional[str] = None
+    fencing_token: Optional[int] = None
+    source_ref: str
+    target_ref: str
+    topology_classification: Literal[
+        "equal",
+        "tree_equivalent_rewrite",
+        "fast_forward",
+        "behind",
+        "diverged",
+        "missing",
+    ]
+    action: Literal[
+        "noop",
+        "preserve_remote_identity",
+        "fast_forward_target",
+        "fast_forward_source",
+        "create_resolution_branch",
+        "blocked",
+    ]
+    status: Literal[
+        "planned",
+        "pending_approval",
+        "approved",
+        "applying",
+        "succeeded",
+        "noop",
+        "conflicted",
+        "blocked",
+        "failed",
+        "deadlettered",
+    ]
+    dedupe_key: str
+    changeset_id: Optional[str] = None
+    conflict_set_id: Optional[str] = None
+    decision_id: Optional[str] = None
+    resolution_branch: Optional[str] = None
+    rollback_ref: Optional[str] = None
+    rollback_sha: Optional[str] = None
+    apply_attempts: int
+    receipt_ids: list[str] = Field(default_factory=list)
+    resource_receipt_ids: list[str] = Field(default_factory=list)
+    error: Optional[dict[str, Any]] = None
+    created_by: str
+    approved_by: Optional[str] = None
+    applied_by: Optional[str] = None
+    created_at: str
+    updated_at: str
+    completed_at: Optional[str] = None
+
+
+class GitHubCodeSyncRunListResponse(BaseModel):
+    project_id: str
+    items: list[GitHubCodeSyncRunSummary]
+
+
+class GitHubCodeSyncPlanRequest(BaseModel):
+    project_id: str
+    repository_binding_id: str
+    snapshot_id: str
+    dedupe_key: str
+    resolution_branch: Optional[str] = None
+    actor: str = "ceo"
+
+    @model_validator(mode="after")
+    def validate_github_code_sync_plan(self) -> "GitHubCodeSyncPlanRequest":
+        self.project_id = _require_text(self.project_id, "project_id")
+        self.repository_binding_id = _require_text(
+            self.repository_binding_id, "repository_binding_id"
+        )
+        self.snapshot_id = _require_text(self.snapshot_id, "snapshot_id")
+        self.dedupe_key = _require_text(self.dedupe_key, "dedupe_key")
+        if self.resolution_branch is not None:
+            self.resolution_branch = _require_text(
+                self.resolution_branch, "resolution_branch"
+            )
+        self.actor = _require_text(self.actor, "actor")
+        return self
+
+
+class GitHubCodeSyncApplyRequest(BaseModel):
+    project_id: str
+    lease_id: str
+    lease_token: str
+    fencing_token: int = Field(ge=1)
+    actor: str = "ceo"
+
+    @model_validator(mode="after")
+    def validate_github_code_sync_apply(self) -> "GitHubCodeSyncApplyRequest":
+        self.project_id = _require_text(self.project_id, "project_id")
+        self.lease_id = _require_text(self.lease_id, "lease_id")
+        self.lease_token = _require_text(self.lease_token, "lease_token")
+        self.actor = _require_text(self.actor, "actor")
+        return self
+
+
+class GitHubConflictSetSummary(BaseModel):
+    id: str
+    project_id: str
+    code_sync_run_id: str
+    repository_binding_id: str
+    resolution_branch: str
+    resolution_branch_head_sha: str
+    base_commit_sha: Optional[str] = None
+    base_tree_sha: Optional[str] = None
+    ours_commit_sha: str
+    ours_tree_sha: str
+    theirs_commit_sha: str
+    theirs_tree_sha: str
+    status: Literal[
+        "open", "resolution_proposed", "approved", "resolved", "blocked"
+    ]
+    files: list[dict[str, Any]] = Field(default_factory=list)
+    conflict_count: int
+    decision_id: Optional[str] = None
+    resolved_by_plan_id: Optional[str] = None
+    created_at: str
+    updated_at: str
+    resolved_at: Optional[str] = None
+
+
+class GitHubConflictSetListResponse(BaseModel):
+    project_id: str
+    items: list[GitHubConflictSetSummary]
+
+
+class GitHubResolutionPlanSummary(BaseModel):
+    id: str
+    project_id: str
+    conflict_set_id: str
+    version: int
+    status: Literal["proposed", "approved", "applied", "rejected", "failed"]
+    resolved_files: list[dict[str, Any]] = Field(default_factory=list)
+    validation_evidence: dict[str, Any] = Field(default_factory=dict)
+    independent_review: dict[str, Any] = Field(default_factory=dict)
+    decision_id: Optional[str] = None
+    changeset_id: Optional[str] = None
+    result_commit_sha: Optional[str] = None
+    created_by: str
+    approved_by: Optional[str] = None
+    applied_by: Optional[str] = None
+    created_at: str
+    updated_at: str
+    applied_at: Optional[str] = None
+
+
+class GitHubResolutionPlanListResponse(BaseModel):
+    project_id: str
+    items: list[GitHubResolutionPlanSummary]
+
+
+class GitHubResolutionPlanCreateRequest(BaseModel):
+    project_id: str
+    resolved_files: list[dict[str, Any]]
+    validation_evidence: dict[str, Any]
+    actor: str = "ceo"
+
+    @model_validator(mode="after")
+    def validate_github_resolution_plan_create(
+        self,
+    ) -> "GitHubResolutionPlanCreateRequest":
+        self.project_id = _require_text(self.project_id, "project_id")
+        self.actor = _require_text(self.actor, "actor")
+        return self
+
+
+class GitHubResolutionPlanApproveRequest(BaseModel):
+    project_id: str
+    review_evidence: dict[str, Any]
+    actor: str
+
+    @model_validator(mode="after")
+    def validate_github_resolution_plan_approve(
+        self,
+    ) -> "GitHubResolutionPlanApproveRequest":
+        self.project_id = _require_text(self.project_id, "project_id")
+        self.actor = _require_text(self.actor, "actor")
+        return self
+
+
+class GitHubResolutionPlanApplyRequest(BaseModel):
+    project_id: str
+    lease_id: str
+    lease_token: str
+    fencing_token: int = Field(ge=1)
+    actor: str = "ceo"
+
+    @model_validator(mode="after")
+    def validate_github_resolution_plan_apply(
+        self,
+    ) -> "GitHubResolutionPlanApplyRequest":
+        self.project_id = _require_text(self.project_id, "project_id")
+        self.lease_id = _require_text(self.lease_id, "lease_id")
+        self.lease_token = _require_text(self.lease_token, "lease_token")
+        self.actor = _require_text(self.actor, "actor")
+        return self
+
+
+class GitHubResolutionApplyResponse(BaseModel):
+    plan: GitHubResolutionPlanSummary
+    conflict_set: GitHubConflictSetSummary
+    sync_run: GitHubCodeSyncRunSummary
+
+
 class ProviderAccountSummary(BaseModel):
     id: str
     project_id: str

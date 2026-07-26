@@ -1217,6 +1217,107 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_github_branch_lease_active
   ON github_branch_leases(repository_binding_id, ref_name)
   WHERE status = 'active';
 
+CREATE TABLE IF NOT EXISTS github_code_sync_runs (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  repository_binding_id TEXT NOT NULL REFERENCES github_repository_bindings(id) ON DELETE CASCADE,
+  branch_policy_id TEXT NOT NULL REFERENCES github_branch_policies(id),
+  branch_policy_version INTEGER NOT NULL,
+  initial_snapshot_id TEXT NOT NULL REFERENCES github_branch_snapshots(id),
+  result_snapshot_id TEXT REFERENCES github_branch_snapshots(id),
+  branch_lease_id TEXT REFERENCES github_branch_leases(id),
+  fencing_token BIGINT,
+  source_ref TEXT NOT NULL,
+  target_ref TEXT NOT NULL,
+  topology_classification TEXT NOT NULL,
+  action TEXT NOT NULL,
+  status TEXT NOT NULL,
+  dedupe_key TEXT NOT NULL,
+  changeset_id TEXT,
+  conflict_set_id TEXT,
+  decision_id TEXT REFERENCES decisions(id),
+  resolution_branch TEXT,
+  rollback_ref TEXT,
+  rollback_sha TEXT,
+  apply_attempts INTEGER NOT NULL DEFAULT 0,
+  receipt_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
+  resource_receipt_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
+  error JSONB,
+  created_by TEXT NOT NULL,
+  approved_by TEXT,
+  applied_by TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  completed_at TIMESTAMPTZ,
+  UNIQUE(project_id, dedupe_key),
+  CHECK (action IN (
+    'noop', 'preserve_remote_identity', 'fast_forward_target',
+    'fast_forward_source', 'create_resolution_branch', 'blocked'
+  )),
+  CHECK (status IN (
+    'planned', 'pending_approval', 'approved', 'applying', 'succeeded',
+    'noop', 'conflicted', 'blocked', 'failed', 'deadlettered'
+  ))
+);
+CREATE INDEX IF NOT EXISTS idx_github_code_sync_runs_project
+  ON github_code_sync_runs(project_id, status, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_github_code_sync_runs_binding
+  ON github_code_sync_runs(repository_binding_id, source_ref, target_ref, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS github_conflict_sets (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  code_sync_run_id TEXT NOT NULL REFERENCES github_code_sync_runs(id) ON DELETE CASCADE,
+  repository_binding_id TEXT NOT NULL REFERENCES github_repository_bindings(id) ON DELETE CASCADE,
+  resolution_branch TEXT NOT NULL,
+  resolution_branch_head_sha TEXT NOT NULL,
+  base_commit_sha TEXT,
+  base_tree_sha TEXT,
+  ours_commit_sha TEXT NOT NULL,
+  ours_tree_sha TEXT NOT NULL,
+  theirs_commit_sha TEXT NOT NULL,
+  theirs_tree_sha TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'open',
+  files JSONB NOT NULL DEFAULT '[]'::jsonb,
+  conflict_count INTEGER NOT NULL DEFAULT 0,
+  decision_id TEXT REFERENCES decisions(id),
+  resolved_by_plan_id TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  resolved_at TIMESTAMPTZ,
+  CHECK (status IN (
+    'open', 'resolution_proposed', 'approved', 'resolved', 'blocked'
+  )),
+  CHECK (conflict_count >= 0)
+);
+CREATE INDEX IF NOT EXISTS idx_github_conflict_sets_project
+  ON github_conflict_sets(project_id, status, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS github_resolution_plans (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  conflict_set_id TEXT NOT NULL REFERENCES github_conflict_sets(id) ON DELETE CASCADE,
+  version INTEGER NOT NULL,
+  status TEXT NOT NULL DEFAULT 'proposed',
+  resolved_files JSONB NOT NULL DEFAULT '[]'::jsonb,
+  validation_evidence JSONB NOT NULL DEFAULT '{}'::jsonb,
+  independent_review JSONB NOT NULL DEFAULT '{}'::jsonb,
+  decision_id TEXT REFERENCES decisions(id),
+  changeset_id TEXT,
+  result_commit_sha TEXT,
+  created_by TEXT NOT NULL,
+  approved_by TEXT,
+  applied_by TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  applied_at TIMESTAMPTZ,
+  UNIQUE(conflict_set_id, version),
+  CHECK (version > 0),
+  CHECK (status IN ('proposed', 'approved', 'applied', 'rejected', 'failed'))
+);
+CREATE INDEX IF NOT EXISTS idx_github_resolution_plans_project
+  ON github_resolution_plans(project_id, status, created_at DESC);
+
 CREATE TABLE IF NOT EXISTS provider_adapters (
   id TEXT PRIMARY KEY,
   provider TEXT NOT NULL,

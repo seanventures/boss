@@ -6,7 +6,10 @@ import httpx
 import pytest
 
 from apps.api.app.config import Settings
-from apps.api.app.services.github_adapter import GitHubAdapter
+from apps.api.app.services.github_adapter import (
+    GitHubAdapter,
+    GitHubMergeConflictError,
+)
 from apps.api.app.services.github_app_adapter import (
     GitHubAppAdapter,
     InstallationToken,
@@ -223,6 +226,131 @@ def test_branch_snapshot_compare_and_checks_use_immutable_github_reads(monkeypat
     ]
     assert all(url.startswith("https://github.example/api/v3/") for url in calls)
     assert any("ai%2Fcodex%2Fwork" in url for url in calls)
+
+
+def test_safe_branch_write_primitives_are_non_force_and_conflicts_are_typed(
+    monkeypatch,
+):
+    calls: list[dict] = []
+    old_sha = "a" * 40
+    new_sha = "b" * 40
+
+    def fake_request(method: str, url: str, **kwargs) -> httpx.Response:
+        calls.append({"method": method, "url": url, **kwargs})
+        if url.endswith("/compare/base...head"):
+            return _response(
+                method,
+                url,
+                200,
+                json_body={
+                    "files": [
+                        {
+                            "filename": "engine/example.py",
+                            "status": "modified",
+                            "additions": 2,
+                            "deletions": 1,
+                            "changes": 3,
+                            "patch": "x" * 25000,
+                        }
+                    ]
+                },
+            )
+        if method == "POST" and url.endswith("/git/refs"):
+            return _response(
+                method,
+                url,
+                201,
+                json_body={"object": {"sha": old_sha}},
+            )
+        if method == "GET" and "/git/ref/heads/ai%2Fcodex%2Fwork" in url:
+            return _response(
+                method, url, 200, json_body={"object": {"sha": old_sha}}
+            )
+        if method == "GET" and url.endswith(f"/git/commits/{old_sha}"):
+            return _response(
+                method,
+                url,
+                200,
+                json_body={"tree": {"sha": "1" * 40}, "parents": []},
+            )
+        if method == "GET" and "/branches/ai%2Fcodex%2Fwork" in url:
+            return _response(
+                method,
+                url,
+                200,
+                json_body={"protected": False, "protection": {}},
+            )
+        if method == "PATCH" and "/git/refs/heads/ai%2Fcodex%2Fwork" in url:
+            return _response(
+                method,
+                url,
+                200,
+                json_body={"object": {"sha": new_sha}},
+            )
+        if method == "POST" and url.endswith("/merges"):
+            return _response(
+                method,
+                url,
+                409,
+                json_body={"message": "Merge conflict"},
+            )
+        if method == "POST" and url.endswith("/git/blobs"):
+            return _response(
+                method, url, 201, json_body={"sha": "2" * 40}
+            )
+        if method == "POST" and url.endswith("/git/trees"):
+            return _response(
+                method, url, 201, json_body={"sha": "3" * 40}
+            )
+        if method == "POST" and url.endswith("/git/commits"):
+            return _response(
+                method,
+                url,
+                201,
+                json_body={"sha": "4" * 40, "tree": {"sha": "3" * 40}},
+            )
+        raise AssertionError(f"unexpected GitHub request: {method} {url}")
+
+    monkeypatch.setattr(httpx, "request", fake_request)
+    adapter = GitHubAdapter(_settings(), token="scoped-token")
+    files = adapter.compare_changed_files("base", "head")
+    created = adapter.create_branch_ref("ai/codex/work", old_sha)
+    updated = adapter.fast_forward_ref(
+        "ai/codex/work",
+        expected_sha=old_sha,
+        new_sha=new_sha,
+    )
+    with pytest.raises(GitHubMergeConflictError):
+        adapter.merge_branch(
+            base_branch="ai/codex/work",
+            head_sha=new_sha,
+            message="merge",
+        )
+    resolution = adapter.create_resolution_commit(
+        base_tree_sha="1" * 40,
+        parent_shas=[old_sha, new_sha],
+        resolved_files=[
+            {
+                "path": "engine/example.py",
+                "content": "resolved = True\n",
+                "mode": "100644",
+            }
+        ],
+        message="resolve",
+    )
+
+    assert len(files[0]["patch"]) == 20000
+    assert created == {"ref": "ai/codex/work", "commit_sha": old_sha}
+    assert updated["forced"] is False
+    assert resolution["commit_sha"] == "4" * 40
+    ref_update = next(call for call in calls if call["method"] == "PATCH")
+    assert ref_update["json"] == {"sha": new_sha, "force": False}
+    commit_call = next(
+        call
+        for call in calls
+        if call["method"] == "POST" and call["url"].endswith("/git/commits")
+    )
+    assert commit_call["json"]["parents"] == [old_sha, new_sha]
 
 
 @pytest.mark.parametrize(

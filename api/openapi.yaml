@@ -3450,6 +3450,256 @@ paths:
         '403': { description: Actor lacks github_manage permission }
         '404': { description: Branch lease not found in the project }
         '409': { description: Lease is still unexpired or already terminal }
+  /v1/github/code-sync-runs:
+    get:
+      summary: List project GitHub code synchronization runs
+      parameters:
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+        - name: repository_binding_id
+          in: query
+          required: false
+          schema: { type: string }
+        - name: status
+          in: query
+          required: false
+          schema: { type: string }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 200, default: 100 }
+      responses:
+        '200': { description: Sync plans and their immutable evidence, policy, lease, receipt, conflict, and rollback identities }
+  /v1/github/code-sync-runs/plan:
+    post:
+      summary: Plan a deterministic GitHub branch synchronization from an immutable snapshot
+      description: Maps topology to noop, non-force fast-forward, protected approval, blocking, or a dedicated resolution branch and creates the canonical zero-cost ChangeSet for every planned provider mutation.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                [project_id, repository_binding_id, snapshot_id, dedupe_key]
+              properties:
+                project_id: { type: string }
+                repository_binding_id: { type: string }
+                snapshot_id: { type: string }
+                dedupe_key: { type: string }
+                resolution_branch: { type: string }
+                actor: { type: string, default: ceo }
+      responses:
+        '201': { description: Idempotent sync plan with pinned policy, topology, ChangeSet, rollback, and approval posture }
+        '403': { description: Actor lacks github_manage permission }
+        '404': { description: Snapshot, policy, or repository binding not found }
+        '409': { description: Dedupe collision, inactive binding, or policy/ref denial }
+  /v1/github/code-sync-runs/{sync_run_id}:
+    get:
+      summary: Get one tenant-scoped GitHub code sync run
+      parameters:
+        - name: sync_run_id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Sync run state and complete receipt/rollback linkage }
+        '404': { description: Sync run not found in the project }
+  /v1/github/code-sync-runs/{sync_run_id}/apply:
+    post:
+      summary: Apply a safe GitHub branch synchronization under a fenced lease
+      description: Re-captures remote topology, rejects stale inputs or policies, verifies the exact ref lease and fencing token, forbids force push, and records a Receipt plus ResourceReceipt for every provider write attempt.
+      parameters:
+        - name: sync_run_id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id, lease_id, lease_token, fencing_token]
+              properties:
+                project_id: { type: string }
+                lease_id: { type: string }
+                lease_token: { type: string }
+                fencing_token: { type: integer, minimum: 1 }
+                actor: { type: string, default: ceo }
+      responses:
+        '200': { description: Succeeded, conflicted, retryable failed, or deadlettered sync state }
+        '403': { description: Actor lacks github_manage permission }
+        '404': { description: Sync run, lease, or repository binding not found }
+        '409': { description: Pending approval, invalid lease, stale fencing, stale policy, or invalid state }
+  /v1/github/conflict-sets:
+    get:
+      summary: List typed GitHub conflict evidence
+      parameters:
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+        - name: status
+          in: query
+          required: false
+          schema: { type: string }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 200, default: 100 }
+      responses:
+        '200': { description: Conflict sets with immutable base, ours, theirs, resolution branch, and bounded file evidence }
+  /v1/github/conflict-sets/{conflict_set_id}:
+    get:
+      summary: Get one tenant-scoped GitHub conflict set
+      parameters:
+        - name: conflict_set_id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Typed conflict evidence and resolution state }
+        '404': { description: Conflict set not found in the project }
+  /v1/github/conflict-sets/{conflict_set_id}/resolution-plans:
+    post:
+      summary: Propose a GitHub conflict resolution with red-to-green proof
+      description: Stores bounded reviewed text-file resolutions on the dedicated branch only. The protected target remains unchanged.
+      parameters:
+        - name: conflict_set_id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id, resolved_files, validation_evidence]
+              properties:
+                project_id: { type: string }
+                resolved_files:
+                  type: array
+                  minItems: 1
+                  maxItems: 100
+                  items:
+                    type: object
+                    required: [path, content]
+                    properties:
+                      path: { type: string }
+                      content: { type: string }
+                      mode: { type: string, enum: ['100644', '100755'] }
+                validation_evidence:
+                  type: object
+                  required: [red, green]
+                  description: Both entries require command, exit_code, and evidence_ref; red must fail and green must pass.
+                actor: { type: string, default: ceo }
+      responses:
+        '201': { description: Versioned resolution plan and approval-required ChangeSet }
+        '403': { description: Actor lacks github_manage permission }
+        '404': { description: Conflict set not found in the project }
+        '409': { description: Invalid state, file scope, or red-to-green evidence }
+  /v1/github/resolution-plans:
+    get:
+      summary: List versioned GitHub conflict resolution plans
+      parameters:
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+        - name: conflict_set_id
+          in: query
+          required: false
+          schema: { type: string }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 200, default: 100 }
+      responses:
+        '200': { description: Resolution proposals, independent review, validation, ChangeSet, and result commit evidence }
+  /v1/github/resolution-plans/{plan_id}:
+    get:
+      summary: Get one tenant-scoped GitHub resolution plan
+      parameters:
+        - name: plan_id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Resolution plan with red-to-green and review evidence }
+        '404': { description: Resolution plan not found in the project }
+  /v1/github/resolution-plans/{plan_id}/approve:
+    post:
+      summary: Independently approve a GitHub conflict resolution plan
+      description: The reviewer must differ from the proposal creator and attach an approved review verdict and summary.
+      parameters:
+        - name: plan_id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id, review_evidence, actor]
+              properties:
+                project_id: { type: string }
+                review_evidence:
+                  type: object
+                  required: [verdict, summary]
+                  properties:
+                    verdict: { type: string, enum: [approved] }
+                    summary: { type: string }
+                actor: { type: string }
+      responses:
+        '200': { description: Independently approved resolution plan }
+        '403': { description: Actor lacks github_manage permission }
+        '404': { description: Resolution plan not found in the project }
+        '409': { description: Self-review, invalid evidence, or invalid plan state }
+  /v1/github/resolution-plans/{plan_id}/apply:
+    post:
+      summary: Apply an approved resolution commit to its dedicated branch
+      description: Verifies unchanged ours/theirs identities and the exact resolution-branch lease, creates an explicit two-parent commit, then performs a non-force fast-forward. It never writes the protected target branch.
+      parameters:
+        - name: plan_id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id, lease_id, lease_token, fencing_token]
+              properties:
+                project_id: { type: string }
+                lease_id: { type: string }
+                lease_token: { type: string }
+                fencing_token: { type: integer, minimum: 1 }
+                actor: { type: string, default: ceo }
+      responses:
+        '200': { description: Applied/failed plan plus conflict-set and sync-run state }
+        '403': { description: Actor lacks github_manage permission }
+        '404': { description: Resolution plan, conflict set, sync run, lease, or binding not found }
+        '409': { description: Invalid review/state, stale remote inputs, stale policy, or invalid lease/fence }
   /v1/provider-definitions:
     get:
       summary: List infrastructure provider connection and authentication contracts

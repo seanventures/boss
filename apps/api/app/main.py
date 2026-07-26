@@ -242,6 +242,12 @@ from .schemas import (
     GitHubBranchSnapshotCaptureResponse,
     GitHubBranchSnapshotListResponse,
     GitHubBranchSnapshotSummary,
+    GitHubCodeSyncApplyRequest,
+    GitHubCodeSyncPlanRequest,
+    GitHubCodeSyncRunListResponse,
+    GitHubCodeSyncRunSummary,
+    GitHubConflictSetListResponse,
+    GitHubConflictSetSummary,
     GitHubConnectionCreateRequest,
     GitHubConnectionLifecycleRequest,
     GitHubConnectionListResponse,
@@ -252,6 +258,12 @@ from .schemas import (
     GitHubRepositoryBindingListResponse,
     GitHubRepositoryBindingSummary,
     GitHubRepositoryBindingUpdateRequest,
+    GitHubResolutionApplyResponse,
+    GitHubResolutionPlanApplyRequest,
+    GitHubResolutionPlanApproveRequest,
+    GitHubResolutionPlanCreateRequest,
+    GitHubResolutionPlanListResponse,
+    GitHubResolutionPlanSummary,
     WebhookDeliveryCreateRequest,
     WebhookDeliveryExecuteRequest,
     WebhookDeliveryListResponse,
@@ -528,6 +540,14 @@ from .services.github_branch_leases import (
     GitHubBranchLeaseService,
     GitHubBranchLeaseTokenError,
 )
+from .services.github_code_sync import (
+    GitHubCodeSyncNotFoundError,
+    GitHubCodeSyncService,
+    GitHubCodeSyncStaleError,
+    GitHubCodeSyncStateError,
+    GitHubConflictSetNotFoundError,
+    GitHubResolutionPlanNotFoundError,
+)
 from .services.github_connections import (
     GitHubConnectionNotFoundError,
     GitHubConnectionService,
@@ -654,6 +674,11 @@ github_branches = GitHubBranchService(
 )
 github_branch_leases = GitHubBranchLeaseService(
     github_connections=github_connections,
+)
+github_code_sync = GitHubCodeSyncService(
+    github_connections=github_connections,
+    github_branches=github_branches,
+    github_branch_leases=github_branch_leases,
 )
 software_factory = SoftwareFactoryService(settings, ports=engine_ports)
 decisions = DecisionService(settings)
@@ -9247,6 +9272,326 @@ def reclaim_github_branch_lease(
         except (GitHubBranchLeaseConflictError, ValueError) as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
         return GitHubBranchLeaseSummary(**item)
+
+
+@app.get(
+    "/v1/github/code-sync-runs",
+    response_model=GitHubCodeSyncRunListResponse,
+)
+def list_github_code_sync_runs(
+    project_id: str,
+    repository_binding_id: Optional[str] = None,
+    status: Optional[str] = None,
+    limit: int = Query(default=100, ge=1, le=200),
+) -> GitHubCodeSyncRunListResponse:
+    with begin(engine) as connection:
+        return GitHubCodeSyncRunListResponse(
+            project_id=project_id,
+            items=[
+                GitHubCodeSyncRunSummary(**item)
+                for item in github_code_sync.list_runs(
+                    connection,
+                    project_id,
+                    repository_binding_id=repository_binding_id,
+                    status=status,
+                    limit=limit,
+                )
+            ],
+        )
+
+
+@app.post(
+    "/v1/github/code-sync-runs/plan",
+    response_model=GitHubCodeSyncRunSummary,
+    status_code=201,
+)
+def plan_github_code_sync(
+    payload: GitHubCodeSyncPlanRequest,
+) -> GitHubCodeSyncRunSummary:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection,
+            payload.project_id,
+            payload.actor,
+            "github_manage",
+        )
+        try:
+            item = github_code_sync.plan(
+                connection,
+                project_id=payload.project_id,
+                repository_binding_id=payload.repository_binding_id,
+                snapshot_id=payload.snapshot_id,
+                dedupe_key=payload.dedupe_key,
+                resolution_branch=payload.resolution_branch,
+                actor=payload.actor,
+            )
+        except (
+            GitHubBranchSnapshotNotFoundError,
+            GitHubBranchPolicyNotFoundError,
+            GitHubRepositoryBindingNotFoundError,
+        ) as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except (
+            GitHubCodeSyncStateError,
+            GitHubConnectionStateError,
+            ValueError,
+        ) as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        return GitHubCodeSyncRunSummary(**item)
+
+
+@app.get(
+    "/v1/github/code-sync-runs/{sync_run_id}",
+    response_model=GitHubCodeSyncRunSummary,
+)
+def get_github_code_sync_run(
+    sync_run_id: str,
+    project_id: str,
+) -> GitHubCodeSyncRunSummary:
+    with begin(engine) as connection:
+        try:
+            item = github_code_sync.get(connection, project_id, sync_run_id)
+        except GitHubCodeSyncNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        return GitHubCodeSyncRunSummary(**item)
+
+
+@app.post(
+    "/v1/github/code-sync-runs/{sync_run_id}/apply",
+    response_model=GitHubCodeSyncRunSummary,
+)
+def apply_github_code_sync(
+    sync_run_id: str,
+    payload: GitHubCodeSyncApplyRequest,
+) -> GitHubCodeSyncRunSummary:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection,
+            payload.project_id,
+            payload.actor,
+            "github_manage",
+        )
+        try:
+            item = github_code_sync.apply(
+                connection,
+                project_id=payload.project_id,
+                sync_run_id=sync_run_id,
+                lease_id=payload.lease_id,
+                lease_token=payload.lease_token,
+                fencing_token=payload.fencing_token,
+                actor=payload.actor,
+            )
+        except (
+            GitHubCodeSyncNotFoundError,
+            GitHubBranchLeaseNotFoundError,
+            GitHubRepositoryBindingNotFoundError,
+        ) as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except (
+            GitHubCodeSyncStateError,
+            GitHubCodeSyncStaleError,
+            GitHubBranchLeaseConflictError,
+            GitHubBranchLeaseTokenError,
+            GitHubConnectionStateError,
+            ValueError,
+        ) as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        return GitHubCodeSyncRunSummary(**item)
+
+
+@app.get(
+    "/v1/github/conflict-sets",
+    response_model=GitHubConflictSetListResponse,
+)
+def list_github_conflict_sets(
+    project_id: str,
+    status: Optional[str] = None,
+    limit: int = Query(default=100, ge=1, le=200),
+) -> GitHubConflictSetListResponse:
+    with begin(engine) as connection:
+        return GitHubConflictSetListResponse(
+            project_id=project_id,
+            items=[
+                GitHubConflictSetSummary(**item)
+                for item in github_code_sync.list_conflicts(
+                    connection,
+                    project_id,
+                    status=status,
+                    limit=limit,
+                )
+            ],
+        )
+
+
+@app.get(
+    "/v1/github/conflict-sets/{conflict_set_id}",
+    response_model=GitHubConflictSetSummary,
+)
+def get_github_conflict_set(
+    conflict_set_id: str,
+    project_id: str,
+) -> GitHubConflictSetSummary:
+    with begin(engine) as connection:
+        try:
+            item = github_code_sync.get_conflict(
+                connection, project_id, conflict_set_id
+            )
+        except GitHubConflictSetNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        return GitHubConflictSetSummary(**item)
+
+
+@app.get(
+    "/v1/github/resolution-plans",
+    response_model=GitHubResolutionPlanListResponse,
+)
+def list_github_resolution_plans(
+    project_id: str,
+    conflict_set_id: Optional[str] = None,
+    limit: int = Query(default=100, ge=1, le=200),
+) -> GitHubResolutionPlanListResponse:
+    with begin(engine) as connection:
+        return GitHubResolutionPlanListResponse(
+            project_id=project_id,
+            items=[
+                GitHubResolutionPlanSummary(**item)
+                for item in github_code_sync.list_resolution_plans(
+                    connection,
+                    project_id,
+                    conflict_set_id=conflict_set_id,
+                    limit=limit,
+                )
+            ],
+        )
+
+
+@app.post(
+    "/v1/github/conflict-sets/{conflict_set_id}/resolution-plans",
+    response_model=GitHubResolutionPlanSummary,
+    status_code=201,
+)
+def create_github_resolution_plan(
+    conflict_set_id: str,
+    payload: GitHubResolutionPlanCreateRequest,
+) -> GitHubResolutionPlanSummary:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection,
+            payload.project_id,
+            payload.actor,
+            "github_manage",
+        )
+        try:
+            item = github_code_sync.propose_resolution(
+                connection,
+                project_id=payload.project_id,
+                conflict_set_id=conflict_set_id,
+                resolved_files=payload.resolved_files,
+                validation_evidence=payload.validation_evidence,
+                actor=payload.actor,
+            )
+        except GitHubConflictSetNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except (GitHubCodeSyncStateError, ValueError) as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        return GitHubResolutionPlanSummary(**item)
+
+
+@app.get(
+    "/v1/github/resolution-plans/{plan_id}",
+    response_model=GitHubResolutionPlanSummary,
+)
+def get_github_resolution_plan(
+    plan_id: str,
+    project_id: str,
+) -> GitHubResolutionPlanSummary:
+    with begin(engine) as connection:
+        try:
+            item = github_code_sync.get_resolution_plan(
+                connection, project_id, plan_id
+            )
+        except GitHubResolutionPlanNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        return GitHubResolutionPlanSummary(**item)
+
+
+@app.post(
+    "/v1/github/resolution-plans/{plan_id}/approve",
+    response_model=GitHubResolutionPlanSummary,
+)
+def approve_github_resolution_plan(
+    plan_id: str,
+    payload: GitHubResolutionPlanApproveRequest,
+) -> GitHubResolutionPlanSummary:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection,
+            payload.project_id,
+            payload.actor,
+            "github_manage",
+        )
+        try:
+            item = github_code_sync.approve_resolution(
+                connection,
+                project_id=payload.project_id,
+                plan_id=plan_id,
+                review_evidence=payload.review_evidence,
+                actor=payload.actor,
+            )
+        except GitHubResolutionPlanNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except (GitHubCodeSyncStateError, ValueError) as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        return GitHubResolutionPlanSummary(**item)
+
+
+@app.post(
+    "/v1/github/resolution-plans/{plan_id}/apply",
+    response_model=GitHubResolutionApplyResponse,
+)
+def apply_github_resolution_plan(
+    plan_id: str,
+    payload: GitHubResolutionPlanApplyRequest,
+) -> GitHubResolutionApplyResponse:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection,
+            payload.project_id,
+            payload.actor,
+            "github_manage",
+        )
+        try:
+            result = github_code_sync.apply_resolution(
+                connection,
+                project_id=payload.project_id,
+                plan_id=plan_id,
+                lease_id=payload.lease_id,
+                lease_token=payload.lease_token,
+                fencing_token=payload.fencing_token,
+                actor=payload.actor,
+            )
+        except (
+            GitHubResolutionPlanNotFoundError,
+            GitHubConflictSetNotFoundError,
+            GitHubCodeSyncNotFoundError,
+            GitHubBranchLeaseNotFoundError,
+            GitHubRepositoryBindingNotFoundError,
+        ) as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except (
+            GitHubCodeSyncStateError,
+            GitHubCodeSyncStaleError,
+            GitHubBranchLeaseConflictError,
+            GitHubBranchLeaseTokenError,
+            GitHubConnectionStateError,
+            ValueError,
+        ) as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        return GitHubResolutionApplyResponse(
+            plan=GitHubResolutionPlanSummary(**result["plan"]),
+            conflict_set=GitHubConflictSetSummary(**result["conflict_set"]),
+            sync_run=GitHubCodeSyncRunSummary(**result["sync_run"]),
+        )
 
 
 @app.get("/v1/provider-definitions", response_model=ProviderDefinitionListResponse)

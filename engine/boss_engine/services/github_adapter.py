@@ -14,6 +14,10 @@ class IntegrationConfigurationError(RuntimeError):
     pass
 
 
+class GitHubMergeConflictError(RuntimeError):
+    """GitHub could not merge the requested immutable commits cleanly."""
+
+
 @dataclass
 class PullRequestResult:
     url: str
@@ -231,6 +235,186 @@ class GitHubAdapter:
             "merge_base_tree_sha": (merge_base.get("commit") or {})
             .get("tree", {})
             .get("sha"),
+        }
+
+    def compare_changed_files(
+        self,
+        base_sha: str,
+        head_sha: str,
+        *,
+        limit: int = 300,
+    ) -> list[dict]:
+        """Return bounded, reviewable file evidence for two immutable commits."""
+        if limit < 1 or limit > 300:
+            raise ValueError("limit must be between 1 and 300.")
+        payload = self._request(
+            "GET",
+            (
+                f"/repos/{self.repository_full_name}/compare/"
+                f"{quote(base_sha, safe='')}...{quote(head_sha, safe='')}"
+            ),
+        )
+        files = []
+        for item in (payload.get("files") or [])[:limit]:
+            patch = item.get("patch")
+            files.append(
+                {
+                    "filename": str(item.get("filename") or ""),
+                    "previous_filename": item.get("previous_filename"),
+                    "status": str(item.get("status") or "modified"),
+                    "additions": max(0, int(item.get("additions") or 0)),
+                    "deletions": max(0, int(item.get("deletions") or 0)),
+                    "changes": max(0, int(item.get("changes") or 0)),
+                    "patch": (
+                        str(patch)[:20000]
+                        if isinstance(patch, str)
+                        else None
+                    ),
+                }
+            )
+        return files
+
+    def create_branch_ref(self, branch_name: str, commit_sha: str) -> dict:
+        """Create a new branch at an immutable commit; never overwrites a ref."""
+        response = self._request(
+            "POST",
+            f"/repos/{self.repository_full_name}/git/refs",
+            {"ref": f"refs/heads/{branch_name}", "sha": commit_sha},
+        )
+        return {
+            "ref": branch_name,
+            "commit_sha": str((response.get("object") or {}).get("sha") or ""),
+        }
+
+    def fast_forward_ref(
+        self,
+        branch_name: str,
+        *,
+        expected_sha: str,
+        new_sha: str,
+    ) -> dict:
+        """Update a branch without force after checking its expected head."""
+        current = self.branch_snapshot(branch_name)
+        if not current["exists"]:
+            raise RuntimeError("GitHub branch no longer exists.")
+        if current["commit_sha"] != expected_sha:
+            raise RuntimeError("GitHub branch head changed before update.")
+        encoded_branch = quote(branch_name, safe="")
+        response = self._request(
+            "PATCH",
+            (
+                f"/repos/{self.repository_full_name}/git/refs/heads/"
+                f"{encoded_branch}"
+            ),
+            {"sha": new_sha, "force": False},
+        )
+        result_sha = str((response.get("object") or {}).get("sha") or "")
+        if result_sha != new_sha:
+            raise RuntimeError("GitHub returned an unexpected branch head.")
+        return {
+            "ref": branch_name,
+            "previous_sha": expected_sha,
+            "commit_sha": result_sha,
+            "forced": False,
+        }
+
+    def merge_branch(
+        self,
+        *,
+        base_branch: str,
+        head_sha: str,
+        message: str,
+    ) -> dict:
+        """Attempt a provider-side merge into an unprotected resolution branch."""
+        try:
+            response = self._request(
+                "POST",
+                f"/repos/{self.repository_full_name}/merges",
+                {
+                    "base": base_branch,
+                    "head": head_sha,
+                    "commit_message": message,
+                },
+            )
+        except httpx.HTTPStatusError as error:
+            if error.response.status_code == 409:
+                raise GitHubMergeConflictError(
+                    "GitHub reported merge conflicts."
+                ) from error
+            raise
+        commit = response.get("commit") or response
+        return {
+            "base": base_branch,
+            "head": head_sha,
+            "commit_sha": str(response.get("sha") or commit.get("sha") or ""),
+            "tree_sha": str(
+                ((commit.get("tree") or {}).get("sha"))
+                or ((commit.get("commit") or {}).get("tree") or {}).get("sha")
+                or ""
+            ),
+        }
+
+    def create_resolution_commit(
+        self,
+        *,
+        base_tree_sha: str,
+        parent_shas: list[str],
+        resolved_files: list[dict],
+        message: str,
+    ) -> dict:
+        """Create one explicit reviewed resolution commit from complete file bodies."""
+        if len(parent_shas) != 2 or any(not str(value).strip() for value in parent_shas):
+            raise ValueError("A resolution commit requires exactly two parent SHAs.")
+        if not resolved_files:
+            raise ValueError("resolved_files must contain at least one file.")
+        tree_entries = []
+        for item in resolved_files:
+            path = str(item.get("path") or "").strip()
+            content = item.get("content")
+            mode = str(item.get("mode") or "100644")
+            if not path or path.startswith("/") or ".." in path.split("/"):
+                raise ValueError("Resolved file paths must be repository-relative.")
+            if not isinstance(content, str):
+                raise ValueError("Resolved file content must be UTF-8 text.")
+            if mode not in {"100644", "100755"}:
+                raise ValueError("Resolved file mode must be 100644 or 100755.")
+            blob = self._request(
+                "POST",
+                f"/repos/{self.repository_full_name}/git/blobs",
+                {
+                    "content": base64.b64encode(content.encode("utf-8")).decode(
+                        "ascii"
+                    ),
+                    "encoding": "base64",
+                },
+            )
+            tree_entries.append(
+                {
+                    "path": path,
+                    "mode": mode,
+                    "type": "blob",
+                    "sha": str(blob["sha"]),
+                }
+            )
+        tree = self._request(
+            "POST",
+            f"/repos/{self.repository_full_name}/git/trees",
+            {"base_tree": base_tree_sha, "tree": tree_entries},
+        )
+        commit = self._request(
+            "POST",
+            f"/repos/{self.repository_full_name}/git/commits",
+            {
+                "message": message,
+                "tree": str(tree["sha"]),
+                "parents": parent_shas,
+            },
+        )
+        return {
+            "commit_sha": str(commit["sha"]),
+            "tree_sha": str((commit.get("tree") or {}).get("sha") or tree["sha"]),
+            "parents": parent_shas,
+            "files": [entry["path"] for entry in tree_entries],
         }
 
     def commit_checks(self, commit_sha: str) -> list[dict]:

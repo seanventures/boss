@@ -3190,6 +3190,186 @@ export type GitHubBranchLeaseReclaimRequest = {
   actor?: string;
 };
 
+export type GitHubCodeSyncRunSummary = {
+  id: string;
+  project_id: string;
+  repository_binding_id: string;
+  branch_policy_id: string;
+  branch_policy_version: number;
+  initial_snapshot_id: string;
+  result_snapshot_id: string | null;
+  branch_lease_id: string | null;
+  fencing_token: number | null;
+  source_ref: string;
+  target_ref: string;
+  topology_classification:
+    | "equal"
+    | "tree_equivalent_rewrite"
+    | "fast_forward"
+    | "behind"
+    | "diverged"
+    | "missing";
+  action:
+    | "noop"
+    | "preserve_remote_identity"
+    | "fast_forward_target"
+    | "fast_forward_source"
+    | "create_resolution_branch"
+    | "blocked";
+  status:
+    | "planned"
+    | "pending_approval"
+    | "approved"
+    | "applying"
+    | "succeeded"
+    | "noop"
+    | "conflicted"
+    | "blocked"
+    | "failed"
+    | "deadlettered";
+  dedupe_key: string;
+  changeset_id: string | null;
+  conflict_set_id: string | null;
+  decision_id: string | null;
+  resolution_branch: string | null;
+  rollback_ref: string | null;
+  rollback_sha: string | null;
+  apply_attempts: number;
+  receipt_ids: string[];
+  resource_receipt_ids: string[];
+  error: Record<string, unknown> | null;
+  created_by: string;
+  approved_by: string | null;
+  applied_by: string | null;
+  created_at: string;
+  updated_at: string;
+  completed_at: string | null;
+};
+
+export type GitHubCodeSyncRunListResponse = {
+  project_id: string;
+  items: GitHubCodeSyncRunSummary[];
+};
+
+export type GitHubCodeSyncPlanRequest = {
+  project_id: string;
+  repository_binding_id: string;
+  snapshot_id: string;
+  dedupe_key: string;
+  resolution_branch?: string;
+  actor?: string;
+};
+
+export type GitHubCodeSyncApplyRequest = {
+  project_id: string;
+  lease_id: string;
+  lease_token: string;
+  fencing_token: number;
+  actor?: string;
+};
+
+export type GitHubConflictSetSummary = {
+  id: string;
+  project_id: string;
+  code_sync_run_id: string;
+  repository_binding_id: string;
+  resolution_branch: string;
+  resolution_branch_head_sha: string;
+  base_commit_sha: string | null;
+  base_tree_sha: string | null;
+  ours_commit_sha: string;
+  ours_tree_sha: string;
+  theirs_commit_sha: string;
+  theirs_tree_sha: string;
+  status: "open" | "resolution_proposed" | "approved" | "resolved" | "blocked";
+  files: Array<Record<string, unknown>>;
+  conflict_count: number;
+  decision_id: string | null;
+  resolved_by_plan_id: string | null;
+  created_at: string;
+  updated_at: string;
+  resolved_at: string | null;
+};
+
+export type GitHubConflictSetListResponse = {
+  project_id: string;
+  items: GitHubConflictSetSummary[];
+};
+
+export type GitHubResolutionPlanSummary = {
+  id: string;
+  project_id: string;
+  conflict_set_id: string;
+  version: number;
+  status: "proposed" | "approved" | "applied" | "rejected" | "failed";
+  resolved_files: Array<Record<string, unknown>>;
+  validation_evidence: Record<string, unknown>;
+  independent_review: Record<string, unknown>;
+  decision_id: string | null;
+  changeset_id: string | null;
+  result_commit_sha: string | null;
+  created_by: string;
+  approved_by: string | null;
+  applied_by: string | null;
+  created_at: string;
+  updated_at: string;
+  applied_at: string | null;
+};
+
+export type GitHubResolutionPlanListResponse = {
+  project_id: string;
+  items: GitHubResolutionPlanSummary[];
+};
+
+export type GitHubResolutionPlanCreateRequest = {
+  project_id: string;
+  resolved_files: Array<{
+    path: string;
+    content: string;
+    mode?: "100644" | "100755";
+  }>;
+  validation_evidence: {
+    red: {
+      command: string;
+      exit_code: number;
+      evidence_ref: string;
+      [key: string]: unknown;
+    };
+    green: {
+      command: string;
+      exit_code: number;
+      evidence_ref: string;
+      [key: string]: unknown;
+    };
+    [key: string]: unknown;
+  };
+  actor?: string;
+};
+
+export type GitHubResolutionPlanApproveRequest = {
+  project_id: string;
+  review_evidence: {
+    verdict: "approved";
+    summary: string;
+    [key: string]: unknown;
+  };
+  actor: string;
+};
+
+export type GitHubResolutionPlanApplyRequest = {
+  project_id: string;
+  lease_id: string;
+  lease_token: string;
+  fencing_token: number;
+  actor?: string;
+};
+
+export type GitHubResolutionApplyResponse = {
+  plan: GitHubResolutionPlanSummary;
+  conflict_set: GitHubConflictSetSummary;
+  sync_run: GitHubCodeSyncRunSummary;
+};
+
 export type AgentModuleSummary = {
   module_id: string;
   version: string;
@@ -6196,6 +6376,127 @@ export function createBossApiClient(config: BossApiClientConfig) {
       return request<GitHubBranchLeaseSummary>(
         "POST",
         `/v1/github/branch-leases/${encodeURIComponent(leaseId)}/reclaim`,
+        { body: payload },
+      );
+    },
+    listGitHubCodeSyncRuns(
+      projectId: string,
+      options: {
+        repository_binding_id?: string;
+        status?: string;
+        limit?: number;
+      } = {},
+    ) {
+      return request<GitHubCodeSyncRunListResponse>(
+        "GET",
+        "/v1/github/code-sync-runs",
+        {
+          query: {
+            project_id: projectId,
+            repository_binding_id: options.repository_binding_id,
+            status: options.status,
+            limit: options.limit ?? 100,
+          },
+        },
+      );
+    },
+    planGitHubCodeSync(payload: GitHubCodeSyncPlanRequest) {
+      return request<GitHubCodeSyncRunSummary>(
+        "POST",
+        "/v1/github/code-sync-runs/plan",
+        { body: payload },
+      );
+    },
+    getGitHubCodeSyncRun(projectId: string, syncRunId: string) {
+      return request<GitHubCodeSyncRunSummary>(
+        "GET",
+        `/v1/github/code-sync-runs/${encodeURIComponent(syncRunId)}`,
+        { query: { project_id: projectId } },
+      );
+    },
+    applyGitHubCodeSync(
+      syncRunId: string,
+      payload: GitHubCodeSyncApplyRequest,
+    ) {
+      return request<GitHubCodeSyncRunSummary>(
+        "POST",
+        `/v1/github/code-sync-runs/${encodeURIComponent(syncRunId)}/apply`,
+        { body: payload },
+      );
+    },
+    listGitHubConflictSets(
+      projectId: string,
+      options: { status?: string; limit?: number } = {},
+    ) {
+      return request<GitHubConflictSetListResponse>(
+        "GET",
+        "/v1/github/conflict-sets",
+        {
+          query: {
+            project_id: projectId,
+            status: options.status,
+            limit: options.limit ?? 100,
+          },
+        },
+      );
+    },
+    getGitHubConflictSet(projectId: string, conflictSetId: string) {
+      return request<GitHubConflictSetSummary>(
+        "GET",
+        `/v1/github/conflict-sets/${encodeURIComponent(conflictSetId)}`,
+        { query: { project_id: projectId } },
+      );
+    },
+    listGitHubResolutionPlans(
+      projectId: string,
+      options: { conflict_set_id?: string; limit?: number } = {},
+    ) {
+      return request<GitHubResolutionPlanListResponse>(
+        "GET",
+        "/v1/github/resolution-plans",
+        {
+          query: {
+            project_id: projectId,
+            conflict_set_id: options.conflict_set_id,
+            limit: options.limit ?? 100,
+          },
+        },
+      );
+    },
+    createGitHubResolutionPlan(
+      conflictSetId: string,
+      payload: GitHubResolutionPlanCreateRequest,
+    ) {
+      return request<GitHubResolutionPlanSummary>(
+        "POST",
+        `/v1/github/conflict-sets/${encodeURIComponent(conflictSetId)}/resolution-plans`,
+        { body: payload },
+      );
+    },
+    getGitHubResolutionPlan(projectId: string, planId: string) {
+      return request<GitHubResolutionPlanSummary>(
+        "GET",
+        `/v1/github/resolution-plans/${encodeURIComponent(planId)}`,
+        { query: { project_id: projectId } },
+      );
+    },
+    approveGitHubResolutionPlan(
+      planId: string,
+      payload: GitHubResolutionPlanApproveRequest,
+    ) {
+      return request<GitHubResolutionPlanSummary>(
+        "POST",
+        `/v1/github/resolution-plans/${encodeURIComponent(planId)}/approve`,
+        { body: payload },
+      );
+    },
+    applyGitHubResolutionPlan(
+      planId: string,
+      payload: GitHubResolutionPlanApplyRequest,
+    ) {
+      return request<GitHubResolutionApplyResponse>(
+        "POST",
+        `/v1/github/resolution-plans/${encodeURIComponent(planId)}/apply`,
         { body: payload },
       );
     },
