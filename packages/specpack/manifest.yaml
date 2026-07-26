@@ -24,6 +24,12 @@ critical_invariants:
   - budget_governor_wins_over_autoscaler
   - agents_never_receive_raw_provider_secrets
   - optimize_across_authorized_capacity_do_not_bypass_limits
+  - authoritative_claims_require_typed_reproducible_evidence
+  - settled_conclusions_interrupt_regressed_priors_before_publication
+  - production_surfaces_have_one_current_deploying_owner
+  - assurance_policy_composition_is_deterministic_and_fail_closed
+  - agent_group_consensus_never_bypasses_governance
+  - effective_capability_is_the_intersection_of_all_authority
 objects:
   core:
     - rolespec
@@ -65,6 +71,29 @@ objects:
     - enterprise_identity_provider
     - enterprise_scim_group
     - enterprise_scim_user
+  ground_truth:
+    - ground_truth_metric_definition
+    - ground_truth_observation
+    - regression_signal
+    - settled_conclusion
+    - closed_question_match
+    - claim
+    - evidence
+    - claim_verification
+    - surface_ownership
+    - ownership_transition
+    - verification_policy
+    - verification_run
+    - assurance_case
+    - assurance_policy_snapshot
+  agent_groups:
+    - agent_group_spec
+    - agent_group_run
+  integrations:
+    - integration_definition
+    - integration_connection
+    - executor_binding
+    - capability_resolution
 policies:
   - default_safety
   - resource_plane_policy

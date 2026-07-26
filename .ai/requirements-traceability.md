@@ -1,9 +1,26 @@
 # BOSS Requirements Traceability Matrix (Autonomous .ai version)
 
-**Last rebuilt**: 2026-07-16 by Codex (v0.7.0 integration: skill marketplace, CI/CD, preview, and feedback delivery)
+**Last rebuilt**: 2026-07-26 by Codex (BOSS-175–194 assurance contract layer)
 **Sources**: docs/product/PRD-v2.0.md, TECHNICAL_SPEC-v2.0.md, REQUIREMENT_INVENTORY.md, TRACEABILITY.md, user-stories.md, AGENTS.md, README, api/openapi.yaml, db/schema.sql, packages/specpack/*, code + tests scan.
 **Status key**: Implemented (full vertical + tests + states + audit + DoD), Partial, Planned, Blocked (external per real-only), In-Progress (this session).
 **DoD reminder**: Requirement complete only when traced, full journey, UI nav, backend, persistence, auth server+client, validations, loading/empty/error/success, edges, mobile/a11y basics, security/arch/QA review, tests pass, lint/build, docs updated, NO mocks/fakes/TODOs for required behavior.
+
+## 2026-07-26 Assurance Contract Trace
+
+| Plane | Contract slice | Implementation | Verification | Status |
+| --- | --- | --- | --- | --- |
+| BOSS-175–177 | Metric definition, observation, and regression signal | SpecPack objects + v2 manifest ground-truth catalog | contract structure, scope, lease/dedupe, baseline and incident invariants | Implemented contract layer |
+| BOSS-178–179 | Settled conclusion and closed-question match | versioned ledger and pre-publication result contracts | expiry/reopen, context classification, STOP evidence, audit rules | Implemented contract layer |
+| BOSS-180–182 | Claim, Evidence, and ClaimVerification | typed authority/evidence contracts | red-to-green, isolation, regression, conflict/inconclusive rules | Implemented contract layer |
+| BOSS-183–184 | Surface ownership and transition | single-owner record + versioned compare-and-swap transition | stale writer, approval, coordination, fail-closed rules | Implemented contract layer |
+| BOSS-185–186 | Verification policy and run | standing schedule policy + leased VAG-compatible run record | independence, outcomes, budget/receipt, retry/deadletter rules | Implemented contract layer |
+| BOSS-187–188 | Assurance Case and policy snapshot | reference graph + immutable deterministic policy composition | precedence, cross-tenant, conflict/Decision, version rules | Implemented contract layer |
+| BOSS-189–190 | Agent Group definition and run | reusable topology/protocol + durable collaboration record | dissent, quorum, lease, spend, gate-bypass rules | Implemented contract layer |
+| BOSS-191–194 | Integration definition/connection, executor binding, capability resolution | typed registry/install/executor/intersection contracts | SecretRef-only, health/revoke, side-effect, receipt/ChangeSet rules | Implemented contract layer |
+
+This batch intentionally stops at the stable SpecPack seam while Paramg owns the
+OSS engine relocation. Persistence/API/worker/UI implementation remains on the
+existing parent feature tickets and is not falsely marked complete.
 
 ## 2026-07-16 CI/CD and Deployment Trace
 

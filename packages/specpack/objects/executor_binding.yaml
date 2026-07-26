@@ -1,0 +1,44 @@
+kind: ObjectSpec
+id: ExecutorBinding
+version: 0.1.0
+description: >
+  Deterministic mapping from a requested SkillSpec and compatible integration
+  type to a governed executor boundary.
+fields:
+  - { name: id, type: string, required: true }
+  - { name: integration_definition_id, type: string, required: true }
+  - { name: integration_definition_version, type: integer, required: true }
+  - { name: skill_spec_id, type: string, required: true }
+  - { name: skill_spec_version, type: integer, required: true }
+  - name: executor_type
+    type: enum
+    values: [local, server, plugin, provider_adapter]
+    required: true
+  - { name: executor_ref, type: string, required: true }
+  - { name: input_schema_hash, type: string, required: true }
+  - { name: output_schema_hash, type: string, required: true }
+  - { name: required_permissions, type: array, required: true }
+  - { name: risk_tier, type: integer, required: true }
+  - { name: cost_contract, type: object, required: true }
+  - { name: data_boundary, type: string, required: true }
+  - { name: retry_policy, type: object, required: true }
+  - { name: artifact_requirements, type: array, required: true }
+  - { name: evidence_requirements, type: array, required: true }
+  - name: side_effect_class
+    type: enum
+    values: [read_only, local_write, external_write, destructive, spend]
+    required: true
+  - { name: receipt_required, type: boolean, required: true }
+  - { name: dedupe_key_required, type: boolean, required: true }
+  - { name: changeset_required, type: boolean, required: true }
+  - { name: resource_receipt_required, type: boolean, required: true }
+  - { name: version, type: integer, required: true }
+  - { name: enabled, type: boolean, required: true }
+rules:
+  external_write_requires_receipt_and_dedupe: true
+  provider_write_requires_changeset_and_resource_receipt: true
+  spend_requires_budget_reservation: true
+  undeclared_effect_fails_closed: true
+constraints:
+  unique:
+    - [integration_definition_id, skill_spec_id, version]

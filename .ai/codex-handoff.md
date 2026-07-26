@@ -1,5 +1,32 @@
 # Codex Handoff
 
+## 2026-07-26 BOSS-175–194 assurance contract batch
+
+- PR #71 merged first as `c0b2493`; Plane BOSS-148/BOSS-149 are Done with
+  shipped roster/board evidence.
+- New branch `ai/codex/boss-assurance-contracts` is based directly on that
+  refreshed `origin/main`. The unrelated untracked `site/` directory was
+  present on the workstation and is explicitly excluded.
+- Plane BOSS-175–194 are twenty child slices of BOSS-124–131. They define the
+  complete typed SpecPack contract seam for metrics, observations, regressions,
+  settled conclusions, closed-question matches, claims/evidence, surface
+  ownership, verification, Assurance Cases, Agent Groups, Integrations,
+  executor bindings, and capability intersection.
+- `packages/specpack/manifest.yaml` catalogs all twenty and adds the governing
+  fail-closed invariants. Contract tests enforce structure, tenant scope,
+  dedupe, authority-state outcomes, exact critical fields/rules, and
+  SecretRef-only credential handling.
+- This branch deliberately does not touch API services, schemas, bootstrap,
+  persistence, deploy, preview, provider actuation, or Paramg's active
+  `feat/oss-engine-split`.
+- Validation: 5/5 contract tests plus 16/16 adjacent marketplace/workflow
+  regression tests pass; web route generation/TypeScript passes; Python lint
+  passes for the full API/worker tree excluding contributor-owned
+  `intent_router.py`; generated docs are current and strict MkDocs passes.
+- Repository-wide `make lint` reaches and passes the web stage, then reports
+  only two inherited F541 findings in `intent_router.py`. That file is owned by
+  open PRs #23/#70 and is intentionally untouched on this branch.
+
 ## 2026-07-26 Paramg catch-up and BOSS-148/BOSS-149 safe UI tail
 
 - Refreshed rewritten `origin/main` at `6a92bd9` and inspected Paramg's delivery

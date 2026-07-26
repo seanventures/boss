@@ -11,11 +11,11 @@ This catalog is generated from the canonical product traceability ledger. It is 
   </div>
   <div>
     <span class="boss-status boss-status--partial">Partial</span>
-    <strong>5</strong>
+    <strong>6</strong>
   </div>
   <div>
     <span class="boss-status boss-status--planned">Planned</span>
-    <strong>1</strong>
+    <strong>0</strong>
   </div>
   <div>
     <span class="boss-status boss-status--blocked">Blocked</span>
@@ -107,10 +107,10 @@ This catalog is generated from the canonical product traceability ledger. It is 
 | [SEC-005 — Data-boundary routing and effect enforcement](implemented.md#sec-005-data-boundary-routing-and-effect-enforcement) | <span class="boss-status boss-status--implemented">Implemented</span> | PRD 9.1 Data boundaries; Model Entitlement Broker guardrail |
 | [NFR-001 — Local portability](implemented.md#nfr-001-local-portability) | <span class="boss-status boss-status--implemented">Implemented</span> | PRD Non-functional |
 | [NFR-002 — Accessibility baseline](implemented.md#nfr-002-accessibility-baseline) | <span class="boss-status boss-status--implemented">Implemented</span> | PRD Non-functional |
-| [AGP-001 — Versioned Agent Groups and collaboration protocols](planned.md#agp-001-versioned-agent-groups-and-collaboration-protocols) | <span class="boss-status boss-status--planned">Planned</span> | PRD v2.0 Agent Groups; Plane BOSS-129 |
-| [INT-001 — Integration registry and typed skill contracts](partial.md#int-001-integration-registry-and-typed-skill-contracts) | <span class="boss-status boss-status--partial">Partial</span> | PRD v2.0 Skills and Integrations; Plane BOSS-130; extends BOSS-44–56 |
+| [AGP-001 — Versioned Agent Groups and collaboration protocols](partial.md#agp-001-versioned-agent-groups-and-collaboration-protocols) | <span class="boss-status boss-status--partial">Partial</span> | PRD v2.0 Agent Groups; Plane BOSS-129/BOSS-189–190 |
+| [INT-001 — Integration registry and typed skill contracts](partial.md#int-001-integration-registry-and-typed-skill-contracts) | <span class="boss-status boss-status--partial">Partial</span> | PRD v2.0 Skills and Integrations; Plane BOSS-130/BOSS-191–194; extends BOSS-44–56 |
 | [WFL-001 — Reusable mapped workflow registry and runtime](implemented.md#wfl-001-reusable-mapped-workflow-registry-and-runtime) | <span class="boss-status boss-status--implemented">Implemented</span> | PRD v2.0 Reusable Mapped Workflows; Plane BOSS-132/BOSS-134–143 |
-| [AST-001 — Ground-truth and Assurance runtime](partial.md#ast-001-ground-truth-and-assurance-runtime) | <span class="boss-status boss-status--partial">Partial</span> | PRD v2.0 Ground-truth and Assurance; Plane BOSS-123–128 and BOSS-131 |
+| [AST-001 — Ground-truth and Assurance runtime](partial.md#ast-001-ground-truth-and-assurance-runtime) | <span class="boss-status boss-status--partial">Partial</span> | PRD v2.0 Ground-truth and Assurance; Plane BOSS-123–128/BOSS-131/BOSS-175–188 |
 | [COM-PKG-001 — Open-core editions](partial.md#com-pkg-001-open-core-editions) | <span class="boss-status boss-status--partial">Partial</span> | PRD v2.0 Commercial Strategy |
 | [ACC-001 — BOSS Account Connect](partial.md#acc-001-boss-account-connect) | <span class="boss-status boss-status--partial">Partial</span> | PRD v2.0 BOSS Account Connect |
 | [ENT-CLUST-001 — Enterprise clustering and HA](partial.md#ent-clust-001-enterprise-clustering-and-ha) | <span class="boss-status boss-status--partial">Partial</span> | PRD v2.0 Enterprise |

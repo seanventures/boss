@@ -1,0 +1,52 @@
+kind: ObjectSpec
+id: VerificationRun
+version: 0.1.0
+description: >
+  Leased, deduplicated adversarial evaluation of a claim and its evidence
+  bundle using the existing verifier foundation.
+fields:
+  - { name: id, type: string, required: true }
+  - { name: org_id, type: string, required: true }
+  - { name: workspace_id, type: string, required: true }
+  - { name: project_id, type: string, required: true }
+  - { name: verification_policy_id, type: string, required: true }
+  - { name: verification_policy_version, type: integer, required: true }
+  - { name: assurance_case_id, type: string, required: true }
+  - { name: claim_id, type: string, required: true }
+  - { name: claim_version, type: integer, required: true }
+  - { name: evidence_refs, type: array, required: true }
+  - { name: producer_ref, type: string, required: true }
+  - { name: verifier_ref, type: string, required: true }
+  - { name: verifier_independent, type: boolean, required: true }
+  - name: status
+    type: enum
+    values: [queued, leased, running, retry_wait, completed, deadlettered]
+    required: true
+  - name: outcome
+    type: enum
+    values: [pending, passed, refuted, inconclusive]
+    required: true
+  - { name: lease_owner, type: string, required: false }
+  - { name: lease_expires_at, type: datetime, required: false }
+  - { name: heartbeat_at, type: datetime, required: false }
+  - { name: attempt, type: integer, required: true }
+  - { name: max_attempts, type: integer, required: true }
+  - { name: budget_quote_ref, type: string, required: false }
+  - { name: budget_reservation_id, type: string, required: false }
+  - { name: receipt_refs, type: array, required: true }
+  - { name: finding_artifact_ref, type: string, required: false }
+  - { name: escalation_decision_id, type: string, required: false }
+  - { name: error_ref, type: string, required: false }
+  - { name: dedupe_key, type: string, required: true }
+  - { name: scheduled_at, type: datetime, required: true }
+  - { name: started_at, type: datetime, required: false }
+  - { name: completed_at, type: datetime, required: false }
+rules:
+  completed_outcome_is_passed_refuted_or_inconclusive: true
+  missing_or_stale_evidence_cannot_produce_passed: true
+  model_or_tool_spend_requires_reservation_and_receipts: true
+  refuted_reopens_or_blocks_authoritative_claim: true
+  failures_retry_or_deadletter: true
+constraints:
+  unique:
+    - [project_id, dedupe_key]
