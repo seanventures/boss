@@ -1,0 +1,51 @@
+from __future__ import annotations
+
+from typing import Any, Optional, Protocol, runtime_checkable
+
+
+@runtime_checkable
+class BudgetPort(Protocol):
+    """Budget boundary used by engine pipelines.
+
+    The connection argument is intentionally opaque. Enterprise adapters use a
+    SQL transaction while the OSS default ignores it and remains in-memory.
+    """
+
+    def reserve(
+        self,
+        connection: Any,
+        project_id: str,
+        category: str,
+        amount_usd_micros: int,
+        reason: str,
+        expires_in_minutes: int,
+        job_id: Optional[str] = None,
+        allocation_id: Optional[str] = None,
+    ) -> dict[str, Any]: ...
+
+    def assert_active_reservation(
+        self,
+        connection: Any,
+        project_id: str,
+        reservation_id: str,
+    ) -> Optional[dict[str, Any]]: ...
+
+    def release(
+        self,
+        connection: Any,
+        project_id: str,
+        reservation_id: str,
+        reason: str,
+    ) -> dict[str, Any]: ...
+
+    def settle(
+        self,
+        connection: Any,
+        project_id: str,
+        reservation_id: str,
+        receipt_id: str,
+        category: str,
+        skill_or_model_id: str,
+        estimated_usd_micros: int,
+        actual_usd_micros: Optional[int],
+    ) -> str: ...

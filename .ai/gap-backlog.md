@@ -1,5 +1,17 @@
 # BOSS Gap Backlog (.ai Autonomous Version)
 
+## 2026-07-26 OSS runtime seam closure
+
+- BOSS-26/27: closed by injected budget/entitlement ports and OSS defaults.
+- BOSS-28: closed for the named code-task/software-factory hot paths by
+  in-memory/Postgres persistence adapters and retry/override lineage tests.
+- BOSS-29/30: closed by connection-free sinks and one edition composition root.
+- BOSS-31: closed by runtime APIRouter ownership and paid-route gating.
+- BOSS-25: closes with the combined merge because v0.8 already shipped the
+  package/license children and BOSS-26–31 complete the outstanding seams.
+- BOSS-119: the historical failing baseline is replaced by the complete local
+  279/279 legacy matrix gate; GitHub Actions remain intentionally disabled.
+
 **Last rebuilt**: 2026-06-05T17:40Z (DOUBLED AGENTS FOR 3X SPEED: 5 prior + 1 pack + 10+ new specialists launched in parallel batch (ui-ux-toasts 019e98d8-8903 P2 client feedback; qa-e2e-comms 019e98d8-bf0d; feature-packs-2 019e98d8-bf0d P3; qa-e2e-selfimp-provider 019e98d8-e518; feature-providerops-polish 019e98d8-e519; ux-commercial-surfaces 019e98d9-1d45; arch-pag-expand 019e98d9-1d46; feature-monitoring-obs 019e98d9-5bd1; feature-comms-ui 019e98d9-5bd1; + devops-worker-infra/pm-docs-ac-more attempted); total ~20+ agents grinding full product DoD polish on all surfaces (pack P3 + ux-toasts + e2e for comms/selfimp/providerops + commercial + pag expand + monitoring + comms-ui + infra/worker + docs AC + more); gap now notes 12+ slices for complete product; prior P2/P3 closed; external 3 blocked. Full validate prior green. .ai/ + handoff/status updated for scale. PR#3. Next: poll 10+ new + integrate 3x.
 **Source**: Rebuilt from PRD-v2.0.md + TECHNICAL_SPEC-v2.0.md + REQUIREMENT_INVENTORY + TRACEABILITY + current code scan (rg for TODO/FIXME/stub/placeholder/mock/fake/not implemented + skipped tests + broad except + fake-success) + git diff + make targets + GitHub issues (0).
 **Process**: P0 first (blocks core use, data loss, auth/sec, prod readiness), then P1, P2, P3. Immediately action P0/P1 local-code. External blocked documented but not "code gaps" to fix here.

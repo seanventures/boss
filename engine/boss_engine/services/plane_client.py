@@ -37,7 +37,7 @@ class PlaneClient:
             if m:
                 base = base or m.group(1)
                 ws = ws or m.group(2)
-        return base, (ws or "goldeneye"), (self.settings.plane_api_token or "")
+        return base, (ws or "default"), (self.settings.plane_api_token or "")
 
     def enabled(self) -> bool:
         base, _ws, token = self._ctx()
