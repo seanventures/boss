@@ -781,7 +781,14 @@ class Settings(BaseSettings):
 
     @property
     def repo_root(self) -> Path:
-        return Path(__file__).resolve().parents[3]
+        # ``config.py`` moved from ``apps/api/app`` to
+        # ``engine/boss_engine``. Both layouts are three path components below
+        # the repository only if the filename itself is counted; pathlib's
+        # ``parents`` collection starts at the containing directory, so the
+        # relocated package must use index 2. In the API/worker images the same
+        # layout is rooted at ``/app/engine/boss_engine`` and resolves to
+        # ``/app``, where db/ and packages/ are copied.
+        return Path(__file__).resolve().parents[2]
 
     @property
     def schema_path(self) -> Path:
