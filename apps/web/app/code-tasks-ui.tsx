@@ -65,12 +65,18 @@ function PreviewLogs({ previewId }: { previewId: string }) {
 
 function PreviewControls({ runId, livePreviews = [] }: { runId: string; livePreviews?: PreviewRec[] }) {
   const [state, action, pending] = useActionState(startPreviewAction, null);
+  const hasLive = livePreviews.length > 0;
   return (
     <span style={{ display: "inline-flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-      <form action={action} style={{ display: "inline-flex", gap: 8, alignItems: "center" }}>
-        <input type="hidden" name="run_id" value={runId} />
-        <button className="cap-btn" disabled={pending}>{pending ? "Starting preview…" : "▶ Run preview"}</button>
-      </form>
+      {/* Only offer "Run preview" (a heavy npm-install+build) when NO live preview exists yet.
+          Once one is running, the primary action is Open preview; a fresh build is demoted to a
+          subtle "Rebuild" link so we don't spawn duplicate builds that starve the api. */}
+      {!hasLive ? (
+        <form action={action} style={{ display: "inline-flex", gap: 8, alignItems: "center" }}>
+          <input type="hidden" name="run_id" value={runId} />
+          <button className="cap-btn" disabled={pending}>{pending ? "Starting preview…" : "▶ Run preview"}</button>
+        </form>
+      ) : null}
       {/* Persistent link(s) from the durable preview record — survive the console's auto-refresh */}
       {livePreviews.map((p) => (
         <span key={p.id} style={{ display: "inline-flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
@@ -81,6 +87,15 @@ function PreviewControls({ runId, livePreviews = [] }: { runId: string; livePrev
           <PreviewLogs previewId={p.id} />
         </span>
       ))}
+      {/* Rebuild — only when a preview already exists; replaces (does not stack) the current one. */}
+      {hasLive ? (
+        <form action={action} style={{ display: "inline-flex" }}>
+          <input type="hidden" name="run_id" value={runId} />
+          <button className="cap-btn" style={{ opacity: 0.7, fontSize: 12 }} disabled={pending}>
+            {pending ? "Rebuilding…" : "↻ Rebuild preview"}
+          </button>
+        </form>
+      ) : null}
       {/* Freshly-started link (shows instantly, before the record is re-fetched) */}
       {state?.url && livePreviews.length === 0 ? (
         <a className="cap-btn primary" href={state.url} target="_blank" rel="noreferrer">Open preview ↗</a>
