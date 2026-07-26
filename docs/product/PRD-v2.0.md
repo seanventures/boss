@@ -311,6 +311,31 @@ Provider Connection Center requirements:
   already leased work can finish without exposing either credential value.
 - Audit all provider access.
 
+System Configuration experience requirements:
+
+- Present ProviderOps as one operator workspace with Connections, Resources,
+  Scaling & Health, and Cloud FinOps views instead of independent
+  provider-specific consoles.
+- Persist the selected view in the URL and preserve saved resource scope across
+  provider, account, environment, region, and service.
+- Make adapter truth visible in the provider catalog. Planned adapters must
+  remain inspectable but cannot accept credentials or expose enabled controls.
+- Display credentials only as write-only named SecretRef posture. Never render
+  a stored SecretRef pointer or secret value back to the operator.
+- Distinguish unavailable, partial, empty, pending, untested, fresh, stale,
+  disabled, revoked, and error states without turning a secondary-feed failure
+  into a false total outage.
+- Gate every provider-account mutation by `providerops_manage`; unauthorized
+  actors receive an explicit read-only view rather than controls that fail only
+  after submission.
+- Open provider accounts and resources in evidence-oriented detail drawers
+  linking impact, authority, spend, ChangeSets, tasks, deployments, budgets,
+  receipts, and audit events.
+- Require irreversible provider revocation to state impact, approval,
+  rollback, and evidence consequences and to confirm the account label.
+- Keep the workspace usable without horizontal page overflow on narrow
+  viewports; dense tables may scroll only inside their bounded table region.
+
 Resource Inventory Graph requirements:
 
 - Sync external resources on schedule.

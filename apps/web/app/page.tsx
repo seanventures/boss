@@ -4,7 +4,6 @@ import {
   completeEntitlementConnectionSessionAction,
   createChangeSetAction,
   createDeploymentTargetAction,
-  createProviderAccountAction,
   createReplayBundleAction,
   createBreakGlassGrantAction,
   createComplianceEvidenceBundleAction,
@@ -42,7 +41,6 @@ import {
   syncAccountConnectAction,
   syncHostedMarketplaceAction,
   syncProviderResourcesAction,
-  testProviderAccountAction,
   unlinkAccountConnectAction,
   uninstallAgentModuleAction,
   revokeAccountConnectTeamInviteAction,
@@ -141,6 +139,7 @@ import { ApprovalRulesView } from "./approval-rules-ui";
 import { fetchMcpServers } from "../lib/mcp";
 import { fetchPackFeed } from "../lib/packs";
 import { fetchProviderOpsFeed } from "../lib/providerops";
+import { ProviderConfigurationSuite } from "./provider-configuration-ui";
 import { DeploymentPromotionTimeline } from "./deployment-promotion-timeline";
 import { fetchProjectFeed } from "../lib/projects";
 import { fetchReceiptFeed } from "../lib/receipts";
@@ -1549,237 +1548,21 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             </p>
           </div>
 
-          {!providerOps.apiReachable ? (
-            <article className="stack-card">
-              <h3>ProviderOps unavailable</h3>
-              <p className="detail">
-                {providerOps.blockedReason ??
-                  "ProviderOps APIs are unavailable for this project."}
-              </p>
-            </article>
-          ) : (
+          <ProviderConfigurationSuite
+            feed={providerOps}
+            projectId={activeProjectId}
+            actor={activeActorId}
+            canManage={
+              activeActor?.status === "active" &&
+              activeActor.permissions.includes("providerops_manage")
+            }
+            events={events.items}
+          />
+
+          {providerOps.apiReachable ? (
             <>
-              <div className="grid compact-grid">
-                <article>
-                  <h2>Connected Providers</h2>
-                  <div className="metric">
-                    {providerOps.summary.connectedProviders}
-                  </div>
-                  <p className="detail">
-                    {providerOps.providerAccounts.length} configured account
-                    {providerOps.providerAccounts.length === 1 ? "" : "s"}.
-                  </p>
-                </article>
-                <article>
-                  <h2>Provider Health</h2>
-                  <div className="metric">
-                    {providerOps.summary.healthyProviders}
-                  </div>
-                  <p className="detail">
-                    Healthy observations from official adapter tests and syncs.
-                  </p>
-                </article>
-                <article>
-                  <h2>Resources</h2>
-                  <div className="metric">
-                    {providerOps.summary.resourceCount}
-                  </div>
-                  <p className="detail">
-                    {providerOps.summary.unmanagedResourceCount} unmanaged /{" "}
-                    {providerOps.summary.orphanedSignalCount} orphan signals.
-                  </p>
-                </article>
-                <article>
-                  <h2>Open ChangeSets</h2>
-                  <div className="metric">
-                    {providerOps.summary.openChangeSets}
-                  </div>
-                  <p className="detail">
-                    Provider writes require explicit approval and receipts.{" "}
-                    {providerOps.summary.activeDeploymentRuns} active deployment
-                    run{providerOps.summary.activeDeploymentRuns === 1 ? "" : "s"}.
-                  </p>
-                </article>
-                <article>
-                  <h2>Observed Costs</h2>
-                  <div className="metric">
-                    {formatMicros(providerOps.summary.spendUsdMicros)}
-                  </div>
-                  <p className="detail">
-                    Cost ledger entries keep confidence labels visible.{" "}
-                    {providerOps.summary.openCostAnomalies} open anomaly
-                    {providerOps.summary.openCostAnomalies === 1 ? "" : "ies"}.
-                  </p>
-                </article>
-                <article>
-                  <h2>Worker Capacity</h2>
-                  <div className="metric">
-                    {providerOps.summary.desiredWorkerCount}
-                  </div>
-                  <p className="detail">
-                    Desired workers across {providerOps.workerPools.length} pool
-                    {providerOps.workerPools.length === 1 ? "" : "s"} /{" "}
-                    {providerOps.summary.openScalePlans} open scale plan
-                    {providerOps.summary.openScalePlans === 1 ? "" : "s"}.
-                  </p>
-                </article>
-              </div>
-
               <div className="stack-grid">
-                <article className="stack-card">
-                  <h3>Provider Connection Center</h3>
-                  <form action={createProviderAccountAction} className="composer compact">
-                    <input type="hidden" name="project_id" value={activeProjectId} />
-                    <input type="hidden" name="actor" value={activeActorId} />
-                    <div className="input-grid">
-                      <label className="field">
-                        <span>Provider</span>
-                        <select className="input" name="provider" required>
-                          <option value="digitalocean">DigitalOcean</option>
-                          <option value="cloudflare">Cloudflare</option>
-                          <option value="supabase">Supabase</option>
-                          <option value="openai">OpenAI</option>
-                          <option value="anthropic">Anthropic</option>
-                        </select>
-                      </label>
-                      <label className="field">
-                        <span>Account label</span>
-                        <input
-                          className="input"
-                          name="account_label"
-                          placeholder="Sandbox account"
-                          required
-                        />
-                      </label>
-                    </div>
-                    <label className="field">
-                      <span>Credential ref</span>
-                      <input
-                        className="input"
-                        name="credential_ref"
-                        placeholder="env:BOSS_CLOUDFLARE_API_TOKEN"
-                      />
-                    </label>
-                    <label className="field">
-                      <span>Scopes</span>
-                      <textarea
-                        className="textarea"
-                        name="scopes"
-                        rows={3}
-                        placeholder={"One scope per line\nread\nbilling.read"}
-                      />
-                    </label>
-                    <div className="input-grid">
-                      <label className="field checkbox-field">
-                        <span>Read-only</span>
-                        <input
-                          name="read_only"
-                          type="checkbox"
-                          value="true"
-                          defaultChecked
-                        />
-                      </label>
-                      <label className="field checkbox-field">
-                        <span>Deploy-capable</span>
-                        <input name="deploy_capable" type="checkbox" value="true" />
-                      </label>
-                      <label className="field checkbox-field">
-                        <span>Billing-readable</span>
-                        <input name="billing_readable" type="checkbox" value="true" />
-                      </label>
-                      <label className="field checkbox-field">
-                        <span>Destructive actions disabled</span>
-                        <input
-                          name="destructive_actions_disabled"
-                          type="checkbox"
-                          value="true"
-                          defaultChecked
-                        />
-                      </label>
-                    </div>
-                    <button className="button secondary" type="submit">
-                      Register provider account
-                    </button>
-                  </form>
-
-                  <div className="feed-list">
-                    {providerOps.providerAccounts.length === 0 ? (
-                      <p className="detail">
-                        No provider accounts are registered yet.
-                      </p>
-                    ) : (
-                      providerOps.providerAccounts.map((account) => (
-                        <div className="feed-row" key={account.id}>
-                          <div>
-                            <h4>{account.accountLabel}</h4>
-                            <p className="detail">
-                              {account.provider} / {account.status} /{" "}
-                              {account.readOnly ? "read-only" : "write-capable"}
-                            </p>
-                            <p className="detail">
-                              {account.credentialRef ?? "No credential ref"} /{" "}
-                              {account.destructiveActionsDisabled
-                                ? "destructive disabled"
-                                : "destructive enabled"}
-                            </p>
-                            {account.lastTestStatus ? (
-                              <p className="detail">
-                                Last test {account.lastTestStatus}
-                                {account.lastTestedAt
-                                  ? ` at ${formatDateTime(account.lastTestedAt)}`
-                                  : ""}
-                              </p>
-                            ) : null}
-                          </div>
-                          <div className="button-stack">
-                            <form action={testProviderAccountAction}>
-                              <input
-                                type="hidden"
-                                name="provider_account_id"
-                                value={account.id}
-                              />
-                              <input
-                                type="hidden"
-                                name="project_id"
-                                value={activeProjectId}
-                              />
-                              <input
-                                type="hidden"
-                                name="actor"
-                                value={activeActorId}
-                              />
-                              <button className="button secondary" type="submit">
-                                Test
-                              </button>
-                            </form>
-                            <form action={syncProviderResourcesAction}>
-                              <input
-                                type="hidden"
-                                name="provider_account_id"
-                                value={account.id}
-                              />
-                              <input
-                                type="hidden"
-                                name="project_id"
-                                value={activeProjectId}
-                              />
-                              <input
-                                type="hidden"
-                                name="actor"
-                                value={activeActorId}
-                              />
-                              <button className="button secondary" type="submit">
-                                Sync
-                              </button>
-                            </form>
-                          </div>
-                        </div>
-                      ))
-                    )}
-                  </div>
-                </article>
-
-                <article className="stack-card">
+                <article className="stack-card" id="provider-resources">
                   <h3>Resource Explorer</h3>
                   <div className="button-stack">
                     <form action={syncProviderResourcesAction}>
@@ -1854,7 +1637,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                   )}
                 </article>
 
-                <article className="stack-card">
+                <article className="stack-card" id="provider-scaling">
                   <h3>Budget-Aware Autoscaler</h3>
                   <form action={upsertWorkerPoolAction} className="composer compact">
                     <input type="hidden" name="project_id" value={activeProjectId} />
@@ -2600,7 +2383,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                   />
                 </article>
 
-                <article className="stack-card">
+                <article className="stack-card" id="provider-health">
                   <h3>Health, Drift, and Receipts</h3>
                   <div className="feed-list">
                     {providerOps.providerHealth.slice(0, 4).map((health) => (
@@ -2662,7 +2445,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                   </div>
                 </article>
 
-                <article className="stack-card">
+                <article className="stack-card" id="provider-finops">
                   <h3>Cost and Reconciliation Ledger</h3>
                   <div className="feed-list">
                     {providerOps.costAnomalies.slice(0, 4).map((anomaly) => (
@@ -2735,7 +2518,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                 </article>
               </div>
             </>
-          )}
+          ) : null}
         </section>
 
         <section className="panel-stack">

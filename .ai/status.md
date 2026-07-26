@@ -1,9 +1,9 @@
 # BOSS Autonomous Delivery Status
 
-**Last updated**: 2026-07-26 (BOSS-236 provider credential lifecycle)
+**Last updated**: 2026-07-26 (BOSS-237 System Configuration UX)
 **Repo root**: /Volumes/DataSSD1/test/boss
 **Git remote**: https://github.com/seanheiney/boss
-**Current branch**: ai/codex/boss-236-provider-credential-lifecycle
+**Current branch**: ai/codex/boss-237-system-config-ux
 **Base branch**: origin/main
 **Product**: BOSS v0.7.0 target (Business Operating System Sentinel)
 **Mission**: Complete product to production-grade, tested, documented, pushed, Codex-coordinated, ready for real users. Grind until all discovered PRD/spec features satisfy world-class DoD or truly blocked.
@@ -14,6 +14,13 @@
 - GitHub: draft PR #16 carries BOSS-22/BOSS-23 and is stacked on draft PR #15; other open PRs were inspected for overlap before implementation.
 
 ## Overall Product Status
+- BOSS-237 turns the ProviderOps surface into a coherent System Configuration
+  workspace with persisted Connections, Resources, Scaling & Health, and Cloud
+  FinOps views; truthful provider availability; named write-only credential
+  slots; permission-aware account lifecycle controls; saved five-dimensional
+  resource scope; evidence drawers; partial-feed resilience; and responsive
+  table containment. Automated web tests and production build pass, and live
+  desktop/mobile validation confirms no viewport overflow or browser errors.
 - BOSS-236 implements the provider-account credential lifecycle foundation
   beneath BOSS-235: truthful initial-cloud auth definitions, multi-slot
   SecretRefs, safe metadata, rotation lineage/overlap, disable/revoke gates,

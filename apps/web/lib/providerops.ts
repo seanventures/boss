@@ -10,6 +10,7 @@ import {
   type DriftReportSummary,
   type ExternalResourceSummary,
   type ProviderAccountSummary,
+  type ProviderDefinitionSummary,
   type ProviderHealthSummary,
   type ReconciliationRunSummary,
   type ResourceReceiptSummary,
@@ -23,8 +24,19 @@ export type ProviderAccountFeedItem = {
   id: string;
   provider: string;
   accountLabel: string;
+  authMethod: string;
   credentialRef?: string;
+  credentialRefs: Record<string, string>;
+  connectionMetadata: Record<string, unknown>;
+  scopes: string[];
   status: string;
+  ownerActor?: string;
+  credentialVersion: number;
+  credentialRotatedAt?: string;
+  disabledAt?: string;
+  disabledBy?: string;
+  revokedAt?: string;
+  revokedBy?: string;
   readOnly: boolean;
   deployCapable: boolean;
   billingReadable: boolean;
@@ -33,11 +45,38 @@ export type ProviderAccountFeedItem = {
   missingPermissions: string[];
   lastTestStatus?: string;
   lastTestedAt?: string;
+  lastError?: Record<string, unknown>;
+  createdBy: string;
   createdAt: string;
+  updatedAt: string;
+};
+
+export type ProviderCredentialSlotFeedItem = {
+  key: string;
+  secretKind: string;
+  required: boolean;
+  defaultRef?: string;
+};
+
+export type ProviderAuthMethodFeedItem = {
+  key: string;
+  runtimeStatus: string;
+  credentialSlots: ProviderCredentialSlotFeedItem[];
+};
+
+export type ProviderDefinitionFeedItem = {
+  provider: string;
+  displayName: string;
+  category: string;
+  adapterStatus: string;
+  defaultAuthMethod: string;
+  authMethods: ProviderAuthMethodFeedItem[];
+  capabilities: string[];
 };
 
 export type ExternalResourceFeedItem = {
   id: string;
+  providerAccountId?: string;
   provider: string;
   resourceType: string;
   externalId: string;
@@ -45,16 +84,26 @@ export type ExternalResourceFeedItem = {
   state: string;
   ownership: string;
   environment: string;
+  ownerRole?: string;
+  taskId?: string;
+  deploymentTargetId?: string;
+  receiptId?: string;
+  budgetAllocationId?: string;
   healthStatus: string;
   estimatedMonthlyUsdMicros?: number;
   actualMonthlyUsdMicros?: number;
   costConfidence: string;
   lastSeenAt: string;
   tags: string[];
+  metadata: Record<string, unknown>;
+  updatedAt: string;
 };
 
 export type CostEventFeedItem = {
   id: string;
+  providerAccountId?: string;
+  externalResourceId?: string;
+  receiptId?: string;
   provider: string;
   category: string;
   amountUsdMicros: number;
@@ -101,6 +150,7 @@ export type ChangeSetFeedItem = {
 export type ResourceReceiptFeedItem = {
   id: string;
   changesetId?: string;
+  providerAccountId?: string;
   dedupeKey: string;
   provider: string;
   action: string;
@@ -109,6 +159,7 @@ export type ResourceReceiptFeedItem = {
   status: string;
   providerRef?: string;
   createdAt: string;
+  updatedAt: string;
 };
 
 export type DeploymentTargetFeedItem = {
@@ -271,6 +322,9 @@ export type ProviderOpsFeed = {
   projectId: string;
   apiReachable: boolean;
   blockedReason?: string;
+  partialFailures: string[];
+  refreshedAt: string;
+  providerDefinitions: ProviderDefinitionFeedItem[];
   providerAccounts: ProviderAccountFeedItem[];
   resources: ExternalResourceFeedItem[];
   costs: CostEventFeedItem[];
@@ -289,6 +343,29 @@ export type ProviderOpsFeed = {
   summary: ProviderOpsSummary;
 };
 
+function mapProviderDefinition(
+  payload: ProviderDefinitionSummary,
+): ProviderDefinitionFeedItem {
+  return {
+    provider: payload.provider,
+    displayName: payload.display_name,
+    category: payload.category,
+    adapterStatus: payload.adapter_status,
+    defaultAuthMethod: payload.default_auth_method,
+    authMethods: payload.auth_methods.map((method) => ({
+      key: method.key,
+      runtimeStatus: method.runtime_status,
+      credentialSlots: method.credential_slots.map((slot) => ({
+        key: slot.key,
+        secretKind: slot.secret_kind,
+        required: slot.required,
+        defaultRef: slot.default_ref,
+      })),
+    })),
+    capabilities: payload.capabilities,
+  };
+}
+
 function mapProviderAccount(
   payload: ProviderAccountSummary,
 ): ProviderAccountFeedItem {
@@ -296,8 +373,19 @@ function mapProviderAccount(
     id: payload.id,
     provider: payload.provider,
     accountLabel: payload.account_label,
+    authMethod: payload.auth_method,
     credentialRef: payload.credential_ref,
+    credentialRefs: payload.credential_refs,
+    connectionMetadata: payload.connection_metadata,
+    scopes: payload.scopes,
     status: payload.status,
+    ownerActor: payload.owner_actor,
+    credentialVersion: payload.credential_version,
+    credentialRotatedAt: payload.credential_rotated_at,
+    disabledAt: payload.disabled_at,
+    disabledBy: payload.disabled_by,
+    revokedAt: payload.revoked_at,
+    revokedBy: payload.revoked_by,
     readOnly: payload.read_only,
     deployCapable: payload.deploy_capable,
     billingReadable: payload.billing_readable,
@@ -306,13 +394,17 @@ function mapProviderAccount(
     missingPermissions: payload.missing_permissions,
     lastTestStatus: payload.last_test_status,
     lastTestedAt: payload.last_tested_at,
+    lastError: payload.last_error,
+    createdBy: payload.created_by,
     createdAt: payload.created_at,
+    updatedAt: payload.updated_at,
   };
 }
 
 function mapResource(payload: ExternalResourceSummary): ExternalResourceFeedItem {
   return {
     id: payload.id,
+    providerAccountId: payload.provider_account_id,
     provider: payload.provider,
     resourceType: payload.resource_type,
     externalId: payload.external_id,
@@ -320,18 +412,28 @@ function mapResource(payload: ExternalResourceSummary): ExternalResourceFeedItem
     state: payload.state,
     ownership: payload.ownership,
     environment: payload.environment,
+    ownerRole: payload.owner_role,
+    taskId: payload.task_id,
+    deploymentTargetId: payload.deployment_target_id,
+    receiptId: payload.receipt_id,
+    budgetAllocationId: payload.budget_allocation_id,
     healthStatus: payload.health_status,
     estimatedMonthlyUsdMicros: payload.estimated_monthly_usd_micros,
     actualMonthlyUsdMicros: payload.actual_monthly_usd_micros,
     costConfidence: payload.cost_confidence,
     lastSeenAt: payload.last_seen_at,
     tags: payload.tags,
+    metadata: payload.metadata,
+    updatedAt: payload.updated_at,
   };
 }
 
 function mapCost(payload: CostEventSummary): CostEventFeedItem {
   return {
     id: payload.id,
+    providerAccountId: payload.provider_account_id,
+    externalResourceId: payload.external_resource_id,
+    receiptId: payload.receipt_id,
     provider: payload.provider,
     category: payload.category,
     amountUsdMicros: payload.amount_usd_micros,
@@ -386,6 +488,7 @@ function mapResourceReceipt(
   return {
     id: payload.id,
     changesetId: payload.changeset_id,
+    providerAccountId: payload.provider_account_id,
     dedupeKey: payload.dedupe_key,
     provider: payload.provider,
     action: payload.action,
@@ -394,6 +497,7 @@ function mapResourceReceipt(
     status: payload.status,
     providerRef: payload.provider_ref,
     createdAt: payload.created_at,
+    updatedAt: payload.updated_at,
   };
 }
 
@@ -569,7 +673,10 @@ function mapScalePlan(payload: ScalePlanSummary): ScalePlanFeedItem {
 }
 
 function summarizeProviderOps(
-  feed: Omit<ProviderOpsFeed, "summary" | "apiReachable" | "blockedReason">,
+  feed: Omit<
+    ProviderOpsFeed,
+    "summary" | "apiReachable" | "blockedReason" | "partialFailures" | "refreshedAt"
+  >,
 ): ProviderOpsSummary {
   return {
     connectedProviders: new Set(
@@ -620,6 +727,9 @@ export function emptyProviderOpsFeed(
     projectId: resolvedProjectId,
     apiReachable: false,
     blockedReason: reason,
+    partialFailures: [],
+    refreshedAt: new Date().toISOString(),
+    providerDefinitions: [],
     providerAccounts: [],
     resources: [],
     costs: [],
@@ -655,42 +765,156 @@ export async function fetchProviderOpsFeed(
   projectId = PROJECT_ID,
 ): Promise<ProviderOpsFeed> {
   const resolvedProjectId = resolveProjectId(projectId);
+  const results = await Promise.allSettled([
+    client.listProviderDefinitions(),
+    client.listProviderAccounts(resolvedProjectId),
+    client.listExternalResources(resolvedProjectId, { limit: 50 }),
+    client.listProviderCosts(resolvedProjectId, 50),
+    client.listProviderCostAnomalies(resolvedProjectId, 25),
+    client.listChangeSets(resolvedProjectId, undefined, 25),
+    client.listResourceReceipts(resolvedProjectId, 25),
+    client.listDeploymentTargets(resolvedProjectId),
+    client.listDeploymentEnvironmentPolicies(resolvedProjectId),
+    client.listDeploymentRuns(resolvedProjectId, 25),
+    client.listDeploymentPromotions(resolvedProjectId, 25),
+    client.listProviderHealth(resolvedProjectId, { limit: 25 }),
+    client.listDriftReports(resolvedProjectId, 25),
+    client.listReconciliationRuns(resolvedProjectId, 25),
+    client.listWorkerPools(resolvedProjectId),
+    client.listScalePlans(resolvedProjectId, 25),
+  ] as const);
+
+  const [
+    providerDefinitionsResult,
+    providerAccountsResult,
+    resourcesResult,
+    costsResult,
+    costAnomaliesResult,
+    changeSetsResult,
+    resourceReceiptsResult,
+    deploymentTargetsResult,
+    deploymentPoliciesResult,
+    deploymentRunsResult,
+    deploymentPromotionsResult,
+    providerHealthResult,
+    driftReportsResult,
+    reconciliationRunsResult,
+    workerPoolsResult,
+    scalePlansResult,
+  ] = results;
+  const partialFailures: string[] = [];
+  const read = <T>(
+    result: PromiseSettledResult<T>,
+    label: string,
+    fallback: T,
+  ): T => {
+    if (result.status === "fulfilled") {
+      return result.value;
+    }
+    const reason =
+      result.reason instanceof BossApiError
+        ? `HTTP ${result.reason.status}`
+        : result.reason instanceof Error
+          ? result.reason.message
+          : "unknown error";
+    partialFailures.push(`${label}: ${reason}`);
+    return fallback;
+  };
+
+  const providerDefinitions = read(
+    providerDefinitionsResult,
+    "Provider catalog",
+    { items: [] },
+  );
+  const providerAccounts = read(
+    providerAccountsResult,
+    "Provider accounts",
+    { project_id: resolvedProjectId, items: [] },
+  );
+  const resources = read(resourcesResult, "Resources", {
+    project_id: resolvedProjectId,
+    items: [],
+    limit: 50,
+    offset: 0,
+  });
+  const costs = read(costsResult, "Cloud costs", {
+    project_id: resolvedProjectId,
+    items: [],
+    limit: 50,
+    offset: 0,
+  });
+  const costAnomalies = read(costAnomaliesResult, "Cost anomalies", {
+    project_id: resolvedProjectId,
+    items: [],
+    limit: 25,
+    offset: 0,
+  });
+  const changeSets = read(changeSetsResult, "ChangeSets", {
+    project_id: resolvedProjectId,
+    items: [],
+  });
+  const resourceReceipts = read(resourceReceiptsResult, "Resource receipts", {
+    project_id: resolvedProjectId,
+    items: [],
+    limit: 25,
+    offset: 0,
+  });
+  const deploymentTargets = read(deploymentTargetsResult, "Deployment targets", {
+    project_id: resolvedProjectId,
+    items: [],
+    limit: 25,
+    offset: 0,
+  });
+  const deploymentPolicies = read(
+    deploymentPoliciesResult,
+    "Deployment policies",
+    { project_id: resolvedProjectId, items: [], limit: 25, offset: 0 },
+  );
+  const deploymentRuns = read(deploymentRunsResult, "Deployment runs", {
+    project_id: resolvedProjectId,
+    items: [],
+  });
+  const deploymentPromotions = read(
+    deploymentPromotionsResult,
+    "Deployment promotions",
+    { project_id: resolvedProjectId, items: [] },
+  );
+  const providerHealth = read(providerHealthResult, "Provider health", {
+    project_id: resolvedProjectId,
+    items: [],
+  });
+  const driftReports = read(driftReportsResult, "Drift reports", {
+    project_id: resolvedProjectId,
+    items: [],
+  });
+  const reconciliationRuns = read(
+    reconciliationRunsResult,
+    "Reconciliation runs",
+    { project_id: resolvedProjectId, items: [] },
+  );
+  const workerPools = read(workerPoolsResult, "Worker pools", {
+    project_id: resolvedProjectId,
+    items: [],
+  });
+  const scalePlans = read(scalePlansResult, "Scale plans", {
+    project_id: resolvedProjectId,
+    items: [],
+  });
+
+  if (
+    providerDefinitionsResult.status === "rejected" &&
+    providerAccountsResult.status === "rejected"
+  ) {
+    return emptyProviderOpsFeed(
+      partialFailures.join("; ") || "Provider configuration APIs unavailable",
+      resolvedProjectId,
+    );
+  }
+
   try {
-    const [
-      providerAccounts,
-      resources,
-      costs,
-      costAnomalies,
-      changeSets,
-      resourceReceipts,
-      deploymentTargets,
-      deploymentPolicies,
-      deploymentRuns,
-      deploymentPromotions,
-      providerHealth,
-      driftReports,
-      reconciliationRuns,
-      workerPools,
-      scalePlans,
-    ] = await Promise.all([
-      client.listProviderAccounts(resolvedProjectId),
-      client.listExternalResources(resolvedProjectId, { limit: 50 }),
-      client.listProviderCosts(resolvedProjectId, 50),
-      client.listProviderCostAnomalies(resolvedProjectId, 25),
-      client.listChangeSets(resolvedProjectId, undefined, 25),
-      client.listResourceReceipts(resolvedProjectId, 25),
-      client.listDeploymentTargets(resolvedProjectId),
-      client.listDeploymentEnvironmentPolicies(resolvedProjectId),
-      client.listDeploymentRuns(resolvedProjectId, 25),
-      client.listDeploymentPromotions(resolvedProjectId, 25),
-      client.listProviderHealth(resolvedProjectId, { limit: 25 }),
-      client.listDriftReports(resolvedProjectId, 25),
-      client.listReconciliationRuns(resolvedProjectId, 25),
-      client.listWorkerPools(resolvedProjectId),
-      client.listScalePlans(resolvedProjectId, 25),
-    ]);
     const feedWithoutSummary = {
       projectId: providerAccounts.project_id,
+      providerDefinitions: providerDefinitions.items.map(mapProviderDefinition),
       providerAccounts: providerAccounts.items.map(mapProviderAccount),
       resources: resources.items.map(mapResource),
       costs: costs.items.map(mapCost),
@@ -712,6 +936,8 @@ export async function fetchProviderOpsFeed(
     return {
       ...feedWithoutSummary,
       apiReachable: true,
+      partialFailures,
+      refreshedAt: new Date().toISOString(),
       summary: summarizeProviderOps(feedWithoutSummary),
     };
   } catch (error) {

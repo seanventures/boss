@@ -6,6 +6,7 @@ vi.mock("../lib/client", () => ({
   PROJECT_ID: "boss-dogfood",
   resolveProjectId: (projectId?: string) => projectId?.trim() || "boss-dogfood",
   client: {
+    listProviderDefinitions: vi.fn(),
     listProviderAccounts: vi.fn(),
     listExternalResources: vi.fn(),
     listProviderCosts: vi.fn(),
@@ -29,6 +30,51 @@ describe("ProviderOps feed", async () => {
   const { fetchProviderOpsFeed } = await import("../lib/providerops");
 
   it("maps ProviderOps API payloads into dashboard summary data", async () => {
+    vi.mocked(client.listProviderDefinitions).mockResolvedValueOnce({
+      items: [
+        {
+          provider: "aws",
+          display_name: "Amazon Web Services",
+          category: "infrastructure",
+          adapter_status: "available",
+          default_auth_method: "access_key",
+          auth_methods: [
+            {
+              key: "access_key",
+              runtime_status: "available",
+              credential_slots: [
+                {
+                  key: "access_key_id",
+                  secret_kind: "access_key_id",
+                  required: true,
+                },
+                {
+                  key: "secret_access_key",
+                  secret_kind: "secret_access_key",
+                  required: true,
+                },
+              ],
+            },
+          ],
+          capabilities: ["resource.sync"],
+        },
+        {
+          provider: "azure",
+          display_name: "Microsoft Azure",
+          category: "infrastructure",
+          adapter_status: "planned",
+          default_auth_method: "service_principal",
+          auth_methods: [
+            {
+              key: "service_principal",
+              runtime_status: "planned",
+              credential_slots: [],
+            },
+          ],
+          capabilities: [],
+        },
+      ],
+    });
     vi.mocked(client.listProviderAccounts).mockResolvedValueOnce({
       project_id: "boss-dogfood",
       items: [
@@ -365,6 +411,26 @@ describe("ProviderOps feed", async () => {
     const feed = await fetchProviderOpsFeed();
 
     expect(feed.apiReachable).toBe(true);
+    expect(feed.partialFailures).toEqual([]);
+    expect(feed.providerDefinitions).toEqual([
+      expect.objectContaining({
+        provider: "aws",
+        adapterStatus: "available",
+        authMethods: [
+          expect.objectContaining({
+            key: "access_key",
+            credentialSlots: [
+              expect.objectContaining({ key: "access_key_id", required: true }),
+              expect.objectContaining({
+                key: "secret_access_key",
+                required: true,
+              }),
+            ],
+          }),
+        ],
+      }),
+      expect.objectContaining({ provider: "azure", adapterStatus: "planned" }),
+    ]);
     expect(feed.summary).toMatchObject({
       connectedProviders: 1,
       healthyProviders: 1,
@@ -416,7 +482,63 @@ describe("ProviderOps feed", async () => {
     });
   });
 
-  it("returns an unavailable state when a ProviderOps endpoint fails", async () => {
+  it("preserves a partial provider workspace when a secondary endpoint fails", async () => {
+    vi.mocked(client.listProviderDefinitions).mockResolvedValueOnce({ items: [] });
+    vi.mocked(client.listProviderAccounts).mockRejectedValueOnce(
+      new BossApiError("request failed", 503, {}),
+    );
+    vi.mocked(client.listExternalResources).mockRejectedValueOnce(
+      new BossApiError("request failed", 503, {}),
+    );
+    vi.mocked(client.listProviderCosts).mockRejectedValueOnce(new Error("costs down"));
+    vi.mocked(client.listProviderCostAnomalies).mockRejectedValueOnce(
+      new Error("anomalies down"),
+    );
+    vi.mocked(client.listChangeSets).mockRejectedValueOnce(new Error("changes down"));
+    vi.mocked(client.listResourceReceipts).mockRejectedValueOnce(
+      new Error("receipts down"),
+    );
+    vi.mocked(client.listDeploymentTargets).mockRejectedValueOnce(
+      new Error("targets down"),
+    );
+    vi.mocked(client.listDeploymentEnvironmentPolicies).mockRejectedValueOnce(
+      new Error("policies down"),
+    );
+    vi.mocked(client.listDeploymentRuns).mockRejectedValueOnce(
+      new Error("deployments down"),
+    );
+    vi.mocked(client.listDeploymentPromotions).mockRejectedValueOnce(
+      new Error("promotions down"),
+    );
+    vi.mocked(client.listProviderHealth).mockRejectedValueOnce(
+      new Error("health down"),
+    );
+    vi.mocked(client.listDriftReports).mockRejectedValueOnce(
+      new Error("drift down"),
+    );
+    vi.mocked(client.listReconciliationRuns).mockRejectedValueOnce(
+      new Error("reconciliation down"),
+    );
+    vi.mocked(client.listWorkerPools).mockRejectedValueOnce(
+      new Error("pools down"),
+    );
+    vi.mocked(client.listScalePlans).mockRejectedValueOnce(
+      new Error("scale plans down"),
+    );
+
+    const feed = await fetchProviderOpsFeed();
+
+    expect(feed.apiReachable).toBe(true);
+    expect(feed.projectId).toBe("boss-dogfood");
+    expect(feed.summary.connectedProviders).toBe(0);
+    expect(feed.partialFailures).toContain("Provider accounts: HTTP 503");
+    expect(feed.partialFailures).toContain("Cloud costs: costs down");
+  });
+
+  it("returns unavailable only when both configuration endpoints fail", async () => {
+    vi.mocked(client.listProviderDefinitions).mockRejectedValueOnce(
+      new BossApiError("request failed", 503, {}),
+    );
     vi.mocked(client.listProviderAccounts).mockRejectedValueOnce(
       new BossApiError("request failed", 503, {}),
     );
@@ -424,8 +546,7 @@ describe("ProviderOps feed", async () => {
     const feed = await fetchProviderOpsFeed();
 
     expect(feed.apiReachable).toBe(false);
-    expect(feed.projectId).toBe("boss-dogfood");
-    expect(feed.summary.connectedProviders).toBe(0);
-    expect(feed.blockedReason).toBe("API returned 503");
+    expect(feed.blockedReason).toContain("Provider catalog: HTTP 503");
+    expect(feed.blockedReason).toContain("Provider accounts: HTTP 503");
   });
 });
