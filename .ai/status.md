@@ -3,7 +3,7 @@
 **Last updated**: 2026-07-26 (BOSS-195–214 assurance workflow batch)
 **Repo root**: /Volumes/DataSSD1/test/boss
 **Git remote**: https://github.com/seanheiney/boss
-**Current branch**: ai/codex/boss-assurance-workflows
+**Current branch**: ai/codex/boss-assurance-workflows-handoff
 **Base branch**: origin/main
 **Product**: BOSS v0.7.0 target (Business Operating System Sentinel)
 **Mission**: Complete product to production-grade, tested, documented, pushed, Codex-coordinated, ready for real users. Grind until all discovered PRD/spec features satisfy world-class DoD or truly blocked.
@@ -27,6 +27,9 @@
   web route generation/TypeScript, SpecPack YAML, strict docs, compile, and
   diff checks. Full repository lint reaches the same two inherited F541
   findings in contributor-owned `intent_router.py`.
+- PR [#74](https://github.com/seanheiney/boss/pull/74) merged to `main` as
+  `79e1f94`; Plane BOSS-195–214 are Done with exact merge, validation, risk,
+  and remaining-runtime-boundary evidence attached.
 - BOSS-175–194 implement twenty non-overlapping SpecPack contract slices under
   the existing Ground Truth, Agent Group, Integration, and Assurance parents.
   The v2 manifest now catalogs all contracts and makes evidence-backed claims,

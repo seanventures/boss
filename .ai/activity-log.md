@@ -1025,5 +1025,7 @@ PR: https://github.com/seanheiney/boss/pull/3
   adjacent marketplace tests pass against local Postgres. Isolated API/worker
   Ruff, web route generation/TypeScript, SpecPack YAML, strict docs, compile,
   and diff checks pass. Full lint stops only at the two inherited F541 findings
-  in contributor-owned `intent_router.py`. Publication and Plane completion
-  remain pending merge.
+  in contributor-owned `intent_router.py`.
+- PR #74 merged to `main` as `79e1f94`. Plane BOSS-195–214 were updated with
+  the PR, implementation/merge commits, validation evidence, inherited lint
+  note, and deliberately unmapped runtime boundary, then verified in Done.
