@@ -1029,3 +1029,28 @@ PR: https://github.com/seanheiney/boss/pull/3
 - PR #74 merged to `main` as `79e1f94`. Plane BOSS-195–214 were updated with
   the PR, implementation/merge commits, validation evidence, inherited lint
   note, and deliberately unmapped runtime boundary, then verified in Done.
+
+## 2026-07-26 — BOSS-215–234 v0.8 integration batch
+
+- Created and advanced 20 deduplicated Plane slices through Backlog, Todo, and
+  In Progress before implementation.
+- Merged Paramg's six-commit OSS engine split through `52ff073`, PR #70's
+  consolidated auth/archive/branch/SSH/rollback fixes, and PR #68's advisory
+  disposition fix. Resolved the governed-code-service conflict by retaining
+  explicit ship/repair/block semantics in the relocated module.
+- Added coherent v0.8.0 metadata, changelog, Apache license coverage, Python
+  3.11 local-gate enforcement, full package discovery, distribution tests, and
+  correct local/API/worker import paths.
+- Fixed relocation regressions discovered by widened testing: verifier corpus
+  repo-root discovery and heartbeat-client ownership. Updated stale assertions
+  for governed design meetings, preview respawn reporting, substantiated
+  verifier refutations, source-module relocation, retrieval annotations,
+  design-tier policy, and pending-plan discussion behavior.
+- Validation: 348 passed / 1 skipped in the affected backend/worker/engine
+  suite; 94 focused regressions; 119 web tests; two idempotent seeds; smoke,
+  Ruff, TypeScript, strict docs, Next build, wheel install, standalone/API/
+  worker containers, Kubernetes 17 resources, Helm 0.8.0, and four infra
+  profiles pass. External rollout checker fails closed only for intentionally
+  unconfigured hosted/provider paths.
+- Publishing state: local implementation complete; Plane tickets remain In
+  Progress until the release PR merges and GitHub v0.8.0 is published.

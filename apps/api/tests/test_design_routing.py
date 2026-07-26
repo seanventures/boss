@@ -5,9 +5,16 @@ from apps.api.app.services import design_routing as dr
 
 # --- tier classification -----------------------------------------------------
 def test_design_axis_vs_fillin_vs_default():
-    for s in ("spec", "plan", "product_design", "scaffold_theme", "visual_judge"):
+    for s in (
+        "spec",
+        "plan",
+        "product_design",
+        "scaffold_theme",
+        "visual_judge",
+        "write_tests",
+    ):
         assert dr.resolve_tier(s) == "frontier" and dr.is_design_axis(s)
-    for s in ("implement", "repair", "write_tests"):
+    for s in ("implement", "repair"):
         assert dr.resolve_tier(s) == "oss" and not dr.is_design_axis(s)
     for s in ("review_code", "security_check"):
         assert dr.resolve_tier(s) == "default"

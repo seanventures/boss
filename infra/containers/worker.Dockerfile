@@ -2,7 +2,7 @@ FROM python:3.11-slim AS runtime
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PYTHONPATH=/app
+    PYTHONPATH=/app:/app/engine
 
 WORKDIR /app
 
@@ -27,6 +27,9 @@ COPY api ./api
 COPY db ./db
 COPY packages ./packages
 COPY scripts ./scripts
+# The OSS engine package (boss_engine) — the worker imports engine services
+# (via the apps.api.app shims) so it must be on PYTHONPATH (/app:/app/engine).
+COPY engine ./engine
 
 RUN mkdir -p /var/lib/boss/artifacts \
     && chown -R boss:boss /app /var/lib/boss

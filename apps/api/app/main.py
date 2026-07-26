@@ -5320,6 +5320,9 @@ def deploy_code_task_endpoint(run_id: str, payload: Optional[dict] = None):
         raise HTTPException(status_code=403, detail={
             "error": str(exc), "reason": "outward deploy gate off / no key",
             "plan": plan, "markdown": render_plan_markdown(plan)})
+    except ValueError as exc:
+        # Invalid host/user (shell-metacharacter rejection) — never actuate.
+        raise HTTPException(status_code=422, detail=str(exc))
     except (RuntimeError, OSError, subprocess.SubprocessError) as exc:
         raise HTTPException(status_code=502, detail={"error": f"deploy failed: {exc}", "plan": plan})
     return {"result": result, "plan": plan}
@@ -6315,12 +6318,17 @@ def list_tasks(
 
 
 @app.delete("/v1/tasks/{task_id}")
-def archive_task_endpoint(task_id: str, project_id: str):
+def archive_task_endpoint(task_id: str, project_id: str, actor: str):
     """Archive a task (soft delete) — hide it from lists/rails without breaking child rows (plans,
-    code tasks reference it). Used to clear junk/mis-created tasks."""
+    code tasks reference it). Used to clear junk/mis-created tasks.
+
+    Requires a project actor with task_create (same gate as create) so knowing a task id alone
+    cannot soft-delete another project's work when API auth is off or loosely bound.
+    """
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
     with begin(engine) as connection:
+        require_project_actor(connection, project_id, actor, "task_create")
         row = connection.execute(
             text("UPDATE tasks SET status='archived', updated_at=now() "
                  "WHERE id = :id AND project_id = :p RETURNING id"),
@@ -6333,6 +6341,15 @@ def archive_task_endpoint(task_id: str, project_id: str):
             text("UPDATE agent_threads SET status='closed' "
                  "WHERE project_id = :p AND external_ref = :ref"),
             {"p": project_id, "ref": task_id},
+        )
+        emit_event(
+            connection,
+            project_id,
+            "task.archived",
+            actor,
+            "task",
+            task_id,
+            {"status": "archived"},
         )
     return {"status": "archived", "task_id": task_id}
 
@@ -6553,7 +6570,12 @@ def dispatch_plan(plan_id: str, payload: PlanDispatchRequest) -> dict:
     with begin(engine) as connection:
         require_project_actor(connection, payload.project_id, payload.actor, "task_create")
         try:
-            return intake.dispatch_plan(connection, plan_id, payload.actor)
+            return intake.dispatch_plan(
+                connection,
+                plan_id,
+                project_id=payload.project_id,
+                actor=payload.actor,
+            )
         except ValueError as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
 

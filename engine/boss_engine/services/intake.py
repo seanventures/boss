@@ -114,20 +114,36 @@ class CommandIntakeService:
         )
         return {"task_id": task_id}
 
-    def dispatch_plan(self, connection: Connection, plan_id: str, actor: str = "program_manager") -> dict:
+    def dispatch_plan(
+        self,
+        connection: Connection,
+        plan_id: str,
+        *,
+        project_id: str,
+        actor: str = "program_manager",
+    ) -> dict:
         """Turn a plan's structured phases into executable tasks: one child task per phase, parented
         to the plan's task and sequenced (each phase depends on the previous unless the phase
-        declares its own `depends_on`). Bridges the plan primitive to the task/job engine."""
+        declares its own `depends_on`). Bridges the plan primitive to the task/job engine.
+
+        `project_id` is required and must match the plan's project — callers authorize against the
+        project they claim; never load a plan by id alone (cross-project dispatch).
+        """
         plan = connection.execute(
-            text("SELECT id, project_id, task_id, title, status, phases FROM plans WHERE id = :id"),
-            {"id": plan_id},
+            text(
+                """
+                SELECT id, project_id, task_id, title, status, phases
+                FROM plans
+                WHERE id = :id AND project_id = :project_id
+                """
+            ),
+            {"id": plan_id, "project_id": project_id},
         ).mappings().first()
         if not plan:
             raise ValueError(f"plan {plan_id} not found")
         if plan["status"] == "dispatched":
             raise ValueError(f"plan {plan_id} already dispatched")
         phases = plan["phases"] if isinstance(plan["phases"], list) else json.loads(plan["phases"] or "[]")
-        project_id = plan["project_id"]
         created: list[str] = []
         prev_task_id: Optional[str] = None
         for i, phase in enumerate(phases):
