@@ -1,7 +1,9 @@
 SHELL := /bin/bash
 VENV := .venv
+PYTHON_BOOTSTRAP ?= python3
 PYTHON := $(VENV)/bin/python
 PIP := $(VENV)/bin/pip
+PYTHON_REQUIREMENTS_STAMP := $(VENV)/.boss-requirements-installed
 BOSS_POSTGRES_PORT ?= 5432
 DATABASE_URL ?= postgresql+psycopg://boss:boss@localhost:$(BOSS_POSTGRES_PORT)/boss
 
@@ -12,12 +14,16 @@ install: install-node install-python
 install-node:
 	pnpm install
 
-install-python: $(PYTHON)
+install-python: $(PYTHON_REQUIREMENTS_STAMP)
 
 $(PYTHON):
-	python3 -m venv $(VENV)
+	$(PYTHON_BOOTSTRAP) -m venv $(VENV)
 	$(PIP) install --upgrade pip
+
+$(PYTHON_REQUIREMENTS_STAMP): apps/api/requirements.txt apps/worker/requirements.txt | $(PYTHON)
+	$(PYTHON) -c 'import sys; assert sys.version_info >= (3, 11), "BOSS requires Python 3.11+"'
 	$(PIP) install -r apps/api/requirements.txt -r apps/worker/requirements.txt
+	touch $(PYTHON_REQUIREMENTS_STAMP)
 
 wait-db: install-python
 	DATABASE_URL=$(DATABASE_URL) $(PYTHON) scripts/wait_for_postgres.py
@@ -29,10 +35,10 @@ dev: install
 
 test: install-python install-node
 	DATABASE_URL=$(DATABASE_URL) $(PYTHON) scripts/wait_for_postgres.py
-	DATABASE_URL=$(DATABASE_URL) pnpm test
+	DATABASE_URL=$(DATABASE_URL) PYTHON_BIN=$(PYTHON) pnpm test
 
 lint: install-python install-node
-	DATABASE_URL=$(DATABASE_URL) pnpm lint
+	DATABASE_URL=$(DATABASE_URL) PYTHON_BIN=$(PYTHON) pnpm lint
 
 build: install-node
 	pnpm --filter boss-web build

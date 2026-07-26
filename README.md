@@ -56,7 +56,7 @@ If a required credential is missing, the API must fail closed and create visible
 
 - Node `20.x`
 - `pnpm` `9.x`
-- Python `3.9+`
+- Python `3.11+`
 - Docker with Compose
 - GitHub credentials available through `BOSS_GITHUB_TOKEN`, `GITHUB_TOKEN`, or the macOS keychain
 - `OPENAI_API_KEY`
