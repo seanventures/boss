@@ -144,6 +144,26 @@ def test_project_github_connection_binding_and_receipted_test(
     assert replayed.json()["receipt_id"] == result["receipt_id"]
     assert FakeGitHubAdapter.calls == 1
 
+    second_binding = _create_binding(
+        client,
+        github_connection["id"],
+        repository="seanheiney/boss-mirror",
+        role="source",
+    )
+    assert second_binding.status_code == 201
+    dedupe_collision = client.post(
+        f"/v1/github/connections/{github_connection['id']}/test",
+        json={
+            "project_id": PROJECT_ID,
+            "repository_binding_id": second_binding.json()["id"],
+            "dedupe_key": "github-connection-test:boss:1",
+            "actor": "ceo",
+        },
+    )
+    assert dedupe_collision.status_code == 409
+    assert "different GitHub connection test" in dedupe_collision.json()["detail"]
+    assert FakeGitHubAdapter.calls == 1
+
     with engine.begin() as connection:
         receipt = connection.execute(
             text(

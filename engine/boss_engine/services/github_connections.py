@@ -594,6 +594,18 @@ class GitHubConnectionService:
             {"operation": "test_connection"},
             data_boundary="internal",
         )
+        if not created:
+            receipt_scope = receipt.get("effect_scope") or {}
+            if (
+                receipt.get("project_id") != project_id
+                or receipt.get("effect_kind") != "github.repository.read"
+                or receipt_scope.get("connection_id") != connection_id
+                or receipt_scope.get("repository_binding_id") != binding_id
+                or receipt_scope.get("repository") != binding["full_name"]
+            ):
+                raise ValueError(
+                    "dedupe_key is already bound to a different GitHub connection test."
+                )
         if not created and receipt["status"] == "succeeded":
             return {
                 "status": (receipt.get("result") or {}).get("status", "passed"),
