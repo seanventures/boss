@@ -1,5 +1,30 @@
 # Codex Handoff
 
+## 2026-07-26 BOSS-195–214 assurance workflow batch
+
+- Branch `ai/codex/boss-assurance-workflows` starts from refreshed `origin/main`
+  after PRs #72 and #73. The unrelated workstation `site/` directory remains
+  excluded.
+- Plane BOSS-195–214 are In Progress and cover fourteen Ground
+  Truth/Assurance workflows, four Agent Group collaboration protocols, and two
+  Integration lifecycle/preflight workflows.
+- All twenty are native acyclic WorkflowSpecs registered by the existing
+  idempotent SpecPack seeder. No selector or default work-class mapping is
+  created, so catalog publication cannot start work by itself.
+- The graphs require dedupe keys, visible failure paths, hold-default
+  Decisions where authority is ambiguous, evidence artifacts, receipts for
+  member effects, budget reservations for spend, SecretRefs, and fail-closed
+  ownership/capability preflight.
+- Paramg's `feat/oss-engine-split` remains untouched. This branch changes only
+  SpecPack workflows/catalog, contract/runtime-seeding tests, product
+  traceability, and coordination documentation.
+- Validation is green: 10 object/workflow contract tests, 6 Workflow Runtime
+  tests, 10 adjacent marketplace tests, isolated API/worker Ruff, web route
+  generation/TypeScript, SpecPack YAML, strict docs, compile, and diff checks.
+  Full repository lint reaches only the same two inherited F541 findings in
+  contributor-owned `intent_router.py`. Publication evidence will be added
+  before the Plane issues move to Done.
+
 ## 2026-07-26 BOSS-175–194 assurance contract batch
 
 - PR #71 merged first as `c0b2493`; Plane BOSS-148/BOSS-149 are Done with

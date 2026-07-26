@@ -121,3 +121,15 @@ the merge and validation evidence and are Done.
 | --- | --- | --- | --- |
 | BOSS-148 | Agent Roster shows Agent / Now / State with truthful state rings and current work | `mission-operations-ui.tsx` resolves role ownership against canonical tasks; no synthetic activity endpoint | `mission-operations.test.tsx`; web lint/typecheck; production build |
 | BOSS-149 | Five-column Task Board shows stable IDs, owner, state, and receipt coverage | Board maps canonical task states and counts receipts only through matching task jobs | `mission-operations.test.tsx`; 119 web tests; production build |
+
+## Assurance workflow contracts (2026-07-26)
+
+| Plane | Requirement | Implementation | Evidence |
+| --- | --- | --- | --- |
+| BOSS-195–197 | Metric evaluation, baseline approval, and regression lifecycle | Three native Ground Truth workflows with pinned versions, leases, dedupe, evidence, hold-default baseline decisions, and visible regression handling | `test_assurance_workflow_contracts.py`; `test_workflow_runtime.py` |
+| BOSS-198–199 | Closed-question publication interruption and controlled reopen | Publication guard blocks direct regressed-prior recommendations; reopen requires evidence, reason, expected version, and Decision | `test_assurance_workflow_contracts.py` |
+| BOSS-200–202 | Claim authority, red-to-green proof, and causal isolation | Fail-closed claim gate plus reproducible red/green and one-variable isolation workflows | `test_assurance_workflow_contracts.py` |
+| BOSS-203–205 | Single surface owner lifecycle and effect preflight | Atomic acquire/transfer plus provider-boundary revalidation; stale, conflicting, or unavailable ownership blocks effects | `test_assurance_workflow_contracts.py` |
+| BOSS-206–208 | Standing verifier and Assurance Case evaluation | Budgeted leased schedule/execute flows preserve passed/refuted/inconclusive; Assurance Case joins all mandatory dimensions under a policy snapshot | `test_assurance_workflow_contracts.py`; `test_workflow_runtime.py` |
+| BOSS-209–212 | Reusable Agent Group protocols | Panel, producer-reviewer, bounded-debate, and fan-out/join graphs preserve attribution, dissent, failures, receipts, bounds, and governance gates | `test_assurance_workflow_contracts.py`; `test_workflow_runtime.py` |
+| BOSS-213–214 | Integration lifecycle and capability gate | SecretRef-only connection lifecycle plus deterministic intersection preflight; denied resolution never invokes an executor | `test_assurance_workflow_contracts.py`; `test_workflow_runtime.py` |

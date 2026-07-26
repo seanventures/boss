@@ -1,0 +1,73 @@
+kind: WorkflowSpec
+id: agent_group_bounded_debate
+version: 0.1.0
+name: Bounded-debate Agent Group protocol
+description: >
+  Capture independent positions, limit debate rounds, preserve unresolved
+  dissent, and escalate rather than manufacture consensus.
+entry_step: pin_group_context
+input_schema:
+  required: [project_id, agent_group_spec_id, agent_group_spec_version, question_ref, dedupe_key]
+output_schema:
+  required: [agent_group_run_id, disposition, position_refs, dissent_refs, receipt_refs]
+steps:
+  - id: pin_group_context
+    kind: task
+    input: { operation: agent_group.debate.pin_roles_policy_question_and_inputs }
+    next: [collect_initial_positions]
+  - id: collect_initial_positions
+    kind: parallel
+    branches: [position_a, position_b]
+    join: join_positions
+  - id: position_a
+    kind: task
+    input: { operation: agent_group.debate.produce_independent_position, role_slot: advocate_a }
+    next: [join_positions]
+  - id: position_b
+    kind: task
+    input: { operation: agent_group.debate.produce_independent_position, role_slot: advocate_b }
+    next: [join_positions]
+  - id: join_positions
+    kind: join
+    wait_for: [position_a, position_b]
+    success_policy: all
+    next: [debate_loop]
+  - id: debate_loop
+    kind: bounded_loop
+    body: debate_round
+    max_iterations: 3
+    expression: { path: context.material_disagreement, op: eq, value: true }
+    next: [synthesize_positions]
+  - id: debate_round
+    kind: task
+    input: { operation: agent_group.debate.run_attributed_evidence_round }
+  - id: synthesize_positions
+    kind: task
+    input: { operation: agent_group.debate.synthesize_without_erasing_dissent }
+    next: [material_disagreement_remains]
+  - id: material_disagreement_remains
+    kind: condition
+    expression: { path: context.material_disagreement, op: eq, value: true }
+    on_true: escalate_dissent
+    on_false: issue_debate_disposition
+  - id: escalate_dissent
+    kind: decision
+    question: Who should resolve the material dissent remaining after the bounded debate?
+    input: { default_action: hold, dissent_refs_required: true }
+    next: [emit_group_event]
+  - id: issue_debate_disposition
+    kind: task
+    input: { operation: agent_group.debate.issue_governed_disposition }
+    next: [emit_group_event]
+  - id: emit_group_event
+    kind: task
+    input: { operation: audit.emit_agent_group_bounded_debate_run }
+rules:
+  initial_positions_are_independent_and_attributed: true
+  debate_rounds_are_bounded: true
+  material_dissent_is_never_erased_or_coerced: true
+  unresolved_dissent_escalates_with_default_hold: true
+  consensus_never_bypasses_evidence_policy_budget_or_approval: true
+  every_member_effect_has_receipt_and_dedupe_key: true
+completion:
+  artifacts_required: [AgentGroupRun, Position, Dissent, Receipt, Event]

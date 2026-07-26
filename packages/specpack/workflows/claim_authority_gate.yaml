@@ -1,0 +1,67 @@
+kind: WorkflowSpec
+id: claim_authority_gate
+version: 0.1.0
+name: Claim authority gate
+description: >
+  Prevent solved, fixed, regressed, caused-by, or health claims from becoming
+  authoritative without fresh, typed, reproducible proof.
+entry_step: load_claim
+input_schema:
+  required: [project_id, claim_id, claim_version, requested_authority_state, dedupe_key]
+output_schema:
+  required: [claim_state, claim_verification_id, decision_id, event_ref]
+steps:
+  - id: load_claim
+    kind: task
+    input: { operation: assurance.claim.load_exact_version }
+    next: [resolve_evidence_contract]
+  - id: resolve_evidence_contract
+    kind: task
+    input: { operation: assurance.claim.resolve_evidence_contract }
+    next: [verify_evidence_bundle]
+  - id: verify_evidence_bundle
+    kind: parallel
+    branches: [verify_provenance, verify_freshness, verify_typed_proof]
+    join: join_evidence_checks
+  - id: verify_provenance
+    kind: task
+    input: { operation: assurance.evidence.verify_provenance_and_hash }
+    next: [join_evidence_checks]
+  - id: verify_freshness
+    kind: task
+    input: { operation: assurance.evidence.verify_freshness_and_validity }
+    next: [join_evidence_checks]
+  - id: verify_typed_proof
+    kind: task
+    input: { operation: assurance.claim.run_required_verification }
+    next: [join_evidence_checks]
+  - id: join_evidence_checks
+    kind: join
+    wait_for: [verify_provenance, verify_freshness, verify_typed_proof]
+    success_policy: all
+    next: [proof_satisfies_contract]
+  - id: proof_satisfies_contract
+    kind: condition
+    expression: { path: context.proof_satisfies_contract, op: eq, value: true }
+    on_true: publish_authoritative_version
+    on_false: block_claim_authority
+  - id: publish_authoritative_version
+    kind: task
+    input: { operation: assurance.claim.publish_authoritative_version }
+    next: [emit_claim_gate_event]
+  - id: block_claim_authority
+    kind: decision
+    question: Claim authority is blocked by missing, stale, or conflicting evidence. How should it be resolved?
+    input: { default_action: hold, allowed_actions: [supply_evidence, mark_inconclusive, abandon_claim] }
+    next: [emit_claim_gate_event]
+  - id: emit_claim_gate_event
+    kind: task
+    input: { operation: audit.emit_claim_authority_result }
+rules:
+  missing_stale_or_conflicting_evidence_fails_closed: true
+  solved_or_fixed_requires_red_to_green: true
+  caused_by_requires_isolation: true
+  regressed_requires_comparable_prior_pass: true
+  blocked_claim_creates_actionable_decision: true
+completion:
+  artifacts_required: [Claim, ClaimVerification, Evidence]

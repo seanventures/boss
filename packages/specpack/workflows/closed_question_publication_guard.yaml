@@ -1,0 +1,54 @@
+kind: WorkflowSpec
+id: closed_question_publication_guard
+version: 0.1.0
+name: Closed-question publication guard
+description: >
+  Scan plans, tool proposals, outputs, and external dispatches for regressed
+  priors and interrupt direct recommendations before publication.
+entry_step: load_current_conclusions
+input_schema:
+  required: [project_id, publication_boundary, content_hash, content, dedupe_key]
+output_schema:
+  required: [outcome, match_id, audit_event_ref]
+steps:
+  - id: load_current_conclusions
+    kind: task
+    input: { operation: ground_truth.conclusion.load_current_for_scope }
+    next: [scan_candidate]
+  - id: scan_candidate
+    kind: task
+    input: { operation: ground_truth.closed_question.scan_exact_normalized_semantic }
+    next: [classify_context]
+  - id: classify_context
+    kind: task
+    input: { operation: ground_truth.closed_question.classify_context }
+    next: [direct_regressed_recommendation]
+  - id: direct_regressed_recommendation
+    kind: condition
+    expression: { path: context.direct_regressed_recommendation, op: eq, value: true }
+    on_true: block_publication
+    on_false: allow_nonrecommendation
+  - id: block_publication
+    kind: task
+    input:
+      operation: ground_truth.closed_question.block
+      response_requires: [settled_conclusion, cause_menu, evidence_refs, reopen_route]
+    next: [persist_match_and_audit]
+  - id: allow_nonrecommendation
+    kind: task
+    input:
+      operation: ground_truth.closed_question.allow_classified_context
+      allowed_contexts: [quotation, historical, negated, hypothetical, no_match]
+    next: [persist_match_and_audit]
+  - id: persist_match_and_audit
+    kind: task
+    input: { operation: ground_truth.closed_question.persist_match_and_event }
+rules:
+  scan_runs_before_every_publication_boundary: true
+  only_current_unexpired_conclusions_block: true
+  direct_recommendation_match_blocks: true
+  quotation_history_negation_and_hypothetical_are_classified: true
+  override_requires_decision_or_reopen_workflow: true
+completion:
+  artifacts_required: [ClosedQuestionMatch]
+  blocked_result_is_terminal: true

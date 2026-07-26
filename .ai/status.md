@@ -1,9 +1,9 @@
 # BOSS Autonomous Delivery Status
 
-**Last updated**: 2026-07-26 (BOSS-175–194 assurance contract batch)
+**Last updated**: 2026-07-26 (BOSS-195–214 assurance workflow batch)
 **Repo root**: /Volumes/DataSSD1/test/boss
 **Git remote**: https://github.com/seanheiney/boss
-**Current branch**: ai/codex/boss-assurance-contracts
+**Current branch**: ai/codex/boss-assurance-workflows
 **Base branch**: origin/main
 **Product**: BOSS v0.7.0 target (Business Operating System Sentinel)
 **Mission**: Complete product to production-grade, tested, documented, pushed, Codex-coordinated, ready for real users. Grind until all discovered PRD/spec features satisfy world-class DoD or truly blocked.
@@ -14,6 +14,19 @@
 - GitHub: draft PR #16 carries BOSS-22/BOSS-23 and is stacked on draft PR #15; other open PRs were inspected for overlap before implementation.
 
 ## Overall Product Status
+- BOSS-195–214 add twenty native reusable WorkflowSpecs for Ground Truth,
+  Assurance, Agent Group, and Integration lifecycles. They seed idempotently
+  into the existing Workflow Runtime but create no implicit work-class
+  mappings. Fail-closed Decisions, dedupe keys, evidence artifacts, ownership
+  revalidation, independent verification, preserved dissent, bounded group
+  loops, SecretRefs, and intersection-only capability checks are contract
+  tested. The workflow orchestration layer is implemented; post-engine-split
+  persistence, action executors, workers, API/client, and UI remain correctly
+  Partial under the parent features. Validation is green across 26 focused and
+  adjacent Python tests, native seeding/idempotency, isolated API/worker Ruff,
+  web route generation/TypeScript, SpecPack YAML, strict docs, compile, and
+  diff checks. Full repository lint reaches the same two inherited F541
+  findings in contributor-owned `intent_router.py`.
 - BOSS-175–194 implement twenty non-overlapping SpecPack contract slices under
   the existing Ground Truth, Agent Group, Integration, and Assurance parents.
   The v2 manifest now catalogs all contracts and makes evidence-backed claims,

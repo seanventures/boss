@@ -1,0 +1,60 @@
+kind: WorkflowSpec
+id: agent_group_producer_reviewer
+version: 0.1.0
+name: Producer-reviewer Agent Group protocol
+description: >
+  Separate production from review, bound revision attempts, preserve findings,
+  and hold rather than self-approve unresolved work.
+entry_step: pin_group_context
+input_schema:
+  required: [project_id, agent_group_spec_id, agent_group_spec_version, task_ref, dedupe_key]
+output_schema:
+  required: [agent_group_run_id, artifact_ref, review_ref, disposition, receipt_refs]
+steps:
+  - id: pin_group_context
+    kind: task
+    input: { operation: agent_group.producer_reviewer.pin_roles_policy_and_inputs }
+    next: [produce_candidate]
+  - id: produce_candidate
+    kind: task
+    input: { operation: agent_group.producer_reviewer.produce_candidate, role_slot: producer }
+    next: [review_candidate]
+  - id: review_candidate
+    kind: task
+    input: { operation: agent_group.producer_reviewer.review_independently, role_slot: reviewer }
+    next: [revision_loop]
+  - id: revision_loop
+    kind: bounded_loop
+    body: revise_candidate
+    max_iterations: 3
+    expression: { path: context.review_clean, op: ne, value: true }
+    next: [final_gate]
+  - id: revise_candidate
+    kind: task
+    input: { operation: agent_group.producer_reviewer.revise_against_attributed_findings, role_slot: producer }
+  - id: final_gate
+    kind: condition
+    expression: { path: context.review_clean, op: eq, value: true }
+    on_true: accept_reviewed_artifact
+    on_false: escalate_unresolved_review
+  - id: accept_reviewed_artifact
+    kind: task
+    input: { operation: agent_group.producer_reviewer.record_accepted_artifact }
+    next: [emit_group_event]
+  - id: escalate_unresolved_review
+    kind: decision
+    question: How should unresolved reviewer findings be handled after the bounded revision limit?
+    input: { default_action: hold, self_approval_allowed: false }
+    next: [emit_group_event]
+  - id: emit_group_event
+    kind: task
+    input: { operation: audit.emit_agent_group_producer_reviewer_run }
+rules:
+  producer_and_reviewer_are_distinct_authorities: true
+  reviewer_findings_are_attributed_and_preserved: true
+  revision_attempts_are_bounded: true
+  unresolved_work_cannot_self_approve: true
+  consensus_never_bypasses_evidence_policy_budget_or_approval: true
+  every_member_effect_has_receipt_and_dedupe_key: true
+completion:
+  artifacts_required: [AgentGroupRun, Review, Receipt, Event]
