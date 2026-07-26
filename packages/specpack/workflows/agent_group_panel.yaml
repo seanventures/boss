@@ -1,0 +1,67 @@
+kind: WorkflowSpec
+id: agent_group_panel
+version: 0.1.0
+name: Panel Agent Group protocol
+description: >
+  Gather independent panel findings, preserve dissent and provenance, and
+  require an evidence gate before the group may emit a disposition.
+entry_step: pin_group_context
+input_schema:
+  required: [project_id, agent_group_spec_id, agent_group_spec_version, task_ref, dedupe_key]
+output_schema:
+  required: [agent_group_run_id, disposition, finding_refs, dissent_refs, receipt_refs]
+steps:
+  - id: pin_group_context
+    kind: task
+    input: { operation: agent_group.panel.pin_members_roles_policy_and_inputs }
+    next: [collect_independent_findings]
+  - id: collect_independent_findings
+    kind: parallel
+    branches: [panel_member_a, panel_member_b, panel_member_c]
+    join: join_panel
+  - id: panel_member_a
+    kind: task
+    input: { operation: agent_group.panel.execute_independent_member, role_slot: panel_a }
+    next: [join_panel]
+  - id: panel_member_b
+    kind: task
+    input: { operation: agent_group.panel.execute_independent_member, role_slot: panel_b }
+    next: [join_panel]
+  - id: panel_member_c
+    kind: task
+    input: { operation: agent_group.panel.execute_independent_member, role_slot: panel_c }
+    next: [join_panel]
+  - id: join_panel
+    kind: join
+    wait_for: [panel_member_a, panel_member_b, panel_member_c]
+    success_policy: all
+    next: [preserve_findings_and_dissent]
+  - id: preserve_findings_and_dissent
+    kind: task
+    input: { operation: agent_group.panel.persist_attributed_findings_and_dissent }
+    next: [evidence_gate_passed]
+  - id: evidence_gate_passed
+    kind: condition
+    expression: { path: context.evidence_gate_passed, op: eq, value: true }
+    on_true: issue_panel_disposition
+    on_false: escalate_panel_gap
+  - id: issue_panel_disposition
+    kind: task
+    input: { operation: agent_group.panel.issue_governed_disposition }
+    next: [emit_group_event]
+  - id: escalate_panel_gap
+    kind: decision
+    question: What additional evidence or panel membership is required before disposition?
+    input: { default_action: hold }
+    next: [emit_group_event]
+  - id: emit_group_event
+    kind: task
+    input: { operation: audit.emit_agent_group_panel_run }
+rules:
+  roles_members_policy_and_inputs_are_version_pinned: true
+  panel_members_work_independently_before_join: true
+  dissent_is_preserved_with_member_provenance: true
+  consensus_never_bypasses_evidence_policy_budget_or_approval: true
+  every_member_effect_has_receipt_and_dedupe_key: true
+completion:
+  artifacts_required: [AgentGroupRun, Finding, Receipt, Event]

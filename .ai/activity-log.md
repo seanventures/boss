@@ -1007,3 +1007,23 @@ Codex handoff updated: Yes (active agents section expanded with 10+ new ids/slic
 Next actions: Poll new batch (get_command_or_subagent_output 019e98d8-8903 019e98d8-bf0d 019e98d8-e518 etc block=true for outputs/commits/.ai/); integrate clean (search_replace + test); full validate per slice + overall; .ai/ update (gap Closed for done slices, activity 15min, handoff, status, agent .md); commit/push with IDs (e.g. GAP-PRD-AUDIT-001 + P2 ux/e2e); MCP PR#3 comment scale results; print terminal; if more slices or clean, dispatch more or full final report (readiness, full coverage table vs all PRD/trace, gaps closed + exact external resume, PRs/commits, 25 DoD, decisions, tests, Codex).
 Blockers: External 3 only (local 3x grind on polish + P3).
 PR: https://github.com/seanheiney/boss/pull/3
+
+## 2026-07-26 — Codex BOSS-195–214 assurance workflow batch
+
+- Refreshed `origin/main`, active `ai/*` branches, GitHub PRs, Plane modules,
+  and Paramg's engine-split ownership before selecting work.
+- Created and advanced Plane BOSS-195–214 through Backlog, Todo, and In
+  Progress. The slices are deliberately outside Paramg's API engine move.
+- Added fourteen Ground Truth/Assurance workflows, four reusable Agent Group
+  protocols, and two Integration workflows as native runtime-valid
+  WorkflowSpecs.
+- Added a manifest workflow catalog and tests for graph validity, idempotent
+  seeding, dedupe, fail-closed Decisions, evidence/receipt invariants,
+  governance-preserving collaboration, SecretRefs, and intersection-only
+  capability resolution.
+- Validation result: 10 contract tests, 6 Workflow Runtime tests, and 10
+  adjacent marketplace tests pass against local Postgres. Isolated API/worker
+  Ruff, web route generation/TypeScript, SpecPack YAML, strict docs, compile,
+  and diff checks pass. Full lint stops only at the two inherited F541 findings
+  in contributor-owned `intent_router.py`. Publication and Plane completion
+  remain pending merge.

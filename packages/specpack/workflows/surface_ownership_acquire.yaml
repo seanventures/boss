@@ -1,0 +1,49 @@
+kind: WorkflowSpec
+id: surface_ownership_acquire
+version: 0.1.0
+name: Surface ownership acquisition
+description: >
+  Acquire deploying authority for an unowned or expired production surface
+  through an authorized, version-checked transition.
+entry_step: load_surface
+input_schema:
+  required: [project_id, surface_key, environment, requested_owner_ref, expected_version, dedupe_key]
+output_schema:
+  required: [surface_ownership_id, ownership_version, status, coordination_route, event_ref]
+steps:
+  - id: load_surface
+    kind: task
+    input: { operation: assurance.ownership.load_surface_and_version }
+    next: [surface_available]
+  - id: surface_available
+    kind: condition
+    expression: { path: context.surface_available, op: eq, value: true }
+    on_true: authorize_acquisition
+    on_false: report_current_owner
+  - id: authorize_acquisition
+    kind: task
+    input: { operation: assurance.ownership.authorize_acquire }
+    next: [apply_acquisition]
+  - id: apply_acquisition
+    kind: task
+    input: { operation: assurance.ownership.compare_and_swap_acquire }
+    next: [publish_ownership]
+  - id: report_current_owner
+    kind: task
+    input: { operation: assurance.ownership.return_owner_and_coordination_route }
+    next: [emit_acquisition_event]
+  - id: publish_ownership
+    kind: task
+    input: { operation: assurance.ownership.publish_current_version }
+    next: [emit_acquisition_event]
+  - id: emit_acquisition_event
+    kind: task
+    input: { operation: audit.emit_ownership_acquisition }
+rules:
+  exactly_one_current_owner: true
+  expected_version_compare_and_swap_required: true
+  unauthorized_acquisition_is_rejected: true
+  conflict_returns_owner_and_coordination_route: true
+  replay_returns_existing_transition: true
+completion:
+  artifacts_required: [SurfaceOwnership, OwnershipTransition]

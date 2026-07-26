@@ -1,0 +1,50 @@
+kind: WorkflowSpec
+id: settled_conclusion_reopen
+version: 0.1.0
+name: Settled-conclusion reopen
+description: >
+  Reopen a settled question only through new evidence, explicit authority, and
+  a versioned Decision-backed conclusion update.
+entry_step: load_conclusion
+input_schema:
+  required: [project_id, settled_conclusion_id, expected_version, reason, new_evidence_refs, dedupe_key]
+output_schema:
+  required: [status, settled_conclusion_version, decision_id, audit_event_ref]
+steps:
+  - id: load_conclusion
+    kind: task
+    input: { operation: ground_truth.conclusion.load_exact_version }
+    next: [validate_reopen_conditions]
+  - id: validate_reopen_conditions
+    kind: task
+    input: { operation: ground_truth.conclusion.validate_reopen_conditions }
+    next: [actor_may_reopen]
+  - id: actor_may_reopen
+    kind: condition
+    expression: { path: context.actor_may_reopen, op: eq, value: true }
+    on_true: decide_reopen
+    on_false: reject_reopen
+  - id: decide_reopen
+    kind: decision
+    question: Does the new evidence justify reopening this settled conclusion?
+    input: { default_action: hold, required_refs: [reason, new_evidence_refs, current_conclusion] }
+    next: [publish_reopened_version]
+  - id: reject_reopen
+    kind: task
+    input: { operation: ground_truth.conclusion.reject_reopen }
+    next: [emit_reopen_event]
+  - id: publish_reopened_version
+    kind: task
+    input: { operation: ground_truth.conclusion.compare_and_publish_reopened_version }
+    next: [emit_reopen_event]
+  - id: emit_reopen_event
+    kind: task
+    input: { operation: audit.emit_conclusion_reopen_result }
+rules:
+  expected_version_required: true
+  new_evidence_and_reason_required: true
+  decision_defaults_to_hold: true
+  superseded_version_stops_blocking: true
+  every_attempt_is_audited: true
+completion:
+  artifacts_required: [SettledConclusion, Decision]

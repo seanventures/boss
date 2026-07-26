@@ -1,0 +1,76 @@
+kind: WorkflowSpec
+id: assurance_case_evaluate
+version: 0.1.0
+name: Assurance Case evaluation
+description: >
+  Evaluate a pinned Assurance Case against metric, claim, ownership, and
+  verifier evidence under one deterministic policy snapshot.
+entry_step: load_assurance_case
+input_schema:
+  required: [project_id, assurance_case_id, assurance_case_version, dedupe_key]
+output_schema:
+  required: [evaluation_id, status, policy_snapshot_id, evidence_refs, event_ref]
+steps:
+  - id: load_assurance_case
+    kind: task
+    input: { operation: assurance.case.load_exact_version }
+    next: [snapshot_effective_policy]
+  - id: snapshot_effective_policy
+    kind: task
+    input: { operation: assurance.policy.compose_and_snapshot_fail_closed }
+    next: [evaluate_dimensions]
+  - id: evaluate_dimensions
+    kind: parallel
+    branches: [evaluate_metrics, evaluate_claims, evaluate_ownership, evaluate_verifiers]
+    join: join_evaluations
+  - id: evaluate_metrics
+    kind: task
+    input: { operation: assurance.case.evaluate_metric_observations }
+    next: [join_evaluations]
+  - id: evaluate_claims
+    kind: task
+    input: { operation: assurance.case.evaluate_claim_authority }
+    next: [join_evaluations]
+  - id: evaluate_ownership
+    kind: task
+    input: { operation: assurance.case.evaluate_surface_ownership }
+    next: [join_evaluations]
+  - id: evaluate_verifiers
+    kind: task
+    input: { operation: assurance.case.evaluate_verification_recency }
+    next: [join_evaluations]
+  - id: join_evaluations
+    kind: join
+    wait_for: [evaluate_metrics, evaluate_claims, evaluate_ownership, evaluate_verifiers]
+    success_policy: all
+    next: [conflict_or_missing_evidence]
+  - id: conflict_or_missing_evidence
+    kind: condition
+    expression: { path: context.has_conflict_or_missing_evidence, op: eq, value: true }
+    on_true: escalate_assurance_gap
+    on_false: derive_case_status
+  - id: escalate_assurance_gap
+    kind: decision
+    question: How should the conflicting or incomplete Assurance Case evidence be resolved?
+    input: { default_action: hold, authoritative_status_allowed: false }
+    next: [persist_evaluation]
+  - id: derive_case_status
+    kind: task
+    input: { operation: assurance.case.derive_status_deterministically }
+    next: [persist_evaluation]
+  - id: persist_evaluation
+    kind: task
+    input: { operation: assurance.case.persist_evaluation_idempotently }
+    next: [emit_assurance_event]
+  - id: emit_assurance_event
+    kind: task
+    input: { operation: audit.emit_assurance_case_evaluation }
+rules:
+  exact_case_version_required: true
+  policy_snapshot_is_immutable_and_explainable: true
+  all_required_dimensions_must_join: true
+  policy_conflict_or_missing_evidence_fails_closed: true
+  evaluation_replay_is_idempotent: true
+completion:
+  artifacts_required: [AssuranceCaseEvaluation, AssurancePolicySnapshot, Evidence, Event]
+  statuses: [satisfied, degraded, blocked, unknown]

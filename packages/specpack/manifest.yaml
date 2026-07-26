@@ -94,6 +94,30 @@ objects:
     - integration_connection
     - executor_binding
     - capability_resolution
+workflows:
+  ground_truth:
+    - ground_truth_metric_evaluation
+    - ground_truth_baseline_change
+    - regression_signal_lifecycle
+    - closed_question_publication_guard
+    - settled_conclusion_reopen
+    - claim_authority_gate
+    - red_to_green_verification
+    - causal_isolation_verification
+    - surface_ownership_acquire
+    - surface_ownership_transfer
+    - ownership_effect_preflight
+    - verification_schedule
+    - adversarial_verification_execute
+    - assurance_case_evaluate
+  agent_groups:
+    - agent_group_panel
+    - agent_group_producer_reviewer
+    - agent_group_bounded_debate
+    - agent_group_fan_out_join
+  integrations:
+    - integration_connection_lifecycle
+    - capability_resolution_gate
 policies:
   - default_safety
   - resource_plane_policy

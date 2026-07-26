@@ -8,37 +8,37 @@
 
 <span class="boss-status boss-status--partial">Partial</span>
 
-**Source:** PRD v2.0 Agent Groups; Plane BOSS-129/BOSS-189–190
+**Source:** PRD v2.0 Agent Groups; Plane BOSS-129/BOSS-189–190/BOSS-209–212
 
-**Implementation:** `docs/product/PRD-v2.0.md`, `docs/product/TECHNICAL_SPEC-v2.0.md`, `docs/product/ROADMAP-v2.0.md`, `docs/product/ASSURANCE_CONTRACTS.md`, `packages/specpack/objects/agent_group_spec.yaml`, `packages/specpack/objects/agent_group_run.yaml`
+**Implementation:** `docs/product/PRD-v2.0.md`, `docs/product/TECHNICAL_SPEC-v2.0.md`, `docs/product/ROADMAP-v2.0.md`, `docs/product/ASSURANCE_CONTRACTS.md`, `packages/specpack/objects/agent_group_spec.yaml`, `packages/specpack/objects/agent_group_run.yaml`, `packages/specpack/workflows/agent_group_{panel,producer_reviewer,bounded_debate,fan_out_join}.yaml`
 
-**Automated evidence:** `apps/api/tests/test_assurance_specpack_contracts.py`; planned runtime tests: partial failure, disagreement, timeout, budget denial, replay, and tenant isolation
+**Automated evidence:** `apps/api/tests/test_assurance_specpack_contracts.py`, `apps/api/tests/test_assurance_workflow_contracts.py`, `apps/api/tests/test_workflow_runtime.py`; planned action-executor tests: timeout, budget denial, replay, and tenant isolation
 
-**Ledger detail:** Partial: versioned SpecPack definition/run contracts and governance invariants implemented; persistence, execution, and UI remain planned
+**Ledger detail:** Partial: versioned definition/run contracts plus four published native collaboration protocols enforce independent work, bounded revision/debate, visible partial failure, preserved dissent, receipts, and hold-default escalation; persistence, action executors, API, and UI remain planned
 
 ## INT-001 — Integration registry and typed skill contracts {#int-001-integration-registry-and-typed-skill-contracts}
 
 <span class="boss-status boss-status--partial">Partial</span>
 
-**Source:** PRD v2.0 Skills and Integrations; Plane BOSS-130/BOSS-191–194; extends BOSS-44–56
+**Source:** PRD v2.0 Skills and Integrations; Plane BOSS-130/BOSS-191–194/BOSS-213–214; extends BOSS-44–56
 
-**Implementation:** `docs/product/PRD-v2.0.md`, `docs/product/TECHNICAL_SPEC-v2.0.md`, `docs/product/ASSURANCE_CONTRACTS.md`, `packages/specpack/skills`, `packages/specpack/objects/integration_definition.yaml`, `packages/specpack/objects/integration_connection.yaml`, `packages/specpack/objects/executor_binding.yaml`, `packages/specpack/objects/capability_resolution.yaml`, `apps/api/app/services/skill_executors.py`
+**Implementation:** `docs/product/PRD-v2.0.md`, `docs/product/TECHNICAL_SPEC-v2.0.md`, `docs/product/ASSURANCE_CONTRACTS.md`, `packages/specpack/skills`, `packages/specpack/objects/integration_definition.yaml`, `packages/specpack/objects/integration_connection.yaml`, `packages/specpack/objects/executor_binding.yaml`, `packages/specpack/objects/capability_resolution.yaml`, `packages/specpack/workflows/integration_connection_lifecycle.yaml`, `packages/specpack/workflows/capability_resolution_gate.yaml`, `apps/api/app/services/skill_executors.py`
 
-**Automated evidence:** `apps/api/tests/test_assurance_specpack_contracts.py`; planned runtime tests: install/revoke, health, intersection, permissions, replay, and tenant isolation
+**Automated evidence:** `apps/api/tests/test_assurance_specpack_contracts.py`, `apps/api/tests/test_assurance_workflow_contracts.py`, `apps/api/tests/test_workflow_runtime.py`; planned action-executor tests: install/revoke, health, intersection, permissions, replay, and tenant isolation
 
-**Ledger detail:** Partial: SkillSpec/MCP foundations plus typed definition, connection, executor-binding, and fail-closed capability-resolution contracts implemented; generic persistence/API runtime remains planned
+**Ledger detail:** Partial: SkillSpec/MCP foundations, typed contracts, and published lifecycle/preflight workflows enforce SecretRefs, health before activation, revocation, intersection-only authority, and no executor call on denial; generic persistence/API/action executors remain planned
 
 ## AST-001 — Ground-truth and Assurance runtime {#ast-001-ground-truth-and-assurance-runtime}
 
 <span class="boss-status boss-status--partial">Partial</span>
 
-**Source:** PRD v2.0 Ground-truth and Assurance; Plane BOSS-123–128/BOSS-131/BOSS-175–188
+**Source:** PRD v2.0 Ground-truth and Assurance; Plane BOSS-123–128/BOSS-131/BOSS-175–188/BOSS-195–208
 
-**Implementation:** `docs/product/PRD-v2.0.md`, `docs/product/TECHNICAL_SPEC-v2.0.md`, `docs/product/ROADMAP-v2.0.md`, `docs/product/BOSS_VERIFICATION_AMPLIFIED_GENERATION.md`, `docs/product/ASSURANCE_CONTRACTS.md`, `packages/specpack/objects/{ground_truth_metric_definition,ground_truth_observation,regression_signal,settled_conclusion,closed_question_match,claim,evidence,claim_verification,surface_ownership,ownership_transition,verification_policy,verification_run,assurance_case,assurance_policy_snapshot}.yaml`
+**Implementation:** `docs/product/PRD-v2.0.md`, `docs/product/TECHNICAL_SPEC-v2.0.md`, `docs/product/ROADMAP-v2.0.md`, `docs/product/BOSS_VERIFICATION_AMPLIFIED_GENERATION.md`, `docs/product/ASSURANCE_CONTRACTS.md`, `packages/specpack/objects/{ground_truth_metric_definition,ground_truth_observation,regression_signal,settled_conclusion,closed_question_match,claim,evidence,claim_verification,surface_ownership,ownership_transition,verification_policy,verification_run,assurance_case,assurance_policy_snapshot}.yaml`, `packages/specpack/workflows/{ground_truth_metric_evaluation,ground_truth_baseline_change,regression_signal_lifecycle,closed_question_publication_guard,settled_conclusion_reopen,claim_authority_gate,red_to_green_verification,causal_isolation_verification,surface_ownership_acquire,surface_ownership_transfer,ownership_effect_preflight,verification_schedule,adversarial_verification_execute,assurance_case_evaluate}.yaml`
 
-**Automated evidence:** `apps/api/tests/test_assurance_specpack_contracts.py`; planned runtime tests: metric regression, closed-question publication block, claim evidence, ownership concurrency, verifier scheduling, override, and tenant isolation
+**Automated evidence:** `apps/api/tests/test_assurance_specpack_contracts.py`, `apps/api/tests/test_assurance_workflow_contracts.py`, `apps/api/tests/test_workflow_runtime.py`; planned action-executor tests: ownership concurrency, real metric regression, verifier scheduling, override, and tenant isolation
 
-**Ledger detail:** Partial: VAG/refute foundations plus all fourteen generalized Ground Truth/Assurance SpecPack contracts and fail-closed invariants implemented; migrations, services, workers, API/client, and UI remain planned
+**Ledger detail:** Partial: VAG/refute foundations, all fourteen object contracts, and fourteen published native fail-closed workflows now cover the generalized lifecycle; migrations, action executors, workers, API/client, and UI remain planned
 
 ## COM-PKG-001 — Open-core editions {#com-pkg-001-open-core-editions}
 

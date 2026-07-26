@@ -89,11 +89,31 @@ def test_shipped_specpack_workflows_are_registered_idempotently(engine):
             actor="test",
         )
 
-    assert len(first) == 12
+    assert len(first) == 32
     assert {item["workflow_key"] for item in first} >= {
         "ceo_command_to_pr",
         "governed_coding_pipeline",
         "self_improvement",
+        "ground_truth_metric_evaluation",
+        "ground_truth_baseline_change",
+        "regression_signal_lifecycle",
+        "closed_question_publication_guard",
+        "settled_conclusion_reopen",
+        "claim_authority_gate",
+        "red_to_green_verification",
+        "causal_isolation_verification",
+        "surface_ownership_acquire",
+        "surface_ownership_transfer",
+        "ownership_effect_preflight",
+        "verification_schedule",
+        "adversarial_verification_execute",
+        "assurance_case_evaluate",
+        "agent_group_panel",
+        "agent_group_producer_reviewer",
+        "agent_group_bounded_debate",
+        "agent_group_fan_out_join",
+        "integration_connection_lifecycle",
+        "capability_resolution_gate",
     }
     assert all(item["duplicate"] for item in second)
 

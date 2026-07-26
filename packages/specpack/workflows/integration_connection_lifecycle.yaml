@@ -1,0 +1,69 @@
+kind: WorkflowSpec
+id: integration_connection_lifecycle
+version: 0.1.0
+name: Integration connection lifecycle
+description: >
+  Install, rotate, health-check, activate, or revoke a trusted integration
+  connection using SecretRefs, explicit authority, and auditable receipts.
+entry_step: load_trusted_definition
+input_schema:
+  required: [project_id, integration_definition_id, integration_definition_version, action, secret_refs, dedupe_key]
+output_schema:
+  required: [integration_connection_id, status, health_check_ref, receipt_refs, event_ref]
+steps:
+  - id: load_trusted_definition
+    kind: task
+    input: { operation: integration.connection.load_trusted_exact_definition }
+    next: [revocation_requested]
+  - id: revocation_requested
+    kind: condition
+    expression: { path: input.action, op: eq, value: revoke }
+    on_true: revoke_connection
+    on_false: validate_secret_refs
+  - id: validate_secret_refs
+    kind: task
+    input: { operation: integration.connection.validate_secret_refs_without_resolving_for_agent }
+    next: [approve_connection_authority]
+  - id: approve_connection_authority
+    kind: decision
+    question: Approve the requested integration connection authority and data scope?
+    input: { default_action: hold, raw_secrets_visible_to_agent: false }
+    next: [provision_inactive_connection]
+  - id: provision_inactive_connection
+    kind: task
+    input: { operation: integration.connection.provision_or_rotate_inactive_with_receipt }
+    next: [run_health_check]
+  - id: run_health_check
+    kind: task
+    input: { operation: integration.connection.run_policy_guarded_health_check }
+    next: [health_check_passed]
+  - id: health_check_passed
+    kind: condition
+    expression: { path: context.health_check_passed, op: eq, value: true }
+    on_true: activate_connection
+    on_false: record_unhealthy_connection
+  - id: activate_connection
+    kind: task
+    input: { operation: integration.connection.activate_exact_version }
+    next: [emit_connection_event]
+  - id: record_unhealthy_connection
+    kind: task
+    input: { operation: integration.connection.keep_inactive_and_record_failure }
+    next: [emit_connection_event]
+  - id: revoke_connection
+    kind: task
+    input: { operation: integration.connection.revoke_and_invalidate_executor_bindings }
+    next: [emit_connection_event]
+  - id: emit_connection_event
+    kind: task
+    input: { operation: audit.emit_integration_connection_lifecycle }
+rules:
+  definition_version_and_trust_tier_are_pinned: true
+  agents_never_receive_raw_secrets: true
+  install_or_rotate_requires_explicit_authority: true
+  connection_is_inactive_until_health_check_passes: true
+  external_effects_require_receipts_and_dedupe_keys: true
+  revocation_invalidates_future_executor_resolution: true
+completion:
+  artifacts_required: [IntegrationConnection, HealthCheck, Receipt, Event]
+  statuses: [active, inactive, unhealthy, revoked]
