@@ -3866,6 +3866,158 @@ paths:
         '403': { description: Actor lacks github_manage permission }
         '404': { description: Merge authorization, branch lease, or repository binding not found }
         '409': { description: Invalid queue order, expiry/state, stale policy, or invalid lease/fence }
+  /v1/github/reconciliation-runs:
+    get:
+      summary: List durable GitHub webhook, poll, and repair reconciliation runs
+      parameters:
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+        - name: repository_binding_id
+          in: query
+          required: false
+          schema: { type: string }
+        - name: status
+          in: query
+          required: false
+          schema: { type: string }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 200, default: 100 }
+      responses:
+        '200': { description: Reconciliation runs with attempts, observations, Receipts, rate-limit state, and deadletters }
+  /v1/github/reconciliation-runs/poll:
+    post:
+      summary: Schedule receipt-backed GitHub repository reconciliation
+      description: Enqueues one leased, deduplicated reconciliation job per active project repository binding. If refs are omitted, BOSS discovers the default and all currently managed refs without performing provider work inline.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id, dedupe_key]
+              properties:
+                project_id: { type: string }
+                repository_binding_id: { type: string }
+                refs:
+                  type: array
+                  minItems: 1
+                  maxItems: 100
+                  items: { type: string }
+                dedupe_key: { type: string }
+                actor: { type: string, default: ceo }
+      responses:
+        '201': { description: Queued reconciliation runs and leased job identities }
+        '403': { description: Actor lacks github_manage permission }
+        '404': { description: No active repository binding matched }
+        '409': { description: Invalid refs or dedupe collision }
+  /v1/github/reconciliation-runs/{run_id}:
+    get:
+      summary: Get one tenant-scoped GitHub reconciliation run
+      parameters:
+        - name: run_id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Reconciliation run and retry/deadletter evidence }
+        '404': { description: Reconciliation run not found in the project }
+  /v1/github/reconciliation-runs/{run_id}/execute:
+    post:
+      summary: Execute a GitHub reconciliation under an active worker lease
+      description: Reads current rate limits and exact branch commit/tree/protection state through the project adapter. Each provider read has a Receipt; failures use bounded backoff and deadletters, while stale webhook signals and drifted pending work remain visible.
+      parameters:
+        - name: run_id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id, job_id, worker_id, lease_token]
+              properties:
+                project_id: { type: string }
+                job_id: { type: string }
+                worker_id: { type: string }
+                lease_token: { type: string }
+      responses:
+        '200': { description: Succeeded, retryable failed, or deadlettered run plus job result }
+        '404': { description: Reconciliation run or repository binding not found }
+        '409': { description: Invalid/expired job lease, binding state, or run state }
+  /v1/github/reconciliation-runs/{run_id}/repair:
+    post:
+      summary: Schedule an explicit repair of a failed or deadlettered reconciliation
+      parameters:
+        - name: run_id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id, dedupe_key]
+              properties:
+                project_id: { type: string }
+                dedupe_key: { type: string }
+                actor: { type: string, default: ceo }
+      responses:
+        '201': { description: Queued repair run linked to the failed original }
+        '403': { description: Actor lacks github_manage permission }
+        '404': { description: Reconciliation run not found in the project }
+        '409': { description: Original is not repairable or dedupe collision }
+  /v1/github/reconciliation-signals:
+    get:
+      summary: List deduplicated GitHub webhook branch signals
+      parameters:
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+        - name: repository_binding_id
+          in: query
+          required: false
+          schema: { type: string }
+        - name: status
+          in: query
+          required: false
+          schema: { type: string }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 200, default: 100 }
+      responses:
+        '200': { description: Delivery/ref/SHA signals with pending, applied, stale, failed, or deadlettered state }
+  /v1/github/repository-ref-states:
+    get:
+      summary: List current reconciled branch truth for project repositories
+      parameters:
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+        - name: repository_binding_id
+          in: query
+          required: false
+          schema: { type: string }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 200, default: 200 }
+      responses:
+        '200': { description: Exact current branch existence, commit/tree identity, protection, observation, signal, and Receipt lineage }
   /v1/provider-definitions:
     get:
       summary: List infrastructure provider connection and authentication contracts

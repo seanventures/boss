@@ -1,5 +1,32 @@
 # Codex Handoff
 
+## 2026-07-26 BOSS-254 GitHub webhook/poll reconciler
+
+- Stacked branch `ai/codex/boss-254-github-reconciler` starts from BOSS-253
+  draft PR #85 and preserves the BOSS-247→253 PR stack.
+- Active repository bindings now route verified GitHub deliveries to
+  deduplicated per-ref `ReconciliationSignal` and
+  `github.repository.reconcile` jobs. The webhook transaction performs no
+  provider reads.
+- Poll and repair requests use the same `GitHubReconciliationRun` state
+  machine. The BOSS worker advertises the capability; reconciliation atomically
+  owns job success/retry/deadletter so the generic worker does not
+  double-finalize its lease.
+- Each attempt records a Receipt-backed core rate-limit read and one
+  Receipt-backed branch identity/protection observation per requested ref.
+  Immutable observations advance canonical `RepositoryRefState`; expected-SHA
+  mismatch and delete/reappearance are explicit stale/out-of-order evidence.
+- Provider errors are redacted. Rate exhaustion uses provider-reset-aware
+  backoff, other read errors use bounded exponential backoff, the third failure
+  deadletters, and operators can schedule a linked repair.
+- Fresh commit/tree drift blocks pending CodeSyncRuns and
+  MergeAuthorizations pinned to stale identities. BOSS never mutates a branch
+  in this reconciler.
+- Validation: 67 widened GitHub/webhook API tests, 30 worker tests, 125 web
+  tests, repository lint, production build, fresh and repeated schema
+  bootstrap, all seven new OpenAPI routes, generated-doc drift, strict
+  MkDocs, and diff checks pass.
+
 ## 2026-07-26 BOSS-253 governed merge authorization and queue
 
 - Stacked branch `ai/codex/boss-253-merge-authorizations` starts from

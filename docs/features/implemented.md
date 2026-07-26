@@ -2,7 +2,7 @@
 
 # Implemented features
 
-<span class="boss-status boss-status--implemented">Implemented</span> **91 features**
+<span class="boss-status boss-status--implemented">Implemented</span> **92 features**
 
 ## MET-001 — CEO command intake {#met-001-ceo-command-intake}
 
@@ -363,6 +363,18 @@
 **Automated evidence:** `apps/api/tests/test_github_merge_authorizations.py`, `apps/api/tests/test_github_community_adapter.py`, `apps/web/tests/api-client.test.ts`
 
 **Ledger detail:** Implemented: expiring exact base/head/tree authorization, independent approval, deterministic per-target queue, target lease/fence, current policy/check/review/mergeability rechecks, guarded PR-only merge with expected head SHA, no direct/force target update, Receipt/ResourceReceipt coverage, verified result, manual newly authorized revert-PR plan, bounded retry, redaction, and deadletter.
+
+## GHX-008 — Webhook and polling reconciler {#ghx-008-webhook-and-polling-reconciler}
+
+<span class="boss-status boss-status--implemented">Implemented</span>
+
+**Source:** PRD GitHub Project Sync; BOSS-254
+
+**Implementation:** `db/schema.sql`, `engine/boss_engine/services/github_reconciliation.py`, `engine/boss_engine/services/webhooks.py`, `engine/boss_engine/services/github_adapter.py`, `apps/api/app/main.py`, `engine/boss_engine/schemas.py`, `apps/worker/boss_worker/runner.py`, `api/openapi.yaml`, `packages/api-client/src/index.ts`, `docs/product/GITHUB_PROJECT_SYNC.md`
+
+**Automated evidence:** `apps/api/tests/test_github_reconciliation.py`, `apps/api/tests/test_github_community_adapter.py`, `apps/worker/tests/test_worker.py`, `apps/web/tests/api-client.test.ts`
+
+**Ledger detail:** Implemented: binding-resolved enqueue-only webhook signals; scheduled poll and explicit repair convergence; delivery/ref/SHA dedupe; leased Receipt-backed rate-limit and branch reads; immutable observations and canonical ref state; stale/out-of-order classification; pinned sync/merge drift invalidation; bounded reset-aware/exponential retry; redacted failures; deadletters; and no worker double-finalization.
 
 ## ORC-001 — Conversational thread store/API {#orc-001-conversational-thread-store-api}
 

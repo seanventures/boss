@@ -1,6 +1,6 @@
 # BOSS Requirements Traceability Matrix (Autonomous .ai version)
 
-**Last rebuilt**: 2026-07-26 by Codex (BOSS-246–252 GitHub project sync)
+**Last rebuilt**: 2026-07-26 by Codex (BOSS-246–254 GitHub project sync)
 **Sources**: docs/product/PRD-v2.0.md, TECHNICAL_SPEC-v2.0.md, REQUIREMENT_INVENTORY.md, TRACEABILITY.md, user-stories.md, AGENTS.md, README, api/openapi.yaml, db/schema.sql, packages/specpack/*, code + tests scan.
 **Status key**: Implemented (full vertical + tests + states + audit + DoD), Partial, Planned, Blocked (external per real-only), In-Progress (this session).
 **DoD reminder**: Requirement complete only when traced, full journey, UI nav, backend, persistence, auth server+client, validations, loading/empty/error/success, edges, mobile/a11y basics, security/arch/QA review, tests pass, lint/build, docs updated, NO mocks/fakes/TODOs for required behavior.
@@ -16,7 +16,8 @@
 | BOSS-251 / GHX-005 | Safe project branch synchronization | deterministic snapshot plan; rewrite no-op; canonical ChangeSet; exact lease/fence and fresh topology/policy; non-force fast-forward; protected hold; Receipt/ResourceReceipt; rollback; bounded retry/deadletter | fast-forward, stale snapshot, protected hold, receipt/ChangeSet/event/rollback and adapter non-force tests | Implemented, pending merge |
 | BOSS-252 / GHX-006 | Conflict branch and reviewed resolution | dedicated resolution ref; immutable base/ours/theirs/file evidence; red-to-green proof; independent reviewer; two-parent resolution commit; non-force resolution-only update | divergence/provider conflict, evidence validation, self-review denial, reviewed apply, target unchanged and per-write receipts | Implemented, pending merge |
 | BOSS-253 / GHX-007 | Governed merge authorization and protected-target queue | exact PR/base/head/tree and policy; expiry; independent authorization; per-target ordering; target lease/fence; fresh checks/reviews/mergeability; guarded PR-only merge; receipts; rollback; retry/deadletter | success/receipts, self-approval, stale head, queue order, failed checks, provider retry/redaction/deadletter | Implemented, pending merge |
-| BOSS-254–255 / GHX-001 remainder | Webhook/poll reconciler and Mission Control | Governing PRD/technical contract and Plane delivery map | Contract/docs validation | Planned |
+| BOSS-254 / GHX-008 | Webhook/poll/repair reconciler | project-binding ingress; enqueue-only webhooks; delivery/ref/SHA dedupe; leased Receipt-backed rate/ref reads; canonical observations/ref state; stale/out-of-order handling; drift invalidation; retry/rate-limit/deadletter/repair | poll success and receipts, binding route and dedupe, stale signal, rate-limit retry/deadletter/repair, redaction, adapter quota read, worker no-double-finalize, typed client | Implemented, pending merge |
+| BOSS-255 / GHX-009 | Mission Control GitHub topology and operations | Governing PRD/technical contract and Plane delivery map | Contract/docs validation | Planned |
 
 ## 2026-07-26 Provider connection lifecycle trace
 

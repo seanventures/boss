@@ -26,6 +26,18 @@ _BOUNDARY_RANK = {
     "local-only": 4,
 }
 _SUPPORTED_GITHUB_EVENTS = {"pull_request", "check_suite", "issue_comment"}
+_GITHUB_RECONCILIATION_EVENTS = {
+    "push",
+    "create",
+    "delete",
+    "pull_request",
+    "pull_request_review",
+    "check_run",
+    "check_suite",
+    "status",
+    "branch_protection_rule",
+    "repository",
+}
 _GITHUB_COMMUNITY_ACTIONS = {
     "issues": {"opened", "edited", "reopened"},
     "issue_comment": {"created"},
@@ -809,7 +821,25 @@ class InboundWebhookService:
         )
 
     def _project_for_repo(self, connection: Connection, repo: str) -> Optional[str]:
-        project_id = self._mapping(self.settings.webhook_project_map_json).get(repo)
+        explicit_project_id = self._mapping(
+            self.settings.webhook_project_map_json
+        ).get(repo)
+        project_id = explicit_project_id
+        if not project_id and repo:
+            bound_projects = connection.execute(
+                text(
+                    """
+                    SELECT DISTINCT project_id
+                    FROM github_repository_bindings
+                    WHERE status = 'active' AND lower(full_name) = lower(:repo)
+                    ORDER BY project_id
+                    LIMIT 2
+                    """
+                ),
+                {"repo": repo},
+            ).scalars().all()
+            if len(bound_projects) == 1:
+                project_id = str(bound_projects[0])
         known_repos = {
             f"{self.settings.github_owner}/{self.settings.github_repo}",
             f"{self.settings.target_github_owner}/{self.settings.target_github_repo}",
@@ -960,6 +990,11 @@ class InboundWebhookService:
         legacy_routed = (
             not github_community_only and provider_event in _SUPPORTED_GITHUB_EVENTS
         )
+        reconciliation_routed = bool(
+            normalized_source == "github"
+            and project_id
+            and provider_event in _GITHUB_RECONCILIATION_EVENTS
+        )
         sender_login = str((payload.get("sender") or {}).get("login") or "")
         own_sender = bool(
             normalized_source == "github"
@@ -967,9 +1002,18 @@ class InboundWebhookService:
             and sender_login.casefold()
             == self.settings.github_app_bot_login.strip().casefold()
         )
-        routed = bool(project_id and (community_event_type or legacy_routed) and not own_sender)
+        community_routed = bool(
+            project_id
+            and (community_event_type or legacy_routed)
+            and not own_sender
+        )
+        routed = bool(community_routed or reconciliation_routed)
         target_project_id = project_id or audit_project_id
-        status = "ignored" if own_sender else ("accepted" if routed else "unrouted")
+        status = (
+            "accepted"
+            if routed
+            else ("ignored" if own_sender else "unrouted")
+        )
         inbound_id = make_id("whin")
         inserted = connection.execute(
             text(
@@ -1027,14 +1071,18 @@ class InboundWebhookService:
 
         event_type = (
             community_event_type
-            if routed and community_event_type
+            if community_routed and community_event_type
             else (
                 "webhook.inbound.received"
-                if routed
+                if community_routed
                 else (
-                    "webhook.inbound.ignored"
-                    if own_sender
-                    else "webhook.inbound.unrouted"
+                    "github.repository_signal"
+                    if reconciliation_routed
+                    else (
+                        "webhook.inbound.ignored"
+                        if own_sender
+                        else "webhook.inbound.unrouted"
+                    )
                 )
             )
         )

@@ -161,6 +161,18 @@ class GitHubAdapter:
     def repo_metadata(self) -> dict:
         return self._request("GET", f"/repos/{self.repository_full_name}")
 
+    def rate_limit_status(self) -> dict:
+        """Return the current GitHub core API quota without exposing credentials."""
+        payload = self._request("GET", "/rate_limit")
+        core = (payload.get("resources") or {}).get("core") or payload.get("rate") or {}
+        return {
+            "resource": "core",
+            "limit": max(0, int(core.get("limit") or 0)),
+            "remaining": max(0, int(core.get("remaining") or 0)),
+            "used": max(0, int(core.get("used") or 0)),
+            "reset_epoch": max(0, int(core.get("reset") or 0)),
+        }
+
     def branch_snapshot(self, branch_name: str) -> dict:
         """Read a branch head, tree, parents, and protection without mutation."""
         encoded_branch = quote(branch_name, safe="")

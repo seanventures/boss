@@ -37,6 +37,10 @@ every operation from a `ProjectGitHubConnection` and
 | `ConflictSet` | Typed base/ours/theirs conflicts with file and hunk provenance |
 | `ResolutionPlan` | Proposed resolutions, validations, reviewer result, dissent and Decision |
 | `MergeAuthorization` | Expiring authorization over exact base/head snapshots and required proof |
+| `ReconciliationSignal` | Deduplicated webhook delivery/ref/SHA claim and its applied, stale, retry, or deadletter state |
+| `GitHubReconciliationRun` | Leased webhook, poll, or repair execution with attempt, rate-limit, Receipt, observation, and deadletter lineage |
+| `RepositoryObservation` | Immutable Receipt-backed provider observation for one ref during one run |
+| `RepositoryRefState` | Latest reconciled branch existence, commit/tree, protection, signal, observation, and Receipt truth |
 
 ## Invariants
 
@@ -224,6 +228,38 @@ ResourceReceipt. Successful apply verifies the resulting target commit/tree
 and records the previous target SHA plus a manual, newly authorized revert-PR
 plan. Provider failures are redacted, retry at most three times, and become a
 visible deadletter.
+
+## BOSS-254 implemented contract
+
+Verified GitHub webhook delivery is now only a low-latency signal. Inbound
+routing first resolves the active project repository binding, persists the raw
+delivery once, and creates one deduplicated `ReconciliationSignal` and leased
+`github.repository.reconcile` job per affected branch. The webhook request
+never calls GitHub. Scheduled polling uses the same run and worker path and
+discovers the default branch plus refs referenced by active leases, sync runs,
+merge authorizations, and prior observations.
+
+The leased worker reads the GitHub core rate limit before branch state and
+records every provider read as a normal `Receipt`. It then persists immutable
+per-run observations and updates the canonical `RepositoryRefState` with exact
+existence, commit SHA, tree SHA, protection, observation, signal, and Receipt
+lineage. A webhook claim whose expected SHA is no longer current is explicitly
+`stale`; a late delete followed by reappearance is
+`unexpected_reappearance`. Neither can roll canonical truth backward.
+
+Rate exhaustion and provider failures use the durable job retry path with
+bounded exponential or provider-reset-aware backoff. The run and signal expose
+each failed attempt, redacted error, next attempt, and terminal deadletter.
+Operators can schedule an explicit repair run linked to the failed original.
+Fresh reconciled state also blocks pending sync or merge work whose pinned
+commit/tree identity drifted, preventing stale authorization from surviving a
+missed or out-of-order webhook.
+
+The typed API and client expose reconciliation runs, poll scheduling, leased
+execution, repairs, webhook signals, and current repository ref state. BOSS
+workers advertise the reconciliation capability and do not double-finalize
+the job lease because the reconciler atomically owns its success/retry/
+deadletter transition with its observation evidence.
 
 ## Completion criteria
 

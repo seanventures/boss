@@ -3,6 +3,31 @@
 All 15-min terminal updates and major milestones appended here. Chronological, newest at top.
 
 ---
+## 2026-07-26 — Codex — BOSS-254 GitHub reconciler
+
+- Advanced BOSS-254 Backlog → Todo → In Progress in Plane after publishing
+  clean stacked draft PR #85 for BOSS-253.
+- Added canonical per-project reconciliation signals, runs, immutable
+  observations, and current repository ref state with webhook, job,
+  Receipt, deadletter, and repair lineage.
+- Changed GitHub ingress to resolve unambiguous active project bindings and
+  enqueue one deduplicated run per affected ref without calling the provider
+  inline. Scheduled polls and explicit repairs converge through the same leased
+  `github.repository.reconcile` worker capability.
+- Each worker attempt first observes the core rate limit, then exact branch
+  commit/tree/protection state. Every provider read is Receipt-backed; stale or
+  out-of-order webhook claims remain visible and cannot roll current truth
+  backward. Reconciled drift blocks pinned pending sync/merge work.
+- Added reset-aware/exponential bounded retry, synchronized run/signal/job
+  state, redacted provider failures, terminal deadletters, repair scheduling,
+  typed API/client/OpenAPI contracts, and worker double-finalization
+  prevention.
+- Validation includes focused reconciliation API/service tests, adapter quota
+  proof, worker lifecycle proof, client contract proof, 67 widened GitHub/
+  webhook API tests, 30 worker tests, 125 web tests, fresh and repeated schema
+  bootstrap, targeted OpenAPI route coverage, repository lint, production web
+  build, strict docs, and diff checks.
+
 ## 2026-07-26 — Codex — BOSS-253 governed merge authorization and queue
 
 - Advanced BOSS-253 Backlog → Todo → In Progress in Plane after publishing

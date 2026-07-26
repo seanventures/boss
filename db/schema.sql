@@ -1384,6 +1384,144 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_github_merge_authorizations_active_pr
     'pending_approval', 'authorized', 'queued', 'applying'
   );
 
+CREATE TABLE IF NOT EXISTS github_reconciliation_signals (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  repository_binding_id TEXT NOT NULL REFERENCES github_repository_bindings(id) ON DELETE CASCADE,
+  -- Inbound webhooks are declared later in this bootstrap file.
+  inbound_webhook_id TEXT,
+  source TEXT NOT NULL,
+  delivery_id TEXT,
+  provider_event TEXT,
+  action TEXT,
+  ref_name TEXT NOT NULL,
+  expected_commit_sha TEXT,
+  expected_deleted BOOLEAN NOT NULL DEFAULT false,
+  payload_hash TEXT,
+  dedupe_key TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending',
+  reconciliation_run_id TEXT,
+  observed_commit_sha TEXT,
+  error JSONB,
+  provider_occurred_at TIMESTAMPTZ,
+  processed_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(project_id, dedupe_key),
+  CHECK (source IN ('webhook', 'poll', 'repair')),
+  CHECK (status IN (
+    'pending', 'processing', 'applied', 'stale', 'failed', 'deadlettered'
+  ))
+);
+CREATE INDEX IF NOT EXISTS idx_github_reconciliation_signals_binding
+  ON github_reconciliation_signals(
+    repository_binding_id, ref_name, status, created_at DESC
+  );
+
+CREATE TABLE IF NOT EXISTS github_reconciliation_runs (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  repository_binding_id TEXT NOT NULL REFERENCES github_repository_bindings(id) ON DELETE CASCADE,
+  trigger_signal_id TEXT REFERENCES github_reconciliation_signals(id) ON DELETE SET NULL,
+  repair_of_run_id TEXT REFERENCES github_reconciliation_runs(id) ON DELETE SET NULL,
+  source TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'queued',
+  dedupe_key TEXT NOT NULL,
+  requested_refs JSONB NOT NULL DEFAULT '[]'::jsonb,
+  attempt_count INTEGER NOT NULL DEFAULT 0,
+  max_attempts INTEGER NOT NULL DEFAULT 3,
+  job_id TEXT REFERENCES jobs(id) ON DELETE SET NULL,
+  observation_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
+  receipt_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
+  rate_limit_status JSONB NOT NULL DEFAULT '{}'::jsonb,
+  next_attempt_at TIMESTAMPTZ,
+  deadletter_id TEXT,
+  error JSONB,
+  created_by TEXT NOT NULL,
+  started_at TIMESTAMPTZ,
+  completed_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(project_id, dedupe_key),
+  CHECK (source IN ('webhook', 'poll', 'repair')),
+  CHECK (status IN (
+    'queued', 'running', 'succeeded', 'failed', 'deadlettered', 'cancelled'
+  )),
+  CHECK (attempt_count >= 0),
+  CHECK (max_attempts BETWEEN 1 AND 10)
+);
+CREATE INDEX IF NOT EXISTS idx_github_reconciliation_runs_project
+  ON github_reconciliation_runs(project_id, status, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_github_reconciliation_runs_binding
+  ON github_reconciliation_runs(
+    repository_binding_id, status, created_at DESC
+  );
+ALTER TABLE github_reconciliation_runs
+  ADD COLUMN IF NOT EXISTS observation_ids JSONB NOT NULL DEFAULT '[]'::jsonb;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'fk_github_reconciliation_signal_run'
+  ) THEN
+    ALTER TABLE github_reconciliation_signals
+      ADD CONSTRAINT fk_github_reconciliation_signal_run
+      FOREIGN KEY (reconciliation_run_id)
+      REFERENCES github_reconciliation_runs(id) ON DELETE SET NULL;
+  END IF;
+END
+$$;
+
+CREATE TABLE IF NOT EXISTS github_repository_observations (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  repository_binding_id TEXT NOT NULL REFERENCES github_repository_bindings(id) ON DELETE CASCADE,
+  reconciliation_run_id TEXT NOT NULL REFERENCES github_reconciliation_runs(id) ON DELETE CASCADE,
+  signal_id TEXT REFERENCES github_reconciliation_signals(id) ON DELETE SET NULL,
+  ref_name TEXT NOT NULL,
+  expected_commit_sha TEXT,
+  exists BOOLEAN NOT NULL,
+  commit_sha TEXT,
+  tree_sha TEXT,
+  protected BOOLEAN NOT NULL DEFAULT false,
+  protection JSONB NOT NULL DEFAULT '{}'::jsonb,
+  classification TEXT NOT NULL,
+  receipt_id TEXT NOT NULL REFERENCES receipts(id),
+  observed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(reconciliation_run_id, ref_name),
+  CHECK (classification IN (
+    'current', 'advanced', 'changed', 'deleted', 'missing',
+    'stale_signal', 'unexpected_reappearance'
+  ))
+);
+CREATE INDEX IF NOT EXISTS idx_github_repository_observations_binding
+  ON github_repository_observations(
+    repository_binding_id, ref_name, observed_at DESC
+  );
+
+CREATE TABLE IF NOT EXISTS github_repository_ref_states (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  repository_binding_id TEXT NOT NULL REFERENCES github_repository_bindings(id) ON DELETE CASCADE,
+  ref_name TEXT NOT NULL,
+  exists BOOLEAN NOT NULL,
+  commit_sha TEXT,
+  tree_sha TEXT,
+  protected BOOLEAN NOT NULL DEFAULT false,
+  protection JSONB NOT NULL DEFAULT '{}'::jsonb,
+  latest_observation_id TEXT NOT NULL REFERENCES github_repository_observations(id) ON DELETE CASCADE,
+  latest_signal_id TEXT REFERENCES github_reconciliation_signals(id) ON DELETE SET NULL,
+  latest_receipt_id TEXT NOT NULL REFERENCES receipts(id),
+  observed_at TIMESTAMPTZ NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(repository_binding_id, ref_name)
+);
+CREATE INDEX IF NOT EXISTS idx_github_repository_ref_states_project
+  ON github_repository_ref_states(project_id, repository_binding_id, ref_name);
+
 CREATE TABLE IF NOT EXISTS provider_adapters (
   id TEXT PRIMARY KEY,
   provider TEXT NOT NULL,
@@ -2065,6 +2203,19 @@ ALTER TABLE deadletters ADD COLUMN IF NOT EXISTS requeued_job_id TEXT;
 ALTER TABLE deadletters ADD COLUMN IF NOT EXISTS resolved_by TEXT;
 ALTER TABLE deadletters ADD COLUMN IF NOT EXISTS resolved_at TIMESTAMPTZ;
 ALTER TABLE deadletters ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now();
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'fk_github_reconciliation_run_deadletter'
+  ) THEN
+    ALTER TABLE github_reconciliation_runs
+      ADD CONSTRAINT fk_github_reconciliation_run_deadletter
+      FOREIGN KEY (deadletter_id)
+      REFERENCES deadletters(id) ON DELETE SET NULL;
+  END IF;
+END
+$$;
 
 CREATE TABLE IF NOT EXISTS events (
   id TEXT PRIMARY KEY,
@@ -2151,6 +2302,19 @@ CREATE TABLE IF NOT EXISTS inbound_webhooks (
 );
 CREATE INDEX IF NOT EXISTS idx_inbound_webhooks_project_created
   ON inbound_webhooks(project_id, created_at DESC);
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'fk_github_reconciliation_signal_inbound'
+  ) THEN
+    ALTER TABLE github_reconciliation_signals
+      ADD CONSTRAINT fk_github_reconciliation_signal_inbound
+      FOREIGN KEY (inbound_webhook_id)
+      REFERENCES inbound_webhooks(id) ON DELETE SET NULL;
+  END IF;
+END
+$$;
 
 CREATE TABLE IF NOT EXISTS feature_catalog (
   id TEXT PRIMARY KEY,

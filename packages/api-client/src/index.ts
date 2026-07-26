@@ -3967,6 +3967,132 @@ export type GitHubMergeAuthorizationApplyRequest = {
   actor?: string;
 };
 
+export type GitHubReconciliationRunSummary = {
+  id: string;
+  project_id: string;
+  repository_binding_id: string;
+  trigger_signal_id: string | null;
+  repair_of_run_id: string | null;
+  source: "webhook" | "poll" | "repair";
+  status:
+    | "queued"
+    | "running"
+    | "succeeded"
+    | "failed"
+    | "deadlettered"
+    | "cancelled";
+  dedupe_key: string;
+  requested_refs: string[];
+  attempt_count: number;
+  max_attempts: number;
+  job_id: string | null;
+  observation_ids: string[];
+  receipt_ids: string[];
+  rate_limit_status: Record<string, unknown>;
+  next_attempt_at: string | null;
+  deadletter_id: string | null;
+  error: Record<string, unknown> | null;
+  created_by: string;
+  started_at: string | null;
+  completed_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type GitHubReconciliationRunListResponse = {
+  project_id: string;
+  items: GitHubReconciliationRunSummary[];
+};
+
+export type GitHubReconciliationSignalSummary = {
+  id: string;
+  project_id: string;
+  repository_binding_id: string;
+  inbound_webhook_id: string | null;
+  source: "webhook" | "poll" | "repair";
+  delivery_id: string | null;
+  provider_event: string | null;
+  action: string | null;
+  ref_name: string;
+  expected_commit_sha: string | null;
+  expected_deleted: boolean;
+  payload_hash: string | null;
+  dedupe_key: string;
+  status:
+    | "pending"
+    | "processing"
+    | "applied"
+    | "stale"
+    | "failed"
+    | "deadlettered";
+  reconciliation_run_id: string | null;
+  observed_commit_sha: string | null;
+  error: Record<string, unknown> | null;
+  provider_occurred_at: string | null;
+  processed_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type GitHubReconciliationSignalListResponse = {
+  project_id: string;
+  items: GitHubReconciliationSignalSummary[];
+};
+
+export type GitHubRepositoryRefStateSummary = {
+  id: string;
+  project_id: string;
+  repository_binding_id: string;
+  ref_name: string;
+  exists: boolean;
+  commit_sha: string | null;
+  tree_sha: string | null;
+  protected: boolean;
+  protection: Record<string, unknown>;
+  latest_observation_id: string;
+  latest_signal_id: string | null;
+  latest_receipt_id: string;
+  observed_at: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type GitHubRepositoryRefStateListResponse = {
+  project_id: string;
+  items: GitHubRepositoryRefStateSummary[];
+};
+
+export type GitHubReconciliationPollRequest = {
+  project_id: string;
+  repository_binding_id?: string;
+  refs?: string[];
+  dedupe_key: string;
+  actor?: string;
+};
+
+export type GitHubReconciliationPollResponse = {
+  project_id: string;
+  items: GitHubReconciliationRunSummary[];
+};
+
+export type GitHubReconciliationExecuteRequest = {
+  project_id: string;
+  job_id: string;
+  worker_id: string;
+  lease_token: string;
+};
+
+export type GitHubReconciliationExecuteResponse = {
+  run: GitHubReconciliationRunSummary;
+  job: Record<string, unknown>;
+};
+
+export type GitHubReconciliationRepairRequest = {
+  project_id: string;
+  dedupe_key: string;
+  actor?: string;
+};
+
 export type ProviderAccountSummary = {
   id: string;
   project_id: string;
@@ -6666,6 +6792,100 @@ export function createBossApiClient(config: BossApiClientConfig) {
         "POST",
         `/v1/github/merge-authorizations/${encodeURIComponent(authorizationId)}/apply`,
         { body: payload },
+      );
+    },
+    listGitHubReconciliationRuns(
+      projectId: string,
+      options: {
+        repository_binding_id?: string;
+        status?: string;
+        limit?: number;
+      } = {},
+    ) {
+      return request<GitHubReconciliationRunListResponse>(
+        "GET",
+        "/v1/github/reconciliation-runs",
+        {
+          query: {
+            project_id: projectId,
+            repository_binding_id: options.repository_binding_id,
+            status: options.status,
+            limit: options.limit ?? 100,
+          },
+        },
+      );
+    },
+    scheduleGitHubReconciliationPoll(
+      payload: GitHubReconciliationPollRequest,
+    ) {
+      return request<GitHubReconciliationPollResponse>(
+        "POST",
+        "/v1/github/reconciliation-runs/poll",
+        { body: payload },
+      );
+    },
+    getGitHubReconciliationRun(projectId: string, runId: string) {
+      return request<GitHubReconciliationRunSummary>(
+        "GET",
+        `/v1/github/reconciliation-runs/${encodeURIComponent(runId)}`,
+        { query: { project_id: projectId } },
+      );
+    },
+    executeGitHubReconciliationRun(
+      runId: string,
+      payload: GitHubReconciliationExecuteRequest,
+    ) {
+      return request<GitHubReconciliationExecuteResponse>(
+        "POST",
+        `/v1/github/reconciliation-runs/${encodeURIComponent(runId)}/execute`,
+        { body: payload },
+      );
+    },
+    repairGitHubReconciliationRun(
+      runId: string,
+      payload: GitHubReconciliationRepairRequest,
+    ) {
+      return request<GitHubReconciliationRunSummary>(
+        "POST",
+        `/v1/github/reconciliation-runs/${encodeURIComponent(runId)}/repair`,
+        { body: payload },
+      );
+    },
+    listGitHubReconciliationSignals(
+      projectId: string,
+      options: {
+        repository_binding_id?: string;
+        status?: string;
+        limit?: number;
+      } = {},
+    ) {
+      return request<GitHubReconciliationSignalListResponse>(
+        "GET",
+        "/v1/github/reconciliation-signals",
+        {
+          query: {
+            project_id: projectId,
+            repository_binding_id: options.repository_binding_id,
+            status: options.status,
+            limit: options.limit ?? 100,
+          },
+        },
+      );
+    },
+    listGitHubRepositoryRefStates(
+      projectId: string,
+      options: { repository_binding_id?: string; limit?: number } = {},
+    ) {
+      return request<GitHubRepositoryRefStateListResponse>(
+        "GET",
+        "/v1/github/repository-ref-states",
+        {
+          query: {
+            project_id: projectId,
+            repository_binding_id: options.repository_binding_id,
+            limit: options.limit ?? 200,
+          },
+        },
       );
     },
     listProviderDefinitions() {

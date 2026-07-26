@@ -229,6 +229,45 @@ def test_branch_snapshot_compare_and_checks_use_immutable_github_reads(monkeypat
     assert any("ai%2Fcodex%2Fwork" in url for url in calls)
 
 
+def test_rate_limit_status_reads_core_quota_without_repository_mutation(
+    monkeypatch,
+):
+    calls: list[dict] = []
+
+    def fake_request(method: str, url: str, **kwargs) -> httpx.Response:
+        calls.append({"method": method, "url": url, **kwargs})
+        return _response(
+            method,
+            url,
+            200,
+            json_body={
+                "resources": {
+                    "core": {
+                        "limit": 5000,
+                        "remaining": 3210,
+                        "used": 1790,
+                        "reset": 4102444800,
+                    }
+                }
+            },
+        )
+
+    monkeypatch.setattr(httpx, "request", fake_request)
+    adapter = GitHubAdapter(_settings())
+
+    assert adapter.rate_limit_status() == {
+        "resource": "core",
+        "limit": 5000,
+        "remaining": 3210,
+        "used": 1790,
+        "reset_epoch": 4102444800,
+    }
+    assert len(calls) == 1
+    assert calls[0]["method"] == "GET"
+    assert calls[0]["url"].endswith("/rate_limit")
+    assert calls[0]["json"] is None
+
+
 def test_safe_branch_write_primitives_are_non_force_and_conflicts_are_typed(
     monkeypatch,
 ):

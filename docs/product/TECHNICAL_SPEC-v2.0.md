@@ -54,6 +54,15 @@ Canonical records:
   review, and Decision.
 - `MergeAuthorization`: exact head/base snapshots, required checks, approvals,
   ownership, evidence bundle, expiry, actor, policy snapshot, and merge result.
+- `GitHubReconciliationSignal`: delivery/ref/expected-SHA identity, source
+  event, dedupe key, processing/stale/deadletter state, observed SHA, and run
+  lineage.
+- `GitHubReconciliationRun`: webhook/poll/repair trigger, requested refs,
+  leased job, bounded attempts, rate-limit state, Receipt/observation IDs,
+  next attempt, deadletter, and repair lineage.
+- `GitHubRepositoryObservation` and `GitHubRepositoryRefState`: immutable
+  per-run branch existence/commit/tree/protection evidence and its latest
+  project-scoped canonical read model.
 
 Connection state machine:
 
@@ -89,6 +98,20 @@ performed inline in a webhook request.
 Webhook deliveries are the low-latency signal; a polling reconciler is the
 completeness backstop. Both converge through the same dedupe keys, leased jobs,
 snapshots, retry/deadletter behavior, and audit events.
+
+BOSS-254 implements that convergence without provider calls in the webhook
+request. Verified deliveries create deduplicated per-ref signals and
+`github.repository.reconcile` jobs. Polls and explicit repairs enqueue the
+same run type. A leased worker first records a core rate-limit Receipt, then
+records a Receipt and immutable observation for each branch read, and advances
+the canonical ref state only from the provider response. Expected webhook SHAs
+classify applied versus stale/out-of-order signals; current provider truth
+wins.
+
+Provider failures and exhausted rate limits use the durable job retry state
+with bounded backoff, synchronized run/signal status, terminal deadletter
+linkage, and a repair endpoint. Reconciled commit/tree drift blocks pending
+CodeSyncRuns and MergeAuthorizations that were pinned to stale identities.
 
 BOSS-248/BOSS-249 implement the policy and observation portion of this
 pipeline. `github_branch_policies` preserves immutable supersession lineage,
@@ -475,13 +498,16 @@ GitHub project integration:
 - `POST /v1/github/connections/{id}/enable|disable|revoke|test`
 - `GET/POST /v1/github/repository-bindings`
 - `GET/PATCH /v1/github/repository-bindings/{id}`
-- Implemented through BOSS-253:
+- Implemented through BOSS-254:
   `/v1/github/branch-policies`, `/v1/github/branch-leases`,
   `/v1/github/branch-snapshots`, `/v1/github/code-sync-runs`,
   `/v1/github/conflict-sets`, `/v1/github/resolution-plans`, and
-  `/v1/github/merge-authorizations`.
-- Planned under BOSS-254/BOSS-255: the webhook/poll reconciler and Mission
-  Control operations read models.
+  `/v1/github/merge-authorizations`; plus
+  `/v1/github/reconciliation-runs`,
+  `/v1/github/reconciliation-signals`, and
+  `/v1/github/repository-ref-states`.
+- Planned under BOSS-255: Mission Control repository topology and branch
+  operations read models.
 
 Reusable Workflows:
 

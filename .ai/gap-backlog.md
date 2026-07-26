@@ -16,8 +16,13 @@
   deterministic target queues, protected-target lease/fence verification,
   fresh checks/reviews, guarded PR-only merge, receipted rollback evidence, and
   bounded retry/deadletter; it closes once its stacked PR merges.
-- BOSS-254/BOSS-255 remain the explicit implementation backlog for webhook/poll
-  reconciliation and Mission Control.
+- BOSS-254 implements the webhook/poll/repair reconciler with binding-resolved
+  enqueue-only ingress, delivery/ref/SHA dedupe, leased Receipt-backed
+  rate/ref reads, canonical observations/ref state, stale/out-of-order
+  handling, drift invalidation, reset-aware bounded retry, deadletter and
+  repair; it closes once its stacked PR merges.
+- BOSS-255 remains the explicit implementation backlog for Mission Control
+  repository topology and branch operations.
 - The governing GHX-001 contract requires immutable observed SHAs, no silent
   reset/force-push, visible rewrite/divergence classification, provider writes
   through ChangeSets/ResourceReceipts, unique dedupe keys, and approval gates

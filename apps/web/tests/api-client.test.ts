@@ -3662,4 +3662,72 @@ describe("createBossApiClient", () => {
       fencing_token: 8,
     });
   });
+
+  it("uses durable GitHub reconciliation, repair, and ref-state contracts", async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const fetchImpl = async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({ url: String(input), init });
+      return new Response(JSON.stringify({ items: [] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    };
+    const client = createBossApiClient({
+      baseUrl: "http://127.0.0.1:8000",
+      fetchImpl,
+    });
+
+    await client.listGitHubReconciliationRuns("boss-dogfood", {
+      repository_binding_id: "ghrepo_1",
+      status: "deadlettered",
+      limit: 25,
+    });
+    await client.scheduleGitHubReconciliationPoll({
+      project_id: "boss-dogfood",
+      repository_binding_id: "ghrepo_1",
+      refs: ["main", "ai/codex/work"],
+      dedupe_key: "reconcile:poll:1",
+      actor: "ceo",
+    });
+    await client.getGitHubReconciliationRun("boss-dogfood", "ghrecon_1");
+    await client.executeGitHubReconciliationRun("ghrecon_1", {
+      project_id: "boss-dogfood",
+      job_id: "job_1",
+      worker_id: "reconcile-worker",
+      lease_token: "job-lease-token",
+    });
+    await client.repairGitHubReconciliationRun("ghrecon_1", {
+      project_id: "boss-dogfood",
+      dedupe_key: "reconcile:repair:1",
+      actor: "ceo",
+    });
+    await client.listGitHubReconciliationSignals("boss-dogfood", {
+      repository_binding_id: "ghrepo_1",
+      status: "stale",
+      limit: 25,
+    });
+    await client.listGitHubRepositoryRefStates("boss-dogfood", {
+      repository_binding_id: "ghrepo_1",
+      limit: 50,
+    });
+
+    expect(calls.map((call) => call.url)).toEqual([
+      "http://127.0.0.1:8000/v1/github/reconciliation-runs?project_id=boss-dogfood&repository_binding_id=ghrepo_1&status=deadlettered&limit=25",
+      "http://127.0.0.1:8000/v1/github/reconciliation-runs/poll",
+      "http://127.0.0.1:8000/v1/github/reconciliation-runs/ghrecon_1?project_id=boss-dogfood",
+      "http://127.0.0.1:8000/v1/github/reconciliation-runs/ghrecon_1/execute",
+      "http://127.0.0.1:8000/v1/github/reconciliation-runs/ghrecon_1/repair",
+      "http://127.0.0.1:8000/v1/github/reconciliation-signals?project_id=boss-dogfood&repository_binding_id=ghrepo_1&status=stale&limit=25",
+      "http://127.0.0.1:8000/v1/github/repository-ref-states?project_id=boss-dogfood&repository_binding_id=ghrepo_1&limit=50",
+    ]);
+    expect(JSON.parse(String(calls[1].init?.body))).toMatchObject({
+      refs: ["main", "ai/codex/work"],
+      dedupe_key: "reconcile:poll:1",
+    });
+    expect(JSON.parse(String(calls[3].init?.body))).toMatchObject({
+      job_id: "job_1",
+      worker_id: "reconcile-worker",
+      lease_token: "job-lease-token",
+    });
+  });
 });

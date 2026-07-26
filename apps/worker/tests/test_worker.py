@@ -175,6 +175,17 @@ class FakeControlPlaneClient:
             "verdict": "accept",
         }
 
+    def run_github_reconciliation(self, run_id, payload):
+        self.calls.append(("run_github_reconciliation", run_id, payload))
+        return {
+            "run": {
+                "id": run_id,
+                "status": "succeeded",
+                "observation_ids": ["ghobs_1"],
+            },
+            "job": {"job_id": payload["job_id"], "status": "succeeded"},
+        }
+
     def sync_provider_resources(self, payload):
         self.calls.append(("sync_provider_resources", payload))
         if payload.get("provider_account_id") == "prov_fail":
@@ -251,6 +262,7 @@ def test_worker_capabilities_include_infra_job_kinds():
     assert "docs.update" in supported
     assert "github.triage" in supported
     assert "github.pr_review" in supported
+    assert "github.repository.reconcile" in supported
     assert "skill.execute" in supported
 
 
@@ -400,6 +412,38 @@ def test_worker_executes_github_community_job_through_lease_boundary():
         },
     ) in client.calls
     assert any(call[0] == "complete" for call in client.calls)
+
+
+def test_worker_executes_reconciliation_and_does_not_double_finalize_lease():
+    leased_job = LeasedJob(
+        id="job_reconcile",
+        project_id="boss-dogfood",
+        task_id=None,
+        kind="github.repository.reconcile",
+        payload={"run_id": "ghrecon_1"},
+        attempt=1,
+        max_attempts=3,
+        lease_token="lease_reconcile",
+        lease_expires_at="future",
+    )
+    client = FakeControlPlaneClient(leased_job)
+    settings = SimpleNamespace(
+        worker_id="worker-reconcile",
+        lease_ttl_seconds=60,
+    )
+
+    assert run_worker_cycle(client, settings) is True
+    assert (
+        "run_github_reconciliation",
+        "ghrecon_1",
+        {
+            "project_id": "boss-dogfood",
+            "job_id": "job_reconcile",
+            "worker_id": "worker-reconcile",
+            "lease_token": "lease_reconcile",
+        },
+    ) in client.calls
+    assert all(call[0] not in {"complete", "fail"} for call in client.calls)
 
 
 def test_agent_work_product_strategies_cover_initial_agent_capabilities():

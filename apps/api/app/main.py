@@ -260,6 +260,17 @@ from .schemas import (
     GitHubMergeAuthorizationEnqueueRequest,
     GitHubMergeAuthorizationListResponse,
     GitHubMergeAuthorizationSummary,
+    GitHubReconciliationExecuteRequest,
+    GitHubReconciliationExecuteResponse,
+    GitHubReconciliationPollRequest,
+    GitHubReconciliationPollResponse,
+    GitHubReconciliationRepairRequest,
+    GitHubReconciliationRunListResponse,
+    GitHubReconciliationRunSummary,
+    GitHubReconciliationSignalListResponse,
+    GitHubReconciliationSignalSummary,
+    GitHubRepositoryRefStateListResponse,
+    GitHubRepositoryRefStateSummary,
     GitHubRepositoryBindingCreateRequest,
     GitHubRepositoryBindingListResponse,
     GitHubRepositoryBindingSummary,
@@ -566,6 +577,12 @@ from .services.github_merges import (
     GitHubMergeAuthorizationStaleError,
     GitHubMergeAuthorizationStateError,
 )
+from .services.github_reconciliation import (
+    GitHubReconciliationNotFoundError,
+    GitHubReconciliationProviderError,
+    GitHubReconciliationService,
+    GitHubReconciliationStateError,
+)
 from .services.infrastructure import (
     InfraResourceNotFoundError,
     InfrastructureService,
@@ -696,6 +713,10 @@ github_merge_authorizations = GitHubMergeAuthorizationService(
     github_connections=github_connections,
     github_branches=github_branches,
     github_branch_leases=github_branch_leases,
+)
+github_reconciler = GitHubReconciliationService(
+    settings,
+    github_connections=github_connections,
 )
 software_factory = SoftwareFactoryService(settings, ports=engine_ports)
 decisions = DecisionService(settings)
@@ -4663,6 +4684,15 @@ async def receive_inbound_webhook(
             raw_body,
             headers,
         )
+        if (
+            source.strip().lower() == "github"
+            and result["status"] == "accepted"
+            and result.get("inbound_webhook_id")
+        ):
+            github_reconciler.ingest_inbound_webhook(
+                connection,
+                inbound_webhook_id=result["inbound_webhook_id"],
+            )
     if result["status"] == "rejected":
         raise HTTPException(status_code=401, detail="Invalid webhook signature.")
     if result["status"] == "not_configured":
@@ -4685,6 +4715,11 @@ async def receive_github_webhook(request: Request):
             headers,
             github_community_only=True,
         )
+        if result["status"] == "accepted" and result.get("inbound_webhook_id"):
+            github_reconciler.ingest_inbound_webhook(
+                connection,
+                inbound_webhook_id=result["inbound_webhook_id"],
+            )
     if result["status"] == "rejected":
         raise HTTPException(status_code=401, detail="Invalid webhook signature.")
     if result["status"] == "not_configured":
@@ -9807,6 +9842,209 @@ def apply_github_merge(
         ) as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
         return GitHubMergeAuthorizationSummary(**item)
+
+
+@app.get(
+    "/v1/github/reconciliation-runs",
+    response_model=GitHubReconciliationRunListResponse,
+)
+def list_github_reconciliation_runs(
+    project_id: str,
+    repository_binding_id: Optional[str] = None,
+    status: Optional[str] = None,
+    limit: int = Query(default=100, ge=1, le=200),
+) -> GitHubReconciliationRunListResponse:
+    with begin(engine) as connection:
+        return GitHubReconciliationRunListResponse(
+            project_id=project_id,
+            items=[
+                GitHubReconciliationRunSummary(**item)
+                for item in github_reconciler.list_runs(
+                    connection,
+                    project_id,
+                    repository_binding_id=repository_binding_id,
+                    status=status,
+                    limit=limit,
+                )
+            ],
+        )
+
+
+@app.post(
+    "/v1/github/reconciliation-runs/poll",
+    response_model=GitHubReconciliationPollResponse,
+    status_code=201,
+)
+def schedule_github_reconciliation_poll(
+    payload: GitHubReconciliationPollRequest,
+) -> GitHubReconciliationPollResponse:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection,
+            payload.project_id,
+            payload.actor,
+            "github_manage",
+        )
+        try:
+            items = github_reconciler.schedule_poll(
+                connection,
+                project_id=payload.project_id,
+                repository_binding_id=payload.repository_binding_id,
+                refs=payload.refs,
+                dedupe_key=payload.dedupe_key,
+                actor=payload.actor,
+            )
+        except (
+            GitHubReconciliationNotFoundError,
+            GitHubRepositoryBindingNotFoundError,
+        ) as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except (
+            GitHubReconciliationStateError,
+            GitHubConnectionStateError,
+            ValueError,
+        ) as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        return GitHubReconciliationPollResponse(
+            project_id=payload.project_id,
+            items=[GitHubReconciliationRunSummary(**item) for item in items],
+        )
+
+
+@app.get(
+    "/v1/github/reconciliation-runs/{run_id}",
+    response_model=GitHubReconciliationRunSummary,
+)
+def get_github_reconciliation_run(
+    run_id: str,
+    project_id: str,
+) -> GitHubReconciliationRunSummary:
+    with begin(engine) as connection:
+        try:
+            item = github_reconciler.get_run(connection, project_id, run_id)
+        except GitHubReconciliationNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        return GitHubReconciliationRunSummary(**item)
+
+
+@app.post(
+    "/v1/github/reconciliation-runs/{run_id}/execute",
+    response_model=GitHubReconciliationExecuteResponse,
+)
+def execute_github_reconciliation_run(
+    run_id: str,
+    payload: GitHubReconciliationExecuteRequest,
+) -> GitHubReconciliationExecuteResponse:
+    with begin(engine) as connection:
+        try:
+            result = github_reconciler.execute(
+                connection,
+                project_id=payload.project_id,
+                run_id=run_id,
+                job_id=payload.job_id,
+                worker_id=payload.worker_id,
+                lease_token=payload.lease_token,
+            )
+        except GitHubReconciliationNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except (
+            LeaseNotFoundError,
+            GitHubReconciliationStateError,
+            GitHubReconciliationProviderError,
+            GitHubConnectionStateError,
+            GitHubRepositoryBindingNotFoundError,
+            ValueError,
+        ) as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        return GitHubReconciliationExecuteResponse(
+            run=GitHubReconciliationRunSummary(**result["run"]),
+            job=result["job"],
+        )
+
+
+@app.post(
+    "/v1/github/reconciliation-runs/{run_id}/repair",
+    response_model=GitHubReconciliationRunSummary,
+    status_code=201,
+)
+def repair_github_reconciliation_run(
+    run_id: str,
+    payload: GitHubReconciliationRepairRequest,
+) -> GitHubReconciliationRunSummary:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection,
+            payload.project_id,
+            payload.actor,
+            "github_manage",
+        )
+        try:
+            item = github_reconciler.repair(
+                connection,
+                project_id=payload.project_id,
+                run_id=run_id,
+                dedupe_key=payload.dedupe_key,
+                actor=payload.actor,
+            )
+        except GitHubReconciliationNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except (
+            GitHubReconciliationStateError,
+            GitHubConnectionStateError,
+            ValueError,
+        ) as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        return GitHubReconciliationRunSummary(**item)
+
+
+@app.get(
+    "/v1/github/reconciliation-signals",
+    response_model=GitHubReconciliationSignalListResponse,
+)
+def list_github_reconciliation_signals(
+    project_id: str,
+    repository_binding_id: Optional[str] = None,
+    status: Optional[str] = None,
+    limit: int = Query(default=100, ge=1, le=200),
+) -> GitHubReconciliationSignalListResponse:
+    with begin(engine) as connection:
+        return GitHubReconciliationSignalListResponse(
+            project_id=project_id,
+            items=[
+                GitHubReconciliationSignalSummary(**item)
+                for item in github_reconciler.list_signals(
+                    connection,
+                    project_id,
+                    repository_binding_id=repository_binding_id,
+                    status=status,
+                    limit=limit,
+                )
+            ],
+        )
+
+
+@app.get(
+    "/v1/github/repository-ref-states",
+    response_model=GitHubRepositoryRefStateListResponse,
+)
+def list_github_repository_ref_states(
+    project_id: str,
+    repository_binding_id: Optional[str] = None,
+    limit: int = Query(default=200, ge=1, le=200),
+) -> GitHubRepositoryRefStateListResponse:
+    with begin(engine) as connection:
+        return GitHubRepositoryRefStateListResponse(
+            project_id=project_id,
+            items=[
+                GitHubRepositoryRefStateSummary(**item)
+                for item in github_reconciler.list_ref_states(
+                    connection,
+                    project_id,
+                    repository_binding_id=repository_binding_id,
+                    limit=limit,
+                )
+            ],
+        )
 
 
 @app.get("/v1/provider-definitions", response_model=ProviderDefinitionListResponse)

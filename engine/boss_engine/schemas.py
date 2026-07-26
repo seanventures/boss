@@ -4936,6 +4936,166 @@ class GitHubMergeAuthorizationApplyRequest(BaseModel):
         return self
 
 
+class GitHubReconciliationRunSummary(BaseModel):
+    id: str
+    project_id: str
+    repository_binding_id: str
+    trigger_signal_id: Optional[str] = None
+    repair_of_run_id: Optional[str] = None
+    source: Literal["webhook", "poll", "repair"]
+    status: Literal[
+        "queued",
+        "running",
+        "succeeded",
+        "failed",
+        "deadlettered",
+        "cancelled",
+    ]
+    dedupe_key: str
+    requested_refs: list[str] = Field(default_factory=list)
+    attempt_count: int
+    max_attempts: int
+    job_id: Optional[str] = None
+    observation_ids: list[str] = Field(default_factory=list)
+    receipt_ids: list[str] = Field(default_factory=list)
+    rate_limit_status: dict[str, Any] = Field(default_factory=dict)
+    next_attempt_at: Optional[str] = None
+    deadletter_id: Optional[str] = None
+    error: Optional[dict[str, Any]] = None
+    created_by: str
+    started_at: Optional[str] = None
+    completed_at: Optional[str] = None
+    created_at: str
+    updated_at: str
+
+
+class GitHubReconciliationRunListResponse(BaseModel):
+    project_id: str
+    items: list[GitHubReconciliationRunSummary]
+
+
+class GitHubReconciliationSignalSummary(BaseModel):
+    id: str
+    project_id: str
+    repository_binding_id: str
+    inbound_webhook_id: Optional[str] = None
+    source: Literal["webhook", "poll", "repair"]
+    delivery_id: Optional[str] = None
+    provider_event: Optional[str] = None
+    action: Optional[str] = None
+    ref_name: str
+    expected_commit_sha: Optional[str] = None
+    expected_deleted: bool
+    payload_hash: Optional[str] = None
+    dedupe_key: str
+    status: Literal[
+        "pending",
+        "processing",
+        "applied",
+        "stale",
+        "failed",
+        "deadlettered",
+    ]
+    reconciliation_run_id: Optional[str] = None
+    observed_commit_sha: Optional[str] = None
+    error: Optional[dict[str, Any]] = None
+    provider_occurred_at: Optional[str] = None
+    processed_at: Optional[str] = None
+    created_at: str
+    updated_at: str
+
+
+class GitHubReconciliationSignalListResponse(BaseModel):
+    project_id: str
+    items: list[GitHubReconciliationSignalSummary]
+
+
+class GitHubRepositoryRefStateSummary(BaseModel):
+    id: str
+    project_id: str
+    repository_binding_id: str
+    ref_name: str
+    exists: bool
+    commit_sha: Optional[str] = None
+    tree_sha: Optional[str] = None
+    protected: bool
+    protection: dict[str, Any] = Field(default_factory=dict)
+    latest_observation_id: str
+    latest_signal_id: Optional[str] = None
+    latest_receipt_id: str
+    observed_at: str
+    created_at: str
+    updated_at: str
+
+
+class GitHubRepositoryRefStateListResponse(BaseModel):
+    project_id: str
+    items: list[GitHubRepositoryRefStateSummary]
+
+
+class GitHubReconciliationPollRequest(BaseModel):
+    project_id: str
+    repository_binding_id: Optional[str] = None
+    refs: Optional[list[str]] = None
+    dedupe_key: str
+    actor: str = "ceo"
+
+    @model_validator(mode="after")
+    def validate_github_reconciliation_poll(
+        self,
+    ) -> "GitHubReconciliationPollRequest":
+        self.project_id = _require_text(self.project_id, "project_id")
+        if self.repository_binding_id is not None:
+            self.repository_binding_id = _require_text(
+                self.repository_binding_id, "repository_binding_id"
+            )
+        self.dedupe_key = _require_text(self.dedupe_key, "dedupe_key")
+        self.actor = _require_text(self.actor, "actor")
+        return self
+
+
+class GitHubReconciliationPollResponse(BaseModel):
+    project_id: str
+    items: list[GitHubReconciliationRunSummary]
+
+
+class GitHubReconciliationExecuteRequest(BaseModel):
+    project_id: str
+    job_id: str
+    worker_id: str
+    lease_token: str
+
+    @model_validator(mode="after")
+    def validate_github_reconciliation_execute(
+        self,
+    ) -> "GitHubReconciliationExecuteRequest":
+        self.project_id = _require_text(self.project_id, "project_id")
+        self.job_id = _require_text(self.job_id, "job_id")
+        self.worker_id = _require_text(self.worker_id, "worker_id")
+        self.lease_token = _require_text(self.lease_token, "lease_token")
+        return self
+
+
+class GitHubReconciliationExecuteResponse(BaseModel):
+    run: GitHubReconciliationRunSummary
+    job: dict[str, Any]
+
+
+class GitHubReconciliationRepairRequest(BaseModel):
+    project_id: str
+    dedupe_key: str
+    actor: str = "ceo"
+
+    @model_validator(mode="after")
+    def validate_github_reconciliation_repair(
+        self,
+    ) -> "GitHubReconciliationRepairRequest":
+        self.project_id = _require_text(self.project_id, "project_id")
+        self.dedupe_key = _require_text(self.dedupe_key, "dedupe_key")
+        self.actor = _require_text(self.actor, "actor")
+        return self
+
+
 class ProviderAccountSummary(BaseModel):
     id: str
     project_id: str
