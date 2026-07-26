@@ -5,9 +5,10 @@
 - Branch `ai/codex/boss-assurance-workflows` starts from refreshed `origin/main`
   after PRs #72 and #73. The unrelated workstation `site/` directory remains
   excluded.
-- Plane BOSS-195–214 are In Progress and cover fourteen Ground
-  Truth/Assurance workflows, four Agent Group collaboration protocols, and two
-  Integration lifecycle/preflight workflows.
+- PR [#74](https://github.com/seanheiney/boss/pull/74) merged to `main` as
+  `79e1f94` (implementation commit `2deda32`). Plane BOSS-195–214 are Done and
+  each carries exact merge, validation, risk, and remaining-runtime-boundary
+  evidence.
 - All twenty are native acyclic WorkflowSpecs registered by the existing
   idempotent SpecPack seeder. No selector or default work-class mapping is
   created, so catalog publication cannot start work by itself.
@@ -22,8 +23,7 @@
   tests, 10 adjacent marketplace tests, isolated API/worker Ruff, web route
   generation/TypeScript, SpecPack YAML, strict docs, compile, and diff checks.
   Full repository lint reaches only the same two inherited F541 findings in
-  contributor-owned `intent_router.py`. Publication evidence will be added
-  before the Plane issues move to Done.
+  contributor-owned `intent_router.py`.
 
 ## 2026-07-26 BOSS-175–194 assurance contract batch
 
