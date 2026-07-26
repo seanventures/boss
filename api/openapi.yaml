@@ -3296,6 +3296,160 @@ paths:
       responses:
         '200': { description: Branch topology, policy, protection, checks, and Receipt evidence }
         '404': { description: Snapshot not found in the project }
+  /v1/github/branch-leases:
+    get:
+      summary: List active or historical fenced branch leases
+      parameters:
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+        - name: repository_binding_id
+          in: query
+          required: false
+          schema: { type: string }
+        - name: ref_name
+          in: query
+          required: false
+          schema: { type: string }
+        - name: include_history
+          in: query
+          required: false
+          schema: { type: boolean, default: false }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 200, default: 100 }
+      responses:
+        '200': { description: Tenant-scoped lease ownership without token hashes }
+    post:
+      summary: Acquire one fenced TTL lease for a mutable repository ref
+      description: Serializes acquisition per repository binding, returns the raw high-entropy lease token once, stores only its hash, and assigns a monotonically increasing fencing token.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                [project_id, repository_binding_id, ref_name, owner_kind, owner_id, acquire_key]
+              properties:
+                project_id: { type: string }
+                repository_binding_id: { type: string }
+                ref_name: { type: string }
+                owner_kind:
+                  type: string
+                  enum: [task, workflow_run, code_task_run, agent, manual]
+                owner_id: { type: string }
+                run_id: { type: string }
+                worktree_path: { type: string }
+                acquire_key: { type: string }
+                ttl_seconds:
+                  type: integer
+                  minimum: 30
+                  maximum: 3600
+                  default: 300
+                actor: { type: string, default: ceo }
+      responses:
+        '201': { description: Lease acquired, or exact dedupe replay without returning the raw token again }
+        '403': { description: Actor lacks github_manage permission }
+        '404': { description: Repository binding not found in the project }
+        '409': { description: Active owner, dedupe collision, inactive connection, or unsafe ref }
+  /v1/github/branch-leases/{lease_id}:
+    get:
+      summary: Get one tenant-scoped branch lease
+      parameters:
+        - name: lease_id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Lease ownership and fencing posture without token hash }
+        '404': { description: Branch lease not found in the project }
+  /v1/github/branch-leases/{lease_id}/heartbeat:
+    post:
+      summary: Heartbeat and extend an active branch lease
+      parameters:
+        - name: lease_id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id, lease_token, fencing_token]
+              properties:
+                project_id: { type: string }
+                lease_token:
+                  type: string
+                  description: Raw token returned once at acquisition and never persisted.
+                fencing_token: { type: integer }
+                ttl_seconds:
+                  type: integer
+                  minimum: 30
+                  maximum: 3600
+                  default: 300
+                actor: { type: string, default: system }
+      responses:
+        '200': { description: Heartbeat and bounded expiry extension recorded }
+        '404': { description: Branch lease not found in the project }
+        '409': { description: Expired/inactive lease or stale/invalid token }
+  /v1/github/branch-leases/{lease_id}/release:
+    post:
+      summary: Release a branch lease using its raw and fencing tokens
+      parameters:
+        - name: lease_id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id, lease_token, fencing_token, reason]
+              properties:
+                project_id: { type: string }
+                lease_token: { type: string }
+                fencing_token: { type: integer }
+                reason: { type: string }
+                actor: { type: string, default: ceo }
+      responses:
+        '200': { description: Lease released with actor and reason evidence }
+        '404': { description: Branch lease not found in the project }
+        '409': { description: Expired/inactive lease or stale/invalid token }
+  /v1/github/branch-leases/{lease_id}/reclaim:
+    post:
+      summary: Reclaim an expired branch lease without using its lost raw token
+      parameters:
+        - name: lease_id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id, reason]
+              properties:
+                project_id: { type: string }
+                reason: { type: string }
+                actor: { type: string, default: ceo }
+      responses:
+        '200': { description: Expired lease reclaimed with audit evidence }
+        '403': { description: Actor lacks github_manage permission }
+        '404': { description: Branch lease not found in the project }
+        '409': { description: Lease is still unexpired or already terminal }
   /v1/provider-definitions:
     get:
       summary: List infrastructure provider connection and authentication contracts

@@ -136,6 +136,15 @@ Acceptance criteria:
   before any provider write.
 - Given a mutable branch operation, when BOSS begins work, then it owns a
   current fenced TTL lease and fresh remote `BranchSnapshot` before deciding.
+- Given two agents acquire the same repository ref concurrently, when
+  acquisition serializes, then exactly one gets the active lease and the other
+  receives a visible conflict without a second owner row.
+- Given an acquired lease, when the owner heartbeats or releases it, then the
+  raw one-time token and current monotonic fencing token must both match; token
+  hashes are never returned or emitted in events.
+- Given a lease expires, when a new owner acquires or an operator reclaims it,
+  then BOSS preserves prior lease lineage, assigns a higher fence to new
+  ownership, and never reclaims an unexpired owner.
 - Given a branch snapshot capture, when BOSS reads GitHub, then it records a
   deduplicated Receipt and immutable source/target commit and tree IDs,
   parents, merge base, ahead/behind, protection, checks, and pinned policy

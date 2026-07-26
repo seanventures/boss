@@ -2,7 +2,7 @@
 
 # Implemented features
 
-<span class="boss-status boss-status--implemented">Implemented</span> **87 features**
+<span class="boss-status boss-status--implemented">Implemented</span> **88 features**
 
 ## MET-001 — CEO command intake {#met-001-ceo-command-intake}
 
@@ -315,6 +315,18 @@
 **Automated evidence:** `apps/api/tests/test_github_branch_topology.py`, `apps/web/tests/api-client.test.ts`
 
 **Ledger detail:** Implemented: receipt-backed remote head/tree/parents/protection/check capture, merge-base and ahead/behind evidence, immutable tenant-scoped snapshots, dedupe replay, redacted failure evidence, and equal/rewrite/fast-forward/behind/diverged/missing/protected-blocked classification.
+
+## GHX-004 — Fenced branch and worktree lease {#ghx-004-fenced-branch-and-worktree-lease}
+
+<span class="boss-status boss-status--implemented">Implemented</span>
+
+**Source:** PRD GitHub Project Sync; BOSS-250
+
+**Implementation:** `db/schema.sql`, `engine/boss_engine/services/github_branch_leases.py`, `apps/api/app/main.py`, `engine/boss_engine/schemas.py`, `api/openapi.yaml`, `packages/api-client/src/index.ts`
+
+**Automated evidence:** `apps/api/tests/test_github_branch_leases.py`, `apps/web/tests/api-client.test.ts`
+
+**Ledger detail:** Implemented: one active TTL owner per repository ref, serialized concurrent acquisition, hashed one-time token, monotonic fencing token, heartbeat, release, expiry/reclaim lineage, exact acquire replay, tenant/RBAC enforcement and audit events.
 
 ## ORC-001 — Conversational thread store/API {#orc-001-conversational-thread-store-api}
 

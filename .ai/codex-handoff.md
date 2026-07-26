@@ -1,5 +1,23 @@
 # Codex Handoff
 
+## 2026-07-26 BOSS-250 fenced branch/worktree leases
+
+- Stacked branch `ai/codex/boss-250-branch-leases` starts from BOSS-248/BOSS-249
+  draft PR #82, which is stacked on BOSS-247 PR #81.
+- `github_branch_leases` permits one active owner per repository binding/ref.
+  Acquisition locks the binding row, so concurrent claimants produce exactly
+  one winner, expires stale ownership atomically, and retains reclaim lineage.
+- The raw high-entropy lease token is returned once and only its SHA-256 hash
+  persists. Exact acquire replay returns the original record but never the raw
+  token. Heartbeat/release verify both token and monotonic fence.
+- Expired leases cannot heartbeat/release; unexpired leases cannot be
+  administratively reclaimed. Reacquisition gets a higher fencing token and
+  links the prior expired lease.
+- Validation: double schema application; 65 widened API/GitHub/provider tests;
+  38 API-client tests; concurrency, token/fence, expiry/reclaim and tenant
+  tests; Ruff; TypeScript; production build; OpenAPI; generated docs; strict
+  MkDocs; and diff checks pass.
+
 ## 2026-07-26 BOSS-248/BOSS-249 branch policy and topology
 
 - Stacked branch `ai/codex/boss-248-249-branch-policy-snapshots` starts from

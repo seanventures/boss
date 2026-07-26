@@ -7,8 +7,10 @@
 - BOSS-248/BOSS-249 implement immutable versioned branch policy plus
   Receipt-backed repository snapshots/topology and close once their stacked PR
   merges.
-- BOSS-250–255 remain the explicit implementation backlog for branch
-  leases/worktrees, safe synchronization, conflict-resolution branches, merge
+- BOSS-250 implements fenced TTL branch/worktree ownership and closes once its
+  stacked PR merges.
+- BOSS-251–255 remain the explicit implementation backlog for safe
+  synchronization, conflict-resolution branches, merge
   orchestration/rollback, webhook/poll reconciliation, and Mission Control.
 - The governing GHX-001 contract requires immutable observed SHAs, no silent
   reset/force-push, visible rewrite/divergence classification, provider writes

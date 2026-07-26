@@ -132,6 +132,22 @@ diverged, and missing refs. A topologically valid fast-forward that policy
 denies is preserved as `topology_classification=fast_forward` with final
 `classification=protected_blocked`.
 
+## BOSS-250 implemented contract
+
+Every mutable repository ref can have exactly one active `BranchLease`.
+Acquisition serializes on the repository binding, expires stale ownership
+inside the same transaction, and assigns a monotonically increasing fencing
+token. The raw high-entropy lease token is returned only on first acquisition;
+only its SHA-256 hash persists and exact acquire-key replay does not return the
+raw token again.
+
+Heartbeat and release require both the raw lease token and current fencing
+token. Expired leases cannot heartbeat or release, unexpired leases cannot be
+administratively reclaimed, and reacquisition after expiry retains
+`reclaimed_from_lease_id` lineage with a higher fence. Lease state carries
+owner kind/ID, run, worktree, ref, TTL, actor, heartbeat, release/reclaim reason,
+and audit events without putting the raw token in events or read models.
+
 ## Completion criteria
 
 The parent feature is complete only when all nine slices are shipped, the

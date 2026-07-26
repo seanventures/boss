@@ -96,6 +96,14 @@ and `github_branch_snapshots` preserves immutable Receipt-linked remote
 identity, topology, protection, check, and pinned-policy evidence. No branch
 write is part of these slices; leases and synchronization begin with BOSS-250.
 
+BOSS-250 implements `github_branch_leases`. A partial unique index permits one
+active lease per repository binding/ref. Acquisition locks the binding row to
+serialize concurrent claimants, stores only a hash of the one-time lease token,
+uses a database sequence for monotonic fencing, and records expiry/reclaim
+lineage. Every future ref mutation must verify project, binding, ref, active
+status, TTL, raw-token hash, and exact fencing token immediately before its
+provider write.
+
 ## Resource Plane Kernel
 
 The Resource Plane Kernel is core infrastructure, not a plugin. Provider adapters are plugins.

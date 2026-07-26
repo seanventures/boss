@@ -1,6 +1,6 @@
 # BOSS Requirements Traceability Matrix (Autonomous .ai version)
 
-**Last rebuilt**: 2026-07-26 by Codex (BOSS-246–249 GitHub project sync)
+**Last rebuilt**: 2026-07-26 by Codex (BOSS-246–250 GitHub project sync)
 **Sources**: docs/product/PRD-v2.0.md, TECHNICAL_SPEC-v2.0.md, REQUIREMENT_INVENTORY.md, TRACEABILITY.md, user-stories.md, AGENTS.md, README, api/openapi.yaml, db/schema.sql, packages/specpack/*, code + tests scan.
 **Status key**: Implemented (full vertical + tests + states + audit + DoD), Partial, Planned, Blocked (external per real-only), In-Progress (this session).
 **DoD reminder**: Requirement complete only when traced, full journey, UI nav, backend, persistence, auth server+client, validations, loading/empty/error/success, edges, mobile/a11y basics, security/arch/QA review, tests pass, lint/build, docs updated, NO mocks/fakes/TODOs for required behavior.
@@ -12,7 +12,8 @@
 | BOSS-247 / GHX-001 foundation | Project-scoped GitHub connection and repository binding | SecretRef-backed App/PAT registry; one active primary; lifecycle; permission/capability discovery; receipted idempotent test; typed API/client/OpenAPI; RBAC/events | 54 focused/widened API tests, 36 client tests, schema idempotency, Ruff, TypeScript, OpenAPI, strict docs | Implemented, pending merge |
 | BOSS-248 / GHX-002 | Versioned branch policy and protected-ref/naming/update/merge rules | immutable supersession; deterministic allow/approval/block result; force/protected denial; typed API/client/OpenAPI; RBAC/events | policy state, unsafe rule, permission, tenant and client tests | Implemented, pending merge |
 | BOSS-249 / GHX-003 | Immutable remote branch topology | receipted commit/tree/parents/merge-base/protection/check capture; dedupe scope; topology classifier; redacted failures | equal, rewrite, fast-forward, behind, diverged, missing, protected-blocked, replay, failure, tenant tests | Implemented, pending merge |
-| BOSS-250–255 / GHX-001 remainder | Leases/worktrees, safe sync, conflict branches, merge queue, reconciler, and Mission Control | Governing PRD/technical contract and Plane delivery map | Contract/docs validation | Planned |
+| BOSS-250 / GHX-004 | Fenced branch/worktree lease | one active owner; serialized acquire; one-time hashed token; monotonic fence; heartbeat/release; expiry/reclaim lineage; typed API/client/OpenAPI; RBAC/events | replay/collision, token/fence, expiry/reclaim, concurrent one-winner, tenant/permission tests | Implemented, pending merge |
+| BOSS-251–255 / GHX-001 remainder | Safe sync, conflict branches, merge queue, reconciler, and Mission Control | Governing PRD/technical contract and Plane delivery map | Contract/docs validation | Planned |
 
 ## 2026-07-26 Provider connection lifecycle trace
 

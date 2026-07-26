@@ -1180,6 +1180,43 @@ CREATE INDEX IF NOT EXISTS idx_github_branch_snapshots_binding
     repository_binding_id, observed_at DESC, source_ref, target_ref
   );
 
+CREATE TABLE IF NOT EXISTS github_branch_leases (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  repository_binding_id TEXT NOT NULL REFERENCES github_repository_bindings(id) ON DELETE CASCADE,
+  ref_name TEXT NOT NULL,
+  owner_kind TEXT NOT NULL,
+  owner_id TEXT NOT NULL,
+  run_id TEXT,
+  worktree_path TEXT,
+  acquire_key TEXT NOT NULL,
+  lease_token_hash TEXT NOT NULL,
+  fencing_token BIGSERIAL NOT NULL UNIQUE,
+  status TEXT NOT NULL DEFAULT 'active',
+  acquired_by TEXT NOT NULL,
+  acquired_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  heartbeat_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  lease_expires_at TIMESTAMPTZ NOT NULL,
+  released_by TEXT,
+  released_at TIMESTAMPTZ,
+  release_reason TEXT,
+  reclaimed_from_lease_id TEXT REFERENCES github_branch_leases(id),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(project_id, acquire_key),
+  CHECK (status IN ('active', 'released', 'expired', 'reclaimed')),
+  CHECK (owner_kind IN (
+    'task', 'workflow_run', 'code_task_run', 'agent', 'manual'
+  ))
+);
+CREATE INDEX IF NOT EXISTS idx_github_branch_leases_binding
+  ON github_branch_leases(
+    repository_binding_id, ref_name, status, lease_expires_at DESC
+  );
+CREATE UNIQUE INDEX IF NOT EXISTS uq_github_branch_lease_active
+  ON github_branch_leases(repository_binding_id, ref_name)
+  WHERE status = 'active';
+
 CREATE TABLE IF NOT EXISTS provider_adapters (
   id TEXT PRIMARY KEY,
   provider TEXT NOT NULL,

@@ -3,6 +3,21 @@
 All 15-min terminal updates and major milestones appended here. Chronological, newest at top.
 
 ---
+## 2026-07-26 — Codex — BOSS-250 fenced branch leases
+
+- Advanced BOSS-250 Backlog → Todo → In Progress in Plane after publishing
+  clean stacked PR #82 for BOSS-248/BOSS-249.
+- Added one-active-owner branch/worktree leases with serialized acquisition,
+  hashed one-time tokens, monotonic fencing, heartbeat, release, expiry/reclaim
+  lineage, exact replay, tenant scope, RBAC and audit events.
+- Acceptance coverage proves token/fence denial, no token persistence/event
+  leakage, expiry/reacquire lineage, unexpired reclaim denial, and exactly one
+  winner under concurrent acquisition.
+- Validation passes double schema application, 65 API tests, 38 client tests,
+  Ruff, TypeScript, production build, OpenAPI, generated docs, strict MkDocs,
+  and diff checks.
+
+---
 ## 2026-07-26 — Codex — BOSS-248/BOSS-249 policy and topology
 
 - Advanced BOSS-248/BOSS-249 through Backlog, Todo, and In Progress in Plane

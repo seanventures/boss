@@ -4457,6 +4457,128 @@ class GitHubBranchSnapshotCaptureResponse(BaseModel):
     error: Optional[dict[str, Any]] = None
 
 
+class GitHubBranchLeaseSummary(BaseModel):
+    id: str
+    project_id: str
+    repository_binding_id: str
+    ref_name: str
+    owner_kind: Literal[
+        "task", "workflow_run", "code_task_run", "agent", "manual"
+    ]
+    owner_id: str
+    run_id: Optional[str] = None
+    worktree_path: Optional[str] = None
+    acquire_key: str
+    fencing_token: int
+    status: Literal["active", "released", "expired", "reclaimed"]
+    acquired_by: str
+    acquired_at: str
+    heartbeat_at: str
+    lease_expires_at: str
+    released_by: Optional[str] = None
+    released_at: Optional[str] = None
+    release_reason: Optional[str] = None
+    reclaimed_from_lease_id: Optional[str] = None
+    created_at: str
+    updated_at: str
+
+
+class GitHubBranchLeaseListResponse(BaseModel):
+    project_id: str
+    items: list[GitHubBranchLeaseSummary]
+
+
+class GitHubBranchLeaseAcquireRequest(BaseModel):
+    project_id: str
+    repository_binding_id: str
+    ref_name: str
+    owner_kind: Literal[
+        "task", "workflow_run", "code_task_run", "agent", "manual"
+    ]
+    owner_id: str
+    run_id: Optional[str] = None
+    worktree_path: Optional[str] = None
+    acquire_key: str
+    ttl_seconds: int = Field(default=300, ge=30, le=3600)
+    actor: str = "ceo"
+
+    @model_validator(mode="after")
+    def validate_github_branch_lease_acquire(
+        self,
+    ) -> "GitHubBranchLeaseAcquireRequest":
+        self.project_id = _require_text(self.project_id, "project_id")
+        self.repository_binding_id = _require_text(
+            self.repository_binding_id, "repository_binding_id"
+        )
+        self.ref_name = _require_text(self.ref_name, "ref_name")
+        self.owner_id = _require_text(self.owner_id, "owner_id")
+        self.acquire_key = _require_text(self.acquire_key, "acquire_key")
+        if self.run_id is not None:
+            self.run_id = _require_text(self.run_id, "run_id")
+        if self.worktree_path is not None:
+            self.worktree_path = _require_text(
+                self.worktree_path, "worktree_path"
+            )
+        self.actor = _require_text(self.actor, "actor")
+        return self
+
+
+class GitHubBranchLeaseAcquireResponse(BaseModel):
+    lease: GitHubBranchLeaseSummary
+    lease_token: Optional[str] = None
+    duplicate: bool
+
+
+class GitHubBranchLeaseHeartbeatRequest(BaseModel):
+    project_id: str
+    lease_token: str
+    fencing_token: int
+    ttl_seconds: int = Field(default=300, ge=30, le=3600)
+    actor: str = "system"
+
+    @model_validator(mode="after")
+    def validate_github_branch_lease_heartbeat(
+        self,
+    ) -> "GitHubBranchLeaseHeartbeatRequest":
+        self.project_id = _require_text(self.project_id, "project_id")
+        self.lease_token = _require_text(self.lease_token, "lease_token")
+        self.actor = _require_text(self.actor, "actor")
+        return self
+
+
+class GitHubBranchLeaseReleaseRequest(BaseModel):
+    project_id: str
+    lease_token: str
+    fencing_token: int
+    reason: str
+    actor: str = "ceo"
+
+    @model_validator(mode="after")
+    def validate_github_branch_lease_release(
+        self,
+    ) -> "GitHubBranchLeaseReleaseRequest":
+        self.project_id = _require_text(self.project_id, "project_id")
+        self.lease_token = _require_text(self.lease_token, "lease_token")
+        self.reason = _require_text(self.reason, "reason")
+        self.actor = _require_text(self.actor, "actor")
+        return self
+
+
+class GitHubBranchLeaseReclaimRequest(BaseModel):
+    project_id: str
+    reason: str
+    actor: str = "ceo"
+
+    @model_validator(mode="after")
+    def validate_github_branch_lease_reclaim(
+        self,
+    ) -> "GitHubBranchLeaseReclaimRequest":
+        self.project_id = _require_text(self.project_id, "project_id")
+        self.reason = _require_text(self.reason, "reason")
+        self.actor = _require_text(self.actor, "actor")
+        return self
+
+
 class ProviderAccountSummary(BaseModel):
     id: str
     project_id: str

@@ -231,6 +231,13 @@ from .schemas import (
     GitHubBranchPolicyListResponse,
     GitHubBranchPolicySummary,
     GitHubBranchPolicyUpdateRequest,
+    GitHubBranchLeaseAcquireRequest,
+    GitHubBranchLeaseAcquireResponse,
+    GitHubBranchLeaseHeartbeatRequest,
+    GitHubBranchLeaseListResponse,
+    GitHubBranchLeaseReclaimRequest,
+    GitHubBranchLeaseReleaseRequest,
+    GitHubBranchLeaseSummary,
     GitHubBranchSnapshotCaptureRequest,
     GitHubBranchSnapshotCaptureResponse,
     GitHubBranchSnapshotListResponse,
@@ -515,6 +522,12 @@ from .services.github_branches import (
     GitHubBranchService,
     GitHubBranchSnapshotNotFoundError,
 )
+from .services.github_branch_leases import (
+    GitHubBranchLeaseConflictError,
+    GitHubBranchLeaseNotFoundError,
+    GitHubBranchLeaseService,
+    GitHubBranchLeaseTokenError,
+)
 from .services.github_connections import (
     GitHubConnectionNotFoundError,
     GitHubConnectionService,
@@ -637,6 +650,9 @@ github_community = GitHubCommunityService(settings)
 github_connections = GitHubConnectionService(settings)
 github_branches = GitHubBranchService(
     settings,
+    github_connections=github_connections,
+)
+github_branch_leases = GitHubBranchLeaseService(
     github_connections=github_connections,
 )
 software_factory = SoftwareFactoryService(settings, ports=engine_ports)
@@ -9041,6 +9057,196 @@ def get_github_branch_snapshot(
         except GitHubBranchSnapshotNotFoundError as error:
             raise HTTPException(status_code=404, detail=str(error)) from error
         return GitHubBranchSnapshotSummary(**item)
+
+
+@app.get(
+    "/v1/github/branch-leases",
+    response_model=GitHubBranchLeaseListResponse,
+)
+def list_github_branch_leases(
+    project_id: str,
+    repository_binding_id: Optional[str] = None,
+    ref_name: Optional[str] = None,
+    include_history: bool = False,
+    limit: int = Query(default=100, ge=1, le=200),
+) -> GitHubBranchLeaseListResponse:
+    with begin(engine) as connection:
+        return GitHubBranchLeaseListResponse(
+            project_id=project_id,
+            items=[
+                GitHubBranchLeaseSummary(**item)
+                for item in github_branch_leases.list(
+                    connection,
+                    project_id,
+                    repository_binding_id=repository_binding_id,
+                    ref_name=ref_name,
+                    include_history=include_history,
+                    limit=limit,
+                )
+            ],
+        )
+
+
+@app.post(
+    "/v1/github/branch-leases",
+    response_model=GitHubBranchLeaseAcquireResponse,
+    status_code=201,
+)
+def acquire_github_branch_lease(
+    payload: GitHubBranchLeaseAcquireRequest,
+) -> GitHubBranchLeaseAcquireResponse:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection,
+            payload.project_id,
+            payload.actor,
+            "github_manage",
+        )
+        try:
+            result = github_branch_leases.acquire(
+                connection,
+                project_id=payload.project_id,
+                repository_binding_id=payload.repository_binding_id,
+                ref_name=payload.ref_name,
+                owner_kind=payload.owner_kind,
+                owner_id=payload.owner_id,
+                run_id=payload.run_id,
+                worktree_path=payload.worktree_path,
+                acquire_key=payload.acquire_key,
+                ttl_seconds=payload.ttl_seconds,
+                actor=payload.actor,
+            )
+        except GitHubRepositoryBindingNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except (
+            GitHubBranchLeaseConflictError,
+            GitHubConnectionStateError,
+            ValueError,
+        ) as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        return GitHubBranchLeaseAcquireResponse(
+            lease=GitHubBranchLeaseSummary(**result["lease"]),
+            lease_token=result["lease_token"],
+            duplicate=result["duplicate"],
+        )
+
+
+@app.get(
+    "/v1/github/branch-leases/{lease_id}",
+    response_model=GitHubBranchLeaseSummary,
+)
+def get_github_branch_lease(
+    lease_id: str,
+    project_id: str,
+) -> GitHubBranchLeaseSummary:
+    with begin(engine) as connection:
+        try:
+            item = github_branch_leases.get(connection, project_id, lease_id)
+        except GitHubBranchLeaseNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        return GitHubBranchLeaseSummary(**item)
+
+
+@app.post(
+    "/v1/github/branch-leases/{lease_id}/heartbeat",
+    response_model=GitHubBranchLeaseSummary,
+)
+def heartbeat_github_branch_lease(
+    lease_id: str,
+    payload: GitHubBranchLeaseHeartbeatRequest,
+) -> GitHubBranchLeaseSummary:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection,
+            payload.project_id,
+            payload.actor,
+            "github_manage",
+        )
+        try:
+            item = github_branch_leases.heartbeat(
+                connection,
+                project_id=payload.project_id,
+                lease_id=lease_id,
+                lease_token=payload.lease_token,
+                fencing_token=payload.fencing_token,
+                ttl_seconds=payload.ttl_seconds,
+                actor=payload.actor,
+            )
+        except GitHubBranchLeaseNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except (
+            GitHubBranchLeaseConflictError,
+            GitHubBranchLeaseTokenError,
+            ValueError,
+        ) as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        return GitHubBranchLeaseSummary(**item)
+
+
+@app.post(
+    "/v1/github/branch-leases/{lease_id}/release",
+    response_model=GitHubBranchLeaseSummary,
+)
+def release_github_branch_lease(
+    lease_id: str,
+    payload: GitHubBranchLeaseReleaseRequest,
+) -> GitHubBranchLeaseSummary:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection,
+            payload.project_id,
+            payload.actor,
+            "github_manage",
+        )
+        try:
+            item = github_branch_leases.release(
+                connection,
+                project_id=payload.project_id,
+                lease_id=lease_id,
+                lease_token=payload.lease_token,
+                fencing_token=payload.fencing_token,
+                reason=payload.reason,
+                actor=payload.actor,
+            )
+        except GitHubBranchLeaseNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except (
+            GitHubBranchLeaseConflictError,
+            GitHubBranchLeaseTokenError,
+            ValueError,
+        ) as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        return GitHubBranchLeaseSummary(**item)
+
+
+@app.post(
+    "/v1/github/branch-leases/{lease_id}/reclaim",
+    response_model=GitHubBranchLeaseSummary,
+)
+def reclaim_github_branch_lease(
+    lease_id: str,
+    payload: GitHubBranchLeaseReclaimRequest,
+) -> GitHubBranchLeaseSummary:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection,
+            payload.project_id,
+            payload.actor,
+            "github_manage",
+        )
+        try:
+            item = github_branch_leases.reclaim_expired(
+                connection,
+                project_id=payload.project_id,
+                lease_id=lease_id,
+                reason=payload.reason,
+                actor=payload.actor,
+            )
+        except GitHubBranchLeaseNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except (GitHubBranchLeaseConflictError, ValueError) as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        return GitHubBranchLeaseSummary(**item)
 
 
 @app.get("/v1/provider-definitions", response_model=ProviderDefinitionListResponse)

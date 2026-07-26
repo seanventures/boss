@@ -3437,4 +3437,72 @@ describe("createBossApiClient", () => {
       dedupe_key: "snapshot:1",
     });
   });
+
+  it("uses fenced GitHub branch lease lifecycle contracts", async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const fetchImpl = async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({ url: String(input), init });
+      return new Response(JSON.stringify({ items: [] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    };
+    const client = createBossApiClient({
+      baseUrl: "http://127.0.0.1:8000",
+      fetchImpl,
+    });
+
+    await client.listGitHubBranchLeases("boss-dogfood", {
+      repository_binding_id: "ghrepo_1",
+      ref_name: "ai/codex/work",
+      include_history: true,
+      limit: 25,
+    });
+    await client.acquireGitHubBranchLease({
+      project_id: "boss-dogfood",
+      repository_binding_id: "ghrepo_1",
+      ref_name: "ai/codex/work",
+      owner_kind: "code_task_run",
+      owner_id: "run-1",
+      acquire_key: "lease:1",
+      ttl_seconds: 300,
+      actor: "ceo",
+    });
+    await client.getGitHubBranchLease("boss-dogfood", "ghlease_1");
+    await client.heartbeatGitHubBranchLease("ghlease_1", {
+      project_id: "boss-dogfood",
+      lease_token: "lease-token",
+      fencing_token: 7,
+      ttl_seconds: 300,
+      actor: "system",
+    });
+    await client.releaseGitHubBranchLease("ghlease_1", {
+      project_id: "boss-dogfood",
+      lease_token: "lease-token",
+      fencing_token: 7,
+      reason: "complete",
+      actor: "ceo",
+    });
+    await client.reclaimGitHubBranchLease("ghlease_2", {
+      project_id: "boss-dogfood",
+      reason: "expired",
+      actor: "ceo",
+    });
+
+    expect(calls.map((call) => call.url)).toEqual([
+      "http://127.0.0.1:8000/v1/github/branch-leases?project_id=boss-dogfood&repository_binding_id=ghrepo_1&ref_name=ai%2Fcodex%2Fwork&include_history=true&limit=25",
+      "http://127.0.0.1:8000/v1/github/branch-leases",
+      "http://127.0.0.1:8000/v1/github/branch-leases/ghlease_1?project_id=boss-dogfood",
+      "http://127.0.0.1:8000/v1/github/branch-leases/ghlease_1/heartbeat",
+      "http://127.0.0.1:8000/v1/github/branch-leases/ghlease_1/release",
+      "http://127.0.0.1:8000/v1/github/branch-leases/ghlease_2/reclaim",
+    ]);
+    expect(JSON.parse(String(calls[1].init?.body))).not.toHaveProperty(
+      "lease_token",
+    );
+    expect(JSON.parse(String(calls[3].init?.body))).toMatchObject({
+      lease_token: "lease-token",
+      fencing_token: 7,
+    });
+  });
 });

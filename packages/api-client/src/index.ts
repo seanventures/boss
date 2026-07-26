@@ -3120,6 +3120,76 @@ export type GitHubBranchSnapshotCaptureResponse = {
   error: Record<string, unknown> | null;
 };
 
+export type GitHubBranchLeaseSummary = {
+  id: string;
+  project_id: string;
+  repository_binding_id: string;
+  ref_name: string;
+  owner_kind: "task" | "workflow_run" | "code_task_run" | "agent" | "manual";
+  owner_id: string;
+  run_id: string | null;
+  worktree_path: string | null;
+  acquire_key: string;
+  fencing_token: number;
+  status: "active" | "released" | "expired" | "reclaimed";
+  acquired_by: string;
+  acquired_at: string;
+  heartbeat_at: string;
+  lease_expires_at: string;
+  released_by: string | null;
+  released_at: string | null;
+  release_reason: string | null;
+  reclaimed_from_lease_id: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type GitHubBranchLeaseListResponse = {
+  project_id: string;
+  items: GitHubBranchLeaseSummary[];
+};
+
+export type GitHubBranchLeaseAcquireRequest = {
+  project_id: string;
+  repository_binding_id: string;
+  ref_name: string;
+  owner_kind: "task" | "workflow_run" | "code_task_run" | "agent" | "manual";
+  owner_id: string;
+  run_id?: string;
+  worktree_path?: string;
+  acquire_key: string;
+  ttl_seconds?: number;
+  actor?: string;
+};
+
+export type GitHubBranchLeaseAcquireResponse = {
+  lease: GitHubBranchLeaseSummary;
+  lease_token: string | null;
+  duplicate: boolean;
+};
+
+export type GitHubBranchLeaseHeartbeatRequest = {
+  project_id: string;
+  lease_token: string;
+  fencing_token: number;
+  ttl_seconds?: number;
+  actor?: string;
+};
+
+export type GitHubBranchLeaseReleaseRequest = {
+  project_id: string;
+  lease_token: string;
+  fencing_token: number;
+  reason: string;
+  actor?: string;
+};
+
+export type GitHubBranchLeaseReclaimRequest = {
+  project_id: string;
+  reason: string;
+  actor?: string;
+};
+
 export type AgentModuleSummary = {
   module_id: string;
   version: string;
@@ -6060,6 +6130,73 @@ export function createBossApiClient(config: BossApiClientConfig) {
         "GET",
         `/v1/github/branch-snapshots/${encodeURIComponent(snapshotId)}`,
         { query: { project_id: projectId } },
+      );
+    },
+    listGitHubBranchLeases(
+      projectId: string,
+      options: {
+        repository_binding_id?: string;
+        ref_name?: string;
+        include_history?: boolean;
+        limit?: number;
+      } = {},
+    ) {
+      return request<GitHubBranchLeaseListResponse>(
+        "GET",
+        "/v1/github/branch-leases",
+        {
+          query: {
+            project_id: projectId,
+            repository_binding_id: options.repository_binding_id,
+            ref_name: options.ref_name,
+            include_history: options.include_history,
+            limit: options.limit ?? 100,
+          },
+        },
+      );
+    },
+    acquireGitHubBranchLease(payload: GitHubBranchLeaseAcquireRequest) {
+      return request<GitHubBranchLeaseAcquireResponse>(
+        "POST",
+        "/v1/github/branch-leases",
+        { body: payload },
+      );
+    },
+    getGitHubBranchLease(projectId: string, leaseId: string) {
+      return request<GitHubBranchLeaseSummary>(
+        "GET",
+        `/v1/github/branch-leases/${encodeURIComponent(leaseId)}`,
+        { query: { project_id: projectId } },
+      );
+    },
+    heartbeatGitHubBranchLease(
+      leaseId: string,
+      payload: GitHubBranchLeaseHeartbeatRequest,
+    ) {
+      return request<GitHubBranchLeaseSummary>(
+        "POST",
+        `/v1/github/branch-leases/${encodeURIComponent(leaseId)}/heartbeat`,
+        { body: payload },
+      );
+    },
+    releaseGitHubBranchLease(
+      leaseId: string,
+      payload: GitHubBranchLeaseReleaseRequest,
+    ) {
+      return request<GitHubBranchLeaseSummary>(
+        "POST",
+        `/v1/github/branch-leases/${encodeURIComponent(leaseId)}/release`,
+        { body: payload },
+      );
+    },
+    reclaimGitHubBranchLease(
+      leaseId: string,
+      payload: GitHubBranchLeaseReclaimRequest,
+    ) {
+      return request<GitHubBranchLeaseSummary>(
+        "POST",
+        `/v1/github/branch-leases/${encodeURIComponent(leaseId)}/reclaim`,
+        { body: payload },
       );
     },
     listProviderDefinitions() {
