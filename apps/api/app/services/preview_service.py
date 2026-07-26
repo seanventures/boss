@@ -48,6 +48,17 @@ def _free_port() -> int:
     return port
 
 
+def _low_priority(command: list[str]) -> list[str]:
+    """Run a preview build at LOW CPU/IO priority. `npm install` + `vite build` run inside the api
+    container; at normal priority they starve the api during the ~60s build and it returns 404s
+    ("Reconnecting to the control plane"). nice (coreutils, always present) lets the api's own
+    threads preempt the build; ionice de-prioritizes its disk IO when available."""
+    prefix = ["nice", "-n", "19"]
+    if shutil.which("ionice"):
+        prefix += ["ionice", "-c3"]
+    return prefix + command
+
+
 def _detect_command(workdir: Path) -> Optional[list[str]]:
     """Detect the repo's declared preview command before falling back to stack hints."""
     hint = workdir / "boss.preview.command"
@@ -325,8 +336,8 @@ def start_preview(engine, settings: Settings, run_id: str, *, ttl_minutes: int =
            "npm_config_fund": "false", "npm_config_audit": "false",
            "npm_config_update_notifier": "false"}
     logf = open(log_path, "w")
-    proc = subprocess.Popen(command, cwd=str(workdir), env=env, stdout=logf, stderr=subprocess.STDOUT,
-                            stdin=subprocess.DEVNULL, start_new_session=True)
+    proc = subprocess.Popen(_low_priority(command), cwd=str(workdir), env=env, stdout=logf,
+                            stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, start_new_session=True)
     logf.close()
 
     # Web builds do `npm install` + `vite build` before the static server binds — well past the
@@ -608,7 +619,7 @@ def _respawn_process_preview(engine, settings: Settings, preview_id: str) -> Non
                "npm_config_fund": "false", "npm_config_audit": "false",
                "npm_config_update_notifier": "false"}
         logf = open(log_path, "w")
-        proc = subprocess.Popen(command, cwd=str(workdir), env=env, stdout=logf,
+        proc = subprocess.Popen(_low_priority(command), cwd=str(workdir), env=env, stdout=logf,
                                 stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
                                 start_new_session=True)
         logf.close()
