@@ -2,8 +2,9 @@
 
 ## 2026-07-26 BOSS-255 GitHub Mission Control
 
-- Stacked branch `ai/codex/boss-255-github-mission-control` starts from the
-  BOSS-254 reconciler commit and is intended to remain stacked on draft PR #86.
+- Draft PR #87 on `ai/codex/boss-255-github-mission-control` starts from the
+  BOSS-254 reconciler commit and is cleanly mergeable on draft PR #86. The
+  implementation commit is `cd9021e9dafa2ee044d600cf8cdf94486691ceb6`.
   It does not rewrite Paramg PR #80 or any contributor ref.
 - Adds a dedicated GitHub navigation area backed directly by twelve canonical
   typed read streams: connections, repository bindings, branch policies,

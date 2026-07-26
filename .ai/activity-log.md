@@ -22,6 +22,9 @@ All 15-min terminal updates and major milestones appended here. Chronological, n
   widened GitHub API/community/worker tests pass alongside TypeScript lint,
   production build, generated-doc drift and strict docs checks, live local
   API/browser navigation, and desktop overflow/error inspection.
+- Published draft PR #87, cleanly mergeable on BOSS-254 PR #86, and attached
+  the exact commit, PR stack, validation, and merge-only closure condition to
+  Plane BOSS-255 and parent BOSS-246.
 
 ## 2026-07-26 — Codex — BOSS-254 GitHub reconciler
 
