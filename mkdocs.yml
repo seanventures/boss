@@ -39,6 +39,7 @@ nav:
       - Product requirements: product/PRD-v2.0.md
       - Technical specification: product/TECHNICAL_SPEC-v2.0.md
       - Roadmap: product/ROADMAP-v2.0.md
+      - Assurance contracts: product/ASSURANCE_CONTRACTS.md
       - Traceability: product/TRACEABILITY.md
   - Operations:
       - Infrastructure runbook: operations/INFRA_RUNBOOK.md

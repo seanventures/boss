@@ -1,0 +1,40 @@
+kind: ObjectSpec
+id: ClaimVerification
+version: 0.1.0
+description: >
+  Reproducible evaluation of a claim against its typed evidence contract.
+fields:
+  - { name: id, type: string, required: true }
+  - { name: org_id, type: string, required: true }
+  - { name: workspace_id, type: string, required: true }
+  - { name: project_id, type: string, required: true }
+  - { name: claim_id, type: string, required: true }
+  - { name: claim_version, type: integer, required: true }
+  - name: verification_kind
+    type: enum
+    values: [red_to_green, isolation, regression_comparison, health_threshold, policy_attestation]
+    required: true
+  - { name: evidence_contract_ref, type: string, required: true }
+  - { name: precondition_evidence_refs, type: array, required: true }
+  - { name: postcondition_evidence_refs, type: array, required: true }
+  - { name: control_evidence_refs, type: array, required: true }
+  - { name: conflicting_evidence_refs, type: array, required: true }
+  - { name: changed_variable, type: string, required: false }
+  - name: result
+    type: enum
+    values: [passed, refuted, inconclusive, blocked]
+    required: true
+  - { name: verifier_ref, type: string, required: true }
+  - { name: verifier_independent, type: boolean, required: true }
+  - { name: policy_snapshot_ref, type: string, required: true }
+  - { name: decision_id, type: string, required: false }
+  - { name: dedupe_key, type: string, required: true }
+  - { name: verified_at, type: datetime, required: true }
+rules:
+  red_to_green_requires_pre_failure_and_post_pass: true
+  isolation_requires_single_changed_variable_and_control: true
+  conflict_or_missing_proof_is_inconclusive_not_passed: true
+  result_transition_emits_event: true
+constraints:
+  unique:
+    - [project_id, dedupe_key]

@@ -1,9 +1,9 @@
 # BOSS Autonomous Delivery Status
 
-**Last updated**: 2026-07-26 (Paramg catch-up; BOSS-148/BOSS-149 safe UI tail)
+**Last updated**: 2026-07-26 (BOSS-175–194 assurance contract batch)
 **Repo root**: /Volumes/DataSSD1/test/boss
 **Git remote**: https://github.com/seanheiney/boss
-**Current branch**: ai/codex/boss-148-151-ui-tail
+**Current branch**: ai/codex/boss-assurance-contracts
 **Base branch**: origin/main
 **Product**: BOSS v0.7.0 target (Business Operating System Sentinel)
 **Mission**: Complete product to production-grade, tested, documented, pushed, Codex-coordinated, ready for real users. Grind until all discovered PRD/spec features satisfy world-class DoD or truly blocked.
@@ -14,6 +14,18 @@
 - GitHub: draft PR #16 carries BOSS-22/BOSS-23 and is stacked on draft PR #15; other open PRs were inspected for overlap before implementation.
 
 ## Overall Product Status
+- BOSS-175–194 implement twenty non-overlapping SpecPack contract slices under
+  the existing Ground Truth, Agent Group, Integration, and Assurance parents.
+  The v2 manifest now catalogs all contracts and makes evidence-backed claims,
+  closed-question interruption, single surface ownership, deterministic policy
+  composition, governance-preserving group consensus, and intersection-only
+  capability resolution explicit product invariants. Runtime persistence/API/
+  worker/UI remains correctly Partial until the active engine split lands.
+  Validation is green across 21 relevant Python tests, web TypeScript/lint,
+  isolated API/worker Ruff, strict docs, YAML, and diff checks; the only full
+  lint failure is two inherited F541 findings in contributor-owned
+  `intent_router.py` covered by open PRs #23/#70.
+- PR #71 merged to `main` as `c0b2493`; BOSS-148/BOSS-149 are shipped and Done.
 - Paramg's July 19–26 mainline delivery adds the design-aware app pipeline,
   task-scoped agent workspace, preview/deploy hardening, Plane closed-loop
   sync, AI SRE/reliability surfaces, and VAG extensions. His active

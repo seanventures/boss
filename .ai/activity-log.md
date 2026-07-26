@@ -3,6 +3,30 @@
 All 15-min terminal updates and major milestones appended here. Chronological, newest at top.
 
 ---
+## 2026-07-26 — Codex — BOSS-175–194 assurance contract batch
+
+- Merged the validated BOSS-148/BOSS-149 UI PR #71 as `c0b2493` and reconciled
+  both Plane issues to Done.
+- Created twenty deduplicated Plane child issues, advanced each Backlog → Todo
+  → In Progress, and isolated the work on
+  `ai/codex/boss-assurance-contracts` from refreshed `origin/main`.
+- Added twenty typed SpecPack objects covering ground-truth metrics and
+  observations, regression signals, the settled-conclusion tripwire,
+  claims/evidence, surface ownership, standing verification, Assurance Cases,
+  Agent Groups, Integration definitions/connections, executor bindings, and
+  deterministic capability resolution.
+- Registered the three new catalogs and six product invariants in the v2
+  manifest. Added structural tests for all twenty contracts and a product
+  reference explaining boundaries and the post-engine-split runtime path.
+- Validation: 5/5 contract tests and 16/16 adjacent marketplace/workflow tests
+  pass; web route generation/TypeScript, isolated API/worker Ruff, generated
+  docs, strict MkDocs, YAML parsing, and diff checks pass. Full `make lint`
+  stops only on two inherited F541 findings in contributor-owned
+  `intent_router.py` (open PRs #23/#70); this branch does not touch that file.
+- Publication and merge evidence remain before the child tickets can move to
+  Done.
+
+---
 ## 2026-07-26 — Codex — Paramg catch-up and safe Mission Control slices
 
 - Reconciled rewritten `origin/main`, all active branches, open GitHub PRs, the

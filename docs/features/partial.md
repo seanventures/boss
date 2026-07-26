@@ -2,31 +2,43 @@
 
 # Partial features
 
-<span class="boss-status boss-status--partial">Partial</span> **5 features**
+<span class="boss-status boss-status--partial">Partial</span> **6 features**
+
+## AGP-001 — Versioned Agent Groups and collaboration protocols {#agp-001-versioned-agent-groups-and-collaboration-protocols}
+
+<span class="boss-status boss-status--partial">Partial</span>
+
+**Source:** PRD v2.0 Agent Groups; Plane BOSS-129/BOSS-189–190
+
+**Implementation:** `docs/product/PRD-v2.0.md`, `docs/product/TECHNICAL_SPEC-v2.0.md`, `docs/product/ROADMAP-v2.0.md`, `docs/product/ASSURANCE_CONTRACTS.md`, `packages/specpack/objects/agent_group_spec.yaml`, `packages/specpack/objects/agent_group_run.yaml`
+
+**Automated evidence:** `apps/api/tests/test_assurance_specpack_contracts.py`; planned runtime tests: partial failure, disagreement, timeout, budget denial, replay, and tenant isolation
+
+**Ledger detail:** Partial: versioned SpecPack definition/run contracts and governance invariants implemented; persistence, execution, and UI remain planned
 
 ## INT-001 — Integration registry and typed skill contracts {#int-001-integration-registry-and-typed-skill-contracts}
 
 <span class="boss-status boss-status--partial">Partial</span>
 
-**Source:** PRD v2.0 Skills and Integrations; Plane BOSS-130; extends BOSS-44–56
+**Source:** PRD v2.0 Skills and Integrations; Plane BOSS-130/BOSS-191–194; extends BOSS-44–56
 
-**Implementation:** `docs/product/PRD-v2.0.md`, `docs/product/TECHNICAL_SPEC-v2.0.md`, `packages/specpack/skills`, `apps/api/app/services/skill_executors.py`
+**Implementation:** `docs/product/PRD-v2.0.md`, `docs/product/TECHNICAL_SPEC-v2.0.md`, `docs/product/ASSURANCE_CONTRACTS.md`, `packages/specpack/skills`, `packages/specpack/objects/integration_definition.yaml`, `packages/specpack/objects/integration_connection.yaml`, `packages/specpack/objects/executor_binding.yaml`, `packages/specpack/objects/capability_resolution.yaml`, `apps/api/app/services/skill_executors.py`
 
-**Automated evidence:** Planned: connection lifecycle/health, capability intersection, revocation, provenance, receipt, and tenant tests
+**Automated evidence:** `apps/api/tests/test_assurance_specpack_contracts.py`; planned runtime tests: install/revoke, health, intersection, permissions, replay, and tenant isolation
 
-**Ledger detail:** Partial: SkillSpec/MCP marketplace and executor foundations exist; generic IntegrationDefinition/IntegrationConnection runtime is planned
+**Ledger detail:** Partial: SkillSpec/MCP foundations plus typed definition, connection, executor-binding, and fail-closed capability-resolution contracts implemented; generic persistence/API runtime remains planned
 
 ## AST-001 — Ground-truth and Assurance runtime {#ast-001-ground-truth-and-assurance-runtime}
 
 <span class="boss-status boss-status--partial">Partial</span>
 
-**Source:** PRD v2.0 Ground-truth and Assurance; Plane BOSS-123–128 and BOSS-131
+**Source:** PRD v2.0 Ground-truth and Assurance; Plane BOSS-123–128/BOSS-131/BOSS-175–188
 
-**Implementation:** `docs/product/PRD-v2.0.md`, `docs/product/TECHNICAL_SPEC-v2.0.md`, `docs/product/ROADMAP-v2.0.md`, `docs/product/BOSS_VERIFICATION_AMPLIFIED_GENERATION.md`
+**Implementation:** `docs/product/PRD-v2.0.md`, `docs/product/TECHNICAL_SPEC-v2.0.md`, `docs/product/ROADMAP-v2.0.md`, `docs/product/BOSS_VERIFICATION_AMPLIFIED_GENERATION.md`, `docs/product/ASSURANCE_CONTRACTS.md`, `packages/specpack/objects/{ground_truth_metric_definition,ground_truth_observation,regression_signal,settled_conclusion,closed_question_match,claim,evidence,claim_verification,surface_ownership,ownership_transition,verification_policy,verification_run,assurance_case,assurance_policy_snapshot}.yaml`
 
-**Automated evidence:** Planned: metric regression, closed-question, claim evidence, ownership, Assurance Case, verifier scheduling, override, and tenant tests
+**Automated evidence:** `apps/api/tests/test_assurance_specpack_contracts.py`; planned runtime tests: metric regression, closed-question publication block, claim evidence, ownership concurrency, verifier scheduling, override, and tenant isolation
 
-**Ledger detail:** Partial: VAG/refute foundations exist; generalized ground-truth enforcement is planned
+**Ledger detail:** Partial: VAG/refute foundations plus all fourteen generalized Ground Truth/Assurance SpecPack contracts and fail-closed invariants implemented; migrations, services, workers, API/client, and UI remain planned
 
 ## COM-PKG-001 — Open-core editions {#com-pkg-001-open-core-editions}
 
