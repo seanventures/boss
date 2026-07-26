@@ -506,8 +506,11 @@ GitHub project integration:
   `/v1/github/reconciliation-runs`,
   `/v1/github/reconciliation-signals`, and
   `/v1/github/repository-ref-states`.
-- Planned under BOSS-255: Mission Control repository topology and branch
-  operations read models.
+- Implemented under BOSS-255: Mission Control composes those canonical read
+  models into project/repository topology, branch evidence, lease/sync/
+  conflict/merge/reconciliation workflows, Receipt/rollback inspection, and
+  permission-aware controls. Browser clients never receive one-time lease
+  secrets; lease-token-bearing apply remains a worker boundary.
 
 Reusable Workflows:
 

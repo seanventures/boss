@@ -1,9 +1,9 @@
 # BOSS Autonomous Delivery Status
 
-**Last updated**: 2026-07-26 (BOSS-246–254 GitHub project sync)
+**Last updated**: 2026-07-26 (BOSS-246–255 GitHub project sync)
 **Repo root**: /Volumes/DataSSD1/test/boss
 **Git remote**: https://github.com/seanheiney/boss
-**Current branch**: ai/codex/boss-254-github-reconciler
+**Current branch**: ai/codex/boss-255-github-mission-control
 **Base branch**: origin/main
 **Product**: BOSS v0.7.0 target (Business Operating System Sentinel)
 **Mission**: Complete product to production-grade, tested, documented, pushed, Codex-coordinated, ready for real users. Grind until all discovered PRD/spec features satisfy world-class DoD or truly blocked.
@@ -34,7 +34,12 @@
   webhook signals, scheduled poll and explicit repair convergence, leased
   Receipt-backed rate/ref reads, immutable observations and canonical ref
   state, stale/out-of-order handling, drift invalidation, reset-aware bounded
-  retry, redaction and deadletters. Mission Control remains BOSS-255.
+  retry, redaction and deadletters. BOSS-255 completes Mission Control with a
+  project/repository selector, canonical ref topology, branch evidence and
+  divergence inspector, lease/sync/conflict/merge/reconciliation lanes,
+  Receipt/rollback visibility, independently degrading read streams, and
+  `github_manage`-aware setup/review/poll/repair controls. Apply operations
+  requiring one-time lease secrets remain worker-only.
 - BOSS-236 implements the provider-account credential lifecycle foundation
   beneath BOSS-235: truthful initial-cloud auth definitions, multi-slot
   SecretRefs, safe metadata, rotation lineage/overlap, disable/revoke gates,

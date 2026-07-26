@@ -261,6 +261,38 @@ workers advertise the reconciliation capability and do not double-finalize
 the job lease because the reconciler atomically owns its success/retry/
 deadletter transition with its observation evidence.
 
+## BOSS-255 implemented contract
+
+Mission Control now has a dedicated GitHub workspace scoped to the active BOSS
+project and actor. Its feed consumes the canonical connection, binding, policy,
+snapshot, lease, sync, conflict, resolution, merge-authorization,
+reconciliation, signal, and repository-ref APIs. Each stream fails
+independently, so an unavailable evidence source is named without hiding
+healthy repository truth.
+
+The primary workspace keeps live branch topology and the selected branch's
+commit/tree, protection, immutable observation, Receipt, ahead/behind
+classification, active fenced writer, sync state, merge state, and rollback
+identity together. A linear delivery view exposes code sync, red-to-green
+conflict resolution, independent review, merge authorization, and
+webhook/poll/repair convergence without inventing state or bypassing the
+canonical records.
+
+Actors holding `github_manage` can configure SecretRef-backed connections,
+bind repositories, create immutable branch-policy versions, test access,
+capture topology snapshots, plan code synchronization, approve independently
+reviewed resolution plans, authorize and enqueue merges, request polling, and
+repair terminal reconciliation runs. Read-only actors see the same evidence
+with mutation controls withheld. Operations that require a one-time branch
+lease secret and fencing token remain worker-only rather than exposing those
+credentials in the browser.
+
+The responsive surface includes explicit unconfigured, empty, partial-error,
+and healthy states. Automated rendering and feed tests cover canonical summary
+derivation, partial degradation, branch/Receipt evidence, workflow state, and
+permission gating; TypeScript validation and the production Next.js build
+exercise the integrated console route.
+
 ## Completion criteria
 
 The parent feature is complete only when all nine slices are shipped, the

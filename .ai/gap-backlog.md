@@ -21,8 +21,11 @@
   rate/ref reads, canonical observations/ref state, stale/out-of-order
   handling, drift invalidation, reset-aware bounded retry, deadletter and
   repair; it closes once its stacked PR merges.
-- BOSS-255 remains the explicit implementation backlog for Mission Control
-  repository topology and branch operations.
+- BOSS-255 implements Mission Control repository topology and branch
+  operations with canonical multi-stream reads, partial-failure visibility,
+  branch evidence/divergence/lease inspection, linear sync/conflict/merge/
+  reconciliation state, Receipts/rollback, responsive empty/error states, and
+  `github_manage`-aware controls. It closes once its stacked PR merges.
 - The governing GHX-001 contract requires immutable observed SHAs, no silent
   reset/force-push, visible rewrite/divergence classification, provider writes
   through ChangeSets/ResourceReceipts, unique dedupe keys, and approval gates

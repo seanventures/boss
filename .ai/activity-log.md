@@ -3,6 +3,26 @@
 All 15-min terminal updates and major milestones appended here. Chronological, newest at top.
 
 ---
+## 2026-07-26 — Codex — BOSS-255 GitHub Mission Control
+
+- Advanced BOSS-255 Backlog → Todo → In Progress in Plane after publishing
+  clean stacked draft PR #86 for the BOSS-254 reconciler.
+- Added a dedicated project-level GitHub workspace that reads canonical
+  connection, repository, policy, topology, lease, sync, conflict, resolution,
+  merge, reconciliation, signal, and ref state through the typed client.
+- Added permission-aware setup and operations for SecretRef-backed
+  connections, repository binding, immutable policies, connection tests,
+  snapshot capture, sync planning, independent resolution review, merge
+  authorization/queueing, reconciliation poll, and terminal repair. Kept
+  lease-token-bearing apply operations behind workers.
+- Added partial-stream degradation, explicit empty/error states, responsive
+  topology/inspector/workflow layout, Receipt/rollback coverage, and actor RBAC
+  reflection.
+- Added three Mission Control feed/rendering tests. All 128 web tests and 85
+  widened GitHub API/community/worker tests pass alongside TypeScript lint,
+  production build, generated-doc drift and strict docs checks, live local
+  API/browser navigation, and desktop overflow/error inspection.
+
 ## 2026-07-26 — Codex — BOSS-254 GitHub reconciler
 
 - Advanced BOSS-254 Backlog → Todo → In Progress in Plane after publishing

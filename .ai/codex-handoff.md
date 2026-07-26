@@ -1,5 +1,30 @@
 # Codex Handoff
 
+## 2026-07-26 BOSS-255 GitHub Mission Control
+
+- Stacked branch `ai/codex/boss-255-github-mission-control` starts from the
+  BOSS-254 reconciler commit and is intended to remain stacked on draft PR #86.
+  It does not rewrite Paramg PR #80 or any contributor ref.
+- Adds a dedicated GitHub navigation area backed directly by twelve canonical
+  typed read streams: connections, repository bindings, branch policies,
+  immutable snapshots, fenced leases, code sync runs, conflict sets,
+  resolution plans, merge authorizations, reconciliation runs/signals, and
+  current repository ref state. Partial failures remain named while healthy
+  evidence stays visible.
+- The restrained two-pane workspace centers live branch topology and a shared
+  evidence inspector, followed by linear sync/conflict/merge/reconciliation
+  lanes. It exposes exact commit/tree/observation/Receipt identity, divergence,
+  lease owner/fence/expiry, checks/reviews, rollback, and deadletter repair.
+- `github_manage` controls cover connection, binding, immutable policy,
+  access test, snapshot capture, sync planning, independent resolution review,
+  merge authorization/enqueue, poll, and repair. Raw one-time lease tokens are
+  never sent to the browser, so apply remains a leased worker operation.
+- Validation: 128 web tests pass, including three new Mission Control feed/
+  rendering tests; all 85 widened GitHub API/community/worker tests pass; web
+  lint/typecheck and production build pass; strict docs build passes; live
+  local API navigation shows all GitHub endpoints returning 200, no React
+  errors, and no horizontal page overflow at the inspected desktop viewport.
+
 ## 2026-07-26 BOSS-254 GitHub webhook/poll reconciler
 
 - Stacked branch `ai/codex/boss-254-github-reconciler` starts from BOSS-253

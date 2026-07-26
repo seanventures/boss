@@ -2,7 +2,7 @@
 
 # Implemented features
 
-<span class="boss-status boss-status--implemented">Implemented</span> **92 features**
+<span class="boss-status boss-status--implemented">Implemented</span> **93 features**
 
 ## MET-001 — CEO command intake {#met-001-ceo-command-intake}
 
@@ -375,6 +375,18 @@
 **Automated evidence:** `apps/api/tests/test_github_reconciliation.py`, `apps/api/tests/test_github_community_adapter.py`, `apps/worker/tests/test_worker.py`, `apps/web/tests/api-client.test.ts`
 
 **Ledger detail:** Implemented: binding-resolved enqueue-only webhook signals; scheduled poll and explicit repair convergence; delivery/ref/SHA dedupe; leased Receipt-backed rate-limit and branch reads; immutable observations and canonical ref state; stale/out-of-order classification; pinned sync/merge drift invalidation; bounded reset-aware/exponential retry; redacted failures; deadletters; and no worker double-finalization.
+
+## GHX-009 — GitHub Mission Control {#ghx-009-github-mission-control}
+
+<span class="boss-status boss-status--implemented">Implemented</span>
+
+**Source:** PRD GitHub Project Sync; BOSS-255
+
+**Implementation:** `apps/web/lib/github-operations.ts`, `apps/web/app/github-operations-ui.tsx`, `apps/web/app/actions.ts`, `apps/web/app/page.tsx`, `apps/web/app/ConsoleShell.tsx`, `apps/web/app/globals.css`, `docs/product/GITHUB_PROJECT_SYNC.md`
+
+**Automated evidence:** `apps/web/tests/github-operations.test.tsx`, `apps/web/tests/accessibility.test.ts`, web TypeScript validation and production build
+
+**Ledger detail:** Implemented: project/repository selection, connection health, canonical ref topology, branch evidence inspector, divergence, fenced lease ownership, sync/conflict/resolution/merge/reconciliation lanes, Receipt and rollback coverage, partial-stream failure visibility, responsive empty/error/success states, and `github_manage`-aware controls for connection, repository, policy, snapshot, plan, review, queue, poll, and repair operations. Lease-token-bearing apply remains worker-only.
 
 ## ORC-001 — Conversational thread store/API {#orc-001-conversational-thread-store-api}
 

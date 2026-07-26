@@ -1470,6 +1470,261 @@ export async function createDecisionDigestAction(
   revalidatePath("/");
 }
 
+// ---- Project GitHub control plane ------------------------------------------
+
+export async function createGitHubConnectionAction(
+  formData: FormData,
+): Promise<void> {
+  const label = String(formData.get("connection_label") ?? "").trim();
+  const credentialRef = String(formData.get("credential_ref") ?? "").trim();
+  const authMethod = String(
+    formData.get("auth_method") ?? "github_app",
+  ).trim();
+  if (!label || !credentialRef) {
+    throw new Error("connection_label and credential_ref are required");
+  }
+  if (authMethod !== "github_app" && authMethod !== "personal_access_token") {
+    throw new Error("auth_method must be github_app or personal_access_token");
+  }
+  await client.createGitHubConnection({
+    project_id: getProjectId(formData),
+    connection_label: label,
+    auth_method: authMethod,
+    credential_ref: credentialRef,
+    app_id: getOptionalString(formData, "app_id"),
+    installation_id: getOptionalString(formData, "installation_id"),
+    api_base_url: getOptionalString(formData, "api_base_url"),
+    required_permissions: parseLines(formData.get("required_permissions")),
+    actor: getActor(formData),
+  });
+  revalidatePath("/");
+}
+
+export async function setGitHubConnectionStateAction(
+  formData: FormData,
+): Promise<void> {
+  const connectionId = String(formData.get("connection_id") ?? "").trim();
+  const operation = String(formData.get("operation") ?? "").trim();
+  if (!connectionId) {
+    throw new Error("connection_id is required");
+  }
+  const payload = {
+    project_id: getProjectId(formData),
+    actor: getActor(formData),
+  };
+  if (operation === "enable") {
+    await client.enableGitHubConnection(connectionId, payload);
+  } else if (operation === "disable") {
+    await client.disableGitHubConnection(connectionId, payload);
+  } else {
+    throw new Error("operation must be enable or disable");
+  }
+  revalidatePath("/");
+}
+
+export async function createGitHubRepositoryBindingAction(
+  formData: FormData,
+): Promise<void> {
+  const connectionId = String(formData.get("connection_id") ?? "").trim();
+  const repository = String(formData.get("repository") ?? "").trim();
+  const role = String(formData.get("role") ?? "primary").trim();
+  if (!connectionId || !repository) {
+    throw new Error("connection_id and repository are required");
+  }
+  if (!["primary", "source", "upstream", "mirror"].includes(role)) {
+    throw new Error("role is invalid");
+  }
+  await client.createGitHubRepositoryBinding({
+    project_id: getProjectId(formData),
+    connection_id: connectionId,
+    repository,
+    role: role as "primary" | "source" | "upstream" | "mirror",
+    default_branch: getOptionalString(formData, "default_branch"),
+    actor: getActor(formData),
+  });
+  revalidatePath("/");
+}
+
+export async function testGitHubConnectionAction(
+  formData: FormData,
+): Promise<void> {
+  const connectionId = String(formData.get("connection_id") ?? "").trim();
+  const bindingId = String(
+    formData.get("repository_binding_id") ?? "",
+  ).trim();
+  if (!connectionId || !bindingId) {
+    throw new Error("connection_id and repository_binding_id are required");
+  }
+  await client.testGitHubConnection(connectionId, {
+    project_id: getProjectId(formData),
+    repository_binding_id: bindingId,
+    dedupe_key: `mission-control-test-${connectionId}-${bindingId}-${Date.now()}`,
+    actor: getActor(formData),
+  });
+  revalidatePath("/");
+}
+
+export async function createGitHubBranchPolicyAction(
+  formData: FormData,
+): Promise<void> {
+  const bindingId = String(
+    formData.get("repository_binding_id") ?? "",
+  ).trim();
+  if (!bindingId) {
+    throw new Error("repository_binding_id is required");
+  }
+  await client.createGitHubBranchPolicy({
+    project_id: getProjectId(formData),
+    repository_binding_id: bindingId,
+    protected_ref_patterns: parseLines(formData.get("protected_ref_patterns")),
+    allowed_branch_prefixes: parseLines(
+      formData.get("allowed_branch_prefixes"),
+    ),
+    required_checks: parseLines(formData.get("required_checks")),
+    required_approvals: parseInteger(
+      formData.get("required_approvals"),
+      1,
+    ),
+    require_pull_request: true,
+    automation_updates_enabled: true,
+    force_push_allowed: false,
+    actor: getActor(formData),
+  });
+  revalidatePath("/");
+}
+
+export async function captureGitHubBranchSnapshotAction(
+  formData: FormData,
+): Promise<void> {
+  const bindingId = String(
+    formData.get("repository_binding_id") ?? "",
+  ).trim();
+  const sourceRef = String(formData.get("source_ref") ?? "").trim();
+  const targetRef = String(formData.get("target_ref") ?? "").trim();
+  if (!bindingId || !sourceRef || !targetRef) {
+    throw new Error(
+      "repository_binding_id, source_ref, and target_ref are required",
+    );
+  }
+  await client.captureGitHubBranchSnapshot({
+    project_id: getProjectId(formData),
+    repository_binding_id: bindingId,
+    source_ref: sourceRef,
+    target_ref: targetRef,
+    dedupe_key: `mission-control-snapshot-${bindingId}-${sourceRef}-${targetRef}-${Date.now()}`,
+    actor: getActor(formData),
+  });
+  revalidatePath("/");
+}
+
+export async function planGitHubCodeSyncAction(
+  formData: FormData,
+): Promise<void> {
+  const bindingId = String(
+    formData.get("repository_binding_id") ?? "",
+  ).trim();
+  const snapshotId = String(formData.get("snapshot_id") ?? "").trim();
+  if (!bindingId || !snapshotId) {
+    throw new Error("repository_binding_id and snapshot_id are required");
+  }
+  await client.planGitHubCodeSync({
+    project_id: getProjectId(formData),
+    repository_binding_id: bindingId,
+    snapshot_id: snapshotId,
+    resolution_branch: getOptionalString(formData, "resolution_branch"),
+    dedupe_key: `mission-control-sync-${bindingId}-${snapshotId}-${Date.now()}`,
+    actor: getActor(formData),
+  });
+  revalidatePath("/");
+}
+
+export async function scheduleGitHubReconciliationAction(
+  formData: FormData,
+): Promise<void> {
+  const bindingId = getOptionalString(formData, "repository_binding_id");
+  await client.scheduleGitHubReconciliationPoll({
+    project_id: getProjectId(formData),
+    repository_binding_id: bindingId,
+    refs: parseLines(formData.get("refs")),
+    dedupe_key: `mission-control-reconcile-${bindingId ?? "all"}-${Date.now()}`,
+    actor: getActor(formData),
+  });
+  revalidatePath("/");
+}
+
+export async function repairGitHubReconciliationAction(
+  formData: FormData,
+): Promise<void> {
+  const runId = String(formData.get("reconciliation_run_id") ?? "").trim();
+  if (!runId) {
+    throw new Error("reconciliation_run_id is required");
+  }
+  await client.repairGitHubReconciliationRun(runId, {
+    project_id: getProjectId(formData),
+    dedupe_key: `mission-control-repair-${runId}-${Date.now()}`,
+    actor: getActor(formData),
+  });
+  revalidatePath("/");
+}
+
+export async function approveGitHubResolutionPlanAction(
+  formData: FormData,
+): Promise<void> {
+  const planId = String(formData.get("resolution_plan_id") ?? "").trim();
+  const summary = String(formData.get("review_summary") ?? "").trim();
+  if (!planId || !summary) {
+    throw new Error("resolution_plan_id and review_summary are required");
+  }
+  await client.approveGitHubResolutionPlan(planId, {
+    project_id: getProjectId(formData),
+    actor: getActor(formData),
+    review_evidence: {
+      verdict: "approved",
+      summary,
+      source: "github_mission_control",
+    },
+  });
+  revalidatePath("/");
+}
+
+export async function authorizeGitHubMergeAction(
+  formData: FormData,
+): Promise<void> {
+  const authorizationId = String(
+    formData.get("merge_authorization_id") ?? "",
+  ).trim();
+  const summary = String(formData.get("review_summary") ?? "").trim();
+  if (!authorizationId || !summary) {
+    throw new Error("merge_authorization_id and review_summary are required");
+  }
+  await client.authorizeGitHubMerge(authorizationId, {
+    project_id: getProjectId(formData),
+    actor: getActor(formData),
+    review_evidence: {
+      verdict: "approved",
+      summary,
+      source: "github_mission_control",
+    },
+  });
+  revalidatePath("/");
+}
+
+export async function enqueueGitHubMergeAction(
+  formData: FormData,
+): Promise<void> {
+  const authorizationId = String(
+    formData.get("merge_authorization_id") ?? "",
+  ).trim();
+  if (!authorizationId) {
+    throw new Error("merge_authorization_id is required");
+  }
+  await client.enqueueGitHubMerge(authorizationId, {
+    project_id: getProjectId(formData),
+    actor: getActor(formData),
+  });
+  revalidatePath("/");
+}
+
 export async function createProviderAccountAction(
   formData: FormData,
 ): Promise<void> {
