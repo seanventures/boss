@@ -113,6 +113,118 @@ def test_comment_review_and_diff_use_existing_app_auth_path(monkeypatch):
     assert calls[2]["headers"]["Accept"] == "application/vnd.github.v3.diff"
 
 
+def test_branch_snapshot_compare_and_checks_use_immutable_github_reads(monkeypatch):
+    calls: list[str] = []
+
+    def fake_request(method: str, url: str, **kwargs) -> httpx.Response:
+        calls.append(url)
+        if "/git/ref/heads/ai%2Fcodex%2Fwork" in url:
+            return _response(
+                method,
+                url,
+                200,
+                json_body={"object": {"sha": "a" * 40}},
+            )
+        if "/git/commits/" in url:
+            return _response(
+                method,
+                url,
+                200,
+                json_body={
+                    "tree": {"sha": "1" * 40},
+                    "parents": [{"sha": "b" * 40}],
+                },
+            )
+        if "/branches/ai%2Fcodex%2Fwork" in url:
+            return _response(
+                method,
+                url,
+                200,
+                json_body={
+                    "protected": True,
+                    "protection": {
+                        "required_status_checks": {"contexts": ["test"]},
+                        "enforce_admins": {"enabled": True},
+                    },
+                },
+            )
+        if "/compare/" in url:
+            return _response(
+                method,
+                url,
+                200,
+                json_body={
+                    "status": "ahead",
+                    "ahead_by": 2,
+                    "behind_by": 0,
+                    "total_commits": 2,
+                    "merge_base_commit": {
+                        "sha": "b" * 40,
+                        "commit": {"tree": {"sha": "2" * 40}},
+                    },
+                },
+            )
+        if "/check-runs" in url:
+            return _response(
+                method,
+                url,
+                200,
+                json_body={
+                    "check_runs": [
+                        {
+                            "name": "test",
+                            "status": "completed",
+                            "conclusion": "success",
+                            "app": {"slug": "github-actions"},
+                        }
+                    ]
+                },
+            )
+        raise AssertionError(f"unexpected GitHub request: {url}")
+
+    monkeypatch.setattr(httpx, "request", fake_request)
+    adapter = GitHubAdapter(
+        _settings(),
+        owner="octo",
+        repo="project",
+        token="scoped-token",
+        api_base_url="https://github.example/api/v3",
+    )
+
+    snapshot = adapter.branch_snapshot("ai/codex/work")
+    comparison = adapter.compare_commits("b" * 40, "a" * 40)
+    checks = adapter.commit_checks("a" * 40)
+
+    assert snapshot == {
+        "ref": "ai/codex/work",
+        "exists": True,
+        "commit_sha": "a" * 40,
+        "tree_sha": "1" * 40,
+        "parents": ["b" * 40],
+        "protected": True,
+        "protection": {
+            "enabled": True,
+            "required_status_checks": {"contexts": ["test"]},
+            "required_pull_request_reviews": None,
+            "required_signatures": None,
+            "enforce_admins": {"enabled": True},
+        },
+    }
+    assert comparison["status"] == "ahead"
+    assert comparison["ahead_by"] == 2
+    assert comparison["merge_base_tree_sha"] == "2" * 40
+    assert checks == [
+        {
+            "name": "test",
+            "status": "completed",
+            "conclusion": "success",
+            "app": "github-actions",
+        }
+    ]
+    assert all(url.startswith("https://github.example/api/v3/") for url in calls)
+    assert any("ai%2Fcodex%2Fwork" in url for url in calls)
+
+
 @pytest.mark.parametrize(
     "invoke",
     [

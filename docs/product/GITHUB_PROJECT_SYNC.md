@@ -109,6 +109,29 @@ rejection, effective repository permission discovery, deduplicated
 revoke. Responses expose only `credential_configured`, never the credential
 pointer.
 
+## BOSS-248 and BOSS-249 implemented contract
+
+Branch policies are immutable versions. Revising a policy supersedes the prior
+record and preserves protected-ref patterns, allowed branch prefixes, bounded
+name rules, update and merge methods, required checks/approvals, pull-request,
+linear-history and signed-commit requirements, automation posture, force-push
+posture, actor, and metadata. Evaluation is deterministic and returns
+`allowed`, `approval_required`, or `blocked` with machine-readable reasons.
+
+Branch snapshots are immutable and tenant-scoped. A capture resolves the
+project binding and SecretRef-backed adapter, reads both remote heads and tree
+identities, parents, merge base, ahead/behind counts, branch protection, and
+target check runs, pins the active policy version, and records a
+`github.repository.snapshot` Receipt. Replaying the dedupe key returns the
+existing snapshot without another provider call. Provider failures create
+redacted failed Receipt and event evidence.
+
+The classifier retains both raw topology and the policy result. It recognizes
+equal commits, tree-equivalent identity rewrites, fast-forward, behind,
+diverged, and missing refs. A topologically valid fast-forward that policy
+denies is preserved as `topology_classification=fast_forward` with final
+`classification=protected_blocked`.
+
 ## Completion criteria
 
 The parent feature is complete only when all nine slices are shipped, the

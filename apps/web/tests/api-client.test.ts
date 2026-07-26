@@ -3369,4 +3369,72 @@ describe("createBossApiClient", () => {
       dedupe_key: "github-test:1",
     });
   });
+
+  it("uses versioned GitHub branch policy and immutable snapshot contracts", async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const fetchImpl = async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({ url: String(input), init });
+      return new Response(JSON.stringify({ items: [] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    };
+    const client = createBossApiClient({
+      baseUrl: "http://127.0.0.1:8000",
+      fetchImpl,
+    });
+
+    await client.listGitHubBranchPolicies("boss-dogfood", {
+      repository_binding_id: "ghrepo_1",
+      include_history: true,
+    });
+    await client.createGitHubBranchPolicy({
+      project_id: "boss-dogfood",
+      repository_binding_id: "ghrepo_1",
+      protected_ref_patterns: ["main"],
+      allowed_branch_prefixes: ["ai/"],
+      actor: "ceo",
+    });
+    await client.getGitHubBranchPolicy("boss-dogfood", "ghpolicy_1");
+    await client.reviseGitHubBranchPolicy("ghpolicy_1", {
+      project_id: "boss-dogfood",
+      required_approvals: 2,
+      actor: "ceo",
+    });
+    await client.evaluateGitHubBranchPolicy("ghpolicy_2", {
+      project_id: "boss-dogfood",
+      ref: "main",
+      operation: "update",
+      method: "fast_forward",
+    });
+    await client.listGitHubBranchSnapshots("boss-dogfood", {
+      repository_binding_id: "ghrepo_1",
+      limit: 25,
+    });
+    await client.captureGitHubBranchSnapshot({
+      project_id: "boss-dogfood",
+      repository_binding_id: "ghrepo_1",
+      source_ref: "ai/codex/work",
+      target_ref: "main",
+      dedupe_key: "snapshot:1",
+      actor: "ceo",
+    });
+    await client.getGitHubBranchSnapshot("boss-dogfood", "ghsnap_1");
+
+    expect(calls.map((call) => call.url)).toEqual([
+      "http://127.0.0.1:8000/v1/github/branch-policies?project_id=boss-dogfood&repository_binding_id=ghrepo_1&include_history=true",
+      "http://127.0.0.1:8000/v1/github/branch-policies",
+      "http://127.0.0.1:8000/v1/github/branch-policies/ghpolicy_1?project_id=boss-dogfood",
+      "http://127.0.0.1:8000/v1/github/branch-policies/ghpolicy_1",
+      "http://127.0.0.1:8000/v1/github/branch-policies/ghpolicy_2/evaluate",
+      "http://127.0.0.1:8000/v1/github/branch-snapshots?project_id=boss-dogfood&repository_binding_id=ghrepo_1&limit=25",
+      "http://127.0.0.1:8000/v1/github/branch-snapshots/capture",
+      "http://127.0.0.1:8000/v1/github/branch-snapshots/ghsnap_1?project_id=boss-dogfood",
+    ]);
+    expect(JSON.parse(String(calls[6].init?.body))).toMatchObject({
+      source_ref: "ai/codex/work",
+      target_ref: "main",
+      dedupe_key: "snapshot:1",
+    });
+  });
 });

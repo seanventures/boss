@@ -3,6 +3,20 @@
 All 15-min terminal updates and major milestones appended here. Chronological, newest at top.
 
 ---
+## 2026-07-26 — Codex — BOSS-248/BOSS-249 policy and topology
+
+- Advanced BOSS-248/BOSS-249 through Backlog, Todo, and In Progress in Plane
+  after publishing clean draft PR #81 for BOSS-247.
+- Added immutable versioned branch policies, deterministic protected-ref/name/
+  method evaluation, immutable remote commit/tree topology snapshots, Receipt
+  replay scoping, protection/check evidence, and all topology classifications.
+- Added real adapter regression coverage plus typed API/client/OpenAPI and
+  product/technical/acceptance/traceability updates.
+- Validation passes double schema application, 60 API tests, 37 client tests,
+  Ruff, TypeScript, production build, OpenAPI, generated docs, strict MkDocs,
+  and diff checks.
+
+---
 ## 2026-07-26 — Codex — BOSS-246/BOSS-247 GitHub project sync
 
 - Created the BOSS-246 parent and BOSS-247–255 delivery slices in Plane before

@@ -3,11 +3,13 @@
 ## 2026-07-26 GitHub project sync delivery map
 
 - BOSS-247 closes the project-scoped connection/repository-binding foundation
-  once its PR merges.
-- BOSS-248–255 remain the explicit implementation backlog for branch policy,
-  repository snapshots/topology, branch leases/worktrees, safe synchronization,
-  conflict-resolution branches, merge orchestration/rollback, webhook/poll
-  reconciliation, and Mission Control operations.
+  once PR #81 merges.
+- BOSS-248/BOSS-249 implement immutable versioned branch policy plus
+  Receipt-backed repository snapshots/topology and close once their stacked PR
+  merges.
+- BOSS-250–255 remain the explicit implementation backlog for branch
+  leases/worktrees, safe synchronization, conflict-resolution branches, merge
+  orchestration/rollback, webhook/poll reconciliation, and Mission Control.
 - The governing GHX-001 contract requires immutable observed SHAs, no silent
   reset/force-push, visible rewrite/divergence classification, provider writes
   through ChangeSets/ResourceReceipts, unique dedupe keys, and approval gates

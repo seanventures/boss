@@ -2964,6 +2964,162 @@ export type GitHubConnectionTestResponse = {
   detail: Record<string, unknown>;
 };
 
+export type GitHubBranchPolicySummary = {
+  id: string;
+  project_id: string;
+  repository_binding_id: string;
+  version: number;
+  supersedes_policy_id: string | null;
+  status: "active" | "superseded" | "disabled";
+  protected_ref_patterns: string[];
+  allowed_branch_prefixes: string[];
+  branch_name_pattern: string;
+  allowed_update_methods: string[];
+  allowed_merge_methods: string[];
+  required_checks: string[];
+  required_approvals: number;
+  require_pull_request: boolean;
+  require_linear_history: boolean;
+  require_signed_commits: boolean;
+  automation_updates_enabled: boolean;
+  force_push_allowed: boolean;
+  metadata: Record<string, unknown>;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type GitHubBranchPolicyListResponse = {
+  project_id: string;
+  items: GitHubBranchPolicySummary[];
+};
+
+export type GitHubBranchPolicyCreateRequest = {
+  project_id: string;
+  repository_binding_id: string;
+  protected_ref_patterns?: string[];
+  allowed_branch_prefixes?: string[];
+  branch_name_pattern?: string;
+  allowed_update_methods?: string[];
+  allowed_merge_methods?: string[];
+  required_checks?: string[];
+  required_approvals?: number;
+  require_pull_request?: boolean;
+  require_linear_history?: boolean;
+  require_signed_commits?: boolean;
+  automation_updates_enabled?: boolean;
+  force_push_allowed?: boolean;
+  metadata?: Record<string, unknown>;
+  actor?: string;
+};
+
+export type GitHubBranchPolicyUpdateRequest = {
+  project_id: string;
+  status?: "active" | "disabled";
+  protected_ref_patterns?: string[];
+  allowed_branch_prefixes?: string[];
+  branch_name_pattern?: string;
+  allowed_update_methods?: string[];
+  allowed_merge_methods?: string[];
+  required_checks?: string[];
+  required_approvals?: number;
+  require_pull_request?: boolean;
+  require_linear_history?: boolean;
+  require_signed_commits?: boolean;
+  automation_updates_enabled?: boolean;
+  force_push_allowed?: boolean;
+  metadata?: Record<string, unknown>;
+  actor?: string;
+};
+
+export type GitHubBranchPolicyEvaluateRequest = {
+  project_id: string;
+  ref: string;
+  operation: "observe" | "create" | "update" | "merge" | "delete";
+  method?: string;
+};
+
+export type GitHubBranchPolicyEvaluationResponse = {
+  policy_id: string;
+  policy_version: number;
+  status: "allowed" | "approval_required" | "blocked";
+  ref: string;
+  operation: string;
+  method: string | null;
+  protected: boolean;
+  reasons: string[];
+  required_checks: string[];
+  required_approvals: number;
+  require_pull_request: boolean;
+  require_linear_history: boolean;
+  require_signed_commits: boolean;
+};
+
+export type GitHubBranchSnapshotSummary = {
+  id: string;
+  project_id: string;
+  repository_binding_id: string;
+  branch_policy_id: string | null;
+  branch_policy_version: number | null;
+  source_ref: string;
+  target_ref: string;
+  source_commit_sha: string | null;
+  source_tree_sha: string | null;
+  target_commit_sha: string | null;
+  target_tree_sha: string | null;
+  merge_base_commit_sha: string | null;
+  merge_base_tree_sha: string | null;
+  ahead_by: number;
+  behind_by: number;
+  topology_classification:
+    | "equal"
+    | "tree_equivalent_rewrite"
+    | "fast_forward"
+    | "behind"
+    | "diverged"
+    | "missing";
+  classification:
+    | "equal"
+    | "tree_equivalent_rewrite"
+    | "fast_forward"
+    | "behind"
+    | "diverged"
+    | "missing"
+    | "protected_blocked";
+  refs: Record<string, unknown>;
+  comparison: Record<string, unknown>;
+  protection: Record<string, unknown>;
+  checks: Array<Record<string, unknown>>;
+  policy_evaluation: Record<string, unknown>;
+  receipt_id: string;
+  dedupe_key: string;
+  observed_by: string;
+  observed_at: string;
+  created_at: string;
+};
+
+export type GitHubBranchSnapshotListResponse = {
+  project_id: string;
+  items: GitHubBranchSnapshotSummary[];
+};
+
+export type GitHubBranchSnapshotCaptureRequest = {
+  project_id: string;
+  repository_binding_id: string;
+  source_ref: string;
+  target_ref: string;
+  dedupe_key: string;
+  actor?: string;
+};
+
+export type GitHubBranchSnapshotCaptureResponse = {
+  status: "succeeded" | "failed";
+  duplicate: boolean;
+  receipt_id: string;
+  snapshot: GitHubBranchSnapshotSummary | null;
+  error: Record<string, unknown> | null;
+};
+
 export type AgentModuleSummary = {
   module_id: string;
   version: string;
@@ -5821,6 +5977,89 @@ export function createBossApiClient(config: BossApiClientConfig) {
         "PATCH",
         `/v1/github/repository-bindings/${encodeURIComponent(bindingId)}`,
         { body: payload },
+      );
+    },
+    listGitHubBranchPolicies(
+      projectId: string,
+      options: {
+        repository_binding_id?: string;
+        include_history?: boolean;
+      } = {},
+    ) {
+      return request<GitHubBranchPolicyListResponse>(
+        "GET",
+        "/v1/github/branch-policies",
+        {
+          query: {
+            project_id: projectId,
+            repository_binding_id: options.repository_binding_id,
+            include_history: options.include_history,
+          },
+        },
+      );
+    },
+    createGitHubBranchPolicy(payload: GitHubBranchPolicyCreateRequest) {
+      return request<GitHubBranchPolicySummary>(
+        "POST",
+        "/v1/github/branch-policies",
+        { body: payload },
+      );
+    },
+    getGitHubBranchPolicy(projectId: string, policyId: string) {
+      return request<GitHubBranchPolicySummary>(
+        "GET",
+        `/v1/github/branch-policies/${encodeURIComponent(policyId)}`,
+        { query: { project_id: projectId } },
+      );
+    },
+    reviseGitHubBranchPolicy(
+      policyId: string,
+      payload: GitHubBranchPolicyUpdateRequest,
+    ) {
+      return request<GitHubBranchPolicySummary>(
+        "PATCH",
+        `/v1/github/branch-policies/${encodeURIComponent(policyId)}`,
+        { body: payload },
+      );
+    },
+    evaluateGitHubBranchPolicy(
+      policyId: string,
+      payload: GitHubBranchPolicyEvaluateRequest,
+    ) {
+      return request<GitHubBranchPolicyEvaluationResponse>(
+        "POST",
+        `/v1/github/branch-policies/${encodeURIComponent(policyId)}/evaluate`,
+        { body: payload },
+      );
+    },
+    listGitHubBranchSnapshots(
+      projectId: string,
+      options: { repository_binding_id?: string; limit?: number } = {},
+    ) {
+      return request<GitHubBranchSnapshotListResponse>(
+        "GET",
+        "/v1/github/branch-snapshots",
+        {
+          query: {
+            project_id: projectId,
+            repository_binding_id: options.repository_binding_id,
+            limit: options.limit ?? 50,
+          },
+        },
+      );
+    },
+    captureGitHubBranchSnapshot(payload: GitHubBranchSnapshotCaptureRequest) {
+      return request<GitHubBranchSnapshotCaptureResponse>(
+        "POST",
+        "/v1/github/branch-snapshots/capture",
+        { body: payload },
+      );
+    },
+    getGitHubBranchSnapshot(projectId: string, snapshotId: string) {
+      return request<GitHubBranchSnapshotSummary>(
+        "GET",
+        `/v1/github/branch-snapshots/${encodeURIComponent(snapshotId)}`,
+        { query: { project_id: projectId } },
       );
     },
     listProviderDefinitions() {

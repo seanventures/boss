@@ -2,7 +2,7 @@
 
 # Implemented features
 
-<span class="boss-status boss-status--implemented">Implemented</span> **85 features**
+<span class="boss-status boss-status--implemented">Implemented</span> **87 features**
 
 ## MET-001 — CEO command intake {#met-001-ceo-command-intake}
 
@@ -291,6 +291,30 @@
 **Automated evidence:** `apps/api/tests/test_github_project_connections.py`, `apps/web/tests/api-client.test.ts`
 
 **Ledger detail:** Implemented foundation: project-scoped App/PAT SecretRefs, canonical primary/source/upstream/mirror bindings, `github_manage`, permission discovery, receipted/idempotent tests, tenant isolation, audited disable/enable, and irreversible revoke. Branch policy/snapshot/lease/sync/conflict/merge/reconciliation/UX remain BOSS-248–255.
+
+## GHX-002 — Versioned branch policy {#ghx-002-versioned-branch-policy}
+
+<span class="boss-status boss-status--implemented">Implemented</span>
+
+**Source:** PRD GitHub Project Sync; BOSS-248
+
+**Implementation:** `db/schema.sql`, `engine/boss_engine/services/github_branches.py`, `apps/api/app/main.py`, `engine/boss_engine/schemas.py`, `api/openapi.yaml`, `packages/api-client/src/index.ts`
+
+**Automated evidence:** `apps/api/tests/test_github_branch_topology.py`, `apps/web/tests/api-client.test.ts`
+
+**Ledger detail:** Implemented: immutable supersession lineage, protected-ref patterns, naming/prefix rules, allowed update/merge methods, checks/reviews, force-push denial, deterministic allowed/approval-required/blocked evaluation, RBAC and audit events.
+
+## GHX-003 — Immutable remote topology snapshot {#ghx-003-immutable-remote-topology-snapshot}
+
+<span class="boss-status boss-status--implemented">Implemented</span>
+
+**Source:** PRD GitHub Project Sync; BOSS-249
+
+**Implementation:** `db/schema.sql`, `engine/boss_engine/services/github_branches.py`, `engine/boss_engine/services/github_adapter.py`, `apps/api/app/main.py`, `api/openapi.yaml`, `packages/api-client/src/index.ts`
+
+**Automated evidence:** `apps/api/tests/test_github_branch_topology.py`, `apps/web/tests/api-client.test.ts`
+
+**Ledger detail:** Implemented: receipt-backed remote head/tree/parents/protection/check capture, merge-base and ahead/behind evidence, immutable tenant-scoped snapshots, dedupe replay, redacted failure evidence, and equal/rewrite/fast-forward/behind/diverged/missing/protected-blocked classification.
 
 ## ORC-001 — Conversational thread store/API {#orc-001-conversational-thread-store-api}
 

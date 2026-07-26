@@ -1,5 +1,27 @@
 # Codex Handoff
 
+## 2026-07-26 BOSS-248/BOSS-249 branch policy and topology
+
+- Stacked branch `ai/codex/boss-248-249-branch-policy-snapshots` starts from
+  BOSS-247 draft PR #81. Target the stacked PR at the BOSS-247 branch until
+  #81 merges, then retarget/rebase by tree without rewriting contributor refs.
+- Branch policies are immutable versions with supersession lineage,
+  protected-ref patterns, branch prefixes/name rules, update/merge methods,
+  checks/approvals, history/signing requirements, automation posture, and
+  deterministic allowed/approval-required/blocked results.
+- Remote snapshots are immutable, tenant-scoped, pinned to a policy version,
+  and Receipt-backed. They retain commit/tree/parents, merge base,
+  ahead/behind, protection, check runs, raw topology, and policy classification.
+- Tree-equivalent commit-identity rewrites remain non-conflicts. A valid
+  fast-forward that policy denies retains raw `fast_forward` topology and final
+  `protected_blocked` classification.
+- Receipt replay now verifies operation scope for both connection tests and
+  snapshots. The BOSS-247 portion was cherry-picked and pushed to PR #81 as
+  `073f3b6`.
+- Validation: schema applied twice; 60 focused/widened API/GitHub/provider
+  tests; 37 API-client tests; Ruff; TypeScript; production Next build; OpenAPI
+  checks; generated-doc drift test; strict MkDocs; and diff checks pass.
+
 ## 2026-07-26 BOSS-246/BOSS-247 GitHub project sync foundation
 
 - Branch `ai/codex/boss-247-github-project-connection` starts from rewritten

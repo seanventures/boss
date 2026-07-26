@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import base64
 from typing import Any, Optional
+from urllib.parse import quote
 
 import httpx
 
@@ -151,6 +152,106 @@ class GitHubAdapter:
 
     def repo_metadata(self) -> dict:
         return self._request("GET", f"/repos/{self.repository_full_name}")
+
+    def branch_snapshot(self, branch_name: str) -> dict:
+        """Read a branch head, tree, parents, and protection without mutation."""
+        encoded_branch = quote(branch_name, safe="")
+        try:
+            ref = self._request(
+                "GET",
+                f"/repos/{self.repository_full_name}/git/ref/heads/{encoded_branch}",
+            )
+        except httpx.HTTPStatusError as error:
+            if error.response.status_code == 404:
+                return {
+                    "ref": branch_name,
+                    "exists": False,
+                    "commit_sha": None,
+                    "tree_sha": None,
+                    "parents": [],
+                    "protected": False,
+                    "protection": {},
+                }
+            raise
+        commit_sha = str((ref.get("object") or {}).get("sha") or "")
+        if not commit_sha:
+            raise RuntimeError(f"GitHub returned no commit SHA for {branch_name}.")
+        commit = self._request(
+            "GET",
+            f"/repos/{self.repository_full_name}/git/commits/{quote(commit_sha, safe='')}",
+        )
+        try:
+            branch = self._request(
+                "GET",
+                f"/repos/{self.repository_full_name}/branches/{encoded_branch}",
+            )
+        except httpx.HTTPStatusError as error:
+            if error.response.status_code != 404:
+                raise
+            branch = {}
+        protection = branch.get("protection") or {}
+        return {
+            "ref": branch_name,
+            "exists": True,
+            "commit_sha": commit_sha,
+            "tree_sha": str((commit.get("tree") or {}).get("sha") or ""),
+            "parents": [
+                str(parent.get("sha"))
+                for parent in (commit.get("parents") or [])
+                if parent.get("sha")
+            ],
+            "protected": bool(branch.get("protected", False)),
+            "protection": {
+                "enabled": bool(branch.get("protected", False)),
+                "required_status_checks": protection.get("required_status_checks"),
+                "required_pull_request_reviews": protection.get(
+                    "required_pull_request_reviews"
+                ),
+                "required_signatures": protection.get("required_signatures"),
+                "enforce_admins": protection.get("enforce_admins"),
+            },
+        }
+
+    def compare_commits(self, base_sha: str, head_sha: str) -> dict:
+        """Compare immutable commit identities and return bounded topology data."""
+        payload = self._request(
+            "GET",
+            (
+                f"/repos/{self.repository_full_name}/compare/"
+                f"{quote(base_sha, safe='')}...{quote(head_sha, safe='')}"
+            ),
+        )
+        merge_base = payload.get("merge_base_commit") or {}
+        return {
+            "status": str(payload.get("status") or ""),
+            "ahead_by": max(0, int(payload.get("ahead_by") or 0)),
+            "behind_by": max(0, int(payload.get("behind_by") or 0)),
+            "total_commits": max(0, int(payload.get("total_commits") or 0)),
+            "merge_base_commit_sha": merge_base.get("sha"),
+            "merge_base_tree_sha": (merge_base.get("commit") or {})
+            .get("tree", {})
+            .get("sha"),
+        }
+
+    def commit_checks(self, commit_sha: str) -> list[dict]:
+        """Return bounded check-run state for an immutable commit."""
+        payload = self._request(
+            "GET",
+            (
+                f"/repos/{self.repository_full_name}/commits/"
+                f"{quote(commit_sha, safe='')}/check-runs?per_page=100"
+            ),
+            accept="application/vnd.github+json",
+        )
+        return [
+            {
+                "name": check.get("name"),
+                "status": check.get("status"),
+                "conclusion": check.get("conclusion"),
+                "app": (check.get("app") or {}).get("slug"),
+            }
+            for check in (payload.get("check_runs") or [])
+        ]
 
     def default_branch_sha(self) -> tuple[str, str]:
         repo = self.repo_metadata()

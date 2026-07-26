@@ -1101,6 +1101,85 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_github_repository_binding_primary
   ON github_repository_bindings(project_id)
   WHERE role = 'primary' AND status = 'active';
 
+CREATE TABLE IF NOT EXISTS github_branch_policies (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  repository_binding_id TEXT NOT NULL REFERENCES github_repository_bindings(id) ON DELETE CASCADE,
+  version INTEGER NOT NULL,
+  supersedes_policy_id TEXT REFERENCES github_branch_policies(id),
+  status TEXT NOT NULL DEFAULT 'active',
+  protected_ref_patterns JSONB NOT NULL DEFAULT '["main", "master", "release/*"]'::jsonb,
+  allowed_branch_prefixes JSONB NOT NULL DEFAULT '["ai/", "feat/", "fix/", "chore/", "docs/", "release/"]'::jsonb,
+  branch_name_pattern TEXT NOT NULL DEFAULT '^[A-Za-z0-9._/-]+$',
+  allowed_update_methods JSONB NOT NULL DEFAULT '["fast_forward", "merge_commit", "rebase"]'::jsonb,
+  allowed_merge_methods JSONB NOT NULL DEFAULT '["merge", "squash", "rebase"]'::jsonb,
+  required_checks JSONB NOT NULL DEFAULT '[]'::jsonb,
+  required_approvals INTEGER NOT NULL DEFAULT 1,
+  require_pull_request BOOLEAN NOT NULL DEFAULT true,
+  require_linear_history BOOLEAN NOT NULL DEFAULT false,
+  require_signed_commits BOOLEAN NOT NULL DEFAULT false,
+  automation_updates_enabled BOOLEAN NOT NULL DEFAULT true,
+  force_push_allowed BOOLEAN NOT NULL DEFAULT false,
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(repository_binding_id, version),
+  CHECK (version > 0),
+  CHECK (required_approvals >= 0),
+  CHECK (status IN ('active', 'superseded', 'disabled'))
+);
+CREATE INDEX IF NOT EXISTS idx_github_branch_policies_project
+  ON github_branch_policies(project_id, status, updated_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_github_branch_policy_active
+  ON github_branch_policies(repository_binding_id)
+  WHERE status = 'active';
+
+CREATE TABLE IF NOT EXISTS github_branch_snapshots (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  repository_binding_id TEXT NOT NULL REFERENCES github_repository_bindings(id) ON DELETE CASCADE,
+  branch_policy_id TEXT REFERENCES github_branch_policies(id),
+  branch_policy_version INTEGER,
+  source_ref TEXT NOT NULL,
+  target_ref TEXT NOT NULL,
+  source_commit_sha TEXT,
+  source_tree_sha TEXT,
+  target_commit_sha TEXT,
+  target_tree_sha TEXT,
+  merge_base_commit_sha TEXT,
+  merge_base_tree_sha TEXT,
+  ahead_by INTEGER NOT NULL DEFAULT 0,
+  behind_by INTEGER NOT NULL DEFAULT 0,
+  topology_classification TEXT NOT NULL,
+  classification TEXT NOT NULL,
+  refs JSONB NOT NULL DEFAULT '{}'::jsonb,
+  comparison JSONB NOT NULL DEFAULT '{}'::jsonb,
+  protection JSONB NOT NULL DEFAULT '{}'::jsonb,
+  checks JSONB NOT NULL DEFAULT '[]'::jsonb,
+  policy_evaluation JSONB NOT NULL DEFAULT '{}'::jsonb,
+  receipt_id TEXT NOT NULL REFERENCES receipts(id),
+  dedupe_key TEXT NOT NULL,
+  observed_by TEXT NOT NULL,
+  observed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(project_id, dedupe_key),
+  CHECK (ahead_by >= 0),
+  CHECK (behind_by >= 0),
+  CHECK (topology_classification IN (
+    'equal', 'tree_equivalent_rewrite', 'fast_forward', 'behind',
+    'diverged', 'missing'
+  )),
+  CHECK (classification IN (
+    'equal', 'tree_equivalent_rewrite', 'fast_forward', 'behind',
+    'diverged', 'missing', 'protected_blocked'
+  ))
+);
+CREATE INDEX IF NOT EXISTS idx_github_branch_snapshots_binding
+  ON github_branch_snapshots(
+    repository_binding_id, observed_at DESC, source_ref, target_ref
+  );
+
 CREATE TABLE IF NOT EXISTS provider_adapters (
   id TEXT PRIMARY KEY,
   provider TEXT NOT NULL,

@@ -1,9 +1,9 @@
 # BOSS Autonomous Delivery Status
 
-**Last updated**: 2026-07-26 (BOSS-246/BOSS-247 GitHub project sync)
+**Last updated**: 2026-07-26 (BOSS-246–249 GitHub project sync)
 **Repo root**: /Volumes/DataSSD1/test/boss
 **Git remote**: https://github.com/seanheiney/boss
-**Current branch**: ai/codex/boss-247-github-project-connection
+**Current branch**: ai/codex/boss-248-249-branch-policy-snapshots
 **Base branch**: origin/main
 **Product**: BOSS v0.7.0 target (Business Operating System Sentinel)
 **Mission**: Complete product to production-grade, tested, documented, pushed, Codex-coordinated, ready for real users. Grind until all discovered PRD/spec features satisfy world-class DoD or truly blocked.
@@ -15,13 +15,13 @@
 
 ## Overall Product Status
 - BOSS-246 defines full project-scoped GitHub integration as nine Plane-backed
-  delivery slices. BOSS-247 implements the first vertical slice: GitHub App/PAT
-  connection records backed by SecretRefs, repository bindings, capability and
-  permission discovery, fail-closed lifecycle controls, receipted idempotent
-  health tests, tenant scope, RBAC, typed API/client/OpenAPI contracts, and
-  product/technical traceability. Branch policy, snapshots, leases, sync,
-  conflict branches, merge orchestration, reconciliation, and Mission Control
-  remain explicitly tracked by BOSS-248–255.
+  delivery slices. BOSS-247 implements project-scoped connections/bindings.
+  BOSS-248/BOSS-249 add immutable versioned branch policies plus Receipt-backed
+  commit/tree/merge-base/protection/check snapshots with deterministic
+  equal/rewrite/fast-forward/behind/diverged/missing/protected-blocked
+  classification. Leases, sync, conflict branches, merge orchestration,
+  reconciliation, and Mission Control remain explicitly tracked by
+  BOSS-250–255.
 - BOSS-236 implements the provider-account credential lifecycle foundation
   beneath BOSS-235: truthful initial-cloud auth definitions, multi-slot
   SecretRefs, safe metadata, rotation lineage/overlap, disable/revoke gates,

@@ -3085,6 +3085,217 @@ paths:
         '200': { description: Updated repository binding }
         '404': { description: Repository binding not found in the project }
         '409': { description: Invalid lifecycle, revoked connection, or primary conflict }
+  /v1/github/branch-policies:
+    get:
+      summary: List versioned branch policies for a project or repository binding
+      parameters:
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+        - name: repository_binding_id
+          in: query
+          required: false
+          schema: { type: string }
+        - name: include_history
+          in: query
+          required: false
+          schema: { type: boolean, default: false }
+      responses:
+        '200': { description: Current policies, optionally including superseded versions }
+    post:
+      summary: Create the first active branch policy for a repository binding
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id, repository_binding_id]
+              properties:
+                project_id: { type: string }
+                repository_binding_id: { type: string }
+                protected_ref_patterns:
+                  type: array
+                  items: { type: string }
+                allowed_branch_prefixes:
+                  type: array
+                  items: { type: string }
+                branch_name_pattern: { type: string }
+                allowed_update_methods:
+                  type: array
+                  items:
+                    type: string
+                    enum: [fast_forward, merge_commit, rebase, force_push]
+                allowed_merge_methods:
+                  type: array
+                  items:
+                    type: string
+                    enum: [merge, squash, rebase]
+                required_checks:
+                  type: array
+                  items: { type: string }
+                required_approvals:
+                  type: integer
+                  minimum: 0
+                  maximum: 20
+                require_pull_request: { type: boolean, default: true }
+                require_linear_history: { type: boolean, default: false }
+                require_signed_commits: { type: boolean, default: false }
+                automation_updates_enabled: { type: boolean, default: true }
+                force_push_allowed: { type: boolean, default: false }
+                metadata: { type: object }
+                actor: { type: string, default: ceo }
+      responses:
+        '201': { description: Version 1 branch policy created and audited }
+        '403': { description: Actor lacks github_manage permission }
+        '409': { description: Invalid rule, inactive binding, or active policy already exists }
+  /v1/github/branch-policies/{policy_id}:
+    get:
+      summary: Get one tenant-scoped branch policy version
+      parameters:
+        - name: policy_id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Immutable branch policy version }
+        '404': { description: Branch policy not found in the project }
+    patch:
+      summary: Supersede a branch policy with a new immutable version
+      parameters:
+        - name: policy_id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id]
+              properties:
+                project_id: { type: string }
+                status:
+                  type: string
+                  enum: [active, disabled]
+                protected_ref_patterns:
+                  type: array
+                  items: { type: string }
+                allowed_branch_prefixes:
+                  type: array
+                  items: { type: string }
+                branch_name_pattern: { type: string }
+                allowed_update_methods:
+                  type: array
+                  items: { type: string }
+                allowed_merge_methods:
+                  type: array
+                  items: { type: string }
+                required_checks:
+                  type: array
+                  items: { type: string }
+                required_approvals: { type: integer, minimum: 0, maximum: 20 }
+                require_pull_request: { type: boolean }
+                require_linear_history: { type: boolean }
+                require_signed_commits: { type: boolean }
+                automation_updates_enabled: { type: boolean }
+                force_push_allowed: { type: boolean }
+                metadata: { type: object }
+                actor: { type: string, default: ceo }
+      responses:
+        '200': { description: New policy version created with supersession lineage }
+        '403': { description: Actor lacks github_manage permission }
+        '404': { description: Branch policy not found in the project }
+        '409': { description: Superseded policy or invalid rule }
+  /v1/github/branch-policies/{policy_id}/evaluate:
+    post:
+      summary: Deterministically evaluate a ref operation against one policy version
+      parameters:
+        - name: policy_id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id, ref, operation]
+              properties:
+                project_id: { type: string }
+                ref: { type: string }
+                operation:
+                  type: string
+                  enum: [observe, create, update, merge, delete]
+                method: { type: string }
+      responses:
+        '200': { description: Allowed, approval-required, or blocked policy result with reasons }
+        '404': { description: Branch policy not found in the project }
+        '422': { description: Invalid ref, operation, or method }
+  /v1/github/branch-snapshots:
+    get:
+      summary: List immutable GitHub branch topology snapshots
+      parameters:
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+        - name: repository_binding_id
+          in: query
+          required: false
+          schema: { type: string }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
+      responses:
+        '200': { description: Immutable snapshot evidence newest first }
+  /v1/github/branch-snapshots/capture:
+    post:
+      summary: Capture and classify remote branch topology through a receipt-backed read
+      description: Fetches commit and tree identities, merge-base topology, protection, checks, and pinned policy evaluation. Equal trees with different commit identities are classified as tree-equivalent rewrites.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                [project_id, repository_binding_id, source_ref, target_ref, dedupe_key]
+              properties:
+                project_id: { type: string }
+                repository_binding_id: { type: string }
+                source_ref: { type: string }
+                target_ref: { type: string }
+                dedupe_key: { type: string }
+                actor: { type: string, default: ceo }
+      responses:
+        '200': { description: Snapshot and Receipt identity, or redacted failed-read evidence }
+        '403': { description: Actor lacks github_manage permission }
+        '404': { description: Repository binding not found in the project }
+        '409': { description: Missing active policy, inactive connection/binding, or unsafe ref }
+  /v1/github/branch-snapshots/{snapshot_id}:
+    get:
+      summary: Get one tenant-scoped immutable branch snapshot
+      parameters:
+        - name: snapshot_id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Branch topology, policy, protection, checks, and Receipt evidence }
+        '404': { description: Snapshot not found in the project }
   /v1/provider-definitions:
     get:
       summary: List infrastructure provider connection and authentication contracts

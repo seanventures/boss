@@ -4236,6 +4236,227 @@ class GitHubConnectionTestResponse(BaseModel):
     detail: dict[str, Any] = Field(default_factory=dict)
 
 
+class GitHubBranchPolicySummary(BaseModel):
+    id: str
+    project_id: str
+    repository_binding_id: str
+    version: int
+    supersedes_policy_id: Optional[str] = None
+    status: Literal["active", "superseded", "disabled"]
+    protected_ref_patterns: list[str]
+    allowed_branch_prefixes: list[str]
+    branch_name_pattern: str
+    allowed_update_methods: list[str]
+    allowed_merge_methods: list[str]
+    required_checks: list[str]
+    required_approvals: int
+    require_pull_request: bool
+    require_linear_history: bool
+    require_signed_commits: bool
+    automation_updates_enabled: bool
+    force_push_allowed: bool
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    created_by: str
+    created_at: str
+    updated_at: str
+
+
+class GitHubBranchPolicyListResponse(BaseModel):
+    project_id: str
+    items: list[GitHubBranchPolicySummary]
+
+
+class GitHubBranchPolicyCreateRequest(BaseModel):
+    project_id: str
+    repository_binding_id: str
+    protected_ref_patterns: list[str] = Field(
+        default_factory=lambda: ["main", "master", "release/*"]
+    )
+    allowed_branch_prefixes: list[str] = Field(
+        default_factory=lambda: [
+            "ai/",
+            "feat/",
+            "fix/",
+            "chore/",
+            "docs/",
+            "release/",
+        ]
+    )
+    branch_name_pattern: str = r"^[A-Za-z0-9._/-]+$"
+    allowed_update_methods: list[str] = Field(
+        default_factory=lambda: ["fast_forward", "merge_commit", "rebase"]
+    )
+    allowed_merge_methods: list[str] = Field(
+        default_factory=lambda: ["merge", "squash", "rebase"]
+    )
+    required_checks: list[str] = Field(default_factory=list)
+    required_approvals: int = 1
+    require_pull_request: bool = True
+    require_linear_history: bool = False
+    require_signed_commits: bool = False
+    automation_updates_enabled: bool = True
+    force_push_allowed: bool = False
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    actor: str = "ceo"
+
+    @model_validator(mode="after")
+    def validate_github_branch_policy(self) -> "GitHubBranchPolicyCreateRequest":
+        self.project_id = _require_text(self.project_id, "project_id")
+        self.repository_binding_id = _require_text(
+            self.repository_binding_id, "repository_binding_id"
+        )
+        self.branch_name_pattern = _require_text(
+            self.branch_name_pattern, "branch_name_pattern"
+        )
+        self.actor = _require_text(self.actor, "actor")
+        return self
+
+
+class GitHubBranchPolicyUpdateRequest(BaseModel):
+    project_id: str
+    status: Optional[Literal["active", "disabled"]] = None
+    protected_ref_patterns: Optional[list[str]] = None
+    allowed_branch_prefixes: Optional[list[str]] = None
+    branch_name_pattern: Optional[str] = None
+    allowed_update_methods: Optional[list[str]] = None
+    allowed_merge_methods: Optional[list[str]] = None
+    required_checks: Optional[list[str]] = None
+    required_approvals: Optional[int] = None
+    require_pull_request: Optional[bool] = None
+    require_linear_history: Optional[bool] = None
+    require_signed_commits: Optional[bool] = None
+    automation_updates_enabled: Optional[bool] = None
+    force_push_allowed: Optional[bool] = None
+    metadata: Optional[dict[str, Any]] = None
+    actor: str = "ceo"
+
+    @model_validator(mode="after")
+    def validate_github_branch_policy_update(
+        self,
+    ) -> "GitHubBranchPolicyUpdateRequest":
+        self.project_id = _require_text(self.project_id, "project_id")
+        if self.branch_name_pattern is not None:
+            self.branch_name_pattern = _require_text(
+                self.branch_name_pattern, "branch_name_pattern"
+            )
+        self.actor = _require_text(self.actor, "actor")
+        return self
+
+
+class GitHubBranchPolicyEvaluateRequest(BaseModel):
+    project_id: str
+    ref: str
+    operation: Literal["observe", "create", "update", "merge", "delete"]
+    method: Optional[str] = None
+
+    @model_validator(mode="after")
+    def validate_github_branch_policy_evaluate(
+        self,
+    ) -> "GitHubBranchPolicyEvaluateRequest":
+        self.project_id = _require_text(self.project_id, "project_id")
+        self.ref = _require_text(self.ref, "ref")
+        if self.method is not None:
+            self.method = _require_text(self.method, "method")
+        return self
+
+
+class GitHubBranchPolicyEvaluationResponse(BaseModel):
+    policy_id: str
+    policy_version: int
+    status: Literal["allowed", "approval_required", "blocked"]
+    ref: str
+    operation: str
+    method: Optional[str] = None
+    protected: bool
+    reasons: list[str]
+    required_checks: list[str]
+    required_approvals: int
+    require_pull_request: bool
+    require_linear_history: bool
+    require_signed_commits: bool
+
+
+class GitHubBranchSnapshotSummary(BaseModel):
+    id: str
+    project_id: str
+    repository_binding_id: str
+    branch_policy_id: Optional[str] = None
+    branch_policy_version: Optional[int] = None
+    source_ref: str
+    target_ref: str
+    source_commit_sha: Optional[str] = None
+    source_tree_sha: Optional[str] = None
+    target_commit_sha: Optional[str] = None
+    target_tree_sha: Optional[str] = None
+    merge_base_commit_sha: Optional[str] = None
+    merge_base_tree_sha: Optional[str] = None
+    ahead_by: int
+    behind_by: int
+    topology_classification: Literal[
+        "equal",
+        "tree_equivalent_rewrite",
+        "fast_forward",
+        "behind",
+        "diverged",
+        "missing",
+    ]
+    classification: Literal[
+        "equal",
+        "tree_equivalent_rewrite",
+        "fast_forward",
+        "behind",
+        "diverged",
+        "missing",
+        "protected_blocked",
+    ]
+    refs: dict[str, Any] = Field(default_factory=dict)
+    comparison: dict[str, Any] = Field(default_factory=dict)
+    protection: dict[str, Any] = Field(default_factory=dict)
+    checks: list[dict[str, Any]] = Field(default_factory=list)
+    policy_evaluation: dict[str, Any] = Field(default_factory=dict)
+    receipt_id: str
+    dedupe_key: str
+    observed_by: str
+    observed_at: str
+    created_at: str
+
+
+class GitHubBranchSnapshotListResponse(BaseModel):
+    project_id: str
+    items: list[GitHubBranchSnapshotSummary]
+
+
+class GitHubBranchSnapshotCaptureRequest(BaseModel):
+    project_id: str
+    repository_binding_id: str
+    source_ref: str
+    target_ref: str
+    dedupe_key: str
+    actor: str = "ceo"
+
+    @model_validator(mode="after")
+    def validate_github_branch_snapshot_capture(
+        self,
+    ) -> "GitHubBranchSnapshotCaptureRequest":
+        self.project_id = _require_text(self.project_id, "project_id")
+        self.repository_binding_id = _require_text(
+            self.repository_binding_id, "repository_binding_id"
+        )
+        self.source_ref = _require_text(self.source_ref, "source_ref")
+        self.target_ref = _require_text(self.target_ref, "target_ref")
+        self.dedupe_key = _require_text(self.dedupe_key, "dedupe_key")
+        self.actor = _require_text(self.actor, "actor")
+        return self
+
+
+class GitHubBranchSnapshotCaptureResponse(BaseModel):
+    status: Literal["succeeded", "failed"]
+    duplicate: bool
+    receipt_id: str
+    snapshot: Optional[GitHubBranchSnapshotSummary] = None
+    error: Optional[dict[str, Any]] = None
+
+
 class ProviderAccountSummary(BaseModel):
     id: str
     project_id: str

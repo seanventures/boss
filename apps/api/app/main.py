@@ -225,6 +225,16 @@ from .schemas import (
     FileChange,
     InboundWebhookResponse,
     GitHubCommunityJobExecuteRequest,
+    GitHubBranchPolicyCreateRequest,
+    GitHubBranchPolicyEvaluateRequest,
+    GitHubBranchPolicyEvaluationResponse,
+    GitHubBranchPolicyListResponse,
+    GitHubBranchPolicySummary,
+    GitHubBranchPolicyUpdateRequest,
+    GitHubBranchSnapshotCaptureRequest,
+    GitHubBranchSnapshotCaptureResponse,
+    GitHubBranchSnapshotListResponse,
+    GitHubBranchSnapshotSummary,
     GitHubConnectionCreateRequest,
     GitHubConnectionLifecycleRequest,
     GitHubConnectionListResponse,
@@ -500,6 +510,11 @@ from .services.webhooks import (
 )
 from .services.plane_webhooks import PlaneWebhookService
 from .services.github_community_service import GitHubCommunityService
+from .services.github_branches import (
+    GitHubBranchPolicyNotFoundError,
+    GitHubBranchService,
+    GitHubBranchSnapshotNotFoundError,
+)
 from .services.github_connections import (
     GitHubConnectionNotFoundError,
     GitHubConnectionService,
@@ -620,6 +635,10 @@ inbound_webhooks = InboundWebhookService(settings)
 plane_webhooks = PlaneWebhookService(settings)
 github_community = GitHubCommunityService(settings)
 github_connections = GitHubConnectionService(settings)
+github_branches = GitHubBranchService(
+    settings,
+    github_connections=github_connections,
+)
 software_factory = SoftwareFactoryService(settings, ports=engine_ports)
 decisions = DecisionService(settings)
 specpack = SpecPackService(settings)
@@ -8796,6 +8815,232 @@ def test_github_connection(
             ),
             detail=result["detail"],
         )
+
+
+@app.get(
+    "/v1/github/branch-policies",
+    response_model=GitHubBranchPolicyListResponse,
+)
+def list_github_branch_policies(
+    project_id: str,
+    repository_binding_id: Optional[str] = None,
+    include_history: bool = False,
+) -> GitHubBranchPolicyListResponse:
+    with begin(engine) as connection:
+        return GitHubBranchPolicyListResponse(
+            project_id=project_id,
+            items=[
+                GitHubBranchPolicySummary(**item)
+                for item in github_branches.list_policies(
+                    connection,
+                    project_id,
+                    repository_binding_id=repository_binding_id,
+                    include_history=include_history,
+                )
+            ],
+        )
+
+
+@app.post(
+    "/v1/github/branch-policies",
+    response_model=GitHubBranchPolicySummary,
+    status_code=201,
+)
+def create_github_branch_policy(
+    payload: GitHubBranchPolicyCreateRequest,
+) -> GitHubBranchPolicySummary:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection,
+            payload.project_id,
+            payload.actor,
+            "github_manage",
+        )
+        try:
+            item = github_branches.create_policy(
+                connection,
+                project_id=payload.project_id,
+                repository_binding_id=payload.repository_binding_id,
+                protected_ref_patterns=payload.protected_ref_patterns,
+                allowed_branch_prefixes=payload.allowed_branch_prefixes,
+                branch_name_pattern=payload.branch_name_pattern,
+                allowed_update_methods=payload.allowed_update_methods,
+                allowed_merge_methods=payload.allowed_merge_methods,
+                required_checks=payload.required_checks,
+                required_approvals=payload.required_approvals,
+                require_pull_request=payload.require_pull_request,
+                require_linear_history=payload.require_linear_history,
+                require_signed_commits=payload.require_signed_commits,
+                automation_updates_enabled=payload.automation_updates_enabled,
+                force_push_allowed=payload.force_push_allowed,
+                metadata=payload.metadata,
+                actor=payload.actor,
+            )
+        except GitHubRepositoryBindingNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except (GitHubConnectionStateError, ValueError) as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        return GitHubBranchPolicySummary(**item)
+
+
+@app.get(
+    "/v1/github/branch-policies/{policy_id}",
+    response_model=GitHubBranchPolicySummary,
+)
+def get_github_branch_policy(
+    policy_id: str,
+    project_id: str,
+) -> GitHubBranchPolicySummary:
+    with begin(engine) as connection:
+        try:
+            item = github_branches.get_policy(connection, project_id, policy_id)
+        except GitHubBranchPolicyNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        return GitHubBranchPolicySummary(**item)
+
+
+@app.patch(
+    "/v1/github/branch-policies/{policy_id}",
+    response_model=GitHubBranchPolicySummary,
+)
+def revise_github_branch_policy(
+    policy_id: str,
+    payload: GitHubBranchPolicyUpdateRequest,
+) -> GitHubBranchPolicySummary:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection,
+            payload.project_id,
+            payload.actor,
+            "github_manage",
+        )
+        try:
+            item = github_branches.revise_policy(
+                connection,
+                project_id=payload.project_id,
+                policy_id=policy_id,
+                updates=payload.model_dump(
+                    exclude={"project_id", "actor"},
+                    exclude_none=True,
+                ),
+                actor=payload.actor,
+            )
+        except GitHubBranchPolicyNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except ValueError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        return GitHubBranchPolicySummary(**item)
+
+
+@app.post(
+    "/v1/github/branch-policies/{policy_id}/evaluate",
+    response_model=GitHubBranchPolicyEvaluationResponse,
+)
+def evaluate_github_branch_policy(
+    policy_id: str,
+    payload: GitHubBranchPolicyEvaluateRequest,
+) -> GitHubBranchPolicyEvaluationResponse:
+    with begin(engine) as connection:
+        try:
+            policy = github_branches.get_policy(
+                connection, payload.project_id, policy_id
+            )
+            result = github_branches.evaluate_policy(
+                policy,
+                ref=payload.ref,
+                operation=payload.operation,
+                method=payload.method,
+            )
+        except GitHubBranchPolicyNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        return GitHubBranchPolicyEvaluationResponse(**result)
+
+
+@app.get(
+    "/v1/github/branch-snapshots",
+    response_model=GitHubBranchSnapshotListResponse,
+)
+def list_github_branch_snapshots(
+    project_id: str,
+    repository_binding_id: Optional[str] = None,
+    limit: int = Query(default=50, ge=1, le=200),
+) -> GitHubBranchSnapshotListResponse:
+    with begin(engine) as connection:
+        return GitHubBranchSnapshotListResponse(
+            project_id=project_id,
+            items=[
+                GitHubBranchSnapshotSummary(**item)
+                for item in github_branches.list_snapshots(
+                    connection,
+                    project_id,
+                    repository_binding_id=repository_binding_id,
+                    limit=limit,
+                )
+            ],
+        )
+
+
+@app.post(
+    "/v1/github/branch-snapshots/capture",
+    response_model=GitHubBranchSnapshotCaptureResponse,
+)
+def capture_github_branch_snapshot(
+    payload: GitHubBranchSnapshotCaptureRequest,
+) -> GitHubBranchSnapshotCaptureResponse:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection,
+            payload.project_id,
+            payload.actor,
+            "github_manage",
+        )
+        try:
+            result = github_branches.capture_snapshot(
+                connection,
+                project_id=payload.project_id,
+                repository_binding_id=payload.repository_binding_id,
+                source_ref=payload.source_ref,
+                target_ref=payload.target_ref,
+                dedupe_key=payload.dedupe_key,
+                actor=payload.actor,
+            )
+        except GitHubRepositoryBindingNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except GitHubBranchPolicyNotFoundError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        except (GitHubConnectionStateError, ValueError) as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        return GitHubBranchSnapshotCaptureResponse(
+            status=result["status"],
+            duplicate=result["duplicate"],
+            receipt_id=result["receipt_id"],
+            snapshot=(
+                GitHubBranchSnapshotSummary(**result["snapshot"])
+                if result["snapshot"]
+                else None
+            ),
+            error=result["error"],
+        )
+
+
+@app.get(
+    "/v1/github/branch-snapshots/{snapshot_id}",
+    response_model=GitHubBranchSnapshotSummary,
+)
+def get_github_branch_snapshot(
+    snapshot_id: str,
+    project_id: str,
+) -> GitHubBranchSnapshotSummary:
+    with begin(engine) as connection:
+        try:
+            item = github_branches.get_snapshot(
+                connection, project_id, snapshot_id
+            )
+        except GitHubBranchSnapshotNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        return GitHubBranchSnapshotSummary(**item)
 
 
 @app.get("/v1/provider-definitions", response_model=ProviderDefinitionListResponse)

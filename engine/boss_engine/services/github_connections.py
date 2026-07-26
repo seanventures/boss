@@ -707,6 +707,35 @@ class GitHubConnectionService:
                 "detail": {"status": "failed", "message": safe_error["message"]},
             }
 
+    def adapter_for_binding(
+        self,
+        connection: Connection,
+        *,
+        project_id: str,
+        binding_id: str,
+    ) -> tuple[GitHubAdapter, dict[str, Any], dict[str, Any]]:
+        """Resolve a live project binding to an execution-scoped adapter."""
+        binding = self.get_repository_binding(connection, project_id, binding_id)
+        github_connection = self.get_connection(
+            connection, project_id, binding["connection_id"]
+        )
+        if github_connection["status"] != "active":
+            raise GitHubConnectionStateError(
+                "GitHub connection must pass its connection test before branch operations."
+            )
+        if binding["status"] != "active":
+            raise GitHubConnectionStateError("GitHub repository binding is disabled.")
+        return (
+            self._make_adapter(
+                connection,
+                project_id=project_id,
+                github_connection=github_connection,
+                binding=binding,
+            ),
+            github_connection,
+            binding,
+        )
+
     def _make_adapter(
         self,
         connection: Connection,

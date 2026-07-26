@@ -126,8 +126,20 @@ Acceptance criteria:
   cannot be re-enabled and its bindings remain disabled.
 - Given another project ID, when a connection or repository binding is read or
   mutated, then BOSS does not expose or change the original project's record.
+- Given an active repository binding, when a branch policy is created or
+  revised, then BOSS stores protected refs, allowed prefixes/name rules,
+  update/merge methods, checks, approvals, and history/signing requirements as
+  immutable versions with supersession and actor evidence.
+- Given an unsafe branch name, forbidden prefix, protected delete, disallowed
+  update/merge method, or force-push against a protected ref, when policy is
+  evaluated, then BOSS returns a deterministic blocked result and reasons
+  before any provider write.
 - Given a mutable branch operation, when BOSS begins work, then it owns a
   current fenced TTL lease and fresh remote `BranchSnapshot` before deciding.
+- Given a branch snapshot capture, when BOSS reads GitHub, then it records a
+  deduplicated Receipt and immutable source/target commit and tree IDs,
+  parents, merge base, ahead/behind, protection, checks, and pinned policy
+  evaluation; replay does not repeat the provider read.
 - Given different commit identities with equal tree content, when topology is
   classified, then BOSS records a tree-equivalent rewrite rather than a
   content conflict.

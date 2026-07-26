@@ -90,6 +90,12 @@ Webhook deliveries are the low-latency signal; a polling reconciler is the
 completeness backstop. Both converge through the same dedupe keys, leased jobs,
 snapshots, retry/deadletter behavior, and audit events.
 
+BOSS-248/BOSS-249 implement the policy and observation portion of this
+pipeline. `github_branch_policies` preserves immutable supersession lineage,
+and `github_branch_snapshots` preserves immutable Receipt-linked remote
+identity, topology, protection, check, and pinned-policy evidence. No branch
+write is part of these slices; leases and synchronization begin with BOSS-250.
+
 ## Resource Plane Kernel
 
 The Resource Plane Kernel is core infrastructure, not a plugin. Provider adapters are plugins.
