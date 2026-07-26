@@ -186,3 +186,16 @@ Commit `1eb1d36` is published in stacked draft PR
 https://github.com/seanheiney/boss/pull/28 (base: PR #27 branch). Plane evidence
 is attached; tickets stay In Progress until merge. The inherited API matrix
 baseline is tracked separately as BOSS-119.
+
+## 2026-07-26 — v0.8.0 integration release
+
+BOSS-215–234 are implementation-complete on `ai/codex/release-v0.8.0`.
+Paramg's OSS engine split (`52ff073`) and the non-overlapping fixes from PRs
+#68/#70 are integrated with relocation, packaging, runtime, security, and
+release regressions closed. Current validation is green across the affected
+backend/worker/engine suite (348 passed, 1 skipped), focused regression suite
+(94 passed), web suite (119 passed), seed/smoke, lint/typecheck, strict docs,
+production web build, isolated wheel/container imports, API/worker containers,
+Kubernetes/Helm, and infra profiles. External hosted/provider rollout remains
+fail-closed by design. Tickets stay In Progress until PR merge and v0.8.0
+publication.

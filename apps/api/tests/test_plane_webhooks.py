@@ -182,10 +182,12 @@ def test_ingest_bug_frames_instructions_and_passes_risk(monkeypatch):
     assert kw["risk_tier"] == 3                            # urgent -> 3
 
 
-def test_route_defers_design_only_to_phase_3():
+def test_route_sends_design_to_governed_meeting():
     payload = _issue_payload(issue={"labels": [{"name": "boss:design"}]})
     d = _svc().route(_svc().parse(payload))
-    assert d["decision"] == "ignore" and "Phase 3" in d["reason"]
+    assert d["decision"] == "accept"
+    assert d["mode"] == "meeting"
+    assert d["label"] == "boss:design"
 
 
 # --- ingest (fake connection, start_code_task monkeypatched) -----------------

@@ -815,7 +815,13 @@ def run_worker_cycle(client: ControlPlaneClient, settings: WorkerSettings) -> bo
     # thread renews every lease_ttl/2 (its OWN client — the main one is busy in
     # execute_job) until the job finishes.
     hb_stop = threading.Event()
-    hb_client = ControlPlaneClient(settings.control_plane_url, api_key=settings.api_key)
+    control_plane_url = getattr(settings, "control_plane_url", None)
+    owns_hb_client = bool(control_plane_url)
+    hb_client = (
+        ControlPlaneClient(control_plane_url, api_key=getattr(settings, "api_key", ""))
+        if owns_hb_client
+        else client
+    )
 
     def _renew_lease() -> None:
         interval = max(15, settings.lease_ttl_seconds // 2)
@@ -864,10 +870,11 @@ def run_worker_cycle(client: ControlPlaneClient, settings: WorkerSettings) -> bo
     finally:
         hb_stop.set()
         hb_thread.join(timeout=3)
-        try:
-            hb_client.close()
-        except Exception:  # noqa: BLE001
-            pass
+        if owns_hb_client:
+            try:
+                hb_client.close()
+            except Exception:  # noqa: BLE001
+                pass
 
     completion = client.complete(
         settings.worker_id,

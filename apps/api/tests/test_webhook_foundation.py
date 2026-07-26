@@ -553,7 +553,9 @@ def test_unmapped_repository_is_accepted_but_not_dispatched(
 
 
 def test_webhook_service_has_no_budget_entitlement_or_commercial_imports():
-    module_path = Path(__file__).parents[1] / "app" / "services" / "webhooks.py"
+    from apps.api.app.services import webhooks
+
+    module_path = Path(webhooks.__file__)
     text_source = module_path.read_text(encoding="utf-8")
     for forbidden in ("budget", "entitlements", "commercial"):
         assert f"import {forbidden}" not in text_source

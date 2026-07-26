@@ -2,7 +2,7 @@
 
 BOSS, the Business Operating System Sentinel, is a financially controlled autonomous company operating system. This repository is the real control plane and dogfood environment for BOSS itself.
 
-Current release: `v0.7.0`
+Current release: `v0.8.0`
 
 ## Operating invariants
 
@@ -56,7 +56,7 @@ If a required credential is missing, the API must fail closed and create visible
 
 - Node `20.x`
 - `pnpm` `9.x`
-- Python `3.9+`
+- Python `3.11+`
 - Docker with Compose
 - GitHub credentials available through `BOSS_GITHUB_TOKEN`, `GITHUB_TOKEN`, or the macOS keychain
 - `OPENAI_API_KEY`

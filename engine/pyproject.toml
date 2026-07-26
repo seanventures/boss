@@ -1,0 +1,44 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "boss-engine"
+version = "0.8.0"
+description = "The OSS-shippable core of the BOSS autonomous software factory: the workflow engine, its tool layer, the engine-native agent, and an MCP server — with no dependency on the HTTP API or web console."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { file = "LICENSE" }
+authors = [{ name = "BOSS" }]
+
+# Core engine dependencies. The engine package owns the complete service graph,
+# while the HTTP API and web console remain outside this distribution.
+dependencies = [
+    "boto3>=1.43,<2",
+    "cryptography>=48,<49",
+    "httpx>=0.28,<1",
+    "markdown>=3.9,<4",
+    "openai>=1.93,<2",
+    "psycopg[binary]>=3.2,<4",
+    "pydantic>=2.7,<3",
+    "pydantic-settings>=2.10,<3",
+    "PyJWT[crypto]>=2.10,<3",
+    "PyYAML>=6,<7",
+    "reportlab>=4.5,<5",
+    "SQLAlchemy>=2.0,<3",
+    "websockets>=15,<16",
+]
+
+[project.optional-dependencies]
+# Only needed for the OPTIONAL HTTP transport of the MCP server
+# (`serve-mcp --http`). stdio MCP + the engine-native agent do not need these.
+mcp-http = ["fastapi>=0.110", "uvicorn>=0.29"]
+visual = ["playwright>=1.60,<2"]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+boss-engine = "boss_engine.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["boss_engine*"]

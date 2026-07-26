@@ -134,7 +134,13 @@ def test_review_verify_fn_materializes_files_and_parses_verdict(monkeypatch):
             # the reviewer must receive the implementation on disk, read-only
             seen["read_only"] = read_only
             seen["solution"] = (Path(root) / "solution.py").read_text()
-            return {"summary": "Looks wrong.\nVERDICT: REFUTED", "cost_usd_micros": 0}
+            return {
+                "summary": (
+                    "solution.py returns 1 for every input, violating criterion c "
+                    "and producing an incorrect result.\nVERDICT: REFUTED"
+                ),
+                "cost_usd_micros": 0,
+            }
 
     monkeypatch.setattr(vme, "make_code_agent", lambda settings, engine=None: _FakeAgent(),
                         raising=False)

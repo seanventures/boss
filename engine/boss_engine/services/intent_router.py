@@ -273,11 +273,16 @@ class IntentRouter:
                                task_id: Optional[str]) -> tuple[Optional[str], Optional[str]]:
         """If this task already has a built app (a completed code task with a PR/branch), return that
         branch + its lineage root — so a chat enhancement MODIFIES the existing code instead of
-        building fresh on `main`. Simple: existing task -> its PR/branch -> keep building on top."""
+        building fresh on `main`. Simple: existing task -> its PR/branch -> keep building on top.
+
+        First builds often store only `{source, actor}` in finalize_ctx (no root_run_id). The worker
+        still opens `boss/code/{run_id}` in that case — so fall back to the completed run's id,
+        matching governed_code_task_service's `root_run_id or run_id` branch naming.
+        """
         if not task_id:
             return None, None
         row = connection.execute(
-            text("SELECT finalize_ctx FROM code_task_runs "
+            text("SELECT id, finalize_ctx FROM code_task_runs "
                  "WHERE project_id = :p AND task_id = :t AND status = 'completed' "
                  "AND pull_request_url IS NOT NULL ORDER BY created_at DESC LIMIT 1"),
             {"p": project_id, "t": task_id},
@@ -290,8 +295,8 @@ class IntentRouter:
                 fc = json.loads(fc)
             except (ValueError, TypeError):
                 fc = {}
-        root = (fc or {}).get("root_run_id")
-        return (f"boss/code/{root}", root) if root else (None, None)
+        root = (fc or {}).get("root_run_id") or row["id"]
+        return (f"boss/code/{root}", root)
 
     def _dispatch(
         self,
@@ -353,8 +358,8 @@ class IntentRouter:
                 "href": f"/?area=code_tasks&run={run_id}",
             }
             return RouterTurn(
-                reply=(f"On it — extending the existing app for this task (building on top of its "
-                       f"current branch). I'll open a PR with just the change."
+                reply=("On it — extending the existing app for this task (building on top of its "
+                       "current branch). I'll open a PR with just the change."
                        if extend else f"Started the governed code task “{title}”."),
                 actions=[action],
                 tool_calls=[{"name": name, "arguments": arguments}],
@@ -568,7 +573,12 @@ class IntentRouter:
             )
         try:
             self._require(connection, project_id, actor, "task_create")
-            dispatched = self.intake.dispatch_plan(connection, confirm_plan_id, actor)
+            dispatched = self.intake.dispatch_plan(
+                connection,
+                confirm_plan_id,
+                project_id=project_id,
+                actor=actor,
+            )
         except (ProjectMemberNotFoundError, ProjectMemberPermissionError) as error:
             return RouterTurn(reply=f"I can’t dispatch that plan: {error}")
         except ValueError as error:
