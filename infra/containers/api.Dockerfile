@@ -2,7 +2,7 @@ FROM python:3.11-slim AS runtime
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PYTHONPATH=/app
+    PYTHONPATH=/app:/app/engine
 
 WORKDIR /app
 
@@ -42,6 +42,11 @@ COPY api ./api
 COPY db ./db
 COPY packages ./packages
 COPY scripts ./scripts
+# The OSS engine package (boss_engine). Post-split the API's config/db/services
+# are compatibility shims that import boss_engine, so it must be on PYTHONPATH
+# (set to /app:/app/engine above). Its deps are a subset of the api's — no extra
+# pip install needed.
+COPY engine ./engine
 
 RUN mkdir -p /var/lib/boss/artifacts \
     && chown -R boss:boss /app /var/lib/boss
