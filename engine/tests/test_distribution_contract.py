@@ -55,3 +55,16 @@ def test_container_boundaries_include_the_engine_without_api_source() -> None:
         content = (ROOT / relative).read_text(encoding="utf-8")
         assert "COPY engine ./engine" in content
         assert "/app/engine" in content
+
+
+def test_local_entrypoints_include_the_engine_package() -> None:
+    root_package = _json(ROOT / "package.json")
+    scripts = root_package["scripts"]
+    assert isinstance(scripts, dict)
+    assert "PYTHONPATH=.:engine" in scripts["dev"]
+    assert "PYTHONPATH=.:engine" in scripts["test"]
+
+    makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
+    for target in ("seed:", "smoke:", "real-smoke-plan:", "worker-drain-once:"):
+        section = makefile.split(target, maxsplit=1)[1].split("\n\n", maxsplit=1)[0]
+        assert "PYTHONPATH=.:engine" in section
