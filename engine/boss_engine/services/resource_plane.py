@@ -25,6 +25,7 @@ from .core import (
 from .digitalocean_adapter import DigitalOceanAdapter
 from .ssh_host_adapter import SSHHostAdapter
 from .receipts import ReceiptService
+from .secret_refs import SecretRefNotFoundError, SecretRefService
 
 
 class ProviderAccountNotFoundError(RuntimeError):
@@ -68,6 +69,18 @@ SUPPORTED_PROVIDERS = {
             "digitalocean.app.deploy",
             "digitalocean.billing.sync",
         ],
+    },
+    "azure": {
+        "credential_ref": "env:BOSS_AZURE_CLIENT_SECRET",
+        "capabilities": [],
+    },
+    "gcp": {
+        "credential_ref": "env:BOSS_GCP_SERVICE_ACCOUNT",
+        "capabilities": [],
+    },
+    "ovhcloud": {
+        "credential_ref": "env:BOSS_OVH_APPLICATION_SECRET",
+        "capabilities": [],
     },
     "cloudflare": {
         "credential_ref": "env:BOSS_CLOUDFLARE_API_TOKEN",
@@ -114,6 +127,175 @@ SUPPORTED_PROVIDERS = {
             "ssh_host.workload.teardown",
             "ssh_host.job.run",
         ],
+    },
+}
+
+PROVIDER_CONNECTION_PROFILES: dict[str, dict[str, Any]] = {
+    "aws": {
+        "display_name": "Amazon Web Services",
+        "category": "infrastructure",
+        "adapter_status": "available",
+        "default_auth_method": "access_key",
+        "auth_methods": {
+            "access_key": {
+                "runtime_status": "available",
+                "credential_slots": [
+                    {
+                        "key": "access_key_id",
+                        "secret_kind": "access_key",
+                        "required": True,
+                        "default_ref": "env:BOSS_AWS_ACCESS_KEY_ID",
+                    },
+                    {
+                        "key": "secret_access_key",
+                        "secret_kind": "client_secret",
+                        "required": True,
+                        "primary": True,
+                        "default_ref": "env:BOSS_AWS_SECRET_ACCESS_KEY",
+                    },
+                    {
+                        "key": "session_token",
+                        "secret_kind": "session",
+                        "required": False,
+                        "default_ref": None,
+                    },
+                ],
+            },
+            "assume_role": {
+                "runtime_status": "available",
+                "credential_slots": [
+                    {
+                        "key": "access_key_id",
+                        "secret_kind": "access_key",
+                        "required": True,
+                        "default_ref": "env:BOSS_AWS_ACCESS_KEY_ID",
+                    },
+                    {
+                        "key": "secret_access_key",
+                        "secret_kind": "client_secret",
+                        "required": True,
+                        "primary": True,
+                        "default_ref": "env:BOSS_AWS_SECRET_ACCESS_KEY",
+                    },
+                ],
+            },
+            "workload_identity": {
+                "runtime_status": "planned",
+                "credential_slots": [],
+            },
+        },
+    },
+    "azure": {
+        "display_name": "Microsoft Azure",
+        "category": "infrastructure",
+        "adapter_status": "planned",
+        "default_auth_method": "service_principal",
+        "auth_methods": {
+            "service_principal": {
+                "runtime_status": "planned",
+                "credential_slots": [
+                    {
+                        "key": "tenant_id",
+                        "secret_kind": "access_key",
+                        "required": True,
+                        "default_ref": "env:BOSS_AZURE_TENANT_ID",
+                    },
+                    {
+                        "key": "client_id",
+                        "secret_kind": "access_key",
+                        "required": True,
+                        "default_ref": "env:BOSS_AZURE_CLIENT_ID",
+                    },
+                    {
+                        "key": "client_secret",
+                        "secret_kind": "client_secret",
+                        "required": True,
+                        "primary": True,
+                        "default_ref": "env:BOSS_AZURE_CLIENT_SECRET",
+                    },
+                ],
+            },
+            "workload_identity": {
+                "runtime_status": "planned",
+                "credential_slots": [],
+            },
+        },
+    },
+    "gcp": {
+        "display_name": "Google Cloud",
+        "category": "infrastructure",
+        "adapter_status": "planned",
+        "default_auth_method": "service_account",
+        "auth_methods": {
+            "service_account": {
+                "runtime_status": "planned",
+                "credential_slots": [
+                    {
+                        "key": "service_account",
+                        "secret_kind": "service_account",
+                        "required": True,
+                        "primary": True,
+                        "default_ref": "env:BOSS_GCP_SERVICE_ACCOUNT",
+                    }
+                ],
+            },
+            "workload_identity": {
+                "runtime_status": "planned",
+                "credential_slots": [],
+            },
+        },
+    },
+    "digitalocean": {
+        "display_name": "DigitalOcean",
+        "category": "infrastructure",
+        "adapter_status": "available",
+        "default_auth_method": "api_token",
+        "auth_methods": {
+            "api_token": {
+                "runtime_status": "available",
+                "credential_slots": [
+                    {
+                        "key": "token",
+                        "secret_kind": "api_token",
+                        "required": True,
+                        "primary": True,
+                        "default_ref": "env:BOSS_DIGITALOCEAN_TOKEN",
+                    }
+                ],
+            }
+        },
+    },
+    "ovhcloud": {
+        "display_name": "OVHcloud",
+        "category": "infrastructure",
+        "adapter_status": "planned",
+        "default_auth_method": "application_consumer_key",
+        "auth_methods": {
+            "application_consumer_key": {
+                "runtime_status": "planned",
+                "credential_slots": [
+                    {
+                        "key": "application_key",
+                        "secret_kind": "access_key",
+                        "required": True,
+                        "default_ref": "env:BOSS_OVH_APPLICATION_KEY",
+                    },
+                    {
+                        "key": "application_secret",
+                        "secret_kind": "client_secret",
+                        "required": True,
+                        "primary": True,
+                        "default_ref": "env:BOSS_OVH_APPLICATION_SECRET",
+                    },
+                    {
+                        "key": "consumer_key",
+                        "secret_kind": "consumer_key",
+                        "required": True,
+                        "default_ref": "env:BOSS_OVH_CONSUMER_KEY",
+                    },
+                ],
+            }
+        },
     },
 }
 
@@ -181,6 +363,42 @@ class ResourcePlaneService:
         self.receipts = ReceiptService()
         self.digitalocean = DigitalOceanAdapter(settings)
         self.ssh_host = SSHHostAdapter(settings)
+        self.secret_refs = SecretRefService()
+
+    def list_provider_definitions(self) -> list[dict[str, Any]]:
+        definitions: list[dict[str, Any]] = []
+        for provider, profile in sorted(PROVIDER_CONNECTION_PROFILES.items()):
+            auth_methods = []
+            for key, method in profile["auth_methods"].items():
+                auth_methods.append(
+                    {
+                        "key": key,
+                        "runtime_status": method["runtime_status"],
+                        "credential_slots": [
+                            {
+                                "key": slot["key"],
+                                "secret_kind": slot["secret_kind"],
+                                "required": bool(slot["required"]),
+                                "default_ref": slot.get("default_ref"),
+                            }
+                            for slot in method["credential_slots"]
+                        ],
+                    }
+                )
+            definitions.append(
+                {
+                    "provider": provider,
+                    "display_name": profile["display_name"],
+                    "category": profile["category"],
+                    "adapter_status": profile["adapter_status"],
+                    "default_auth_method": profile["default_auth_method"],
+                    "auth_methods": auth_methods,
+                    "capabilities": list(
+                        SUPPORTED_PROVIDERS.get(provider, {}).get("capabilities") or []
+                    ),
+                }
+            )
+        return definitions
 
     def list_provider_accounts(
         self, connection: Connection, project_id: str
@@ -188,8 +406,11 @@ class ResourcePlaneService:
         rows = connection.execute(
             text(
                 """
-                SELECT id, project_id, provider, account_label, credential_ref, scopes,
-                       status, read_only, deploy_capable, billing_readable,
+                SELECT id, project_id, provider, account_label, auth_method,
+                       credential_ref, credential_refs, connection_metadata, scopes,
+                       status, owner_actor, credential_version, credential_rotated_at,
+                       disabled_at, disabled_by, revoked_at, revoked_by,
+                       read_only, deploy_capable, billing_readable,
                        destructive_actions_disabled, capabilities, missing_permissions,
                        last_test_status, last_tested_at, last_error, created_by,
                        created_at, updated_at
@@ -209,7 +430,10 @@ class ResourcePlaneService:
         project_id: str,
         provider: str,
         account_label: str,
-        credential_ref: Optional[str],
+        auth_method: Optional[str] = None,
+        credential_ref: Optional[str] = None,
+        credential_refs: Optional[dict[str, str]] = None,
+        connection_metadata: Optional[dict[str, Any]] = None,
         scopes: list[str],
         read_only: bool,
         deploy_capable: bool,
@@ -219,37 +443,87 @@ class ResourcePlaneService:
     ) -> dict[str, Any]:
         normalized_provider = self._normalize_provider(provider)
         normalized_label = self._require_text(account_label, "account_label")
-        ref = self._normalize_credential_ref(
-            normalized_provider,
-            credential_ref,
+        normalized_auth_method, refs, ref, slot_kinds = (
+            self._normalize_provider_credentials(
+                normalized_provider,
+                auth_method=auth_method,
+                credential_ref=credential_ref,
+                credential_refs=credential_refs or {},
+            )
+        )
+        safe_connection_metadata = self.secret_refs._validate_metadata(
+            connection_metadata or {}
+        )
+        existing = connection.execute(
+            text(
+                """
+                SELECT id, status, auth_method, credential_ref, credential_refs
+                FROM provider_accounts
+                WHERE project_id = :project_id
+                  AND provider = :provider
+                  AND account_label = :account_label
+                """
+            ),
+            {
+                "project_id": project_id,
+                "provider": normalized_provider,
+                "account_label": normalized_label,
+            },
+        ).mappings().first()
+        if existing and existing["status"] in {"disabled", "revoked"}:
+            raise ValueError(
+                f"Provider account is {existing['status']}; use the explicit lifecycle endpoint."
+            )
+        if existing:
+            existing_refs = existing["credential_refs"] or (
+                {"primary": existing["credential_ref"]}
+                if existing["credential_ref"]
+                else {}
+            )
+            if dict(existing_refs) != refs:
+                raise ValueError(
+                    "Provider credentials changed; use the explicit rotation endpoint."
+                )
+        account_status = (
+            "active"
+            if self._provider_adapter_status(normalized_provider) == "available"
+            else "pending_adapter"
         )
         capabilities = SUPPORTED_PROVIDERS[normalized_provider]["capabilities"]
         provider_account_id = make_id("prov")
-        self._ensure_secret_ref(
-            connection,
-            project_id=project_id,
-            provider=normalized_provider,
-            credential_ref=ref,
-            actor=actor,
-        )
+        for slot, credential_pointer in refs.items():
+            self._ensure_secret_ref(
+                connection,
+                project_id=project_id,
+                provider=normalized_provider,
+                credential_ref=credential_pointer,
+                secret_kind=slot_kinds[slot],
+                actor=actor,
+            )
         connection.execute(
             text(
                 """
                 INSERT INTO provider_accounts (
-                    id, project_id, provider, account_label, credential_ref, scopes,
-                    status, read_only, deploy_capable, billing_readable,
+                    id, project_id, provider, account_label, auth_method,
+                    credential_ref, credential_refs, connection_metadata, scopes,
+                    status, owner_actor, read_only, deploy_capable, billing_readable,
                     destructive_actions_disabled, capabilities, created_by
                 )
                 VALUES (
-                    :id, :project_id, :provider, :account_label, :credential_ref,
-                    CAST(:scopes AS JSONB), 'active', :read_only, :deploy_capable,
+                    :id, :project_id, :provider, :account_label, :auth_method,
+                    :credential_ref, CAST(:credential_refs AS JSONB),
+                    CAST(:connection_metadata AS JSONB), CAST(:scopes AS JSONB),
+                    :status, :actor, :read_only, :deploy_capable,
                     :billing_readable, :destructive_actions_disabled,
                     CAST(:capabilities AS JSONB), :actor
                 )
                 ON CONFLICT (project_id, provider, account_label) DO UPDATE
-                SET credential_ref = EXCLUDED.credential_ref,
+                SET auth_method = EXCLUDED.auth_method,
+                    credential_ref = EXCLUDED.credential_ref,
+                    credential_refs = EXCLUDED.credential_refs,
+                    connection_metadata = EXCLUDED.connection_metadata,
                     scopes = EXCLUDED.scopes,
-                    status = 'active',
+                    status = provider_accounts.status,
                     read_only = EXCLUDED.read_only,
                     deploy_capable = EXCLUDED.deploy_capable,
                     billing_readable = EXCLUDED.billing_readable,
@@ -264,8 +538,12 @@ class ResourcePlaneService:
                 "project_id": project_id,
                 "provider": normalized_provider,
                 "account_label": normalized_label,
+                "auth_method": normalized_auth_method,
                 "credential_ref": ref,
+                "credential_refs": json.dumps(refs),
+                "connection_metadata": json.dumps(safe_connection_metadata),
                 "scopes": json.dumps(self._normalize_string_list(scopes)),
+                "status": account_status,
                 "read_only": read_only,
                 "deploy_capable": deploy_capable,
                 "billing_readable": billing_readable,
@@ -289,11 +567,14 @@ class ResourcePlaneService:
             row["id"],
             {
                 "provider": normalized_provider,
+                "auth_method": normalized_auth_method,
+                "credential_slots": sorted(refs),
                 "read_only": read_only,
                 "deploy_capable": deploy_capable,
                 "billing_readable": billing_readable,
                 "destructive_actions_disabled": destructive_actions_disabled,
-                "credential_ref": ref,
+                "credential_version": int(row.get("credential_version") or 1),
+                "status": row["status"],
             },
         )
         self._upsert_capabilities(
@@ -304,6 +585,384 @@ class ResourcePlaneService:
         )
         return self._serialize_provider_account(row)
 
+    def update_provider_account(
+        self,
+        connection: Connection,
+        *,
+        project_id: str,
+        provider_account_id: str,
+        account_label: Optional[str],
+        scopes: Optional[list[str]],
+        read_only: Optional[bool],
+        deploy_capable: Optional[bool],
+        billing_readable: Optional[bool],
+        destructive_actions_disabled: Optional[bool],
+        connection_metadata: Optional[dict[str, Any]],
+        owner_actor: Optional[str],
+        actor: str,
+    ) -> dict[str, Any]:
+        existing = self.get_provider_account(
+            connection, project_id, provider_account_id
+        )
+        if existing["status"] == "revoked":
+            raise ValueError("Revoked provider accounts are immutable.")
+        next_label = (
+            self._require_text(account_label, "account_label")
+            if account_label is not None
+            else existing["account_label"]
+        )
+        duplicate_label = connection.execute(
+            text(
+                """
+                SELECT id
+                FROM provider_accounts
+                WHERE project_id = :project_id
+                  AND provider = :provider
+                  AND account_label = :account_label
+                  AND id <> :provider_account_id
+                """
+            ),
+            {
+                "project_id": project_id,
+                "provider": existing["provider"],
+                "account_label": next_label,
+                "provider_account_id": provider_account_id,
+            },
+        ).scalar_one_or_none()
+        if duplicate_label:
+            raise ValueError(
+                "A provider account with this provider and account_label already exists."
+            )
+        next_scopes = (
+            self._normalize_string_list(scopes)
+            if scopes is not None
+            else existing["scopes"]
+        )
+        next_metadata = (
+            self.secret_refs._validate_metadata(connection_metadata)
+            if connection_metadata is not None
+            else existing["connection_metadata"]
+        )
+        next_owner = (
+            self._require_text(owner_actor, "owner_actor")
+            if owner_actor is not None
+            else existing["owner_actor"]
+        )
+        values = {
+            "account_label": next_label,
+            "scopes": next_scopes,
+            "read_only": existing["read_only"] if read_only is None else read_only,
+            "deploy_capable": (
+                existing["deploy_capable"]
+                if deploy_capable is None
+                else deploy_capable
+            ),
+            "billing_readable": (
+                existing["billing_readable"]
+                if billing_readable is None
+                else billing_readable
+            ),
+            "destructive_actions_disabled": (
+                existing["destructive_actions_disabled"]
+                if destructive_actions_disabled is None
+                else destructive_actions_disabled
+            ),
+            "connection_metadata": next_metadata,
+            "owner_actor": next_owner,
+        }
+        connection.execute(
+            text(
+                """
+                UPDATE provider_accounts
+                SET account_label = :account_label,
+                    scopes = CAST(:scopes AS JSONB),
+                    read_only = :read_only,
+                    deploy_capable = :deploy_capable,
+                    billing_readable = :billing_readable,
+                    destructive_actions_disabled = :destructive_actions_disabled,
+                    connection_metadata = CAST(:connection_metadata AS JSONB),
+                    owner_actor = :owner_actor,
+                    updated_at = now()
+                WHERE id = :provider_account_id AND project_id = :project_id
+                """
+            ),
+            {
+                "project_id": project_id,
+                "provider_account_id": provider_account_id,
+                "account_label": values["account_label"],
+                "scopes": json.dumps(values["scopes"]),
+                "read_only": values["read_only"],
+                "deploy_capable": values["deploy_capable"],
+                "billing_readable": values["billing_readable"],
+                "destructive_actions_disabled": values[
+                    "destructive_actions_disabled"
+                ],
+                "connection_metadata": json.dumps(values["connection_metadata"]),
+                "owner_actor": values["owner_actor"],
+            },
+        )
+        changed = sorted(key for key, value in values.items() if value != existing[key])
+        emit_event(
+            connection,
+            project_id,
+            "provider.account_updated",
+            actor,
+            "provider_account",
+            provider_account_id,
+            {"provider": existing["provider"], "changed_fields": changed},
+        )
+        return self.get_provider_account(
+            connection, project_id, provider_account_id
+        )
+
+    def transition_provider_account(
+        self,
+        connection: Connection,
+        *,
+        project_id: str,
+        provider_account_id: str,
+        action: str,
+        actor: str,
+    ) -> dict[str, Any]:
+        account = self.get_provider_account(
+            connection, project_id, provider_account_id
+        )
+        normalized_action = action.strip().lower()
+        if normalized_action not in {"enable", "disable", "revoke"}:
+            raise ValueError("action must be enable, disable, or revoke.")
+        if account["status"] == "revoked":
+            if normalized_action == "revoke":
+                return account
+            raise ValueError("Revoked provider accounts cannot be re-enabled.")
+        if normalized_action == "enable":
+            self._require_account_secret_refs_usable(
+                connection, account, check_account_state=False
+            )
+            status = (
+                "active"
+                if self._provider_adapter_status(account["provider"]) == "available"
+                else "pending_adapter"
+            )
+        elif normalized_action == "disable":
+            status = "disabled"
+        else:
+            status = "revoked"
+        connection.execute(
+            text(
+                """
+                UPDATE provider_accounts
+                SET status = :status,
+                    read_only = CASE WHEN :status = 'revoked' THEN true ELSE read_only END,
+                    deploy_capable = CASE
+                        WHEN :status = 'revoked' THEN false ELSE deploy_capable
+                    END,
+                    destructive_actions_disabled = CASE
+                        WHEN :status = 'revoked' THEN true
+                        ELSE destructive_actions_disabled
+                    END,
+                    disabled_at = CASE
+                        WHEN :status = 'disabled' THEN now()
+                        WHEN :status IN ('active', 'pending_adapter') THEN NULL
+                        ELSE disabled_at
+                    END,
+                    disabled_by = CASE
+                        WHEN :status = 'disabled' THEN :actor
+                        WHEN :status IN ('active', 'pending_adapter') THEN NULL
+                        ELSE disabled_by
+                    END,
+                    revoked_at = CASE WHEN :status = 'revoked' THEN now() ELSE revoked_at END,
+                    revoked_by = CASE
+                        WHEN :status = 'revoked' THEN :actor ELSE revoked_by
+                    END,
+                    updated_at = now()
+                WHERE id = :provider_account_id AND project_id = :project_id
+                """
+            ),
+            {
+                "project_id": project_id,
+                "provider_account_id": provider_account_id,
+                "status": status,
+                "actor": actor,
+            },
+        )
+        emit_event(
+            connection,
+            project_id,
+            f"provider.account_{normalized_action}d",
+            actor,
+            "provider_account",
+            provider_account_id,
+            {
+                "provider": account["provider"],
+                "from_status": account["status"],
+                "to_status": status,
+            },
+        )
+        return self.get_provider_account(
+            connection, project_id, provider_account_id
+        )
+
+    def rotate_provider_credentials(
+        self,
+        connection: Connection,
+        *,
+        project_id: str,
+        provider_account_id: str,
+        credential_ref: Optional[str],
+        credential_refs: dict[str, str],
+        overlap_minutes: int,
+        actor: str,
+    ) -> dict[str, Any]:
+        account = self.get_provider_account(
+            connection, project_id, provider_account_id
+        )
+        if account["status"] in {"disabled", "revoked"}:
+            raise ValueError(
+                f"Provider account is {account['status']}; credentials cannot be rotated."
+            )
+        auth_method, next_refs, primary_ref, slot_kinds = (
+            self._normalize_provider_credentials(
+                account["provider"],
+                auth_method=account["auth_method"],
+                credential_ref=credential_ref,
+                credential_refs=credential_refs,
+                apply_defaults=False,
+            )
+        )
+        current_refs = dict(account["credential_refs"])
+        if set(next_refs) != set(current_refs):
+            raise ValueError(
+                "Rotation must provide exactly the currently configured credential slots."
+            )
+        if next_refs == current_refs:
+            raise ValueError("Rotation requires at least one new SecretRef.")
+        for slot, pointer in next_refs.items():
+            self._ensure_secret_ref(
+                connection,
+                project_id=project_id,
+                provider=account["provider"],
+                credential_ref=pointer,
+                secret_kind=slot_kinds[slot],
+                actor=actor,
+            )
+
+        overlap_expires_at = now_utc() + timedelta(minutes=overlap_minutes)
+        prior_items: dict[str, dict[str, Any]] = {}
+        active_items: dict[str, dict[str, Any]] = {}
+        for slot, old_pointer in current_refs.items():
+            new_pointer = next_refs[slot]
+            old_item = self.secret_refs.get_by_credential_ref(
+                connection,
+                project_id=project_id,
+                credential_ref=old_pointer,
+            )
+            new_item = self.secret_refs.get_by_credential_ref(
+                connection,
+                project_id=project_id,
+                credential_ref=new_pointer,
+            )
+            prior_items[old_item["id"]] = old_item
+            active_items[new_item["id"]] = new_item
+            if old_pointer == new_pointer:
+                continue
+            connection.execute(
+                text(
+                    """
+                    UPDATE secret_refs
+                    SET status = 'rotating',
+                        overlap_expires_at = :overlap_expires_at,
+                        updated_at = now()
+                    WHERE id = :secret_ref_id AND project_id = :project_id
+                    """
+                ),
+                {
+                    "project_id": project_id,
+                    "secret_ref_id": old_item["id"],
+                    "overlap_expires_at": overlap_expires_at,
+                },
+            )
+            connection.execute(
+                text(
+                    """
+                    UPDATE secret_refs
+                    SET supersedes_secret_ref_id = :prior_secret_ref_id,
+                        updated_at = now()
+                    WHERE id = :secret_ref_id AND project_id = :project_id
+                    """
+                ),
+                {
+                    "project_id": project_id,
+                    "secret_ref_id": new_item["id"],
+                    "prior_secret_ref_id": old_item["id"],
+                },
+            )
+
+        account_status = (
+            "active"
+            if self._provider_adapter_status(account["provider"]) == "available"
+            else "pending_adapter"
+        )
+        connection.execute(
+            text(
+                """
+                UPDATE provider_accounts
+                SET auth_method = :auth_method,
+                    credential_ref = :credential_ref,
+                    credential_refs = CAST(:credential_refs AS JSONB),
+                    credential_version = credential_version + 1,
+                    credential_rotated_at = now(),
+                    status = :status,
+                    last_test_status = NULL,
+                    last_tested_at = NULL,
+                    missing_permissions = '[]'::jsonb,
+                    last_error = NULL,
+                    updated_at = now()
+                WHERE id = :provider_account_id AND project_id = :project_id
+                """
+            ),
+            {
+                "project_id": project_id,
+                "provider_account_id": provider_account_id,
+                "auth_method": auth_method,
+                "credential_ref": primary_ref,
+                "credential_refs": json.dumps(next_refs),
+                "status": account_status,
+            },
+        )
+        updated = self.get_provider_account(
+            connection, project_id, provider_account_id
+        )
+        emit_event(
+            connection,
+            project_id,
+            "provider.credentials_rotated",
+            actor,
+            "provider_account",
+            provider_account_id,
+            {
+                "provider": account["provider"],
+                "credential_version": updated["credential_version"],
+                "rotated_slots": sorted(
+                    slot
+                    for slot, pointer in next_refs.items()
+                    if pointer != current_refs[slot]
+                ),
+                "overlap_expires_at": overlap_expires_at.isoformat(),
+            },
+        )
+        return {
+            "provider_account": updated,
+            "prior_secret_refs": [
+                self.secret_refs.get_secret_ref(connection, project_id, secret_id)
+                for secret_id in prior_items
+            ],
+            "active_secret_refs": [
+                self.secret_refs.get_secret_ref(connection, project_id, secret_id)
+                for secret_id in active_items
+            ],
+            "overlap_expires_at": overlap_expires_at.isoformat(),
+        }
+
     def test_provider_account(
         self,
         connection: Connection,
@@ -313,22 +972,45 @@ class ResourcePlaneService:
         actor: str,
     ) -> dict[str, Any]:
         account = self.get_provider_account(connection, project_id, provider_account_id)
-        try:
-            credential = self._credential_value(account["credential_ref"])
-            result = self._test_connection(account["provider"], credential)
-            status = "passed"
-            detail = result
-            missing_permissions: list[str] = []
-        except Exception as error:
-            status = "failed"
-            detail = {"message": str(error)}
-            missing_permissions = ["provider_credentials_or_permissions"]
+        if account["status"] in {"disabled", "revoked"}:
+            raise ProviderCredentialError(
+                f"Provider account is {account['status']}; connection test blocked."
+            )
+        adapter_status = self._provider_adapter_status(account["provider"])
+        if adapter_status != "available":
+            status = "unsupported"
+            detail = {
+                "code": "provider_adapter_unavailable",
+                "message": (
+                    f"{account['provider']} credentials are recorded as SecretRefs, "
+                    "but its runtime adapter is not available yet."
+                ),
+            }
+            missing_permissions = ["provider_adapter_unavailable"]
+        else:
+            try:
+                self._require_account_secret_refs_usable(connection, account)
+                credential = self._credential_value(account["credential_ref"])
+                result = self._test_connection(account["provider"], credential)
+                status = "passed"
+                detail = result
+                missing_permissions = []
+            except Exception as error:
+                status = "failed"
+                detail = self._safe_provider_error(error)
+                missing_permissions = ["provider_credentials_or_permissions"]
+        account_status = {
+            "passed": "active",
+            "failed": "degraded",
+            "unsupported": "pending_adapter",
+        }[status]
 
         connection.execute(
             text(
                 """
                 UPDATE provider_accounts
-                SET last_test_status = :status,
+                SET status = :account_status,
+                    last_test_status = :status,
                     last_tested_at = now(),
                     missing_permissions = CAST(:missing_permissions AS JSONB),
                     last_error = CAST(:last_error AS JSONB),
@@ -339,17 +1021,46 @@ class ResourcePlaneService:
             {
                 "project_id": project_id,
                 "provider_account_id": provider_account_id,
+                "account_status": account_status,
                 "status": status,
                 "missing_permissions": json.dumps(missing_permissions),
                 "last_error": json.dumps(None if status == "passed" else detail),
             },
         )
+        if status == "passed":
+            for credential_pointer in set(account["credential_refs"].values()):
+                ref_kind, ref_key = self.secret_refs.parse_credential_ref(
+                    credential_pointer
+                )
+                connection.execute(
+                    text(
+                        """
+                        UPDATE secret_refs
+                        SET last_verified_at = now(),
+                            updated_at = now()
+                        WHERE project_id = :project_id
+                          AND ref_kind = :ref_kind
+                          AND ref_key = :ref_key
+                        """
+                    ),
+                    {
+                        "project_id": project_id,
+                        "ref_kind": ref_kind,
+                        "ref_key": ref_key,
+                    },
+                )
         health = self._record_provider_health(
             connection,
             project_id=project_id,
             provider_account_id=provider_account_id,
             provider=account["provider"],
-            status="healthy" if status == "passed" else "degraded",
+            status=(
+                "healthy"
+                if status == "passed"
+                else "unknown"
+                if status == "unsupported"
+                else "degraded"
+            ),
             api_available=status == "passed",
             detail=detail,
         )
@@ -417,6 +1128,7 @@ class ResourcePlaneService:
                 },
             )
             try:
+                self._require_account_secret_refs_usable(connection, account)
                 credential = self._credential_value(account["credential_ref"])
                 inventory = self._sync_inventory(account["provider"], credential)
                 changed = 0
@@ -551,7 +1263,8 @@ class ResourcePlaneService:
                     }
                 )
             except Exception as error:
-                error_payload = {"message": str(error)}
+                safe_error = self._redact_provider_error(error, account)
+                error_payload = {"message": safe_error}
                 self._finish_reconciliation(
                     connection,
                     run_id,
@@ -575,7 +1288,7 @@ class ResourcePlaneService:
                     project_id=project_id,
                     source_kind="provider_sync",
                     source_id=run_id,
-                    reason=str(error),
+                    reason=safe_error,
                     payload={
                         "provider": account["provider"],
                         "provider_account_id": account["id"],
@@ -597,7 +1310,7 @@ class ResourcePlaneService:
                         deadletter_id=deadletter_id,
                         error=error_payload,
                         billing_status="failed",
-                        billing_message=str(error),
+                        billing_message=safe_error,
                     )
                 )
                 self._attach_reconciliation_metadata(
@@ -620,7 +1333,7 @@ class ResourcePlaneService:
                         "provider": account["provider"],
                         "provider_account_id": account["id"],
                         "deadletter_id": deadletter_id,
-                        "message": str(error),
+                        "message": safe_error,
                     },
                 )
                 run_summaries.append(
@@ -2725,6 +3438,17 @@ class ResourcePlaneService:
                     }
                 )
                 continue
+            if account["status"] not in {"active", "degraded"}:
+                skipped.append(
+                    {
+                        "external_resource_id": resource["id"],
+                        "provider": resource["provider"],
+                        "resource_type": resource["resource_type"],
+                        "external_id": resource["external_id"],
+                        "reason": f"provider_account_{account['status']}",
+                    }
+                )
+                continue
             if account["read_only"]:
                 skipped.append(
                     {
@@ -3750,8 +4474,11 @@ class ResourcePlaneService:
         row = connection.execute(
             text(
                 """
-                SELECT id, project_id, provider, account_label, credential_ref, scopes,
-                       status, read_only, deploy_capable, billing_readable,
+                SELECT id, project_id, provider, account_label, auth_method,
+                       credential_ref, credential_refs, connection_metadata, scopes,
+                       status, owner_actor, credential_version, credential_rotated_at,
+                       disabled_at, disabled_by, revoked_at, revoked_by,
+                       read_only, deploy_capable, billing_readable,
                        destructive_actions_disabled, capabilities, missing_permissions,
                        last_test_status, last_tested_at, last_error, created_by,
                        created_at, updated_at
@@ -3775,8 +4502,11 @@ class ResourcePlaneService:
         row = connection.execute(
             text(
                 """
-                SELECT id, project_id, provider, account_label, credential_ref, scopes,
-                       status, read_only, deploy_capable, billing_readable,
+                SELECT id, project_id, provider, account_label, auth_method,
+                       credential_ref, credential_refs, connection_metadata, scopes,
+                       status, owner_actor, credential_version, credential_rotated_at,
+                       disabled_at, disabled_by, revoked_at, revoked_by,
+                       read_only, deploy_capable, billing_readable,
                        destructive_actions_disabled, capabilities, missing_permissions,
                        last_test_status, last_tested_at, last_error, created_by,
                        created_at, updated_at
@@ -3822,11 +4552,40 @@ class ResourcePlaneService:
         project_id: str,
         provider: str,
         credential_ref: str,
+        secret_kind: str,
         actor: str,
-    ) -> None:
-        ref_kind, _, ref_key = credential_ref.partition(":")
-        if not ref_kind or not ref_key:
-            raise ValueError("credential_ref must use '<kind>:<key>' format.")
+    ) -> dict[str, Any]:
+        ref_kind, ref_key = self.secret_refs.parse_credential_ref(credential_ref)
+        existing = connection.execute(
+            text(
+                """
+                SELECT id, provider, status
+                FROM secret_refs
+                WHERE project_id = :project_id
+                  AND ref_kind = :ref_kind
+                  AND ref_key = :ref_key
+                """
+            ),
+            {
+                "project_id": project_id,
+                "ref_kind": ref_kind,
+                "ref_key": ref_key,
+            },
+        ).mappings().first()
+        if existing:
+            if existing["provider"] not in {None, provider}:
+                raise ValueError(
+                    f"SecretRef {credential_ref!r} already belongs to provider "
+                    f"{existing['provider']}."
+                )
+            if existing["status"] in {"disabled", "rotating", "revoked"}:
+                raise ValueError(
+                    f"SecretRef {credential_ref!r} is {existing['status']} and "
+                    "cannot be silently reactivated."
+                )
+            return self.secret_refs.get_secret_ref(
+                connection, project_id, existing["id"]
+            )
         secret_ref_id = f"secret_{project_id}_{provider}_{ref_kind}_{ref_key}".replace(
             "-",
             "_",
@@ -3835,16 +4594,14 @@ class ResourcePlaneService:
             text(
                 """
                 INSERT INTO secret_refs (
-                    id, project_id, ref_kind, ref_key, provider, status, metadata, created_by
+                    id, project_id, scope_type, scope_id, ref_kind, ref_key,
+                    provider, secret_kind, storage_backend, status, metadata, created_by
                 )
                 VALUES (
-                    :id, :project_id, :ref_kind, :ref_key, :provider, 'active',
+                    :id, :project_id, 'project', :project_id, :ref_kind, :ref_key,
+                    :provider, :secret_kind, :storage_backend, 'active',
                     CAST(:metadata AS JSONB), :actor
                 )
-                ON CONFLICT (project_id, ref_kind, ref_key) DO UPDATE
-                SET provider = EXCLUDED.provider,
-                    status = 'active',
-                    updated_at = now()
                 """
             ),
             {
@@ -3853,9 +4610,30 @@ class ResourcePlaneService:
                 "ref_kind": ref_kind,
                 "ref_key": ref_key,
                 "provider": provider,
+                "secret_kind": secret_kind,
+                "storage_backend": self.secret_refs._storage_backend_for_ref_kind(
+                    ref_kind
+                ),
                 "metadata": json.dumps({"raw_secret_stored": False}),
                 "actor": actor,
             },
+        )
+        emit_event(
+            connection,
+            project_id,
+            "secret_ref.created",
+            actor,
+            "secret_ref",
+            secret_ref_id[:96],
+            {
+                "provider": provider,
+                "ref_kind": ref_kind,
+                "ref_key": ref_key,
+                "secret_kind": secret_kind,
+            },
+        )
+        return self.secret_refs.get_secret_ref(
+            connection, project_id, secret_ref_id[:96]
         )
 
     def _upsert_capabilities(
@@ -4247,6 +5025,7 @@ class ResourcePlaneService:
             raise ProviderAdapterError(
                 f"ProviderAccount is for {account['provider']}, not {provider}."
             )
+        self._require_account_secret_refs_usable(connection, account)
         if account["read_only"] and operation["action"] not in {"read", "sync"}:
             raise ProviderAdapterError("Provider account is read-only; provider write blocked.")
         if operation["destructive"] and account["destructive_actions_disabled"]:
@@ -7363,12 +8142,165 @@ class ResourcePlaneService:
             )
         return normalized
 
-    def _normalize_credential_ref(
+    def _normalize_provider_credentials(
         self,
         provider: str,
+        *,
+        auth_method: Optional[str],
         credential_ref: Optional[str],
+        credential_refs: dict[str, str],
+        apply_defaults: bool = True,
+    ) -> tuple[str, dict[str, str], Optional[str], dict[str, str]]:
+        profile = PROVIDER_CONNECTION_PROFILES.get(provider)
+        if not profile:
+            method_key = (auth_method or "api_token").strip().lower()
+            if method_key != "api_token":
+                raise ValueError(
+                    f"{provider} supports only auth_method='api_token' in this runtime."
+                )
+            primary = (
+                credential_ref or SUPPORTED_PROVIDERS[provider]["credential_ref"]
+            ).strip()
+            refs = dict(credential_refs or {})
+            if refs and set(refs) != {"primary"}:
+                raise ValueError(
+                    f"{provider} credential_refs supports only the 'primary' slot."
+                )
+            refs["primary"] = refs.get("primary") or primary
+            self.secret_refs.parse_credential_ref(refs["primary"])
+            return method_key, refs, refs["primary"], {"primary": "api_token"}
+
+        method_key = (
+            auth_method or profile["default_auth_method"]
+        ).strip().lower()
+        method = profile["auth_methods"].get(method_key)
+        if not method:
+            raise ValueError(
+                f"{provider} auth_method must be one of: "
+                + ", ".join(sorted(profile["auth_methods"]))
+                + "."
+            )
+        slots = {slot["key"]: slot for slot in method["credential_slots"]}
+        refs = {
+            str(key).strip(): str(value).strip()
+            for key, value in (credential_refs or {}).items()
+            if str(key).strip() and str(value).strip()
+        }
+        unknown = sorted(set(refs) - set(slots))
+        if unknown:
+            raise ValueError(
+                f"Unknown credential slot(s) for {provider}/{method_key}: "
+                + ", ".join(unknown)
+                + "."
+            )
+        primary_slot = next(
+            (slot["key"] for slot in method["credential_slots"] if slot.get("primary")),
+            next(iter(slots), None),
+        )
+        if credential_ref:
+            if not primary_slot:
+                raise ValueError(
+                    f"{provider}/{method_key} does not accept a primary credential_ref."
+                )
+            refs[primary_slot] = credential_ref.strip()
+        if apply_defaults:
+            for slot in method["credential_slots"]:
+                if slot.get("default_ref") and slot["key"] not in refs:
+                    refs[slot["key"]] = slot["default_ref"]
+        missing = sorted(
+            slot["key"]
+            for slot in method["credential_slots"]
+            if slot["required"] and slot["key"] not in refs
+        )
+        if missing:
+            raise ValueError(
+                f"Missing required credential slot(s) for {provider}/{method_key}: "
+                + ", ".join(missing)
+                + "."
+            )
+        for pointer in refs.values():
+            self.secret_refs.parse_credential_ref(pointer)
+        primary_ref = refs.get(primary_slot) if primary_slot else None
+        slot_kinds = {
+            slot["key"]: slot["secret_kind"] for slot in method["credential_slots"]
+        }
+        return method_key, refs, primary_ref, slot_kinds
+
+    def _provider_adapter_status(self, provider: str) -> str:
+        profile = PROVIDER_CONNECTION_PROFILES.get(provider)
+        return str(profile.get("adapter_status") if profile else "available")
+
+    def _require_account_secret_refs_usable(
+        self,
+        connection: Connection,
+        account: dict[str, Any],
+        *,
+        check_account_state: bool = True,
+    ) -> None:
+        account_status = str(account.get("status") or "active")
+        if check_account_state and account_status in {
+            "disabled",
+            "revoked",
+            "pending_adapter",
+        }:
+            raise ProviderCredentialError(
+                f"Provider account is {account_status}; provider operation blocked."
+            )
+        if connection is None:
+            return
+        refs = dict(account.get("credential_refs") or {})
+        if account.get("credential_ref") and not refs:
+            refs = {"primary": account["credential_ref"]}
+        for pointer in set(refs.values()):
+            try:
+                item = self.secret_refs.require_usable(
+                    connection,
+                    project_id=account["project_id"],
+                    credential_ref=pointer,
+                )
+            except (SecretRefNotFoundError, ValueError) as error:
+                raise ProviderCredentialError(str(error)) from error
+            if item["provider"] not in {None, account["provider"]}:
+                raise ProviderCredentialError(
+                    f"SecretRef {pointer!r} belongs to {item['provider']}, "
+                    f"not {account['provider']}."
+                )
+
+    @staticmethod
+    def _safe_provider_error(error: Exception) -> dict[str, str]:
+        return {
+            "code": error.__class__.__name__,
+            "message": "Provider connection test failed; inspect SecretRef availability and provider permissions.",
+        }
+
+    def _redact_provider_error(
+        self,
+        error: Exception,
+        account: dict[str, Any],
     ) -> str:
-        return (credential_ref or SUPPORTED_PROVIDERS[provider]["credential_ref"]).strip()
+        message = str(error)
+        refs = dict(account.get("credential_refs") or {})
+        if account.get("credential_ref") and not refs:
+            refs = {"primary": account["credential_ref"]}
+        configured_values = {
+            "OPENAI_API_KEY": self.settings.openai_api_key,
+            "ANTHROPIC_API_KEY": self.settings.anthropic_api_key,
+            "BOSS_DIGITALOCEAN_TOKEN": self.settings.digitalocean_token,
+            "BOSS_CLOUDFLARE_API_TOKEN": self.settings.cloudflare_api_token,
+            "BOSS_SUPABASE_ACCESS_TOKEN": self.settings.supabase_access_token,
+            "BOSS_AWS_ACCESS_KEY_ID": self.settings.aws_access_key_id,
+        }
+        for pointer in refs.values():
+            try:
+                ref_kind, ref_key = self.secret_refs.parse_credential_ref(pointer)
+            except ValueError:
+                continue
+            if ref_kind != "env":
+                continue
+            value = configured_values.get(ref_key) or os.environ.get(ref_key)
+            if value:
+                message = message.replace(value, "[REDACTED]")
+        return message
 
     def _normalize_string_list(self, values: list[str]) -> list[str]:
         return [item.strip() for item in values if isinstance(item, str) and item.strip()]
@@ -7408,8 +8340,22 @@ class ResourcePlaneService:
 
     def _serialize_provider_account(self, row) -> dict[str, Any]:
         payload = dict(row)
-        for key in ("created_at", "updated_at", "last_tested_at"):
+        for key in (
+            "created_at",
+            "updated_at",
+            "last_tested_at",
+            "credential_rotated_at",
+            "disabled_at",
+            "revoked_at",
+        ):
             payload[key] = payload[key].isoformat() if payload.get(key) else None
+        payload["auth_method"] = payload.get("auth_method") or "api_token"
+        payload["credential_refs"] = payload.get("credential_refs") or (
+            {"primary": payload["credential_ref"]}
+            if payload.get("credential_ref")
+            else {}
+        )
+        payload["connection_metadata"] = payload.get("connection_metadata") or {}
         payload["scopes"] = payload.get("scopes") or []
         payload["capabilities"] = payload.get("capabilities") or []
         payload["missing_permissions"] = payload.get("missing_permissions") or []

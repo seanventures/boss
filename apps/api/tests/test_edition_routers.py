@@ -58,6 +58,7 @@ def test_paid_editions_mount_both_router_sets(edition):
         "/v1/enterprise/clusters",
         "/v1/marketplace/listings",
         "/v1/account-connect/link",
+        "/v1/provider-definitions",
         "/v1/providers",
         "/v1/self-improvement/proposals",
     ],
@@ -121,6 +122,7 @@ def test_real_community_app_omits_paid_routes():
                 "assert '/v1/account-connect/link' not in paths; "
                 "assert '/v1/enterprise/clusters' not in paths; "
                 "assert '/v1/marketplace/listings' not in paths; "
+                "assert '/v1/provider-definitions' not in paths; "
                 "assert '/v1/providers' not in paths"
             ),
         ],

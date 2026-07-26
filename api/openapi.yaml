@@ -2767,9 +2767,22 @@ paths:
                   enum: [env, vault, local_runner, platform_secret_store]
                 ref_key: { type: string }
                 provider: { type: string }
+                scope_type:
+                  type: string
+                  enum: [org, workspace, project]
+                  default: project
+                scope_id: { type: string }
+                secret_kind:
+                  type: string
+                  enum: [api_token, access_key, client_secret, consumer_key, private_key, service_account, session]
+                  default: api_token
+                storage_backend:
+                  type: string
+                  enum: [environment, vault, local_runner, platform_secret_store]
+                rotation_due_at: { type: string, format: date-time }
                 status:
                   type: string
-                  enum: [active, disabled, rotation_due, revoked]
+                  enum: [active, disabled, rotating, rotation_due, revoked]
                   default: active
                 metadata: { type: object }
                 actor: { type: string, default: system }
@@ -2811,8 +2824,9 @@ paths:
                 provider: { type: string }
                 status:
                   type: string
-                  enum: [active, disabled, rotation_due, revoked]
+                  enum: [active, disabled, rotating, rotation_due, revoked]
                 metadata: { type: object }
+                rotation_due_at: { type: string, format: date-time }
                 actor: { type: string, default: system }
       responses:
         '200': { description: SecretRef updated }
@@ -2835,6 +2849,13 @@ paths:
       responses:
         '204': { description: SecretRef revoked }
         '404': { description: SecretRef not found }
+  /v1/provider-definitions:
+    get:
+      summary: List infrastructure provider connection and authentication contracts
+      description: Declares credential slots and adapter availability without claiming planned adapters are live.
+      responses:
+        '200':
+          description: AWS, Azure, Google Cloud, DigitalOcean, and OVHcloud connection definitions
   /v1/providers:
     get:
       summary: List ProviderOps provider accounts for a project
@@ -2858,9 +2879,17 @@ paths:
                 project_id: { type: string }
                 provider:
                   type: string
-                  enum: [digitalocean, cloudflare, supabase, openai, anthropic]
+                  enum: [aws, azure, gcp, digitalocean, ovhcloud, cloudflare, supabase, openai, anthropic, ssh_host]
                 account_label: { type: string }
+                auth_method: { type: string }
                 credential_ref: { type: string }
+                credential_refs:
+                  type: object
+                  additionalProperties: { type: string }
+                  description: Named SecretRef pointers only; raw credential values are rejected.
+                connection_metadata:
+                  type: object
+                  description: Non-secret account metadata; secret-shaped fields are rejected.
                 scopes:
                   type: array
                   items: { type: string }
@@ -2872,6 +2901,143 @@ paths:
       responses:
         '201': { description: Provider account registered }
         '403': { description: Actor is not allowed to manage ProviderOps }
+        '422': { description: Invalid auth method, SecretRef, metadata, or provider definition }
+  /v1/providers/{provider_account_id}:
+    get:
+      summary: Get a tenant-scoped provider account
+      parameters:
+        - name: provider_account_id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Provider account metadata without raw credentials }
+        '404': { description: Provider account not found in the project }
+    patch:
+      summary: Update provider account policy and non-secret metadata
+      parameters:
+        - name: provider_account_id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id]
+              properties:
+                project_id: { type: string }
+                account_label: { type: string }
+                scopes: { type: array, items: { type: string } }
+                read_only: { type: boolean }
+                deploy_capable: { type: boolean }
+                billing_readable: { type: boolean }
+                destructive_actions_disabled: { type: boolean }
+                connection_metadata: { type: object }
+                owner_actor: { type: string }
+                actor: { type: string, default: ceo }
+      responses:
+        '200': { description: Updated provider account }
+        '403': { description: Actor is not allowed to manage ProviderOps }
+        '404': { description: Provider account not found }
+        '422': { description: Invalid policy or secret-shaped metadata }
+  /v1/providers/{provider_account_id}/enable:
+    post:
+      summary: Enable a provider account after validating all SecretRefs remain usable
+      parameters:
+        - name: provider_account_id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id]
+              properties:
+                project_id: { type: string }
+                actor: { type: string, default: ceo }
+      responses:
+        '200': { description: Provider account enabled or left pending for its adapter }
+        '409': { description: SecretRef unusable or account permanently revoked }
+  /v1/providers/{provider_account_id}/disable:
+    post:
+      summary: Disable a provider account before any provider call can occur
+      parameters:
+        - name: provider_account_id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id]
+              properties:
+                project_id: { type: string }
+                actor: { type: string, default: ceo }
+      responses:
+        '200': { description: Provider account disabled }
+  /v1/providers/{provider_account_id}/revoke:
+    post:
+      summary: Permanently revoke a provider account and force safe non-deploying flags
+      parameters:
+        - name: provider_account_id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id]
+              properties:
+                project_id: { type: string }
+                actor: { type: string, default: ceo }
+      responses:
+        '200': { description: Provider account revoked }
+  /v1/providers/{provider_account_id}/rotate:
+    post:
+      summary: Rotate named provider SecretRefs with bounded overlap and lineage
+      parameters:
+        - name: provider_account_id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id]
+              properties:
+                project_id: { type: string }
+                credential_ref: { type: string }
+                credential_refs:
+                  type: object
+                  additionalProperties: { type: string }
+                overlap_minutes:
+                  type: integer
+                  minimum: 0
+                  maximum: 1440
+                  default: 15
+                actor: { type: string, default: ceo }
+      responses:
+        '200': { description: Updated account plus prior/active SecretRef lineage }
+        '409': { description: Invalid lifecycle state, slots, or SecretRefs }
   /v1/providers/{provider_account_id}/test:
     post:
       summary: Test a provider account through the policy-guarded adapter boundary
@@ -2891,6 +3057,7 @@ paths:
       responses:
         '200': { description: Connection test result and provider-health record }
         '404': { description: Provider account not found }
+        '409': { description: Provider account disabled or revoked }
   /v1/resources:
     get:
       summary: List normalized external resources from the Resource Inventory Graph

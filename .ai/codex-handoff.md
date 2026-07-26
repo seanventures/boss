@@ -1,5 +1,26 @@
 # Codex Handoff
 
+## 2026-07-26 BOSS-236 provider credential lifecycle
+
+- Branch `ai/codex/boss-236-provider-credential-lifecycle` starts from
+  `main` at `fe223af`; no open GitHub PR or active contributor branch overlaps
+  this provider-account/SecretRef lifecycle slice.
+- Added truthful connection definitions for AWS, Azure, GCP, DigitalOcean, and
+  OVHcloud. AWS/DigitalOcean are available; unfinished adapters remain
+  explicitly planned and cannot make provider calls.
+- Provider accounts now carry auth method, named SecretRefs, safe metadata,
+  ownership, credential version/rotation, and disable/revoke evidence.
+  SecretRefs carry scope, secret/storage kind, verification/rotation lineage,
+  bounded overlap, and revocation evidence without secret material.
+- Added update, enable, disable, revoke, rotate, get, and definition APIs plus
+  typed client/OpenAPI contracts. Revoked references cannot be reactivated;
+  changed credentials cannot bypass rotation through an upsert; inactive
+  accounts fail before sync/test/write adapters.
+- Validation: 10/10 new lifecycle acceptance tests, 77/77 widened
+  provider/AWS/IaC/router/promotion tests with one expected live AWS skip,
+  28/28 targeted legacy ProviderOps tests, 279/279 complete legacy API tests,
+  double schema application, focused Ruff, web typecheck, and client tests.
+
 ## 2026-07-26 BOSS-25–31 OSS runtime seams + BOSS-119 legacy closure
 
 - Active branch `ai/codex/oss-ports-baseline` starts from clean `main` at

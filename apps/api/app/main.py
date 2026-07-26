@@ -326,9 +326,15 @@ from .schemas import (
     ModelRouteDecisionSimulateResponse,
     ModelRouteDecisionSummary,
     ProviderAccountCreateRequest,
+    ProviderAccountLifecycleRequest,
     ProviderAccountListResponse,
     ProviderAccountSummary,
+    ProviderAccountUpdateRequest,
     ProviderConnectionTestResponse,
+    ProviderCredentialRotateRequest,
+    ProviderCredentialRotationResponse,
+    ProviderDefinitionListResponse,
+    ProviderDefinitionSummary,
     ProviderHealthListResponse,
     ProviderHealthSummary,
     PullRequestMergeJobRequest,
@@ -530,6 +536,7 @@ from .services.receipts import ReceiptService
 from .services.resource_plane import (
     ChangeSetNotFoundError,
     ProviderAccountNotFoundError,
+    ProviderCredentialError,
     ResourcePlaneService,
 )
 from .services import terraform_drift as terraform_drift_service
@@ -8418,6 +8425,11 @@ def create_secret_ref(payload: SecretRefCreateRequest) -> SecretRefSummary:
                 status=payload.status,
                 metadata=payload.metadata,
                 actor=payload.actor,
+                scope_type=payload.scope_type,
+                scope_id=payload.scope_id,
+                secret_kind=payload.secret_kind,
+                storage_backend=payload.storage_backend,
+                rotation_due_at=payload.rotation_due_at,
             )
         except ValueError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
@@ -8453,6 +8465,7 @@ def update_secret_ref(
                 provider=payload.provider,
                 status=payload.status,
                 metadata=payload.metadata,
+                rotation_due_at=payload.rotation_due_at,
                 actor=payload.actor,
             )
         except SecretRefNotFoundError as error:
@@ -8487,6 +8500,16 @@ def delete_secret_ref(
     return Response(status_code=204)
 
 
+@app.get("/v1/provider-definitions", response_model=ProviderDefinitionListResponse)
+def list_provider_definitions() -> ProviderDefinitionListResponse:
+    return ProviderDefinitionListResponse(
+        items=[
+            ProviderDefinitionSummary(**item)
+            for item in resource_plane.list_provider_definitions()
+        ]
+    )
+
+
 @app.get("/v1/providers", response_model=ProviderAccountListResponse)
 def list_provider_accounts(project_id: str) -> ProviderAccountListResponse:
     with begin(engine) as connection:
@@ -8514,7 +8537,10 @@ def create_provider_account(
                 project_id=payload.project_id,
                 provider=payload.provider,
                 account_label=payload.account_label,
+                auth_method=payload.auth_method,
                 credential_ref=payload.credential_ref,
+                credential_refs=payload.credential_refs,
+                connection_metadata=payload.connection_metadata,
                 scopes=payload.scopes,
                 read_only=payload.read_only,
                 deploy_capable=payload.deploy_capable,
@@ -8525,6 +8551,162 @@ def create_provider_account(
         except ValueError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
         return ProviderAccountSummary(**item)
+
+
+@app.get(
+    "/v1/providers/{provider_account_id}",
+    response_model=ProviderAccountSummary,
+)
+def get_provider_account(
+    provider_account_id: str,
+    project_id: str,
+) -> ProviderAccountSummary:
+    with begin(engine) as connection:
+        try:
+            item = resource_plane.get_provider_account(
+                connection, project_id, provider_account_id
+            )
+        except ProviderAccountNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        return ProviderAccountSummary(**item)
+
+
+@app.patch(
+    "/v1/providers/{provider_account_id}",
+    response_model=ProviderAccountSummary,
+)
+def update_provider_account(
+    provider_account_id: str,
+    payload: ProviderAccountUpdateRequest,
+) -> ProviderAccountSummary:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection,
+            payload.project_id,
+            payload.actor,
+            "providerops_manage",
+        )
+        try:
+            item = resource_plane.update_provider_account(
+                connection,
+                project_id=payload.project_id,
+                provider_account_id=provider_account_id,
+                account_label=payload.account_label,
+                scopes=payload.scopes,
+                read_only=payload.read_only,
+                deploy_capable=payload.deploy_capable,
+                billing_readable=payload.billing_readable,
+                destructive_actions_disabled=payload.destructive_actions_disabled,
+                connection_metadata=payload.connection_metadata,
+                owner_actor=payload.owner_actor,
+                actor=payload.actor,
+            )
+        except ProviderAccountNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        return ProviderAccountSummary(**item)
+
+
+def _transition_provider_account(
+    provider_account_id: str,
+    payload: ProviderAccountLifecycleRequest,
+    action: str,
+) -> ProviderAccountSummary:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection,
+            payload.project_id,
+            payload.actor,
+            "providerops_manage",
+        )
+        try:
+            item = resource_plane.transition_provider_account(
+                connection,
+                project_id=payload.project_id,
+                provider_account_id=provider_account_id,
+                action=action,
+                actor=payload.actor,
+            )
+        except ProviderAccountNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except (ProviderCredentialError, ValueError) as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        return ProviderAccountSummary(**item)
+
+
+@app.post(
+    "/v1/providers/{provider_account_id}/enable",
+    response_model=ProviderAccountSummary,
+)
+def enable_provider_account(
+    provider_account_id: str,
+    payload: ProviderAccountLifecycleRequest,
+) -> ProviderAccountSummary:
+    return _transition_provider_account(provider_account_id, payload, "enable")
+
+
+@app.post(
+    "/v1/providers/{provider_account_id}/disable",
+    response_model=ProviderAccountSummary,
+)
+def disable_provider_account(
+    provider_account_id: str,
+    payload: ProviderAccountLifecycleRequest,
+) -> ProviderAccountSummary:
+    return _transition_provider_account(provider_account_id, payload, "disable")
+
+
+@app.post(
+    "/v1/providers/{provider_account_id}/revoke",
+    response_model=ProviderAccountSummary,
+)
+def revoke_provider_account(
+    provider_account_id: str,
+    payload: ProviderAccountLifecycleRequest,
+) -> ProviderAccountSummary:
+    return _transition_provider_account(provider_account_id, payload, "revoke")
+
+
+@app.post(
+    "/v1/providers/{provider_account_id}/rotate",
+    response_model=ProviderCredentialRotationResponse,
+)
+def rotate_provider_credentials(
+    provider_account_id: str,
+    payload: ProviderCredentialRotateRequest,
+) -> ProviderCredentialRotationResponse:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection,
+            payload.project_id,
+            payload.actor,
+            "providerops_manage",
+        )
+        try:
+            result = resource_plane.rotate_provider_credentials(
+                connection,
+                project_id=payload.project_id,
+                provider_account_id=provider_account_id,
+                credential_ref=payload.credential_ref,
+                credential_refs=payload.credential_refs,
+                overlap_minutes=payload.overlap_minutes,
+                actor=payload.actor,
+            )
+        except ProviderAccountNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except (SecretRefNotFoundError, ValueError) as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        return ProviderCredentialRotationResponse(
+            provider_account=ProviderAccountSummary(**result["provider_account"]),
+            prior_secret_refs=[
+                SecretRefSummary(**item) for item in result["prior_secret_refs"]
+            ],
+            active_secret_refs=[
+                SecretRefSummary(**item) for item in result["active_secret_refs"]
+            ],
+            overlap_expires_at=result["overlap_expires_at"],
+        )
 
 
 @app.post("/v1/providers/{provider_account_id}/test", response_model=ProviderConnectionTestResponse)
@@ -8544,6 +8726,8 @@ def test_provider_account(
             )
         except ProviderAccountNotFoundError as error:
             raise HTTPException(status_code=404, detail=str(error)) from error
+        except ProviderCredentialError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
         return ProviderConnectionTestResponse(
             status=result["status"],
             provider_account=ProviderAccountSummary(**result["provider_account"]),

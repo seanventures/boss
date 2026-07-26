@@ -3565,11 +3565,21 @@ class PackImportRequest(BaseModel):
 class SecretRefSummary(BaseModel):
     id: str
     project_id: str
+    scope_type: str
+    scope_id: str
     ref_kind: str
     ref_key: str
     provider: Optional[str] = None
+    secret_kind: str
+    storage_backend: str
     status: str
     metadata: dict[str, Any] = Field(default_factory=dict)
+    rotation_due_at: Optional[str] = None
+    last_verified_at: Optional[str] = None
+    supersedes_secret_ref_id: Optional[str] = None
+    overlap_expires_at: Optional[str] = None
+    revoked_at: Optional[str] = None
+    revoked_by: Optional[str] = None
     created_by: str
     created_at: str
     updated_at: str
@@ -3590,6 +3600,11 @@ class SecretRefCreateRequest(BaseModel):
     provider: Optional[str] = None
     status: str = "active"
     metadata: dict[str, Any] = Field(default_factory=dict)
+    scope_type: str = "project"
+    scope_id: Optional[str] = None
+    secret_kind: str = "api_token"
+    storage_backend: Optional[str] = None
+    rotation_due_at: Optional[datetime] = None
     actor: str = "system"
 
 
@@ -3598,6 +3613,7 @@ class SecretRefUpdateRequest(BaseModel):
     provider: Optional[str] = None
     status: Optional[str] = None
     metadata: Optional[dict[str, Any]] = None
+    rotation_due_at: Optional[datetime] = None
     actor: str = "system"
 
 
@@ -4055,9 +4071,19 @@ class ProviderAccountSummary(BaseModel):
     project_id: str
     provider: str
     account_label: str
+    auth_method: str
     credential_ref: Optional[str] = None
+    credential_refs: dict[str, str] = Field(default_factory=dict)
+    connection_metadata: dict[str, Any] = Field(default_factory=dict)
     scopes: list[str]
     status: str
+    owner_actor: Optional[str] = None
+    credential_version: int = 1
+    credential_rotated_at: Optional[str] = None
+    disabled_at: Optional[str] = None
+    disabled_by: Optional[str] = None
+    revoked_at: Optional[str] = None
+    revoked_by: Optional[str] = None
     read_only: bool
     deploy_capable: bool
     billing_readable: bool
@@ -4081,7 +4107,10 @@ class ProviderAccountCreateRequest(BaseModel):
     project_id: str
     provider: str
     account_label: str
+    auth_method: Optional[str] = None
     credential_ref: Optional[str] = None
+    credential_refs: dict[str, str] = Field(default_factory=dict)
+    connection_metadata: dict[str, Any] = Field(default_factory=dict)
     scopes: list[str] = Field(default_factory=list)
     read_only: bool = True
     deploy_capable: bool = False
@@ -4095,6 +4124,66 @@ class ProviderAccountCreateRequest(BaseModel):
         self.account_label = _require_text(self.account_label, "account_label")
         self.actor = _require_text(self.actor, "actor")
         return self
+
+
+class ProviderAccountUpdateRequest(BaseModel):
+    project_id: str
+    account_label: Optional[str] = None
+    scopes: Optional[list[str]] = None
+    read_only: Optional[bool] = None
+    deploy_capable: Optional[bool] = None
+    billing_readable: Optional[bool] = None
+    destructive_actions_disabled: Optional[bool] = None
+    connection_metadata: Optional[dict[str, Any]] = None
+    owner_actor: Optional[str] = None
+    actor: str = "ceo"
+
+
+class ProviderAccountLifecycleRequest(BaseModel):
+    project_id: str
+    actor: str = "ceo"
+
+
+class ProviderCredentialRotateRequest(BaseModel):
+    project_id: str
+    credential_ref: Optional[str] = None
+    credential_refs: dict[str, str] = Field(default_factory=dict)
+    overlap_minutes: int = Field(default=15, ge=0, le=1440)
+    actor: str = "ceo"
+
+
+class ProviderCredentialRotationResponse(BaseModel):
+    provider_account: ProviderAccountSummary
+    prior_secret_refs: list[SecretRefSummary]
+    active_secret_refs: list[SecretRefSummary]
+    overlap_expires_at: str
+
+
+class ProviderCredentialSlotSummary(BaseModel):
+    key: str
+    secret_kind: str
+    required: bool
+    default_ref: Optional[str] = None
+
+
+class ProviderAuthMethodSummary(BaseModel):
+    key: str
+    runtime_status: str
+    credential_slots: list[ProviderCredentialSlotSummary]
+
+
+class ProviderDefinitionSummary(BaseModel):
+    provider: str
+    display_name: str
+    category: str
+    adapter_status: str
+    default_auth_method: str
+    auth_methods: list[ProviderAuthMethodSummary]
+    capabilities: list[str]
+
+
+class ProviderDefinitionListResponse(BaseModel):
+    items: list[ProviderDefinitionSummary]
 
 
 class ProviderConnectionTestResponse(BaseModel):

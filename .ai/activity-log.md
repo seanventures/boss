@@ -3,6 +3,18 @@
 All 15-min terminal updates and major milestones appended here. Chronological, newest at top.
 
 ---
+## 2026-07-26 — Codex — BOSS-236 provider credential lifecycle
+
+- Advanced BOSS-236 Backlog → Todo → In Progress in Plane after deduping the
+  BOSS-18, BOSS-64/65/70, and BOSS-130 workstreams.
+- Added initial-cloud connection definitions, named SecretRef persistence,
+  provider account lifecycle/rotation APIs, fail-before-adapter enforcement,
+  typed client/OpenAPI contracts, and product/technical/user-story updates.
+- Validation passes 10 focused lifecycle tests, 77 widened provider/IaC/router/
+  promotion tests with one live-only AWS skip, 28 legacy ProviderOps tests,
+  279 complete legacy API tests, and double schema application.
+
+---
 ## 2026-07-26 — Codex — BOSS-25–31 OSS seams and BOSS-119
 
 - Advanced BOSS-25–31 and BOSS-119 through Plane before implementation.

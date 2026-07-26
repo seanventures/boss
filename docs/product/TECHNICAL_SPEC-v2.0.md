@@ -71,14 +71,30 @@ Provider connections use `ProviderAccount`, `ProviderAdapter`, `SecretRef`, `Cap
 
 Required provider-account controls:
 
+- Publish provider/auth definitions with named credential slots and explicit
+  `available` versus `planned` runtime status for AWS, Azure, GCP,
+  DigitalOcean, and OVHcloud.
 - Scope to org, workspace, or project.
 - Mark read-only, deploy-capable, billing-readable, destructive-actions-disabled.
 - Detect and show missing permissions.
 - Rotate credentials.
 - Disable provider.
+- Revoke provider access irreversibly inside BOSS and fail before adapter
+  invocation when the account or any referenced credential is disabled or
+  revoked.
 - Audit every provider access.
 
 Community may use local environment or local vault SecretRefs. Cloud uses managed connector authorization through BOSS Account Connect. Enterprise can run attached to Account Connect or detached with private credential stores.
+
+`ProviderAccount` stores `auth_method`, named `credential_refs`,
+non-secret `connection_metadata`, owner, credential version/rotation time, and
+disable/revoke evidence. `credential_ref` remains the backwards-compatible
+primary pointer for adapter execution. `SecretRef` stores scope, secret kind,
+storage backend, rotation/verification time, predecessor/overlap lineage, and
+revocation evidence—never secret material. Rotation activates the new named
+pointers immediately, marks replaced pointers as `rotating` for a bounded
+overlap, clears prior connection-test evidence, and increments the account
+credential version.
 
 ## Resource Sync and Reconciliation Workers
 
