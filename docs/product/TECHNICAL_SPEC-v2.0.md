@@ -475,11 +475,13 @@ GitHub project integration:
 - `POST /v1/github/connections/{id}/enable|disable|revoke|test`
 - `GET/POST /v1/github/repository-bindings`
 - `GET/PATCH /v1/github/repository-bindings/{id}`
-- Planned under BOSS-248 through BOSS-255:
+- Implemented through BOSS-253:
   `/v1/github/branch-policies`, `/v1/github/branch-leases`,
   `/v1/github/branch-snapshots`, `/v1/github/code-sync-runs`,
-  `/v1/github/conflict-sets`, `/v1/github/merge-authorizations`, and the
-  reconciler/operations read models.
+  `/v1/github/conflict-sets`, `/v1/github/resolution-plans`, and
+  `/v1/github/merge-authorizations`.
+- Planned under BOSS-254/BOSS-255: the webhook/poll reconciler and Mission
+  Control operations read models.
 
 Reusable Workflows:
 

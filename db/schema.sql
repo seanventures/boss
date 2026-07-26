@@ -1318,6 +1318,72 @@ CREATE TABLE IF NOT EXISTS github_resolution_plans (
 CREATE INDEX IF NOT EXISTS idx_github_resolution_plans_project
   ON github_resolution_plans(project_id, status, created_at DESC);
 
+CREATE TABLE IF NOT EXISTS github_merge_authorizations (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  repository_binding_id TEXT NOT NULL REFERENCES github_repository_bindings(id) ON DELETE CASCADE,
+  branch_policy_id TEXT NOT NULL REFERENCES github_branch_policies(id),
+  branch_policy_version INTEGER NOT NULL,
+  code_sync_run_id TEXT REFERENCES github_code_sync_runs(id),
+  resolution_plan_id TEXT REFERENCES github_resolution_plans(id),
+  pull_request_number BIGINT NOT NULL,
+  pull_request_url TEXT NOT NULL,
+  source_ref TEXT NOT NULL,
+  target_ref TEXT NOT NULL,
+  head_commit_sha TEXT NOT NULL,
+  head_tree_sha TEXT NOT NULL,
+  base_commit_sha TEXT NOT NULL,
+  base_tree_sha TEXT NOT NULL,
+  merge_method TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending_approval',
+  dedupe_key TEXT NOT NULL,
+  required_checks JSONB NOT NULL DEFAULT '[]'::jsonb,
+  observed_checks JSONB NOT NULL DEFAULT '[]'::jsonb,
+  required_approvals INTEGER NOT NULL DEFAULT 1,
+  observed_reviews JSONB NOT NULL DEFAULT '[]'::jsonb,
+  evidence_bundle JSONB NOT NULL DEFAULT '{}'::jsonb,
+  policy_evaluation JSONB NOT NULL DEFAULT '{}'::jsonb,
+  authorized_by TEXT,
+  authorized_at TIMESTAMPTZ,
+  expires_at TIMESTAMPTZ NOT NULL,
+  queue_position BIGSERIAL NOT NULL UNIQUE,
+  queued_at TIMESTAMPTZ,
+  branch_lease_id TEXT REFERENCES github_branch_leases(id),
+  fencing_token BIGINT,
+  changeset_id TEXT,
+  apply_attempts INTEGER NOT NULL DEFAULT 0,
+  receipt_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
+  resource_receipt_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
+  result_merge_sha TEXT,
+  result_target_tree_sha TEXT,
+  rollback_plan JSONB NOT NULL DEFAULT '{}'::jsonb,
+  error JSONB,
+  created_by TEXT NOT NULL,
+  applied_by TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  merged_at TIMESTAMPTZ,
+  UNIQUE(project_id, dedupe_key),
+  CHECK (pull_request_number > 0),
+  CHECK (required_approvals >= 0),
+  CHECK (merge_method IN ('merge', 'squash', 'rebase')),
+  CHECK (status IN (
+    'pending_approval', 'authorized', 'queued', 'applying', 'merged',
+    'blocked', 'expired', 'failed', 'deadlettered', 'cancelled'
+  ))
+);
+CREATE INDEX IF NOT EXISTS idx_github_merge_authorizations_project
+  ON github_merge_authorizations(project_id, status, queue_position);
+CREATE INDEX IF NOT EXISTS idx_github_merge_authorizations_target_queue
+  ON github_merge_authorizations(
+    repository_binding_id, target_ref, status, queue_position
+  );
+CREATE UNIQUE INDEX IF NOT EXISTS uq_github_merge_authorizations_active_pr
+  ON github_merge_authorizations(repository_binding_id, pull_request_number)
+  WHERE status IN (
+    'pending_approval', 'authorized', 'queued', 'applying'
+  );
+
 CREATE TABLE IF NOT EXISTS provider_adapters (
   id TEXT PRIMARY KEY,
   provider TEXT NOT NULL,

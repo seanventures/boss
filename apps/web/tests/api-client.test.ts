@@ -3589,6 +3589,44 @@ describe("createBossApiClient", () => {
       fencing_token: 7,
       actor: "ceo",
     });
+    await client.listGitHubMergeAuthorizations("boss-dogfood", {
+      repository_binding_id: "ghrepo_1",
+      target_ref: "main",
+      status: "queued",
+      limit: 25,
+    });
+    await client.createGitHubMergeAuthorization({
+      project_id: "boss-dogfood",
+      repository_binding_id: "ghrepo_1",
+      pull_request_number: 84,
+      source_ref: "ai/codex/work",
+      target_ref: "main",
+      merge_method: "merge",
+      dedupe_key: "merge:84",
+      evidence_bundle: { evidence_refs: ["artifact://tests"] },
+      expires_in_seconds: 3600,
+      actor: "ceo",
+    });
+    await client.getGitHubMergeAuthorization("boss-dogfood", "ghmerge_1");
+    await client.authorizeGitHubMerge("ghmerge_1", {
+      project_id: "boss-dogfood",
+      review_evidence: {
+        verdict: "approved",
+        summary: "Independent release review passed.",
+      },
+      actor: "cto",
+    });
+    await client.enqueueGitHubMerge("ghmerge_1", {
+      project_id: "boss-dogfood",
+      actor: "cto",
+    });
+    await client.applyGitHubMerge("ghmerge_1", {
+      project_id: "boss-dogfood",
+      lease_id: "ghlease_main",
+      lease_token: "lease-token-main",
+      fencing_token: 8,
+      actor: "ceo",
+    });
 
     expect(calls.map((call) => call.url)).toEqual([
       "http://127.0.0.1:8000/v1/github/code-sync-runs?project_id=boss-dogfood&repository_binding_id=ghrepo_1&status=conflicted&limit=25",
@@ -3602,6 +3640,12 @@ describe("createBossApiClient", () => {
       "http://127.0.0.1:8000/v1/github/resolution-plans/ghresolve_1?project_id=boss-dogfood",
       "http://127.0.0.1:8000/v1/github/resolution-plans/ghresolve_1/approve",
       "http://127.0.0.1:8000/v1/github/resolution-plans/ghresolve_1/apply",
+      "http://127.0.0.1:8000/v1/github/merge-authorizations?project_id=boss-dogfood&repository_binding_id=ghrepo_1&target_ref=main&status=queued&limit=25",
+      "http://127.0.0.1:8000/v1/github/merge-authorizations",
+      "http://127.0.0.1:8000/v1/github/merge-authorizations/ghmerge_1?project_id=boss-dogfood",
+      "http://127.0.0.1:8000/v1/github/merge-authorizations/ghmerge_1/authorize",
+      "http://127.0.0.1:8000/v1/github/merge-authorizations/ghmerge_1/enqueue",
+      "http://127.0.0.1:8000/v1/github/merge-authorizations/ghmerge_1/apply",
     ]);
     expect(JSON.parse(String(calls[3].init?.body))).toMatchObject({
       lease_id: "ghlease_1",
@@ -3611,6 +3655,11 @@ describe("createBossApiClient", () => {
     expect(JSON.parse(String(calls[9].init?.body))).toMatchObject({
       actor: "cto",
       review_evidence: { verdict: "approved" },
+    });
+    expect(JSON.parse(String(calls[16].init?.body))).toMatchObject({
+      lease_id: "ghlease_main",
+      lease_token: "lease-token-main",
+      fencing_token: 8,
     });
   });
 });

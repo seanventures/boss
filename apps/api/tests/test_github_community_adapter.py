@@ -9,6 +9,7 @@ from apps.api.app.config import Settings
 from apps.api.app.services.github_adapter import (
     GitHubAdapter,
     GitHubMergeConflictError,
+    GitHubMergeRejectedError,
 )
 from apps.api.app.services.github_app_adapter import (
     GitHubAppAdapter,
@@ -351,6 +352,162 @@ def test_safe_branch_write_primitives_are_non_force_and_conflicts_are_typed(
         if call["method"] == "POST" and call["url"].endswith("/git/commits")
     )
     assert commit_call["json"]["parents"] == [old_sha, new_sha]
+
+
+def test_guarded_pull_request_merge_binds_exact_snapshot(monkeypatch):
+    calls: list[dict] = []
+    head_sha = "a" * 40
+    base_sha = "b" * 40
+
+    def fake_request(method: str, url: str, **kwargs) -> httpx.Response:
+        calls.append({"method": method, "url": url, **kwargs})
+        if method == "GET" and url.endswith(f"/git/commits/{head_sha}"):
+            return _response(
+                method,
+                url,
+                200,
+                json_body={"sha": head_sha, "tree": {"sha": "1" * 40}},
+            )
+        if method == "GET" and url.endswith("/pulls/42"):
+            return _response(
+                method,
+                url,
+                200,
+                json_body={
+                    "number": 42,
+                    "html_url": "https://github.test/pull/42",
+                    "state": "open",
+                    "draft": False,
+                    "mergeable": True,
+                    "mergeable_state": "clean",
+                    "head": {
+                        "ref": "ai/codex/work",
+                        "sha": head_sha,
+                        "repo": {"full_name": "acme/widget"},
+                    },
+                    "base": {
+                        "ref": "main",
+                        "sha": base_sha,
+                        "repo": {"full_name": "acme/widget"},
+                    },
+                    "updated_at": "2026-07-26T16:00:00Z",
+                },
+            )
+        if method == "GET" and "/pulls/42/reviews" in url:
+            return _response(
+                method,
+                url,
+                200,
+                json_body=[
+                    {
+                        "id": 7,
+                        "user": {"login": "cto"},
+                        "state": "APPROVED",
+                        "commit_id": head_sha,
+                        "submitted_at": "2026-07-26T16:01:00Z",
+                    }
+                ],
+            )
+        if method == "PUT" and url.endswith("/pulls/42/merge"):
+            return _response(
+                method,
+                url,
+                200,
+                json_body={
+                    "sha": "c" * 40,
+                    "merged": True,
+                    "message": "Pull Request successfully merged",
+                },
+            )
+        raise AssertionError(f"unexpected GitHub request: {method} {url}")
+
+    monkeypatch.setattr(httpx, "request", fake_request)
+    adapter = GitHubAdapter(_settings(), token="scoped-token")
+
+    assert adapter.commit_identity(head_sha) == {
+        "commit_sha": head_sha,
+        "tree_sha": "1" * 40,
+    }
+    snapshot = adapter.pull_request_snapshot(42)
+    reviews = adapter.pull_request_reviews(42)
+    merged = adapter.merge_pull_request_guarded(
+        pull_number=42,
+        expected_head_sha=head_sha,
+        expected_base_sha=base_sha,
+        expected_head_ref="ai/codex/work",
+        expected_base_ref="main",
+        merge_method="merge",
+        commit_title="governed merge",
+    )
+
+    assert snapshot["head_sha"] == head_sha
+    assert snapshot["base_sha"] == base_sha
+    assert reviews == [
+        {
+            "id": 7,
+            "reviewer": "cto",
+            "state": "APPROVED",
+            "commit_sha": head_sha,
+            "submitted_at": "2026-07-26T16:01:00Z",
+        }
+    ]
+    assert merged["commit_sha"] == "c" * 40
+    merge_call = next(call for call in calls if call["method"] == "PUT")
+    assert merge_call["json"] == {
+        "sha": head_sha,
+        "commit_title": "governed merge",
+        "merge_method": "merge",
+    }
+
+
+def test_guarded_pull_request_merge_rejects_stale_head_without_write(monkeypatch):
+    calls: list[dict] = []
+
+    def fake_request(method: str, url: str, **kwargs) -> httpx.Response:
+        calls.append({"method": method, "url": url, **kwargs})
+        return _response(
+            method,
+            url,
+            200,
+            json_body={
+                "number": 42,
+                "html_url": "https://github.test/pull/42",
+                "state": "open",
+                "draft": False,
+                "mergeable": True,
+                "mergeable_state": "clean",
+                "head": {
+                    "ref": "ai/codex/work",
+                    "sha": "c" * 40,
+                    "repo": {"full_name": "acme/widget"},
+                },
+                "base": {
+                    "ref": "main",
+                    "sha": "b" * 40,
+                    "repo": {"full_name": "acme/widget"},
+                },
+                "updated_at": "2026-07-26T16:00:00Z",
+            },
+        )
+
+    monkeypatch.setattr(httpx, "request", fake_request)
+    adapter = GitHubAdapter(_settings(), token="scoped-token")
+
+    with pytest.raises(
+        GitHubMergeRejectedError,
+        match="snapshot changed",
+    ):
+        adapter.merge_pull_request_guarded(
+            pull_number=42,
+            expected_head_sha="a" * 40,
+            expected_base_sha="b" * 40,
+            expected_head_ref="ai/codex/work",
+            expected_base_ref="main",
+            merge_method="merge",
+            commit_title="governed merge",
+        )
+
+    assert [call["method"] for call in calls] == ["GET"]
 
 
 @pytest.mark.parametrize(

@@ -3871,6 +3871,102 @@ export type ModelRouteDecisionSimulateResponse = {
   decision: ModelRouteDecisionSummary;
 };
 
+export type GitHubMergeAuthorizationSummary = {
+  id: string;
+  project_id: string;
+  repository_binding_id: string;
+  branch_policy_id: string;
+  branch_policy_version: number;
+  code_sync_run_id: string | null;
+  resolution_plan_id: string | null;
+  pull_request_number: number;
+  pull_request_url: string;
+  source_ref: string;
+  target_ref: string;
+  head_commit_sha: string;
+  head_tree_sha: string;
+  base_commit_sha: string;
+  base_tree_sha: string;
+  merge_method: "merge" | "squash" | "rebase";
+  status:
+    | "pending_approval"
+    | "authorized"
+    | "queued"
+    | "applying"
+    | "merged"
+    | "blocked"
+    | "expired"
+    | "failed"
+    | "deadlettered"
+    | "cancelled";
+  dedupe_key: string;
+  required_checks: string[];
+  observed_checks: Array<Record<string, unknown>>;
+  required_approvals: number;
+  observed_reviews: Array<Record<string, unknown>>;
+  evidence_bundle: Record<string, unknown>;
+  policy_evaluation: Record<string, unknown>;
+  authorized_by: string | null;
+  authorized_at: string | null;
+  expires_at: string;
+  queue_position: number;
+  queued_at: string | null;
+  branch_lease_id: string | null;
+  fencing_token: number | null;
+  changeset_id: string;
+  apply_attempts: number;
+  receipt_ids: string[];
+  resource_receipt_ids: string[];
+  result_merge_sha: string | null;
+  result_target_tree_sha: string | null;
+  rollback_plan: Record<string, unknown>;
+  error: Record<string, unknown> | null;
+  created_by: string;
+  applied_by: string | null;
+  created_at: string;
+  updated_at: string;
+  merged_at: string | null;
+};
+
+export type GitHubMergeAuthorizationListResponse = {
+  project_id: string;
+  items: GitHubMergeAuthorizationSummary[];
+};
+
+export type GitHubMergeAuthorizationCreateRequest = {
+  project_id: string;
+  repository_binding_id: string;
+  pull_request_number: number;
+  source_ref: string;
+  target_ref: string;
+  merge_method?: "merge" | "squash" | "rebase";
+  dedupe_key: string;
+  evidence_bundle: Record<string, unknown>;
+  expires_in_seconds?: number;
+  code_sync_run_id?: string;
+  resolution_plan_id?: string;
+  actor?: string;
+};
+
+export type GitHubMergeAuthorizationApproveRequest = {
+  project_id: string;
+  review_evidence: Record<string, unknown>;
+  actor: string;
+};
+
+export type GitHubMergeAuthorizationEnqueueRequest = {
+  project_id: string;
+  actor?: string;
+};
+
+export type GitHubMergeAuthorizationApplyRequest = {
+  project_id: string;
+  lease_id: string;
+  lease_token: string;
+  fencing_token: number;
+  actor?: string;
+};
+
 export type ProviderAccountSummary = {
   id: string;
   project_id: string;
@@ -6497,6 +6593,78 @@ export function createBossApiClient(config: BossApiClientConfig) {
       return request<GitHubResolutionApplyResponse>(
         "POST",
         `/v1/github/resolution-plans/${encodeURIComponent(planId)}/apply`,
+        { body: payload },
+      );
+    },
+    listGitHubMergeAuthorizations(
+      projectId: string,
+      options: {
+        repository_binding_id?: string;
+        target_ref?: string;
+        status?: string;
+        limit?: number;
+      } = {},
+    ) {
+      return request<GitHubMergeAuthorizationListResponse>(
+        "GET",
+        "/v1/github/merge-authorizations",
+        {
+          query: {
+            project_id: projectId,
+            repository_binding_id: options.repository_binding_id,
+            target_ref: options.target_ref,
+            status: options.status,
+            limit: options.limit ?? 100,
+          },
+        },
+      );
+    },
+    createGitHubMergeAuthorization(
+      payload: GitHubMergeAuthorizationCreateRequest,
+    ) {
+      return request<GitHubMergeAuthorizationSummary>(
+        "POST",
+        "/v1/github/merge-authorizations",
+        { body: payload },
+      );
+    },
+    getGitHubMergeAuthorization(
+      projectId: string,
+      authorizationId: string,
+    ) {
+      return request<GitHubMergeAuthorizationSummary>(
+        "GET",
+        `/v1/github/merge-authorizations/${encodeURIComponent(authorizationId)}`,
+        { query: { project_id: projectId } },
+      );
+    },
+    authorizeGitHubMerge(
+      authorizationId: string,
+      payload: GitHubMergeAuthorizationApproveRequest,
+    ) {
+      return request<GitHubMergeAuthorizationSummary>(
+        "POST",
+        `/v1/github/merge-authorizations/${encodeURIComponent(authorizationId)}/authorize`,
+        { body: payload },
+      );
+    },
+    enqueueGitHubMerge(
+      authorizationId: string,
+      payload: GitHubMergeAuthorizationEnqueueRequest,
+    ) {
+      return request<GitHubMergeAuthorizationSummary>(
+        "POST",
+        `/v1/github/merge-authorizations/${encodeURIComponent(authorizationId)}/enqueue`,
+        { body: payload },
+      );
+    },
+    applyGitHubMerge(
+      authorizationId: string,
+      payload: GitHubMergeAuthorizationApplyRequest,
+    ) {
+      return request<GitHubMergeAuthorizationSummary>(
+        "POST",
+        `/v1/github/merge-authorizations/${encodeURIComponent(authorizationId)}/apply`,
         { body: payload },
       );
     },

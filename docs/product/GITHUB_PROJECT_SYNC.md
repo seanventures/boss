@@ -195,6 +195,36 @@ non-force update. Both provider actions have independent ChangeSet operations,
 Receipts, and ResourceReceipts. The protected target remains unchanged until
 BOSS-253 supplies a current `MergeAuthorization`.
 
+## BOSS-253 implemented contract
+
+`MergeAuthorization` is a durable, expiring grant over one exact pull-request
+snapshot. Requesting authorization observes and pins the project repository
+binding, active branch-policy ID/version, PR number and URL, source/target refs,
+head/base commit and tree identities, required checks, effective reviews,
+evidence bundle, merge method, and optional CodeSyncRun/ResolutionPlan
+lineage. The observation is Receipt-backed and creates a zero-cost,
+risk-tier-three ChangeSet with a non-destructive revert-PR rollback plan.
+
+Approval must come from a `github_manage` actor other than the requester and
+does not extend expiry. Authorized entries enter a deterministic per-repository
+target queue; an entry cannot run while an earlier queued/applying/retryable
+entry owns that target.
+
+Apply requires the raw lease token and monotonic fence for the exact protected
+target. Immediately before the provider write BOSS re-observes the PR and
+rejects changed policy, refs, commits, trees, target head, draft/closed or
+unmergeable posture, missing/failing required checks, stale approvals, or a
+current request for changes. The adapter performs a second exact-snapshot guard
+and submits the merge through the GitHub pull-request API with the authorized
+head SHA; it never directly pushes or force-updates the target ref.
+
+Every observation and verification read has a deduplicated Receipt. Every
+merge attempt has one canonical ChangeSet operation, Receipt, and
+ResourceReceipt. Successful apply verifies the resulting target commit/tree
+and records the previous target SHA plus a manual, newly authorized revert-PR
+plan. Provider failures are redacted, retry at most three times, and become a
+visible deadletter.
+
 ## Completion criteria
 
 The parent feature is complete only when all nine slices are shipped, the

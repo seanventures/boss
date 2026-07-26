@@ -254,6 +254,12 @@ from .schemas import (
     GitHubConnectionSummary,
     GitHubConnectionTestRequest,
     GitHubConnectionTestResponse,
+    GitHubMergeAuthorizationApplyRequest,
+    GitHubMergeAuthorizationApproveRequest,
+    GitHubMergeAuthorizationCreateRequest,
+    GitHubMergeAuthorizationEnqueueRequest,
+    GitHubMergeAuthorizationListResponse,
+    GitHubMergeAuthorizationSummary,
     GitHubRepositoryBindingCreateRequest,
     GitHubRepositoryBindingListResponse,
     GitHubRepositoryBindingSummary,
@@ -554,6 +560,12 @@ from .services.github_connections import (
     GitHubConnectionStateError,
     GitHubRepositoryBindingNotFoundError,
 )
+from .services.github_merges import (
+    GitHubMergeAuthorizationNotFoundError,
+    GitHubMergeAuthorizationService,
+    GitHubMergeAuthorizationStaleError,
+    GitHubMergeAuthorizationStateError,
+)
 from .services.infrastructure import (
     InfraResourceNotFoundError,
     InfrastructureService,
@@ -676,6 +688,11 @@ github_branch_leases = GitHubBranchLeaseService(
     github_connections=github_connections,
 )
 github_code_sync = GitHubCodeSyncService(
+    github_connections=github_connections,
+    github_branches=github_branches,
+    github_branch_leases=github_branch_leases,
+)
+github_merge_authorizations = GitHubMergeAuthorizationService(
     github_connections=github_connections,
     github_branches=github_branches,
     github_branch_leases=github_branch_leases,
@@ -9592,6 +9609,204 @@ def apply_github_resolution_plan(
             conflict_set=GitHubConflictSetSummary(**result["conflict_set"]),
             sync_run=GitHubCodeSyncRunSummary(**result["sync_run"]),
         )
+
+
+@app.get(
+    "/v1/github/merge-authorizations",
+    response_model=GitHubMergeAuthorizationListResponse,
+)
+def list_github_merge_authorizations(
+    project_id: str,
+    repository_binding_id: Optional[str] = None,
+    target_ref: Optional[str] = None,
+    status: Optional[str] = None,
+    limit: int = Query(default=100, ge=1, le=200),
+) -> GitHubMergeAuthorizationListResponse:
+    with begin(engine) as connection:
+        return GitHubMergeAuthorizationListResponse(
+            project_id=project_id,
+            items=[
+                GitHubMergeAuthorizationSummary(**item)
+                for item in github_merge_authorizations.list(
+                    connection,
+                    project_id,
+                    repository_binding_id=repository_binding_id,
+                    target_ref=target_ref,
+                    status=status,
+                    limit=limit,
+                )
+            ],
+        )
+
+
+@app.post(
+    "/v1/github/merge-authorizations",
+    response_model=GitHubMergeAuthorizationSummary,
+    status_code=201,
+)
+def create_github_merge_authorization(
+    payload: GitHubMergeAuthorizationCreateRequest,
+) -> GitHubMergeAuthorizationSummary:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection,
+            payload.project_id,
+            payload.actor,
+            "github_manage",
+        )
+        try:
+            item = github_merge_authorizations.request_authorization(
+                connection,
+                project_id=payload.project_id,
+                repository_binding_id=payload.repository_binding_id,
+                pull_request_number=payload.pull_request_number,
+                source_ref=payload.source_ref,
+                target_ref=payload.target_ref,
+                merge_method=payload.merge_method,
+                dedupe_key=payload.dedupe_key,
+                evidence_bundle=payload.evidence_bundle,
+                expires_in_seconds=payload.expires_in_seconds,
+                code_sync_run_id=payload.code_sync_run_id,
+                resolution_plan_id=payload.resolution_plan_id,
+                actor=payload.actor,
+            )
+        except (
+            GitHubRepositoryBindingNotFoundError,
+            GitHubBranchPolicyNotFoundError,
+        ) as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except (
+            GitHubMergeAuthorizationStateError,
+            GitHubMergeAuthorizationStaleError,
+            GitHubConnectionStateError,
+            ValueError,
+        ) as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        return GitHubMergeAuthorizationSummary(**item)
+
+
+@app.get(
+    "/v1/github/merge-authorizations/{authorization_id}",
+    response_model=GitHubMergeAuthorizationSummary,
+)
+def get_github_merge_authorization(
+    authorization_id: str,
+    project_id: str,
+) -> GitHubMergeAuthorizationSummary:
+    with begin(engine) as connection:
+        try:
+            item = github_merge_authorizations.get(
+                connection, project_id, authorization_id
+            )
+        except GitHubMergeAuthorizationNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        return GitHubMergeAuthorizationSummary(**item)
+
+
+@app.post(
+    "/v1/github/merge-authorizations/{authorization_id}/authorize",
+    response_model=GitHubMergeAuthorizationSummary,
+)
+def authorize_github_merge(
+    authorization_id: str,
+    payload: GitHubMergeAuthorizationApproveRequest,
+) -> GitHubMergeAuthorizationSummary:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection,
+            payload.project_id,
+            payload.actor,
+            "github_manage",
+        )
+        try:
+            item = github_merge_authorizations.authorize(
+                connection,
+                project_id=payload.project_id,
+                authorization_id=authorization_id,
+                review_evidence=payload.review_evidence,
+                actor=payload.actor,
+            )
+        except GitHubMergeAuthorizationNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except (
+            GitHubMergeAuthorizationStateError,
+            GitHubMergeAuthorizationStaleError,
+            ValueError,
+        ) as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        return GitHubMergeAuthorizationSummary(**item)
+
+
+@app.post(
+    "/v1/github/merge-authorizations/{authorization_id}/enqueue",
+    response_model=GitHubMergeAuthorizationSummary,
+)
+def enqueue_github_merge(
+    authorization_id: str,
+    payload: GitHubMergeAuthorizationEnqueueRequest,
+) -> GitHubMergeAuthorizationSummary:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection,
+            payload.project_id,
+            payload.actor,
+            "github_manage",
+        )
+        try:
+            item = github_merge_authorizations.enqueue(
+                connection,
+                project_id=payload.project_id,
+                authorization_id=authorization_id,
+                actor=payload.actor,
+            )
+        except GitHubMergeAuthorizationNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except GitHubMergeAuthorizationStateError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        return GitHubMergeAuthorizationSummary(**item)
+
+
+@app.post(
+    "/v1/github/merge-authorizations/{authorization_id}/apply",
+    response_model=GitHubMergeAuthorizationSummary,
+)
+def apply_github_merge(
+    authorization_id: str,
+    payload: GitHubMergeAuthorizationApplyRequest,
+) -> GitHubMergeAuthorizationSummary:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection,
+            payload.project_id,
+            payload.actor,
+            "github_manage",
+        )
+        try:
+            item = github_merge_authorizations.apply(
+                connection,
+                project_id=payload.project_id,
+                authorization_id=authorization_id,
+                lease_id=payload.lease_id,
+                lease_token=payload.lease_token,
+                fencing_token=payload.fencing_token,
+                actor=payload.actor,
+            )
+        except (
+            GitHubMergeAuthorizationNotFoundError,
+            GitHubBranchLeaseNotFoundError,
+            GitHubRepositoryBindingNotFoundError,
+        ) as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except (
+            GitHubMergeAuthorizationStateError,
+            GitHubMergeAuthorizationStaleError,
+            GitHubBranchLeaseConflictError,
+            GitHubBranchLeaseTokenError,
+            GitHubConnectionStateError,
+            ValueError,
+        ) as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        return GitHubMergeAuthorizationSummary(**item)
 
 
 @app.get("/v1/provider-definitions", response_model=ProviderDefinitionListResponse)

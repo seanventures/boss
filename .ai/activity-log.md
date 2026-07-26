@@ -3,6 +3,27 @@
 All 15-min terminal updates and major milestones appended here. Chronological, newest at top.
 
 ---
+## 2026-07-26 — Codex — BOSS-253 governed merge authorization and queue
+
+- Advanced BOSS-253 Backlog → Todo → In Progress in Plane after publishing
+  clean stacked PR #84 for BOSS-251/BOSS-252.
+- Added durable expiring MergeAuthorization state over exact PR, base/head
+  commit/tree, policy, checks, reviews, evidence and optional
+  sync/resolution lineage.
+- Implemented independent approval, deterministic per-target queue ordering,
+  exact target lease/fencing, fresh merge-readiness gates, guarded PR-only
+  merge with expected head SHA, and verified result/rollback evidence.
+- Routed every observation through a Receipt and every merge attempt through a
+  zero-cost risk-tier-three ChangeSet, Receipt, and ResourceReceipt. Failures
+  are redacted, retry three times, and deadletter visibly.
+- Added regression tests for self-approval denial, successful receipted merge,
+  stale head blocking, out-of-order queue denial, failed-check blocking, and
+  bounded provider failure/deadletter behavior.
+- Validation: 40 widened GitHub API/adapter tests, 39 typed-client tests,
+  focused Ruff/compile, TypeScript and route generation, production web build,
+  schema idempotency, OpenAPI route coverage, generated docs, strict MkDocs,
+  and diff checks pass.
+
 ## 2026-07-26 — Codex — BOSS-251/BOSS-252 safe sync and conflict resolution
 
 - Advanced BOSS-251 and BOSS-252 Backlog → Todo → In Progress in Plane before

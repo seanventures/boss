@@ -4791,6 +4791,151 @@ class GitHubResolutionApplyResponse(BaseModel):
     sync_run: GitHubCodeSyncRunSummary
 
 
+class GitHubMergeAuthorizationSummary(BaseModel):
+    id: str
+    project_id: str
+    repository_binding_id: str
+    branch_policy_id: str
+    branch_policy_version: int
+    code_sync_run_id: Optional[str] = None
+    resolution_plan_id: Optional[str] = None
+    pull_request_number: int
+    pull_request_url: str
+    source_ref: str
+    target_ref: str
+    head_commit_sha: str
+    head_tree_sha: str
+    base_commit_sha: str
+    base_tree_sha: str
+    merge_method: Literal["merge", "squash", "rebase"]
+    status: Literal[
+        "pending_approval",
+        "authorized",
+        "queued",
+        "applying",
+        "merged",
+        "blocked",
+        "expired",
+        "failed",
+        "deadlettered",
+        "cancelled",
+    ]
+    dedupe_key: str
+    required_checks: list[str] = Field(default_factory=list)
+    observed_checks: list[dict[str, Any]] = Field(default_factory=list)
+    required_approvals: int
+    observed_reviews: list[dict[str, Any]] = Field(default_factory=list)
+    evidence_bundle: dict[str, Any] = Field(default_factory=dict)
+    policy_evaluation: dict[str, Any] = Field(default_factory=dict)
+    authorized_by: Optional[str] = None
+    authorized_at: Optional[str] = None
+    expires_at: str
+    queue_position: int
+    queued_at: Optional[str] = None
+    branch_lease_id: Optional[str] = None
+    fencing_token: Optional[int] = None
+    changeset_id: str
+    apply_attempts: int
+    receipt_ids: list[str] = Field(default_factory=list)
+    resource_receipt_ids: list[str] = Field(default_factory=list)
+    result_merge_sha: Optional[str] = None
+    result_target_tree_sha: Optional[str] = None
+    rollback_plan: dict[str, Any] = Field(default_factory=dict)
+    error: Optional[dict[str, Any]] = None
+    created_by: str
+    applied_by: Optional[str] = None
+    created_at: str
+    updated_at: str
+    merged_at: Optional[str] = None
+
+
+class GitHubMergeAuthorizationListResponse(BaseModel):
+    project_id: str
+    items: list[GitHubMergeAuthorizationSummary]
+
+
+class GitHubMergeAuthorizationCreateRequest(BaseModel):
+    project_id: str
+    repository_binding_id: str
+    pull_request_number: int = Field(ge=1)
+    source_ref: str
+    target_ref: str
+    merge_method: Literal["merge", "squash", "rebase"] = "merge"
+    dedupe_key: str
+    evidence_bundle: dict[str, Any]
+    expires_in_seconds: int = Field(default=3600, ge=60, le=86400)
+    code_sync_run_id: Optional[str] = None
+    resolution_plan_id: Optional[str] = None
+    actor: str = "ceo"
+
+    @model_validator(mode="after")
+    def validate_github_merge_authorization_create(
+        self,
+    ) -> "GitHubMergeAuthorizationCreateRequest":
+        self.project_id = _require_text(self.project_id, "project_id")
+        self.repository_binding_id = _require_text(
+            self.repository_binding_id, "repository_binding_id"
+        )
+        self.source_ref = _require_text(self.source_ref, "source_ref")
+        self.target_ref = _require_text(self.target_ref, "target_ref")
+        self.dedupe_key = _require_text(self.dedupe_key, "dedupe_key")
+        if self.code_sync_run_id is not None:
+            self.code_sync_run_id = _require_text(
+                self.code_sync_run_id, "code_sync_run_id"
+            )
+        if self.resolution_plan_id is not None:
+            self.resolution_plan_id = _require_text(
+                self.resolution_plan_id, "resolution_plan_id"
+            )
+        self.actor = _require_text(self.actor, "actor")
+        return self
+
+
+class GitHubMergeAuthorizationApproveRequest(BaseModel):
+    project_id: str
+    review_evidence: dict[str, Any]
+    actor: str
+
+    @model_validator(mode="after")
+    def validate_github_merge_authorization_approve(
+        self,
+    ) -> "GitHubMergeAuthorizationApproveRequest":
+        self.project_id = _require_text(self.project_id, "project_id")
+        self.actor = _require_text(self.actor, "actor")
+        return self
+
+
+class GitHubMergeAuthorizationEnqueueRequest(BaseModel):
+    project_id: str
+    actor: str = "ceo"
+
+    @model_validator(mode="after")
+    def validate_github_merge_authorization_enqueue(
+        self,
+    ) -> "GitHubMergeAuthorizationEnqueueRequest":
+        self.project_id = _require_text(self.project_id, "project_id")
+        self.actor = _require_text(self.actor, "actor")
+        return self
+
+
+class GitHubMergeAuthorizationApplyRequest(BaseModel):
+    project_id: str
+    lease_id: str
+    lease_token: str
+    fencing_token: int = Field(ge=1)
+    actor: str = "ceo"
+
+    @model_validator(mode="after")
+    def validate_github_merge_authorization_apply(
+        self,
+    ) -> "GitHubMergeAuthorizationApplyRequest":
+        self.project_id = _require_text(self.project_id, "project_id")
+        self.lease_id = _require_text(self.lease_id, "lease_id")
+        self.lease_token = _require_text(self.lease_token, "lease_token")
+        self.actor = _require_text(self.actor, "actor")
+        return self
+
+
 class ProviderAccountSummary(BaseModel):
     id: str
     project_id: str

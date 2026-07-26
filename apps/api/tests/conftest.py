@@ -112,6 +112,7 @@ def clean_tables(engine):
             "billing_accounts",
             "capabilities",
             "provider_accounts",
+            "github_merge_authorizations",
             "github_resolution_plans",
             "github_conflict_sets",
             "github_code_sync_runs",

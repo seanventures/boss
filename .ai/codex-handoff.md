@@ -1,5 +1,32 @@
 # Codex Handoff
 
+## 2026-07-26 BOSS-253 governed merge authorization and queue
+
+- Stacked branch `ai/codex/boss-253-merge-authorizations` starts from
+  BOSS-251/BOSS-252 draft PR #84 and preserves the BOSS-247→252 PR stack.
+- `MergeAuthorization` pins one project binding, active policy ID/version, PR,
+  source/target refs, exact head/base commit and tree identities, checks,
+  effective reviews, evidence bundle, expiry, and optional sync/resolution
+  lineage. Initial and fresh provider observations are Receipt-backed.
+- Approval must be independent from the requester. Authorized merges enter a
+  deterministic per-repository/target queue; only its earliest active entry can
+  apply.
+- Apply requires the exact protected-target BranchLease token and fence, then
+  rechecks policy, PR state/draft/mergeability, commit/tree freshness, target
+  head, required checks, current-head approvals, and requested changes.
+- The adapter performs a second exact-snapshot guard and merges only through
+  the GitHub PR API with the authorized head SHA. BOSS never pushes or
+  force-updates the protected target.
+- Every merge attempt has a risk-tier-three zero-cost ChangeSet operation,
+  Receipt, and ResourceReceipt. Result verification records the merge
+  commit/tree and previous target plus a manual, newly authorized revert-PR
+  plan. Failures redact provider detail, retry three times, then deadletter.
+- Validation: seven merge state-machine tests inside a 40-test widened GitHub
+  API/adapter matrix; 39 typed-client tests; focused Ruff and compile; Next
+  route generation and TypeScript; production web build; schema idempotency;
+  complete BOSS-253 OpenAPI route coverage; generated-doc drift; strict MkDocs;
+  and diff checks pass.
+
 ## 2026-07-26 BOSS-251/BOSS-252 safe sync and conflict resolution
 
 - Stacked branch `ai/codex/boss-251-252-safe-sync-conflicts` starts from

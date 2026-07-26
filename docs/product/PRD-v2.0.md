@@ -519,10 +519,11 @@ Required behavior:
 The detailed contract and staged delivery map live in
 `docs/product/GITHUB_PROJECT_SYNC.md`. Plane BOSS-246 is the parent feature;
 BOSS-247 through BOSS-255 are dependency-ordered implementation slices.
-BOSS-247 through BOSS-250 now provide the connection/binding, immutable
-versioned policy, Receipt-backed remote topology observation, and fenced TTL
-branch/worktree ownership foundation. BOSS-251 through BOSS-255 remain required
-for writes, conflicts, merge/reconciliation, and Mission Control completion.
+BOSS-247 through BOSS-253 now provide the connection/binding, immutable
+versioned policy, Receipt-backed remote topology observation, fenced TTL
+branch/worktree ownership, safe synchronization, reviewed conflict resolution,
+and exact-snapshot governed merge queue. BOSS-254 and BOSS-255 remain required
+for webhook/poll reconciliation and Mission Control completion.
 
 ## Roles, Role Packs, and Agent Factory
 

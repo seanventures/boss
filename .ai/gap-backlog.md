@@ -12,9 +12,12 @@
 - BOSS-251/BOSS-252 implement safe synchronization, typed conflict-resolution
   branches, red-to-green proof, independent review, and receipted non-force
   resolution commits; they close once their stacked PR merges.
-- BOSS-253–255 remain the explicit implementation backlog for exact-snapshot
-  merge authorization/queue and rollback, webhook/poll reconciliation, and
-  Mission Control.
+- BOSS-253 implements exact-snapshot merge authorization, independent approval,
+  deterministic target queues, protected-target lease/fence verification,
+  fresh checks/reviews, guarded PR-only merge, receipted rollback evidence, and
+  bounded retry/deadletter; it closes once its stacked PR merges.
+- BOSS-254/BOSS-255 remain the explicit implementation backlog for webhook/poll
+  reconciliation and Mission Control.
 - The governing GHX-001 contract requires immutable observed SHAs, no silent
   reset/force-push, visible rewrite/divergence classification, provider writes
   through ChangeSets/ResourceReceipts, unique dedupe keys, and approval gates

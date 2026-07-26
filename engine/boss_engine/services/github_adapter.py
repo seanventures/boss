@@ -18,6 +18,10 @@ class GitHubMergeConflictError(RuntimeError):
     """GitHub could not merge the requested immutable commits cleanly."""
 
 
+class GitHubMergeRejectedError(RuntimeError):
+    """GitHub rejected a guarded pull-request merge."""
+
+
 @dataclass
 class PullRequestResult:
     url: str
@@ -235,6 +239,20 @@ class GitHubAdapter:
             "merge_base_tree_sha": (merge_base.get("commit") or {})
             .get("tree", {})
             .get("sha"),
+        }
+
+    def commit_identity(self, commit_sha: str) -> dict:
+        """Return the commit and tree identity for an immutable Git object."""
+        payload = self._request(
+            "GET",
+            (
+                f"/repos/{self.repository_full_name}/git/commits/"
+                f"{quote(commit_sha, safe='')}"
+            ),
+        )
+        return {
+            "commit_sha": str(payload.get("sha") or commit_sha),
+            "tree_sha": str((payload.get("tree") or {}).get("sha") or ""),
         }
 
     def compare_changed_files(
@@ -578,6 +596,106 @@ class GitHubAdapter:
             merged=bool(response["merged"]),
             message=response["message"],
         )
+
+    def pull_request_snapshot(self, pull_number: int) -> dict:
+        """Return the immutable identities and merge posture for one pull request."""
+        response = self._request(
+            "GET",
+            f"/repos/{self.repository_full_name}/pulls/{pull_number}",
+        )
+        head = response.get("head") or {}
+        base = response.get("base") or {}
+        return {
+            "number": int(response["number"]),
+            "url": str(response.get("html_url") or ""),
+            "state": str(response.get("state") or ""),
+            "draft": bool(response.get("draft", False)),
+            "mergeable": response.get("mergeable"),
+            "mergeable_state": str(response.get("mergeable_state") or ""),
+            "head_ref": str(head.get("ref") or ""),
+            "head_sha": str(head.get("sha") or ""),
+            "head_repository": str(
+                ((head.get("repo") or {}).get("full_name")) or ""
+            ),
+            "base_ref": str(base.get("ref") or ""),
+            "base_sha": str(base.get("sha") or ""),
+            "base_repository": str(
+                ((base.get("repo") or {}).get("full_name")) or ""
+            ),
+            "updated_at": response.get("updated_at"),
+        }
+
+    def pull_request_reviews(self, pull_number: int) -> list[dict]:
+        """Return bounded review evidence used by merge authorization."""
+        response = self._request(
+            "GET",
+            (
+                f"/repos/{self.repository_full_name}/pulls/{pull_number}/reviews"
+                "?per_page=100"
+            ),
+        )
+        return [
+            {
+                "id": int(review["id"]),
+                "reviewer": str((review.get("user") or {}).get("login") or ""),
+                "state": str(review.get("state") or "").upper(),
+                "commit_sha": str(review.get("commit_id") or ""),
+                "submitted_at": review.get("submitted_at"),
+            }
+            for review in response[:100]
+            if review.get("id") is not None
+        ]
+
+    def merge_pull_request_guarded(
+        self,
+        *,
+        pull_number: int,
+        expected_head_sha: str,
+        expected_base_sha: str,
+        expected_head_ref: str,
+        expected_base_ref: str,
+        merge_method: str,
+        commit_title: str,
+    ) -> dict:
+        """Merge only if GitHub still exposes the exact authorized PR snapshot."""
+        current = self.pull_request_snapshot(pull_number)
+        expected = {
+            "head_sha": expected_head_sha,
+            "base_sha": expected_base_sha,
+            "head_ref": expected_head_ref,
+            "base_ref": expected_base_ref,
+        }
+        if current["state"] != "open":
+            raise GitHubMergeRejectedError("Pull request is not open.")
+        if current["draft"]:
+            raise GitHubMergeRejectedError("Draft pull requests cannot be merged.")
+        for field, value in expected.items():
+            if current[field] != value:
+                raise GitHubMergeRejectedError(
+                    "Pull request snapshot changed after authorization."
+                )
+        response = self._request(
+            "PUT",
+            f"/repos/{self.repository_full_name}/pulls/{pull_number}/merge",
+            {
+                "sha": expected_head_sha,
+                "commit_title": commit_title,
+                "merge_method": merge_method,
+            },
+        )
+        if not bool(response.get("merged")):
+            raise GitHubMergeRejectedError(
+                str(response.get("message") or "GitHub rejected the merge.")
+            )
+        return {
+            "pull_request_number": pull_number,
+            "commit_sha": str(response.get("sha") or ""),
+            "merged": True,
+            "message": str(response.get("message") or ""),
+            "merge_method": merge_method,
+            "previous_target_sha": expected_base_sha,
+            "authorized_head_sha": expected_head_sha,
+        }
 
     def create_issue_comment(
         self, issue_number: int, body: str

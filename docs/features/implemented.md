@@ -2,7 +2,7 @@
 
 # Implemented features
 
-<span class="boss-status boss-status--implemented">Implemented</span> **90 features**
+<span class="boss-status boss-status--implemented">Implemented</span> **91 features**
 
 ## MET-001 — CEO command intake {#met-001-ceo-command-intake}
 
@@ -351,6 +351,18 @@
 **Automated evidence:** `apps/api/tests/test_github_code_sync.py`, `apps/api/tests/test_github_community_adapter.py`, `apps/web/tests/api-client.test.ts`
 
 **Ledger detail:** Implemented: dedicated policy-approved resolution branch, immutable base/ours/theirs and bounded file evidence, versioned resolution plans, mandatory failing-red/passing-green proof, independent reviewer enforcement, stale-input/fence rejection, explicit two-parent resolution commit, non-force resolution-ref update, ChangeSet/Receipt/ResourceReceipt coverage, and no protected-target write.
+
+## GHX-007 — Governed merge authorization and queue {#ghx-007-governed-merge-authorization-and-queue}
+
+<span class="boss-status boss-status--implemented">Implemented</span>
+
+**Source:** PRD GitHub Project Sync; BOSS-253
+
+**Implementation:** `db/schema.sql`, `engine/boss_engine/services/github_merges.py`, `engine/boss_engine/services/github_adapter.py`, `apps/api/app/main.py`, `engine/boss_engine/schemas.py`, `api/openapi.yaml`, `packages/api-client/src/index.ts`, `docs/product/GITHUB_PROJECT_SYNC.md`
+
+**Automated evidence:** `apps/api/tests/test_github_merge_authorizations.py`, `apps/api/tests/test_github_community_adapter.py`, `apps/web/tests/api-client.test.ts`
+
+**Ledger detail:** Implemented: expiring exact base/head/tree authorization, independent approval, deterministic per-target queue, target lease/fence, current policy/check/review/mergeability rechecks, guarded PR-only merge with expected head SHA, no direct/force target update, Receipt/ResourceReceipt coverage, verified result, manual newly authorized revert-PR plan, bounded retry, redaction, and deadletter.
 
 ## ORC-001 — Conversational thread store/API {#orc-001-conversational-thread-store-api}
 
