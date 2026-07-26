@@ -623,7 +623,12 @@ class DecisionService:
                     {"reason": "missing_community_plan_id"},
                 )
                 return
-            result = self.intake.dispatch_plan(connection, plan_id, actor=actor)
+            result = self.intake.dispatch_plan(
+                connection,
+                plan_id,
+                project_id=row["project_id"],
+                actor=actor,
+            )
             emit_event(
                 connection,
                 row["project_id"],
