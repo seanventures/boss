@@ -40,17 +40,19 @@ Rebuilt into a hairline **KPI strip** + **Health & Signals** panel with status-a
 - API: `GET /v1/decisions/inbox`, `POST /v1/decisions/{id}/approve|reject` (exist). Modal confirm
   for irreversible actions.
 
-## Phase 4 — Agent Roster (`org`)
+## Phase 4 — Agent Roster (`org`) ✅ DONE
 - Render the roster as a **divided list** (Agent / Now / State): 40–52px **agent orbs** with state
   rings (running=rotating conic ring, verified=green, blocked=breathing coral, idle=dashed), Sora
   initials, role, and a **current-task line**.
-- API: agents/roles/modules (exist). **Likely new:** a "what is each agent working on right now"
-  signal — check if derivable from tasks/jobs owner_role; if not, add `GET /v1/agents/activity`.
+- API: agents/roles/modules (exist). Current work and state are derived from canonical task
+  ownership, so no competing activity endpoint or synthetic agent status is needed. The roster
+  distinguishes running, verified, blocked, and idle roles and keeps current-task context visible.
 
-## Phase 5 — Task Board (`work`)
+## Phase 5 — Task Board (`work`) ✅ DONE
 - **5 columns** (Backlog / In Progress / Review / Blocked / Done) with colored square column
-  markers; **flat 8px cards**: mono priority + `T-###`, Sora title, footer orb + receipts count +
-  right-aligned mono state. API: tasks (exists).
+  markers; **flat 8px cards**: mono priority + stable compact task id, Sora title, footer owner
+  orb + real job-lineage receipt count + right-aligned mono state. API: tasks, ops queue, and
+  receipts (exist).
 
 ## Phase 6 — Evidence (`reports`)
 - **Evidence receipt** view: header (orb, action, `rcpt_…` mono meta, VERIFIED) → divided meta
@@ -73,5 +75,7 @@ Build controls → wire live API → local preview (`localhost:3007`) → user v
 goldeneye (`build → push → POST /deploy`) → next phase. Each phase is one PR-sized batch.
 
 ## Status
-Phase 0–1 done (branch `feat/gap-phase0-mvp`… now `feat/ui-redesign-design-system`), previewable
-locally, **not yet deployed to goldeneye** (awaiting look-and-feel sign-off).
+Phase 0–1 and the Phase-3 approval surface shipped on Paramg's redesign work. Phase 4–5 are
+completed on `ai/codex/boss-148-151-ui-tail` with 119 web tests, TypeScript validation, and a
+production build passing. Phase 2 and Phase 6 have live foundations but retain their own Plane
+acceptance follow-ups; Phase 7 remains open.

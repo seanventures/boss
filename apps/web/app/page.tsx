@@ -60,6 +60,7 @@ import {
 import ConsoleShell from "./ConsoleShell";
 import { AgentChat } from "./agent-ui";
 import { WorkBoard, WorkflowHealth } from "./workflow-ui";
+import { MissionAgentRoster, MissionTaskBoard } from "./mission-operations-ui";
 import { ReportsView } from "./reports-ui";
 import type { DataBoundary } from "@boss/api-client";
 import { fetchAuditSummary } from "../lib/audit";
@@ -152,7 +153,7 @@ import {
 } from "../lib/software-factory";
 import { fetchSkillFeed } from "../lib/skills";
 import { fetchStatus } from "../lib/status";
-import { fetchTaskFeed, type TaskFeedItem } from "../lib/tasks";
+import { fetchTaskFeed } from "../lib/tasks";
 import { PROJECT_ID } from "../lib/client";
 
 function formatMicros(amount: unknown): string {
@@ -253,52 +254,6 @@ function formatDateTime(value?: string): string {
     dateStyle: "medium",
     timeStyle: "short",
   }).format(new Date(value));
-}
-
-const TASK_BOARD_COLUMNS = [
-  { id: "backlog", label: "Backlog" },
-  { id: "in_progress", label: "In progress" },
-  { id: "review", label: "Review" },
-  { id: "blocked", label: "Blocked" },
-  { id: "done", label: "Done" },
-] as const;
-
-function taskBoardColumn(status: string): (typeof TASK_BOARD_COLUMNS)[number]["id"] {
-  const value = status.toLowerCase();
-  if (["done", "completed", "succeeded", "shipped"].includes(value)) return "done";
-  if (["blocked", "failed", "deadletter", "cancelled"].includes(value)) return "blocked";
-  if (value.includes("review") || value.includes("decision") || value.includes("approval")) return "review";
-  if (["running", "executing", "in_progress", "leased"].includes(value)) return "in_progress";
-  return "backlog";
-}
-
-function MissionTaskBoard({ tasks }: { tasks: TaskFeedItem[] }) {
-  return (
-    <div className="mission-task-board" aria-label="Task status board">
-      {TASK_BOARD_COLUMNS.map((column) => {
-        const columnTasks = tasks.filter((task) => taskBoardColumn(task.status) === column.id);
-        return (
-          <section className={`mission-task-column column-${column.id}`} key={column.id}>
-            <header>
-              <span>{column.label}</span>
-              <b>{columnTasks.length}</b>
-            </header>
-            <div className="mission-task-list">
-              {columnTasks.map((task) => (
-                <article className="mission-task-card" key={task.id}>
-                  <span className="task-priority">{task.priority} · R{task.riskTier}</span>
-                  <strong>{task.title}</strong>
-                  <small>{task.ownerRoleId ?? "Unassigned"}</small>
-                  <time dateTime={task.updatedAt}>{formatDateTime(task.updatedAt)}</time>
-                </article>
-              ))}
-              {columnTasks.length === 0 ? <p>No tasks</p> : null}
-            </div>
-          </section>
-        );
-      })}
-    </div>
-  );
 }
 
 function formatDurationSeconds(value?: number | null): string {
@@ -563,7 +518,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
     await Promise.all([
       fetchStatus(activeProjectId),
       fetchDecisionFeed(activeProjectId),
-      fetchTaskFeed(activeProjectId),
+      fetchTaskFeed(activeProjectId, 50),
       fetchMeetingFeed(activeProjectId),
       fetchArtifactFeed(activeProjectId),
       fetchActivityFeed(activeProjectId, 40),
@@ -585,7 +540,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
       }),
       fetchSkillFeed(),
       fetchProviderOpsFeed(activeProjectId),
-      fetchReceiptFeed(activeProjectId),
+      fetchReceiptFeed(activeProjectId, 100),
       fetchInfrastructureResourceFeed(activeProjectId),
       fetchBudgetStatus(activeProjectId),
       fetchBudgetIntensity(activeProjectId),
@@ -715,23 +670,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             </div>
             <span className="status-text running"><span className="dot teal bx-pulse" />{commandCenterAgents.length} available</span>
           </div>
-          <div className="mission-agent-roster">
-            {commandCenterAgents.map((agent) => (
-              <article className="mission-agent-row" key={agent.id}>
-                <span className="mission-agent-avatar">{agent.name.slice(0, 2).toUpperCase()}</span>
-                <span className="mission-agent-identity">
-                  <strong>{agent.name}</strong>
-                  <small>{agent.role}</small>
-                </span>
-                <span className="status-text running"><span className="dot teal bx-pulse" />Active</span>
-                <span className="mission-agent-metric">
-                  <small>Trust</small>
-                  <strong>{Math.round(agent.trust)}%</strong>
-                </span>
-                <AreaLink className="text-link" area="work" orgId={activeOrgId}>View work</AreaLink>
-              </article>
-            ))}
-          </div>
+          <MissionAgentRoster roles={roles.items} tasks={tasks.items} />
         </section>
 
         <section className="ov-cc" data-area="overview" aria-label="Command center">
@@ -6242,7 +6181,11 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               <h2>Workflow transitions — click a task to trace its run.</h2>
             </div>
           </div>
-          <MissionTaskBoard tasks={tasks.items} />
+          <MissionTaskBoard
+            tasks={tasks.items}
+            jobs={opsQueue.jobs}
+            receipts={receipts.items}
+          />
           <PlansCard projectId={activeProjectId} plans={plansList} />
           <WorkBoard
             tasks={tasks.items}

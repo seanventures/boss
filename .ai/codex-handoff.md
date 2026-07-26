@@ -1,5 +1,23 @@
 # Codex Handoff
 
+## 2026-07-26 Paramg catch-up and BOSS-148/BOSS-149 safe UI tail
+
+- Refreshed rewritten `origin/main` at `6a92bd9` and inspected Paramg's delivery
+  since the prior Codex handoff: coding-engine/app-build hardening, task-scoped
+  agent chat, previews and governed SSH deploys, Plane sync, AI SRE/reliability,
+  design routing/scaffolding, VAG, and the Mission Control redesign foundation.
+- Paramg's active `feat/oss-engine-split` relocates the complete API service
+  layer into `engine/boss_engine`; do not modify engine services, API schemas,
+  or bootstrap on this branch. Open Cursor PRs #23/#68/#69/#70 own adjacent
+  authorization, intent routing, governed-code-task, and SSH deploy fixes.
+- Safe branch `ai/codex/boss-148-151-ui-tail` claims Plane BOSS-148 and BOSS-149
+  only. It extracts the roster/board into a web-only component, derives agent
+  state/current work from canonical role/task records, and derives task receipt
+  counts through job lineage. No backend endpoint, provider effect, credential,
+  or invented operational state is added.
+- Validation: 119/119 web tests, Next route generation/TypeScript, production
+  build, and diff checks pass.
+
 ## 2026-07-18 BOSS-134–143 reusable workflow runtime
 
 - Shipped to `main`: product-taxonomy PR

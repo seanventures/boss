@@ -1115,6 +1115,39 @@ select.input:focus,
   text-transform: uppercase;
 }
 
+.mission-task-column {
+  --column-signal: var(--faint);
+}
+
+.mission-task-column.column-in_progress {
+  --column-signal: var(--teal);
+}
+
+.mission-task-column.column-review {
+  --column-signal: var(--amber);
+}
+
+.mission-task-column.column-blocked {
+  --column-signal: var(--red);
+}
+
+.mission-task-column.column-done {
+  --column-signal: var(--green);
+}
+
+.mission-task-column-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.mission-task-column-title::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  background: var(--column-signal);
+}
+
 .mission-task-column > header b {
   color: var(--faint);
   font-size: 0.58rem;
@@ -1157,8 +1190,15 @@ select.input:focus,
   gap: 6px;
   padding: 11px;
   border: 1px solid var(--panel-border);
-  border-radius: 6px;
+  border-radius: 8px;
   background: var(--card);
+  transition: border-color 120ms ease, background 120ms ease, transform 120ms ease;
+}
+
+.mission-task-card:hover {
+  border-color: var(--strong);
+  background: var(--raised);
+  transform: translateY(-1px);
 }
 
 .mission-task-card .task-priority {
@@ -1186,6 +1226,53 @@ select.input:focus,
   white-space: nowrap;
 }
 
+.mission-task-footer {
+  display: grid;
+  grid-template-columns: 24px auto minmax(0, 1fr);
+  align-items: center;
+  gap: 7px;
+  color: var(--faint);
+  font-family: var(--mono);
+  font-size: 0.48rem;
+}
+
+.mission-task-owner {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border: 1px solid var(--strong);
+  border-radius: 50%;
+  background: var(--raised);
+  color: var(--teal);
+  font-size: 0.5rem;
+}
+
+.mission-task-state {
+  overflow: hidden;
+  justify-self: end;
+  color: var(--muted);
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.mission-task-state.state-in_progress {
+  color: var(--teal);
+}
+
+.mission-task-state.state-review {
+  color: var(--amber);
+}
+
+.mission-task-state.state-blocked {
+  color: var(--red);
+}
+
+.mission-task-state.state-done {
+  color: var(--green);
+}
+
 .mission-task-card time {
   padding-top: 6px;
   border-top: 1px solid var(--hair);
@@ -1208,9 +1295,23 @@ select.input:focus,
   display: grid;
 }
 
+.mission-roster-header {
+  display: grid;
+  grid-template-columns: 46px minmax(170px, 0.85fr) minmax(240px, 1.6fr) 110px 90px;
+  gap: 14px;
+  padding: 9px 20px;
+  border-bottom: 1px solid var(--hair-2);
+  background: var(--graph);
+  color: var(--faint);
+  font-family: var(--mono);
+  font-size: 0.5rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
 .mission-agent-row {
   display: grid;
-  grid-template-columns: 40px minmax(210px, 1fr) 110px 95px auto;
+  grid-template-columns: 46px minmax(170px, 0.85fr) minmax(240px, 1.6fr) 110px 90px;
   align-items: center;
   gap: 14px;
   min-height: 70px;
@@ -1224,10 +1325,11 @@ select.input:focus,
 }
 
 .mission-agent-avatar {
+  position: relative;
   display: grid;
   place-items: center;
-  width: 38px;
-  height: 38px;
+  width: 42px;
+  height: 42px;
   border: 1px solid var(--strong);
   border-radius: 50%;
   background: var(--raised);
@@ -1237,10 +1339,66 @@ select.input:focus,
   font-weight: 600;
 }
 
+.mission-agent-avatar::before {
+  content: "";
+  position: absolute;
+  inset: -4px;
+  border: 2px solid var(--faint);
+  border-radius: 50%;
+  pointer-events: none;
+}
+
+.mission-agent-avatar.state-running::before {
+  border-color: var(--teal) transparent var(--teal) var(--teal);
+  animation: boss-orbit 1.9s linear infinite;
+}
+
+.mission-agent-avatar.state-verified::before {
+  border-color: var(--green);
+}
+
+.mission-agent-avatar.state-blocked::before {
+  border-color: var(--red);
+  animation: bx-pulse 1.8s ease-in-out infinite;
+}
+
+.mission-agent-avatar.state-idle::before {
+  border-style: dashed;
+  border-color: var(--faint);
+}
+
 .mission-agent-identity,
 .mission-agent-metric {
   display: grid;
   gap: 2px;
+}
+
+.mission-agent-now {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 0.66rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.roster-state {
+  font-size: 0.54rem;
+}
+
+.roster-state.state-running {
+  color: var(--teal);
+}
+
+.roster-state.state-verified {
+  color: var(--green);
+}
+
+.roster-state.state-blocked {
+  color: var(--red);
+}
+
+.roster-state.state-idle {
+  color: var(--faint);
 }
 
 .mission-agent-identity strong,
@@ -1599,6 +1757,17 @@ select.input:focus,
     grid-template-columns: 40px minmax(0, 1fr) auto;
     gap: 10px;
     padding: 11px 14px;
+  }
+
+  .mission-roster-header {
+    grid-template-columns: 40px minmax(0, 1fr) auto;
+    gap: 10px;
+    padding: 9px 14px;
+  }
+
+  .mission-roster-header > span:nth-child(4),
+  .mission-roster-header > span:nth-child(5) {
+    display: none;
   }
 
   .mission-agent-row > .status-text,

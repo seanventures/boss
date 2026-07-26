@@ -7,6 +7,10 @@ describe("BOSS mission-control design system", () => {
   const css = readFileSync(resolve(__dirname, "../app/design-system.css"), "utf8");
   const shell = readFileSync(resolve(__dirname, "../app/ConsoleShell.tsx"), "utf8");
   const page = readFileSync(resolve(__dirname, "../app/page.tsx"), "utf8");
+  const operations = readFileSync(
+    resolve(__dirname, "../app/mission-operations-ui.tsx"),
+    "utf8",
+  );
 
   it("defines the approved foundations", () => {
     expect(css).toContain("--void: #090d17");
@@ -28,10 +32,14 @@ describe("BOSS mission-control design system", () => {
 
   it("implements the operational design-system views", () => {
     expect(page).toContain('className="outcome-bar"');
-    expect(page).toContain('className="mission-task-board"');
-    expect(page).toContain('className="mission-agent-roster"');
+    expect(operations).toContain('className="mission-task-board"');
+    expect(operations).toContain('className="mission-agent-roster"');
     expect(page).toContain('className="decision-list"');
     expect(page).toContain('className="mission-evidence-receipt"');
+    expect(page).toContain("<MissionAgentRoster");
+    expect(page).toContain("<MissionTaskBoard");
+    expect(css).toContain(".mission-roster-header");
+    expect(css).toContain(".mission-task-footer");
   });
 
   it("honors reduced-motion preferences", () => {
