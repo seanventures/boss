@@ -16,9 +16,13 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse, StreamingResponse
 from sqlalchemy import text
 
+from boss_engine.ports import configure_engine_ports
+
 from .bootstrap import seed
+from .bootstrap_ports import build_ports
 from .config import get_settings
 from .db import begin, database_is_reachable, ensure_schema, get_engine
+from .routers import mount_edition_routers
 from .schemas import (
     AgentModuleDetail,
     AgentModuleInstallRecordListResponse,
@@ -578,6 +582,8 @@ from .services.specpack import (
 
 settings = get_settings()
 engine = get_engine(settings)
+engine_ports = build_ports(settings, engine)
+configure_engine_ports(engine_ports)
 LOGGER = logging.getLogger("boss.api")
 budget = BudgetGovernor(settings)
 intake = CommandIntakeService(settings)
@@ -590,7 +596,7 @@ webhooks = WebhookService(settings)
 inbound_webhooks = InboundWebhookService(settings)
 plane_webhooks = PlaneWebhookService(settings)
 github_community = GitHubCommunityService(settings)
-software_factory = SoftwareFactoryService(settings)
+software_factory = SoftwareFactoryService(settings, ports=engine_ports)
 decisions = DecisionService(settings)
 specpack = SpecPackService(settings)
 agent_runtime = AgentRuntimeService(settings)
@@ -1042,6 +1048,10 @@ def require_authenticated_actor_binding(
 
 
 def require_project_actor(connection, project_id: str, actor: str, permission: str) -> None:
+    # Authenticate the claimed actor before inspecting its permissions. Checking
+    # permissions first can turn an impersonation attempt into a target-member
+    # error and bypass the principal-specific denial evidence.
+    require_authenticated_actor_binding(project_id, actor, permission, connection)
     try:
         members.require_member(
             connection,
@@ -1064,11 +1074,9 @@ def require_project_actor(connection, project_id: str, actor: str, permission: s
             except (ProjectMemberNotFoundError, ProjectMemberPermissionError):
                 record_policy_denial(project_id, actor, permission, str(error))
                 raise HTTPException(status_code=403, detail=str(error)) from error
-            require_authenticated_actor_binding(project_id, actor, permission, connection)
             return
         record_policy_denial(project_id, actor, permission, str(error))
         raise HTTPException(status_code=403, detail=str(error)) from error
-    require_authenticated_actor_binding(project_id, actor, permission, connection)
 
 
 def require_decision_actor_binding(
@@ -11895,3 +11903,6 @@ def fail_workflow_compensation(
             )
         except workflow_runtime.WorkflowError as error:
             raise_workflow_error(error)
+
+
+mount_edition_routers(app, settings.boss_edition)

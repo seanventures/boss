@@ -26,19 +26,19 @@ import threading
 from concurrent.futures import ThreadPoolExecutor, wait as _futures_wait
 from pathlib import Path
 
-from sqlalchemy import text
-
 from ..config import Settings
-from ..db import begin
+from ..ports import sql
 from ..schemas import FileChange
 from . import design_prompts, plane_sync, verification_target
 from .code_agent import make_code_agent
 from .model_rate_limiter import get_rate_limiter, provider_of, is_rate_limit_error
 from .code_task_service import (
     _fail,
+    _engine_ports,
     _persist_sandbox_id,
     _release,
     _set_phase,
+    _transaction,
     load_code_task_run,
 )
 from .core import create_blocking_decision, emit_event, make_id, record_policy_eval
@@ -138,7 +138,7 @@ def _record_quality_gate(connection, *, run_id, project_id, task_id, job_id, evi
     status = "pass" if not failed else "fail"
     qg_id = make_id("qg")
     connection.execute(
-        text("""
+        sql("""
             INSERT INTO quality_gates (
                 id, project_id, task_id, code_task_run_id, risk_tier,
                 test_author_independent, reviewer_independent, tests_passed,
@@ -554,7 +554,7 @@ def _requires_plan_approval(risk_tier: int) -> bool:
     return risk_tier >= 3
 
 
-def _block_for_plan_approval(engine, sf, *, run_id, project_id, task_id, reservation_id,
+def _block_for_plan_approval(engine, budget, *, run_id, project_id, task_id, reservation_id,
                              design, risk_tier, title="", sensitive_markers=None):
     """Wire-Phase 2b: pause the run after the design phase, persist the design so the resumed run
     reuses it, release budget + sandbox during the wait, and raise a Decision whose approval
@@ -573,12 +573,18 @@ def _block_for_plan_approval(engine, sf, *, run_id, project_id, task_id, reserva
         )
     else:
         question = f"Approve the technical plan for “{(title or 'this task')[:70]}” before BOSS writes code?"
-    with begin(engine) as c:
+    with _transaction(engine) as c:
         c.execute(
-            text("UPDATE code_task_runs SET state = COALESCE(state, '{}'::jsonb) || CAST(:s AS JSONB), "
+            sql("UPDATE code_task_runs SET state = COALESCE(state, '{}'::jsonb) || CAST(:s AS JSONB), "
                  "updated_at=now() WHERE id=:id"),
             {"s": json.dumps({"design": design, "awaiting_plan_approval": True}), "id": run_id})
-        _release(sf, c, project_id, reservation_id, "Paused for human plan approval (Wire-Phase 2b).")
+        _release(
+            budget,
+            c,
+            project_id,
+            reservation_id,
+            "Paused for human plan approval (Wire-Phase 2b).",
+        )
         dec_id = create_blocking_decision(
             c, project_id, task_id,
             question,
@@ -594,7 +600,7 @@ def _block_for_plan_approval(engine, sf, *, run_id, project_id, task_id, reserva
             {"phase": "plan", "risk_tier": risk_tier},
             why,
             risk_tier=risk_tier)
-        c.execute(text("UPDATE code_task_runs SET status='blocked', phase='awaiting_plan_approval', "
+        c.execute(sql("UPDATE code_task_runs SET status='blocked', phase='awaiting_plan_approval', "
                        "decision_id=:d, updated_at=now() WHERE id=:id"),
                   {"d": dec_id, "id": run_id})
     return {"status": "blocked", "done": True, "awaiting_plan_approval": True, "decision_id": dec_id}
@@ -604,7 +610,7 @@ def _block_for_plan_approval(engine, sf, *, run_id, project_id, task_id, reserva
 #  The governed job handler                                                   #
 # --------------------------------------------------------------------------- #
 def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dict:
-    with begin(engine) as c:
+    with _transaction(engine) as c:
         run = load_code_task_run(c, run_id)
     if run is None:
         return {"status": "not_found", "done": True}
@@ -620,7 +626,9 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
     # VAG Phase 0: publish the run's identity so every run_role call below records an
     # llm_calls row with the right attribution (stage is set before each step).
     set_llm_context(db_engine=engine, project_id=project_id, run_id=run_id)
-    sf = SoftwareFactoryService(settings)
+    ports = _engine_ports()
+    budget = ports.budget
+    sf = SoftwareFactoryService(settings, ports=ports)
     title = run["title"]
     # APP-3 (#93): when the task didn't specify tests, resolve the target from the project type —
     # web/TS gets build/typecheck/lint/e2e (the scaffold's scripts) so the repair loop optimizes a
@@ -636,7 +644,7 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
     ui_task = design_prompts.is_ui_bearing(spec, title)
     # Cost/rigor dial: resolve the profile (per-task override > project default > edition
     # default) and infer the risk tier, clamped to the profile's range. Scales effort to work.
-    with begin(engine) as c:
+    with _transaction(engine) as c:
         profile = resolve_for_run(c, project_id, spec.get("profile"), settings)
     risk_tier = infer_risk_tier({**spec, "title": title}, profile)
     # WEB-APP TIER: a scaffolded marketing/web build carries innocent words ("design tokens",
@@ -653,19 +661,19 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
     prior_state = run.get("state") or {}
     resume_design = prior_state.get("design") if prior_state.get("awaiting_plan_approval") else None
 
-    with begin(engine) as c:
-        reservation = sf.budget.reserve(
+    with _transaction(engine) as c:
+        reservation = budget.reserve(
             c, project_id, category="code_task",
             amount_usd_micros=int(settings.code_task_budget_usd_micros),
             reason=f"governed code task: {title[:64]}", expires_in_minutes=45, job_id=job_id)
     if reservation.get("status") != "reserved":
-        with begin(engine) as c:
+        with _transaction(engine) as c:
             return _fail(c, run_id, project_id,
                          f"Budget reservation denied: {reservation.get('status')}", status="blocked",
                          failure_class="needs_human", reason_code="budget_denied")
     reservation_id = reservation["reservation_id"]
-    with begin(engine) as c:
-        c.execute(text("UPDATE code_task_runs SET reservation_id=:r WHERE id=:id"),
+    with _transaction(engine) as c:
+        c.execute(sql("UPDATE code_task_runs SET reservation_id=:r WHERE id=:id"),
                   {"r": reservation_id, "id": run_id})
 
     owner = spec.get("owner") or settings.target_github_owner
@@ -694,7 +702,7 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
     data_boundary = spec.get("data_boundary", "internal")
     redact_external = data_boundary in ("restricted", "confidential")
     if redact_external:
-        with begin(engine) as c:
+        with _transaction(engine) as c:
             record_policy_eval(c, project_id, "data_boundary", "allow", action="redact_external",
                                reason=f"{data_boundary} task — PII redacted before external model calls",
                                detail={"run_id": run_id, "data_boundary": data_boundary})
@@ -763,9 +771,9 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
         "microvm" if use_microvm else "local"
     ).value
     fctx = {**fctx, "execution_substrate": execution_substrate}
-    with begin(engine) as c:
+    with _transaction(engine) as c:
         c.execute(
-            text("UPDATE code_task_runs SET finalize_ctx=COALESCE(finalize_ctx, '{}'::jsonb) "
+            sql("UPDATE code_task_runs SET finalize_ctx=COALESCE(finalize_ctx, '{}'::jsonb) "
                  "|| jsonb_build_object('execution_substrate', CAST(:s AS text)), updated_at=now() "
                  "WHERE id=:id"),
             {"s": execution_substrate, "id": run_id},
@@ -812,9 +820,9 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
                 limiter.report_ok(provider)
         if mv.last_sandbox_task_id:
             guest_vm_ids.append(mv.last_sandbox_task_id)
-            with begin(engine) as c:
+            with _transaction(engine) as c:
                 c.execute(
-                    text("UPDATE code_task_runs SET finalize_ctx=COALESCE(finalize_ctx, '{}'::jsonb) "
+                    sql("UPDATE code_task_runs SET finalize_ctx=COALESCE(finalize_ctx, '{}'::jsonb) "
                          "|| jsonb_build_object('sandbox_task_id', CAST(:sid AS text), "
                          "'sandbox_task_ids', CAST(:ids AS JSONB)), updated_at=now() WHERE id=:id"),
                     {"sid": mv.last_sandbox_task_id, "ids": json.dumps(guest_vm_ids), "id": run_id},
@@ -849,7 +857,7 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
     cost = 0
     try:
         sandbox = provider.acquire(task_id=run_id, tenant_id=project_id)
-        with begin(engine) as c:
+        with _transaction(engine) as c:
             _set_phase(c, run_id, "provisioning")
         sandbox.provision(owner, repo, base_branch=base_branch,
                           work_branch=work_branch, token=token)
@@ -887,7 +895,7 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
             instructions = (f"{instructions}\n\nREFINED SPEC:\n{design.get('spec', '')}"
                             f"\n\nTECHNICAL PLAN:\n{design.get('plan', '')}")
         elif do_design:
-            with begin(engine) as c:
+            with _transaction(engine) as c:
                 _set_phase(c, run_id, "design")
             set_llm_context(stage="standards")
             a, m = _route("standards")
@@ -918,8 +926,8 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
                 _finish_vms(success=False)
                 reason_line = next((ln.strip() for ln in design["plan_review"].splitlines()
                                     if "NOT_A_CODE_TASK" in ln.upper()), "")
-                with begin(engine) as c:
-                    _release(sf, c, project_id, reservation_id,
+                with _transaction(engine) as c:
+                    _release(budget, c, project_id, reservation_id,
                              "not a coding task — mis-routed into the code pipeline")
                     emit_event(c, project_id, "code_task.not_a_code_task", "boss",
                                "code_task_run", run_id, {"reason": reason_line[:300]})
@@ -938,7 +946,7 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
             # HUMAN APPROVE-PLAN GATE (Wire-Phase 2b): top risk pauses for sign-off before code.
             if _requires_plan_approval(risk_tier):
                 return _block_for_plan_approval(
-                    engine, sf, run_id=run_id, project_id=project_id, task_id=task_id,
+                    engine, budget, run_id=run_id, project_id=project_id, task_id=task_id,
                     reservation_id=reservation_id, design=design, risk_tier=risk_tier,
                     title=title,
                     sensitive_markers=sensitive_markers_in({**spec, "title": title}))
@@ -949,7 +957,7 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
 
         if do_separate_tests:
             # STEP write tests (qa), tests only.
-            with begin(engine) as c:
+            with _transaction(engine) as c:
                 _set_phase(c, run_id, "write_tests")
 
             def _attempt_write_tests(escalate: bool):
@@ -984,14 +992,14 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
             if not test_files:
                 # SELF-HEAL: don't hard-fail on a weak/empty first pass — escalate to a
                 # frontier model and retry once, visibly, before giving up.
-                with begin(engine) as c:
+                with _transaction(engine) as c:
                     emit_event(c, project_id, "code_task.step_escalating", "boss",
                                "code_task_run", run_id,
                                {"step": "write_tests", "reason": "no_test_files",
                                 "action": "retry_on_frontier"})
                 r1, test_files, test_changes = _attempt_write_tests(escalate=True)
                 if test_files:
-                    with begin(engine) as c:
+                    with _transaction(engine) as c:
                         emit_event(c, project_id, "code_task.step_recovered", "boss",
                                    "code_task_run", run_id,
                                    {"step": "write_tests", "recovered_by": "frontier_retry"})
@@ -999,12 +1007,12 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
                 # Commit ONLY test files — anything else the QA role wrote is discarded.
                 _commit_stage(test_changes or [], f"governed: tests-first (qa) — {title[:60]}")
             if not test_files:
-                with begin(engine) as c:
+                with _transaction(engine) as c:
                     emit_event(c, project_id, "code_task.step_exhausted", "boss",
                                "code_task_run", run_id,
                                {"step": "write_tests",
                                 "reason": "no_test_files_after_escalation"})
-                    _release(sf, c, project_id, reservation_id, "no independent tests authored")
+                    _release(budget, c, project_id, reservation_id, "no independent tests authored")
                     return _fail(
                         c, run_id, project_id,
                         "Test author produced no test files even after escalating to a frontier "
@@ -1024,7 +1032,7 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
         # executable check (the test command) and feeds the implementer the CONCRETE failure
         # (failing test output, a tamper notice, or "no implementation"). Retries can earn a
         # pass but never soften the gate. 0 retries == the pre-Phase-3 single pass.
-        with begin(engine) as c:
+        with _transaction(engine) as c:
             _set_phase(c, run_id, "implement")
         base_impl_prompt = (_impl_prompt(title, instructions, test_files, test_cmd,
                                          iac=iac_task, ui=ui_task)
@@ -1048,7 +1056,7 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
         for attempt in range(max_repair + 2):
             escalate_impl = attempt == max_repair + 1
             if escalate_impl:
-                with begin(engine) as c:
+                with _transaction(engine) as c:
                     emit_event(c, project_id, "code_task.step_escalating", "boss",
                                "code_task_run", run_id,
                                {"step": "implement", "reason": "tests_not_passing_on_oss",
@@ -1080,7 +1088,7 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
                 impl_files = [p for p in accumulated if not _is_test_path(p)]
                 # Authoritative verification: the guest RUNNER (our code, in-VM) executed the
                 # test command after the agent stopped — that in-VM result is the verdict.
-                with begin(engine) as c:
+                with _transaction(engine) as c:
                     _set_phase(c, run_id, "run_tests")
                 tests_passed = bool(res2.tests_passed)
                 test_exit_code = res2.tests[0].exit_code if res2.tests else None
@@ -1099,7 +1107,7 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
                     tampered = []
                 impl_files = [fc.path for fc in sandbox.diff() if not _is_test_path(fc.path)]
                 # Authoritative verification — BOSS runs the tests itself.
-                with begin(engine) as c:
+                with _transaction(engine) as c:
                     _set_phase(c, run_id, "run_tests")
                 test_result = sandbox.run(test_cmd)
                 tests_passed = bool(test_result.ok)
@@ -1117,7 +1125,7 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
                                "cost_usd_micros": int(r2.get("cost_usd_micros") or 0)})
             if escalate_impl and ok:
                 escalated_recovered = True
-                with begin(engine) as c:
+                with _transaction(engine) as c:
                     emit_event(c, project_id, "code_task.step_recovered", "boss",
                                "code_task_run", run_id,
                                {"step": "implement", "recovered_by": "frontier_retry",
@@ -1161,7 +1169,7 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
         regressions_ok = None
         panel_parallel = False
         if do_review:
-            with begin(engine) as c:
+            with _transaction(engine) as c:
                 _set_phase(c, run_id, "review_panel")
             panel: dict = {}
             panel_cost = {"v": 0}
@@ -1310,7 +1318,7 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
             finally:
                 pool.shutdown(wait=False)
             if review_errors:
-                with begin(engine) as c:
+                with _transaction(engine) as c:
                     emit_event(c, project_id, "code_task.review_degraded", "boss",
                                "code_task_run", run_id,
                                {"errors": review_errors[:8], "deadline_s": review_deadline})
@@ -1337,7 +1345,7 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
             # check tests (mutation) — plant one bug, expect the tests to FAIL. In the
             # micro-VM substrate the mutation runs in ITS OWN VM against the committed
             # work branch and its diff is simply never committed — nothing to restore.
-            with begin(engine) as c:
+            with _transaction(engine) as c:
                 _set_phase(c, run_id, "check_tests")
             if use_microvm:
                 if impl_files:
@@ -1374,7 +1382,7 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
                          else {fc.path: fc.content for fc in sandbox.diff()})
         iac_result = None
         if detect_iac_files(changed_files):
-            with begin(engine) as c:
+            with _transaction(engine) as c:
                 _set_phase(c, run_id, "iac_verify")
             iac_result = _run_iac_lane(settings, files=changed_files,
                                        workdir=None if use_microvm else root)
@@ -1471,8 +1479,8 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
             "security_summary": r4.get("summary", "")[:4000],
             "consistency_summary": r6.get("summary", "")[:1500],
         }
-        with begin(engine) as c:
-            c.execute(text("UPDATE code_task_runs SET state=CAST(:s AS JSONB), "
+        with _transaction(engine) as c:
+            c.execute(sql("UPDATE code_task_runs SET state=CAST(:s AS JSONB), "
                            "usage=jsonb_build_object('cost_usd_micros', CAST(:cost AS bigint), "
                            "'model', CAST(:m AS text)), updated_at=now() WHERE id=:id"),
                       {"s": json.dumps(evidence), "cost": cost,
@@ -1501,8 +1509,8 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
                 # ADVISORY first pass: surface the failing checks (their verdicts are already
                 # recorded on the run, so the UI shows exactly which failed) but PROCEED to open the
                 # PR + preview. No block, no dead-end — the user retries-to-improve when they want.
-                with begin(engine) as c:
-                    c.execute(text(
+                with _transaction(engine) as c:
+                    c.execute(sql(
                         "UPDATE code_task_runs SET finalize_ctx=COALESCE(finalize_ctx,'{}'::jsonb) "
                         "|| jsonb_build_object('advisory_failing_gates', CAST(:f AS JSONB)), "
                         "updated_at=now() WHERE id=:id"),
@@ -1515,8 +1523,8 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
                 # EVERY failure that reaches this quality gate is a code-quality issue a fresh full
                 # re-run with the findings fed back can plausibly fix. Bounded by max_repair_rounds.
                 _finish_vms(success=False)  # retain this round's VMs for inspection
-                with begin(engine) as c:
-                    _release(sf, c, project_id, reservation_id,
+                with _transaction(engine) as c:
+                    _release(budget, c, project_id, reservation_id,
                              f"auto review-repair (round {rounds_used + 1}): {failing}")
                     emit_event(c, project_id, "code_task.review_repair_round", "boss",
                                "code_task_run", run_id,
@@ -1530,8 +1538,8 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
                               "gates pass, and do NOT regress the checks that already passed. If "
                               "'tests_strong_enough' failed, STRENGTHEN the tests so a one-line "
                               "mutation to the logic is caught."))
-                with begin(engine) as c:
-                    c.execute(text(
+                with _transaction(engine) as c:
+                    c.execute(sql(
                         "UPDATE code_task_runs SET status='repairing', phase='done', error=:e, "
                         "finalize_ctx=COALESCE(finalize_ctx, '{}'::jsonb) || jsonb_build_object("
                         "  'review_repair_next_run', CAST(:nx AS text), "
@@ -1550,12 +1558,12 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
                 pending = ([{"path": p, "content": content} for p, content in accumulated.items()]
                            if use_microvm else
                            [{"path": fc.path, "content": fc.content} for fc in sandbox.diff()])
-                with begin(engine) as c:
-                    _release(sf, c, project_id, reservation_id, f"quality gate failed: {qg_id}")
+                with _transaction(engine) as c:
+                    _release(budget, c, project_id, reservation_id, f"quality gate failed: {qg_id}")
                     ctx = {**fctx, "pending_diff": pending, "failing_gates": failing,
                            "quality_gate_id": qg_id, "pr_summary": r2.get("summary", "")[:600],
                            **({"sandbox_task_id": guest_vm_ids[-1]} if guest_vm_ids else {})}
-                    c.execute(text(
+                    c.execute(sql(
                         "UPDATE code_task_runs SET status='blocked', phase='awaiting_gate_override', "
                         "error=:e, finalize_ctx=CAST(:fc AS JSONB), updated_at=now() WHERE id=:id"),
                         {"e": f"QualityGate FAIL ({qg_id}); failing gates: {failing}. "
@@ -1578,11 +1586,11 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
             # Eval/bake-off runs (open_pr=false) measure the gate not the delivery; a non-final
             # decomposition slice defers its PR to the final slice. Either way: record the verified
             # outcome, keep the work on the shared branch, and let the chain advance.
-            with begin(engine) as c:
-                _release(sf, c, project_id, reservation_id,
+            with _transaction(engine) as c:
+                _release(budget, c, project_id, reservation_id,
                          ("gate passed; non-final decomposition slice — PR deferred to final slice"
                           if _nonfinal_slice else "gate passed; PR suppressed (open_pr=false)"))
-                c.execute(text("UPDATE code_task_runs SET status='completed', phase='done', "
+                c.execute(sql("UPDATE code_task_runs SET status='completed', phase='done', "
                                "updated_at=now() WHERE id=:id"), {"id": run_id})
                 emit_event(c, project_id, "code_task.completed_no_pr", "boss",
                            "code_task_run", run_id,
@@ -1593,7 +1601,7 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
             return {"status": "completed", "done": True, "quality_gate_id": qg_id,
                     "pr_suppressed": True, "decomposition_nonfinal": _nonfinal_slice}
 
-        with begin(engine) as c:
+        with _transaction(engine) as c:
             _set_phase(c, run_id, "opening_pr")
             proposal = sf.propose_pull_request(
                 c, project_id, task_id, reservation_id=reservation_id,
@@ -1607,14 +1615,14 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
 
         status = proposal.get("status")
         if status not in ("created", "succeeded"):
-            with begin(engine) as c:
-                c.execute(text("UPDATE code_task_runs SET status='blocked', phase='done', "
+            with _transaction(engine) as c:
+                c.execute(sql("UPDATE code_task_runs SET status='blocked', phase='done', "
                                "decision_id=:d, error=:e, updated_at=now() WHERE id=:id"),
                           {"d": proposal.get("decision_id"), "e": f"PR not created: {status}", "id": run_id})
             return {"status": "blocked", "done": True, "quality_gate_id": qg_id, **proposal}
 
-        with begin(engine) as c:
-            c.execute(text("UPDATE code_task_runs SET status='completed', phase='done', "
+        with _transaction(engine) as c:
+            c.execute(sql("UPDATE code_task_runs SET status='completed', phase='done', "
                            "pull_request_url=:u, pull_request_number=:n, decision_id=:d, updated_at=now() WHERE id=:id"),
                       {"u": proposal.get("pull_request_url"), "n": proposal.get("pull_request_number"),
                        "d": proposal.get("decision_id"), "id": run_id})
@@ -1632,8 +1640,8 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
         reason = f"{reason} [substrate={execution_substrate}]"
         from .code_task_service import classify_pipeline_exception
         fclass, rcode = classify_pipeline_exception(reason)
-        with begin(engine) as c:
-            _release(sf, c, project_id, reservation_id, f"governed code task error: {reason}")
+        with _transaction(engine) as c:
+            _release(budget, c, project_id, reservation_id, f"governed code task error: {reason}")
             if guest_vm_ids:
                 _persist_sandbox_id(c, run_id, guest_vm_ids[-1])
             return _fail(c, run_id, project_id, reason,

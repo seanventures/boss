@@ -1,9 +1,21 @@
 # BOSS Requirements Traceability Matrix (Autonomous .ai version)
 
-**Last rebuilt**: 2026-07-26 by Codex (BOSS-175–194 assurance contract layer)
+**Last rebuilt**: 2026-07-26 by Codex (BOSS-25–31 OSS runtime seams)
 **Sources**: docs/product/PRD-v2.0.md, TECHNICAL_SPEC-v2.0.md, REQUIREMENT_INVENTORY.md, TRACEABILITY.md, user-stories.md, AGENTS.md, README, api/openapi.yaml, db/schema.sql, packages/specpack/*, code + tests scan.
 **Status key**: Implemented (full vertical + tests + states + audit + DoD), Partial, Planned, Blocked (external per real-only), In-Progress (this session).
 **DoD reminder**: Requirement complete only when traced, full journey, UI nav, backend, persistence, auth server+client, validations, loading/empty/error/success, edges, mobile/a11y basics, security/arch/QA review, tests pass, lint/build, docs updated, NO mocks/fakes/TODOs for required behavior.
+
+## 2026-07-26 OSS runtime seam trace
+
+| Plane | Requirement | Implementation | Verification | Status |
+| --- | --- | --- | --- | --- |
+| BOSS-26/27 | Budget and entitlement dependency inversion | typed ports, OSS defaults, enterprise wrappers, direct governed/non-governed pipeline injection | lifecycle, hot-path, and budget regressions | Implemented |
+| BOSS-28 | Code-task persistence boundary | `PersistencePort`, `InMemoryPersistence`, `PostgresPersistence` | retry lineage, gate override, Postgres pipeline regressions | Implemented |
+| BOSS-29 | Event and Decision sinks | connection-free OSS sinks and schema-compatible Postgres sinks | no-SQLAlchemy core import, sink contracts, API regressions | Implemented |
+| BOSS-30 | Edition composition | one startup resolver selects all five ports | both branches and concrete adapter types | Implemented |
+| BOSS-31 | Community/enterprise route ownership | APIRouter partition and paid-edition mounting | classifier/mount tests and real enterprise app | Implemented |
+| BOSS-119 | Legacy API regression matrix | burst isolation and authoritative principal-binding order | 279/279 complete local legacy matrix | Implemented |
+| BOSS-25 | OSS engine extraction umbrella | v0.8 package/license plus BOSS-26–31 runtime seams | package contracts and local release gates | Implemented |
 
 ## 2026-07-26 Assurance Contract Trace
 

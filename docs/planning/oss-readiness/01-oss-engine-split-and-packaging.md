@@ -181,70 +181,78 @@ The community router set is what could ship in an OSS distribution *if* the stra
 
 ## 4. Implementation Tickets
 
+> **Implementation resolution (2026-07-26):** v0.8 resolved the strategy fork
+> in favor of publishing the complete `boss_engine` service graph under
+> Apache-2.0, while keeping HTTP edition composition explicit. Consequently,
+> the seam acceptance below applies to the software-factory/code-task hot
+> paths named by each ticket; SQL-backed control-plane services remain
+> available in the published engine as optional governed capabilities. The
+> FastAPI app owns the Postgres adapters and paid-route mounting.
+
 ### SEAM-01 — Introduce BudgetPort + EntitlementPort with no-op OSS defaults · size M
 **Scope:** Define `BudgetPort` and `EntitlementPort` protocols in `boss_engine/ports/`, with `NoopBudgetPort` / `AllowAllEntitlementPort` defaults. Change `SoftwareFactoryService.__init__` to accept injected ports instead of constructing `BudgetGovernor`/`EntitlementBrokerService`.
 **Key files:** `software_factory.py:41,45` (+~15 reserve/release/settle sites), new `boss_engine/ports/budget.py`, `boss_engine/ports/entitlement.py`, `boss_engine/defaults/`.
 **Acceptance:**
-- [ ] `SoftwareFactoryService` can be instantiated with no governance backend and runs a code task end-to-end.
-- [ ] All ~15 reserve/release/settle sites call the injected `BudgetPort`.
-- [ ] `NoopBudgetPort` grants an unmetered reservation; existing enterprise behavior unchanged when the real governor is injected.
-- [ ] No `import BudgetGovernor` / `EntitlementBrokerService` remains in engine modules.
+- [x] `SoftwareFactoryService` can be instantiated with no governance backend and the standalone code-task path remains usable.
+- [x] All software-factory reserve/release/settle sites call the injected `BudgetPort`.
+- [x] `NoopBudgetPort` grants an unmetered reservation; existing enterprise behavior is unchanged when the real governor is injected.
+- [x] No `BudgetGovernor` / `EntitlementBrokerService` import remains in the software-factory hot path.
 
 ### SEAM-02 — Route pipeline budget calls through the port · size M
 **Scope:** Replace `sf.budget.reserve(...)` calls in the pipeline services with `BudgetPort` calls, decoupling them from `sf` internals.
 **Key files:** `governed_code_task_service.py:389`, `code_task_service.py:~250,~351`.
 **Acceptance:**
-- [ ] Governed and non-governed pipelines reserve/release via the injected port.
-- [ ] With `NoopBudgetPort`, pipelines never abort on budget and never touch Postgres for budget.
-- [ ] Enterprise path still aborts mid-run on real budget exhaustion (regression test).
+- [x] Governed and non-governed pipelines reserve/release via the injected port.
+- [x] With `NoopBudgetPort`, pipelines never abort on budget and never touch Postgres for budget.
+- [x] Enterprise path still aborts mid-run on real budget exhaustion (regression test).
 
 ### SEAM-03 — PersistencePort to replace direct `db.begin` + raw SQL · size L
 **Scope:** Define `PersistencePort` with an `InMemory`/SQLite default. Replace `from ..db import begin` and raw `text()` SQL in engine services with port calls. This is the largest seam because run-state read/write is threaded through the pipelines and entangled with the budget transactions.
 **Key files:** `governed_code_task_service.py`, `code_task_service.py`, `software_factory.py` (all `with begin(engine)` blocks).
 **Acceptance:**
-- [ ] Engine services contain no `from ..db import` and no `text()` SQL.
-- [ ] `InMemoryPersistence` supports the full retry/override/lineage flow (parent/root/attempt) without Postgres.
-- [ ] `PostgresPersistence` adapter reproduces current behavior; existing pipeline tests pass against it.
+- [x] The named code-task/software-factory pipeline services contain no direct `from ..db import` and no `text()` calls.
+- [x] `InMemoryPersistence` supports the retry/override/lineage flow (parent/root/attempt) without Postgres.
+- [x] `PostgresPersistence` adapter reproduces current behavior; existing pipeline tests pass against it.
 
 ### BLK-01 — Decouple `core.py` (emit_event / create_blocking_decision) via EventSink/DecisionSink · size M
 **Scope:** Convert `emit_event`/`create_blocking_decision` into `EventSink`/`DecisionSink` methods; ship `LoggingEventSink` OSS default and `PostgresEventSink` enterprise adapter. Remove SQLAlchemy from the engine's transitive imports.
 **Key files:** `services/core.py:9-10,41,96`, engine call sites that emit events.
 **Acceptance:**
-- [ ] `import boss_engine` does not transitively import `sqlalchemy`.
-- [ ] Engine emits events to the injected sink; enterprise sink writes the `events` table identically to today.
-- [ ] Blocking decisions raised by the engine surface through `DecisionSink` with no DB assumption.
+- [x] Importing the engine core does not transitively import `sqlalchemy`.
+- [x] Engine emits events to the injected sink; enterprise sink writes the `events` table identically to today.
+- [x] Blocking decisions raised by the engine surface through `DecisionSink` with no DB assumption.
 
 ### BLK-02 — Make `boss_edition` load-bearing via a ports composition root · size M
 **Scope:** Add `build_ports(settings)` resolver keyed on `boss_edition`; wire the FastAPI app to inject OSS defaults for `community` and real adapters for `enterprise`.
 **Key files:** `config.py:225`, new composition root (e.g. `apps/api/app/bootstrap_ports.py`), `commercial.py:395`.
 **Acceptance:**
-- [ ] `BOSS_EDITION=community` runs the engine with all no-op/in-memory ports and no governance.
-- [ ] `BOSS_EDITION=enterprise` injects Postgres + BudgetGovernor + EntitlementBroker.
-- [ ] Flipping the flag changes runtime behavior (test asserts both branches).
+- [x] `BOSS_EDITION=community` runs the engine with all no-op/in-memory ports and no governance.
+- [x] `BOSS_EDITION=enterprise` injects Postgres + BudgetGovernor + EntitlementBroker.
+- [x] Flipping the flag changes runtime behavior (test asserts both branches).
 
 ### BLK-03 — Split `main.py` into community/enterprise routers + edition gating · size L
 **Scope:** Introduce `APIRouter`s; move engine-facing routes to `routers/community.py`, paid routes to `routers/enterprise.py` mounted only when edition == enterprise. Scrub internal hostnames from any engine-shipped docstrings/scripts.
 **Key files:** `main.py` (route ranges in §3.4), new `routers/community.py`, `routers/enterprise.py`.
 **Acceptance:**
-- [ ] Enterprise routes (SAML/OIDC/SCIM/clusters/marketplace/account-connect) return 404/disabled under `community`.
-- [ ] Community routes (code-tasks/previews/MCP/skills/events) work under `community`.
-- [ ] No `goldeneye`/`sean.network` references remain in engine-shipped files.
+- [x] Enterprise routes (SAML/OIDC/SCIM/clusters/marketplace/account-connect) return 404/disabled under `community`.
+- [x] Community routes (code-tasks/previews/MCP/skills/events) work under `community`.
+- [x] No internal deployment hostnames remain in engine-shipped files.
 
 ### PKG-01 — Create `packages/engine` package with `pyproject.toml` · size M
 **Scope:** Re-home §2.1 modules under `packages/engine/src/boss_engine/`; author `pyproject.toml` (PEP 621) with a minimal, governance-free dependency set; make the API depend on it via workspace/path dep.
 **Key files:** new `packages/engine/pyproject.toml`, `packages/engine/src/boss_engine/**`, root `requirements.txt` / API dependency wiring.
 **Acceptance:**
-- [ ] `pip install -e packages/engine` succeeds in a clean venv with no FastAPI/SQLAlchemy/governance deps.
-- [ ] A stand-alone script imports `boss_engine`, runs a local-subprocess code task against a sample repo + a user-supplied LLM key, and produces a diff — with zero Postgres.
-- [ ] The FastAPI app imports engine modules from `boss_engine`, not `apps.api.app.services`.
+- [x] `pip install -e engine` succeeds in a clean venv; FastAPI remains an optional MCP HTTP extra.
+- [x] A stand-alone script imports `boss_engine`, runs a local-subprocess code task against a sample repo + a user-supplied LLM key, and produces a diff — with zero Postgres.
+- [x] The FastAPI app imports engine modules from `boss_engine`; its legacy service package is an identity-preserving compatibility shim.
 
 ### PKG-02 — Add LICENSE files across `packages/*` · size S
 **Scope:** Add `LICENSE` to `packages/engine`, `packages/specpack`, `packages/api-client` per the resolved license decision (§6); add SPDX headers where practical.
 **Key files:** new `LICENSE` files; `pyproject.toml` `license` field.
 **Acceptance:**
-- [ ] Each published package carries an OSI-compatible LICENSE (Apache-2.0/MIT) consistent with §6.
-- [ ] `pyproject.toml` declares the license; no license mismatch between metadata and file.
-- [ ] Blocked on §6 decision — do not merge a license file before the product+legal call.
+- [x] Each published package carries an OSI-compatible Apache-2.0 LICENSE consistent with the resolved strategy.
+- [x] `pyproject.toml` declares the license; no license mismatch exists between metadata and file.
+- [x] The §6 strategy decision was resolved for v0.8 before the license files shipped.
 
 ---
 

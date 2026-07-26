@@ -98,7 +98,7 @@ class PlaneWebhookService:
             if m:
                 base = base or m.group(1)
                 ws = ws or m.group(2)
-        return base, (ws or "goldeneye"), (self.settings.plane_api_token or "")
+        return base, (ws or "default"), (self.settings.plane_api_token or "")
 
     def _project_labels(self, project_id: str, *, force: bool = False) -> dict[str, str]:
         """Cached {label_id: name} for a project, fetched from the Plane REST API. Empty on any
