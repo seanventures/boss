@@ -133,3 +133,12 @@ the merge and validation evidence and are Done.
 | BOSS-206–208 | Standing verifier and Assurance Case evaluation | Budgeted leased schedule/execute flows preserve passed/refuted/inconclusive; Assurance Case joins all mandatory dimensions under a policy snapshot | `test_assurance_workflow_contracts.py`; `test_workflow_runtime.py` |
 | BOSS-209–212 | Reusable Agent Group protocols | Panel, producer-reviewer, bounded-debate, and fan-out/join graphs preserve attribution, dissent, failures, receipts, bounds, and governance gates | `test_assurance_workflow_contracts.py`; `test_workflow_runtime.py` |
 | BOSS-213–214 | Integration lifecycle and capability gate | SecretRef-only connection lifecycle plus deterministic intersection preflight; denied resolution never invokes an executor | `test_assurance_workflow_contracts.py`; `test_workflow_runtime.py` |
+
+## OSS engine and v0.8 release integration (2026-07-26)
+
+| Plane | Requirement | Implementation | Evidence |
+| --- | --- | --- | --- |
+| BOSS-215–218 | Integrate the complete Paramg engine split without duplicate modules; preserve shim identity, worker/API imports, and distributable metadata | Merged `feat/oss-engine-split`; corrected repo-root and local import paths; expanded `boss_engine` package discovery/dependencies; added licenses and isolated distribution contract | `engine/tests/test_config.py`; `engine/tests/test_distribution.py`; isolated wheel install and API/worker container import checks |
+| BOSS-219–224 | Preserve CLI/live read tools, tool safety classes, confirmation-gated writes, MCP filtering/protocol, and standalone containers | Engine CLI/MCP expose 15 governed tools; read-only mode filters write tools; standalone/API/worker images import relocated engine and connect through explicit runtime boundaries | `engine/tests`; engine verify harness; standalone/API/worker container checks |
+| BOSS-225–230 | Ship critical authorization, archive audit, branch-lineage, SSH destination, rollback, and advisory-disposition fixes | Integrated PR #70 and PR #68 with explicit conflict resolution in the relocated governed-code service | 34 focused security/deploy/advisory tests; affected suite rerun |
+| BOSS-231–234 | Reconcile source branches, publish coherent 0.8 metadata, validate the release, and cut v0.8.0 from merged main | Source PR lineage recorded; root/web/client/engine/Helm/Kubernetes versions aligned; changelog and release gates added | 348 passed/1 skipped; 119 web; lint, docs, build, smoke, package/container, Kubernetes/Helm, and infra validation |

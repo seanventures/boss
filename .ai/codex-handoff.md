@@ -446,3 +446,27 @@ Slice complete; accelerating full product with parallel agents.
 - Draft PR: https://github.com/seanheiney/boss/pull/28 at commit `1eb1d36`.
   Merge https://github.com/seanheiney/boss/pull/27 first, then retarget #28 to
   `main`; attach the merge commit and move the selected Plane issues to Done.
+
+## Codex handoff — BOSS-215–234 / v0.8.0 (2026-07-26)
+
+- Active branch: `ai/codex/release-v0.8.0`, based on `origin/main` `351a37c`.
+- Integrated Paramg's complete `feat/oss-engine-split` tip `52ff073`, the
+  consolidated critical fixes from PR #70, and the advisory quality-gate fix
+  from PR #68. PRs #23 and #69 are subsets of #70.
+- Closed split regressions in repo-root discovery, standalone command imports,
+  API shim identity coverage, worker heartbeat client ownership, and verifier
+  corpus discovery. Added Python 3.11 gate, package/distribution contracts,
+  licenses, v0.8 metadata, changelog, and container/wheel validation.
+- Release evidence at the current tip: 348 passed / 1 skipped in the full
+  affected backend/worker/engine half; 94/94 focused relocation/worker tests;
+  119/119 web tests; idempotent seed twice; smoke, Ruff, TypeScript, strict
+  MkDocs, Next production build, engine wheel/container, API/worker containers,
+  Kubernetes 17 resources, Helm 0.8.0, and four infra profiles pass.
+- `release-blockers` correctly remains non-zero only for unconfigured hosted
+  Account Connect, enterprise identity/SCIM, live-cluster verification, and
+  provider-write credentials/approval. Community local and self-hosted
+  packages are ready. The dependency report contains the known dev-server-only
+  esbuild advisory below Vitest; production build is unaffected.
+- Plane BOSS-215–234 remain In Progress until the release PR is merged and
+  `v0.8.0` is published. Attach the final PR, merge SHA, tag, release URL, and
+  validation evidence before moving them to Done.
