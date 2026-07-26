@@ -297,23 +297,69 @@ def _register_write_tools(reg: ToolRegistry) -> None:
     def create_code_task(ctx, *, project_id, actor, args):
         pid = args.get("project_id") or project_id
         cts = services_module("code_task_service")
+        task_id = args.get("task_id")
+        instructions = args.get("instructions") or ""
+        base_branch = args.get("base_branch") or "main"
+        finalize_ctx: dict = {}
+        risk_tier = args.get("risk_tier")
+        extended_from = None
         with ctx.begin() as c:
+            # Build-on-existing: if this task already has a built app (a completed
+            # code task with a PR), EXTEND that app's branch instead of a fresh
+            # build on main. Mirrors intent_router._existing_app_for_task.
+            if task_id and not args.get("base_branch"):
+                branch, root = _existing_app_branch(c, pid, task_id)
+                if branch:
+                    base_branch = branch
+                    extended_from = root
+                    finalize_ctx = {"root_run_id": root, "web_app_build": True}
+                    risk_tier = 0 if risk_tier is None else risk_tier
+                    instructions = (
+                        "EXTEND the existing app on this branch — do NOT rebuild from scratch. "
+                        "Make the smallest change that satisfies the request, preserving all "
+                        "current features.\n\n" + instructions
+                    )
             run_id = cts.start_code_task(
                 c,
                 project_id=pid,
-                task_id=args.get("task_id"),
+                task_id=task_id,
                 title=args.get("title") or "Code task",
-                instructions=args.get("instructions") or "",
+                instructions=instructions,
                 acceptance_criteria=args.get("acceptance_criteria") or [],
                 test_commands=args.get("test_commands") or [],
                 owner=ctx.settings.target_github_owner,
                 repo=ctx.settings.target_github_repo,
-                base_branch=args.get("base_branch") or "main",
-                finalize_ctx={},
+                base_branch=base_branch,
+                finalize_ctx=finalize_ctx,
                 jobs=ctx.jobs,
-                risk_tier=args.get("risk_tier"),
+                risk_tier=risk_tier,
             )
-        return {"status": "queued", "run_id": run_id, "project_id": pid}
+        return {
+            "status": "queued",
+            "run_id": run_id,
+            "project_id": pid,
+            "base_branch": base_branch,
+            "extended_existing_app": bool(extended_from),
+            "extended_from_root": extended_from,
+        }
+
+    @reg.tool(
+        "retry_code_task",
+        "Resume a failed/blocked code-task run as a new attempt in the same "
+        "lineage, carrying prior findings forward (optionally with a fix note).",
+        _obj(
+            {"run_id": {"type": "string"}, "fix_note": {"type": "string"}},
+            ["run_id"],
+        ),
+        kind="write",
+    )
+    def retry_code_task(ctx, *, project_id, actor, args):
+        cts = services_module("code_task_service")
+        result = cts.retry_code_task(
+            ctx.engine, ctx.settings, ctx.jobs, args["run_id"],
+            fix_note=(args.get("fix_note") or ""),
+        )
+        return {"status": "retried", "result": _json_safe(result)}
 
     @reg.tool(
         "create_discovery",
@@ -402,6 +448,30 @@ def _text(sql: str):
     from sqlalchemy import text
 
     return text(sql)
+
+
+def _existing_app_branch(conn, project_id: str, task_id: str) -> tuple:
+    """The app branch + lineage root for a task that already has a built app
+    (latest completed code-task run with a PR). Mirrors intent_router so chat
+    enhancements extend the existing PR instead of rebuilding on main."""
+    row = conn.execute(
+        _text(
+            "SELECT finalize_ctx FROM code_task_runs "
+            "WHERE project_id = :p AND task_id = :t AND status = 'completed' "
+            "AND pull_request_url IS NOT NULL ORDER BY created_at DESC LIMIT 1"
+        ),
+        {"p": project_id, "t": task_id},
+    ).mappings().first()
+    if not row:
+        return None, None
+    fc = row["finalize_ctx"]
+    if isinstance(fc, str):
+        try:
+            fc = json.loads(fc)
+        except (ValueError, TypeError):
+            fc = {}
+    root = (fc or {}).get("root_run_id")
+    return (f"boss/code/{root}", root) if root else (None, None)
 
 
 def _slim_run(r: dict) -> dict:

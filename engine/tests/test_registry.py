@@ -9,13 +9,13 @@ from boss_engine.tools.registry import ToolError, ToolRegistry, ToolSpec
 
 def test_default_registry_shape():
     reg = build_default_registry()
-    assert len(reg.names()) == 14
+    assert len(reg.names()) == 15
     assert len(reg.specs(kind="read")) == 10
-    assert len(reg.specs(kind="write")) == 4
+    assert len(reg.specs(kind="write")) == 5
     # the capabilities the user explicitly asked the agent to cover
     for name in (
         "project_status", "list_running_work", "get_task_preview",
-        "microvm_status", "query_db", "create_code_task",
+        "microvm_status", "query_db", "create_code_task", "retry_code_task",
     ):
         assert name in reg.names()
 
