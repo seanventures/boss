@@ -1052,5 +1052,10 @@ PR: https://github.com/seanheiney/boss/pull/3
   worker containers, Kubernetes 17 resources, Helm 0.8.0, and four infra
   profiles pass. External rollout checker fails closed only for intentionally
   unconfigured hosted/provider paths.
-- Publishing state: local implementation complete; Plane tickets remain In
-  Progress until the release PR merges and GitHub v0.8.0 is published.
+- Publishing complete: PR #76 merged to `main` as
+  `bc4c4d6525063feac0a6997501aafc1642c23ae3`; GitHub automatically records
+  source PRs #68/#70 as merged; superseded #23/#69 are closed without deleting
+  contributor branches. The annotated `v0.8.0` tag peels to that exact merge
+  and https://github.com/seanheiney/boss/releases/tag/v0.8.0 is the latest
+  release. Plane BOSS-215–234 and reconciled BOSS-32/33 are Done with final
+  provenance and validation evidence.

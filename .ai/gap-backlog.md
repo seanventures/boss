@@ -43,9 +43,12 @@
 
 ## 2026-07-26 v0.8 integration disposition
 
-- BOSS-215–230: locally closed and release-validated; awaiting merge evidence.
-- BOSS-231–234: release integration is validated; PR merge, source-PR
-  reconciliation, exact-main tag, and GitHub release remain before closure.
+- BOSS-215–230: shipped through PR #76 and verified Done in Plane.
+- BOSS-231–234: PR #76 merged as `bc4c4d6`; source PRs are reconciled; the
+  annotated `v0.8.0` tag peels to that exact commit; the GitHub release is
+  published; all four are verified Done in Plane.
+- BOSS-32/33: stale package/license backlog reconciled to Done because v0.8.0
+  ships the standalone engine distribution and package license contracts.
 - No unintegrated Paramg engine commits remain: local integration includes
   authoritative tip `52ff073`.
 - External rollout gaps remain intentionally open and fail-closed: hosted
