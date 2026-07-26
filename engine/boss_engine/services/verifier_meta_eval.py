@@ -223,8 +223,8 @@ def load_corpus(path: Optional[str] = None) -> dict[str, Any]:
     """Load the labeled corpus JSON. Defaults to the repo's evals/verifier_meta/corpus.json."""
     import json
     if path is None:
-        # this file: apps/api/app/services/verifier_meta_eval.py -> repo root is parents[4]
-        path = str(Path(__file__).resolve().parents[4] / "evals" / "verifier_meta" / "corpus.json")
+        # this file: engine/boss_engine/services/verifier_meta_eval.py -> repo root is parents[3]
+        path = str(Path(__file__).resolve().parents[3] / "evals" / "verifier_meta" / "corpus.json")
     return json.loads(Path(path).read_text())
 
 

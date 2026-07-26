@@ -80,6 +80,7 @@ def test_preview_proxy_shim_rewrites_static_dynamic_spa_and_live_assets():
 
 def test_reconcile_keeps_healthy_preview_and_stops_only_dead_one(engine, monkeypatch):
     settings = get_settings()
+    monkeypatch.setattr(preview_service, "_respawn_process_preview", lambda *_args: None)
     expires = datetime.now(timezone.utc) + timedelta(hours=1)
     with engine.begin() as connection:
         for preview_id, pid, url in (
@@ -97,8 +98,12 @@ def test_reconcile_keeps_healthy_preview_and_stops_only_dead_one(engine, monkeyp
 
     first = reconcile_previews(engine, settings)
     second = reconcile_previews(engine, settings)
-    assert first == {"checked": 2, "running": 1, "stopped": 1, "expired": 0}
-    assert second == {"checked": 1, "running": 1, "stopped": 0, "expired": 0}
+    assert first == {
+        "checked": 2, "running": 1, "stopped": 1, "expired": 0, "respawning": 1
+    }
+    assert second == {
+        "checked": 1, "running": 1, "stopped": 0, "expired": 0, "respawning": 0
+    }
     with engine.begin() as connection:
         rows = dict(connection.execute(text(
             "SELECT id,status FROM app_previews WHERE id IN ('prev_alive','prev_dead')"
