@@ -1,0 +1,176 @@
+from __future__ import annotations
+
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+from sqlalchemy import text
+
+from apps.api.app.bootstrap_ports import build_ports
+from apps.api.app.config import get_settings
+from apps.api.app.routers import mount_edition_routers
+from apps.api.app.routers.enterprise import is_enterprise_path
+
+
+ROOT = Path(__file__).resolve().parents[3]
+
+
+def _test_app(edition: str) -> FastAPI:
+    app = FastAPI()
+
+    @app.get("/v1/code-tasks")
+    def community_route():
+        return {"surface": "community"}
+
+    @app.get("/v1/account-connect/link")
+    def enterprise_route():
+        return {"surface": "enterprise"}
+
+    mount_edition_routers(app, edition)
+    return app
+
+
+def test_community_edition_mounts_only_community_routes():
+    client = TestClient(_test_app("community"))
+    assert client.get("/v1/code-tasks").status_code == 200
+    assert client.get("/v1/account-connect/link").status_code == 404
+
+
+@pytest.mark.parametrize(
+    "edition",
+    ["cloud", "enterprise", "enterprise_cloud", "enterprise_self_hosted"],
+)
+def test_paid_editions_mount_both_router_sets(edition):
+    client = TestClient(_test_app(edition))
+    assert client.get("/v1/code-tasks").status_code == 200
+    assert client.get("/v1/account-connect/link").status_code == 200
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/saml/v2/project/metadata",
+        "/scim/v2/project/Users",
+        "/v1/enterprise/clusters",
+        "/v1/marketplace/listings",
+        "/v1/account-connect/link",
+        "/v1/providers",
+        "/v1/self-improvement/proposals",
+    ],
+)
+def test_paid_surface_classification(path):
+    assert is_enterprise_path(path)
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/v1/code-tasks",
+        "/v1/code-tasks/run/preview",
+        "/v1/previews",
+        "/v1/mcp/servers",
+        "/v1/skills",
+        "/v1/events",
+    ],
+)
+def test_community_surface_classification(path):
+    assert not is_enterprise_path(path)
+
+
+def test_composition_root_changes_implementations_by_edition(engine):
+    settings = get_settings()
+    previous = settings.boss_edition
+    try:
+        settings.boss_edition = "community"
+        community = build_ports(settings, engine)
+        settings.boss_edition = "enterprise"
+        enterprise = build_ports(settings, engine)
+    finally:
+        settings.boss_edition = previous
+
+    assert type(community.persistence).__name__ == "InMemoryPersistence"
+    assert type(community.budget).__name__ == "NoopBudgetPort"
+    assert type(enterprise.persistence).__name__ == "PostgresPersistence"
+    assert type(enterprise.budget).__name__ == "PostgresBudgetPort"
+
+
+def test_real_enterprise_app_exposes_both_surfaces(client):
+    assert client.get("/v1/code-tasks", params={"project_id": "boss-dogfood"}).status_code != 404
+    assert client.get("/v1/account-connect/health-checks", params={"project_id": "boss-dogfood"}).status_code != 404
+
+
+def test_real_community_app_omits_paid_routes():
+    environment = os.environ.copy()
+    environment["BOSS_EDITION"] = "community"
+    environment["PYTHONPATH"] = f"{ROOT}:{ROOT / 'engine'}"
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "from apps.api.app.main import app; "
+                "paths={getattr(route, 'path', '') for route in app.routes}; "
+                "assert '/v1/code-tasks' in paths; "
+                "assert '/v1/mcp/servers' in paths; "
+                "assert '/v1/skills' in paths; "
+                "assert '/v1/events' in paths; "
+                "assert '/v1/account-connect/link' not in paths; "
+                "assert '/v1/enterprise/clusters' not in paths; "
+                "assert '/v1/marketplace/listings' not in paths; "
+                "assert '/v1/providers' not in paths"
+            ),
+        ],
+        cwd=ROOT,
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+
+
+def test_enterprise_event_and_decision_sinks_preserve_postgres_behavior(engine):
+    settings = get_settings()
+    previous = settings.boss_edition
+    try:
+        settings.boss_edition = "enterprise"
+        ports = build_ports(settings, engine)
+    finally:
+        settings.boss_edition = previous
+
+    with engine.begin() as connection:
+        event_id = ports.events.emit(
+            connection,
+            "boss-dogfood",
+            "ports.contract_test",
+            "tester",
+            "project",
+            "boss-dogfood",
+            {"source": "enterprise_sink"},
+        )
+        decision_id = ports.decisions.create_blocking(
+            connection,
+            "boss-dogfood",
+            None,
+            "Verify the persistence adapter?",
+            {"action": "hold"},
+            {},
+            "ports_contract_test",
+        )
+        event = connection.execute(
+            text("SELECT event_type, data FROM events WHERE id = :id"),
+            {"id": event_id},
+        ).mappings().one()
+        decision = connection.execute(
+            text("SELECT status, question FROM decisions WHERE id = :id"),
+            {"id": decision_id},
+        ).mappings().one()
+
+    assert event["event_type"] == "ports.contract_test"
+    assert event["data"]["source"] == "enterprise_sink"
+    assert decision["status"] == "pending"
+    assert decision["question"] == "Verify the persistence adapter?"

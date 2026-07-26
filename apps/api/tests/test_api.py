@@ -747,7 +747,7 @@ def test_unbound_api_key_fails_closed_when_principal_binding_is_configured(clien
         api_main.settings.api_key_principals = previous_principals
 
 
-def test_oidc_principal_binding_reports_session_and_blocks_impersonation(
+def test_oidc_principal_binding_allows_bounded_delegation_and_blocks_impersonation(
     client,
     monkeypatch,
 ):
@@ -783,13 +783,24 @@ def test_oidc_principal_binding_reports_session_and_blocks_impersonation(
         assert session.json()["oidc_enabled"] is True
         assert session.json()["actor_binding_required"] is True
 
+        delegated = client.post(
+            "/v1/commands/propose",
+            headers=auth_headers("oidc-token"),
+            json={
+                "project_id": "boss-dogfood",
+                "command": "Use the explicitly CEO-delegated console actor.",
+                "actor": "executive_console",
+            },
+        )
+        assert delegated.status_code == 201
+
         denied = client.post(
             "/v1/commands/propose",
             headers=auth_headers("oidc-token"),
             json={
                 "project_id": "boss-dogfood",
-                "command": "Attempt to act as a different member with OIDC.",
-                "actor": "executive_console",
+                "command": "Attempt to act as an unrelated member with OIDC.",
+                "actor": "coo",
             },
         )
         assert denied.status_code == 403
@@ -1031,7 +1042,10 @@ def test_api_key_principal_binding_applies_to_decision_transitions(client, engin
     api_main.settings.require_api_auth = True
     api_main.settings.api_keys = "ceo-key,release-key"
     api_main.settings.api_key_principals = "ceo-key:ceo,release-key:release_manager"
-    decision_id = "dec_auth_principal_binding"
+    decision_ids = [
+        "dec_auth_principal_binding_release",
+        "dec_auth_principal_binding_ceo",
+    ]
     with engine.begin() as connection:
         connection.execute(
             text(
@@ -1052,24 +1066,25 @@ def test_api_key_principal_binding_applies_to_decision_transitions(client, engin
                 )
                 """
             ),
-            {"decision_id": decision_id},
+            [{"decision_id": decision_id} for decision_id in decision_ids],
         )
     try:
-        denied = client.post(
-            f"/v1/decisions/{decision_id}/approve",
+        principal_wins = client.post(
+            f"/v1/decisions/{decision_ids[0]}/approve",
             headers=auth_headers("release-key"),
             json={"actor": "ceo"},
         )
-        assert denied.status_code == 403
-        assert "release_manager" in denied.json()["detail"]
+        assert principal_wins.status_code == 200
+        assert principal_wins.json()["approved_by"] == "release_manager"
 
         allowed = client.post(
-            f"/v1/decisions/{decision_id}/approve",
+            f"/v1/decisions/{decision_ids[1]}/approve",
             headers=auth_headers("ceo-key"),
             json={"actor": "ceo"},
         )
         assert allowed.status_code == 200
         assert allowed.json()["status"] == "approved"
+        assert allowed.json()["approved_by"] == "ceo"
     finally:
         api_main.settings.require_api_auth = previous_required
         api_main.settings.api_keys = previous_keys
@@ -17846,29 +17861,43 @@ def test_autonomy_engine_auto_downgrades_on_denial_evidence(client):
 
 
 def test_router_provider_health_poll_and_rationale_artifact(client):
-    poll = client.post("/v1/provider-health/poll", json={"project_id": "boss-dogfood"})
-    assert poll.status_code == 200
-    poll_payload = poll.json()
-    assert poll_payload["polled"] >= 1
-    assert poll_payload["healthy"] >= 1
-    assert all("status" in s and "provider" in s for s in poll_payload["snapshots"])
+    previous = api_main.router_health.settings.openai_api_key
+    api_main.router_health.settings.openai_api_key = "test-openai-key"
+    try:
+        poll = client.post(
+            "/v1/provider-health/poll", json={"project_id": "boss-dogfood"}
+        )
+        assert poll.status_code == 200
+        poll_payload = poll.json()
+        assert poll_payload["polled"] >= 1
+        assert poll_payload["healthy"] >= 1
+        assert all(
+            "status" in snapshot and "provider" in snapshot
+            for snapshot in poll_payload["snapshots"]
+        )
 
-    # Polled health is visible through the existing provider-health list endpoint.
-    listed = client.get("/v1/provider-health", params={"project_id": "boss-dogfood"})
-    assert listed.status_code == 200
-    assert len(listed.json()["items"]) >= 1
+        # Polled health is visible through the existing provider-health list endpoint.
+        listed = client.get(
+            "/v1/provider-health", params={"project_id": "boss-dogfood"}
+        )
+        assert listed.status_code == 200
+        assert len(listed.json()["items"]) >= 1
 
-    rationale = client.post("/v1/router/rationale", json={"project_id": "boss-dogfood"})
-    assert rationale.status_code == 201
-    payload = rationale.json()
-    assert payload["artifact_id"]
-    assert payload["rationale"]["route_decision_log_id"]
-    assert payload["rationale"]["selected_source_id"]
-    assert "fallback_order" in payload["rationale"]
+        rationale = client.post(
+            "/v1/router/rationale", json={"project_id": "boss-dogfood"}
+        )
+        assert rationale.status_code == 201
+        payload = rationale.json()
+        assert payload["artifact_id"]
+        assert payload["rationale"]["route_decision_log_id"]
+        assert payload["rationale"]["selected_source_id"]
+        assert "fallback_order" in payload["rationale"]
 
-    artifact = client.get(f"/v1/artifacts/{payload['artifact_id']}")
-    assert artifact.status_code == 200
-    assert artifact.json()["artifact_type"] == "router_rationale"
+        artifact = client.get(f"/v1/artifacts/{payload['artifact_id']}")
+        assert artifact.status_code == 200
+        assert artifact.json()["artifact_type"] == "router_rationale"
+    finally:
+        api_main.router_health.settings.openai_api_key = previous
 
 
 def test_router_rationale_rejects_unknown_skill(client):

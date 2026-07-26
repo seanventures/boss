@@ -1,5 +1,27 @@
 # Codex Handoff
 
+## 2026-07-26 BOSS-25–31 OSS runtime seams + BOSS-119 legacy closure
+
+- Active branch `ai/codex/oss-ports-baseline` starts from clean `main` at
+  `da9a43b`. Plane BOSS-25–31 and BOSS-119 are the release scope.
+- Added typed Budget, Entitlement, Persistence, Event, and Decision ports with
+  connection-free OSS defaults and Postgres/governance enterprise adapters.
+  The FastAPI composition root selects all five once from `BOSS_EDITION`.
+- Software-factory and both code-task pipelines now consume injected ports.
+  In-memory persistence covers retry lineage and gate override; the Postgres
+  adapter preserves existing transactional behavior.
+- Community and enterprise APIRouter ownership is explicit. Community mounts
+  code tasks, previews, MCP, skills, and events; paid identity, commercial,
+  ProviderOps, deployment, marketplace, and self-improvement routes mount only
+  for paid editions.
+- Internal deployment hostnames were removed from engine-shipped source. Paid
+  edition capability packs now inherit the Community baseline they declare.
+- BOSS-119 repairs isolate the burst limiter from unrelated regression tests
+  and enforce authenticated-principal binding before target permissions.
+- Green release evidence: 279/279 legacy API tests, 30/30 focused OSS-port and
+  edition-router tests, 31/31 engine tests, 46/46 widened persistence/code-task
+  tests, repository Ruff/TypeScript lint, docs checks, compile, and diff checks.
+
 ## 2026-07-26 BOSS-195–214 assurance workflow batch
 
 - Branch `ai/codex/boss-assurance-workflows` starts from refreshed `origin/main`

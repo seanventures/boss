@@ -27,10 +27,8 @@ import logging
 from datetime import datetime, timezone
 from typing import Optional
 
-from sqlalchemy import text
-
 from ..config import Settings
-from ..db import begin
+from ..ports import get_engine_ports, sql
 from .code_agent import CodeTaskSpec, RepoContext, make_code_agent
 from .core import emit_event, make_id
 from .github_app_adapter import GitHubAppAdapter
@@ -46,6 +44,19 @@ logger = logging.getLogger(__name__)
 # --------------------------------------------------------------------------- #
 #  Persistence helpers                                                        #
 # --------------------------------------------------------------------------- #
+def _engine_ports():
+    ports = get_engine_ports()
+    if ports is None:
+        raise RuntimeError(
+            "engine ports are not configured; configure EnginePorts at startup"
+        )
+    return ports
+
+
+def _transaction(engine):
+    return _engine_ports().persistence.transaction(engine)
+
+
 def _row_to_run(r) -> dict:
     def _j(v):
         if isinstance(v, str):
@@ -66,8 +77,10 @@ def _row_to_run(r) -> dict:
 
 
 def load_code_task_run(connection, run_id: str) -> Optional[dict]:
+    if hasattr(connection, "get_run"):
+        return connection.get_run(run_id)
     r = connection.execute(
-        text("SELECT id, project_id, task_id, status, phase, title, spec, state, usage, "
+        sql("SELECT id, project_id, task_id, status, phase, title, spec, state, usage, "
              "finalize_ctx, reservation_id, pull_request_url, pull_request_number, decision_id, error "
              "FROM code_task_runs WHERE id = :id"),
         {"id": run_id},
@@ -76,8 +89,10 @@ def load_code_task_run(connection, run_id: str) -> Optional[dict]:
 
 
 def list_code_task_runs(connection, project_id: str, limit: int = 50) -> list[dict]:
+    if hasattr(connection, "list_runs"):
+        return connection.list_runs(project_id, limit)
     rows = connection.execute(
-        text("SELECT id, project_id, task_id, status, phase, title, spec, state, usage, "
+        sql("SELECT id, project_id, task_id, status, phase, title, spec, state, usage, "
              "finalize_ctx, reservation_id, pull_request_url, pull_request_number, decision_id, error "
              "FROM code_task_runs WHERE project_id = :p ORDER BY created_at DESC LIMIT :lim"),
         {"p": project_id, "lim": int(limit)},
@@ -125,14 +140,48 @@ def start_code_task(
         spec["review_panel_size"] = review_panel_size
     if open_pr is False:  # eval/bake-off runs: verify via the gate, do not open a PR
         spec["open_pr"] = False
-    connection.execute(
-        text("""
-            INSERT INTO code_task_runs (id, project_id, task_id, status, phase, title, spec, finalize_ctx)
-            VALUES (:id, :p, :t, 'running', 'queued', :title, CAST(:spec AS JSONB), CAST(:fc AS JSONB))
-        """),
-        {"id": run_id, "p": project_id, "t": task_id, "title": title,
-         "spec": json.dumps(spec), "fc": json.dumps(finalize_ctx or {})},
-    )
+    if hasattr(connection, "save_run"):
+        connection.save_run(
+            run_id,
+            {
+                "project_id": project_id,
+                "task_id": task_id,
+                "status": "running",
+                "phase": "queued",
+                "title": title,
+                "spec": spec,
+                "state": {},
+                "usage": {},
+                "finalize_ctx": finalize_ctx or {},
+                "reservation_id": None,
+                "pull_request_url": None,
+                "pull_request_number": None,
+                "decision_id": None,
+                "error": None,
+            },
+        )
+    else:
+        connection.execute(
+            sql(
+                """
+                INSERT INTO code_task_runs (
+                    id, project_id, task_id, status, phase, title, spec, finalize_ctx
+                )
+                VALUES (
+                    :id, :p, :t, 'running', 'queued', :title,
+                    CAST(:spec AS JSONB), CAST(:fc AS JSONB)
+                )
+                """
+            ),
+            {
+                "id": run_id,
+                "p": project_id,
+                "t": task_id,
+                "title": title,
+                "spec": json.dumps(spec),
+                "fc": json.dumps(finalize_ctx or {}),
+            },
+        )
     jobs.create_job(connection, project_id=project_id, task_id=task_id,
                     kind="code.task", priority=46, payload={"run_id": run_id})
     emit_event(connection, project_id, "code_task.started", "boss", "code_task_run", run_id,
@@ -148,7 +197,7 @@ def retry_code_task(
     attempt's findings forward as explicit feedback so the agent fixes the identified issues instead
     of regenerating blind. History is preserved: each attempt links to its parent + root run, and
     accumulates the findings it must address."""
-    with begin(engine) as c:
+    with _transaction(engine) as c:
         prev = load_code_task_run(c, run_id)
     if prev is None:
         raise ValueError(f"code task run not found: {run_id}")
@@ -234,7 +283,7 @@ def retry_code_task(
         **({"substrate_fallback": substrate_fallback_note} if substrate_fallback_note else {}),
     })
 
-    with begin(engine) as c:
+    with _transaction(engine) as c:
         new_id = start_code_task(
             c, project_id=prev["project_id"], task_id=prev.get("task_id"), title=title,
             instructions=augmented,
@@ -266,7 +315,7 @@ def override_code_task(engine, settings: Settings, jobs, run_id: str, *,
     preserved at gate-failure time — NO re-run. Gates the human does NOT waive still block, and the
     opened PR keeps its own merge-gate Decision (this opens, it does not merge)."""
     from ..schemas import FileChange
-    with begin(engine) as c:
+    with _transaction(engine) as c:
         run = load_code_task_run(c, run_id)
     if run is None:
         raise ValueError(f"code task run not found: {run_id}")
@@ -286,12 +335,14 @@ def override_code_task(engine, settings: Settings, jobs, run_id: str, *,
                          "Waive them explicitly to proceed (or leave them to keep blocking).")
     waive_gates = waive
     files = [FileChange(path=f["path"], content=f["content"]) for f in pending]
-    sf = SoftwareFactoryService(settings)
+    ports = _engine_ports()
+    budget = ports.budget
+    sf = SoftwareFactoryService(settings, ports=ports)
     project_id = run["project_id"]
     task_id = run.get("task_id")
     qg = fctx.get("quality_gate_id")
-    with begin(engine) as c:
-        reservation = sf.budget.reserve(c, project_id, category="code_task",
+    with _transaction(engine) as c:
+        reservation = budget.reserve(c, project_id, category="code_task",
             amount_usd_micros=200_000, reason=f"gate-override PR {run_id[:12]}", expires_in_minutes=15)
         _set_phase(c, run_id, "opening_pr")
         # Use the root-run branch so a waived iteration lands on the SAME branch/PR the
@@ -307,36 +358,61 @@ def override_code_task(engine, settings: Settings, jobs, run_id: str, *,
     status = proposal.get("status")
     if status not in ("created", "succeeded"):
         return {"status": "error", "detail": f"PR not created: {status}", **proposal}
-    with begin(engine) as c:
-        c.execute(text("UPDATE code_task_runs SET status='completed', phase='done', "
-                       "pull_request_url=:u, pull_request_number=:n, decision_id=:d, error=:e, "
-                       "updated_at=now() WHERE id=:id"),
-                  {"u": proposal.get("pull_request_url"), "n": proposal.get("pull_request_number"),
-                   "d": proposal.get("decision_id"),
-                   "e": f"Gate {qg} OVERRIDDEN by {actor}: waived {waive_gates}.", "id": run_id})
+    with _transaction(engine) as c:
+        override_error = f"Gate {qg} OVERRIDDEN by {actor}: waived {waive_gates}."
+        if hasattr(c, "save_run"):
+            c.save_run(
+                run_id,
+                {
+                    "status": "completed",
+                    "phase": "done",
+                    "pull_request_url": proposal.get("pull_request_url"),
+                    "pull_request_number": proposal.get("pull_request_number"),
+                    "decision_id": proposal.get("decision_id"),
+                    "error": override_error,
+                },
+            )
+        else:
+            c.execute(
+                sql(
+                    "UPDATE code_task_runs SET status='completed', phase='done', "
+                    "pull_request_url=:u, pull_request_number=:n, decision_id=:d, "
+                    "error=:e, updated_at=now() WHERE id=:id"
+                ),
+                {
+                    "u": proposal.get("pull_request_url"),
+                    "n": proposal.get("pull_request_number"),
+                    "d": proposal.get("decision_id"),
+                    "e": override_error,
+                    "id": run_id,
+                },
+            )
         emit_event(c, project_id, "code_task.gate_overridden", actor, "code_task_run", run_id,
                    {"waived_gates": waive_gates, "reason": reason, "quality_gate_id": qg,
                     "pull_request_url": proposal.get("pull_request_url")})
         # VAG #107 ratchet: a human overriding the gate means the gate was wrong to block —
         # capture the (now-blessed) implementation as a CLEAN corpus item so the verifier is
         # measured against this false-fail forever after. Never let it break the override.
-        try:
-            from .verifier_ratchet import tag_run
-            tag_run(c, run_id, label="clean", source="gate_override",
-                    files=pending, reason=reason or f"override waived {waive_gates}")
-        except Exception:  # noqa: BLE001
-            logger.exception("ratchet capture failed for override %s", run_id)
+        if not hasattr(c, "save_run"):
+            try:
+                from .verifier_ratchet import tag_run
+                tag_run(c, run_id, label="clean", source="gate_override",
+                        files=pending, reason=reason or f"override waived {waive_gates}")
+            except Exception:  # noqa: BLE001
+                logger.exception("ratchet capture failed for override %s", run_id)
     return {"status": "completed", "run_id": run_id, "waived_gates": waive_gates,
             "pull_request_url": proposal.get("pull_request_url"),
             "pull_request_number": proposal.get("pull_request_number"),
             "decision_id": proposal.get("decision_id")}
 
 
-def _release(sf, connection, project_id: str, reservation_id: Optional[str], reason: str) -> None:
+def _release(
+    budget, connection, project_id: str, reservation_id: Optional[str], reason: str
+) -> None:
     if not reservation_id:
         return
     try:
-        sf.budget.release(connection, project_id, reservation_id, reason)
+        budget.release(connection, project_id, reservation_id, reason)
     except Exception:
         pass
 
@@ -346,8 +422,16 @@ def _set_phase(connection, run_id: str, phase: str) -> None:
     # one. Timings live in finalize_ctx (merged with ||, so the mid-run state overwrite
     # can't clobber them). Lets us see where a code task spends its time — especially
     # the big 'coding' phase (the whole inner agent loop). Atomic in one statement.
+    if hasattr(connection, "save_run"):
+        run = connection.get_run(run_id) or {}
+        finalize_ctx = dict(run.get("finalize_ctx") or {})
+        finalize_ctx["phase_started_at"] = datetime.now(timezone.utc).isoformat()
+        connection.save_run(
+            run_id, {"phase": phase, "finalize_ctx": finalize_ctx}
+        )
+        return
     connection.execute(
-        text(
+        sql(
             """
             UPDATE code_task_runs SET
               finalize_ctx = COALESCE(finalize_ctx, '{}'::jsonb)
@@ -379,8 +463,14 @@ def _persist_sandbox_id(connection, run_id: str, sbx_id: Optional[str]) -> None:
     inspect the retained VM after a failure (browse /work/repo, view logs, hold)."""
     if not sbx_id:
         return
+    if hasattr(connection, "save_run"):
+        run = connection.get_run(run_id) or {}
+        finalize_ctx = dict(run.get("finalize_ctx") or {})
+        finalize_ctx["sandbox_task_id"] = sbx_id
+        connection.save_run(run_id, {"finalize_ctx": finalize_ctx})
+        return
     connection.execute(
-        text("UPDATE code_task_runs SET finalize_ctx = COALESCE(finalize_ctx, '{}'::jsonb) "
+        sql("UPDATE code_task_runs SET finalize_ctx = COALESCE(finalize_ctx, '{}'::jsonb) "
              "|| jsonb_build_object('sandbox_task_id', CAST(:s AS text)), updated_at = now() "
              "WHERE id = :id"),
         {"s": sbx_id, "id": run_id},
@@ -412,13 +502,37 @@ def _fail(
         provider_error, exception, …) for dashboards + auto-recovery routing.
 
     Recorded on the run (finalize_ctx) and the event so the console/API can show WHY + WHAT."""
-    connection.execute(
-        text("UPDATE code_task_runs SET status=:st, phase='done', error=:e, "
-             "finalize_ctx = COALESCE(finalize_ctx, '{}'::jsonb) || jsonb_build_object("
-             "  'failure_class', CAST(:fc AS text), 'reason_code', CAST(:rc AS text)), "
-             "updated_at=now() WHERE id=:id"),
-        {"st": status, "e": reason[:2000], "fc": failure_class, "rc": reason_code, "id": run_id},
-    )
+    if hasattr(connection, "save_run"):
+        run = connection.get_run(run_id) or {}
+        finalize_ctx = dict(run.get("finalize_ctx") or {})
+        finalize_ctx.update(
+            {"failure_class": failure_class, "reason_code": reason_code}
+        )
+        connection.save_run(
+            run_id,
+            {
+                "status": status,
+                "phase": "done",
+                "error": reason[:2000],
+                "finalize_ctx": finalize_ctx,
+            },
+        )
+    else:
+        connection.execute(
+            sql(
+                "UPDATE code_task_runs SET status=:st, phase='done', error=:e, "
+                "finalize_ctx = COALESCE(finalize_ctx, '{}'::jsonb) "
+                "|| jsonb_build_object('failure_class', CAST(:fc AS text), "
+                "'reason_code', CAST(:rc AS text)), updated_at=now() WHERE id=:id"
+            ),
+            {
+                "st": status,
+                "e": reason[:2000],
+                "fc": failure_class,
+                "rc": reason_code,
+                "id": run_id,
+            },
+        )
     emit_event(connection, project_id, "code_task.failed", "boss", "code_task_run", run_id,
                {"reason": reason[:300], "status": status,
                 "failure_class": failure_class, "reason_code": reason_code})
@@ -431,7 +545,7 @@ def _fail(
 # --------------------------------------------------------------------------- #
 def run_code_task(engine, settings: Settings, jobs, run_id: str) -> dict:
     """Execute one full code-task attempt. Safe to re-run after a crash."""
-    with begin(engine) as c:
+    with _transaction(engine) as c:
         run = load_code_task_run(c, run_id)
     if run is None:
         return {"status": "not_found", "done": True}
@@ -449,7 +563,7 @@ def run_code_task(engine, settings: Settings, jobs, run_id: str) -> dict:
                 "pull_request_url": run["pull_request_url"], "decision_id": run["decision_id"]}
 
     if not settings.enable_code_task:
-        with begin(engine) as c:
+        with _transaction(engine) as c:
             return _fail(c, run_id, run["project_id"],
                          "Code tasks are disabled (BOSS_ENABLE_CODE_TASK=false).", status="blocked",
                          failure_class="needs_human", reason_code="feature_disabled")
@@ -470,9 +584,9 @@ def run_code_task(engine, settings: Settings, jobs, run_id: str) -> dict:
                 "reason": ("IaC task routed to the governed pipeline: the native lane "
                            "truncates repo context and has no IaC verify lane (spec 05 T4)"),
             }
-            with begin(engine) as c:
+            with _transaction(engine) as c:
                 c.execute(
-                    text("UPDATE code_task_runs SET finalize_ctx=COALESCE(finalize_ctx, '{}'::jsonb) "
+                    sql("UPDATE code_task_runs SET finalize_ctx=COALESCE(finalize_ctx, '{}'::jsonb) "
                          "|| jsonb_build_object('lane_routing', CAST(:lr AS JSONB)), "
                          "updated_at=now() WHERE id=:id"),
                     {"lr": json.dumps(lane_routing), "id": run_id},
@@ -496,24 +610,26 @@ def run_code_task(engine, settings: Settings, jobs, run_id: str) -> dict:
     task_id = run["task_id"]
     spec = run["spec"]
     fctx = run["finalize_ctx"] or {}
-    sf = SoftwareFactoryService(settings)
+    ports = _engine_ports()
+    budget = ports.budget
+    sf = SoftwareFactoryService(settings, ports=ports)
 
     # 1) Reserve budget for this code task's model spend.
-    with begin(engine) as c:
-        reservation = sf.budget.reserve(
+    with _transaction(engine) as c:
+        reservation = budget.reserve(
             c, project_id, category="code_task",
             amount_usd_micros=int(settings.code_task_budget_usd_micros),
             reason=f"code task: {run['title'][:80]}",
             expires_in_minutes=30, job_id=fctx.get("created_by_job_id"),
         )
     if reservation.get("status") != "reserved":
-        with begin(engine) as c:
+        with _transaction(engine) as c:
             return _fail(c, run_id, project_id,
                          f"Budget reservation denied: {reservation.get('status')}", status="blocked",
                          failure_class="needs_human", reason_code="budget_denied")
     reservation_id = reservation["reservation_id"]
-    with begin(engine) as c:
-        c.execute(text("UPDATE code_task_runs SET reservation_id=:r WHERE id=:id"),
+    with _transaction(engine) as c:
+        c.execute(sql("UPDATE code_task_runs SET reservation_id=:r WHERE id=:id"),
                   {"r": reservation_id, "id": run_id})
 
     # 2) Resolve a clone token: prefer a short-lived GitHub-App installation token
@@ -541,9 +657,9 @@ def run_code_task(engine, settings: Settings, jobs, run_id: str) -> dict:
     # when an operator later asks where this run actually executed.
     from .execution_substrate import normalize_build_substrate
     execution_substrate = normalize_build_substrate(getattr(provider, "kind", "local")).value
-    with begin(engine) as c:
+    with _transaction(engine) as c:
         c.execute(
-            text("UPDATE code_task_runs SET finalize_ctx=COALESCE(finalize_ctx, '{}'::jsonb) "
+            sql("UPDATE code_task_runs SET finalize_ctx=COALESCE(finalize_ctx, '{}'::jsonb) "
                  "|| jsonb_build_object('execution_substrate', CAST(:s AS text)), updated_at=now() "
                  "WHERE id=:id"),
             {"s": execution_substrate, "id": run_id},
@@ -551,7 +667,7 @@ def run_code_task(engine, settings: Settings, jobs, run_id: str) -> dict:
     sandbox = None
     try:
         if hasattr(provider, "run_code_task"):
-            with begin(engine) as c:
+            with _transaction(engine) as c:
                 _set_phase(c, run_id, "coding")
             guest_spec = {
                 "task_id": run_id, "work_branch": work_branch,
@@ -582,11 +698,11 @@ def run_code_task(engine, settings: Settings, jobs, run_id: str) -> dict:
                             ok=bool(result.diff))
         else:
             sandbox = provider.acquire(task_id=run_id, tenant_id=project_id)
-            with begin(engine) as c:
+            with _transaction(engine) as c:
                 _set_phase(c, run_id, "provisioning")
             sandbox.provision(owner, repo, base_branch=base_branch,
                               work_branch=work_branch, token=token)
-            with begin(engine) as c:
+            with _transaction(engine) as c:
                 _set_phase(c, run_id, "coding")
             # VAG Phase 0: attribute the host agent's model calls to this run.
             set_llm_context(db_engine=engine, project_id=project_id, run_id=run_id, stage="solo")
@@ -600,10 +716,10 @@ def run_code_task(engine, settings: Settings, jobs, run_id: str) -> dict:
             result = agent.run(code_spec, RepoContext(owner=owner, repo=repo, base_branch=base_branch), sandbox)
 
         # 5) Record agent outcome (governance metadata only — never the patch).
-        with begin(engine) as c:
+        with _transaction(engine) as c:
             _set_phase(c, run_id, "validating")
             c.execute(
-                text("UPDATE code_task_runs SET state=CAST(:s AS JSONB), "
+                sql("UPDATE code_task_runs SET state=CAST(:s AS JSONB), "
                      "usage=jsonb_build_object('cost_usd_micros', CAST(:cost AS bigint), 'model', CAST(:m AS text)), "
                      "updated_at=now() WHERE id=:id"),
                 {"s": json.dumps(result.to_metadata()), "cost": int(result.cost_usd_micros or 0),
@@ -613,20 +729,20 @@ def run_code_task(engine, settings: Settings, jobs, run_id: str) -> dict:
             _persist_sandbox_id(c, run_id, getattr(provider, "last_sandbox_task_id", None))
 
         if not result.diff:
-            with begin(engine) as c:
-                _release(sf, c, project_id, reservation_id, "no changes produced")
+            with _transaction(engine) as c:
+                _release(budget, c, project_id, reservation_id, "no changes produced")
                 return _fail(c, run_id, project_id, "Agent produced no file changes.",
                              failure_class="terminal", reason_code="no_diff")
         if not result.tests_passed:
-            with begin(engine) as c:
-                _release(sf, c, project_id, reservation_id, "tests did not pass")
+            with _transaction(engine) as c:
+                _release(budget, c, project_id, reservation_id, "tests did not pass")
                 return _fail(c, run_id, project_id,
                              "Tests did not pass; not opening a PR. See run state for details.",
                              failure_class="terminal", reason_code="tests_failed")
 
         # 6) Open the PR via the EXISTING software-factory path (receipt dedupe,
         #    CI wait, merge-gate Decision, budget settle all handled there).
-        with begin(engine) as c:
+        with _transaction(engine) as c:
             _set_phase(c, run_id, "opening_pr")
             proposal = sf.propose_pull_request(
                 c, project_id, task_id,
@@ -642,17 +758,17 @@ def run_code_task(engine, settings: Settings, jobs, run_id: str) -> dict:
         status = proposal.get("status")
         if status not in ("created", "succeeded"):
             # blocked by data-boundary / routing / missing reservation, etc.
-            with begin(engine) as c:
+            with _transaction(engine) as c:
                 c.execute(
-                    text("UPDATE code_task_runs SET status='blocked', phase='done', "
+                    sql("UPDATE code_task_runs SET status='blocked', phase='done', "
                          "decision_id=:d, error=:e, updated_at=now() WHERE id=:id"),
                     {"d": proposal.get("decision_id"), "e": f"PR not created: {status}", "id": run_id},
                 )
             return {"status": "blocked", "done": True, **proposal}
 
-        with begin(engine) as c:
+        with _transaction(engine) as c:
             c.execute(
-                text("UPDATE code_task_runs SET status='completed', phase='done', "
+                sql("UPDATE code_task_runs SET status='completed', phase='done', "
                      "pull_request_url=:u, pull_request_number=:n, decision_id=:d, updated_at=now() WHERE id=:id"),
                 {"u": proposal.get("pull_request_url"), "n": proposal.get("pull_request_number"),
                  "d": proposal.get("decision_id"), "id": run_id},
@@ -674,8 +790,8 @@ def run_code_task(engine, settings: Settings, jobs, run_id: str) -> dict:
         # A blank reason makes every retry blind — always record at least the exception type.
         reason = str(exc).strip() or f"{type(exc).__name__} with no message"
         fclass, rcode = classify_pipeline_exception(reason)
-        with begin(engine) as c:
-            _release(sf, c, project_id, reservation_id, f"code task error: {reason}")
+        with _transaction(engine) as c:
+            _release(budget, c, project_id, reservation_id, f"code task error: {reason}")
             # Retain + record the micro-VM so the failure can be root-caused in the console.
             _persist_sandbox_id(c, run_id, getattr(provider, "last_sandbox_task_id", None))
             return _fail(c, run_id, project_id, reason,
