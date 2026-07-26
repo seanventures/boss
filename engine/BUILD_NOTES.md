@@ -46,10 +46,52 @@ Tool layer + engine-native agent + MCP + standalone CLI. All new files under
   existing `preview_service.list_previews` SQL errors locally. The deployed DB
   self-migrates and has the column. `microvm_status` was made resilient to it.
 
-## Next
-- Phase 1 — broaden tool coverage (retry/deploy task, plan propose/dispatch,
-  budget/entitlements, discovery/meeting detail); wire the engine-native agent's
-  create_code_task to the build-on-existing logic in `intent_router`.
-- Phase 2 — relocate the ~103 pure service modules under `boss_engine/`; repoint
-  API + worker; leave re-export shims. Flip `_compat.SERVICES_PKG`.
-- Phase 3 — standalone packaging + engine Dockerfile; run with no API/console.
+## Phase 1 — DONE ✅
+- `create_code_task` now EXTENDS a task's existing app branch (`boss/code/{root}`)
+  when the task already has a completed PR — build-on-existing, not rebuild.
+- Added `retry_code_task`. 15 tools (10 read, 5 write).
+- **LIVE agent verified**: `EngineAgent` answered "how many tasks running + recent
+  builds" by calling `list_running_work` + `list_code_tasks` against the real
+  engine/DB via the Claude CLI adapter — no API, no console.
+
+## Phase 2 — DONE ✅
+Physically relocated the engine into `boss_engine/`: all service modules +
+`config/db/schemas/bootstrap`. **Pure git mv (zero content edits)** — 126 renames;
+main hotfixes editing a service merge onto the renamed file via git rename
+detection with no conflict. The internal API + worker keep working UNCHANGED via
+lazy compatibility shims:
+- `apps/api/app/{config,db,schemas,bootstrap}.py` → alias `boss_engine.<mod>`.
+- `apps/api/app/services/__init__.py` → lazy meta-path finder aliasing every
+  `apps.api.app.services.X` onto the SAME object as `boss_engine.services.X`
+  (main.py's 90 inline imports untouched; single module identity).
+- `_compat` flipped to `boss_engine.*` — the engine no longer needs the monorepo.
+
+Verified (via `engine/scripts/verify_engine.py --with-api 397 --live`):
+engine imports standalone (no apps/); apps.api.app.main == 397 routes (baseline);
+`apps.api.app.services.X is boss_engine.services.X`; 17/17 tests; live read ok.
+
+## Phase 3 — packaging DONE ✅ / runtime gate PENDING
+- `engine/requirements.txt` (api deps minus fastapi/uvicorn/dev), `engine/Dockerfile`
+  (standalone image, copies only `boss_engine/`), `engine/scripts/verify_engine.py`.
+- REMAINING (the deploy+test gate the user wants to run together): build the engine
+  image, run `serve-mcp` / `ask` against a reachable Postgres, and exercise the
+  agent end-to-end in a container; then merge to main.
+
+## Not done / next candidates
+- Repoint API + worker to import `boss_engine.*` directly and delete the shims
+  (optional; shims are permanent-safe, so this is cleanliness not necessity).
+- Wire the console to the engine-native agent via a thin `/v1/engine/agent/chat`.
+- Broaden tools: deploy status, plan propose/dispatch, budget/entitlements detail.
+- Lean the engine deps (make playwright/reportlab optional at import).
+- Phase 4: lift `engine/` into its own OSS repo.
+
+## How to run it (reviewer quickstart)
+```bash
+export DATABASE_URL='postgresql+psycopg://boss:boss@localhost:5432/boss'
+# engine standalone (only the engine on the path):
+PYTHONPATH=engine python -m boss_engine tools
+PYTHONPATH=engine python -m boss_engine ask "how many tasks are running?"
+PYTHONPATH=engine python -m boss_engine serve-mcp            # MCP stdio for GitHub/Claude
+# full regression gate (engine + API graph + live):
+PYTHONPATH=.:engine python engine/scripts/verify_engine.py --with-api 397 --live
+```
