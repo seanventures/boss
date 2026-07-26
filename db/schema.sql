@@ -994,16 +994,38 @@ CREATE INDEX IF NOT EXISTS idx_infra_resources_project
 CREATE TABLE IF NOT EXISTS secret_refs (
   id TEXT PRIMARY KEY,
   project_id TEXT NOT NULL REFERENCES projects(id),
+  scope_type TEXT NOT NULL DEFAULT 'project',
+  scope_id TEXT NOT NULL,
   ref_kind TEXT NOT NULL DEFAULT 'env',
   ref_key TEXT NOT NULL,
   provider TEXT,
+  secret_kind TEXT NOT NULL DEFAULT 'api_token',
+  storage_backend TEXT NOT NULL DEFAULT 'environment',
   status TEXT NOT NULL DEFAULT 'active',
   metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+  rotation_due_at TIMESTAMPTZ,
+  last_verified_at TIMESTAMPTZ,
+  supersedes_secret_ref_id TEXT REFERENCES secret_refs(id),
+  overlap_expires_at TIMESTAMPTZ,
+  revoked_at TIMESTAMPTZ,
+  revoked_by TEXT,
   created_by TEXT NOT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE(project_id, ref_kind, ref_key)
 );
+ALTER TABLE secret_refs ADD COLUMN IF NOT EXISTS scope_type TEXT NOT NULL DEFAULT 'project';
+ALTER TABLE secret_refs ADD COLUMN IF NOT EXISTS scope_id TEXT;
+UPDATE secret_refs SET scope_id = project_id WHERE scope_id IS NULL;
+ALTER TABLE secret_refs ALTER COLUMN scope_id SET NOT NULL;
+ALTER TABLE secret_refs ADD COLUMN IF NOT EXISTS secret_kind TEXT NOT NULL DEFAULT 'api_token';
+ALTER TABLE secret_refs ADD COLUMN IF NOT EXISTS storage_backend TEXT NOT NULL DEFAULT 'environment';
+ALTER TABLE secret_refs ADD COLUMN IF NOT EXISTS rotation_due_at TIMESTAMPTZ;
+ALTER TABLE secret_refs ADD COLUMN IF NOT EXISTS last_verified_at TIMESTAMPTZ;
+ALTER TABLE secret_refs ADD COLUMN IF NOT EXISTS supersedes_secret_ref_id TEXT REFERENCES secret_refs(id);
+ALTER TABLE secret_refs ADD COLUMN IF NOT EXISTS overlap_expires_at TIMESTAMPTZ;
+ALTER TABLE secret_refs ADD COLUMN IF NOT EXISTS revoked_at TIMESTAMPTZ;
+ALTER TABLE secret_refs ADD COLUMN IF NOT EXISTS revoked_by TEXT;
 CREATE INDEX IF NOT EXISTS idx_secret_refs_project
   ON secret_refs(project_id, provider, status);
 
@@ -1026,9 +1048,19 @@ CREATE TABLE IF NOT EXISTS provider_accounts (
   project_id TEXT NOT NULL REFERENCES projects(id),
   provider TEXT NOT NULL,
   account_label TEXT NOT NULL,
+  auth_method TEXT NOT NULL DEFAULT 'api_token',
   credential_ref TEXT,
+  credential_refs JSONB NOT NULL DEFAULT '{}'::jsonb,
+  connection_metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
   scopes JSONB NOT NULL DEFAULT '[]'::jsonb,
   status TEXT NOT NULL DEFAULT 'active',
+  owner_actor TEXT,
+  credential_version INTEGER NOT NULL DEFAULT 1,
+  credential_rotated_at TIMESTAMPTZ,
+  disabled_at TIMESTAMPTZ,
+  disabled_by TEXT,
+  revoked_at TIMESTAMPTZ,
+  revoked_by TEXT,
   read_only BOOLEAN NOT NULL DEFAULT true,
   deploy_capable BOOLEAN NOT NULL DEFAULT false,
   billing_readable BOOLEAN NOT NULL DEFAULT false,
@@ -1043,6 +1075,41 @@ CREATE TABLE IF NOT EXISTS provider_accounts (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE(project_id, provider, account_label)
 );
+ALTER TABLE provider_accounts ADD COLUMN IF NOT EXISTS auth_method TEXT NOT NULL DEFAULT 'api_token';
+ALTER TABLE provider_accounts ADD COLUMN IF NOT EXISTS credential_refs JSONB NOT NULL DEFAULT '{}'::jsonb;
+ALTER TABLE provider_accounts ADD COLUMN IF NOT EXISTS connection_metadata JSONB NOT NULL DEFAULT '{}'::jsonb;
+ALTER TABLE provider_accounts ADD COLUMN IF NOT EXISTS owner_actor TEXT;
+UPDATE provider_accounts SET owner_actor = created_by WHERE owner_actor IS NULL;
+ALTER TABLE provider_accounts ADD COLUMN IF NOT EXISTS credential_version INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE provider_accounts ADD COLUMN IF NOT EXISTS credential_rotated_at TIMESTAMPTZ;
+ALTER TABLE provider_accounts ADD COLUMN IF NOT EXISTS disabled_at TIMESTAMPTZ;
+ALTER TABLE provider_accounts ADD COLUMN IF NOT EXISTS disabled_by TEXT;
+ALTER TABLE provider_accounts ADD COLUMN IF NOT EXISTS revoked_at TIMESTAMPTZ;
+ALTER TABLE provider_accounts ADD COLUMN IF NOT EXISTS revoked_by TEXT;
+UPDATE provider_accounts
+SET auth_method = CASE provider
+  WHEN 'aws' THEN 'access_key'
+  WHEN 'azure' THEN 'service_principal'
+  WHEN 'gcp' THEN 'service_account'
+  WHEN 'ovhcloud' THEN 'application_consumer_key'
+  ELSE auth_method
+END
+WHERE auth_method = 'api_token'
+  AND provider IN ('aws', 'azure', 'gcp', 'ovhcloud');
+UPDATE provider_accounts
+SET credential_refs = CASE provider
+  WHEN 'aws' THEN jsonb_build_object(
+    'access_key_id', 'env:BOSS_AWS_ACCESS_KEY_ID',
+    'secret_access_key', credential_ref
+  )
+  WHEN 'digitalocean' THEN jsonb_build_object('token', credential_ref)
+  WHEN 'azure' THEN jsonb_build_object('client_secret', credential_ref)
+  WHEN 'gcp' THEN jsonb_build_object('service_account', credential_ref)
+  WHEN 'ovhcloud' THEN jsonb_build_object('application_secret', credential_ref)
+  ELSE jsonb_build_object('primary', credential_ref)
+END
+WHERE credential_refs = '{}'::jsonb
+  AND credential_ref IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_provider_accounts_project
   ON provider_accounts(project_id, provider, status);
 

@@ -1,9 +1,9 @@
 # BOSS Autonomous Delivery Status
 
-**Last updated**: 2026-07-26 (BOSS-25–31 OSS runtime seams + BOSS-119)
+**Last updated**: 2026-07-26 (BOSS-236 provider credential lifecycle)
 **Repo root**: /Volumes/DataSSD1/test/boss
 **Git remote**: https://github.com/seanheiney/boss
-**Current branch**: ai/codex/oss-ports-baseline
+**Current branch**: ai/codex/boss-236-provider-credential-lifecycle
 **Base branch**: origin/main
 **Product**: BOSS v0.7.0 target (Business Operating System Sentinel)
 **Mission**: Complete product to production-grade, tested, documented, pushed, Codex-coordinated, ready for real users. Grind until all discovered PRD/spec features satisfy world-class DoD or truly blocked.
@@ -14,6 +14,11 @@
 - GitHub: draft PR #16 carries BOSS-22/BOSS-23 and is stacked on draft PR #15; other open PRs were inspected for overlap before implementation.
 
 ## Overall Product Status
+- BOSS-236 implements the provider-account credential lifecycle foundation
+  beneath BOSS-235: truthful initial-cloud auth definitions, multi-slot
+  SecretRefs, safe metadata, rotation lineage/overlap, disable/revoke gates,
+  typed API/client contracts, and fail-before-adapter enforcement. Azure, GCP,
+  and OVHcloud remain explicitly planned until their adapter tickets ship.
 - BOSS-25–31 now have a load-bearing edition composition boundary: typed
   Budget/Entitlement/Persistence/Event/Decision ports, connection-free OSS
   defaults, enterprise adapters, direct code-pipeline injection, and

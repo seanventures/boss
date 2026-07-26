@@ -5,6 +5,12 @@
 **Status key**: Implemented (full vertical + tests + states + audit + DoD), Partial, Planned, Blocked (external per real-only), In-Progress (this session).
 **DoD reminder**: Requirement complete only when traced, full journey, UI nav, backend, persistence, auth server+client, validations, loading/empty/error/success, edges, mobile/a11y basics, security/arch/QA review, tests pass, lint/build, docs updated, NO mocks/fakes/TODOs for required behavior.
 
+## 2026-07-26 Provider connection lifecycle trace
+
+| Plane | Requirement | Implementation | Verification | Status |
+| --- | --- | --- | --- | --- |
+| BOSS-236 / PRV-01 | Infrastructure provider accounts and credential lifecycle | initial-cloud auth definitions; multi-slot SecretRefs; account update/test/enable/disable/revoke/rotate; lifecycle gates; typed API/client/OpenAPI | 10 focused, 77 widened, 28 legacy ProviderOps, 279 complete legacy API, schema idempotency, lint/typecheck | Implemented |
+
 ## 2026-07-26 OSS runtime seam trace
 
 | Plane | Requirement | Implementation | Verification | Status |

@@ -291,8 +291,13 @@ Capabilities:
 
 Provider Connection Center requirements:
 
+- Present one initial infrastructure catalog for AWS, Microsoft Azure, Google
+  Cloud, DigitalOcean, and OVHcloud. The catalog must distinguish an available
+  adapter from a planned adapter and must never imply that recording
+  credentials makes an unfinished adapter operational.
 - Add provider account.
-- Store credentials securely.
+- Store only named `SecretRef` pointers for single- or multi-credential auth
+  methods; reject raw secret-shaped values in provider metadata.
 - Test connection.
 - Detect permissions.
 - Show missing permissions.
@@ -300,6 +305,10 @@ Provider Connection Center requirements:
 - Mark provider as read-only, deploy-capable, billing-readable, and destructive-actions-disabled.
 - Rotate credentials.
 - Disable provider.
+- Permanently revoke provider access. A revoked provider account or SecretRef
+  cannot be re-enabled or silently reactivated by an upsert.
+- Preserve bounded credential-rotation overlap and predecessor lineage so
+  already leased work can finish without exposing either credential value.
 - Audit all provider access.
 
 Resource Inventory Graph requirements:

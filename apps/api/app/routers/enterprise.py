@@ -19,6 +19,7 @@ _ENTERPRISE_PREFIXES = (
     "/v1/enterprise",
     "/v1/marketplace",
     "/v1/self-improvement",
+    "/v1/provider-definitions",
     "/v1/providers",
     "/v1/resources",
     "/v1/changesets",

@@ -257,6 +257,17 @@ As a ProviderOps Manager, I want provider accounts connected through scoped adap
 Acceptance criteria:
 
 - Given provider credentials are registered, when BOSS tests the connection, then it stores only a `SecretRef`, detects capabilities and missing permissions, and emits auditable provider-access events.
+- Given an operator opens the provider catalog, when AWS, Azure, GCP,
+  DigitalOcean, and OVHcloud definitions load, then each supported auth method
+  declares named SecretRef slots and truthfully identifies whether its runtime
+  adapter is available or planned.
+- Given a provider needs multiple credential parts, when its account is
+  registered or rotated, then BOSS stores only named SecretRef pointers,
+  rejects raw secret-shaped metadata, preserves bounded predecessor overlap,
+  increments credential version, and clears stale connection-test evidence.
+- Given a provider account or one of its SecretRefs is disabled or revoked,
+  when test, sync, or write execution is attempted, then BOSS fails before an
+  adapter call; revoked records cannot be silently reactivated.
 - Given a provider is marked read-only or destructive-actions-disabled, when a write or destructive action is requested, then policy blocks the action before any provider call.
 - Given an agent needs provider data, when it requests access, then it receives typed Resource Plane outputs rather than raw credentials.
 

@@ -2800,11 +2800,21 @@ export type PackImportRequest = {
 export type SecretRefSummary = {
   id: string;
   project_id: string;
+  scope_type: string;
+  scope_id: string;
   ref_kind: string;
   ref_key: string;
   provider?: string;
+  secret_kind: string;
+  storage_backend: string;
   status: string;
   metadata: Record<string, unknown>;
+  rotation_due_at?: string;
+  last_verified_at?: string;
+  supersedes_secret_ref_id?: string;
+  overlap_expires_at?: string;
+  revoked_at?: string;
+  revoked_by?: string;
   created_by: string;
   created_at: string;
   updated_at: string;
@@ -2825,6 +2835,11 @@ export type SecretRefCreateRequest = {
   provider?: string;
   status?: string;
   metadata?: Record<string, unknown>;
+  scope_type?: string;
+  scope_id?: string;
+  secret_kind?: string;
+  storage_backend?: string;
+  rotation_due_at?: string;
   actor?: string;
 };
 
@@ -2833,6 +2848,7 @@ export type SecretRefUpdateRequest = {
   provider?: string;
   status?: string;
   metadata?: Record<string, unknown>;
+  rotation_due_at?: string;
   actor?: string;
 };
 
@@ -3342,9 +3358,19 @@ export type ProviderAccountSummary = {
   project_id: string;
   provider: string;
   account_label: string;
+  auth_method: string;
   credential_ref?: string;
+  credential_refs: Record<string, string>;
+  connection_metadata: Record<string, unknown>;
   scopes: string[];
   status: string;
+  owner_actor?: string;
+  credential_version: number;
+  credential_rotated_at?: string;
+  disabled_at?: string;
+  disabled_by?: string;
+  revoked_at?: string;
+  revoked_by?: string;
   read_only: boolean;
   deploy_capable: boolean;
   billing_readable: boolean;
@@ -3368,13 +3394,76 @@ export type ProviderAccountCreateRequest = {
   project_id: string;
   provider: string;
   account_label: string;
+  auth_method?: string;
   credential_ref?: string;
+  credential_refs?: Record<string, string>;
+  connection_metadata?: Record<string, unknown>;
   scopes?: string[];
   read_only?: boolean;
   deploy_capable?: boolean;
   billing_readable?: boolean;
   destructive_actions_disabled?: boolean;
   actor?: string;
+};
+
+export type ProviderAccountUpdateRequest = {
+  project_id: string;
+  account_label?: string;
+  scopes?: string[];
+  read_only?: boolean;
+  deploy_capable?: boolean;
+  billing_readable?: boolean;
+  destructive_actions_disabled?: boolean;
+  connection_metadata?: Record<string, unknown>;
+  owner_actor?: string;
+  actor?: string;
+};
+
+export type ProviderAccountLifecycleRequest = {
+  project_id: string;
+  actor?: string;
+};
+
+export type ProviderCredentialRotateRequest = {
+  project_id: string;
+  credential_ref?: string;
+  credential_refs?: Record<string, string>;
+  overlap_minutes?: number;
+  actor?: string;
+};
+
+export type ProviderCredentialRotationResponse = {
+  provider_account: ProviderAccountSummary;
+  prior_secret_refs: SecretRefSummary[];
+  active_secret_refs: SecretRefSummary[];
+  overlap_expires_at: string;
+};
+
+export type ProviderCredentialSlotSummary = {
+  key: string;
+  secret_kind: string;
+  required: boolean;
+  default_ref?: string;
+};
+
+export type ProviderAuthMethodSummary = {
+  key: string;
+  runtime_status: string;
+  credential_slots: ProviderCredentialSlotSummary[];
+};
+
+export type ProviderDefinitionSummary = {
+  provider: string;
+  display_name: string;
+  category: string;
+  adapter_status: string;
+  default_auth_method: string;
+  auth_methods: ProviderAuthMethodSummary[];
+  capabilities: string[];
+};
+
+export type ProviderDefinitionListResponse = {
+  items: ProviderDefinitionSummary[];
 };
 
 export type ProviderHealthSummary = {
@@ -5523,10 +5612,70 @@ export function createBossApiClient(config: BossApiClientConfig) {
         query: { project_id: projectId },
       });
     },
+    listProviderDefinitions() {
+      return request<ProviderDefinitionListResponse>("GET", "/v1/provider-definitions");
+    },
     createProviderAccount(payload: ProviderAccountCreateRequest) {
       return request<ProviderAccountSummary>("POST", "/v1/providers", {
         body: payload,
       });
+    },
+    getProviderAccount(providerAccountId: string, projectId: string) {
+      return request<ProviderAccountSummary>(
+        "GET",
+        `/v1/providers/${encodeURIComponent(providerAccountId)}`,
+        { query: { project_id: projectId } },
+      );
+    },
+    updateProviderAccount(
+      providerAccountId: string,
+      payload: ProviderAccountUpdateRequest,
+    ) {
+      return request<ProviderAccountSummary>(
+        "PATCH",
+        `/v1/providers/${encodeURIComponent(providerAccountId)}`,
+        { body: payload },
+      );
+    },
+    enableProviderAccount(
+      providerAccountId: string,
+      payload: ProviderAccountLifecycleRequest,
+    ) {
+      return request<ProviderAccountSummary>(
+        "POST",
+        `/v1/providers/${encodeURIComponent(providerAccountId)}/enable`,
+        { body: payload },
+      );
+    },
+    disableProviderAccount(
+      providerAccountId: string,
+      payload: ProviderAccountLifecycleRequest,
+    ) {
+      return request<ProviderAccountSummary>(
+        "POST",
+        `/v1/providers/${encodeURIComponent(providerAccountId)}/disable`,
+        { body: payload },
+      );
+    },
+    revokeProviderAccount(
+      providerAccountId: string,
+      payload: ProviderAccountLifecycleRequest,
+    ) {
+      return request<ProviderAccountSummary>(
+        "POST",
+        `/v1/providers/${encodeURIComponent(providerAccountId)}/revoke`,
+        { body: payload },
+      );
+    },
+    rotateProviderCredentials(
+      providerAccountId: string,
+      payload: ProviderCredentialRotateRequest,
+    ) {
+      return request<ProviderCredentialRotationResponse>(
+        "POST",
+        `/v1/providers/${encodeURIComponent(providerAccountId)}/rotate`,
+        { body: payload },
+      );
     },
     testProviderAccount(providerAccountId: string, projectId: string, actor = "ceo") {
       return request<ProviderConnectionTestResponse>(
