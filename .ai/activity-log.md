@@ -3,6 +3,20 @@
 All 15-min terminal updates and major milestones appended here. Chronological, newest at top.
 
 ---
+## 2026-07-26 — Codex — BOSS-25–31 OSS seams and BOSS-119
+
+- Advanced BOSS-25–31 and BOSS-119 through Plane before implementation.
+- Added five engine boundaries with OSS and enterprise implementations, wired
+  both code-task pipelines, and made edition selection load-bearing.
+- Partitioned community and paid API routes through explicit APIRouters and
+  removed deployment-specific hostnames from engine source.
+- Fixed enterprise capability inheritance and authenticated-principal binding
+  order discovered by the widened regression matrix.
+- Local gates pass: 279/279 legacy API tests, 30/30 focused OSS-port and
+  edition-router tests, 31/31 engine tests, 46/46 widened persistence/code-task
+  tests, repository lint/typecheck, docs checks, compile, and diff checks.
+
+---
 ## 2026-07-26 — Codex — BOSS-175–194 assurance contract batch
 
 - Merged the validated BOSS-148/BOSS-149 UI PR #71 as `c0b2493` and reconciled

@@ -1,9 +1,9 @@
 # BOSS Autonomous Delivery Status
 
-**Last updated**: 2026-07-26 (BOSS-195–214 assurance workflow batch)
+**Last updated**: 2026-07-26 (BOSS-25–31 OSS runtime seams + BOSS-119)
 **Repo root**: /Volumes/DataSSD1/test/boss
 **Git remote**: https://github.com/seanheiney/boss
-**Current branch**: ai/codex/boss-assurance-workflows-handoff
+**Current branch**: ai/codex/oss-ports-baseline
 **Base branch**: origin/main
 **Product**: BOSS v0.7.0 target (Business Operating System Sentinel)
 **Mission**: Complete product to production-grade, tested, documented, pushed, Codex-coordinated, ready for real users. Grind until all discovered PRD/spec features satisfy world-class DoD or truly blocked.
@@ -14,6 +14,11 @@
 - GitHub: draft PR #16 carries BOSS-22/BOSS-23 and is stacked on draft PR #15; other open PRs were inspected for overlap before implementation.
 
 ## Overall Product Status
+- BOSS-25–31 now have a load-bearing edition composition boundary: typed
+  Budget/Entitlement/Persistence/Event/Decision ports, connection-free OSS
+  defaults, enterprise adapters, direct code-pipeline injection, and
+  community-versus-paid router mounting. BOSS-119 replaces the historical
+  failing legacy baseline with a locally enforced 279/279 green matrix gate.
 - BOSS-195–214 add twenty native reusable WorkflowSpecs for Ground Truth,
   Assurance, Agent Group, and Integration lifecycles. They seed idempotently
   into the existing Workflow Runtime but create no implicit work-class

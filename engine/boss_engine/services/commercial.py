@@ -407,6 +407,20 @@ class CommercialService:
         payload = yaml.safe_load(self._pack_path(edition_id).read_text(encoding="utf-8"))
         if not isinstance(payload, dict):
             return {}
+        # Paid editions extend Community rather than replacing its baseline
+        # capabilities. The pack declares that relationship via
+        # ``requires: [community_edition]``; make it operational so a paid
+        # edition can still install the default Community agent modules.
+        if "community_edition" in (payload.get("requires") or []):
+            community = yaml.safe_load(
+                self._pack_path("community").read_text(encoding="utf-8")
+            )
+            inherited = (
+                community.get("includes", []) if isinstance(community, dict) else []
+            )
+            payload["includes"] = list(
+                dict.fromkeys([*inherited, *(payload.get("includes") or [])])
+            )
         return payload
 
     def _account_connect_required(self, edition_id: str) -> bool:

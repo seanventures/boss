@@ -2,23 +2,26 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Optional
+from typing import Any, Optional
 
 import httpx
-from sqlalchemy import text
-from sqlalchemy.engine import Connection
 
 from ..config import Settings
+from ..ports import (
+    BudgetPort,
+    DecisionSink,
+    EnginePorts,
+    EntitlementPort,
+    EventSink,
+    get_engine_ports,
+    sql,
+)
 from ..schemas import FileChange
-from .budget import BudgetGovernor
 from .core import (
     create_artifact,
-    create_blocking_decision,
-    emit_event,
     make_id,
     normalize_data_boundary,
 )
-from .entitlements import EntitlementBrokerService
 from .github_adapter import (
     GitHubAdapter,
     IntegrationConfigurationError,
@@ -37,14 +40,27 @@ from .specpack import SpecPackService
 
 
 class SoftwareFactoryService:
-    def __init__(self, settings: Settings):
+    def __init__(
+        self,
+        settings: Settings,
+        *,
+        ports: Optional[EnginePorts] = None,
+        budget_port: Optional[BudgetPort] = None,
+        entitlement_port: Optional[EntitlementPort] = None,
+        event_sink: Optional[EventSink] = None,
+        decision_sink: Optional[DecisionSink] = None,
+    ):
         self.settings = settings
-        self.budget = BudgetGovernor(settings)
+        resolved_ports = ports or get_engine_ports() or EnginePorts.oss_defaults(settings)
+        self.ports = resolved_ports
+        self.budget = budget_port or resolved_ports.budget
         self.receipts = ReceiptService()
         self.github = GitHubAdapter(settings)
         self.pipeline = make_pipeline_adapter(settings, github=self.github)
         self.openai = make_chat_adapter(settings)
-        self.entitlements = EntitlementBrokerService(settings)
+        self.entitlements = entitlement_port or resolved_ports.entitlement
+        self.events = event_sink or resolved_ports.events
+        self.decisions = decision_sink or resolved_ports.decisions
         self.specpack = SpecPackService(settings)
         self.sandbox_validation = SandboxValidationAdapter(settings)
 
@@ -94,9 +110,9 @@ class SoftwareFactoryService:
             return "Do not merge until the failing sandbox validation evidence is fixed."
         return "Do not merge until GitHub validation completes successfully."
 
-    def _scope(self, connection: Connection, project_id: str) -> dict:
+    def _scope(self, connection: Any, project_id: str) -> dict:
         row = connection.execute(
-            text(
+            sql(
                 """
                 SELECT p.id AS project_id, p.name AS project_name, w.id AS workspace_id, o.id AS org_id
                 FROM projects p
@@ -112,19 +128,19 @@ class SoftwareFactoryService:
         return dict(row)
 
     def _data_boundary_for_task(
-        self, connection: Connection, task_id: Optional[str]
+        self, connection: Any, task_id: Optional[str]
     ) -> str:
         if not task_id:
             return "internal"
         row = connection.execute(
-            text("SELECT data_boundary FROM tasks WHERE id = :task_id"),
+            sql("SELECT data_boundary FROM tasks WHERE id = :task_id"),
             {"task_id": task_id},
         ).mappings().first()
         return normalize_data_boundary(row["data_boundary"] if row else None)
 
     def _block_github_effect_for_data_boundary(
         self,
-        connection: Connection,
+        connection: Any,
         project_id: str,
         task_id: Optional[str],
         effect_kind: str,
@@ -134,7 +150,7 @@ class SoftwareFactoryService:
         if boundary not in {"restricted", "local-only"}:
             return None
 
-        decision_id = create_blocking_decision(
+        decision_id = self.decisions.create_blocking(
             connection,
             project_id,
             task_id,
@@ -147,7 +163,7 @@ class SoftwareFactoryService:
             {},
             "data_boundary_blocks_external_effect",
         )
-        emit_event(
+        self.events.emit(
             connection,
             project_id,
             "policy.denied",
@@ -173,7 +189,7 @@ class SoftwareFactoryService:
 
     def _route_model_execution(
         self,
-        connection: Connection,
+        connection: Any,
         project_id: str,
         *,
         task_id: Optional[str],
@@ -202,7 +218,7 @@ class SoftwareFactoryService:
             for item in rejected
         )
         if missing_openai:
-            decision_id = create_blocking_decision(
+            decision_id = self.decisions.create_blocking(
                 connection,
                 project_id,
                 task_id,
@@ -219,7 +235,7 @@ class SoftwareFactoryService:
                 }
             }
 
-        decision_id = create_blocking_decision(
+        decision_id = self.decisions.create_blocking(
             connection,
             project_id,
             task_id,
@@ -239,7 +255,7 @@ class SoftwareFactoryService:
 
     def _resolve_agent_module(
         self,
-        connection: Connection,
+        connection: Any,
         project_id: str,
         *,
         requested_module_id: Optional[str],
@@ -299,7 +315,7 @@ class SoftwareFactoryService:
 
     def _run_sandbox_validation(
         self,
-        connection: Connection,
+        connection: Any,
         scope: dict,
         project_id: str,
         task_id: Optional[str],
@@ -363,7 +379,7 @@ class SoftwareFactoryService:
             event_type = "software_factory.local_validation_failed"
             receipt_status = "failed"
 
-        emit_event(
+        self.events.emit(
             connection,
             project_id,
             event_type,
@@ -572,7 +588,7 @@ class SoftwareFactoryService:
 
     def create_plan_artifact(
         self,
-        connection: Connection,
+        connection: Any,
         project_id: str,
         reservation_id: str,
         dedupe_key: str,
@@ -586,7 +602,7 @@ class SoftwareFactoryService:
             connection, project_id, reservation_id
         )
         if not reservation:
-            decision_id = create_blocking_decision(
+            decision_id = self.decisions.create_blocking(
                 connection,
                 project_id,
                 None,
@@ -709,7 +725,7 @@ class SoftwareFactoryService:
                 reservation_id,
                 "Released reservation because OpenAI credentials are not configured.",
             )
-            decision_id = create_blocking_decision(
+            decision_id = self.decisions.create_blocking(
                 connection,
                 project_id,
                 None,
@@ -733,7 +749,7 @@ class SoftwareFactoryService:
                 reservation_id,
                 "Released reservation because the OpenAI plan call failed.",
             )
-            emit_event(
+            self.events.emit(
                 connection,
                 project_id,
                 "software_factory.plan_failed",
@@ -759,7 +775,7 @@ class SoftwareFactoryService:
             }
         return self._finalize_plan_run(connection, loop_result["run_id"])
 
-    def _finalize_plan_run(self, connection: Connection, run_id: str) -> dict:
+    def _finalize_plan_run(self, connection: Any, run_id: str) -> dict:
         """Turn a completed agent run into a plan_draft artifact + settled cost +
         review decision. Called when the run finishes — immediately, or later
         after a suspend -> approve -> resume cycle."""
@@ -805,7 +821,7 @@ class SoftwareFactoryService:
             int(ctx.get("reservation_amount") or 0),
             estimate_cost_usd_micros(usage),
         )
-        emit_event(
+        self.events.emit(
             connection,
             project_id,
             "software_factory.plan_created",
@@ -823,10 +839,10 @@ class SoftwareFactoryService:
         decision_id = None
         if task_id:
             task_row = connection.execute(
-                text("SELECT title FROM tasks WHERE id = :t AND project_id = :p"),
+                sql("SELECT title FROM tasks WHERE id = :t AND project_id = :p"),
                 {"t": task_id, "p": project_id},
             ).mappings().first()
-            decision_id = create_blocking_decision(
+            decision_id = self.decisions.create_blocking(
                 connection,
                 project_id,
                 task_id,
@@ -843,7 +859,7 @@ class SoftwareFactoryService:
             "decision_id": decision_id,
         }
 
-    def resume_plan_run(self, connection: Connection, run_id: str) -> dict:
+    def resume_plan_run(self, connection: Any, run_id: str) -> dict:
         """Resume a suspended plan run after a human approval; finalize if it
         completes (it may suspend again on another high-risk action)."""
         from .agent_loop import resume_agent_run
@@ -855,7 +871,7 @@ class SoftwareFactoryService:
 
     def _mark_merge_completed(
         self,
-        connection: Connection,
+        connection: Any,
         project_id: str,
         task_id: Optional[str],
         decision_id: str,
@@ -884,10 +900,10 @@ class SoftwareFactoryService:
         return None
 
     def _mark_decision_executed(
-        self, connection: Connection, project_id: str, decision_id: str, actor: str
+        self, connection: Any, project_id: str, decision_id: str, actor: str
     ) -> None:
         updated = connection.execute(
-            text(
+            sql(
                 """
                 UPDATE decisions
                 SET status = 'executed',
@@ -900,7 +916,7 @@ class SoftwareFactoryService:
             {"decision_id": decision_id, "actor": actor},
         )
         if updated.rowcount == 1:
-            emit_event(
+            self.events.emit(
                 connection,
                 project_id,
                 "decision.executed",
@@ -912,7 +928,7 @@ class SoftwareFactoryService:
 
     def _complete_task(
         self,
-        connection: Connection,
+        connection: Any,
         project_id: str,
         task_id: Optional[str],
         actor: str,
@@ -921,7 +937,7 @@ class SoftwareFactoryService:
         if not task_id:
             return
         task_updated = connection.execute(
-            text(
+            sql(
                 """
                 UPDATE tasks
                 SET status = 'completed',
@@ -932,7 +948,7 @@ class SoftwareFactoryService:
             {"task_id": task_id},
         )
         if task_updated.rowcount == 1:
-            emit_event(
+            self.events.emit(
                 connection,
                 project_id,
                 "task.completed",
@@ -944,7 +960,7 @@ class SoftwareFactoryService:
 
     def _ensure_deployment_review_decision(
         self,
-        connection: Connection,
+        connection: Any,
         project_id: str,
         task_id: Optional[str],
         *,
@@ -957,7 +973,7 @@ class SoftwareFactoryService:
         existing_id = None
         if task_id:
             existing_id = connection.execute(
-                text(
+                sql(
                     """
                     SELECT id
                     FROM decisions
@@ -979,7 +995,7 @@ class SoftwareFactoryService:
             return str(existing_id)
 
         environment = self.settings.sandbox_deploy_environment
-        decision_id = create_blocking_decision(
+        decision_id = self.decisions.create_blocking(
             connection,
             project_id,
             task_id,
@@ -995,7 +1011,7 @@ class SoftwareFactoryService:
             {},
             "deploy_decision_required",
         )
-        emit_event(
+        self.events.emit(
             connection,
             project_id,
             "software_factory.deployment_review_requested",
@@ -1012,7 +1028,7 @@ class SoftwareFactoryService:
 
     def _mark_deployment_completed(
         self,
-        connection: Connection,
+        connection: Any,
         project_id: str,
         task_id: Optional[str],
         decision_id: str,
@@ -1064,7 +1080,7 @@ class SoftwareFactoryService:
 
     def _create_deployment_health_gate(
         self,
-        connection: Connection,
+        connection: Any,
         project_id: str,
         task_id: Optional[str],
         *,
@@ -1099,7 +1115,7 @@ class SoftwareFactoryService:
             },
             created_by_job_id=created_by_job_id,
         )
-        decision_id = create_blocking_decision(
+        decision_id = self.decisions.create_blocking(
             connection,
             project_id,
             task_id,
@@ -1118,7 +1134,7 @@ class SoftwareFactoryService:
             {},
             "deployment_health_verification_failed",
         )
-        emit_event(
+        self.events.emit(
             connection,
             project_id,
             "software_factory.deployment_health_blocked",
@@ -1137,7 +1153,7 @@ class SoftwareFactoryService:
 
     def _record_deployment_rollout(
         self,
-        connection: Connection,
+        connection: Any,
         project_id: str,
         task_id: Optional[str],
         *,
@@ -1223,7 +1239,7 @@ class SoftwareFactoryService:
             created_by_job_id=created_by_job_id,
         )
         connection.execute(
-            text(
+            sql(
                 """
                 INSERT INTO deployment_rollouts (
                     id, project_id, task_id, decision_id, deployment_receipt_id,
@@ -1262,7 +1278,7 @@ class SoftwareFactoryService:
                 "created_by_job_id": created_by_job_id,
             },
         )
-        emit_event(
+        self.events.emit(
             connection,
             project_id,
             "software_factory.deployment_rollout_recorded",
@@ -1286,10 +1302,10 @@ class SoftwareFactoryService:
         }
 
     def list_deployment_rollouts(
-        self, connection: Connection, project_id: str, limit: int
+        self, connection: Any, project_id: str, limit: int
     ) -> list[dict]:
         rows = connection.execute(
-            text(
+            sql(
                 """
                 SELECT id, project_id, task_id, decision_id, deployment_receipt_id,
                        deployment_artifact_id, rollout_artifact_id, title,
@@ -1311,7 +1327,7 @@ class SoftwareFactoryService:
 
     def propose_pull_request(
         self,
-        connection: Connection,
+        connection: Any,
         project_id: str,
         task_id: Optional[str],
         reservation_id: str,
@@ -1328,7 +1344,7 @@ class SoftwareFactoryService:
             connection, project_id, reservation_id
         )
         if not reservation:
-            decision_id = create_blocking_decision(
+            decision_id = self.decisions.create_blocking(
                 connection,
                 project_id,
                 task_id,
@@ -1451,7 +1467,7 @@ class SoftwareFactoryService:
                 reservation_id,
                 "Released reservation because OpenAI credentials are not configured.",
             )
-            decision_id = create_blocking_decision(
+            decision_id = self.decisions.create_blocking(
                 connection,
                 project_id,
                 task_id,
@@ -1475,7 +1491,7 @@ class SoftwareFactoryService:
                 reservation_id,
                 "Released reservation because the review-packet generation failed.",
             )
-            emit_event(
+            self.events.emit(
                 connection,
                 project_id,
                 "software_factory.pull_request_failed",
@@ -1522,7 +1538,7 @@ class SoftwareFactoryService:
                 reservation_id,
                 "Released reservation because GitHub credentials are not configured.",
             )
-            decision_id = create_blocking_decision(
+            decision_id = self.decisions.create_blocking(
                 connection,
                 project_id,
                 task_id,
@@ -1546,7 +1562,7 @@ class SoftwareFactoryService:
                 reservation_id,
                 "Released reservation because sandbox PR creation failed.",
             )
-            emit_event(
+            self.events.emit(
                 connection,
                 project_id,
                 "software_factory.pull_request_failed",
@@ -1578,7 +1594,7 @@ class SoftwareFactoryService:
                 completed=False,
                 checks=[],
             )
-            emit_event(
+            self.events.emit(
                 connection,
                 project_id,
                 "software_factory.validation_unavailable",
@@ -1755,7 +1771,7 @@ class SoftwareFactoryService:
             },
             created_by_job_id=created_by_job_id,
         )
-        decision_id = create_blocking_decision(
+        decision_id = self.decisions.create_blocking(
             connection,
             project_id,
             task_id,
@@ -1815,7 +1831,7 @@ class SoftwareFactoryService:
             int(reservation["amount_usd_micros"]),
             actual_usd_micros,
         )
-        emit_event(
+        self.events.emit(
             connection,
             project_id,
             "software_factory.pull_request_proposed",
@@ -1858,7 +1874,7 @@ class SoftwareFactoryService:
 
     def merge_pull_request(
         self,
-        connection: Connection,
+        connection: Any,
         project_id: str,
         task_id: Optional[str],
         decision_id: str,
@@ -1871,7 +1887,7 @@ class SoftwareFactoryService:
     ) -> dict:
         if task_id is None:
             task_id = connection.execute(
-                text(
+                sql(
                     """
                     SELECT task_id
                     FROM decisions
@@ -1942,7 +1958,7 @@ class SoftwareFactoryService:
             self.receipts.mark_failed(
                 connection, merge_receipt["id"], {"message": str(error)}
             )
-            decision_id_block = create_blocking_decision(
+            decision_id_block = self.decisions.create_blocking(
                 connection,
                 project_id,
                 task_id,
@@ -1960,7 +1976,7 @@ class SoftwareFactoryService:
             self.receipts.mark_failed(
                 connection, merge_receipt["id"], {"message": str(error)}
             )
-            emit_event(
+            self.events.emit(
                 connection,
                 project_id,
                 "software_factory.pull_request_merge_failed",
@@ -2019,7 +2035,7 @@ class SoftwareFactoryService:
             pull_request_url,
             result,
         )
-        emit_event(
+        self.events.emit(
             connection,
             project_id,
             "software_factory.pull_request_merged",
@@ -2045,7 +2061,7 @@ class SoftwareFactoryService:
 
     def create_deployment(
         self,
-        connection: Connection,
+        connection: Any,
         project_id: str,
         task_id: Optional[str],
         decision_id: str,
@@ -2059,7 +2075,7 @@ class SoftwareFactoryService:
     ) -> dict:
         if task_id is None:
             task_id = connection.execute(
-                text(
+                sql(
                     """
                     SELECT task_id
                     FROM decisions
@@ -2149,7 +2165,7 @@ class SoftwareFactoryService:
             self.receipts.mark_failed(
                 connection, deployment_receipt["id"], {"message": str(error)}
             )
-            decision_id_block = create_blocking_decision(
+            decision_id_block = self.decisions.create_blocking(
                 connection,
                 project_id,
                 task_id,
@@ -2167,7 +2183,7 @@ class SoftwareFactoryService:
             self.receipts.mark_failed(
                 connection, deployment_receipt["id"], {"message": str(error)}
             )
-            emit_event(
+            self.events.emit(
                 connection,
                 project_id,
                 "software_factory.deployment_failed",
@@ -2228,7 +2244,7 @@ class SoftwareFactoryService:
             self.receipts.mark_failed(
                 connection, deployment_receipt["id"], {"message": str(error)}
             )
-            emit_event(
+            self.events.emit(
                 connection,
                 project_id,
                 "software_factory.deployment_failed",
@@ -2335,7 +2351,7 @@ class SoftwareFactoryService:
                 decision_id,
                 "release_manager",
             )
-            emit_event(
+            self.events.emit(
                 connection,
                 project_id,
                 "software_factory.deployment_created",

@@ -4,13 +4,11 @@ import hashlib
 import json
 import logging
 from datetime import datetime, timedelta, timezone
-from typing import Optional, Union
+from typing import Any, Optional, Union
 from uuid import uuid4
 
-from sqlalchemy import text
-from sqlalchemy.engine import Connection
-
 from ..config import Settings
+from ..ports import sql
 
 
 DATA_BOUNDARIES = {"public", "internal", "confidential", "restricted", "local-only"}
@@ -41,7 +39,42 @@ def normalize_data_boundary(value: Optional[str] = None) -> str:
 
 
 def emit_event(
-    connection: Connection,
+    connection: Any,
+    project_id: str,
+    event_type: str,
+    actor: str,
+    entity_type: str,
+    entity_id: str,
+    data: dict,
+) -> str:
+    """Emit through the configured edition sink, with Postgres compatibility."""
+
+    from ..ports import get_engine_ports
+
+    ports = get_engine_ports()
+    if ports is not None:
+        return ports.events.emit(
+            connection,
+            project_id,
+            event_type,
+            actor,
+            entity_type,
+            entity_id,
+            data,
+        )
+    return _emit_event_postgres(
+        connection,
+        project_id,
+        event_type,
+        actor,
+        entity_type,
+        entity_id,
+        data,
+    )
+
+
+def _emit_event_postgres(
+    connection: Any,
     project_id: str,
     event_type: str,
     actor: str,
@@ -51,7 +84,7 @@ def emit_event(
 ) -> str:
     event_id = make_id("evt")
     connection.execute(
-        text(
+        sql(
             """
             INSERT INTO events (id, project_id, event_type, actor, entity_type, entity_id, data)
             VALUES (:id, :project_id, :event_type, :actor, :entity_type, :entity_id, CAST(:data AS JSONB))
@@ -102,7 +135,7 @@ def emit_event(
         try:
             with connection.begin_nested():
                 connection.execute(
-                    text(
+                    sql(
                         """
                         INSERT INTO events (
                             id, project_id, event_type, actor,
@@ -143,7 +176,7 @@ def emit_event(
 
 
 def record_policy_eval(
-    connection: Connection,
+    connection: Any,
     project_id: str,
     boundary: str,
     decision: str,
@@ -157,7 +190,7 @@ def record_policy_eval(
     'policy violation attempts (tracked and blocked)' and replay/'why did we do that'."""
     eval_id = make_id("pev")
     connection.execute(
-        text(
+        sql(
             """
             INSERT INTO policy_eval_log (id, project_id, boundary, action, decision, reason, detail)
             VALUES (:id, :p, :b, :a, :d, :r, CAST(:det AS JSONB))
@@ -170,7 +203,49 @@ def record_policy_eval(
 
 
 def create_blocking_decision(
-    connection: Connection,
+    connection: Any,
+    project_id: str,
+    task_id: Optional[str],
+    question: str,
+    recommendation: dict,
+    cost_summary: dict,
+    reason: str,
+    *,
+    risk_tier: int = 2,
+    default_action: str = "hold",
+) -> str:
+    """Create a hold-default decision through the configured edition sink."""
+
+    from ..ports import get_engine_ports
+
+    ports = get_engine_ports()
+    if ports is not None:
+        return ports.decisions.create_blocking(
+            connection,
+            project_id,
+            task_id,
+            question,
+            recommendation,
+            cost_summary,
+            reason,
+            risk_tier=risk_tier,
+            default_action=default_action,
+        )
+    return _create_blocking_decision_postgres(
+        connection,
+        project_id,
+        task_id,
+        question,
+        recommendation,
+        cost_summary,
+        reason,
+        risk_tier=risk_tier,
+        default_action=default_action,
+    )
+
+
+def _create_blocking_decision_postgres(
+    connection: Any,
     project_id: str,
     task_id: Optional[str],
     question: str,
@@ -184,7 +259,7 @@ def create_blocking_decision(
     decision_id = make_id("dec")
     deadline_at = now_utc() + timedelta(hours=24)
     connection.execute(
-        text(
+        sql(
             """
             INSERT INTO decisions (
                 id, project_id, task_id, question, recommendation, options, risk_tier,
@@ -215,7 +290,7 @@ def create_blocking_decision(
             "default_action": default_action,
         },
     )
-    emit_event(
+    _emit_event_postgres(
         connection,
         project_id,
         "decision.created",
@@ -233,7 +308,7 @@ def create_blocking_decision(
 
 
 def create_artifact(
-    connection: Connection,
+    connection: Any,
     settings: Settings,
     project_id: str,
     task_id: Optional[str],
@@ -246,7 +321,7 @@ def create_artifact(
     boundary_source = data_boundary or content.get("data_boundary")
     if not boundary_source and task_id:
         row = connection.execute(
-            text("SELECT data_boundary FROM tasks WHERE id = :task_id"),
+            sql("SELECT data_boundary FROM tasks WHERE id = :task_id"),
             {"task_id": task_id},
         ).mappings().first()
         boundary_source = row["data_boundary"] if row else None
@@ -257,7 +332,7 @@ def create_artifact(
     artifact_path = artifact_dir / f"{artifact_id}.json"
     artifact_path.write_text(json.dumps(content, indent=2), encoding="utf-8")
     connection.execute(
-        text(
+        sql(
             """
             INSERT INTO artifacts (
                 id, project_id, task_id, artifact_type, title, uri, content,

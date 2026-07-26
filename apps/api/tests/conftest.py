@@ -1,5 +1,7 @@
 import os
 
+os.environ.setdefault("BOSS_EDITION", "enterprise_self_hosted")
+
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, text
@@ -14,6 +16,14 @@ from apps.api.app.services.event_dispatch import invalidate_subscription_cache
 from apps.api.app.services.members import MemberDirectoryService
 from apps.api.app.services.skill_registry import seed_system_skills
 from apps.api.app.services.specpack import SpecPackService
+
+# Build the test app with the complete enterprise route/adapter surface, then
+# restore the product's historical Community baseline before seeding and test
+# execution. This keeps the legacy matrix meaningful while edition-router
+# behavior is covered explicitly in test_edition_routers.py.
+os.environ["BOSS_EDITION"] = "community"
+get_settings.cache_clear()
+api_main.settings.boss_edition = "community"
 
 
 @pytest.fixture(scope="session")
@@ -221,7 +231,9 @@ def clean_tables(engine):
                 "project_id": settings.default_project_id,
                 "daily_cap": settings.daily_cap_usd_micros,
                 "monthly_cap": settings.monthly_cap_usd_micros,
-                "burst_cap": settings.burst_cap_usd_micros_per_min,
+                # Keep the general matrix independent from the production burst
+                # limiter. Tests that exercise burst denial set their own cap.
+                "burst_cap": 100_000_000,
             },
         )
         try:
