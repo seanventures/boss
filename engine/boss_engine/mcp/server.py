@@ -23,10 +23,11 @@ import json
 import sys
 from typing import Any, Optional
 
+from .. import __version__
 from ..tools import ToolRegistry, build_default_registry
 
 PROTOCOL_VERSION = "2024-11-05"
-SERVER_INFO = {"name": "boss-engine", "version": "0.1.0"}
+SERVER_INFO = {"name": "boss-engine", "version": __version__}
 
 
 class MCPServer:

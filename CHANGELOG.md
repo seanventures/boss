@@ -1,5 +1,44 @@
 # Changelog
 
+## v0.8.0 - 2026-07-26
+
+This release integrates Paramg's standalone OSS engine split, the consolidated
+critical-fix branches, and the assurance/workflow product slices tracked in
+Plane BOSS-175–234.
+
+### Added
+
+- Shipped `boss-engine` as a standalone Python distribution and container with
+  the complete service graph, typed tools, engine-native agent, read-only-aware
+  MCP server, CLI, compatibility shims, and package/container contract tests.
+- Added reusable assurance workflows and product contracts for continuous
+  ground truth, claim evidence, settled-conclusion tripwires, surface
+  ownership, adversarial verification, agent groups, governed integrations,
+  and mapped workflow composition.
+- Added project-scoped task archive authorization/auditing, cross-project
+  dispatch protection, completed-application branch lineage, advisory
+  ship/repair/block disposition, and SSH deployment destination/rollback
+  safeguards.
+- Added Apache-2.0 licensing evidence at the repository, engine, API client,
+  and specpack distribution boundaries.
+
+### Changed
+
+- Moved the canonical API/worker service implementation into
+  `engine/boss_engine/services` while retaining identity-preserving import
+  shims for existing callers.
+- Aligned application, engine, Helm, and Kubernetes release metadata on
+  `v0.8.0`.
+
+### Release notes
+
+- All external provider effects remain policy-, approval-, budget-, dedupe-,
+  and Receipt-governed. Publishing this source release does not automatically
+  deploy images or mutate a target environment.
+- GitHub Actions are intentionally disabled; the release is gated by the
+  equivalent local lint, test, build, schema, smoke, packaging, container, and
+  manifest validations recorded in Plane.
+
 ## v0.7.0 - 2026-07-16
 
 This release integrates the governed skills, deployment-promotion, durable

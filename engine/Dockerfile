@@ -20,7 +20,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # The engine package (self-contained post Phase 2 — imports only boss_engine.*)
 COPY boss_engine ./boss_engine
-COPY pyproject.toml README.md ./
+COPY pyproject.toml README.md LICENSE ./
 
 ENV PYTHONPATH=/engine
 ENV PYTHONUNBUFFERED=1

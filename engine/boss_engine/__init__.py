@@ -19,13 +19,12 @@ The engine is consumed three ways, all over the same in-process helper methods
      and `boss_engine.mcp` — the same tools exposed to external agents
      (GitHub Copilot, Claude) over MCP JSON-RPC.
 
-Phase 0 (this commit) imports the existing service modules from
-`apps.api.app.services` in place, so the engine is runnable and testable with
-zero file moves. Phase 2 physically relocates those modules under
-`boss_engine/` and repoints the API + worker to import from here.
+The service graph is physically owned by this package. The internal API and
+worker consume the same module objects through compatibility shims, preserving
+one implementation and one module identity while they migrate their imports.
 """
 from __future__ import annotations
 
-__version__ = "0.1.0"
+__version__ = "0.8.0"
 
 __all__ = ["__version__"]
