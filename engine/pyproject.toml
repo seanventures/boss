@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "boss-engine"
+version = "0.1.0"
+description = "The OSS-shippable core of the BOSS autonomous software factory: the workflow engine, its tool layer, the engine-native agent, and an MCP server — with no dependency on the HTTP API or web console."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "Apache-2.0" }
+authors = [{ name = "BOSS" }]
+
+# Core engine dependencies. The pure engine (tool layer + engine-native agent +
+# MCP over stdio) needs NO web framework. During Phase 0 the engine imports the
+# service modules in place from the monorepo; Phase 2 vendors them under
+# boss_engine/ and this list becomes the complete standalone dependency set.
+dependencies = [
+    "SQLAlchemy>=2.0",
+    "psycopg[binary]>=3.1",
+    "pydantic>=2.7",
+    "pydantic-settings>=2.2",
+]
+
+[project.optional-dependencies]
+# Only needed for the OPTIONAL HTTP transport of the MCP server
+# (`serve-mcp --http`). stdio MCP + the engine-native agent do not need these.
+mcp-http = ["fastapi>=0.110", "uvicorn>=0.29"]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+boss-engine = "boss_engine.__main__:main"
+
+[tool.setuptools]
+packages = ["boss_engine", "boss_engine.tools", "boss_engine.agent", "boss_engine.mcp"]
+
+[tool.setuptools.package-dir]
+"" = "."
