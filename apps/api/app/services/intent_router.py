@@ -150,32 +150,35 @@ class IntentRouter:
             )
 
         if pending_plan_id:
-            if re.search(r"\b(no|don't|do not|change|revise|edit|instead|not yet)\b", latest.lower()):
-                row = connection.execute(
-                    text(
-                        "SELECT objective FROM plans WHERE id = :id AND project_id = :project_id"
-                    ),
-                    {"id": pending_plan_id, "project_id": project_id},
-                ).mappings().first()
-                if row is None:
-                    return RouterTurn(reply="That pending plan no longer exists, so I did not dispatch anything.")
-                try:
-                    return self._dispatch(
-                        connection,
-                        "propose_command",
-                        {"command": f"{row['objective']}\n\nRequested revision: {latest}"},
-                        project_id=project_id,
-                        actor=actor,
-                    )
-                except (ProjectMemberNotFoundError, ProjectMemberPermissionError) as error:
-                    return RouterTurn(reply=f"I can’t revise that plan: {error}")
-            return RouterTurn(
-                reply=(
-                    "The proposed plan is still waiting for an explicit confirmation. "
-                    "Use the confirm action to dispatch it, or tell me what to revise."
-                ),
-                pending_confirmation=self._pending_plan(connection, project_id, pending_plan_id),
-            )
+            low = latest.lower()
+            # DISMISS: clear a stale/unwanted plan and move on (agent_service clears it on this action).
+            if re.search(r"\b(cancel|discard|dismiss|scrap|forget (it|this|that)|never ?mind|"
+                         r"drop (it|this|the plan)|(remove|delete|clear|scrap|ignore) the plan|"
+                         r"start over)\b", low):
+                return RouterTurn(reply="Okay — cleared that pending plan. What would you like to do next?",
+                                  actions=[{"kind": "plan_dismissed"}])
+            # A leading QUESTION is discussion — answer it without touching the plan (the pending plan
+            # must not swallow every message: a user has to be able to ask things).
+            if bool(re.match(r"^\s*(how|what|why|when|where|who|which|explain|tell me|show me)\b", low)) or (
+                    latest.strip().endswith("?") and not re.match(r"^\s*(can|could|would|will|please)\b", low)):
+                return self._answer(connection, project_id, messages)
+            # Any other new instruction REVISES the plan to reflect it (re-propose). This also unjams a
+            # thread whose plan was already handled another way — the user just steers with a message.
+            row = connection.execute(
+                text("SELECT objective FROM plans WHERE id = :id AND project_id = :project_id"),
+                {"id": pending_plan_id, "project_id": project_id},
+            ).mappings().first()
+            if row is None:
+                return RouterTurn(reply="That pending plan no longer exists — cleared it.",
+                                  actions=[{"kind": "plan_dismissed"}])
+            revising = bool(re.search(r"\b(no|don't|do not|change|revise|edit|instead|not yet)\b", low))
+            command = (f"{row['objective']}\n\nRequested revision: {latest}" if revising else latest)
+            try:
+                return self._dispatch(
+                    connection, "propose_command", {"command": command},
+                    project_id=project_id, actor=actor, external_ref=external_ref)
+            except (ProjectMemberNotFoundError, ProjectMemberPermissionError) as error:
+                return RouterTurn(reply=f"I can’t revise that plan: {error}")
 
         if self._asks_for_capabilities(latest):
             enabled = [item for item in manifest.capabilities if item.enabled]
