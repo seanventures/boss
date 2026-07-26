@@ -7,8 +7,8 @@
     "node": "20.x"
   },
   "scripts": {
-    "dev": "concurrently -k -n web,api,worker -c blue,green,yellow \"pnpm --filter boss-web dev\" \"./.venv/bin/python -m uvicorn apps.api.app.main:app --host 0.0.0.0 --port 8000 --reload\" \"./.venv/bin/python -m apps.worker.boss_worker.main\"",
-    "test": "pnpm --filter boss-web test && ./.venv/bin/python -m pytest apps/api/tests apps/worker/tests",
+    "dev": "concurrently -k -n web,api,worker -c blue,green,yellow \"pnpm --filter boss-web dev\" \"PYTHONPATH=.:engine ./.venv/bin/python -m uvicorn apps.api.app.main:app --host 0.0.0.0 --port 8000 --reload\" \"PYTHONPATH=.:engine ./.venv/bin/python -m apps.worker.boss_worker.main\"",
+    "test": "pnpm --filter boss-web test && PYTHONPATH=.:engine ./.venv/bin/python -m pytest apps/api/tests apps/worker/tests engine/tests",
     "lint": "pnpm --filter boss-web lint && ./.venv/bin/python -m ruff check apps/api apps/worker"
   },
   "devDependencies": {

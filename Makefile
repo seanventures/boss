@@ -52,17 +52,17 @@ docs: docs-install docs-check
 seed: install-python
 	docker compose -f infra/docker-compose.yml up -d db
 	DATABASE_URL=$(DATABASE_URL) $(PYTHON) scripts/wait_for_postgres.py
-	DATABASE_URL=$(DATABASE_URL) $(PYTHON) -m apps.api.app.bootstrap
+	DATABASE_URL=$(DATABASE_URL) PYTHONPATH=.:engine $(PYTHON) -m apps.api.app.bootstrap
 
 # Baseline seed + realistic DEMO data (tasks, decisions, a multi-agent PRD
 # meeting, code tasks) so a fresh console is populated. Offline, idempotent.
 seed-demo: seed
-	DATABASE_URL=$(DATABASE_URL) PYTHONPATH=apps/api $(PYTHON) scripts/seed_demo.py
+	DATABASE_URL=$(DATABASE_URL) PYTHONPATH=.:engine:apps/api $(PYTHON) scripts/seed_demo.py
 
 smoke: install-python
 	docker compose -f infra/docker-compose.yml up -d db
 	DATABASE_URL=$(DATABASE_URL) $(PYTHON) scripts/wait_for_postgres.py
-	DATABASE_URL=$(DATABASE_URL) $(PYTHON) -m apps.api.tests.smoke
+	DATABASE_URL=$(DATABASE_URL) PYTHONPATH=.:engine $(PYTHON) -m apps.api.tests.smoke
 
 k8s-validate: install-python
 	$(PYTHON) scripts/validate_kubernetes_manifests.py
@@ -76,25 +76,25 @@ release-blockers: install-python
 real-smoke-plan: install-python
 	docker compose -f infra/docker-compose.yml up -d db
 	DATABASE_URL=$(DATABASE_URL) $(PYTHON) scripts/wait_for_postgres.py
-	DATABASE_URL=$(DATABASE_URL) $(PYTHON) scripts/run_real_control_plane_smoke.py
+	DATABASE_URL=$(DATABASE_URL) PYTHONPATH=.:engine $(PYTHON) scripts/run_real_control_plane_smoke.py
 
 real-smoke-pr: install-python
 	docker compose -f infra/docker-compose.yml up -d db
 	DATABASE_URL=$(DATABASE_URL) $(PYTHON) scripts/wait_for_postgres.py
-	DATABASE_URL=$(DATABASE_URL) $(PYTHON) scripts/run_real_control_plane_smoke.py --with-pr
+	DATABASE_URL=$(DATABASE_URL) PYTHONPATH=.:engine $(PYTHON) scripts/run_real_control_plane_smoke.py --with-pr
 
 real-smoke-merge: install-python
 	docker compose -f infra/docker-compose.yml up -d db
 	DATABASE_URL=$(DATABASE_URL) $(PYTHON) scripts/wait_for_postgres.py
-	DATABASE_URL=$(DATABASE_URL) $(PYTHON) scripts/run_real_control_plane_smoke.py --with-pr --with-merge
+	DATABASE_URL=$(DATABASE_URL) PYTHONPATH=.:engine $(PYTHON) scripts/run_real_control_plane_smoke.py --with-pr --with-merge
 
 real-smoke-deploy: install-python
 	docker compose -f infra/docker-compose.yml up -d db
 	DATABASE_URL=$(DATABASE_URL) $(PYTHON) scripts/wait_for_postgres.py
-	DATABASE_URL=$(DATABASE_URL) $(PYTHON) scripts/run_real_control_plane_smoke.py --with-pr --with-merge --with-deploy
+	DATABASE_URL=$(DATABASE_URL) PYTHONPATH=.:engine $(PYTHON) scripts/run_real_control_plane_smoke.py --with-pr --with-merge --with-deploy
 
 worker-drain-once: install-python
-	DATABASE_URL=$(DATABASE_URL) $(PYTHON) -m apps.worker.boss_worker.main --drain-once
+	DATABASE_URL=$(DATABASE_URL) PYTHONPATH=.:engine $(PYTHON) -m apps.worker.boss_worker.main --drain-once
 
 sandbox-template:
 	mkdir -p tmp
