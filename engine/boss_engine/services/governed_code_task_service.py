@@ -107,6 +107,31 @@ def _hash_files(root: Path, paths: list[str]) -> dict[str, str]:
     return out
 
 
+def resolve_gate_failure_action(
+    *,
+    failing: list[str],
+    advisory_gate: bool,
+    rounds_used: int,
+    max_repair_rounds: int,
+    open_pr: bool = True,
+) -> str:
+    """Decide what to do after a non-passing quality gate.
+
+    Returns one of:
+      - ``"ship"``   — open the PR (hard pass, or advisory first-pass with surfaced failures)
+      - ``"repair"`` — autonomous review-repair retry
+      - ``"block"``  — pause for human gate override
+
+    Advisory mode MUST ship: clearing failing gates without short-circuiting used to fall
+    through into the block path and permanently stall web-app first-pass builds.
+    """
+    if not failing or advisory_gate:
+        return "ship"
+    if rounds_used < max_repair_rounds and open_pr:
+        return "repair"
+    return "block"
+
+
 def _record_quality_gate(connection, *, run_id, project_id, task_id, job_id, evidence, gates):
     passed = [k for k, v in gates.items() if v]
     failed = [k for k, v in gates.items() if not v]
@@ -1460,9 +1485,22 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
         # (advisory_failing_gates → shown in the UI) but must NOT block. Record it and FALL THROUGH
         # to the PR-open path below so there's always a result to iterate on. (The earlier bug set
         # failing=[] but stayed inside the `!= pass` block, so it still blocked with an empty list.)
-        if qg_status != "pass" and advisory_gate:
+        if qg_status != "pass":
             failing = [k for k, v in gates.items() if not v]
-            if failing:
+            rounds_used = max(0, int(fctx.get("attempt", 1)) - 1)
+            # Fallback 2 (not 0): a missing/blank config field must never SILENTLY disable the moat.
+            max_repair_rounds = max(0, int(getattr(settings, "code_review_repair_max_rounds", 2) or 2))
+            action = resolve_gate_failure_action(
+                failing=failing,
+                advisory_gate=advisory_gate,
+                rounds_used=rounds_used,
+                max_repair_rounds=max_repair_rounds,
+                open_pr=spec.get("open_pr", True) is not False,
+            )
+            if action == "ship" and failing and advisory_gate:
+                # ADVISORY first pass: surface the failing checks (their verdicts are already
+                # recorded on the run, so the UI shows exactly which failed) but PROCEED to open the
+                # PR + preview. No block, no dead-end — the user retries-to-improve when they want.
                 with begin(engine) as c:
                     c.execute(text(
                         "UPDATE code_task_runs SET finalize_ctx=COALESCE(finalize_ctx,'{}'::jsonb) "
@@ -1471,22 +1509,11 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
                         {"f": json.dumps(failing), "id": run_id})
                     emit_event(c, project_id, "code_task.gate_advisory", "boss",
                                "code_task_run", run_id, {"advisory_failing_gates": failing})
-
-        if qg_status != "pass" and not advisory_gate:
-            failing = [k for k, v in gates.items() if not v]
-            # AUTONOMOUS REVIEW-REPAIR (BOSS's moat: agents converge in a loop, not a human). EVERY
-            # failure that reaches this quality gate is a code-quality issue a fresh full re-run with
-            # the findings fed back can plausibly fix — failing tests, a regression, an adversarial
-            # defect, a security issue, weak tests, or drift. (Genuinely needs-human/mis-routed tasks
-            # never reach this gate — they exit earlier via _fail / NOT_A_CODE_TASK / plan-approval.)
-            # So iterate autonomously up to the round budget before blocking a human; retry_code_task
-            # carries the review summaries forward as ITERATION FEEDBACK and clones the prior code.
-            # Bounded by max_repair_rounds so it can never run away.
-            rounds_used = max(0, int(fctx.get("attempt", 1)) - 1)
-            # Fallback 2 (not 0): a missing/blank config field must never SILENTLY disable the moat.
-            max_repair_rounds = max(0, int(getattr(settings, "code_review_repair_max_rounds", 2) or 2))
-            if (failing and rounds_used < max_repair_rounds
-                    and spec.get("open_pr", True) is not False):
+                # Fall through to GATE PASSED below — do NOT enter repair/block.
+            elif action == "repair":
+                # AUTONOMOUS REVIEW-REPAIR (BOSS's moat: agents converge in a loop, not a human).
+                # EVERY failure that reaches this quality gate is a code-quality issue a fresh full
+                # re-run with the findings fed back can plausibly fix. Bounded by max_repair_rounds.
                 _finish_vms(success=False)  # retain this round's VMs for inspection
                 with begin(engine) as c:
                     _release(sf, c, project_id, reservation_id,
@@ -1515,26 +1542,27 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
                 return {"status": "repairing", "done": True, "review_repair": True,
                         "next_run_id": nxt.get("run_id"), "round": rounds_used + 1,
                         "failing_gates": failing}
-            _finish_vms(success=False)  # retain the stage VMs for inspection
-            # Human escape hatch: preserve the produced diff so an operator can WAIVE the failing
-            # gate(s) and open the PR without a re-run. Governance is kept — gates the human does
-            # NOT waive still block, and the PR still carries its own merge-gate Decision.
-            pending = ([{"path": p, "content": content} for p, content in accumulated.items()]
-                       if use_microvm else
-                       [{"path": fc.path, "content": fc.content} for fc in sandbox.diff()])
-            with begin(engine) as c:
-                _release(sf, c, project_id, reservation_id, f"quality gate failed: {qg_id}")
-                ctx = {**fctx, "pending_diff": pending, "failing_gates": failing,
-                       "quality_gate_id": qg_id, "pr_summary": r2.get("summary", "")[:600],
-                       **({"sandbox_task_id": guest_vm_ids[-1]} if guest_vm_ids else {})}
-                c.execute(text(
-                    "UPDATE code_task_runs SET status='blocked', phase='awaiting_gate_override', "
-                    "error=:e, finalize_ctx=CAST(:fc AS JSONB), updated_at=now() WHERE id=:id"),
-                    {"e": f"QualityGate FAIL ({qg_id}); failing gates: {failing}. "
-                          f"A human can waive these + open the PR via /override.",
-                     "fc": json.dumps(ctx), "id": run_id})
-            return {"status": "blocked", "done": True, "awaiting_gate_override": True,
-                    "quality_gate_id": qg_id, "failing_gates": failing}
+            elif action == "block":
+                _finish_vms(success=False)  # retain the stage VMs for inspection
+                # Human escape hatch: preserve the produced diff so an operator can WAIVE the failing
+                # gate(s) and open the PR without a re-run. Governance is kept — gates the human does
+                # NOT waive still block, and the PR still carries its own merge-gate Decision.
+                pending = ([{"path": p, "content": content} for p, content in accumulated.items()]
+                           if use_microvm else
+                           [{"path": fc.path, "content": fc.content} for fc in sandbox.diff()])
+                with begin(engine) as c:
+                    _release(sf, c, project_id, reservation_id, f"quality gate failed: {qg_id}")
+                    ctx = {**fctx, "pending_diff": pending, "failing_gates": failing,
+                           "quality_gate_id": qg_id, "pr_summary": r2.get("summary", "")[:600],
+                           **({"sandbox_task_id": guest_vm_ids[-1]} if guest_vm_ids else {})}
+                    c.execute(text(
+                        "UPDATE code_task_runs SET status='blocked', phase='awaiting_gate_override', "
+                        "error=:e, finalize_ctx=CAST(:fc AS JSONB), updated_at=now() WHERE id=:id"),
+                        {"e": f"QualityGate FAIL ({qg_id}); failing gates: {failing}. "
+                              f"A human can waive these + open the PR via /override.",
+                         "fc": json.dumps(ctx), "id": run_id})
+                return {"status": "blocked", "done": True, "awaiting_gate_override": True,
+                        "quality_gate_id": qg_id, "failing_gates": failing}
 
         # GATE PASSED — open the PR via the existing software-factory path.
         _finish_vms(success=True)
