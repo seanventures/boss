@@ -196,6 +196,8 @@ release regressions closed. Current validation is green across the affected
 backend/worker/engine suite (348 passed, 1 skipped), focused regression suite
 (94 passed), web suite (119 passed), seed/smoke, lint/typecheck, strict docs,
 production web build, isolated wheel/container imports, API/worker containers,
-Kubernetes/Helm, and infra profiles. External hosted/provider rollout remains
-fail-closed by design. Tickets stay In Progress until PR merge and v0.8.0
-publication.
+Kubernetes/Helm, and infra profiles. PR #76 merged as `bc4c4d6`; the annotated
+`v0.8.0` tag peels to that exact commit and is published as the latest GitHub
+release. Source PRs #68/#70 are merged and #23/#69 are closed as superseded.
+Plane BOSS-215–234 plus stale shipped package tickets BOSS-32/33 are Done.
+External hosted/provider rollout remains fail-closed by design.

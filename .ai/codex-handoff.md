@@ -467,6 +467,9 @@ Slice complete; accelerating full product with parallel agents.
   provider-write credentials/approval. Community local and self-hosted
   packages are ready. The dependency report contains the known dev-server-only
   esbuild advisory below Vitest; production build is unaffected.
-- Plane BOSS-215–234 remain In Progress until the release PR is merged and
-  `v0.8.0` is published. Attach the final PR, merge SHA, tag, release URL, and
-  validation evidence before moving them to Done.
+- Release PR #76 merged as `bc4c4d6525063feac0a6997501aafc1642c23ae3`;
+  the annotated `v0.8.0` tag peels to that exact commit and the GitHub release
+  is published at https://github.com/seanheiney/boss/releases/tag/v0.8.0.
+  GitHub records #68/#70 as merged and #23/#69 as superseded/closed. Plane
+  BOSS-215–234 and the reconciled package backlog BOSS-32/33 are Done with
+  release evidence attached.
