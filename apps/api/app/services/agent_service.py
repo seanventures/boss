@@ -292,7 +292,10 @@ class AgentService:
         )
 
         pending = turn.pending_confirmation
-        dispatched = any(action.get("kind") == "plan_dispatched" for action in turn.actions)
+        # A dispatched OR explicitly dismissed plan clears the thread's pending state (a dismissed
+        # plan must not keep jamming every future message with "confirm the pending plan").
+        dispatched = any(action.get("kind") in ("plan_dispatched", "plan_dismissed")
+                         for action in turn.actions)
         if pending:
             connection.execute(
                 text(
