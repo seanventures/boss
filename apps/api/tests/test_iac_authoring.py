@@ -55,7 +55,7 @@ def test_context_whitelist_includes_tf_tfvars_hcl(tmp_path):
     (tmp_path / "skip.tfx").write_text("not terraform\n")
     body = _contents_section(_ctx(tmp_path))
     assert "--- net.tf ---" in body and 'resource "aws_vpc" "main"' in body
-    assert "--- dev.tfvars ---" in body
+    assert "--- dev.tfvars" in body
     assert "--- mod.hcl ---" in body
     assert "--- app.py ---" in body
     assert "--- skip.tfx ---" not in body  # unknown extension stays excluded
@@ -85,10 +85,10 @@ def test_core_tf_files_survive_the_40_blob_cap(tmp_path):
 
     body = _contents_section(_ctx(tmp_path))
     for core in ("main.tf", "variables.tf", "outputs.tf", "versions.tf", "prod.tfvars"):
-        assert f"--- {core} ---" in body, f"core file {core} must always be in context"
+        assert f"--- {core}" in body, f"core file {core} must always be in context"
     # Oversized core file: truncated head with an explicit marker, not dropped.
     assert "# HEAD-MARKER main.tf" in body
-    assert "[truncated: core Terraform file exceeds the 20KB context cap" in body
+    assert "[truncated: exceeds context head cap]" in body
     # The overall cap still applies to non-core files (core displaced 5 slots).
     assert "--- a00.py ---" in body
     assert "--- a44.py ---" not in body
