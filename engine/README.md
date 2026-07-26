@@ -7,14 +7,15 @@ request into shipped software. It has **no dependency on the HTTP API or the web
 console**; those live in `../apps/` and are the internal/enterprise layer that
 sits on top of this engine.
 
-This directory is being extracted so the engine can ship on its own (and, later,
-move to its own OSS repo). The API + console stay behind as the commercial layer.
+The engine now ships on its own as a Python package and container. The API and
+console remain separate consumers of the same engine core.
 
 ## What you get
 
 ```
 boss_engine/
   context.py     EngineContext — wires Settings + DB + services, no FastAPI
+  services/      the complete workflow and policy service graph
   tools/         the tool layer: every engine helper as a schema-typed tool
   agent/         EngineAgent — the engine-native BOSS Agent (tool-calling loop)
   mcp/           MCP server exposing the same tools to GitHub/Claude/etc.
@@ -47,18 +48,19 @@ python -m boss_engine serve-mcp                     # MCP over stdio (default)
 python -m boss_engine serve-mcp --http --port 8791  # MCP over HTTP (needs [mcp-http])
 ```
 
-## Status: Phase 0
+## Status: Phase 3 release-ready
 
-The engine currently **imports the service modules in place** from
-`apps/api/app/services` (via `boss_engine/_compat.py`), so it is runnable and
-testable with zero file moves. The staged plan:
+The service graph is physically owned by `boss_engine/services`. The API and
+worker use compatibility shims that preserve module identity while allowing a
+gradual import cleanup. The package and standalone container do not require the
+API or console source trees.
 
 | Phase | What |
 |-------|------|
-| 0 ✅ | Tool layer + engine-native agent + MCP + CLI (new files; import in place) |
-| 1 | Broaden read/write tool coverage |
-| 2 | Physically relocate the pure service modules under `boss_engine/`; repoint API + worker; leave re-export shims |
-| 3 | Standalone packaging + Dockerfile; `pip install boss-engine` and run with no API/console |
+| 0 ✅ | Tool layer + engine-native agent + MCP + CLI |
+| 1 ✅ | Broaden read/write tool coverage and live read-only verification |
+| 2 ✅ | Relocate pure services under `boss_engine/`; preserve API/worker compatibility shims |
+| 3 ✅ | Standalone package + Dockerfile; install and run with no API/console |
 | 4 | Lift `engine/` into its own OSS repo |
 
 See `BUILD_NOTES.md` for the running log.

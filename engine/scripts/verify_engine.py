@@ -35,6 +35,7 @@ def check_engine_imports() -> None:
         import boss_engine  # noqa: F401
         import boss_engine.agent  # noqa: F401
         import boss_engine.mcp  # noqa: F401
+        import boss_engine.services.core  # noqa: F401
         import boss_engine.tools  # noqa: F401
     except Exception as exc:  # pragma: no cover
         _fail(f"engine import: {type(exc).__name__}: {exc}")

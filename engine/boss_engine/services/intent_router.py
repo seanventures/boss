@@ -358,8 +358,8 @@ class IntentRouter:
                 "href": f"/?area=code_tasks&run={run_id}",
             }
             return RouterTurn(
-                reply=(f"On it — extending the existing app for this task (building on top of its "
-                       f"current branch). I'll open a PR with just the change."
+                reply=("On it — extending the existing app for this task (building on top of its "
+                       "current branch). I'll open a PR with just the change."
                        if extend else f"Started the governed code task “{title}”."),
                 actions=[action],
                 tool_calls=[{"name": name, "arguments": arguments}],

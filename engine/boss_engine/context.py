@@ -19,7 +19,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from dataclasses import dataclass
 from functools import cached_property
-from typing import Any, Iterator, Optional
+from typing import Any, Iterator
 
 from ._compat import app_module, ensure_monorepo_on_path, services_module
 

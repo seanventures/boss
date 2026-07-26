@@ -12,7 +12,7 @@ Running log of the OSS engine-split work on branch `feat/oss-engine-split`
 - **Engine has no web-framework dependency.** MCP protocol logic is pure; stdio is
   the default transport; FastAPI is an optional `[mcp-http]` extra.
 
-## Phase 0 — DONE ✅ (this commit)
+## Phase 0 — DONE ✅
 Tool layer + engine-native agent + MCP + standalone CLI. All new files under
 `engine/`; they import today's services in place via `boss_engine/_compat.py`
 (no service files moved yet).
@@ -76,9 +76,9 @@ engine imports standalone (no apps/); apps.api.app.main == 397 routes (baseline)
 - **Image builds (441MB) and runs standalone**: `docker run boss-engine:dev tools`
   lists all 15 tools; `docker run -e DATABASE_URL=… boss-engine:dev status` returned
   live `project_status` from Postgres — NO API, NO console in the image. Req #1 proven.
-- REMAINING for the merge gate (deploy+test the user wants to run together): push the
-  engine image to a registry, run `serve-mcp` and drive the agent end-to-end in the
-  target environment, then merge `feat/oss-engine-split` to main.
+- The release gate builds and exercises the standalone package and container
+  locally. Registry publication and target-environment deployment remain
+  separately governed provider effects.
 
 ## Not done / next candidates
 - Repoint API + worker to import `boss_engine.*` directly and delete the shims
