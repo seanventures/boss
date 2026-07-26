@@ -40,3 +40,16 @@
 **P0 Count Open (local)**: 0.
 **P0 Count Blocked (external)**: 3.
 **Total Open Gaps**: ~12+ slices in parallel for full product DoD polish (P3 pack + P2 ux-toasts/e2e-comms/selfimp/provider/commercial/pag-expand/monitoring/comms-ui/worker/infra/docs-ac/security/rate/a11y etc); agents doubled to ~20 for 3x speed. (Prior P2/P3 closed; grind on all surfaces until complete or blocked).
+
+## 2026-07-26 v0.8 integration disposition
+
+- BOSS-215–230: locally closed and release-validated; awaiting merge evidence.
+- BOSS-231–234: release integration is validated; PR merge, source-PR
+  reconciliation, exact-main tag, and GitHub release remain before closure.
+- No unintegrated Paramg engine commits remain: local integration includes
+  authoritative tip `52ff073`.
+- External rollout gaps remain intentionally open and fail-closed: hosted
+  Account Connect/team/billing, enterprise SCIM/identity, approved live-cluster
+  verification, and provider writes with credentials/reservation/approval.
+- The documented legacy monolithic API matrix remains tracked by BOSS-119; its
+  old principal-delegation expectations are not a v0.8 release regression.
