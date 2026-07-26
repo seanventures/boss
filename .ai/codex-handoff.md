@@ -4,7 +4,11 @@
 
 - PR #71 merged first as `c0b2493`; Plane BOSS-148/BOSS-149 are Done with
   shipped roster/board evidence.
-- New branch `ai/codex/boss-assurance-contracts` is based directly on that
+- PR [#72](https://github.com/seanheiney/boss/pull/72) merged to `main` as
+  `83eb39b`. Plane BOSS-175–194 each carry the exact PR, merge, validation, and
+  runtime-boundary evidence and are Done. Their parent runtime features remain
+  open for post-engine-split persistence, services, workers, APIs, and UI.
+- The implementation branch `ai/codex/boss-assurance-contracts` was based directly on that
   refreshed `origin/main`. The unrelated untracked `site/` directory was
   present on the workstation and is explicitly excluded.
 - Plane BOSS-175–194 are twenty child slices of BOSS-124–131. They define the

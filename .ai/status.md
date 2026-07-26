@@ -25,6 +25,8 @@
   isolated API/worker Ruff, strict docs, YAML, and diff checks; the only full
   lint failure is two inherited F541 findings in contributor-owned
   `intent_router.py` covered by open PRs #23/#70.
+- PR [#72](https://github.com/seanheiney/boss/pull/72) merged as `83eb39b`;
+  Plane BOSS-175–194 are Done with merge and validation evidence attached.
 - PR #71 merged to `main` as `c0b2493`; BOSS-148/BOSS-149 are shipped and Done.
 - Paramg's July 19–26 mainline delivery adds the design-aware app pipeline,
   task-scoped agent workspace, preview/deploy hardening, Plane closed-loop

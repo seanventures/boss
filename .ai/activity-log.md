@@ -23,8 +23,9 @@ All 15-min terminal updates and major milestones appended here. Chronological, n
   docs, strict MkDocs, YAML parsing, and diff checks pass. Full `make lint`
   stops only on two inherited F541 findings in contributor-owned
   `intent_router.py` (open PRs #23/#70); this branch does not touch that file.
-- Publication and merge evidence remain before the child tickets can move to
-  Done.
+- Published PR #72 and merged it to `main` as `83eb39b`. Attached exact merge,
+  validation, and contract/runtime-boundary evidence to every Plane child;
+  BOSS-175–194 are Done while their parent runtime features remain open.
 
 ---
 ## 2026-07-26 — Codex — Paramg catch-up and safe Mission Control slices
