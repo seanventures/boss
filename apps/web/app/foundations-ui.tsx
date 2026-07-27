@@ -1,5 +1,7 @@
 "use client";
 
+import React from "react";
+
 /**
  * BOSS-281 — Foundations: the design-system reference page from the handoff
  * (~/Documents/design_handoff_boss_design_system), restored as a console area.
@@ -25,24 +27,48 @@ const SIGNALS = [
   { token: "--red", label: "BLOCKED" },
 ];
 
+function useComputedHex(token: string): string {
+  const [hex, setHex] = React.useState("");
+  React.useEffect(() => {
+    // read the LIVE resolved value so the readout proves the token exists in the build
+    const v = getComputedStyle(document.documentElement).getPropertyValue(token).trim();
+    setHex(v.toUpperCase());
+  }, [token]);
+  return hex;
+}
+
 function Swatch({ token, label, note }: { token: string; label: string; note?: string }) {
+  const hex = useComputedHex(token);
   return (
-    <div style={{ display: "grid", gap: 5 }}>
+    <div style={{ display: "grid", gap: 6 }}>
       <div
         style={{
           height: 56,
           background: `var(${token})`,
-          border: "1px solid var(--border-panel, #1c2740)",
+          border: "1px solid var(--panel-border, #1c2740)",
           borderRadius: 8,
+          // dark-on-dark swatches need a visible seat: an inset ring + soft outer glow
+          boxShadow:
+            "inset 0 0 0 1px rgba(255,255,255,0.06), 0 0 0 3px rgba(255,255,255,0.025)",
         }}
       />
-      <div style={{ fontSize: 12.5 }}>
+      <div style={{ fontSize: 12.5, lineHeight: 1.45 }}>
         <b>{label}</b>{" "}
-        <span style={{ fontFamily: "var(--mono, monospace)", color: "var(--muted, #64769a)" }}>
+        <span
+          style={{
+            fontFamily: "var(--mono, monospace)",
+            color: "var(--teal, #2ec5c5)",
+            fontSize: 11.5,
+          }}
+        >
+          {hex || "…"}
+        </span>
+        <br />
+        <span style={{ fontFamily: "var(--mono, monospace)", color: "var(--muted, #64769a)", fontSize: 11 }}>
           var({token})
         </span>
         {note ? (
-          <span style={{ color: "var(--muted, #64769a)" }}> — {note}</span>
+          <span style={{ color: "var(--muted, #64769a)", fontSize: 11.5 }}> — {note}</span>
         ) : null}
       </div>
     </div>
@@ -63,15 +89,25 @@ export function FoundationsHome() {
           BOSS / Design System
         </span>
         <h2
+          className="foundations-hero-title"
           style={{
             margin: "6px 0 4px", fontFamily: "var(--display, Sora, sans-serif)",
             fontWeight: 800, letterSpacing: "-0.02em", fontSize: 30,
-            background: "var(--brand-grad, linear-gradient(135deg,#2ec5c5,#2f6fe0 55%,#1b3a6b))",
-            WebkitBackgroundClip: "text", backgroundClip: "text", color: "transparent",
+            color: "var(--ink, #e6ecf9)",
           }}
         >
           Run a company of AI workers. Stay in command.
         </h2>
+        <style>{`
+          @supports ((-webkit-background-clip: text) or (background-clip: text)) {
+            .foundations-hero-title {
+              background: var(--brand-grad, linear-gradient(135deg,#2ec5c5,#2f6fe0 55%,#1b3a6b));
+              -webkit-background-clip: text;
+              background-clip: text;
+              color: transparent !important;
+            }
+          }
+        `}</style>
         <p className="detail" style={{ maxWidth: "62ch" }}>
           The visual language for BOSS — an operating system for AI labor. Flat surfaces,
           hairline structure, accountable agents. Powerful without being loud; the operator is
@@ -86,8 +122,12 @@ export function FoundationsHome() {
         <p className="detail">Surfaces (dark), the brand gradient, and the signal palette.</p>
         <div
           style={{
-            display: "grid", gap: 12,
-            gridTemplateColumns: "repeat(auto-fill, minmax(140px, 1fr))",
+            display: "grid", gap: 14,
+            gridTemplateColumns: "repeat(auto-fill, minmax(150px, 1fr))",
+            background: "var(--void, #090d17)",
+            border: "1px solid var(--panel-border, #1c2740)",
+            borderRadius: 8,
+            padding: 14,
           }}
         >
           {SURFACES.map((s) => (
