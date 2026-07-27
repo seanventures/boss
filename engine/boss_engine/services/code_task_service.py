@@ -116,7 +116,7 @@ def start_code_task(
     jobs, profile: Optional[str] = None, risk_tier: Optional[int] = None,
     model_config: Optional[dict] = None, open_pr: Optional[bool] = None,
     repair_retries: Optional[int] = None, review_panel_size: Optional[int] = None,
-    substrate: Optional[str] = None,
+    substrate: Optional[str] = None, repo_host: Optional[str] = None,
 ) -> str:
     """Create the durable run row and enqueue the single `code.task` job."""
     run_id = make_id("crun")
@@ -128,6 +128,8 @@ def start_code_task(
     }
     if substrate:  # per-run substrate override (retry fallback: microvm infra-failure -> local)
         spec["substrate"] = substrate
+    if repo_host:  # BOSS-267: per-task SCM provider (github default; bitbucket, ...)
+        spec["repo_host"] = repo_host
     if profile:  # per-task cost/rigor override (else the project setting applies)
         spec["profile"] = profile
     if isinstance(risk_tier, int):
@@ -637,8 +639,14 @@ def run_code_task(engine, settings: Settings, jobs, run_id: str) -> dict:
     owner = spec.get("owner") or settings.target_github_owner
     repo = spec.get("repo") or settings.target_github_repo
     base_branch = spec.get("base_branch") or "main"
-    app = GitHubAppAdapter(settings)
-    token = app.token_for_repo(owner, repo) if app.configured else settings.github_token
+    # BOSS-267: per-task repo host (spec.repo_host) else the project setting; github default.
+    from .repo_host import resolve_repo_host_kind
+    repo_host_kind = resolve_repo_host_kind(settings, spec)
+    if repo_host_kind == "bitbucket":
+        token = settings.bitbucket_token or ""
+    else:
+        app = GitHubAppAdapter(settings)
+        token = app.token_for_repo(owner, repo) if app.configured else settings.github_token
 
     # Feedback-iteration: reuse the ROOT run's branch and clone its accumulated code so the
     # model builds ON prior work (not from base), and update the SAME PR. Mirrors the governed
@@ -685,6 +693,7 @@ def run_code_task(engine, settings: Settings, jobs, run_id: str) -> dict:
                 "azure_api_version": settings.azure_openai_api_version,
                 "azure_key": settings.azure_openai_key,
                 "token": token, "timeout": settings.code_agent_timeout_seconds,
+                "repo_host": repo_host_kind,
             }
             result = provider.run_code_task(guest_spec, tenant_id=project_id)
             # The guest reports ONE aggregate usage for its whole edit/test loop — record it
@@ -701,7 +710,8 @@ def run_code_task(engine, settings: Settings, jobs, run_id: str) -> dict:
             with _transaction(engine) as c:
                 _set_phase(c, run_id, "provisioning")
             sandbox.provision(owner, repo, base_branch=base_branch,
-                              work_branch=work_branch, token=token)
+                              work_branch=work_branch, token=token,
+                              repo_host=repo_host_kind)
             with _transaction(engine) as c:
                 _set_phase(c, run_id, "coding")
             # VAG Phase 0: attribute the host agent's model calls to this run.

@@ -269,8 +269,9 @@ def start_preview(engine, settings: Settings, run_id: str, *, ttl_minutes: int =
                 "failure_kind": failure_kind, "suggested_action": suggested_action}
 
     token = settings.github_token
-    clone_url = (f"https://x-access-token:{token}@github.com/{owner}/{repo}.git"
-                 if token else f"https://github.com/{owner}/{repo}.git")
+    from .repo_host import clone_url_for  # BOSS-267: host-aware clone
+    clone_url = clone_url_for(getattr(settings, "target_repo_host", "github") or "github",
+                              owner, repo, token or "")
     clone = subprocess.run(["git", "clone", "--depth", "1", "--branch", branch, clone_url, str(workdir)],
                            capture_output=True, text=True, timeout=120)
     if clone.returncode != 0:
@@ -440,8 +441,9 @@ def start_container_preview(engine, settings: Settings, run_id: str, *, ttl_minu
                 "failure_kind": failure_kind, "suggested_action": suggested_action}
 
     token = settings.github_token
-    clone_url = (f"https://x-access-token:{token}@github.com/{owner}/{repo}.git"
-                 if token else f"https://github.com/{owner}/{repo}.git")
+    from .repo_host import clone_url_for  # BOSS-267: host-aware clone
+    clone_url = clone_url_for(getattr(settings, "target_repo_host", "github") or "github",
+                              owner, repo, token or "")
     clone = subprocess.run(["git", "clone", "--depth", "1", "--branch", branch, clone_url, str(workdir)],
                            capture_output=True, text=True, timeout=120)
     if clone.returncode != 0:
@@ -603,8 +605,9 @@ def _respawn_process_preview(engine, settings: Settings, preview_id: str) -> Non
         workdir = Path(tempfile.mkdtemp(prefix=f"{preview_id}-", dir=str(PREVIEW_ROOT)))
         log_path = str(workdir / "_preview.log")
         token = settings.github_token
-        clone_url = (f"https://x-access-token:{token}@github.com/{owner}/{repo}.git"
-                     if token else f"https://github.com/{owner}/{repo}.git")
+        from .repo_host import clone_url_for  # BOSS-267: host-aware clone
+        clone_url = clone_url_for(getattr(settings, "target_repo_host", "github") or "github",
+                                  owner, repo, token or "")
         clone = subprocess.run(
             ["git", "clone", "--depth", "1", "--branch", branch, clone_url, str(workdir)],
             capture_output=True, text=True, timeout=120)
