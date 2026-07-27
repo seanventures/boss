@@ -21,6 +21,7 @@ class PostgresBudgetPort:
         expires_in_minutes: int,
         job_id: Optional[str] = None,
         allocation_id: Optional[str] = None,
+        risk_tier: Optional[int] = None,
     ) -> dict[str, Any]:
         return self.governor.reserve(
             connection,
@@ -31,6 +32,7 @@ class PostgresBudgetPort:
             expires_in_minutes,
             job_id=job_id,
             allocation_id=allocation_id,
+            risk_tier=risk_tier,
         )
 
     def assert_active_reservation(
