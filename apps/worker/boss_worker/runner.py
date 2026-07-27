@@ -337,6 +337,22 @@ def build_agent_brief_result(job: LeasedJob) -> dict[str, Any]:
         "safety_gates": ["respect_role_boundaries", "escalate_missing_data"],
         "required_decision_when": ["scope_expansion", "policy_override"],
     }
+    runtime_contract = compiled_prompt.get("runtime_contract")
+    if job.kind == "agent.studio.execute" and isinstance(runtime_contract, dict):
+        declared_sections = runtime_contract.get("sections")
+        if isinstance(declared_sections, list) and declared_sections:
+            strategy = {
+                **strategy,
+                "contract": str(
+                    runtime_contract.get("artifact_type")
+                    or strategy["contract"]
+                ),
+                "sections": [
+                    str(section)
+                    for section in declared_sections
+                    if str(section).strip()
+                ],
+            }
     grounding_context = _agent_grounding_context(job)
     grounding_status = "grounded_in_payload_context" if grounding_context else "needs_control_plane_context"
     findings = [

@@ -13,10 +13,13 @@
   deduplicated by an external-effect Receipt. Required Plane connections gate
   ordinary agent leasing until synchronization; unconfigured Community installs
   retain visible advisory migration behavior.
-- Added the seeded Product Manager agent, work-tracking/allocation skills,
-  Mattermost bot delivery, GitHub/Plane/Mattermost delivery-presence records,
-  bot identities and status channels, plus the Mission Control Work Allocation
-  area for rankings, quota pressure, leases, ticket state, and delivery events.
+- Added the seeded Product Manager agent, work-tracking/allocation skills, and
+  declared output-contract persistence so Product Manager runs create versioned
+  `product_delivery_brief` artifacts with PRD/ticket change sections. Also
+  added Mattermost bot delivery, GitHub/Plane/Mattermost delivery-presence
+  records, bot identities and status channels, plus the Mission Control Work
+  Allocation area for rankings, quota pressure, leases, ticket state, and
+  delivery events.
 - Governing PRD/technical spec, focused product spec, policy, SpecPack manifest,
   OpenAPI, tests, and coordination evidence are updated. Plane BOSS-270–278
   remain In Progress until the stacked PR merges.

@@ -18,7 +18,7 @@ All 15-min terminal updates and major milestones appended here. Chronological, n
 - Added the Mission Control Work Allocation area and governing product,
   technical, policy, OpenAPI, test, and coordination contracts. Browser QA
   caught and closed the portfolio-area visibility regression.
-- Final local evidence: 22 focused API/Postgres tests, eight widened legacy
+- Final local evidence: 23 focused API/Postgres tests, eight widened legacy
   lease/comms/budget regressions, 30 worker tests, 128 web tests, Ruff,
   TypeScript, production build, SpecPack YAML, generated docs, compile,
   schema bootstrap, secret scan, and diff checks pass. The repository-wide

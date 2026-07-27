@@ -14,9 +14,9 @@
 | BOSS-273 / WOS-03 | Agents use durable job system | work/tracker/allocation refs on jobs; score claim order; lease/heartbeat/retry/deadletter retained | tracked job quota state-machine test; worker suite | Implemented; In Progress until PR merge |
 | BOSS-272 / WOS-04 | Plane default WorkTracker with plugins | Plane default plus GitHub Issues/Linear/Jira descriptors; binding ledger; leased receipt-backed Plane issue creation | Plane client, sync lease/receipt, binding overview tests | Implemented; In Progress until PR merge |
 | BOSS-277 / WOS-05 | Embedded operator visibility | Work Allocation navigation with ranked portfolio, quotas, jobs, tickets, bots, channels, and presence rail | TypeScript, 128 web tests, production build, populated desktop browser journey | Implemented; In Progress until PR merge |
-| BOSS-276 / WOS-06 | Product Manager agent owns PRD/ticket hygiene | seeded immutable agent definition, PRD artifact and ticket rules, priority/evidence contract | Agent Studio catalog/entitlement tests | Implemented; In Progress until PR merge |
+| BOSS-276 / WOS-06 | Product Manager agent owns PRD/ticket hygiene | seeded immutable agent definition, PRD artifact and ticket rules, priority/evidence contract, declared output-contract persistence | Agent Studio run persists a versioned `product_delivery_brief` with PRD/ticket change sections | Implemented; In Progress until PR merge |
 | BOSS-274 / WOS-07 | GitHub/Mattermost bot delivery presence | Mattermost v4 bot adapter, SecretRef identity records, status channels, PR/merge/deploy/message presence | fail-closed adapter and presence overview tests | Implemented; In Progress until PR merge |
-| BOSS-275 / WOS-08 | End-to-end evidence | product/technical/policy/OpenAPI contract plus score/quota/job/tracker/worker/UI proof | 22 focused API/Postgres, 8 legacy job regressions, 30 worker, 128 web, Ruff, production build, YAML/docs/compile/diff/browser checks | Implemented; In Progress until PR merge |
+| BOSS-275 / WOS-08 | End-to-end evidence | product/technical/policy/OpenAPI contract plus score/quota/job/tracker/worker/UI proof | 23 focused API/Postgres, 8 legacy job regressions, 30 worker, 128 web, Ruff, production build, YAML/docs/compile/diff/browser checks | Implemented; In Progress until PR merge |
 
 ## 2026-07-26 Agent Studio wizard trace
 

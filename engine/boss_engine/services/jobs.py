@@ -1039,15 +1039,38 @@ class JobLeaseService:
                 ((agent_module or {}).get("role_key"))
                 or str(job_row["kind"]).split(".")[1]
             )
+            artifact_type = "agent_brief"
+            if job_row["kind"] == "agent.studio.execute":
+                runtime_contract = (
+                    ((payload.get("agent_runtime") or {}).get("compiled_prompt") or {})
+                    .get("runtime_contract")
+                )
+                declared_type = (
+                    runtime_contract.get("artifact_type")
+                    if isinstance(runtime_contract, dict)
+                    else None
+                )
+                if (
+                    isinstance(declared_type, str)
+                    and declared_type
+                    and declared_type.replace("_", "").isalnum()
+                    and declared_type[0].isalpha()
+                    and len(declared_type) <= 64
+                ):
+                    artifact_type = declared_type
             artifact_id = create_artifact(
                 connection,
                 self.settings,
                 job_row["project_id"],
                 job_row["task_id"],
-                "agent_brief",
-                f"{role_key} brief for {job_row['kind']}",
+                artifact_type,
+                f"{role_key} {artifact_type.replace('_', ' ')}",
                 {
                     "job_kind": job_row["kind"],
+                    "output_contract": (
+                        ((payload.get("agent_runtime") or {}).get("compiled_prompt") or {})
+                        .get("runtime_contract")
+                    ),
                     "summary": result.get("summary"),
                     "findings": result.get("findings") or [],
                     "recommendations": result.get("recommendations") or [],

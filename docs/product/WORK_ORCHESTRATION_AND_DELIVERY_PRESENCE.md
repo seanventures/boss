@@ -93,7 +93,10 @@ Agent Studio seeds a Product Manager persona that owns:
 - priority recommendations with evidence;
 - ticket state and shipment-link hygiene.
 
-It uses the canonical agent job system and the WorkTracker capabilities. It may not mark work done solely from its own claim.
+It uses the canonical agent job system and the WorkTracker capabilities. Each
+completed run persists the AgentVersion's declared `product_delivery_brief`
+artifact contract, including PRD changes, ticket changes, acceptance criteria,
+and evidence gaps. It may not mark work done solely from its own claim.
 
 ### WOS-07 — GitHub, Mattermost, and bot presence
 

@@ -49,7 +49,7 @@ Tracker synchronization is also a leased job (`work_tracker.issue.sync`). The wo
 
 `DeliveryBotIdentity`, `DeliveryStatusChannel`, and `DeliveryPresenceEvent` project Plane, GitHub, and Mattermost activity into Mission Control. GitHub PR/merge/deployment completion and Mattermost delivery create deduplicated presence records. Channel policies constrain event kinds and data boundaries. Mattermost uses the official `/api/v4/posts` bot-token API behind an explicit real-send rollout flag.
 
-The seeded Product Manager AgentDefinition owns PRD currency, acceptance criteria, ticket hygiene, priority rationale, dependencies, and completion evidence. Its skills are limited to tracker ensure/update, priority update, research, artifacts, and decisions; it cannot bypass policy or self-certify evidence.
+The seeded Product Manager AgentDefinition owns PRD currency, acceptance criteria, ticket hygiene, priority rationale, dependencies, and completion evidence. Its installed skills are limited to tracker ensure/update and priority update; the Agent Studio completion path persists the immutable AgentVersion's declared `product_delivery_brief` artifact contract with PRD and ticket change sections. It cannot bypass policy or self-certify evidence.
 
 ## Resource Plane Kernel
 
