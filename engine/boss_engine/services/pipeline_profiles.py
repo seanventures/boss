@@ -215,6 +215,23 @@ def route_for_step(profile: dict, step: str, model_config: Optional[dict] = None
     return route
 
 
+def apply_budget_pressure(route: dict, step: str, budget_state: str) -> tuple[dict, bool]:
+    """Auto-lite mode, actually enforced (BOSS-280). At ORANGE/RED budget state, class-routed
+    BUILD-lane "strong" steps degrade to "low_cost". Three invariants:
+      - verification NEVER degrades (review-lane steps keep their route — the VAG principle:
+        saving money by weakening the checker is how false passes happen);
+      - an EXPLICIT operator pin (engine/model named in model_config) is never overridden;
+      - green/yellow states change nothing.
+    Returns (route, degraded)."""
+    if budget_state not in ("orange", "red"):
+        return route, False
+    if route.get("lane") == "review" or step in REVIEW_LANE_STEPS:
+        return route, False
+    if route.get("model_class") == "strong" and not route.get("engine") and not route.get("model"):
+        return {**route, "model_class": "low_cost"}, True
+    return route, False
+
+
 def materialize_route(
     route: dict, *, build_engine: str, review_engine: str,
     strong_engine: str = "", low_cost_engine: str = "",

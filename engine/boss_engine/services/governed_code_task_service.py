@@ -47,6 +47,7 @@ from .iac_verify import IacVerifyResult, detect_iac_files, is_iac_task, run_iac_
 from .llm_telemetry import clear_llm_context, record_llm_call, set_llm_context
 from .pipeline_profile_service import resolve_for_run
 from .pipeline_profiles import (
+    apply_budget_pressure,
     infer_risk_tier,
     materialize_route,
     plan_gate_explanation,
@@ -584,6 +585,7 @@ def _block_for_plan_approval(engine, budget, *, run_id, project_id, task_id, res
             project_id,
             reservation_id,
             "Paused for human plan approval (Wire-Phase 2b).",
+            run_id=run_id,
         )
         dec_id = create_blocking_decision(
             c, project_id, task_id,
@@ -665,7 +667,8 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
         reservation = budget.reserve(
             c, project_id, category="code_task",
             amount_usd_micros=int(settings.code_task_budget_usd_micros),
-            reason=f"governed code task: {title[:64]}", expires_in_minutes=45, job_id=job_id)
+            reason=f"governed code task: {title[:64]}", expires_in_minutes=45, job_id=job_id,
+            risk_tier=spec.get("risk_tier"))
     if reservation.get("status") != "reserved":
         with _transaction(engine) as c:
             return _fail(c, run_id, project_id,
@@ -719,18 +722,30 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
             agents[engine_name] = a
         return a
 
+    # BOSS-280: auto-lite mode enforced — at orange/red budget state, class-routed BUILD
+    # steps degrade to low_cost (verification lanes and explicit pins never degrade).
+    _budget_state = "green"
+    try:
+        with _transaction(engine) as c:
+            _budget_state = str(budget.status_for_project(c, project_id).get(
+                "budget_state") or "green")
+    except Exception:
+        _budget_state = "green"
+
     def _route(step: str):
         """Resolve a step to (agent, model). Precedence: spec model_config > profile
         routing > class defaults; engine falls back to the step's lane default. Call
         from the MAIN thread only (the agent cache is not locked)."""
         r = route_for_step(profile, step, spec.get("model_config"))
+        r, _lite = apply_budget_pressure(r, step, _budget_state)
         eng, model = materialize_route(
             r, build_engine=build_engine, review_engine=review_engine,
             strong_engine=settings.code_agent_strong_engine,
             low_cost_engine=settings.code_agent_low_cost_engine,
             strong_model=settings.code_agent_strong_model,
             low_cost_model=settings.code_agent_low_cost_model)
-        stage_routes[step] = {"engine": eng, "model": model}
+        stage_routes[step] = {"engine": eng, "model": model,
+                              **({"budget_lite": True} if _lite else {})}
         return _agent_for(eng), model
 
     def _route_escalated(step: str):
@@ -928,7 +943,7 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
                                     if "NOT_A_CODE_TASK" in ln.upper()), "")
                 with _transaction(engine) as c:
                     _release(budget, c, project_id, reservation_id,
-                             "not a coding task — mis-routed into the code pipeline")
+                             "not a coding task — mis-routed into the code pipeline", run_id=run_id)
                     emit_event(c, project_id, "code_task.not_a_code_task", "boss",
                                "code_task_run", run_id, {"reason": reason_line[:300]})
                     return _fail(
@@ -1012,7 +1027,7 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
                                "code_task_run", run_id,
                                {"step": "write_tests",
                                 "reason": "no_test_files_after_escalation"})
-                    _release(budget, c, project_id, reservation_id, "no independent tests authored")
+                    _release(budget, c, project_id, reservation_id, "no independent tests authored", run_id=run_id)
                     return _fail(
                         c, run_id, project_id,
                         "Test author produced no test files even after escalating to a frontier "
@@ -1525,7 +1540,7 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
                 _finish_vms(success=False)  # retain this round's VMs for inspection
                 with _transaction(engine) as c:
                     _release(budget, c, project_id, reservation_id,
-                             f"auto review-repair (round {rounds_used + 1}): {failing}")
+                             f"auto review-repair (round {rounds_used + 1}, run_id=run_id): {failing}")
                     emit_event(c, project_id, "code_task.review_repair_round", "boss",
                                "code_task_run", run_id,
                                {"round": rounds_used + 1, "of": max_repair_rounds,
@@ -1559,7 +1574,7 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
                            if use_microvm else
                            [{"path": fc.path, "content": fc.content} for fc in sandbox.diff()])
                 with _transaction(engine) as c:
-                    _release(budget, c, project_id, reservation_id, f"quality gate failed: {qg_id}")
+                    _release(budget, c, project_id, reservation_id, f"quality gate failed: {qg_id}", run_id=run_id)
                     ctx = {**fctx, "pending_diff": pending, "failing_gates": failing,
                            "quality_gate_id": qg_id, "pr_summary": r2.get("summary", "")[:600],
                            **({"sandbox_task_id": guest_vm_ids[-1]} if guest_vm_ids else {})}
@@ -1589,7 +1604,7 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
             with _transaction(engine) as c:
                 _release(budget, c, project_id, reservation_id,
                          ("gate passed; non-final decomposition slice — PR deferred to final slice"
-                          if _nonfinal_slice else "gate passed; PR suppressed (open_pr=false)"))
+                          if _nonfinal_slice else "gate passed; PR suppressed (open_pr=false, run_id=run_id)"))
                 c.execute(sql("UPDATE code_task_runs SET status='completed', phase='done', "
                                "updated_at=now() WHERE id=:id"), {"id": run_id})
                 emit_event(c, project_id, "code_task.completed_no_pr", "boss",
@@ -1597,6 +1612,9 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
                            {"quality_gate_id": qg_id,
                             "reason": "decomposition_slice" if _nonfinal_slice else "open_pr_false",
                             "slice": f"{_didx}/{_dtot}" if _nonfinal_slice else None})
+            with _transaction(engine) as c:
+                # BOSS-280: verified work with no PR still burned real model spend — settle it.
+                _release(budget, c, project_id, reservation_id, "completed_no_pr", run_id=run_id)
             plane_sync.on_event(engine, settings, run_id, "code_task.completed_no_pr")  # P2
             return {"status": "completed", "done": True, "quality_gate_id": qg_id,
                     "pr_suppressed": True, "decomposition_nonfinal": _nonfinal_slice}
@@ -1641,7 +1659,7 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
         from .code_task_service import classify_pipeline_exception
         fclass, rcode = classify_pipeline_exception(reason)
         with _transaction(engine) as c:
-            _release(budget, c, project_id, reservation_id, f"governed code task error: {reason}")
+            _release(budget, c, project_id, reservation_id, f"governed code task error: {reason}", run_id=run_id)
             if guest_vm_ids:
                 _persist_sandbox_id(c, run_id, guest_vm_ids[-1])
             return _fail(c, run_id, project_id, reason,
