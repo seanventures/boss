@@ -3134,6 +3134,19 @@ class WorkflowVersionCreateRequest(BaseModel):
         return self
 
 
+class WorkflowDraftValidateRequest(BaseModel):
+    project_id: str
+    spec: dict[str, Any]
+    actor: str = "ceo"
+
+    @model_validator(mode="after")
+    def validate_fields(self) -> "WorkflowDraftValidateRequest":
+        self.project_id = _require_text(self.project_id, "project_id")
+        self.actor = _require_text(self.actor, "actor")
+        self.spec = _require_non_empty_mapping(self.spec, "spec")
+        return self
+
+
 class WorkflowVersionSummary(BaseModel):
     id: str
     project_id: str
@@ -6225,3 +6238,196 @@ class ReliabilityDecisionResponse(BaseModel):
     confidence: float = 0.0
     blast_radius: int = 0
     policy: dict[str, Any] = Field(default_factory=dict)
+
+
+# ── Agent Studio, executable Panels, and durable A2A coordination ────────────
+class AgentDefinitionCreateRequest(BaseModel):
+    project_id: str
+    agent_key: str
+    name: str
+    description: str = ""
+    owner: str = "vp_agents"
+    actor: str = "vp_agents"
+
+    @model_validator(mode="after")
+    def _validate(self) -> "AgentDefinitionCreateRequest":
+        self.project_id = _require_text(self.project_id, "project_id")
+        self.agent_key = _require_text(self.agent_key, "agent_key")
+        self.name = _require_text(self.name, "name")
+        self.actor = _require_text(self.actor, "actor")
+        return self
+
+
+class AgentVersionCreateRequest(BaseModel):
+    project_id: str
+    role_key: str
+    model_policy: dict[str, Any] = Field(default_factory=dict)
+    prompts: dict[str, Any] = Field(default_factory=dict)
+    rules: list[Any] = Field(default_factory=list)
+    requested_skills: list[str] = Field(default_factory=list)
+    requested_integrations: list[str] = Field(default_factory=list)
+    scopes: dict[str, Any] = Field(default_factory=dict)
+    limits: dict[str, Any] = Field(default_factory=dict)
+    output_contract: dict[str, Any] = Field(default_factory=dict)
+    a2a_policy: dict[str, Any] = Field(default_factory=dict)
+    provenance: dict[str, Any] = Field(default_factory=dict)
+    agent_module_id: Optional[str] = None
+    actor: str = "vp_agents"
+
+
+class AgentStudioActorRequest(BaseModel):
+    project_id: str
+    actor: str = "vp_agents"
+
+
+class AgentTestRunRequest(AgentStudioActorRequest):
+    scenario: dict[str, Any] = Field(default_factory=dict)
+    assertions: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class AgentStudioRunRequest(AgentStudioActorRequest):
+    input: dict[str, Any] = Field(default_factory=dict)
+    dedupe_key: Optional[str] = None
+    task_id: Optional[str] = None
+    workflow_run_id: Optional[str] = None
+    budget_reservation_id: Optional[str] = None
+
+
+class PanelDefinitionCreateRequest(BaseModel):
+    project_id: str
+    panel_key: str
+    name: str
+    description: str = ""
+    purpose: str
+    owner: str = "vp_agents"
+    actor: str = "vp_agents"
+
+
+class PanelVersionCreateRequest(AgentStudioActorRequest):
+    topology: str = "panel"
+    members: list[dict[str, Any]] = Field(default_factory=list)
+    context_policy: dict[str, Any] = Field(default_factory=dict)
+    independence_policy: dict[str, Any] = Field(default_factory=dict)
+    quorum_policy: dict[str, Any] = Field(default_factory=dict)
+    bounds: dict[str, Any] = Field(default_factory=dict)
+    evidence_policy: dict[str, Any] = Field(default_factory=dict)
+    consolidation_policy: dict[str, Any] = Field(default_factory=dict)
+    dissent_policy: dict[str, Any] = Field(default_factory=dict)
+    escalation_policy: dict[str, Any] = Field(default_factory=dict)
+    output_contract: dict[str, Any] = Field(default_factory=dict)
+
+
+class PanelRunRequest(AgentStudioActorRequest):
+    input: dict[str, Any] = Field(default_factory=dict)
+    context: dict[str, Any] = Field(default_factory=dict)
+    dedupe_key: Optional[str] = None
+    task_id: Optional[str] = None
+    workflow_run_id: Optional[str] = None
+
+
+class A2AChannelCreateRequest(BaseModel):
+    project_id: str
+    channel_key: str
+    name: str
+    description: str = ""
+    allowed_message_kinds: list[str] = Field(default_factory=list)
+    allowed_schema_versions: dict[str, Any] = Field(default_factory=dict)
+    retention_seconds: int = 604800
+    max_payload_bytes: int = 65536
+    actor: str = "coo"
+
+
+class A2ASubscriptionCreateRequest(BaseModel):
+    project_id: str
+    channel_id: str
+    subscriber_kind: str
+    subscriber_id: str
+    consumer_group: Optional[str] = None
+    recipient_filter: dict[str, Any] = Field(default_factory=dict)
+    ack_mode: str = "processed"
+    visibility_timeout_seconds: int = 60
+    max_attempts: int = 3
+    data_boundaries: list[DataBoundary] = Field(
+        default_factory=lambda: ["public", "internal"]
+    )
+    actor: str = "coo"
+
+
+class A2AMessagePublishRequest(BaseModel):
+    project_id: str
+    channel_id: str
+    message_kind: str
+    schema_name: str
+    schema_version: int = 1
+    sender_kind: str
+    sender_id: str
+    sender_version_id: Optional[str] = None
+    recipient: dict[str, Any] = Field(default_factory=dict)
+    payload: dict[str, Any] = Field(default_factory=dict)
+    dedupe_key: str
+    data_boundary: DataBoundary = "internal"
+    priority: int = 100
+    ttl_seconds: Optional[int] = None
+    ack_mode: str = "processed"
+    conversation_id: Optional[str] = None
+    correlation_id: Optional[str] = None
+    causation_id: Optional[str] = None
+    trace_id: Optional[str] = None
+    reply_to_id: Optional[str] = None
+    lineage: dict[str, Any] = Field(default_factory=dict)
+    actor: str = "coo"
+
+
+class A2ADispatchRequest(BaseModel):
+    project_id: str
+    worker_id: str
+    lease_token: str
+    created_by_job_id: str
+
+
+class A2APollRequest(BaseModel):
+    project_id: str
+    subscription_id: str
+    consumer_name: str
+    count: int = 10
+    block_ms: int = 0
+    actor: str = "coo"
+
+
+class A2AAcknowledgeRequest(BaseModel):
+    project_id: str
+    acknowledgement: str
+    actor_kind: str
+    actor_id: str
+    result: dict[str, Any] = Field(default_factory=dict)
+    evidence_refs: list[str] = Field(default_factory=list)
+    reason: Optional[str] = None
+
+
+class A2AMessageCancelRequest(BaseModel):
+    project_id: str
+    actor: str = "coo"
+    reason: str
+
+    @model_validator(mode="after")
+    def _validate(self) -> "A2AMessageCancelRequest":
+        self.project_id = _require_text(self.project_id, "project_id")
+        self.actor = _require_text(self.actor, "actor")
+        self.reason = _require_text(self.reason, "reason")
+        return self
+
+
+class A2AMessageReplayRequest(BaseModel):
+    project_id: str
+    dedupe_key: str
+    reason: str
+    ttl_seconds: Optional[int] = None
+    actor: str = "coo"
+
+    @model_validator(mode="after")
+    def _validate(self) -> "A2AMessageReplayRequest":
+        self.project_id = _require_text(self.project_id, "project_id")
+        self.dedupe_key = _require_text(self.dedupe_key, "dedupe_key")
+        self.reason = _require_text(self.reason, "reason")
+        self.actor = _require_text(self.actor, "actor")
+        return self

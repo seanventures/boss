@@ -22,7 +22,7 @@ role:
     can_decide: [QA pass/fail recommendations]
     must_escalate: [Risk acceptance decisions]
   permissions:
-    allowed_skills: [test.run, ci.status, artifact.create, code.review]
+    allowed_skills: [test.run, ci.status, artifact.create, code.review, model.generate_code]
     forbidden_skills: [github.merge_pr]
   output_contracts: [TestPlan, ValidationReport, DefectReport]
   autonomy: {level: 1}

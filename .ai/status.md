@@ -244,3 +244,56 @@ Kubernetes/Helm, and infra profiles. PR #76 merged as `bc4c4d6`; the annotated
 release. Source PRs #68/#70 are merged and #23/#69 are closed as superseded.
 Plane BOSS-215–234 plus stale shipped package tickets BOSS-32/33 are Done.
 External hosted/provider rollout remains fail-closed by design.
+
+## 2026-07-26 — BOSS-256–266 Agent Studio and global A2A fabric
+
+Implementation is complete on `ai/codex/boss-256-agent-studio-a2a`.
+Agent Studio now owns immutable agent/panel configuration and test/run
+evidence while RoleSpec, project entitlements, policy, budget, and leases
+retain authority. Twelve seeded specialists and three Panels are executable.
+Its Workflow lane now exposes the canonical Workflow registry in the same
+workbench with creation, editable graph preview, side-effect-free validation,
+immutable publication, pinned execution, and recent-run visibility.
+
+The A2A bus uses Postgres as canonical truth and Redis Streams only as the
+delivery adapter. XADD/XACK are Receipt-backed; consumer loss uses XAUTOCLAIM
+and bounded deadlettering; unknown schemas, incompatible boundaries, missing
+leases, and unavailable live-model budget/provider paths fail closed.
+
+Current evidence is green: 121 web tests; 938 Python tests with four
+intentional live/external skips; 39 focused Agent Studio/A2A/worker/assurance
+tests; Ruff, TypeScript, OpenAPI YAML, diff checks, optimized Next build,
+desktop/responsive browser QA, and two real-Redis lifecycle proofs. Draft PR
+#88 is cleanly mergeable against `main`; Plane BOSS-256–266 carry the commit,
+PR, and validation evidence and remain In Progress until merge.
+
+Post-workflow-lane evidence is also green: 12 focused Agent Studio/Workflow
+runtime tests, all 121 web tests, Ruff, TypeScript, diff checks, and the
+optimized Next production build. Draft validation proves graph reachability,
+typed bindings, and bounds without publishing or executing work.
+
+Contributor `main` tip `98ab5f4` (BOSS-267) was merged without conflict at
+code/integration head `d0d3a6354a1214459db23e212c1467cd292d1506`;
+22/22 combined Studio, Workflow Runtime, and repo-host tests pass, and GitHub
+reports draft PR #88 cleanly mergeable.
+
+## 2026-07-26 — BOSS-268 guided Agent Studio wizard
+
+Implementation is complete on `ai/codex/boss-256-agent-studio-a2a` and extends
+draft PR #88. Agent Studio now has a five-stage agent commissioning flow for
+identity/RoleSpec, runtime and prompt layers, deterministic rules and requested
+capabilities, scope/limits/output/A2A contracts, and final compile review.
+Blank, builder, reviewer, and operator patterns remain editable and do not
+grant authority. The live blueprint exposes the proposed RoleSpec, model
+posture, capability requests, coordination topics, and runtime envelope.
+
+Save Draft creates the stable definition plus immutable version. Validate +
+Publish uses the existing server lifecycle in order and preserves partial
+draft identifiers and errors on failure. The UI accepts integration references
+only, never credentials. Plane BOSS-268 remains In Progress until PR #88
+merges.
+
+Validation is green: 125 web tests, seven focused Agent Studio/A2A API tests,
+Ruff, TypeScript, generated feature-doc parity, strict MkDocs, optimized Next
+build, and a real browser create/validate/publish/refresh journey. Browser QA
+also verified the portal-based full-screen focus layer and all five stages.

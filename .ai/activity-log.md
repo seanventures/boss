@@ -156,6 +156,54 @@ All 15-min terminal updates and major milestones appended here. Chronological, n
   checks.
 
 ---
+## 2026-07-26 — Codex — BOSS-268 guided Agent Studio wizard
+
+- Advanced the deduplicated BOSS-268 slice through Backlog, Todo, and In
+  Progress before implementation.
+- Added a focused five-stage wizard for agent identity/RoleSpec, runtime and
+  prompts, rules and requested capabilities, scope/limits/output/A2A, and
+  review. Blank, builder, reviewer, and operator patterns update a persistent
+  live authority blueprint without granting ambient permissions.
+- Compiled wizard state into the existing stable AgentDefinition and immutable
+  AgentVersion lifecycle. Operators can save a draft or validate then publish;
+  partial failures retain identifiers and validation detail.
+- Added local preflight/payload tests, API client lifecycle coverage, and a
+  real API create/version/validate/publish integration proof. Credentials
+  remain outside the UI; live-model runs remain budget/provider/policy gated.
+- Final evidence passes 125 web tests, seven focused API tests, Ruff,
+  TypeScript, generated-doc parity, strict docs, optimized build, and the
+  full browser commissioning journey. The browser proof found and closed an
+  overlay-clipping defect and verified Studio refresh after publication.
+
+---
+## 2026-07-26 — Codex — BOSS-256–266 Agent Studio, Panels, and A2A
+
+- Created and advanced the eleven deduplicated Plane slices BOSS-256–266
+  before implementation.
+- Added the Agent Studio/Panel/A2A product and technical contract, canonical
+  Postgres schema, immutable agent and panel versions, validation/publish/test
+  gates, executable leased runs, evidence-attributed consolidation, preserved
+  dissent, and capability-intersection enforcement.
+- Seeded twelve specialist agents and three executable panels from SpecPack
+  YAML while retaining RoleSpec as the authority boundary.
+- Added a Redis Streams A2A adapter backed by the canonical Postgres
+  envelope/delivery/outbox ledger, leased and Receipt-backed XADD, consumer
+  groups, visibility leases, XAUTOCLAIM recovery, bounded deadlettering,
+  actor-bound acknowledgements, Receipt-backed XACK, filtering cleanup,
+  replay/cancel, schema/version allowlists, health, and audit APIs.
+- Added a production-quality Agent Studio workbench with searchable agent and
+  panel library, topology view, governed run/test controls, and live A2A trace.
+  Desktop and 760px responsive browser QA passed.
+- Validation: 121 web tests and 938 executable Python tests pass, with four
+  intentional external/live skips; 39 focused runtime/worker/assurance tests,
+  Ruff, TypeScript, OpenAPI YAML, diff checks, and the optimized Next build
+  pass. Real Redis proofs pass XADD/read-group/XACK, replay/cancel, and
+  consumer-crash XAUTOCLAIM-to-deadletter recovery.
+- Published implementation commit `a2daccf` and opened cleanly mergeable draft
+  PR https://github.com/seanheiney/boss/pull/88. Plane BOSS-256–266 include the
+  implementation, validation, commit, and PR evidence.
+
+---
 ## 2026-07-26 — Codex — BOSS-236 provider credential lifecycle
 
 - Advanced BOSS-236 Backlog → Todo → In Progress in Plane after deduping the
@@ -1238,3 +1286,23 @@ PR: https://github.com/seanheiney/boss/pull/3
   and https://github.com/seanheiney/boss/releases/tag/v0.8.0 is the latest
   release. Plane BOSS-215–234 and reconciled BOSS-32/33 are Done with final
   provenance and validation evidence.
+
+## 2026-07-26 — BOSS-256–266 Agent Studio, Panels, Workflows, and A2A
+
+- Built immutable Agent and Panel definitions/versions, deterministic
+  validation and test evidence, leased specialist execution, attributed Panel
+  consolidation, twelve seeded agents, and three seeded Panels.
+- Added the Agent Studio Workflow lane over the existing canonical registry:
+  full definitions and recent runs in the catalog, editable live graph
+  preview, side-effect-free draft validation, create-and-publish, immutable
+  version publication, and pinned execution.
+- Built the global Postgres-canonical, Redis Streams A2A bus with governed
+  channels/subscriptions, typed envelopes, consumer groups, receipts for
+  XADD/XACK, visibility reclaim, bounded retry/deadletter, ACK, replay,
+  cancellation, health, and audit.
+- Validation includes 12 post-workflow focused Agent Studio/Workflow tests,
+  all 121 web tests, Ruff, TypeScript, diff checks, optimized production
+  build, plus the broader 938-test Python, browser, docs, and real-Redis
+  evidence recorded in the handoff.
+- Draft PR #88 remains cleanly mergeable. Plane BOSS-256–266 stay In Progress
+  until merge and carry implementation, validation, and PR evidence.

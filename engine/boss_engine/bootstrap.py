@@ -5,6 +5,8 @@ from sqlalchemy import text
 from .config import get_settings
 from .db import ensure_schema, get_engine
 from .services.core import emit_event, make_id
+from .services.agent_studio import AgentStudioService
+from .services.a2a import A2AService
 from .services.entitlements import EntitlementBrokerService
 from .services.event_subscription_service import seed_default_event_subscriptions
 from .services.feature_catalog import FeatureCatalog
@@ -153,6 +155,45 @@ def seed_project_defaults(
         workflow_root=settings.specpack_root / "workflows",
         actor=actor,
     )
+    AgentStudioService(settings).seed_catalog(connection, project_id, actor)
+    a2a = A2AService(settings)
+    for channel in (
+        {
+            "channel_key": "coordination",
+            "name": "Work coordination",
+            "description": "Instructions, status, questions, answers, task offers, and resource coordination.",
+            "allowed_message_kinds": [
+                "instruction", "status", "question", "answer", "task_offer",
+                "task_accept", "resource_request", "resource_grant", "cancel", "error",
+            ],
+        },
+        {
+            "channel_key": "evidence",
+            "name": "Evidence and decisions",
+            "description": "Artifacts, evidence, and explicit decision handoffs.",
+            "allowed_message_kinds": [
+                "artifact", "evidence", "decision_request", "decision_result", "error",
+            ],
+        },
+        {
+            "channel_key": "telemetry",
+            "name": "Runtime telemetry",
+            "description": "Job, agent, panel, worker, and transport status for operations visibility.",
+            "allowed_message_kinds": ["status", "metric", "heartbeat", "error"],
+        },
+    ):
+        a2a.create_channel(
+            connection,
+            project_id=project_id,
+            description=channel["description"],
+            allowed_message_kinds=channel["allowed_message_kinds"],
+            allowed_schema_versions={"boss.a2a": [1]},
+            retention_seconds=604800,
+            max_payload_bytes=settings.a2a_max_payload_bytes,
+            actor=actor,
+            channel_key=channel["channel_key"],
+            name=channel["name"],
+        )
 
 
 def onboard_org(connection, settings, name, *, entitlements, members, specpack, slug=None):

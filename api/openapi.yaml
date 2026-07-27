@@ -6798,6 +6798,183 @@ paths:
       summary: Retry or deadletter a failed compensation action
       responses:
         '200': { description: Compensation action retried or deadlettered }
+  /v1/agent-studio/catalog:
+    get:
+      summary: Read the complete Agent Studio operator feed
+      parameters:
+        - { name: project_id, in: query, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Agents, Panels, Workflow graphs/runs, tests, and A2A health/feed }
+  /v1/agent-studio/workflows/validate:
+    post:
+      summary: Validate and normalize a Workflow draft without publishing or executing it
+      responses:
+        '200': { description: Reachability, binding, bound, and no-side-effect validation evidence }
+        '422': { description: Invalid graph, binding, control-flow bound, or schema }
+  /v1/agent-studio/agents:
+    get:
+      summary: List versioned AgentDefinitions
+      parameters:
+        - { name: project_id, in: query, required: true, schema: { type: string } }
+      responses:
+        '200': { description: AgentDefinition list with active immutable versions }
+    post:
+      summary: Create an AgentDefinition
+      responses:
+        '200': { description: Created AgentDefinition }
+        '422': { description: Invalid or duplicate definition }
+  /v1/agent-studio/agents/{agent_id}/versions:
+    post:
+      summary: Create an immutable draft AgentVersion with model, prompt, rule, skill, scope, limit, and A2A policy
+      parameters:
+        - { name: agent_id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Draft AgentVersion }
+  /v1/agent-studio/agent-versions/{version_id}/validate:
+    post:
+      summary: Compile and validate the effective AgentVersion authority envelope
+      parameters:
+        - { name: version_id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Deterministic validation result }
+  /v1/agent-studio/agent-versions/{version_id}/publish:
+    post:
+      summary: Publish and activate a validated immutable AgentVersion
+      parameters:
+        - { name: version_id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Published AgentVersion }
+        '409': { description: Validation or lifecycle gate failed }
+  /v1/agent-studio/agent-versions/{version_id}/tests:
+    post:
+      summary: Run the zero-effect deterministic Agent Studio test bench
+      parameters:
+        - { name: version_id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Persisted test assertions and evidence }
+  /v1/agent-studio/agent-versions/{version_id}/runs:
+    post:
+      summary: Queue a published AgentVersion as a governed leased job
+      parameters:
+        - { name: version_id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Queued or explicitly blocked Agent Studio run }
+  /v1/agent-studio/panels:
+    get:
+      summary: List executable PanelDefinitions
+      parameters:
+        - { name: project_id, in: query, required: true, schema: { type: string } }
+      responses:
+        '200': { description: PanelDefinition list with active versions }
+    post:
+      summary: Create a PanelDefinition
+      responses:
+        '200': { description: Created PanelDefinition }
+  /v1/agent-studio/panels/{panel_id}/versions:
+    post:
+      summary: Create a PanelVersion with pinned agents, topology, quorum, evidence, consolidation, and dissent rules
+      parameters:
+        - { name: panel_id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Draft PanelVersion }
+  /v1/agent-studio/panel-versions/{version_id}/publish:
+    post:
+      summary: Publish and activate a validated immutable PanelVersion
+      parameters:
+        - { name: version_id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Published PanelVersion }
+  /v1/agent-studio/panel-versions/{version_id}/runs:
+    post:
+      summary: Fan out a Panel run into governed member jobs and attributed consolidation
+      parameters:
+        - { name: version_id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Panel run and member runs }
+  /v1/a2a/channels:
+    get:
+      summary: List governed project A2A channels
+      parameters:
+        - { name: project_id, in: query, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Channel list and message/subscriber counts }
+    post:
+      summary: Create an A2A channel and its schema/retention boundary
+      responses:
+        '200': { description: A2A channel }
+  /v1/a2a/subscriptions:
+    post:
+      summary: Bind a durable Redis consumer group to an agent, panel, workflow, worker, system, or operator
+      responses:
+        '200': { description: A2A subscription }
+  /v1/a2a/messages:
+    get:
+      summary: Inspect durable A2A envelopes by status or trace
+      parameters:
+        - { name: project_id, in: query, required: true, schema: { type: string } }
+        - { name: status, in: query, required: false, schema: { type: string } }
+        - { name: trace_id, in: query, required: false, schema: { type: string } }
+        - { name: limit, in: query, required: false, schema: { type: integer, default: 100 } }
+      responses:
+        '200': { description: Durable A2A envelope list }
+    post:
+      summary: Persist an A2A envelope, deliveries, outbox item, and dispatch job
+      responses:
+        '200': { description: Queued envelope; duplicate dedupe keys reuse the original }
+  /v1/a2a/messages/{message_id}/dispatch:
+    post:
+      summary: Receipt-backed Redis XADD authorized by an active worker lease
+      parameters:
+        - { name: message_id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Published or delivering A2A envelope }
+        '409': { description: Lease or lifecycle state does not authorize dispatch }
+        '503': { description: Redis transport unavailable; durable retry state retained }
+  /v1/a2a/messages/{message_id}/cancel:
+    post:
+      summary: Cancel a non-terminal envelope, its pending deliveries, and dispatch job
+      parameters:
+        - { name: message_id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Cancelled envelope with receipt-backed Redis cursor cleanup }
+        '409': { description: Terminal envelopes must be replayed rather than cancelled }
+  /v1/a2a/messages/{message_id}/replay:
+    post:
+      summary: Replay a terminal envelope with a new dedupe key and causation lineage
+      parameters:
+        - { name: message_id, in: path, required: true, schema: { type: string } }
+      responses:
+        '201': { description: Fresh queued envelope linked to the terminal source }
+        '409': { description: Source envelope is not terminal }
+  /v1/a2a/poll:
+    post:
+      summary: Claim bounded A2A deliveries through a durable consumer group
+      responses:
+        '200': { description: Claimed delivery envelopes and visibility leases }
+        '503': { description: Redis transport unavailable }
+  /v1/a2a/deliveries/{delivery_id}/acknowledge:
+    post:
+      summary: Persist an actor-bound acknowledgement and receipt-backed Redis XACK
+      parameters:
+        - { name: delivery_id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Delivery, evidence, and acknowledgement history }
+        '409': { description: Acknowledgement actor does not own the subscription }
+  /v1/a2a/health:
+    get:
+      summary: Inspect Redis transport and canonical A2A ledger health
+      parameters:
+        - { name: project_id, in: query, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Transport latency/configuration and queued/deadlettered ledger counts }
+  /v1/a2a/audit:
+    get:
+      summary: Inspect A2A envelopes, deliveries, and transport attempts for troubleshooting
+      parameters:
+        - { name: project_id, in: query, required: true, schema: { type: string } }
+        - { name: limit, in: query, required: false, schema: { type: integer, default: 100 } }
+      responses:
+        '200': { description: A2A audit feed }
 components:
   securitySchemes:
     BossBearerAuth:

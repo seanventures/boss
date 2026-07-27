@@ -3730,4 +3730,86 @@ describe("createBossApiClient", () => {
       lease_token: "job-lease-token",
     });
   });
+
+  it("uses Agent Studio and A2A lifecycle contracts", async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const fetchImpl = async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({ url: String(input), init });
+      return new Response(
+        JSON.stringify({ id: "a2amsg_1", status: "queued" }),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        },
+      );
+    };
+    const client = createBossApiClient({
+      baseUrl: "http://127.0.0.1:8000",
+      fetchImpl,
+    });
+
+    await client.getAgentStudioCatalog("boss-dogfood");
+    await client.validateStudioWorkflow({
+      project_id: "boss-dogfood",
+      actor: "ceo",
+      spec: {
+        entry_step: "plan",
+        steps: [{ id: "plan", kind: "task" }],
+      },
+    });
+    await client.createAgentDefinition({
+      project_id: "boss-dogfood",
+      agent_key: "release_sentinel",
+      name: "Release Sentinel",
+      actor: "vp_agents",
+    });
+    await client.createAgentVersion("agent_1", {
+      project_id: "boss-dogfood",
+      role_key: "software_engineer",
+      actor: "vp_agents",
+    });
+    await client.validateAgentVersion("agentv_1", {
+      project_id: "boss-dogfood",
+      actor: "vp_agents",
+    });
+    await client.publishAgentVersion("agentv_1", {
+      project_id: "boss-dogfood",
+      actor: "vp_agents",
+    });
+    await client.cancelA2AMessage("a2amsg_1", {
+      project_id: "boss-dogfood",
+      actor: "coo",
+      reason: "Superseded instruction.",
+    });
+    await client.replayA2AMessage("a2amsg_1", {
+      project_id: "boss-dogfood",
+      actor: "coo",
+      dedupe_key: "replay:a2amsg_1:1",
+      reason: "Reproduce the terminal delivery.",
+    });
+
+    expect(calls.map((call) => call.url)).toEqual([
+      "http://127.0.0.1:8000/v1/agent-studio/catalog?project_id=boss-dogfood",
+      "http://127.0.0.1:8000/v1/agent-studio/workflows/validate",
+      "http://127.0.0.1:8000/v1/agent-studio/agents",
+      "http://127.0.0.1:8000/v1/agent-studio/agents/agent_1/versions",
+      "http://127.0.0.1:8000/v1/agent-studio/agent-versions/agentv_1/validate",
+      "http://127.0.0.1:8000/v1/agent-studio/agent-versions/agentv_1/publish",
+      "http://127.0.0.1:8000/v1/a2a/messages/a2amsg_1/cancel",
+      "http://127.0.0.1:8000/v1/a2a/messages/a2amsg_1/replay",
+    ]);
+    expect(JSON.parse(String(calls[1].init?.body))).toMatchObject({
+      spec: { entry_step: "plan" },
+    });
+    expect(JSON.parse(String(calls[4].init?.body))).toMatchObject({
+      project_id: "boss-dogfood",
+      actor: "vp_agents",
+    });
+    expect(JSON.parse(String(calls[6].init?.body))).toMatchObject({
+      reason: "Superseded instruction.",
+    });
+    expect(JSON.parse(String(calls[7].init?.body))).toMatchObject({
+      dedupe_key: "replay:a2amsg_1:1",
+    });
+  });
 });

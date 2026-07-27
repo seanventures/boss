@@ -63,7 +63,7 @@ Owns stateless workers, local runners, code workers, review workers, test worker
 
 ### Communications Plane
 
-Owns Slack, email, chat, optional voice/SMS later, outbox/inbox ACK, persona rendering, quiet hours, escalation rules, threading, channel rollout policies, delivery receipts, and communication deadletters.
+Owns Slack, email, chat, optional voice/SMS later, outbox/inbox ACK, persona rendering, quiet hours, escalation rules, threading, channel rollout policies, delivery receipts, and communication deadletters. Its internal A2A coordination fabric provides typed instructions, status, task/job coordination, handoffs, resource requests, telemetry, acknowledgements, replay, and deadletters. Redis Streams is delivery transport; Postgres remains canonical audit truth.
 
 ### Elastic Resource Plane / ProviderOps
 
@@ -85,6 +85,10 @@ Owns integration definitions, installed connections, connector/adapter bindings,
 
 Owns reusable multi-agent collaboration definitions and runs: member roles, topology, collaboration protocol, context-sharing boundaries, independence constraints, dissent, completion rules, time/budget bounds, and escalation. Agent Groups can be invoked by workflows and can use resolved skills/integrations, but group consensus never becomes ground truth by itself.
 
+### Agent Studio
+
+Owns versioned executable agent definitions, model-selection policy, prompt layers, deterministic rules, requested capabilities, project/data scope, limits, validation, test evidence, publish state, seeded agent catalog, a guided agent-commissioning wizard, and a visual operator workbench. Agent Studio references RoleSpecs and Agent Modules but does not redefine company authority or package installation. Its Panel object is an explicit versioned composition profile over the Agent Group runtime.
+
 ### Workflow Registry and Runtime
 
 Owns reusable WorkflowDefinitions, immutable versions, deterministic mappings from work classes to approved versions, durable WorkflowRuns and StepRuns, branching, fan-out/join, timers, approvals, subworkflows, retries/deadletters, compensation, and migration. Workflows coordinate roles or Agent Groups and bind them to skills/integrations under policy.
@@ -103,7 +107,11 @@ Community works with local auth and no hosted dependency. BOSS Cloud uses BOSS A
 
 Core objects: `Org`, `Workspace`, `Project`, `User`, `Membership`, `Task`, `Plan`, `Decision`, `Approval`, `Policy`, `RoleSpec`, `RolePack`, `Department`, `KPI`, `Meeting`, `Receipt`, `ArtifactManifest`, `OutboxMessage`, `InboxMessage`, `RoutingDecision`, `TrustScore`, `ImprovementProposal`, `EvaluationRun`, `CanaryRun`, `Deadletter`, `SnapshotHealth`.
 
+Agent Studio objects: `AgentDefinition`, `AgentVersion`, `AgentTestRun`, `AgentRun`, `PanelDefinition`, `PanelVersion`, `PanelRun`.
+
 Collaboration objects: `AgentGroupSpec`, `AgentGroupVersion`, `AgentGroupRun`, `AgentGroupMemberRun`, `AgentFinding`, `DissentRecord`.
+
+A2A coordination objects: `A2AChannel`, `A2ASubscription`, `A2AEnvelope`, `A2ADelivery`, `A2AAcknowledgement`, `A2ATransportAttempt`.
 
 Capability/integration objects: `SkillSpec`, `IntegrationDefinition`, `IntegrationConnection`, `IntegrationHealth`, `SkillInvocation`, `ExecutorBinding`.
 
@@ -127,6 +135,8 @@ These are separate first-class product concepts. They interoperate through versi
 
 | Concept | Owns | Does not own |
 | --- | --- | --- |
+| Agent definition | Versioned executable configuration, prompts, model policy, rules and requested capability scope | Company authority, package installation, workflow sequencing, or integration credentials |
+| Panel | Version-pinned agent composition and consolidation policy | A second collaboration engine or authority to establish truth |
 | Agent Group | Who collaborates and the collaboration protocol | Workflow sequencing, capability implementation, or truth determination |
 | Skill | The typed capability contract that may be requested | Credentials, installed provider configuration, or orchestration |
 | Integration | The installed/configured system that implements skills | Agent roles, business process sequencing, or claim acceptance |
@@ -593,6 +603,20 @@ Agent Factory responsibilities:
 
 No new role may ship without objective linkage, bounded scope, eval plan, permissions, budget, staged rollout, and rollback plan.
 
+## Agent Studio, Panels, and A2A Coordination
+
+Agent Studio is the governed builder and live operations surface for executable agents, Panels, and reusable Workflows. Operators can author, scope, validate, test, version, publish, retire, and observe agents while choosing a model policy, prompt layers, deterministic rules, output contract, requested skills/integrations, A2A permissions, context policy, autonomy ceiling, budget and runtime limits. The same workbench can create a WorkflowDefinition, edit and preview its typed graph, validate reachability/bindings/bounds without side effects, publish an immutable WorkflowVersion, and execute that pinned version through the canonical Workflow Runtime. Agent Studio never creates a parallel orchestration engine. Effective runtime capability is still the deterministic intersection of RoleSpec, Agent Module, project policy, Workflow or Panel binding, installed Skills/Integrations, data boundary, health, budget and actor permission.
+
+The guided agent wizard is the primary commissioning path. It walks an operator through identity and installed RoleSpec, deterministic or live-model runtime posture, layered prompts, rules, requested skills/integrations, project and data boundary, bounded calls/runtime, output contract, and A2A publish/subscribe topics. Blank, builder, reviewer, and operator patterns accelerate authoring without granting authority. A persistent live blueprint shows the proposed authority envelope before mutation. Saving creates a stable `AgentDefinition` and immutable draft `AgentVersion`; validate-and-publish activates the version only after server-side RoleSpec, capability, scope, output, A2A, and runtime checks pass. A failed validation or publication remains an explicit draft with its definition/version identifiers and errors. Credentials are never accepted by the wizard.
+
+The seeded library includes UX Engineer, UI Designer, Frontend Engineer, Backend Engineer, Full-Stack Engineer, Database Administrator, Chief Architect, Security Engineer, QA Engineer, Chief Operator/Job Captain, CFO/FinOps, and DevOps Engineer. Seeded agents are editable product assets, not privileged actors, and default to a deterministic side-effect-free execution posture until a governed live model/tool path is selected.
+
+A Panel is a first-class, versioned composition object that pins AgentVersions and declares independence, shared/private context, quorum, rounds, cost/call bounds, evidence, consolidation, dissent, tie-break and escalation. Panel execution reuses Agent Group member-run, finding, dissent, lease, budget and receipt primitives. Consolidation may synthesize, rank by evidence, weight recommendations, require producer-reviewer revision, or hold for more evidence; it never erases attributed member outputs or turns consensus into proof.
+
+The global A2A fabric standardizes instructions, status, task/job coordination, joint work, resource requests, handoffs, barriers, findings, dissent, telemetry, replies, cancellation and heartbeat. Every message carries tenant/data scope, typed schema/version, sender/recipient, dedupe, correlation/causation, TTL, priority, acknowledgement mode, and task/job/workflow/group/panel/resource lineage. The durable flow is Postgres envelope/outbox -> leased dispatch -> Receipt-backed Redis Stream -> consumer group -> durable delivery/ACK. Redis failure delays delivery but cannot erase state; retries, lag, deadletters and replay remain visible.
+
+The detailed governing contract is `docs/product/AGENT_STUDIO_A2A.md`.
+
 ## Agent Groups and Reusable Collaboration Protocols
 
 An Agent Group is a reusable, governed collaboration unit, not merely several prompts running at once. It defines a purpose, versioned membership by RoleSpec, topology, collaboration protocol, shared/private context boundaries, independence rules, allowed capabilities, time and budget bounds, completion rule, dissent handling, and escalation target.
@@ -641,7 +665,7 @@ Consensus protocol: `propose -> critique -> revise -> vote -> record dissent -> 
 
 ## Communications and Presence
 
-BOSS supports Slack-style internal chat, email as durable command/receipt backbone, optional Google Chat, optional SMS/voice escalation later, persona identity rendering, urgency tiers, quiet hours, ACK-required critical messages, durable Outbox/Inbox objects, no silent drops, deadletters, and escalations. Real Slack/email sends require an explicit per-project channel rollout policy, allowed data boundary, BudgetReservation, Receipt, provider credentials, and visible policy-block decisions when not configured.
+BOSS supports Slack-style internal chat, email as durable command/receipt backbone, optional Google Chat, optional SMS/voice escalation later, persona identity rendering, urgency tiers, quiet hours, ACK-required critical messages, durable Outbox/Inbox objects, no silent drops, deadletters, and escalations. The internal A2A fabric is a separate typed coordination channel with durable envelopes, deliveries, ACKs, correlation/causation, Redis Streams transport, Postgres audit truth, lag/health, retry and replay. An A2A instruction is coordination evidence, not authority to spend, create a job, or change a resource. Real Slack/email sends require an explicit per-project channel rollout policy, allowed data boundary, BudgetReservation, Receipt, provider credentials, and visible policy-block decisions when not configured.
 
 ## Knowledge, Memory, and SSP
 

@@ -1,6 +1,6 @@
 # BOSS Requirements Traceability Matrix (Autonomous .ai version)
 
-**Last rebuilt**: 2026-07-26 by Codex (v0.9.0 integration: BOSS-237 and BOSS-246–255)
+**Last rebuilt**: 2026-07-26 by Codex (v0.9.0 integration through BOSS-268)
 **Sources**: docs/product/PRD-v2.0.md, TECHNICAL_SPEC-v2.0.md, REQUIREMENT_INVENTORY.md, TRACEABILITY.md, user-stories.md, AGENTS.md, README, api/openapi.yaml, db/schema.sql, packages/specpack/*, code + tests scan.
 **Status key**: Implemented (full vertical + tests + states + audit + DoD), Partial, Planned, Blocked (external per real-only), In-Progress (this session).
 **DoD reminder**: Requirement complete only when traced, full journey, UI nav, backend, persistence, auth server+client, validations, loading/empty/error/success, edges, mobile/a11y basics, security/arch/QA review, tests pass, lint/build, docs updated, NO mocks/fakes/TODOs for required behavior.
@@ -18,6 +18,12 @@
 | BOSS-253 / GHX-007 | Governed merge authorization and protected-target queue | exact PR/base/head/tree and policy; expiry; independent authorization; per-target ordering; target lease/fence; fresh checks/reviews/mergeability; guarded PR-only merge; receipts; rollback; retry/deadletter | success/receipts, self-approval, stale head, queue order, failed checks, provider retry/redaction/deadletter | Implemented, pending merge |
 | BOSS-254 / GHX-008 | Webhook/poll/repair reconciler | project-binding ingress; enqueue-only webhooks; delivery/ref/SHA dedupe; leased Receipt-backed rate/ref reads; canonical observations/ref state; stale/out-of-order handling; drift invalidation; retry/rate-limit/deadletter/repair | poll success and receipts, binding route and dedupe, stale signal, rate-limit retry/deadletter/repair, redaction, adapter quota read, worker no-double-finalize, typed client | Implemented, pending merge |
 | BOSS-255 / GHX-009 | Mission Control GitHub topology and operations | dedicated nav; canonical connection/binding/policy/snapshot/lease/sync/conflict/resolution/merge/reconciliation/signal/ref feed; repository selector; branch topology/evidence inspector; governed workflow lanes; Receipt/rollback coverage; `github_manage` controls; worker-only lease-secret apply boundary; responsive degraded/empty states | 128 web tests including feed aggregation, partial-stream degradation, render/evidence/control gating; TypeScript lint; production build; live API/browser navigation and overflow/error inspection | Implemented, pending merge |
+
+## 2026-07-26 Agent Studio wizard trace
+
+| Plane | Requirement | Implementation | Verification | Status |
+| --- | --- | --- | --- | --- |
+| BOSS-268 / AST-08 | Guided creation of governed agents inside Agent Studio | five-stage responsive commissioning wizard; blank/builder/reviewer/operator patterns; installed RoleSpec and Skill selection; prompt/rule/runtime/scope/output/A2A/limit authoring; live authority blueprint; explicit draft and validate/publish lifecycle over canonical APIs | pure payload/preflight tests, typed client lifecycle coverage, real API create/version/validate/publish integration test, web lint/build, browser QA | Implemented; In Progress until PR merge |
 
 ## 2026-07-26 Provider connection lifecycle trace
 
@@ -175,3 +181,14 @@ the merge and validation evidence and are Done.
 | BOSS-219–224 | Preserve CLI/live read tools, tool safety classes, confirmation-gated writes, MCP filtering/protocol, and standalone containers | Engine CLI/MCP expose 15 governed tools; read-only mode filters write tools; standalone/API/worker images import relocated engine and connect through explicit runtime boundaries | `engine/tests`; engine verify harness; standalone/API/worker container checks |
 | BOSS-225–230 | Ship critical authorization, archive audit, branch-lineage, SSH destination, rollback, and advisory-disposition fixes | Integrated PR #70 and PR #68 with explicit conflict resolution in the relocated governed-code service | 34 focused security/deploy/advisory tests; affected suite rerun |
 | BOSS-231–234 | Reconcile source branches, publish coherent 0.8 metadata, validate the release, and cut v0.8.0 from merged main | PR #76 merged as `bc4c4d6`; #68/#70 merged and #23/#69 closed as superseded; root/web/client/engine/Helm/Kubernetes versions aligned; annotated `v0.8.0` tag peels to the merge and the GitHub release is published | 348 passed/1 skipped; 119 web; lint, docs, build, smoke, package/container, Kubernetes/Helm, infra validation; https://github.com/seanheiney/boss/releases/tag/v0.8.0 |
+
+## Agent Studio, Panels, and A2A trace (2026-07-26)
+
+| Plane | Requirement | Implementation | Evidence |
+| --- | --- | --- | --- |
+| BOSS-256–259 | Define Agent Studio and ship immutable, scoped, testable AgentDefinitions/AgentVersions plus the seeded specialist catalog | Product/technical contract, canonical schema, validation/publish gates, deterministic test bench, leased execution, capability intersection, twelve SpecPack agents | `test_agent_studio_a2a.py`; catalog browser QA; full suite |
+| BOSS-260 | Make Panel a first-class executable composition with pinned members, quorum, evidence, consolidation, dissent, and escalation | Three seeded Panels fan out leased member runs, retain findings/dissent, and consolidate only after evidence/quorum checks; consensus is never proof | Panel integration test; `test_governed_review_panel.py`; verifier suites |
+| BOSS-261–263 | Define and implement a global durable A2A coordination bus and Ops API | Typed/versioned envelopes, subscriptions, per-recipient deliveries, Postgres outbox, Redis Streams adapter, Receipt-backed XADD/XACK, XAUTOCLAIM, retries/deadletters, replay/cancel, health/audit | Fake-transport state-machine tests; two real Redis lifecycle proofs |
+| BOSS-264 | Expose typed Agent Studio, Panel, and A2A API/client contracts | Agent/version/test/run, Panel/version/run, channel/subscription/publish/poll/ack/replay/cancel/health/audit routes plus typed client methods and OpenAPI | OpenAPI YAML check; API catalog test; 36 API-client tests |
+| BOSS-265 | Build the live operator Agent Studio workbench | Searchable agent/panel library, authority/topology canvas, run/test controls, health metrics, channel/message trace, responsive/reduced-motion styling | TypeScript; optimized Next build; desktop and 760px browser QA |
+| BOSS-266 | Prove runtime integration, observability, and no-silent-drop behavior | Job completion hooks, worker capabilities, artifacts/evidence, panel completion, transport attempts, ACK receipts, filtered-cursor cleanup, crash recovery and deadletter visibility | 121 web tests; 938 Python tests/4 live skips; 39 focused tests; Ruff; real Redis proof |

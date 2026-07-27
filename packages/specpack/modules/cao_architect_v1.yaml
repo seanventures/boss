@@ -22,7 +22,7 @@ role:
     can_decide: [Architecture recommendations]
     must_escalate: [Schema-breaking changes, Removal of safety/accountability mechanisms]
   permissions:
-    allowed_skills: [artifact.create, design.review, adr.create, code.review]
+    allowed_skills: [artifact.create, design.review, adr.create, code.review, model.generate_text]
     forbidden_skills: [infra.create_node, github.merge_pr]
   output_contracts: [ArchitectureReview, ADR, InvariantReport]
   autonomy: {level: 1}

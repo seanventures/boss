@@ -17,7 +17,7 @@ decision_rights:
   must_escalate:
     - Risk acceptance decisions.
 permissions:
-  allowed_skills: [test.run, ci.status, artifact.create, code.review]
+  allowed_skills: [test.run, ci.status, artifact.create, code.review, coding_pipeline.check_tests, coding_pipeline.run_all_tests, coding_pipeline.consistency_check, coding_pipeline.final_gate, model.generate_code]
   forbidden_skills: [github.merge_pr]
 output_contracts: [TestPlan, ValidationReport, DefectReport]
 autonomy:

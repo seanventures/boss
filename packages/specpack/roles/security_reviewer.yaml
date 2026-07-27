@@ -18,7 +18,7 @@ decision_rights:
   must_escalate:
     - Accepted-risk exceptions (require an auditable Decision).
 permissions:
-  allowed_skills: [code.review, coding_pipeline.security_review, ci.status, artifact.create]
+  allowed_skills: [code.review, coding_pipeline.security_review, ci.status, artifact.create, coding_pipeline.security_check, model.generate_code]
   forbidden_skills: [code.edit, github.merge_pr_real, infra.*]
 output_contracts: [SecurityFindings, SecurityVerdict]
 autonomy:

@@ -5014,6 +5014,28 @@ export type WorkflowRunListResponse = {
   items: WorkflowRunSummary[];
 };
 
+export type AgentStudioCatalogResponse = {
+  project_id: string;
+  agents: Array<Record<string, unknown>>;
+  panels: Array<Record<string, unknown>>;
+  workflows: WorkflowDefinitionDetail[];
+  agent_runs: Array<Record<string, unknown>>;
+  panel_runs: Array<Record<string, unknown>>;
+  workflow_runs: WorkflowRunSummary[];
+  tests: Array<Record<string, unknown>>;
+  a2a: {
+    channels: Array<Record<string, unknown>>;
+    subscriptions: Array<Record<string, unknown>>;
+    messages: Array<Record<string, unknown>>;
+    health: Record<string, unknown>;
+  };
+};
+
+export type A2AListResponse = {
+  project_id: string;
+  items: Array<Record<string, unknown>>;
+};
+
 export class BossApiError extends Error {
   status: number;
   body?: unknown;
@@ -5094,6 +5116,162 @@ export function createBossApiClient(config: BossApiClientConfig) {
   }
 
   return {
+    getAgentStudioCatalog(projectId: string) {
+      return request<AgentStudioCatalogResponse>(
+        "GET",
+        "/v1/agent-studio/catalog",
+        { query: { project_id: projectId } },
+      );
+    },
+    validateStudioWorkflow(payload: {
+      project_id: string;
+      spec: Record<string, unknown>;
+      actor?: string;
+    }) {
+      return request<{
+        valid: boolean;
+        normalized_spec: Record<string, unknown>;
+        checks: Array<{ kind: string; passed: boolean; detail: string }>;
+      }>("POST", "/v1/agent-studio/workflows/validate", { body: payload });
+    },
+    createAgentDefinition(payload: Record<string, unknown>) {
+      return request<Record<string, unknown>>(
+        "POST",
+        "/v1/agent-studio/agents",
+        { body: payload },
+      );
+    },
+    createAgentVersion(agentId: string, payload: Record<string, unknown>) {
+      return request<Record<string, unknown>>(
+        "POST",
+        `/v1/agent-studio/agents/${encodeURIComponent(agentId)}/versions`,
+        { body: payload },
+      );
+    },
+    validateAgentVersion(versionId: string, payload: Record<string, unknown>) {
+      return request<Record<string, unknown>>(
+        "POST",
+        `/v1/agent-studio/agent-versions/${encodeURIComponent(versionId)}/validate`,
+        { body: payload },
+      );
+    },
+    publishAgentVersion(versionId: string, payload: Record<string, unknown>) {
+      return request<Record<string, unknown>>(
+        "POST",
+        `/v1/agent-studio/agent-versions/${encodeURIComponent(versionId)}/publish`,
+        { body: payload },
+      );
+    },
+    testAgentVersion(versionId: string, payload: Record<string, unknown>) {
+      return request<Record<string, unknown>>(
+        "POST",
+        `/v1/agent-studio/agent-versions/${encodeURIComponent(versionId)}/tests`,
+        { body: payload },
+      );
+    },
+    runAgentVersion(versionId: string, payload: Record<string, unknown>) {
+      return request<Record<string, unknown>>(
+        "POST",
+        `/v1/agent-studio/agent-versions/${encodeURIComponent(versionId)}/runs`,
+        { body: payload },
+      );
+    },
+    createPanelDefinition(payload: Record<string, unknown>) {
+      return request<Record<string, unknown>>(
+        "POST",
+        "/v1/agent-studio/panels",
+        { body: payload },
+      );
+    },
+    createPanelVersion(panelId: string, payload: Record<string, unknown>) {
+      return request<Record<string, unknown>>(
+        "POST",
+        `/v1/agent-studio/panels/${encodeURIComponent(panelId)}/versions`,
+        { body: payload },
+      );
+    },
+    publishPanelVersion(versionId: string, payload: Record<string, unknown>) {
+      return request<Record<string, unknown>>(
+        "POST",
+        `/v1/agent-studio/panel-versions/${encodeURIComponent(versionId)}/publish`,
+        { body: payload },
+      );
+    },
+    runPanelVersion(versionId: string, payload: Record<string, unknown>) {
+      return request<Record<string, unknown>>(
+        "POST",
+        `/v1/agent-studio/panel-versions/${encodeURIComponent(versionId)}/runs`,
+        { body: payload },
+      );
+    },
+    listA2AChannels(projectId: string) {
+      return request<A2AListResponse>("GET", "/v1/a2a/channels", {
+        query: { project_id: projectId },
+      });
+    },
+    createA2AChannel(payload: Record<string, unknown>) {
+      return request<Record<string, unknown>>("POST", "/v1/a2a/channels", {
+        body: payload,
+      });
+    },
+    createA2ASubscription(payload: Record<string, unknown>) {
+      return request<Record<string, unknown>>(
+        "POST",
+        "/v1/a2a/subscriptions",
+        { body: payload },
+      );
+    },
+    publishA2AMessage(payload: Record<string, unknown>) {
+      return request<Record<string, unknown>>("POST", "/v1/a2a/messages", {
+        body: payload,
+      });
+    },
+    cancelA2AMessage(messageId: string, payload: Record<string, unknown>) {
+      return request<Record<string, unknown>>(
+        "POST",
+        `/v1/a2a/messages/${encodeURIComponent(messageId)}/cancel`,
+        { body: payload },
+      );
+    },
+    replayA2AMessage(messageId: string, payload: Record<string, unknown>) {
+      return request<Record<string, unknown>>(
+        "POST",
+        `/v1/a2a/messages/${encodeURIComponent(messageId)}/replay`,
+        { body: payload },
+      );
+    },
+    listA2AMessages(projectId: string, limit = 100, traceId?: string) {
+      return request<A2AListResponse>("GET", "/v1/a2a/messages", {
+        query: { project_id: projectId, limit, trace_id: traceId },
+      });
+    },
+    pollA2A(payload: Record<string, unknown>) {
+      return request<{ items: Array<Record<string, unknown>> }>(
+        "POST",
+        "/v1/a2a/poll",
+        { body: payload },
+      );
+    },
+    acknowledgeA2ADelivery(
+      deliveryId: string,
+      payload: Record<string, unknown>,
+    ) {
+      return request<Record<string, unknown>>(
+        "POST",
+        `/v1/a2a/deliveries/${encodeURIComponent(deliveryId)}/acknowledge`,
+        { body: payload },
+      );
+    },
+    getA2AHealth(projectId: string) {
+      return request<Record<string, unknown>>("GET", "/v1/a2a/health", {
+        query: { project_id: projectId },
+      });
+    },
+    getA2AAudit(projectId: string, limit = 100) {
+      return request<Record<string, unknown>>("GET", "/v1/a2a/audit", {
+        query: { project_id: projectId, limit },
+      });
+    },
     getWorkflowDefinitions(projectId: string, includeRetired = false) {
       return request<WorkflowDefinitionListResponse>("GET", "/v1/workflows", {
         query: { project_id: projectId, include_retired: includeRetired },

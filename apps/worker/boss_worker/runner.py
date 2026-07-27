@@ -142,6 +142,31 @@ AGENT_WORK_PRODUCT_STRATEGIES: dict[str, dict[str, Any]] = {
         "safety_gates": ["no_silent_autonomy_upgrade", "evidence_required"],
         "required_decision_when": ["autonomy_upgrade", "high_risk_skill_install"],
     },
+    "agent.studio.execute": {
+        "contract": "AgentStudioWorkProduct",
+        "role_logic": (
+            "Execute the immutable Agent Studio version inside its compiled "
+            "RoleSpec, scope, skill, integration, model, and budget envelope."
+        ),
+        "sections": [
+            "objective",
+            "findings",
+            "recommendations",
+            "dissent",
+            "required_decisions",
+        ],
+        "evidence": ["agent_version", "artifact", "event", "receipt"],
+        "safety_gates": [
+            "effective_capability_is_intersection",
+            "preserve_role_authority",
+            "evidence_before_claim",
+        ],
+        "required_decision_when": [
+            "scope_expansion",
+            "policy_override",
+            "budget_change",
+        ],
+    },
     "agent.providerops_manager.providerops_brief": {
         "contract": "ProviderOpsBrief",
         "role_logic": "Review provider connections, resource inventory, ChangeSets, and provider risk.",
@@ -267,6 +292,8 @@ def capabilities() -> list[str]:
         "agent.resource_janitor.cleanup_brief",
         "agent.secrets_steward.secret_boundary_review",
         "agent.vp_agents.role_review",
+        "agent.studio.execute",
+        "a2a.dispatch",
         "enterprise.marketplace.validate",
         "providerops.sync.readonly",
         "plan.command",
@@ -594,6 +621,19 @@ def execute_job(job: LeasedJob, client: ControlPlaneClient) -> dict[str, Any]:
                 "lease_token": job.lease_token,
             },
         )
+    if job.kind == "a2a.dispatch":
+        try:
+            return client.dispatch_a2a_message(
+                job.payload["message_id"],
+                {
+                    "project_id": job.project_id,
+                    "worker_id": client.worker_id,
+                    "lease_token": job.lease_token,
+                    "created_by_job_id": job.id,
+                },
+            )
+        except Exception as error:  # transport/API outages use durable retry
+            raise RetryableJobError(str(error)) from error
     if job.kind.startswith("agent.") and job.kind != "agent.resume":
         return build_agent_brief_result(job)
     if job.kind == "enterprise.marketplace.validate":

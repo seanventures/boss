@@ -392,6 +392,17 @@ class JobLeaseService:
                 row["id"],
                 {"attempt": row["attempt"], "kind": row["kind"]},
             )
+            if row["kind"] == "agent.studio.execute":
+                connection.execute(
+                    text(
+                        "UPDATE agent_studio_runs SET status='leased', "
+                        "updated_at=:updated_at WHERE job_id=:job_id"
+                    ),
+                    {
+                        "job_id": row["id"],
+                        "updated_at": current_time,
+                    },
+                )
             leased_payload = self.agent_runtime.attach_to_payload(
                 connection,
                 row["project_id"],
@@ -447,6 +458,18 @@ class JobLeaseService:
                 "job_id": job_id,
             },
         )
+        if row["kind"] == "agent.studio.execute":
+            connection.execute(
+                text(
+                    "UPDATE agent_studio_runs SET status=:status, "
+                    "updated_at=:updated_at WHERE job_id=:job_id"
+                ),
+                {
+                    "status": next_status,
+                    "updated_at": current_time,
+                    "job_id": job_id,
+                },
+            )
         emit_event(
             connection,
             row["project_id"],
@@ -558,6 +581,9 @@ class JobLeaseService:
             self._mark_related_message_retrying(
                 connection, row, retry_delay_seconds
             )
+            self._mark_agent_system_failure(
+                connection, row, error, terminal=False, actor=worker_id
+            )
             return {
                 "job_id": job_id,
                 "status": "failed_retryable",
@@ -633,6 +659,9 @@ class JobLeaseService:
             {"deadletter_id": deadletter_id},
         )
         self._mark_related_message_deadlettered(connection, row, deadletter_id)
+        self._mark_agent_system_failure(
+            connection, row, error, terminal=True, actor=worker_id
+        )
         return {
             "job_id": job_id,
             "status": "deadlettered",
@@ -762,6 +791,13 @@ class JobLeaseService:
                 "receipt_id": result.get("receipt_id"),
             }
 
+        if job_row["kind"] == "a2a.dispatch":
+            return {
+                "receipt_id": result.get("receipt_id"),
+                "message_id": result.get("id") or result.get("message_id"),
+                "redis_stream_id": result.get("redis_stream_id"),
+            }
+
         if job_row["kind"] == "infra.droplet.create":
             return {
                 "artifact_id": result.get("artifact_id"),
@@ -828,6 +864,17 @@ class JobLeaseService:
                     "role_key": role_key,
                 },
             )
+            if job_row["kind"] == "agent.studio.execute":
+                from .agent_studio import AgentStudioService
+
+                AgentStudioService(self.settings).record_job_success(
+                    connection,
+                    project_id=job_row["project_id"],
+                    job_id=job_row["id"],
+                    result=result,
+                    artifact_id=artifact_id,
+                    actor="worker",
+                )
             return {"artifact_id": artifact_id}
 
         if job_row["kind"] == "enterprise.marketplace.validate":
@@ -922,6 +969,37 @@ class JobLeaseService:
             {"job_id": job_row["id"], "decision_id": decision_id},
         )
         return {"artifact_id": artifact_id, "decision_id": decision_id}
+
+    def _mark_agent_system_failure(
+        self,
+        connection: Connection,
+        job_row,
+        error: dict[str, Any],
+        *,
+        terminal: bool,
+        actor: str,
+    ) -> None:
+        if job_row["kind"] == "agent.studio.execute":
+            from .agent_studio import AgentStudioService
+
+            AgentStudioService(self.settings).record_job_failure(
+                connection,
+                project_id=job_row["project_id"],
+                job_id=job_row["id"],
+                error=error,
+                terminal=terminal,
+                actor=actor,
+            )
+        elif job_row["kind"] == "a2a.dispatch":
+            from .a2a import A2AService
+
+            A2AService(self.settings).mark_dispatch_failure(
+                connection,
+                project_id=job_row["project_id"],
+                job_id=job_row["id"],
+                error=error,
+                terminal=terminal,
+            )
 
     def _task_title(self, connection: Connection, task_id: Optional[str]) -> Optional[str]:
         if not task_id:

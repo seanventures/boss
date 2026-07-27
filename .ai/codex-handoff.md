@@ -705,3 +705,57 @@ Slice complete; accelerating full product with parallel agents.
   GitHub records #68/#70 as merged and #23/#69 as superseded/closed. Plane
   BOSS-215–234 and the reconciled package backlog BOSS-32/33 are Done with
   release evidence attached.
+
+## Codex handoff — BOSS-256–266 Agent Studio/A2A (2026-07-26)
+
+- Active branch: `ai/codex/boss-256-agent-studio-a2a`, based independently on
+  `origin/main`; it does not modify Paramg PR #80.
+- Delivered: immutable Agent/Panel versions, validation/test/publish gates,
+  leased deterministic specialist execution, attributed Panel fan-out and
+  consolidation, twelve seeded specialists, three seeded Panels, and a
+  responsive live Agent Studio workbench.
+- Delivered Workflow Studio lane: canonical Workflow definitions and recent
+  runs in the catalog, live draft graph preview, no-side-effect validation,
+  create-and-publish, immutable version publication, and pinned execution
+  through the existing Workflow Registry/Runtime rather than a second engine.
+- Delivered A2A: canonical Postgres ledger/outbox/deliveries, Redis Streams
+  adapter, leased Receipt-backed XADD, consumer groups, filtered-cursor
+  cleanup, visibility leases/XAUTOCLAIM, bounded retry/deadletter, actor-bound
+  ACK, Receipt-backed XACK, replay/cancel, schema/version allowlists, health
+  and audit APIs.
+- Safety: effective capabilities are intersection-only; Panel consensus is not
+  proof; no provider/model secret enters prompts or messages; live-model mode
+  requires a BudgetReservation and remains fail-closed until a governed model
+  provider lane is explicitly enabled.
+- Validation: 121 web and 938 Python tests pass (four intentional external/live
+  skips); 39 focused tests, Ruff, TypeScript, OpenAPI YAML, diff checks,
+  optimized build, responsive browser QA, and real Redis delivery/reclaim
+  proofs pass. The Workflow Studio follow-up additionally passes 12 focused
+  Agent Studio/Workflow runtime tests, the full 121-test web suite,
+  TypeScript, Ruff, diff checks, and the optimized production build.
+- Draft PR: https://github.com/seanheiney/boss/pull/88. Implementation commit:
+  `a2daccfa5d81f0b1687c3e77925e981820274375`. GitHub reports the PR cleanly
+  mergeable against `main`.
+- Workflow Studio implementation is `d5dc58105b598209868543629526cfd6a5bd3b59`;
+  current contributor `main` through BOSS-267 was merged without conflict at
+  code/integration head `d0d3a6354a1214459db23e212c1467cd292d1506`.
+  GitHub still reports draft PR #88 cleanly mergeable.
+- Plane BOSS-256–266 remain In Progress until the PR is merged. Attach the
+  final commit/PR and merge evidence before moving them to Done.
+
+### BOSS-268 follow-up: guided agent commissioning
+
+- Agent Studio now exposes an accessible five-stage wizard from the Agents
+  library. It covers identity, installed RoleSpec, runtime/model policy,
+  layered prompts, deterministic rules, installed Skill and integration
+  references, data scope, limits, output contract, A2A topics, and review.
+- Blank/builder/reviewer/operator patterns feed an always-visible live
+  authority blueprint. Patterns provide content only; effective authority
+  remains the server-validated intersection.
+- Save Draft and Validate + Publish call the existing definition/version/
+  validate/publish APIs in order. Partial failure preserves identifiers and an
+  explicit draft; no credential fields or alternate runtime were introduced.
+- Validation passes 125 web tests, seven focused Agent Studio/A2A API tests,
+  Ruff, TypeScript, generated-doc parity, strict docs, the production build,
+  and a real browser create/validate/publish/refresh journey.
+- Plane BOSS-268 is In Progress on the existing draft PR #88 until merge.
