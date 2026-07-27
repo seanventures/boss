@@ -21,15 +21,18 @@ const SURFACES = [
 ];
 
 const SIGNALS = [
-  { token: "--teal", label: "RUNNING", pulse: true },
-  { token: "--green", label: "VERIFIED" },
-  { token: "--amber", label: "AWAITING" },
-  { token: "--red", label: "BLOCKED" },
+  { token: "--teal", label: "Running", state: "RUNNING", pulse: true },
+  { token: "--green", label: "Verified", state: "VERIFIED" },
+  { token: "--amber", label: "Awaiting", state: "AWAITING" },
+  { token: "--red", label: "Blocked", state: "BLOCKED" },
+  { token: "--blue", label: "Primary", state: "" },
+  { token: "--faint", label: "Idle", state: "" },
 ];
 
 function useComputedHex(token: string): string {
   const [hex, setHex] = React.useState("");
   React.useEffect(() => {
+    if (!token) return;
     // read the LIVE resolved value so the readout proves the token exists in the build
     const v = getComputedStyle(document.documentElement).getPropertyValue(token).trim();
     setHex(v.toUpperCase());
@@ -37,40 +40,94 @@ function useComputedHex(token: string): string {
   return hex;
 }
 
-function Swatch({ token, label, note }: { token: string; label: string; note?: string }) {
-  const hex = useComputedHex(token);
+/**
+ * Reference-strip swatch: a connected row of cells, each a full-bleed color fill
+ * over a caption seated on --panel. The lighter caption row is what makes the dark
+ * surface fills legible as *colors* rather than empty outlined boxes.
+ */
+function SwatchCell({
+  token,
+  label,
+  note,
+  fill,
+  hexText,
+  last,
+}: {
+  token?: string;
+  label: string;
+  note?: string;
+  fill?: string; // overrides var(token) — used for the brand gradient
+  hexText?: string; // overrides the live hex readout
+  last?: boolean;
+}) {
+  const hex = useComputedHex(token ?? "");
   return (
-    <div style={{ display: "grid", gap: 6 }}>
+    <div
+      style={{
+        flex: "1 1 120px",
+        minWidth: 104,
+        borderRight: last ? "none" : "1px solid var(--panel-border, #1c2740)",
+        display: "flex",
+        flexDirection: "column",
+      }}
+    >
+      <div style={{ height: 64, background: fill ?? `var(${token})` }} />
       <div
         style={{
-          height: 56,
-          background: `var(${token})`,
-          border: "1px solid var(--panel-border, #1c2740)",
-          borderRadius: 8,
-          // dark-on-dark swatches need a visible seat: an inset ring + soft outer glow
-          boxShadow:
-            "inset 0 0 0 1px rgba(255,255,255,0.06), 0 0 0 3px rgba(255,255,255,0.025)",
+          padding: "9px 12px 10px",
+          borderTop: "1px solid var(--panel-border, #1c2740)",
+          background: "var(--panel, #101a30)",
+          flex: 1,
         }}
-      />
-      <div style={{ fontSize: 12.5, lineHeight: 1.45 }}>
-        <b>{label}</b>{" "}
-        <span
+      >
+        <div style={{ fontSize: 12.5, fontWeight: 600, color: "var(--ink, #eef3fb)" }}>{label}</div>
+        <div
           style={{
             fontFamily: "var(--mono, monospace)",
-            color: "var(--teal, #2ec5c5)",
-            fontSize: 11.5,
+            fontSize: 10.5,
+            color: "var(--faint, #64769a)",
+            marginTop: 2,
           }}
         >
-          {hex || "…"}
-        </span>
-        <br />
-        <span style={{ fontFamily: "var(--mono, monospace)", color: "var(--muted, #64769a)", fontSize: 11 }}>
-          var({token})
-        </span>
+          {hexText ?? (hex || "…")}
+        </div>
         {note ? (
-          <span style={{ color: "var(--muted, #64769a)", fontSize: 11.5 }}> — {note}</span>
+          <div style={{ fontSize: 10.5, color: "var(--faint, #64769a)", marginTop: 1 }}>{note}</div>
         ) : null}
       </div>
+    </div>
+  );
+}
+
+function SwatchStrip({ children }: { children: React.ReactNode }) {
+  return (
+    <div
+      style={{
+        display: "flex",
+        flexWrap: "wrap",
+        border: "1px solid var(--panel-border, #1c2740)",
+        borderRadius: 8,
+        overflow: "hidden",
+      }}
+    >
+      {children}
+    </div>
+  );
+}
+
+function StripLabel({ children }: { children: React.ReactNode }) {
+  return (
+    <div
+      style={{
+        fontFamily: "var(--mono, monospace)",
+        fontSize: 10.5,
+        letterSpacing: "0.16em",
+        textTransform: "uppercase",
+        color: "var(--faint, #64769a)",
+        margin: "14px 0 9px",
+      }}
+    >
+      {children}
     </div>
   );
 }
@@ -120,41 +177,34 @@ export function FoundationsHome() {
       <article className="stack-card">
         <h3 style={{ margin: 0 }}>01 · Color</h3>
         <p className="detail">Surfaces (dark), the brand gradient, and the signal palette.</p>
-        <div
-          style={{
-            display: "grid", gap: 14,
-            gridTemplateColumns: "repeat(auto-fill, minmax(150px, 1fr))",
-            background: "var(--void, #090d17)",
-            border: "1px solid var(--panel-border, #1c2740)",
-            borderRadius: 8,
-            padding: 14,
-          }}
-        >
+
+        <StripLabel>Surfaces</StripLabel>
+        <SwatchStrip>
           {SURFACES.map((s) => (
-            <Swatch key={s.token} {...s} />
+            <SwatchCell key={s.token} {...s} />
           ))}
-          <div style={{ display: "grid", gap: 5 }}>
-            <div
-              style={{
-                height: 56, borderRadius: 8,
-                background:
-                  "var(--brand-grad, linear-gradient(135deg,#2ec5c5,#2f6fe0 55%,#1b3a6b))",
-              }}
-            />
-            <div style={{ fontSize: 12.5 }}>
-              <b>Brand</b>{" "}
-              <span style={{ fontFamily: "var(--mono, monospace)", color: "var(--muted)" }}>
-                teal → navy
-              </span>
-            </div>
-          </div>
-        </div>
+          <SwatchCell
+            label="Brand"
+            note="one gradient, used sparingly"
+            fill="var(--brand-grad, linear-gradient(135deg,#2ec5c5,#2f6fe0 55%,#1b3a6b))"
+            hexText="teal → navy"
+            last
+          />
+        </SwatchStrip>
+
+        <StripLabel>Signal — agent state</StripLabel>
+        <SwatchStrip>
+          {SIGNALS.map((s, i) => (
+            <SwatchCell key={s.token} token={s.token} label={s.label} last={i === SIGNALS.length - 1} />
+          ))}
+        </SwatchStrip>
+
         <p className="detail" style={{ marginTop: 12, marginBottom: 6 }}>
-          Signal — agent/work state is <b>text, not pills</b>: uppercase mono in the state
-          color, with an optional dot. Only running state pulses.
+          In the product, agent/work state is <b>text, not pills</b>: uppercase mono in the
+          state color, with an optional dot. Only running state pulses.
         </p>
         <div style={{ display: "flex", gap: 22, flexWrap: "wrap" }}>
-          {SIGNALS.map((s) => (
+          {SIGNALS.filter((s) => s.state).map((s) => (
             <span
               key={s.label}
               style={{
@@ -171,7 +221,7 @@ export function FoundationsHome() {
                   display: "inline-block",
                 }}
               />
-              {s.label}
+              {s.state}
             </span>
           ))}
         </div>
