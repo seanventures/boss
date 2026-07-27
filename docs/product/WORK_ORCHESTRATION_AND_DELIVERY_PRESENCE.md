@@ -103,6 +103,10 @@ and evidence gaps. It may not mark work done solely from its own claim.
 GitHub PR, merge, and deployment job completions create delivery-presence events. Mattermost sends through the official v4 API using a bot token only when the real-send rollout flag is enabled. Bot records refer to SecretRefs; raw credentials are never returned to agents or UI.
 
 Status channels declare purpose, provider channel identity, subscribed event kinds, allowed data boundaries, and bot identity. Presence writes are deduplicated and retained in Postgres for troubleshooting.
+GitHub deployment events are projected automatically into every matching
+active status channel and attributed to the channel's bot identity. Projection
+updates BOSS immediately; an external Mattermost post remains a separate
+leased, budgeted, policy-gated, Receipt-backed communications effect.
 
 ### WOS-08 — Evidence and end-to-end proof
 

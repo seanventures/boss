@@ -358,6 +358,18 @@ def test_plane_tracker_and_delivery_presence_plugins_feed_embedded_overview(engi
             bot_identity_id=bot["id"],
             external_url=binding["external_url"],
         )
+        deployment_presence = service.record_delivery_event(
+            connection,
+            project_id=settings.default_project_id,
+            provider="github",
+            event_kind="deployment.status",
+            subject_type="work_item",
+            subject_id=tracked["work_item"]["id"],
+            status="healthy",
+            summary="Production deployment is healthy.",
+            dedupe_key="presence:deploy-270:healthy",
+            external_url="https://github.example/deployments/270",
+        )
         overview = service.overview(connection, settings.default_project_id)
 
     assert binding["sync_status"] == "synced"
@@ -367,6 +379,17 @@ def test_plane_tracker_and_delivery_presence_plugins_feed_embedded_overview(engi
     assert overview["tracker_providers"][0]["provider_key"] == "plane"
     assert overview["summary"]["active_channels"] == 1
     assert overview["presence_events"][0]["bot_name"] == "BOSS Product Manager"
+    assert deployment_presence["projected_channel_ids"] == [channel["id"]]
+    projected = next(
+        item
+        for item in overview["presence_events"]
+        if item["dedupe_key"].endswith(f":channel:{channel['id']}")
+    )
+    assert projected["provider"] == "mattermost"
+    assert projected["channel_name"] == "BOSS Delivery"
+    assert projected["bot_name"] == "BOSS Product Manager"
+    assert projected["metadata"]["source_provider"] == "github"
+    assert projected["metadata"]["projection_only"] is True
     assert {item["provider"] for item in overview["delivery_plugins"]} == {
         "github",
         "mattermost",

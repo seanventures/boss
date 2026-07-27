@@ -19,7 +19,9 @@
   added Mattermost bot delivery, GitHub/Plane/Mattermost delivery-presence
   records, bot identities and status channels, plus the Mission Control Work
   Allocation area for rankings, quota pressure, leases, ticket state, and
-  delivery events.
+  delivery events. Matching GitHub deployment events project automatically
+  into configured status channels with their bot identity; external Mattermost
+  delivery remains governed by the existing comms effect path.
 - Governing PRD/technical spec, focused product spec, policy, SpecPack manifest,
   OpenAPI, tests, and coordination evidence are updated. Plane BOSS-270–278
   remain In Progress until the stacked PR merges.

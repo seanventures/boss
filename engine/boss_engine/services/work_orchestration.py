@@ -1759,8 +1759,10 @@ class WorkOrchestrationService:
         external_url: Optional[str] = None,
         receipt_id: Optional[str] = None,
         metadata: Optional[dict[str, Any]] = None,
+        data_boundary: str = "internal",
     ) -> dict[str, Any]:
         self._require_delivery_provider(provider)
+        boundary = self._key(data_boundary, "data_boundary")
         row = connection.execute(
             text(
                 """
@@ -1822,7 +1824,149 @@ class WorkOrchestrationService:
                 "status": row["status"],
             },
         )
-        return self._serialize(row)
+        projected_channels = self._project_delivery_event_to_channels(
+            connection,
+            project_id=project_id,
+            source_provider=provider,
+            event_kind=event_kind,
+            subject_type=subject_type,
+            subject_id=subject_id,
+            status=status,
+            summary=summary,
+            dedupe_key=dedupe_key,
+            external_url=external_url,
+            receipt_id=receipt_id,
+            metadata=metadata or {},
+            data_boundary=boundary,
+            skip_channel_id=channel_id,
+        )
+        return {
+            **self._serialize(row),
+            "projected_channel_ids": projected_channels,
+        }
+
+    def _project_delivery_event_to_channels(
+        self,
+        connection: Connection,
+        *,
+        project_id: str,
+        source_provider: str,
+        event_kind: str,
+        subject_type: str,
+        subject_id: str,
+        status: str,
+        summary: str,
+        dedupe_key: str,
+        external_url: Optional[str],
+        receipt_id: Optional[str],
+        metadata: dict[str, Any],
+        data_boundary: str,
+        skip_channel_id: Optional[str],
+    ) -> list[str]:
+        channels = connection.execute(
+            text(
+                """
+                SELECT id, provider, bot_identity_id
+                FROM delivery_status_channels
+                WHERE project_id=:project_id
+                  AND status='active'
+                  AND (
+                    CAST(:skip_channel_id AS TEXT) IS NULL
+                    OR id<>CAST(:skip_channel_id AS TEXT)
+                  )
+                  AND (
+                    jsonb_array_length(event_kinds)=0
+                    OR event_kinds ? CAST(:event_kind AS TEXT)
+                    OR event_kinds ? '*'
+                  )
+                  AND (
+                    jsonb_array_length(allowed_data_boundaries)=0
+                    OR allowed_data_boundaries ? CAST(:data_boundary AS TEXT)
+                  )
+                ORDER BY created_at, id
+                """
+            ),
+            {
+                "project_id": project_id,
+                "skip_channel_id": skip_channel_id,
+                "event_kind": event_kind,
+                "data_boundary": data_boundary,
+            },
+        ).mappings().all()
+        projected_ids: list[str] = []
+        for channel in channels:
+            projected = connection.execute(
+                text(
+                    """
+                    INSERT INTO delivery_presence_events (
+                        id, project_id, channel_id, bot_identity_id, provider,
+                        event_kind, subject_type, subject_id, status, summary,
+                        external_url, receipt_id, metadata, dedupe_key
+                    )
+                    VALUES (
+                        :id, :project_id, :channel_id, :bot_identity_id,
+                        :provider, :event_kind, :subject_type, :subject_id,
+                        :status, :summary, :external_url, :receipt_id,
+                        CAST(:metadata AS JSONB), :dedupe_key
+                    )
+                    ON CONFLICT (project_id, dedupe_key) DO UPDATE
+                    SET status=EXCLUDED.status,
+                        summary=EXCLUDED.summary,
+                        external_url=COALESCE(
+                          EXCLUDED.external_url,
+                          delivery_presence_events.external_url
+                        ),
+                        receipt_id=COALESCE(
+                          EXCLUDED.receipt_id,
+                          delivery_presence_events.receipt_id
+                        ),
+                        metadata=delivery_presence_events.metadata
+                          || EXCLUDED.metadata
+                    RETURNING id
+                    """
+                ),
+                {
+                    "id": make_id("presence"),
+                    "project_id": project_id,
+                    "channel_id": channel["id"],
+                    "bot_identity_id": channel["bot_identity_id"],
+                    "provider": channel["provider"],
+                    "event_kind": self._key(event_kind, "event_kind"),
+                    "subject_type": self._key(subject_type, "subject_type"),
+                    "subject_id": self._required(subject_id, "subject_id"),
+                    "status": self._key(status, "status"),
+                    "summary": self._required(summary, "summary"),
+                    "external_url": external_url,
+                    "receipt_id": receipt_id,
+                    "metadata": json.dumps(
+                        {
+                            **metadata,
+                            "source_provider": source_provider,
+                            "data_boundary": data_boundary,
+                            "projection_only": True,
+                        }
+                    ),
+                    "dedupe_key": f"{dedupe_key}:channel:{channel['id']}",
+                },
+            ).scalar_one()
+            projected_ids.append(str(projected))
+        if projected_ids:
+            emit_event(
+                connection,
+                project_id,
+                "delivery.presence_projected",
+                "delivery_presence",
+                "delivery_presence_event",
+                projected_ids[0],
+                {
+                    "source_provider": source_provider,
+                    "event_kind": event_kind,
+                    "channel_ids": [str(channel["id"]) for channel in channels],
+                    "presence_event_ids": projected_ids,
+                    "data_boundary": data_boundary,
+                },
+            )
+        return [str(channel["id"]) for channel in channels]
 
     # ------------------------------------------------------------------
     # Embedded operator read model
