@@ -239,11 +239,10 @@ class ClaudeCodeAgent:
     @staticmethod
     def _usage(data: dict, settings: Settings) -> tuple[dict, int]:
         u = data.get("usage") or {}
-        prompt_tokens = (
-            int(u.get("input_tokens") or 0)
-            + int(u.get("cache_read_input_tokens") or 0)
-            + int(u.get("cache_creation_input_tokens") or 0)
-        )
+        # Cache tokens tracked separately (BOSS-280 P1) — see claude_cli_adapter._usage.
+        prompt_tokens = int(u.get("input_tokens") or 0)
+        cache_read = int(u.get("cache_read_input_tokens") or 0)
+        cache_write = int(u.get("cache_creation_input_tokens") or 0)
         completion = int(u.get("output_tokens") or 0)
         model_usage = data.get("modelUsage") or {}
         primary = next((n for n in model_usage if "haiku" not in n), None)
@@ -256,7 +255,9 @@ class ClaudeCodeAgent:
             "model": primary,
             "prompt_tokens": prompt_tokens,
             "completion_tokens": completion,
-            "total_tokens": prompt_tokens + completion,
+            "cache_read_tokens": cache_read,
+            "cache_write_tokens": cache_write,
+            "total_tokens": prompt_tokens + cache_read + cache_write + completion,
             "cost_usd_micros": cost_micros,
         }
         return usage, cost_micros

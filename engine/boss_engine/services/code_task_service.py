@@ -409,14 +409,50 @@ def override_code_task(engine, settings: Settings, jobs, run_id: str, *,
 
 
 def _release(
-    budget, connection, project_id: str, reservation_id: Optional[str], reason: str
+    budget, connection, project_id: str, reservation_id: Optional[str], reason: str,
+    run_id: Optional[str] = None,
 ) -> None:
+    """Settle-then-release (BOSS-280): money already burned on model calls is REAL even when
+    the run failed — sum the run's llm_calls and settle it as an actual cost receipt, so the
+    budget ledger reconciles with true LLM spend instead of silently dropping every failed
+    run's cost. Only a run with zero recorded spend releases cleanly. Always fail-soft."""
     if not reservation_id:
         return
     try:
-        budget.release(connection, project_id, reservation_id, reason)
+        actual = 0
+        if run_id and hasattr(connection, "execute"):
+            actual = int(connection.execute(
+                sql("SELECT COALESCE(SUM(cost_usd_micros), 0) FROM llm_calls "
+                    "WHERE code_task_run_id = :r"),
+                {"r": run_id}).scalar() or 0)
+        if actual > 0:
+            # consume() requires a governance receipt (every settled effect gets one).
+            from .receipts import ReceiptService
+            scope = connection.execute(
+                sql("SELECT p.workspace_id, w.org_id FROM projects p "
+                    "JOIN workspaces w ON w.id = p.workspace_id WHERE p.id = :p"),
+                {"p": project_id}).mappings().first()
+            receipt, _created = ReceiptService().create_or_reuse(
+                connection, scope["org_id"], scope["workspace_id"], project_id,
+                dedupe_key=f"budget:settle:{run_id}:{reservation_id}",
+                effect_kind="budget.llm_spend.settle",
+                effect_scope={"run_id": run_id, "reservation_id": reservation_id},
+                payload={"actual_usd_micros": actual, "reason": reason},
+            )
+            budget.consume(
+                connection, project_id, reservation_id,
+                receipt_id=receipt["id"], category="code_task",
+                skill_or_model_id=f"code_task:{run_id}",
+                estimated_usd_micros=actual, actual_usd_micros=actual,
+                actor="budget_reconciler",
+            )
+        else:
+            budget.release(connection, project_id, reservation_id, reason)
     except Exception:
-        pass
+        try:
+            budget.release(connection, project_id, reservation_id, reason)
+        except Exception:
+            pass
 
 
 def _set_phase(connection, run_id: str, phase: str) -> None:
@@ -740,12 +776,12 @@ def run_code_task(engine, settings: Settings, jobs, run_id: str) -> dict:
 
         if not result.diff:
             with _transaction(engine) as c:
-                _release(budget, c, project_id, reservation_id, "no changes produced")
+                _release(budget, c, project_id, reservation_id, "no changes produced", run_id=run_id)
                 return _fail(c, run_id, project_id, "Agent produced no file changes.",
                              failure_class="terminal", reason_code="no_diff")
         if not result.tests_passed:
             with _transaction(engine) as c:
-                _release(budget, c, project_id, reservation_id, "tests did not pass")
+                _release(budget, c, project_id, reservation_id, "tests did not pass", run_id=run_id)
                 return _fail(c, run_id, project_id,
                              "Tests did not pass; not opening a PR. See run state for details.",
                              failure_class="terminal", reason_code="tests_failed")
@@ -801,7 +837,7 @@ def run_code_task(engine, settings: Settings, jobs, run_id: str) -> dict:
         reason = str(exc).strip() or f"{type(exc).__name__} with no message"
         fclass, rcode = classify_pipeline_exception(reason)
         with _transaction(engine) as c:
-            _release(budget, c, project_id, reservation_id, f"code task error: {reason}")
+            _release(budget, c, project_id, reservation_id, f"code task error: {reason}", run_id=run_id)
             # Retain + record the micro-VM so the failure can be root-caused in the console.
             _persist_sandbox_id(c, run_id, getattr(provider, "last_sandbox_task_id", None))
             return _fail(c, run_id, project_id, reason,

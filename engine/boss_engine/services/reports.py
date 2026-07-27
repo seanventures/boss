@@ -29,6 +29,7 @@ class ReportService:
             "daily": self._daily(connection, project_id),
             "by_kind": self._by_kind(connection, project_id),
             "by_model": self._by_model(connection, project_id),
+            "llm_spend": self._llm_spend(connection, project_id),
             "agents": self._agents(connection, project_id),
             "decision_latency": self._decision_latency(connection, project_id),
         }
@@ -130,6 +131,64 @@ class ReportService:
             }
             for r in rows
         ]
+
+    def _llm_spend(self, connection: Connection, project_id: str) -> dict[str, Any]:
+        """The REAL model-spend ledger (llm_calls), segmented the way the cost question is
+        actually asked (BOSS-280 P1): $/agent-role, $/model, and cache leverage (how many
+        input tokens were served from cache vs paid fresh)."""
+        by_role = connection.execute(
+            text(
+                """
+                SELECT COALESCE(role, 'unattributed') AS role,
+                  count(*) AS calls,
+                  COALESCE(SUM(cost_usd_micros), 0) AS spend_usd_micros,
+                  COALESCE(SUM(total_tokens), 0) AS tokens
+                FROM llm_calls WHERE project_id=:p
+                GROUP BY COALESCE(role, 'unattributed') ORDER BY spend_usd_micros DESC
+                """
+            ),
+            {"p": project_id},
+        ).mappings().all()
+        by_model = connection.execute(
+            text(
+                """
+                SELECT COALESCE(model, 'unknown') AS model,
+                  count(*) AS calls,
+                  COALESCE(SUM(cost_usd_micros), 0) AS spend_usd_micros,
+                  COALESCE(SUM(CASE WHEN price_estimated THEN 1 ELSE 0 END), 0) AS estimated_calls
+                FROM llm_calls WHERE project_id=:p
+                GROUP BY COALESCE(model, 'unknown') ORDER BY spend_usd_micros DESC
+                """
+            ),
+            {"p": project_id},
+        ).mappings().all()
+        cache = connection.execute(
+            text(
+                """
+                SELECT COALESCE(SUM(prompt_tokens), 0) AS fresh_input,
+                       COALESCE(SUM(cache_read_tokens), 0) AS cache_read,
+                       COALESCE(SUM(cache_write_tokens), 0) AS cache_write
+                FROM llm_calls WHERE project_id=:p
+                """
+            ),
+            {"p": project_id},
+        ).mappings().one()
+        total_input = int(cache["fresh_input"]) + int(cache["cache_read"])
+        return {
+            "by_role": [{"role": r["role"], "calls": int(r["calls"]),
+                         "spend_usd_micros": int(r["spend_usd_micros"]),
+                         "tokens": int(r["tokens"])} for r in by_role],
+            "by_model": [{"model": r["model"], "calls": int(r["calls"]),
+                          "spend_usd_micros": int(r["spend_usd_micros"]),
+                          "estimated_calls": int(r["estimated_calls"])} for r in by_model],
+            "cache": {
+                "fresh_input_tokens": int(cache["fresh_input"]),
+                "cache_read_tokens": int(cache["cache_read"]),
+                "cache_write_tokens": int(cache["cache_write"]),
+                "cache_hit_ratio": (round(int(cache["cache_read"]) / total_input, 4)
+                                    if total_input else None),
+            },
+        }
 
     def _agents(self, connection: Connection, project_id: str) -> list[dict[str, Any]]:
         rows = connection.execute(

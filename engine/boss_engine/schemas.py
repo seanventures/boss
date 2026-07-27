@@ -1359,6 +1359,12 @@ class BudgetStatusResponse(BaseModel):
     active_reservations_count: int
     top_cost_drivers: list[dict[str, Any]]
     operational_intensity: Optional[int] = None
+    # BOSS-280: the enforced thresholds, surfaced so the console shows REAL knobs
+    soft_cap_pct: Optional[float] = None
+    auto_lite_mode_pct: Optional[float] = None
+    freeze_provisioning_pct: Optional[float] = None
+    freeze_tier2_pct: Optional[float] = None
+    tier2_frozen: Optional[bool] = None
 
 
 class BudgetForecastResponse(BaseModel):
@@ -2214,6 +2220,10 @@ class TaskSummary(BaseModel):
     title: str
     description: Optional[str] = None
     status: str
+    # BOSS-281: activity-derived lifecycle (from the task's latest job + pending decisions) —
+    # the tasks table itself only ever holds open/archived, which made every board column
+    # except Backlog permanently empty.
+    derived_status: Optional[str] = None
     owner_role_id: Optional[str] = None
     parent_task_id: Optional[str] = None
     dependency_task_ids: list[str] = Field(default_factory=list)
