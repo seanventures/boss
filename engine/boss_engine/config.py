@@ -314,6 +314,21 @@ class Settings(BaseSettings):
     bitbucket_app_password: Optional[str] = Field(
         default=None, alias="BOSS_BITBUCKET_APP_PASSWORD"
     )
+    # HMAC secret Bitbucket signs webhook deliveries with (X-Hub-Signature). Absent =>
+    # POST /v1/webhooks/bitbucket stays fail-closed, mirroring the GitHub webhook.
+    bitbucket_webhook_secret: Optional[str] = Field(
+        default=None, alias="BOSS_BITBUCKET_WEBHOOK_SECRET"
+    )
+    # --- MCP-backed repo host (BOSS-269): enterprise SSO/OAuth identity path ---------------
+    # URL of the MCP server that fronts the SCM with the USER's identity (SSO/OAuth at the
+    # gateway) — repo operations become MCP tool calls; no raw API keys in BOSS.
+    repo_mcp_url: Optional[str] = Field(default=None, alias="BOSS_REPO_MCP_URL")
+    # Env-var NAME holding the bearer for the MCP endpoint itself (gateway session/token).
+    repo_mcp_auth_env: Optional[str] = Field(default=None, alias="BOSS_REPO_MCP_AUTH_ENV")
+    # Which SCM the MCP server fronts (drives clone-URL form): bitbucket | github.
+    repo_mcp_provider: str = Field(default="bitbucket", alias="BOSS_REPO_MCP_PROVIDER")
+    # Optional JSON overrides for tool names ({"create_pull_request": "bb_pr_create", ...}).
+    repo_mcp_toolmap: Optional[str] = Field(default=None, alias="BOSS_REPO_MCP_TOOLMAP")
     github_webhook_secret: Optional[str] = Field(
         default=None, alias="BOSS_GITHUB_WEBHOOK_SECRET"
     )

@@ -20,11 +20,12 @@ class MCPClient:
         self.settings = settings
         self.timeout = timeout
 
-    def _rpc(self, url: str, method: str, params: Optional[dict] = None, rid: int = 1) -> Any:
+    def _rpc(self, url: str, method: str, params: Optional[dict] = None, rid: int = 1,
+             headers: Optional[dict] = None) -> Any:
         resp = httpx.post(
             url,
             json={"jsonrpc": "2.0", "id": rid, "method": method, "params": params or {}},
-            headers={"Accept": "application/json"},
+            headers={"Accept": "application/json", **(headers or {})},
             timeout=self.timeout,
         )
         resp.raise_for_status()
@@ -33,7 +34,7 @@ class MCPClient:
             raise RuntimeError(data["error"].get("message") or "MCP error")
         return data.get("result") if isinstance(data, dict) else None
 
-    def list_tools(self, url: str) -> list[dict]:
+    def list_tools(self, url: str, headers: Optional[dict] = None) -> list[dict]:
         # Best-effort handshake; some servers require it before tools/list.
         try:
             self._rpc(
@@ -44,14 +45,17 @@ class MCPClient:
                     "capabilities": {},
                     "clientInfo": {"name": "boss", "version": "0.1.0"},
                 },
+                headers=headers,
             )
         except Exception:
             pass
-        result = self._rpc(url, "tools/list") or {}
+        result = self._rpc(url, "tools/list", headers=headers) or {}
         return result.get("tools", []) if isinstance(result, dict) else []
 
-    def call_tool(self, url: str, name: str, args: dict) -> Any:
-        result = self._rpc(url, "tools/call", {"name": name, "arguments": args or {}}) or {}
+    def call_tool(self, url: str, name: str, args: dict,
+                  headers: Optional[dict] = None) -> Any:
+        result = self._rpc(url, "tools/call", {"name": name, "arguments": args or {}},
+                           headers=headers) or {}
         content = result.get("content") if isinstance(result, dict) else None
         texts = [
             c.get("text", "")

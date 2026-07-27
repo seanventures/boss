@@ -27,7 +27,7 @@ from .github_adapter import (
     PullRequestResult,
 )
 
-KNOWN_REPO_HOSTS = ("github", "bitbucket")
+KNOWN_REPO_HOSTS = ("github", "bitbucket", "mcp")
 
 
 @runtime_checkable
@@ -85,4 +85,8 @@ def make_repo_host(settings, *, host: Optional[str] = None,
     if kind == "bitbucket":
         from .bitbucket_adapter import BitbucketAdapter
         return BitbucketAdapter(settings, workspace=owner, repo_slug=repo)
+    if kind == "mcp":
+        # SSO/OAuth identity path (BOSS-269): operations via the user's MCP gateway.
+        from .mcp_repo_host import McpRepoHost
+        return McpRepoHost(settings)
     raise ValueError(f"unsupported repo host {kind!r} (known: {', '.join(KNOWN_REPO_HOSTS)})")

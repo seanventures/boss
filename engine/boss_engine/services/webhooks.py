@@ -26,6 +26,14 @@ _BOUNDARY_RANK = {
     "local-only": 4,
 }
 _SUPPORTED_GITHUB_EVENTS = {"pull_request", "check_suite", "issue_comment"}
+# Bitbucket (BOSS-269): X-Event-Key drives event:action (e.g. pullrequest:fulfilled = merged).
+_SUPPORTED_BITBUCKET_EVENTS = {"pullrequest"}
+_BITBUCKET_EVENT_TYPES = {
+    "pullrequest:created": "bitbucket.pr_opened",
+    "pullrequest:updated": "bitbucket.pr_updated",
+    "pullrequest:fulfilled": "bitbucket.pr_merged",
+    "pullrequest:rejected": "bitbucket.pr_declined",
+}
 _GITHUB_COMMUNITY_ACTIONS = {
     "issues": {"opened", "edited", "reopened"},
     "issue_comment": {"created"},
@@ -794,7 +802,9 @@ class InboundWebhookService:
         return {str(key): str(value) for key, value in parsed.items()}
 
     @staticmethod
-    def _resolve_config_secret(value: str) -> str:
+    def _resolve_config_secret(value: Optional[str]) -> str:
+        if not value:            # no secret configured at all -> fail-closed upstream
+            return ""
         if value.startswith("env:"):
             return os.environ.get(value[4:].strip(), "")
         return value
@@ -804,6 +814,8 @@ class InboundWebhookService:
         fallback = self.settings.webhook_inbound_secret
         if source == "github" and self.settings.github_webhook_secret:
             fallback = self.settings.github_webhook_secret
+        if source == "bitbucket" and getattr(self.settings, "bitbucket_webhook_secret", None):
+            fallback = self.settings.bitbucket_webhook_secret
         return self._resolve_config_secret(
             configured.get(source, fallback)
         )
@@ -833,13 +845,15 @@ class InboundWebhookService:
         github_community_only: bool = False,
     ) -> dict[str, Any]:
         normalized_source = source.strip().lower()
-        signature = headers.get("x-hub-signature-256", "")
+        signature = (headers.get("x-hub-signature-256", "")
+                     or headers.get("x-hub-signature", ""))    # Bitbucket's header name
         secret = self._secret(normalized_source)
         if not secret:
             return {
                 "status": "not_configured",
                 "source": normalized_source,
-                "delivery_id": headers.get("x-github-delivery", "").strip() or None,
+                "delivery_id": (headers.get("x-github-delivery", "").strip()
+                                or headers.get("x-request-uuid", "").strip() or None),
                 "duplicate": False,
             }
         expected = (
@@ -847,7 +861,9 @@ class InboundWebhookService:
             + hmac.new(secret.encode("utf-8"), raw_body, hashlib.sha256).hexdigest()
         )
         audit_project_id = self.settings.default_project_id
-        delivery_key = headers.get("x-github-delivery", "").strip()
+        delivery_key = (headers.get("x-github-delivery", "").strip()
+                        or headers.get("x-request-uuid", "").strip()      # Bitbucket delivery id
+                        or headers.get("x-hook-uuid", "").strip())
         if not signature or not compare_digest(signature, expected):
             emit_event(
                 connection,
@@ -950,12 +966,18 @@ class InboundWebhookService:
                 "duplicate": True,
             }
 
-        provider_event = headers.get("x-github-event", "").strip().lower()
-        action = str(payload.get("action") or "").strip().lower()
+        if normalized_source == "bitbucket":
+            event_key = headers.get("x-event-key", "").strip().lower()
+            provider_event, _, action = event_key.partition(":")
+        else:
+            provider_event = headers.get("x-github-event", "").strip().lower()
+            action = str(payload.get("action") or "").strip().lower()
         repo = str((payload.get("repository") or {}).get("full_name") or "")
         project_id = self._project_for_repo(connection, repo)
         community_event_type = None
-        if action in _GITHUB_COMMUNITY_ACTIONS.get(provider_event, set()):
+        if normalized_source == "bitbucket":
+            community_event_type = _BITBUCKET_EVENT_TYPES.get(f"{provider_event}:{action}")
+        elif action in _GITHUB_COMMUNITY_ACTIONS.get(provider_event, set()):
             community_event_type = _GITHUB_COMMUNITY_EVENT_TYPES[provider_event]
         legacy_routed = (
             not github_community_only and provider_event in _SUPPORTED_GITHUB_EVENTS
@@ -1038,7 +1060,10 @@ class InboundWebhookService:
                 )
             )
         )
-        normalized = self._normalize_github_payload(provider_event, payload)
+        if normalized_source == "bitbucket":
+            normalized = self._normalize_bitbucket_payload(provider_event, action, payload)
+        else:
+            normalized = self._normalize_github_payload(provider_event, payload)
         event_id = emit_event(
             connection,
             target_project_id,
@@ -1082,6 +1107,28 @@ class InboundWebhookService:
             "event_id": event_id,
             "project_id": target_project_id,
             "duplicate": False,
+        }
+
+    @staticmethod
+    def _normalize_bitbucket_payload(
+        provider_event: str, action: str, payload: dict
+    ) -> dict:
+        """Canonical PR shape from a Bitbucket pullrequest:* payload (BOSS-269)."""
+        if provider_event != "pullrequest":
+            return {}
+        pr = payload.get("pullrequest") or {}
+        return {
+            "kind": "pull_request",
+            "action": action,
+            "merged": action == "fulfilled",
+            "number": pr.get("id"),
+            "title": pr.get("title") or "",
+            "state": str(pr.get("state") or "").lower(),
+            "source_branch": (((pr.get("source") or {}).get("branch") or {}).get("name")) or "",
+            "destination_branch": (((pr.get("destination") or {}).get("branch") or {}).get("name")) or "",
+            "url": (((pr.get("links") or {}).get("html") or {}).get("href")) or "",
+            "author": ((pr.get("author") or {}).get("nickname")) or "",
+            "merge_commit": (((pr.get("merge_commit") or {}).get("hash")) or ""),
         }
 
     @staticmethod

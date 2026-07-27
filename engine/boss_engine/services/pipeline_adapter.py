@@ -463,6 +463,77 @@ class GitLabPipeline:
         )
 
 
+class BitbucketPipelines:
+    """Bitbucket Pipelines adapter (BOSS-269) — CI checks for Bitbucket-hosted target repos.
+
+    Rides the RepoHost seam's BitbucketAdapter for auth + repo identity; normalizes Bitbucket's
+    state machine (PENDING/IN_PROGRESS/COMPLETED x SUCCESSFUL/FAILED/STOPPED) onto the pipeline
+    verdict vocabulary used by the other providers."""
+
+    provider = "bitbucket_pipelines"
+    _TERMINAL_RESULTS = {"SUCCESSFUL": "passed", "FAILED": "failed", "STOPPED": "failed",
+                         "ERROR": "failed"}
+
+    def __init__(self, settings: Settings, bitbucket=None):
+        from .bitbucket_adapter import BitbucketAdapter
+        self.settings = settings
+        self.bitbucket = bitbucket or BitbucketAdapter(settings)
+
+    @property
+    def repository(self) -> str:
+        return self.bitbucket.repository_full_name
+
+    def discover(self, repo: str) -> PipelineDescriptor:
+        try:
+            self.bitbucket._request("GET", f"{self.bitbucket._repo_path()}/pipelines_config")
+            configured = True
+        except Exception:
+            configured = False
+        return PipelineDescriptor(self.provider, self.repository, configured,
+                                  workflows=[{"name": "bitbucket-pipelines.yml"}] if configured else [])
+
+    def trigger(self, ref: str) -> PipelineRunHandle:
+        created = self.bitbucket._request(
+            "POST", f"{self.bitbucket._repo_path()}/pipelines/",
+            json_body={"target": {"type": "pipeline_ref_target", "ref_type": "branch",
+                                  "ref_name": ref}})
+        return PipelineRunHandle(self.provider, self.repository, ref,
+                                 external_id=str(created.get("uuid", "")))
+
+    def poll(self, handle: PipelineRunHandle) -> PipelineRunStatus:
+        run = self.bitbucket._request(
+            "GET", f"{self.bitbucket._repo_path()}/pipelines/{handle.external_id}")
+        state = (run.get("state") or {})
+        stage = str(state.get("name") or "PENDING").upper()
+        result = str(((state.get("result") or {}).get("name")) or "").upper()
+        completed = stage == "COMPLETED"
+        status = self._TERMINAL_RESULTS.get(result, "failed") if completed else "in_progress"
+        check = PullRequestValidationCheck(
+            name="Bitbucket Pipelines", status="completed" if completed else "in_progress",
+            conclusion=(status if completed else None), html_url=None,
+            started_at=str(run.get("created_on") or "") or None,
+            completed_at=str(run.get("completed_on") or "") or None)
+        return PipelineRunStatus(self.provider, handle.repository, handle.ref,
+                                 status, completed, [check])
+
+    def verdict(self, handle: PipelineRunHandle) -> PipelineVerdict:
+        run = self.poll(handle)
+        summary = (
+            "Bitbucket pipeline passed." if run.status == "passed" else
+            "Bitbucket pipeline failed." if run.completed else
+            "Bitbucket pipeline is still running."
+        )
+        return PipelineVerdict(
+            run.provider, run.repository, run.ref, run.status, summary, run.completed, run.checks
+        )
+
+    def wait_for_verdict(self, ref: str, *, timeout_seconds: int, poll_interval_seconds: int):
+        return _trigger_and_wait(
+            self, ref, timeout_seconds=timeout_seconds,
+            poll_interval_seconds=poll_interval_seconds,
+        )
+
+
 def make_pipeline_adapter(
     settings: Settings,
     *,
@@ -475,4 +546,6 @@ def make_pipeline_adapter(
         return JenkinsPipeline(settings)
     if provider == "gitlab":
         return GitLabPipeline(settings)
+    if provider == "bitbucket_pipelines":
+        return BitbucketPipelines(settings)
     raise ValueError(f"Unsupported pipeline provider: {settings.pipeline_provider}")

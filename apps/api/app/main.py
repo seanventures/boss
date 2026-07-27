@@ -899,6 +899,7 @@ async def require_transport_auth_for_v1(request: Request, call_next):
     # Plane's issue webhook is a machine callback that verifies its own X-Plane-Signature HMAC,
     # so it is exempt from transport auth exactly like the GitHub webhook.
     is_plane_webhook = request.url.path == "/v1/webhooks/plane"
+    is_bitbucket_webhook = request.url.path == "/v1/webhooks/bitbucket"
     # Alerting tools sign reliability alert deliveries (X-Reliability-Signature HMAC) — same model.
     is_reliability_alert = request.url.path == "/v1/reliability/alert"
     if (
@@ -908,6 +909,7 @@ async def require_transport_auth_for_v1(request: Request, call_next):
         or is_inbound_webhook
         or is_github_webhook
         or is_plane_webhook
+        or is_bitbucket_webhook
         or is_reliability_alert
     ):
         principal_token = current_api_principal.set(None)
@@ -4627,6 +4629,28 @@ async def receive_github_webhook(request: Request):
             headers,
             github_community_only=True,
         )
+    if result["status"] == "rejected":
+        raise HTTPException(status_code=401, detail="Invalid webhook signature.")
+    if result["status"] == "not_configured":
+        raise HTTPException(status_code=503, detail="Webhook source is not configured.")
+    if result["status"] == "invalid":
+        raise HTTPException(status_code=400, detail="Invalid webhook payload.")
+    if result["status"] in {"unrouted", "ignored"}:
+        return Response(status_code=204)
+    return JSONResponse(
+        status_code=202,
+        content=InboundWebhookResponse(**result).model_dump(mode="json"),
+    )
+
+
+@app.post("/v1/webhooks/bitbucket", status_code=202)
+async def receive_bitbucket_webhook(request: Request):
+    """Bitbucket ingress (BOSS-269): X-Hub-Signature verified, pullrequest:* normalized to the
+    canonical PR shape (fulfilled = merged) — the Bitbucket analog of the GitHub webhook."""
+    raw_body = await request.body()
+    headers = {key.lower(): value for key, value in request.headers.items()}
+    with begin(engine) as connection:
+        result = inbound_webhooks.ingest(connection, "bitbucket", raw_body, headers)
     if result["status"] == "rejected":
         raise HTTPException(status_code=401, detail="Invalid webhook signature.")
     if result["status"] == "not_configured":

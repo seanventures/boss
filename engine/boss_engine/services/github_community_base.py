@@ -8,6 +8,7 @@ from sqlalchemy.engine import Connection
 
 from ..config import Settings
 from .github_adapter import GitHubAdapter
+from .repo_host import RepoHost  # BOSS-269: agents work against any SCM plugin
 from .receipts import ReceiptService
 
 
@@ -17,7 +18,7 @@ class GitHubCommunityAgentBase:
     def __init__(
         self,
         settings: Settings,
-        adapter_factory: Optional[Callable[[Settings], GitHubAdapter]] = None,
+        adapter_factory: Optional[Callable[[Settings], RepoHost]] = None,
     ) -> None:
         self.settings = settings
         self.receipts = ReceiptService()
@@ -40,7 +41,7 @@ class GitHubCommunityAgentBase:
             raise ValueError(f"Unknown project_id: {project_id}")
         return dict(row)
 
-    def _adapter(self, repository: str) -> GitHubAdapter:
+    def _adapter(self, repository: str) -> RepoHost:
         parts = repository.split("/", 1)
         if len(parts) != 2 or not all(part.strip() for part in parts):
             raise ValueError("GitHub repository must use owner/name format.")
