@@ -55,8 +55,15 @@ describe("executive console accessibility baseline", () => {
       resolve(__dirname, "../app/page.tsx"),
       "utf8",
     );
+    const providerConfigurationSource = readFileSync(
+      resolve(__dirname, "../app/provider-configuration-ui.tsx"),
+      "utf8",
+    );
 
     expect(findVisibleControlsWithoutAccessibleName(pageSource)).toEqual([]);
+    expect(
+      findVisibleControlsWithoutAccessibleName(providerConfigurationSource),
+    ).toEqual([]);
   });
 
   it("provides keyboard skip navigation and labelled landmarks", () => {
@@ -81,6 +88,10 @@ describe("executive console accessibility baseline", () => {
     // <main> content region.
     expect(shellSource).toContain("<nav");
     expect(shellSource).toContain('aria-label="Console areas"');
+    expect(shellSource).toContain("System Configuration");
+    expect(shellSource).toContain(
+      "Connections, providers, resources, health, and FinOps",
+    );
     expect(shellSource).toContain("<main");
     expect(shellSource).toMatch(/<main[^>]*aria-label=/);
 

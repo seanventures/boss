@@ -271,6 +271,47 @@ Acceptance criteria:
 - Given a provider is marked read-only or destructive-actions-disabled, when a write or destructive action is requested, then policy blocks the action before any provider call.
 - Given an agent needs provider data, when it requests access, then it receives typed Resource Plane outputs rather than raw credentials.
 
+### Story RPL-001A: Operate System Configuration
+
+As a ProviderOps Manager, I want connections, inventory, service posture, and
+cloud finance in one truthful workspace, so that I can understand authority,
+impact, health, and spend before changing provider state.
+
+Acceptance criteria:
+
+- Given the System Configuration workspace loads, when the provider catalog is
+  available but a secondary feed fails, then BOSS keeps connection controls
+  available and identifies the failed feed as partial rather than reporting a
+  false total outage.
+- Given AWS or DigitalOcean has an available adapter, when an authorized
+  operator selects it, then BOSS renders its supported authentication methods
+  and named write-only SecretRef slots.
+- Given Azure, Google Cloud, OVHcloud, or any authentication method is planned,
+  when an operator selects it, then BOSS explains that it is planned and
+  disables credential entry and submission.
+- Given a configured account exists, when its table row or drawer renders, then
+  BOSS shows credential slot count and version but never renders stored
+  SecretRef pointers or secret values.
+- Given the active actor lacks `providerops_manage`, when System Configuration
+  renders, then the actor receives an explicit read-only notice and no provider
+  mutation controls.
+- Given an account is untested, fresh, stale, disabled, revoked, or has an
+  error, when it renders, then the state and supporting timestamp or evidence
+  are visible without inference.
+- Given an operator changes the System Configuration view, when the page is
+  reloaded or shared, then `infra_view` restores the same view; saved resource
+  scope covers provider, account, environment, region, and service.
+- Given an account or resource detail drawer opens, when the operator reviews
+  it, then BOSS links impact, ownership, spend, tasks, deployments, budgets,
+  ChangeSets, receipts, and audit events where present.
+- Given an authorized operator chooses permanent revocation, when the warning
+  renders, then it states impact, required approval, absence of direct
+  rollback, retained evidence, and requires the exact account label before
+  submission.
+- Given the workspace renders at 390 CSS pixels, when dense provider tables and
+  account drawers are used, then scrolling remains contained and the document
+  does not overflow horizontally.
+
 ### Story RPL-002: Inventory External Resources
 
 As a founder or operator, I want BOSS to discover and normalize external resources across providers, so that unmanaged, orphaned, costly, or production-critical assets are visible.

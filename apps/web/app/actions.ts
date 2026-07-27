@@ -543,6 +543,25 @@ function getOptionalString(formData: FormData, name: string): string | undefined
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
+function parseProviderCredentialRefs(formData: FormData): Record<string, string> {
+  const refs: Record<string, string> = {};
+  for (const [name, value] of formData.entries()) {
+    if (
+      !name.startsWith("credential_ref__") ||
+      typeof value !== "string" ||
+      !value.trim()
+    ) {
+      continue;
+    }
+    const slot = name.slice("credential_ref__".length).trim();
+    if (!slot) {
+      continue;
+    }
+    refs[slot] = value.trim();
+  }
+  return refs;
+}
+
 export async function resolveDecisionAction(formData: FormData): Promise<void> {
   const decisionId = formData.get("decision_id");
   const action = formData.get("action");
@@ -1481,11 +1500,18 @@ export async function createProviderAccountAction(
   if (typeof accountLabel !== "string" || !accountLabel.trim()) {
     throw new Error("account_label is required");
   }
+  const credentialRefs = parseProviderCredentialRefs(formData);
   await client.createProviderAccount({
     project_id: getProjectId(formData),
     provider: provider.trim(),
     account_label: accountLabel.trim(),
-    credential_ref: getOptionalString(formData, "credential_ref"),
+    auth_method: getOptionalString(formData, "auth_method"),
+    credential_ref:
+      Object.keys(credentialRefs).length === 0
+        ? getOptionalString(formData, "credential_ref")
+        : undefined,
+    credential_refs:
+      Object.keys(credentialRefs).length > 0 ? credentialRefs : undefined,
     scopes: parseLines(formData.get("scopes")),
     read_only: parseProviderOpsCheckbox(formData, "read_only", true),
     deploy_capable: parseProviderOpsCheckbox(formData, "deploy_capable", false),
@@ -1504,16 +1530,103 @@ export async function createProviderAccountAction(
   revalidatePath("/");
 }
 
-export async function testProviderAccountAction(formData: FormData): Promise<void> {
+function getProviderAccountId(formData: FormData): string {
   const providerAccountId = formData.get("provider_account_id");
   if (typeof providerAccountId !== "string" || !providerAccountId.trim()) {
     throw new Error("provider_account_id is required");
   }
+  return providerAccountId.trim();
+}
+
+export async function testProviderAccountAction(formData: FormData): Promise<void> {
+  const providerAccountId = getProviderAccountId(formData);
   await client.testProviderAccount(
-    providerAccountId.trim(),
+    providerAccountId,
     getProjectId(formData),
     getActor(formData),
   );
+  revalidatePath("/");
+}
+
+export async function updateProviderAccountAction(
+  formData: FormData,
+): Promise<void> {
+  const providerAccountId = getProviderAccountId(formData);
+  await client.updateProviderAccount(providerAccountId, {
+    project_id: getProjectId(formData),
+    account_label: getOptionalString(formData, "account_label"),
+    owner_actor: getOptionalString(formData, "owner_actor"),
+    scopes: parseLines(formData.get("scopes")),
+    read_only: parseProviderOpsCheckbox(formData, "read_only", true),
+    deploy_capable: parseProviderOpsCheckbox(
+      formData,
+      "deploy_capable",
+      false,
+    ),
+    billing_readable: parseProviderOpsCheckbox(
+      formData,
+      "billing_readable",
+      false,
+    ),
+    destructive_actions_disabled: parseProviderOpsCheckbox(
+      formData,
+      "destructive_actions_disabled",
+      true,
+    ),
+    actor: getActor(formData),
+  });
+  revalidatePath("/");
+}
+
+export async function enableProviderAccountAction(
+  formData: FormData,
+): Promise<void> {
+  await client.enableProviderAccount(getProviderAccountId(formData), {
+    project_id: getProjectId(formData),
+    actor: getActor(formData),
+  });
+  revalidatePath("/");
+}
+
+export async function disableProviderAccountAction(
+  formData: FormData,
+): Promise<void> {
+  await client.disableProviderAccount(getProviderAccountId(formData), {
+    project_id: getProjectId(formData),
+    actor: getActor(formData),
+  });
+  revalidatePath("/");
+}
+
+export async function rotateProviderCredentialsAction(
+  formData: FormData,
+): Promise<void> {
+  const credentialRefs = parseProviderCredentialRefs(formData);
+  if (Object.keys(credentialRefs).length === 0) {
+    throw new Error("At least one replacement SecretRef is required.");
+  }
+  const overlapMinutes = Number(formData.get("overlap_minutes") ?? 30);
+  await client.rotateProviderCredentials(getProviderAccountId(formData), {
+    project_id: getProjectId(formData),
+    credential_refs: credentialRefs,
+    overlap_minutes: Number.isFinite(overlapMinutes) ? overlapMinutes : 30,
+    actor: getActor(formData),
+  });
+  revalidatePath("/");
+}
+
+export async function revokeProviderAccountAction(
+  formData: FormData,
+): Promise<void> {
+  const accountLabel = getOptionalString(formData, "account_label");
+  const confirmation = getOptionalString(formData, "confirmation");
+  if (!accountLabel || confirmation !== accountLabel) {
+    throw new Error("Type the account label exactly to confirm permanent revocation.");
+  }
+  await client.revokeProviderAccount(getProviderAccountId(formData), {
+    project_id: getProjectId(formData),
+    actor: getActor(formData),
+  });
   revalidatePath("/");
 }
 

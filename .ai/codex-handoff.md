@@ -1,5 +1,26 @@
 # Codex Handoff
 
+## 2026-07-26 BOSS-237 System Configuration UX
+
+- Branch `ai/codex/boss-237-system-config-ux` starts from `main` after BOSS-236
+  merged as `36144d0`; Plane BOSS-237 is In Progress.
+- Replaced the loose ProviderOps summary with a cohesive System Configuration
+  workspace: Connections, Resources, Scaling & Health, and Cloud FinOps.
+- Provider definitions drive truthful available/planned catalog states and
+  named write-only credential forms. Planned providers fail closed; configured
+  SecretRef pointers never render back to the operator.
+- Added URL-persisted views, saved provider/account/environment/region/service
+  scope, permission-aware lifecycle controls, partial-feed resilience, explicit
+  empty/error/freshness states, and account/resource evidence drawers.
+- Live browser validation covered seeded enterprise data at desktop and 390px
+  mobile. It found and fixed hidden-header horizontal overflow and a transformed
+  ancestor that broke fixed drawer containment. A clean final browser tab had
+  no console errors.
+- Green evidence: 127/127 web tests, repository lint/typecheck, production Next
+  build, strict docs, smoke, diff hygiene, and desktop/mobile interaction and
+  overflow checks. Product, technical, user-story, and `.ai` records are
+  updated here.
+
 ## 2026-07-26 BOSS-236 provider credential lifecycle
 
 - Branch `ai/codex/boss-236-provider-credential-lifecycle` starts from

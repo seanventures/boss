@@ -3,6 +3,24 @@
 All 15-min terminal updates and major milestones appended here. Chronological, newest at top.
 
 ---
+## 2026-07-26 — Codex — BOSS-237 System Configuration UX
+
+- Advanced BOSS-237 Backlog → Todo → In Progress in Plane after merging
+  BOSS-236 and checking contributor branches and GitHub PRs for overlap.
+- Built one System Configuration workspace for Connections, Resources, Scaling
+  & Health, and Cloud FinOps with URL persistence, saved five-dimensional
+  scope, truthful provider definitions, write-only credential posture,
+  permission-aware lifecycle controls, partial-feed resilience, and
+  evidence-oriented account/resource drawers.
+- Live desktop and 390px mobile browser QA found and fixed table-driven
+  horizontal document overflow and transformed-ancestor drawer containment.
+  Planned Azure credentials fail closed, configured SecretRefs remain masked,
+  resource view selection survives reload, and a clean validation tab reports
+  no console errors.
+- Validation: 127/127 web tests, repository lint/typecheck, production Next
+  build, strict docs, smoke, diff hygiene, and secret-pattern scan pass.
+
+---
 ## 2026-07-26 — Codex — BOSS-236 provider credential lifecycle
 
 - Advanced BOSS-236 Backlog → Todo → In Progress in Plane after deduping the

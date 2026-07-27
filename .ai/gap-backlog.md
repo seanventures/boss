@@ -3,9 +3,13 @@
 ## 2026-07-26 Provider suite foundation
 
 - BOSS-236 closes the connection/credential lifecycle foundation for BOSS-235.
+- BOSS-237 closes the System Configuration UX slice locally: persisted
+  connections/resources/health/FinOps views, truthful planned states,
+  permission-aware account lifecycle controls, saved scope, partial-feed
+  handling, evidence drawers, and responsive containment. Merge is pending.
 - BOSS-18 remains the model-provider BYOK stream.
 - BOSS-64/65/70 remain the AWS/Azure/GCP adapter and IaC stream.
-- BOSS-237–245 remain open for suite UX, DigitalOcean/OVH expansion,
+- BOSS-238–245 remain open for DigitalOcean/OVH expansion,
   inventory/topology, monitoring, autoscaling, accounting/FinOps, and adapter
   conformance. Planned adapters are represented honestly and fail closed.
 

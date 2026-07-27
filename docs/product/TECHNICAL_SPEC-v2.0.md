@@ -419,8 +419,15 @@ Ground-truth and Assurance (planned):
 
 ProviderOps:
 
+- `GET /v1/provider-definitions`
 - `GET /v1/providers`
 - `POST /v1/providers`
+- `GET /v1/providers/{id}`
+- `PATCH /v1/providers/{id}`
+- `POST /v1/providers/{id}/enable`
+- `POST /v1/providers/{id}/disable`
+- `POST /v1/providers/{id}/rotate`
+- `POST /v1/providers/{id}/revoke`
 - `POST /v1/providers/{id}/test`
 - `GET /v1/resources`
 - `POST /v1/resources/sync`
@@ -437,6 +444,32 @@ ProviderOps:
 - `POST /v1/deployment-runs`
 - `GET /v1/provider-health`
 - `GET /v1/drift-reports`
+
+ProviderOps operator contract:
+
+- The System Configuration route composes provider definitions and accounts as
+  its core feed. Secondary inventory, cost, health, deployment, ChangeSet, and
+  receipt feeds are loaded independently so one failure produces a visible
+  partial state instead of hiding usable connection controls.
+- The client persists the active Connections, Resources, Scaling & Health, or
+  Cloud FinOps view in `infra_view` and mirrors saved resource scope locally
+  across provider, account, environment, region, and service.
+- Connection forms derive their authentication methods and named credential
+  slots from provider definitions. Planned adapters and planned auth methods
+  are disabled before submission.
+- Credential inputs are password/write-only controls. Read models expose only
+  slot names and lifecycle posture; the UI renders a configured marker, never
+  the stored SecretRef pointer.
+- Mutating server actions carry project and actor scope and rely on API
+  enforcement of `providerops_manage`. The client also removes mutation
+  controls for unauthorized actors.
+- Provider-account and resource drawers are viewport-bound dialogs containing
+  durable relationship and audit evidence. Revocation additionally requires
+  exact account-label confirmation and explains that rollback means creating a
+  new account and SecretRefs.
+- Tabular inventory may use an internal horizontal scroll container, but the
+  document viewport itself must not overflow at the 390-pixel mobile
+  breakpoint.
 
 Model Entitlement:
 

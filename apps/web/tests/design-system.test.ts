@@ -11,6 +11,10 @@ describe("BOSS mission-control design system", () => {
     resolve(__dirname, "../app/mission-operations-ui.tsx"),
     "utf8",
   );
+  const providerConfiguration = readFileSync(
+    resolve(__dirname, "../app/provider-configuration-ui.tsx"),
+    "utf8",
+  );
 
   it("defines the approved foundations", () => {
     expect(css).toContain("--void: #090d17");
@@ -40,9 +44,25 @@ describe("BOSS mission-control design system", () => {
     expect(page).toContain("<MissionTaskBoard");
     expect(css).toContain(".mission-roster-header");
     expect(css).toContain(".mission-task-footer");
+    expect(providerConfiguration).toContain('className="provider-subnav"');
+    expect(providerConfiguration).toContain('className="provider-table"');
+    expect(providerConfiguration).toContain('className="provider-drawer"');
+    expect(providerConfiguration).toContain('className="provider-cost-chart"');
+    expect(css).toContain(".provider-suite-summary");
+    expect(css).toContain(".provider-drawer");
   });
 
   it("honors reduced-motion preferences", () => {
     expect(css).toContain("@media (prefers-reduced-motion: reduce)");
+  });
+
+  it("keeps provider tables and fixed drawers inside the mobile viewport", () => {
+    expect(css).toMatch(
+      /\.provider-table-wrap\s*\{[\s\S]*position:\s*relative;[\s\S]*max-width:\s*100%;[\s\S]*overflow-x:\s*auto;/,
+    );
+    expect(css).toMatch(
+      /\.bx-content\[data-active="infra"\][\s\S]*animation:\s*none\s*!important;/,
+    );
+    expect(css).toContain("width: 100vw;");
   });
 });

@@ -1,6 +1,6 @@
 # BOSS Requirements Traceability Matrix (Autonomous .ai version)
 
-**Last rebuilt**: 2026-07-26 by Codex (BOSS-25–31 OSS runtime seams)
+**Last rebuilt**: 2026-07-26 by Codex (BOSS-237 System Configuration UX)
 **Sources**: docs/product/PRD-v2.0.md, TECHNICAL_SPEC-v2.0.md, REQUIREMENT_INVENTORY.md, TRACEABILITY.md, user-stories.md, AGENTS.md, README, api/openapi.yaml, db/schema.sql, packages/specpack/*, code + tests scan.
 **Status key**: Implemented (full vertical + tests + states + audit + DoD), Partial, Planned, Blocked (external per real-only), In-Progress (this session).
 **DoD reminder**: Requirement complete only when traced, full journey, UI nav, backend, persistence, auth server+client, validations, loading/empty/error/success, edges, mobile/a11y basics, security/arch/QA review, tests pass, lint/build, docs updated, NO mocks/fakes/TODOs for required behavior.
@@ -9,6 +9,7 @@
 
 | Plane | Requirement | Implementation | Verification | Status |
 | --- | --- | --- | --- | --- |
+| BOSS-237 / PRV-02 | System Configuration navigation and operator UX | four persisted views; truthful provider catalog; write-only credential forms; permission-aware lifecycle controls; saved five-dimensional resource scope; partial states; evidence drawers; responsive containment | 127 web tests, lint/typecheck, production build, strict docs, smoke, desktop + 390px live browser pass, zero final console errors | Implemented; merge pending |
 | BOSS-236 / PRV-01 | Infrastructure provider accounts and credential lifecycle | initial-cloud auth definitions; multi-slot SecretRefs; account update/test/enable/disable/revoke/rotate; lifecycle gates; typed API/client/OpenAPI | 10 focused, 77 widened, 28 legacy ProviderOps, 279 complete legacy API, schema idempotency, lint/typecheck | Implemented |
 
 ## 2026-07-26 OSS runtime seam trace
