@@ -21,6 +21,7 @@ from .core import (
 from .receipts import ReceiptService
 from .email_adapter import EmailAdapter
 from .slack_adapter import SlackAdapter
+from .mattermost_adapter import MattermostAdapter
 from .github_adapter import IntegrationConfigurationError
 
 
@@ -38,6 +39,7 @@ class CommsService:
         self.budget = BudgetGovernor(settings)
         self.receipts = ReceiptService()
         self.slack = SlackAdapter(settings)
+        self.mattermost = MattermostAdapter(settings)
         self.email = EmailAdapter(settings)
 
     def list_channel_policies(
@@ -95,7 +97,7 @@ class CommsService:
     ) -> dict:
         normalized_provider = provider.strip().lower()
         normalized_mode = delivery_mode.strip().lower()
-        if normalized_provider not in {"slack", "email"}:
+        if normalized_provider not in {"slack", "mattermost", "email"}:
             raise ValueError(f"Unsupported communications provider: {provider}")
         if normalized_mode not in {"disabled", "draft_only", "real_send_allowed"}:
             raise ValueError(f"Unsupported communications delivery mode: {delivery_mode}")
@@ -696,6 +698,13 @@ class CommsService:
                 "effect_kind": "email.message.send",
                 "skill_id": "email.send_real",
             }
+        if channel.startswith("mattermost:"):
+            return {
+                "key": "mattermost",
+                "label": "Mattermost",
+                "effect_kind": "mattermost.message.post",
+                "skill_id": "mattermost.post_real",
+            }
         return None
 
     def _delivery_policy_block(
@@ -739,6 +748,8 @@ class CommsService:
             return self.slack.post_message(channel, subject, body)
         if provider["key"] == "email":
             return self.email.send_message(channel, subject, body)
+        if provider["key"] == "mattermost":
+            return self.mattermost.post_message(channel, subject, body)
         raise RuntimeError(f"Unsupported provider key: {provider['key']}")
 
     def list_inbox_messages(

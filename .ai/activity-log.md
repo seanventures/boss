@@ -3,6 +3,29 @@
 All 15-min terminal updates and major milestones appended here. Chronological, newest at top.
 
 ---
+## 2026-07-26 — BOSS-270–278 Work Orchestration and Delivery Presence
+
+- Added canonical ranked work, quota, allocation, tracker binding, bot/channel,
+  and delivery-presence records plus job references and ranked claim ordering.
+- Enforced applicable global through agent/workload concurrency envelopes
+  atomically at claim time and released capacity across completion, retry,
+  budget deferral, and terminal failure.
+- Added Plane-first plugin registration and leased, deduplicated,
+  Receipt-backed issue creation; alternate tracker providers stay typed and
+  fail closed without an executor.
+- Seeded the Product Manager agent and work-tracker/Mattermost capabilities;
+  added official Mattermost bot posting and GitHub/Plane/Mattermost presence.
+- Added the Mission Control Work Allocation area and governing product,
+  technical, policy, OpenAPI, test, and coordination contracts. Browser QA
+  caught and closed the portfolio-area visibility regression.
+- Final local evidence: 23 focused API/Postgres tests, eight widened legacy
+  lease/comms/budget regressions, 30 worker tests, 128 web tests, Ruff,
+  TypeScript, production build, SpecPack YAML, generated docs, compile,
+  schema bootstrap, secret scan, and diff checks pass. The repository-wide
+  OpenAPI audit retains only its pre-existing backlog; every new
+  work-orchestration route is present.
+
+---
 ## 2026-07-26 — Codex — BOSS-237 System Configuration UX
 
 - Advanced BOSS-237 Backlog → Todo → In Progress in Plane after merging

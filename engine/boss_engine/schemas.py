@@ -1969,10 +1969,16 @@ class JobSummary(BaseModel):
     id: str
     project_id: str
     task_id: Optional[str] = None
+    work_item_id: Optional[str] = None
+    tracker_binding_id: Optional[str] = None
+    allocation_id: Optional[str] = None
     kind: str
     status: str
     data_boundary: DataBoundary = "internal"
     priority: int
+    priority_score: Optional[float] = None
+    workload_class: str = "general"
+    resource_units: int = 1
     max_attempts: int
     attempt: int
     run_after: str
@@ -1980,6 +1986,10 @@ class JobSummary(BaseModel):
 
 class JobListItem(JobSummary):
     task_title: Optional[str] = None
+    work_title: Optional[str] = None
+    tracker_provider: Optional[str] = None
+    external_key: Optional[str] = None
+    external_url: Optional[str] = None
     lease_owner: Optional[str] = None
     lease_expires_at: Optional[str] = None
     heartbeat_at: Optional[str] = None
@@ -1999,11 +2009,17 @@ class JobCreateRequest(BaseModel):
     project_id: str
     kind: str
     task_id: Optional[str] = None
+    work_item_id: Optional[str] = None
+    tracker_binding_id: Optional[str] = None
+    allocation_id: Optional[str] = None
     payload: dict[str, Any] = Field(default_factory=dict)
     data_boundary: Optional[DataBoundary] = None
     requires_reservation: bool = False
     reservation_id: Optional[str] = None
     priority: int = Field(default=100, ge=0)
+    priority_score: Optional[float] = Field(default=None, ge=0, le=100)
+    workload_class: str = "general"
+    resource_units: int = Field(default=1, ge=1, le=1000)
     max_attempts: int = Field(default=3, ge=1, le=20)
     run_after_seconds: int = Field(default=0, ge=0, le=86_400)
 
@@ -2096,9 +2112,15 @@ class LeasedJob(BaseModel):
     id: str
     project_id: str
     task_id: Optional[str] = None
+    work_item_id: Optional[str] = None
+    tracker_binding_id: Optional[str] = None
+    allocation_id: Optional[str] = None
     kind: str
     payload: dict[str, Any]
     data_boundary: DataBoundary = "internal"
+    priority_score: Optional[float] = None
+    workload_class: str = "general"
+    resource_units: int = 1
     attempt: int
     max_attempts: int
     lease_token: str
@@ -6431,3 +6453,118 @@ class A2AMessageReplayRequest(BaseModel):
         self.reason = _require_text(self.reason, "reason")
         self.actor = _require_text(self.actor, "actor")
         return self
+
+
+class WorkItemUpsertRequest(BaseModel):
+    project_id: str
+    subject_type: str
+    subject_id: str
+    title: str
+    description: str = ""
+    status: str = "active"
+    strategic_value: int = Field(default=50, ge=0, le=100)
+    customer_impact: int = Field(default=50, ge=0, le=100)
+    urgency: int = Field(default=50, ge=0, le=100)
+    cost_of_delay: int = Field(default=50, ge=0, le=100)
+    risk_reduction: int = Field(default=50, ge=0, le=100)
+    dependency_pressure: int = Field(default=50, ge=0, le=100)
+    confidence: int = Field(default=75, ge=0, le=100)
+    manual_adjustment: int = Field(default=0, ge=-100, le=100)
+    rationale: str = ""
+    workload_class: str = "general"
+    estimated_units: int = Field(default=1, ge=1, le=10000)
+    due_at: Optional[datetime] = None
+    owner_actor: Optional[str] = None
+    evidence: list[Any] = Field(default_factory=list)
+    source: str = "boss"
+    actor: str = "product_manager"
+
+
+class ResourceQuotaUpsertRequest(BaseModel):
+    project_id: str
+    scope_type: Literal["global", "org", "workspace", "project", "agent", "workload"]
+    scope_id: str
+    resource_kind: str = "job_concurrency"
+    reserved_min: int = Field(default=0, ge=0)
+    soft_limit: int = Field(default=1, ge=0)
+    hard_limit: int = Field(default=1, ge=1)
+    burst_limit: int = Field(default=0, ge=0)
+    allocation_weight: float = Field(default=1, gt=0)
+    borrow_enabled: bool = False
+    policy: dict[str, Any] = Field(default_factory=dict)
+    actor: str = "chief_operator"
+
+
+class ResourceAllocationPlanRequest(BaseModel):
+    project_id: str
+    resource_kind: str = "job_concurrency"
+    actor: str = "chief_operator"
+
+
+class WorkTrackerBindingUpsertRequest(BaseModel):
+    project_id: str
+    work_item_id: str
+    provider_key: Optional[str] = None
+    external_workspace_id: Optional[str] = None
+    external_project_id: Optional[str] = None
+    external_issue_id: Optional[str] = None
+    external_key: Optional[str] = None
+    external_url: Optional[str] = None
+    external_state: Optional[str] = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    actor: str = "product_manager"
+
+
+class WorkTrackerSyncExecuteRequest(BaseModel):
+    project_id: str
+    binding_id: str
+    worker_id: str
+    lease_token: str
+    created_by_job_id: str
+
+
+class DeliveryBotIdentityUpsertRequest(BaseModel):
+    project_id: str
+    provider: Literal["mattermost", "github", "plane"]
+    agent_key: str
+    display_name: str
+    external_identity: Optional[str] = None
+    agent_definition_id: Optional[str] = None
+    credential_secret_ref_id: Optional[str] = None
+    avatar_url: Optional[str] = None
+    policy: dict[str, Any] = Field(default_factory=dict)
+    actor: str = "chief_operator"
+
+
+class DeliveryStatusChannelUpsertRequest(BaseModel):
+    project_id: str
+    provider: Literal["mattermost", "github", "plane"]
+    channel_key: str
+    display_name: str
+    purpose: str
+    external_channel_id: Optional[str] = None
+    external_url: Optional[str] = None
+    bot_identity_id: Optional[str] = None
+    event_kinds: list[str] = Field(default_factory=list)
+    allowed_data_boundaries: list[DataBoundary] = Field(
+        default_factory=lambda: ["public", "internal"]
+    )
+    configuration: dict[str, Any] = Field(default_factory=dict)
+    actor: str = "chief_operator"
+
+
+class DeliveryPresenceEventCreateRequest(BaseModel):
+    project_id: str
+    provider: Literal["mattermost", "github", "plane"]
+    event_kind: str
+    subject_type: str
+    subject_id: str
+    status: str
+    summary: str
+    dedupe_key: str
+    channel_id: Optional[str] = None
+    bot_identity_id: Optional[str] = None
+    external_url: Optional[str] = None
+    receipt_id: Optional[str] = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    actor: str = "delivery_presence"

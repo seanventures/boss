@@ -30,6 +30,8 @@ critical_invariants:
   - assurance_policy_composition_is_deterministic_and_fail_closed
   - agent_group_consensus_never_bypasses_governance
   - effective_capability_is_the_intersection_of_all_authority
+  - externally_tracked_work_is_the_only_normal_agent_execution_path
+  - tracker_provider_is_intake_authority_and_boss_jobs_are_execution_authority
 objects:
   core:
     - rolespec
@@ -111,6 +113,15 @@ objects:
     - integration_connection
     - executor_binding
     - capability_resolution
+  work_orchestration:
+    - work_item
+    - resource_quota
+    - resource_allocation
+    - work_tracker_provider
+    - work_tracker_binding
+    - delivery_bot_identity
+    - delivery_status_channel
+    - delivery_presence_event
 workflows:
   ground_truth:
     - ground_truth_metric_evaluation
@@ -135,6 +146,12 @@ workflows:
   integrations:
     - integration_connection_lifecycle
     - capability_resolution_gate
+  work_orchestration:
+    - ranked_portfolio_refresh
+    - dynamic_resource_allocation
+    - work_tracker_issue_sync
+    - tracked_job_lease
+    - delivery_presence_publish
 policies:
   - default_safety
   - resource_plane_policy
@@ -142,6 +159,7 @@ policies:
   - model_entitlement_policy
   - commercial_packaging_policy
   - enterprise_governance_policy
+  - work_orchestration_policy
 packs:
   - core_v2
   - community_edition

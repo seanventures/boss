@@ -45,6 +45,38 @@ def test_add_comment_posts(monkeypatch):
     assert calls[0][0] == "POST" and calls[0][1] == "issues/iss/comments/" and calls[0][2] == {"comment_html": "<p>hi</p>"}
 
 
+def test_create_issue_returns_canonical_provider_payload(monkeypatch):
+    c = _client()
+    calls = []
+    monkeypatch.setattr(
+        c,
+        "_request",
+        lambda method, pid, path, body=None: calls.append(
+            (method, pid, path, body)
+        )
+        or {"id": "issue-7", "sequence_id": 31, "name": body["name"]},
+    )
+
+    issue = c.create_issue(
+        "proj",
+        name="Rank customer-facing work",
+        description_html="<p>Measured priority rationale.</p>",
+    )
+
+    assert issue["id"] == "issue-7"
+    assert calls == [
+        (
+            "POST",
+            "proj",
+            "issues/",
+            {
+                "name": "Rank customer-facing work",
+                "description_html": "<p>Measured priority rationale.</p>",
+            },
+        )
+    ]
+
+
 def test_request_failure_is_fail_safe(monkeypatch):
     # a network error yields None (logged), never raises -> set_state/add_comment return False
     c = _client()

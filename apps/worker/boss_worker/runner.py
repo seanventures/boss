@@ -296,6 +296,7 @@ def capabilities() -> list[str]:
         "a2a.dispatch",
         "enterprise.marketplace.validate",
         "providerops.sync.readonly",
+        "work_tracker.issue.sync",
         "plan.command",
         "plan.generate",
         "openai.plan",
@@ -337,6 +338,22 @@ def build_agent_brief_result(job: LeasedJob) -> dict[str, Any]:
         "safety_gates": ["respect_role_boundaries", "escalate_missing_data"],
         "required_decision_when": ["scope_expansion", "policy_override"],
     }
+    runtime_contract = compiled_prompt.get("runtime_contract")
+    if job.kind == "agent.studio.execute" and isinstance(runtime_contract, dict):
+        declared_sections = runtime_contract.get("sections")
+        if isinstance(declared_sections, list) and declared_sections:
+            strategy = {
+                **strategy,
+                "contract": str(
+                    runtime_contract.get("artifact_type")
+                    or strategy["contract"]
+                ),
+                "sections": [
+                    str(section)
+                    for section in declared_sections
+                    if str(section).strip()
+                ],
+            }
     grounding_context = _agent_grounding_context(job)
     grounding_status = "grounded_in_payload_context" if grounding_context else "needs_control_plane_context"
     findings = [
@@ -634,6 +651,24 @@ def execute_job(job: LeasedJob, client: ControlPlaneClient) -> dict[str, Any]:
             )
         except Exception as error:  # transport/API outages use durable retry
             raise RetryableJobError(str(error)) from error
+    if job.kind == "work_tracker.issue.sync":
+        try:
+            result = client.sync_work_tracker(
+                {
+                    "project_id": job.project_id,
+                    "binding_id": job.payload["binding_id"],
+                    "worker_id": client.worker_id,
+                    "lease_token": job.lease_token,
+                    "created_by_job_id": job.id,
+                }
+            )
+        except Exception as error:  # provider/API outages use durable retry
+            raise RetryableJobError(str(error)) from error
+        if result.get("status") != "succeeded":
+            raise RetryableJobError(
+                result.get("reason") or "Work-tracker sync failed."
+            )
+        return result
     if job.kind.startswith("agent.") and job.kind != "agent.resume":
         return build_agent_brief_result(job)
     if job.kind == "enterprise.marketplace.validate":

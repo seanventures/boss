@@ -6975,6 +6975,57 @@ paths:
         - { name: limit, in: query, required: false, schema: { type: integer, default: 100 } }
       responses:
         '200': { description: A2A audit feed }
+  /v1/work-orchestration/overview:
+    get:
+      summary: Inspect ranked work, quotas, allocations, jobs, tracker bindings, and delivery presence
+      parameters:
+        - { name: project_id, in: query, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Embedded work-orchestration operator read model }
+  /v1/work-orchestration/items:
+    post:
+      summary: Score a canonical work item, bind it to the default tracker, allocate capacity, and queue synchronization
+      responses:
+        '200': { description: Ranked work item, tracker binding, allocation, and sync job }
+        '422': { description: Invalid score, missing tracker, or unavailable quota }
+  /v1/work-orchestration/quotas:
+    post:
+      summary: Create or update a bounded resource quota
+      responses:
+        '200': { description: Effective quota envelope }
+        '422': { description: Invalid scope or limit relationship }
+  /v1/work-orchestration/allocations/plan:
+    post:
+      summary: Rebalance project capacity in effective-score order
+      responses:
+        '200': { description: Deterministic allocation plan with granted and throttled work }
+  /v1/work-orchestration/tracker-bindings:
+    post:
+      summary: Bind work to an installed tracker plugin and queue provider synchronization when needed
+      responses:
+        '200': { description: Canonical tracker binding and optional sync job }
+        '422': { description: Work item or tracker plugin is unavailable }
+  /v1/work-orchestration/tracker-sync/execute:
+    post:
+      summary: Execute a receipt-backed tracker write authorized by an active worker lease
+      responses:
+        '200': { description: Synchronized binding and external-effect receipt }
+        '422': { description: Lease or tracker binding does not authorize the write }
+  /v1/work-orchestration/bot-identities:
+    post:
+      summary: Register a governed Plane, GitHub, or Mattermost bot identity
+      responses:
+        '200': { description: Delivery bot identity without secret material }
+  /v1/work-orchestration/status-channels:
+    post:
+      summary: Register a delivery-status channel and its event/data-boundary policy
+      responses:
+        '200': { description: Delivery status channel }
+  /v1/work-orchestration/presence-events:
+    post:
+      summary: Record a deduplicated ticket, pull-request, deployment, or bot presence event
+      responses:
+        '200': { description: Delivery presence event }
 components:
   securitySchemes:
     BossBearerAuth:

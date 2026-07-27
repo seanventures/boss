@@ -1,5 +1,31 @@
 # Codex Handoff
 
+## 2026-07-26 BOSS-270–278 work orchestration and delivery presence
+
+- Branch `ai/codex/boss-270-work-orchestration` is stacked on the Agent Studio
+  branch/PR #88 so Product Manager execution reuses the canonical Studio and
+  A2A runtime instead of creating a second agent system.
+- Added explainable `P0..P4` portfolio scoring, global/org/workspace/project/
+  workload/agent concurrency envelopes, deterministic ranked allocation, and
+  atomic hierarchical quota checks in the fenced Postgres job claim path.
+- Plane is the seeded open-source default WorkTracker. New work receives a
+  binding and a leased `work_tracker.issue.sync` job; provider creation is
+  deduplicated by an external-effect Receipt. Required Plane connections gate
+  ordinary agent leasing until synchronization; unconfigured Community installs
+  retain visible advisory migration behavior.
+- Added the seeded Product Manager agent, work-tracking/allocation skills, and
+  declared output-contract persistence so Product Manager runs create versioned
+  `product_delivery_brief` artifacts with PRD/ticket change sections. Also
+  added Mattermost bot delivery, GitHub/Plane/Mattermost delivery-presence
+  records, bot identities and status channels, plus the Mission Control Work
+  Allocation area for rankings, quota pressure, leases, ticket state, and
+  delivery events. Matching GitHub deployment events project automatically
+  into configured status channels with their bot identity; external Mattermost
+  delivery remains governed by the existing comms effect path.
+- Governing PRD/technical spec, focused product spec, policy, SpecPack manifest,
+  OpenAPI, tests, and coordination evidence are updated. Plane BOSS-270–278
+  remain In Progress until the release merge.
+
 ## 2026-07-26 BOSS-237 System Configuration UX
 
 - Branch `ai/codex/boss-237-system-config-ux` starts from `main` after BOSS-236

@@ -14,6 +14,10 @@
 - GitHub: draft PR #16 carries BOSS-22/BOSS-23 and is stacked on draft PR #15; other open PRs were inspected for overlap before implementation.
 
 ## Overall Product Status
+- BOSS-270–278 provide one ranked and quota-bounded path from Plane-backed
+  intake to fenced agent execution. Plane creation is a leased,
+  receipt-producing job; Mission Control embeds priority, quota, ticket, job,
+  GitHub deployment, Mattermost channel, and bot-presence truth.
 - BOSS-237 turns the ProviderOps surface into a coherent System Configuration
   workspace with persisted Connections, Resources, Scaling & Health, and Cloud
   FinOps views; truthful provider availability; named write-only credential

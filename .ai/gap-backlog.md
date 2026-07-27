@@ -1,5 +1,20 @@
 # BOSS Gap Backlog (.ai Autonomous Version)
 
+## 2026-07-26 Work orchestration disposition
+
+- BOSS-270–278 close the local implementation gap for explainable work ranking,
+  hierarchical job quotas, Plane-first tracked intake, Product Manager
+  ownership, embedded ticket/job visibility, and GitHub/Mattermost delivery
+  presence.
+- Alternate WorkTracker plugins publish typed capabilities but remain
+  fail-closed until their provider executors and credentials are installed.
+- Live Mattermost sending remains intentionally disabled until a bot token,
+  server URL, channel policy, and `BOSS_MATTERMOST_REAL_SEND_ALLOWED=true` are
+  supplied. This is external rollout configuration, not a silent local success.
+- Legacy unscoped job producers remain measurable migration debt. New Agent
+  Studio work uses the mandatory tracked path; a later hardening release may
+  reject unscoped job creation after every producer has migrated.
+
 ## 2026-07-26 GitHub project sync delivery map
 
 - BOSS-247 closes the project-scoped connection/repository-binding foundation

@@ -98,6 +98,18 @@ class FakeControlPlaneClient:
             "result": {"ok": True},
         }
 
+    def sync_work_tracker(self, payload):
+        self.calls.append(("sync_work_tracker", payload))
+        return {
+            "status": "succeeded",
+            "receipt_id": "rcpt_tracker",
+            "binding": {
+                "id": payload["binding_id"],
+                "external_issue_id": "plane-issue-31",
+                "external_key": "BOSS-31",
+            },
+        }
+
     def merge_pull_request(self, payload):
         self.calls.append(("merge_pull_request", payload))
         return {
@@ -258,6 +270,7 @@ def test_worker_capabilities_include_infra_job_kinds():
     assert "agent.model_spend_analyst.model_spend_brief" in supported
     assert "enterprise.marketplace.validate" in supported
     assert "providerops.sync.readonly" in supported
+    assert "work_tracker.issue.sync" in supported
     assert "webhook.outbound.deliver" in supported
     assert "docs.update" in supported
     assert "github.triage" in supported
@@ -305,6 +318,40 @@ def test_run_worker_cycle_executes_real_skill_with_lease_scope():
             "lease_token": "lease_skill",
         },
     )
+
+
+def test_run_worker_cycle_syncs_tracker_through_fenced_control_plane():
+    leased_job = LeasedJob(
+        id="job_tracker",
+        project_id="boss-dogfood",
+        task_id=None,
+        kind="work_tracker.issue.sync",
+        payload={"binding_id": "trackbind_31"},
+        attempt=1,
+        max_attempts=5,
+        lease_token="lease_tracker",
+        lease_expires_at="future",
+        work_item_id="work_31",
+        tracker_binding_id="trackbind_31",
+        allocation_id="alloc_31",
+        priority_score=88.5,
+        workload_class="product",
+    )
+    client = FakeControlPlaneClient(leased_job)
+    settings = SimpleNamespace(worker_id="worker-tracker", lease_ttl_seconds=60)
+
+    assert run_worker_cycle(client, settings) is True
+    assert client.calls[2] == (
+        "sync_work_tracker",
+        {
+            "project_id": "boss-dogfood",
+            "binding_id": "trackbind_31",
+            "worker_id": "worker-tracker",
+            "lease_token": "lease_tracker",
+            "created_by_job_id": "job_tracker",
+        },
+    )
+    assert client.calls[-1][0] == "complete"
 
 
 def test_run_worker_cycle_executes_budgeted_docs_update_job():

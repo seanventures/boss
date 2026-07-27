@@ -17,7 +17,7 @@ decision_rights:
   must_escalate:
     - Product scope expansion with budget impact.
 permissions:
-  allowed_skills: [artifact.create, research.real, decision.create]
+  allowed_skills: [artifact.create, research.real, decision.create, work_tracker.issue.ensure, work_tracker.issue.update, work.priority.update]
   forbidden_skills: [github.merge_pr, infra.*]
 output_contracts: [PRD, AcceptanceCriteria, ScopeDecision]
 autonomy:

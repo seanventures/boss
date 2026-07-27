@@ -25,6 +25,27 @@ BOSS is a durable, API-first control plane for accountable AI labor. The technic
 
 OpenClaw is not the BOSS foundation or durable runtime. External runtimes, legacy systems, and coding agents are adapters behind BOSS-owned state, policy, budget, routing, receipt, and observability layers.
 
+## Work Orchestration Kernel
+
+The Work Orchestration Kernel separates human-visible work management from durable execution:
+
+- A `WorkTrackerProvider` is the plugin registration and capability contract. Plane is seeded as the default open-source provider. GitHub Issues, Linear, and Jira are adapter registrations, not hard-coded domain models.
+- A `WorkTrackerBinding` maps one canonical BOSS `WorkItem` to one external issue. Required providers must reach `synced` before ordinary agent work can lease.
+- A `WorkItem` stores normalized score inputs, confidence, manual adjustment, rationale, priority band, workload class, estimated units, current allocation, ownership, and evidence.
+- A `ResourceQuota` is a bounded capacity envelope for a global, org, workspace, project, agent, or workload scope. Hard limits are inviolate; burst and borrowing exist only when explicit policy enables them.
+- A `ResourceAllocation` is a current reservation of quota capacity for ranked work. Allocation planning is deterministic and emits visible hold reasons.
+- A `Job` remains the only executable unit. Tracked jobs carry work-item, tracker-binding, and allocation references while retaining lease TTL, heartbeat, retry, budget, decision, Receipt, and deadletter semantics.
+
+Priority is explainable rather than an opaque integer. BOSS computes a score from customer impact, business value, urgency, risk reduction, and dependency unlock, discounts it by confidence, applies a bounded manual adjustment, and persists the factors and rationale. Score bands map to `P0` through `P4`. Dependency blocks remain explicit and cannot be overridden by score.
+
+Lease order is effective score descending, legacy numeric priority ascending, then creation time. Before a tracked job leases, the allocator atomically verifies its tracker binding and consumes allocation units. Completion, retry, terminal failure, budget deferral, and lease recovery release units. Capacity denial keeps the job queued with a visible reason; it never silently drops work.
+
+Tracker synchronization is also a leased job (`work_tracker.issue.sync`). The worker calls the control plane with its lease token; the control plane creates or reuses an external-effect `Receipt`, invokes the configured tracker adapter, updates the binding, and returns the provider reference. Plane creation uses `X-API-Key` behind `PlaneClient`; credentials remain configuration/SecretRefs and are never placed in prompts, payloads, events, or UI responses.
+
+`DeliveryBotIdentity`, `DeliveryStatusChannel`, and `DeliveryPresenceEvent` project Plane, GitHub, and Mattermost activity into Mission Control. GitHub PR/merge/deployment completion and Mattermost delivery create deduplicated presence records. Active status channels automatically receive matching event-kind/data-boundary projections attributed to their configured bot identity. Channel policies constrain event kinds and data boundaries. External Mattermost posting remains a separate leased, budgeted, policy-gated, Receipt-backed effect using the official `/api/v4/posts` bot-token API behind an explicit real-send rollout flag.
+
+The seeded Product Manager AgentDefinition owns PRD currency, acceptance criteria, ticket hygiene, priority rationale, dependencies, and completion evidence. Its installed skills are limited to tracker ensure/update and priority update; the Agent Studio completion path persists the immutable AgentVersion's declared `product_delivery_brief` artifact contract with PRD and ticket change sections. It cannot bypass policy or self-certify evidence.
+
 ## Project GitHub Integration and Branch Orchestration
 
 GitHub execution resolves from project state, never directly from global

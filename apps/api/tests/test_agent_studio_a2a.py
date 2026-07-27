@@ -93,7 +93,7 @@ def test_seeded_catalog_compiles_and_runs_a_specialist(engine):
     with engine.begin() as connection:
         agents = studio.list_agents(connection, settings.default_project_id)
         panels = studio.list_panels(connection, settings.default_project_id)
-        assert len(agents) == 12
+        assert len(agents) == 13
         assert len(panels) == 3
         assert all(item["status"] == "active" for item in agents)
         assert all(item["status"] == "active" for item in panels)
@@ -145,6 +145,74 @@ def test_seeded_catalog_compiles_and_runs_a_specialist(engine):
 
         completed = studio.get_agent_run(
             connection, settings.default_project_id, run["id"]
+        )
+        assert completed["status"] == "completed"
+        assert completion["artifact_id"] in completed["evidence"]
+
+
+def test_product_manager_persists_declared_prd_work_product(engine):
+    settings = get_settings()
+    studio = AgentStudioService(settings)
+    jobs = JobLeaseService(settings)
+
+    with engine.begin() as connection:
+        product_manager = next(
+            item
+            for item in studio.list_agents(
+                connection,
+                settings.default_project_id,
+            )
+            if item["agent_key"] == "product_manager"
+        )
+        run = studio.start_agent_run(
+            connection,
+            project_id=settings.default_project_id,
+            agent_version_id=product_manager["active_version_id"],
+            input_data={
+                "objective": "Revise the allocation PRD and linked acceptance tickets.",
+                "evidence_refs": ["spec:WOS-01", "plane:BOSS-270"],
+            },
+            actor="vp_agents",
+            dedupe_key="test:product-manager-prd",
+        )
+
+        leased = jobs.claim_job(
+            connection,
+            "worker-product-manager",
+            ["agent.studio.execute"],
+            120,
+        )
+        assert leased is not None
+        result = build_agent_brief_result(_leased_job(leased))
+        assert "prd_changes" in result["work_product"]["sections"]
+        assert "ticket_changes" in result["work_product"]["sections"]
+
+        completion = jobs.complete(
+            connection,
+            "worker-product-manager",
+            leased["id"],
+            leased["lease_token"],
+            result,
+        )
+        artifact = connection.execute(
+            text(
+                """
+                SELECT artifact_type, content
+                FROM artifacts
+                WHERE id=:artifact_id
+                """
+            ),
+            {"artifact_id": completion["artifact_id"]},
+        ).mappings().one()
+        assert artifact["artifact_type"] == "product_delivery_brief"
+        assert artifact["content"]["output_contract"]["artifact_type"] == (
+            "product_delivery_brief"
+        )
+
+        completed = studio.get_agent_run(
+            connection,
+            settings.default_project_id,
+            run["id"],
         )
         assert completed["status"] == "completed"
         assert completion["artifact_id"] in completed["evidence"]
@@ -619,7 +687,7 @@ def test_agent_studio_catalog_api_exposes_seeded_objects(client):
     )
     assert response.status_code == 200
     payload = response.json()
-    assert len(payload["agents"]) == 12
+    assert len(payload["agents"]) == 13
     assert len(payload["panels"]) == 3
     assert len(payload["workflows"]) >= 1
     assert all("versions" in workflow for workflow in payload["workflows"])

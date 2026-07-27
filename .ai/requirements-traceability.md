@@ -1,9 +1,22 @@
 # BOSS Requirements Traceability Matrix (Autonomous .ai version)
 
-**Last rebuilt**: 2026-07-26 by Codex (v0.9.0 integration through BOSS-268)
+**Last rebuilt**: 2026-07-26 by Codex (v0.9.0 integration through BOSS-278)
 **Sources**: docs/product/PRD-v2.0.md, TECHNICAL_SPEC-v2.0.md, REQUIREMENT_INVENTORY.md, TRACEABILITY.md, user-stories.md, AGENTS.md, README, api/openapi.yaml, db/schema.sql, packages/specpack/*, code + tests scan.
 **Status key**: Implemented (full vertical + tests + states + audit + DoD), Partial, Planned, Blocked (external per real-only), In-Progress (this session).
 **DoD reminder**: Requirement complete only when traced, full journey, UI nav, backend, persistence, auth server+client, validations, loading/empty/error/success, edges, mobile/a11y basics, security/arch/QA review, tests pass, lint/build, docs updated, NO mocks/fakes/TODOs for required behavior.
+
+## 2026-07-26 Work Orchestration and Delivery Presence trace
+
+| Plane | Requirement | Implementation | Verification | Status |
+| --- | --- | --- | --- | --- |
+| BOSS-271 / WOS-01 | Explainable ranked portfolio | weighted customer/business/risk/dependency score, confidence factor, rationale, manual adjustment, P0–P4 bands | score ordering and confidence test; UI rationale/driver contract | Implemented, pending release |
+| BOSS-278 / WOS-02 | Hierarchical quotas and dynamic allocation | global/org/workspace/project/agent/workload envelopes; atomic claim checks; score-ordered planning; automatic replan on quota update | allocation throttle/release test; global cap test | Implemented, pending release |
+| BOSS-273 / WOS-03 | Agents use durable job system | work/tracker/allocation refs on jobs; score claim order; lease/heartbeat/retry/deadletter retained | tracked job quota state-machine test; worker suite | Implemented, pending release |
+| BOSS-272 / WOS-04 | Plane default WorkTracker with plugins | Plane default plus GitHub Issues/Linear/Jira descriptors; binding ledger; leased receipt-backed Plane issue creation | Plane client, sync lease/receipt, binding overview tests | Implemented, pending release |
+| BOSS-277 / WOS-05 | Embedded operator visibility | Work Allocation navigation with ranked portfolio, quotas, jobs, tickets, bots, channels, and presence rail | TypeScript, 128 web tests, production build, populated desktop browser journey | Implemented, pending release |
+| BOSS-276 / WOS-06 | Product Manager agent owns PRD/ticket hygiene | seeded immutable agent definition, PRD artifact and ticket rules, priority/evidence contract, declared output-contract persistence | Agent Studio run persists a versioned `product_delivery_brief` with PRD/ticket change sections | Implemented, pending release |
+| BOSS-274 / WOS-07 | GitHub/Mattermost bot delivery presence | Mattermost v4 bot adapter, SecretRef identity records, status channels, PR/merge/deploy/message presence, automatic event-kind/data-boundary channel projection | fail-closed adapter and GitHub deployment → Mattermost channel/bot projection tests | Implemented, pending release |
+| BOSS-275 / WOS-08 | End-to-end evidence | product/technical/policy/OpenAPI contract plus score/quota/job/tracker/worker/UI proof | 23 focused API/Postgres, 8 legacy job regressions, 30 worker, 128 web, Ruff, production build, YAML/docs/compile/diff/browser checks | Implemented, pending release |
 
 ## 2026-07-26 GitHub project sync trace
 
