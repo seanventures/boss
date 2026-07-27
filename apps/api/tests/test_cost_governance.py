@@ -129,3 +129,60 @@ def test_tasks_endpoint_derives_lifecycle_from_jobs(engine, client):
     mine = next(t for t in r.json()["items"] if t["id"] == tid)
     assert mine["status"] == "open"
     assert mine["derived_status"] == "in_progress"     # latest job drives the board column
+
+
+def test_release_without_run_id_then_settle_cannot_recover(engine):
+    """Regression: completed_no_pr used to plain-release, then settle in a second call.
+    Once released, consume fails soft and the spend never lands in cost_receipts."""
+    with begin(engine) as c:
+        gov = _governor()
+        res = gov.reserve(c, PID, category="code_task", amount_usd_micros=500_000,
+                          reason="run", expires_in_minutes=5)
+        rid = res["reservation_id"]
+        run_id = make_id("crun")
+        _insert_llm_call(c, run_id, 150_000)
+
+        # buggy ordering (what main shipped): release first without run_id
+        _release(gov, c, PID, rid, "gate passed; PR suppressed (open_pr=false)")
+        assert c.execute(text("SELECT status FROM budget_reservations WHERE id = :id"),
+                         {"id": rid}).scalar_one() == "released"
+
+        # late settle cannot consume an inactive reservation
+        _release(gov, c, PID, rid, "completed_no_pr", run_id=run_id)
+        assert c.execute(
+            text("SELECT COUNT(*) FROM cost_receipts WHERE reservation_id = :id"),
+            {"id": rid}).scalar_one() == 0
+
+
+def test_release_settles_only_unsettled_delta_across_reservations(engine):
+    """Plan-approval pause settles design spend; resume must not re-bill it on the next reservation."""
+    with begin(engine) as c:
+        gov = _governor()
+        run_id = make_id("crun")
+
+        res1 = gov.reserve(c, PID, category="code_task", amount_usd_micros=500_000,
+                           reason="pre-approval", expires_in_minutes=5)
+        rid1 = res1["reservation_id"]
+        _insert_llm_call(c, run_id, 100_000)
+        _release(gov, c, PID, rid1, "Paused for human plan approval", run_id=run_id)
+        assert c.execute(text("SELECT status FROM budget_reservations WHERE id = :id"),
+                         {"id": rid1}).scalar_one() == "consumed"
+
+        res2 = gov.reserve(c, PID, category="code_task", amount_usd_micros=500_000,
+                           reason="post-approval", expires_in_minutes=5)
+        rid2 = res2["reservation_id"]
+        _insert_llm_call(c, run_id, 250_000)  # new spend after resume
+        _release(gov, c, PID, rid2, "completed_no_pr", run_id=run_id)
+
+        assert c.execute(text("SELECT status FROM budget_reservations WHERE id = :id"),
+                         {"id": rid2}).scalar_one() == "consumed"
+        settled = c.execute(
+            text("SELECT actual_usd_micros FROM cost_receipts WHERE reservation_id = :id"),
+            {"id": rid2}).scalar_one()
+        assert settled == 250_000  # delta only — not 100k+250k
+
+        total = c.execute(
+            text("SELECT COALESCE(SUM(actual_usd_micros), 0) FROM cost_receipts "
+                 "WHERE project_id = :p AND skill_or_model_id = :sid"),
+            {"p": PID, "sid": f"code_task:{run_id}"}).scalar_one()
+        assert total == 350_000
