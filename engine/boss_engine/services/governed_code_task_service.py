@@ -1539,8 +1539,11 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
                 # re-run with the findings fed back can plausibly fix. Bounded by max_repair_rounds.
                 _finish_vms(success=False)  # retain this round's VMs for inspection
                 with _transaction(engine) as c:
-                    _release(budget, c, project_id, reservation_id,
-                             f"auto review-repair (round {rounds_used + 1}, run_id=run_id): {failing}")
+                    _release(
+                        budget, c, project_id, reservation_id,
+                        f"auto review-repair (round {rounds_used + 1}): {failing}",
+                        run_id=run_id,
+                    )
                     emit_event(c, project_id, "code_task.review_repair_round", "boss",
                                "code_task_run", run_id,
                                {"round": rounds_used + 1, "of": max_repair_rounds,
@@ -1602,9 +1605,15 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
             # decomposition slice defers its PR to the final slice. Either way: record the verified
             # outcome, keep the work on the shared branch, and let the chain advance.
             with _transaction(engine) as c:
-                _release(budget, c, project_id, reservation_id,
-                         ("gate passed; non-final decomposition slice — PR deferred to final slice"
-                          if _nonfinal_slice else "gate passed; PR suppressed (open_pr=false, run_id=run_id)"))
+                # BOSS-280: settle real LLM spend before releasing. A prior plain release
+                # (no run_id) left the reservation inactive so the settle path failed soft
+                # and bake-off / non-final-slice spend vanished from the ledger.
+                _release(
+                    budget, c, project_id, reservation_id,
+                    ("gate passed; non-final decomposition slice — PR deferred to final slice"
+                     if _nonfinal_slice else "gate passed; PR suppressed (open_pr=false)"),
+                    run_id=run_id,
+                )
                 c.execute(sql("UPDATE code_task_runs SET status='completed', phase='done', "
                                "updated_at=now() WHERE id=:id"), {"id": run_id})
                 emit_event(c, project_id, "code_task.completed_no_pr", "boss",
@@ -1612,9 +1621,6 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
                            {"quality_gate_id": qg_id,
                             "reason": "decomposition_slice" if _nonfinal_slice else "open_pr_false",
                             "slice": f"{_didx}/{_dtot}" if _nonfinal_slice else None})
-            with _transaction(engine) as c:
-                # BOSS-280: verified work with no PR still burned real model spend — settle it.
-                _release(budget, c, project_id, reservation_id, "completed_no_pr", run_id=run_id)
             plane_sync.on_event(engine, settings, run_id, "code_task.completed_no_pr")  # P2
             return {"status": "completed", "done": True, "quality_gate_id": qg_id,
                     "pr_suppressed": True, "decomposition_nonfinal": _nonfinal_slice}

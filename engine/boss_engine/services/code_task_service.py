@@ -415,16 +415,25 @@ def _release(
     """Settle-then-release (BOSS-280): money already burned on model calls is REAL even when
     the run failed — sum the run's llm_calls and settle it as an actual cost receipt, so the
     budget ledger reconciles with true LLM spend instead of silently dropping every failed
-    run's cost. Only a run with zero recorded spend releases cleanly. Always fail-soft."""
+    run's cost. Only a run with zero recorded spend releases cleanly. Always fail-soft.
+
+    Settles the *unsettled* delta only: plan-approval pauses (and any earlier reservation for
+    the same run) already wrote cost_receipts under skill_or_model_id ``code_task:{run_id}``,
+    so a later settle on resume must not re-bill that spend or the ledger double-counts."""
     if not reservation_id:
         return
     try:
         actual = 0
         if run_id and hasattr(connection, "execute"):
-            actual = int(connection.execute(
+            gross = int(connection.execute(
                 sql("SELECT COALESCE(SUM(cost_usd_micros), 0) FROM llm_calls "
                     "WHERE code_task_run_id = :r"),
                 {"r": run_id}).scalar() or 0)
+            already = int(connection.execute(
+                sql("SELECT COALESCE(SUM(actual_usd_micros), 0) FROM cost_receipts "
+                    "WHERE project_id = :p AND skill_or_model_id = :sid"),
+                {"p": project_id, "sid": f"code_task:{run_id}"}).scalar() or 0)
+            actual = max(0, gross - already)
         if actual > 0:
             # consume() requires a governance receipt (every settled effect gets one).
             from .receipts import ReceiptService
