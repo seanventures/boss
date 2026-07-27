@@ -84,11 +84,14 @@ class EngineAgent:
         allow_writes: bool = False,
         max_steps: int = 6,
         history: Optional[list[dict]] = None,
+        system: Optional[str] = None,
     ) -> AgentTurn:
         """Run one agent turn. Returns the reply plus the tool trace and any
-        write actions that were held for confirmation."""
+        write actions that were held for confirmation. `system` overrides the
+        default system prompt (the router's answer path passes its own
+        discuss-don't-claim-you-started framing)."""
         schemas = self.registry.openai_schema()
-        messages: list[dict] = [{"role": "system", "content": _SYSTEM_PROMPT}]
+        messages: list[dict] = [{"role": "system", "content": system or _SYSTEM_PROMPT}]
         if history:
             messages.extend(history)
         messages.append({"role": "user", "content": message})

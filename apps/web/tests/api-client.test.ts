@@ -29,7 +29,7 @@ describe("createBossApiClient", () => {
       message: "What can you do?",
     });
 
-    expect(calls[0].url).toBe("http://127.0.0.1:8000/v1/agent/chat");
+    expect(calls[0].url).toBe("http://127.0.0.1:8000/v1/engine/agent/chat");
     expect(calls[0].init?.method).toBe("POST");
     expect(JSON.parse(String(calls[0].init?.body))).toMatchObject({
       project_id: "boss-dogfood",

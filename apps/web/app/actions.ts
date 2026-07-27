@@ -143,7 +143,7 @@ export async function agentChatAction(
   if (!message && !confirmPlanId) {
     return { ok: false, error: "Enter a message or confirm the pending plan." };
   }
-  const result = await postJsonReturn("/v1/agent/chat", {
+  const result = await postJsonReturn("/v1/engine/agent/chat", {
     project_id: getProjectId(formData),
     actor: getActor(formData),
     thread_id: String(formData.get("thread_id") ?? "").trim() || undefined,
