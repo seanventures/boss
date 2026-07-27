@@ -829,7 +829,10 @@ class Settings(BaseSettings):
         default=True, alias="BOSS_RATE_LIMIT_ENABLED"
     )
     rate_limit_requests_per_minute: int = Field(
-        default=10, alias="BOSS_RATE_LIMIT_RPM"
+        # Bumped 10 -> 120 so interactive console/validation sessions aren't
+        # throttled on the high-cost paths (propose/query/chat/sync). Still
+        # env-overridable; prod should front with Redis/LB rate limiting.
+        default=120, alias="BOSS_RATE_LIMIT_RPM"
     )
 
     @property
