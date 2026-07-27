@@ -26,6 +26,9 @@ All 15-min terminal updates and major milestones appended here. Chronological, n
   Ruff, TypeScript, OpenAPI YAML, diff checks, and the optimized Next build
   pass. Real Redis proofs pass XADD/read-group/XACK, replay/cancel, and
   consumer-crash XAUTOCLAIM-to-deadletter recovery.
+- Published implementation commit `a2daccf` and opened cleanly mergeable draft
+  PR https://github.com/seanheiney/boss/pull/88. Plane BOSS-256–266 include the
+  implementation, validation, commit, and PR evidence.
 
 ---
 ## 2026-07-26 — Codex — BOSS-236 provider credential lifecycle

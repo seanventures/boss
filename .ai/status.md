@@ -227,4 +227,6 @@ leases, and unavailable live-model budget/provider paths fail closed.
 Current evidence is green: 121 web tests; 938 Python tests with four
 intentional live/external skips; 39 focused Agent Studio/A2A/worker/assurance
 tests; Ruff, TypeScript, OpenAPI YAML, diff checks, optimized Next build,
-desktop/responsive browser QA, and two real-Redis lifecycle proofs.
+desktop/responsive browser QA, and two real-Redis lifecycle proofs. Draft PR
+#88 is cleanly mergeable against `main`; Plane BOSS-256–266 carry the commit,
+PR, and validation evidence and remain In Progress until merge.
