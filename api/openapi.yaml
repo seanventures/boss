@@ -2849,6 +2849,1175 @@ paths:
       responses:
         '204': { description: SecretRef revoked }
         '404': { description: SecretRef not found }
+  /v1/github/connections:
+    get:
+      summary: List project-scoped GitHub connections
+      parameters:
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: GitHub connections without SecretRef pointers or secret material }
+    post:
+      summary: Register a project-scoped GitHub App or PAT connection
+      description: Stores only a validated SecretRef pointer plus non-secret installation identity. Raw tokens and private keys are rejected from metadata and omitted from responses.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id, connection_label, auth_method, credential_ref]
+              properties:
+                project_id: { type: string }
+                connection_label: { type: string }
+                auth_method:
+                  type: string
+                  enum: [github_app, personal_access_token]
+                credential_ref:
+                  type: string
+                  description: Project-scoped SecretRef pointer; never raw credential material.
+                app_id: { type: string }
+                installation_id: { type: string }
+                api_base_url:
+                  type: string
+                  format: uri
+                  default: https://api.github.com
+                required_permissions:
+                  type: array
+                  default: [pull]
+                  items:
+                    type: string
+                    enum: [pull, triage, push, maintain, admin]
+                metadata:
+                  type: object
+                  description: Non-secret connection metadata; secret-shaped fields are rejected.
+                actor: { type: string, default: ceo }
+      responses:
+        '201': { description: GitHub connection configured }
+        '403': { description: Actor lacks github_manage permission }
+        '422': { description: Invalid auth method, SecretRef, permissions, URL, or secret-shaped metadata }
+  /v1/github/connections/{connection_id}:
+    get:
+      summary: Get a tenant-scoped GitHub connection
+      parameters:
+        - name: connection_id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: GitHub connection posture without credential pointer or secret material }
+        '404': { description: GitHub connection not found in the project }
+  /v1/github/connections/{connection_id}/enable:
+    post:
+      summary: Re-enable a disabled GitHub connection for required retesting
+      parameters:
+        - name: connection_id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id]
+              properties:
+                project_id: { type: string }
+                actor: { type: string, default: ceo }
+      responses:
+        '200': { description: Connection returned to configured state }
+        '409': { description: SecretRef unusable or connection permanently revoked }
+  /v1/github/connections/{connection_id}/disable:
+    post:
+      summary: Disable a GitHub connection before future adapter invocation
+      parameters:
+        - name: connection_id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id]
+              properties:
+                project_id: { type: string }
+                actor: { type: string, default: ceo }
+      responses:
+        '200': { description: GitHub connection disabled }
+  /v1/github/connections/{connection_id}/revoke:
+    post:
+      summary: Permanently revoke a GitHub connection and disable its repository bindings
+      parameters:
+        - name: connection_id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id]
+              properties:
+                project_id: { type: string }
+                actor: { type: string, default: ceo }
+      responses:
+        '200': { description: GitHub connection irreversibly revoked }
+        '409': { description: Connection was already revoked }
+  /v1/github/connections/{connection_id}/test:
+    post:
+      summary: Test a project repository binding through a receipt-backed GitHub adapter call
+      parameters:
+        - name: connection_id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id, repository_binding_id, dedupe_key]
+              properties:
+                project_id: { type: string }
+                repository_binding_id: { type: string }
+                dedupe_key: { type: string }
+                actor: { type: string, default: ceo }
+      responses:
+        '200': { description: Connection health, effective permissions, repository metadata, and Receipt identity }
+        '404': { description: Connection or repository binding not found in the project }
+        '409': { description: Connection or repository binding is disabled or revoked }
+  /v1/github/repository-bindings:
+    get:
+      summary: List canonical project repository bindings
+      parameters:
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+        - name: connection_id
+          in: query
+          required: false
+          schema: { type: string }
+      responses:
+        '200': { description: Project repository target list and discovered capabilities }
+    post:
+      summary: Bind a repository to a project GitHub connection
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id, connection_id, repository]
+              properties:
+                project_id: { type: string }
+                connection_id: { type: string }
+                repository:
+                  type: string
+                  example: seanheiney/boss
+                role:
+                  type: string
+                  enum: [primary, source, upstream, mirror]
+                  default: primary
+                default_branch: { type: string }
+                metadata:
+                  type: object
+                  description: Non-secret binding metadata.
+                actor: { type: string, default: ceo }
+      responses:
+        '201': { description: Repository binding created }
+        '403': { description: Actor lacks github_manage permission }
+        '409': { description: Connection inactive, repository duplicate, or active primary already exists }
+  /v1/github/repository-bindings/{binding_id}:
+    get:
+      summary: Get a tenant-scoped GitHub repository binding
+      parameters:
+        - name: binding_id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Repository binding detail }
+        '404': { description: Repository binding not found in the project }
+    patch:
+      summary: Update repository role, lifecycle, default branch, or non-secret metadata
+      parameters:
+        - name: binding_id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id]
+              properties:
+                project_id: { type: string }
+                role:
+                  type: string
+                  enum: [primary, source, upstream, mirror]
+                status:
+                  type: string
+                  enum: [active, disabled]
+                default_branch: { type: string }
+                metadata: { type: object }
+                actor: { type: string, default: ceo }
+      responses:
+        '200': { description: Updated repository binding }
+        '404': { description: Repository binding not found in the project }
+        '409': { description: Invalid lifecycle, revoked connection, or primary conflict }
+  /v1/github/branch-policies:
+    get:
+      summary: List versioned branch policies for a project or repository binding
+      parameters:
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+        - name: repository_binding_id
+          in: query
+          required: false
+          schema: { type: string }
+        - name: include_history
+          in: query
+          required: false
+          schema: { type: boolean, default: false }
+      responses:
+        '200': { description: Current policies, optionally including superseded versions }
+    post:
+      summary: Create the first active branch policy for a repository binding
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id, repository_binding_id]
+              properties:
+                project_id: { type: string }
+                repository_binding_id: { type: string }
+                protected_ref_patterns:
+                  type: array
+                  items: { type: string }
+                allowed_branch_prefixes:
+                  type: array
+                  items: { type: string }
+                branch_name_pattern: { type: string }
+                allowed_update_methods:
+                  type: array
+                  items:
+                    type: string
+                    enum: [fast_forward, merge_commit, rebase, force_push]
+                allowed_merge_methods:
+                  type: array
+                  items:
+                    type: string
+                    enum: [merge, squash, rebase]
+                required_checks:
+                  type: array
+                  items: { type: string }
+                required_approvals:
+                  type: integer
+                  minimum: 0
+                  maximum: 20
+                require_pull_request: { type: boolean, default: true }
+                require_linear_history: { type: boolean, default: false }
+                require_signed_commits: { type: boolean, default: false }
+                automation_updates_enabled: { type: boolean, default: true }
+                force_push_allowed: { type: boolean, default: false }
+                metadata: { type: object }
+                actor: { type: string, default: ceo }
+      responses:
+        '201': { description: Version 1 branch policy created and audited }
+        '403': { description: Actor lacks github_manage permission }
+        '409': { description: Invalid rule, inactive binding, or active policy already exists }
+  /v1/github/branch-policies/{policy_id}:
+    get:
+      summary: Get one tenant-scoped branch policy version
+      parameters:
+        - name: policy_id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Immutable branch policy version }
+        '404': { description: Branch policy not found in the project }
+    patch:
+      summary: Supersede a branch policy with a new immutable version
+      parameters:
+        - name: policy_id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id]
+              properties:
+                project_id: { type: string }
+                status:
+                  type: string
+                  enum: [active, disabled]
+                protected_ref_patterns:
+                  type: array
+                  items: { type: string }
+                allowed_branch_prefixes:
+                  type: array
+                  items: { type: string }
+                branch_name_pattern: { type: string }
+                allowed_update_methods:
+                  type: array
+                  items: { type: string }
+                allowed_merge_methods:
+                  type: array
+                  items: { type: string }
+                required_checks:
+                  type: array
+                  items: { type: string }
+                required_approvals: { type: integer, minimum: 0, maximum: 20 }
+                require_pull_request: { type: boolean }
+                require_linear_history: { type: boolean }
+                require_signed_commits: { type: boolean }
+                automation_updates_enabled: { type: boolean }
+                force_push_allowed: { type: boolean }
+                metadata: { type: object }
+                actor: { type: string, default: ceo }
+      responses:
+        '200': { description: New policy version created with supersession lineage }
+        '403': { description: Actor lacks github_manage permission }
+        '404': { description: Branch policy not found in the project }
+        '409': { description: Superseded policy or invalid rule }
+  /v1/github/branch-policies/{policy_id}/evaluate:
+    post:
+      summary: Deterministically evaluate a ref operation against one policy version
+      parameters:
+        - name: policy_id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id, ref, operation]
+              properties:
+                project_id: { type: string }
+                ref: { type: string }
+                operation:
+                  type: string
+                  enum: [observe, create, update, merge, delete]
+                method: { type: string }
+      responses:
+        '200': { description: Allowed, approval-required, or blocked policy result with reasons }
+        '404': { description: Branch policy not found in the project }
+        '422': { description: Invalid ref, operation, or method }
+  /v1/github/branch-snapshots:
+    get:
+      summary: List immutable GitHub branch topology snapshots
+      parameters:
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+        - name: repository_binding_id
+          in: query
+          required: false
+          schema: { type: string }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
+      responses:
+        '200': { description: Immutable snapshot evidence newest first }
+  /v1/github/branch-snapshots/capture:
+    post:
+      summary: Capture and classify remote branch topology through a receipt-backed read
+      description: Fetches commit and tree identities, merge-base topology, protection, checks, and pinned policy evaluation. Equal trees with different commit identities are classified as tree-equivalent rewrites.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                [project_id, repository_binding_id, source_ref, target_ref, dedupe_key]
+              properties:
+                project_id: { type: string }
+                repository_binding_id: { type: string }
+                source_ref: { type: string }
+                target_ref: { type: string }
+                dedupe_key: { type: string }
+                actor: { type: string, default: ceo }
+      responses:
+        '200': { description: Snapshot and Receipt identity, or redacted failed-read evidence }
+        '403': { description: Actor lacks github_manage permission }
+        '404': { description: Repository binding not found in the project }
+        '409': { description: Missing active policy, inactive connection/binding, or unsafe ref }
+  /v1/github/branch-snapshots/{snapshot_id}:
+    get:
+      summary: Get one tenant-scoped immutable branch snapshot
+      parameters:
+        - name: snapshot_id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Branch topology, policy, protection, checks, and Receipt evidence }
+        '404': { description: Snapshot not found in the project }
+  /v1/github/branch-leases:
+    get:
+      summary: List active or historical fenced branch leases
+      parameters:
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+        - name: repository_binding_id
+          in: query
+          required: false
+          schema: { type: string }
+        - name: ref_name
+          in: query
+          required: false
+          schema: { type: string }
+        - name: include_history
+          in: query
+          required: false
+          schema: { type: boolean, default: false }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 200, default: 100 }
+      responses:
+        '200': { description: Tenant-scoped lease ownership without token hashes }
+    post:
+      summary: Acquire one fenced TTL lease for a mutable repository ref
+      description: Serializes acquisition per repository binding, returns the raw high-entropy lease token once, stores only its hash, and assigns a monotonically increasing fencing token.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                [project_id, repository_binding_id, ref_name, owner_kind, owner_id, acquire_key]
+              properties:
+                project_id: { type: string }
+                repository_binding_id: { type: string }
+                ref_name: { type: string }
+                owner_kind:
+                  type: string
+                  enum: [task, workflow_run, code_task_run, agent, manual]
+                owner_id: { type: string }
+                run_id: { type: string }
+                worktree_path: { type: string }
+                acquire_key: { type: string }
+                ttl_seconds:
+                  type: integer
+                  minimum: 30
+                  maximum: 3600
+                  default: 300
+                actor: { type: string, default: ceo }
+      responses:
+        '201': { description: Lease acquired, or exact dedupe replay without returning the raw token again }
+        '403': { description: Actor lacks github_manage permission }
+        '404': { description: Repository binding not found in the project }
+        '409': { description: Active owner, dedupe collision, inactive connection, or unsafe ref }
+  /v1/github/branch-leases/{lease_id}:
+    get:
+      summary: Get one tenant-scoped branch lease
+      parameters:
+        - name: lease_id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Lease ownership and fencing posture without token hash }
+        '404': { description: Branch lease not found in the project }
+  /v1/github/branch-leases/{lease_id}/heartbeat:
+    post:
+      summary: Heartbeat and extend an active branch lease
+      parameters:
+        - name: lease_id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id, lease_token, fencing_token]
+              properties:
+                project_id: { type: string }
+                lease_token:
+                  type: string
+                  description: Raw token returned once at acquisition and never persisted.
+                fencing_token: { type: integer }
+                ttl_seconds:
+                  type: integer
+                  minimum: 30
+                  maximum: 3600
+                  default: 300
+                actor: { type: string, default: system }
+      responses:
+        '200': { description: Heartbeat and bounded expiry extension recorded }
+        '404': { description: Branch lease not found in the project }
+        '409': { description: Expired/inactive lease or stale/invalid token }
+  /v1/github/branch-leases/{lease_id}/release:
+    post:
+      summary: Release a branch lease using its raw and fencing tokens
+      parameters:
+        - name: lease_id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id, lease_token, fencing_token, reason]
+              properties:
+                project_id: { type: string }
+                lease_token: { type: string }
+                fencing_token: { type: integer }
+                reason: { type: string }
+                actor: { type: string, default: ceo }
+      responses:
+        '200': { description: Lease released with actor and reason evidence }
+        '404': { description: Branch lease not found in the project }
+        '409': { description: Expired/inactive lease or stale/invalid token }
+  /v1/github/branch-leases/{lease_id}/reclaim:
+    post:
+      summary: Reclaim an expired branch lease without using its lost raw token
+      parameters:
+        - name: lease_id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id, reason]
+              properties:
+                project_id: { type: string }
+                reason: { type: string }
+                actor: { type: string, default: ceo }
+      responses:
+        '200': { description: Expired lease reclaimed with audit evidence }
+        '403': { description: Actor lacks github_manage permission }
+        '404': { description: Branch lease not found in the project }
+        '409': { description: Lease is still unexpired or already terminal }
+  /v1/github/code-sync-runs:
+    get:
+      summary: List project GitHub code synchronization runs
+      parameters:
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+        - name: repository_binding_id
+          in: query
+          required: false
+          schema: { type: string }
+        - name: status
+          in: query
+          required: false
+          schema: { type: string }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 200, default: 100 }
+      responses:
+        '200': { description: Sync plans and their immutable evidence, policy, lease, receipt, conflict, and rollback identities }
+  /v1/github/code-sync-runs/plan:
+    post:
+      summary: Plan a deterministic GitHub branch synchronization from an immutable snapshot
+      description: Maps topology to noop, non-force fast-forward, protected approval, blocking, or a dedicated resolution branch and creates the canonical zero-cost ChangeSet for every planned provider mutation.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                [project_id, repository_binding_id, snapshot_id, dedupe_key]
+              properties:
+                project_id: { type: string }
+                repository_binding_id: { type: string }
+                snapshot_id: { type: string }
+                dedupe_key: { type: string }
+                resolution_branch: { type: string }
+                actor: { type: string, default: ceo }
+      responses:
+        '201': { description: Idempotent sync plan with pinned policy, topology, ChangeSet, rollback, and approval posture }
+        '403': { description: Actor lacks github_manage permission }
+        '404': { description: Snapshot, policy, or repository binding not found }
+        '409': { description: Dedupe collision, inactive binding, or policy/ref denial }
+  /v1/github/code-sync-runs/{sync_run_id}:
+    get:
+      summary: Get one tenant-scoped GitHub code sync run
+      parameters:
+        - name: sync_run_id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Sync run state and complete receipt/rollback linkage }
+        '404': { description: Sync run not found in the project }
+  /v1/github/code-sync-runs/{sync_run_id}/apply:
+    post:
+      summary: Apply a safe GitHub branch synchronization under a fenced lease
+      description: Re-captures remote topology, rejects stale inputs or policies, verifies the exact ref lease and fencing token, forbids force push, and records a Receipt plus ResourceReceipt for every provider write attempt.
+      parameters:
+        - name: sync_run_id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id, lease_id, lease_token, fencing_token]
+              properties:
+                project_id: { type: string }
+                lease_id: { type: string }
+                lease_token: { type: string }
+                fencing_token: { type: integer, minimum: 1 }
+                actor: { type: string, default: ceo }
+      responses:
+        '200': { description: Succeeded, conflicted, retryable failed, or deadlettered sync state }
+        '403': { description: Actor lacks github_manage permission }
+        '404': { description: Sync run, lease, or repository binding not found }
+        '409': { description: Pending approval, invalid lease, stale fencing, stale policy, or invalid state }
+  /v1/github/conflict-sets:
+    get:
+      summary: List typed GitHub conflict evidence
+      parameters:
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+        - name: status
+          in: query
+          required: false
+          schema: { type: string }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 200, default: 100 }
+      responses:
+        '200': { description: Conflict sets with immutable base, ours, theirs, resolution branch, and bounded file evidence }
+  /v1/github/conflict-sets/{conflict_set_id}:
+    get:
+      summary: Get one tenant-scoped GitHub conflict set
+      parameters:
+        - name: conflict_set_id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Typed conflict evidence and resolution state }
+        '404': { description: Conflict set not found in the project }
+  /v1/github/conflict-sets/{conflict_set_id}/resolution-plans:
+    post:
+      summary: Propose a GitHub conflict resolution with red-to-green proof
+      description: Stores bounded reviewed text-file resolutions on the dedicated branch only. The protected target remains unchanged.
+      parameters:
+        - name: conflict_set_id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id, resolved_files, validation_evidence]
+              properties:
+                project_id: { type: string }
+                resolved_files:
+                  type: array
+                  minItems: 1
+                  maxItems: 100
+                  items:
+                    type: object
+                    required: [path, content]
+                    properties:
+                      path: { type: string }
+                      content: { type: string }
+                      mode: { type: string, enum: ['100644', '100755'] }
+                validation_evidence:
+                  type: object
+                  required: [red, green]
+                  description: Both entries require command, exit_code, and evidence_ref; red must fail and green must pass.
+                actor: { type: string, default: ceo }
+      responses:
+        '201': { description: Versioned resolution plan and approval-required ChangeSet }
+        '403': { description: Actor lacks github_manage permission }
+        '404': { description: Conflict set not found in the project }
+        '409': { description: Invalid state, file scope, or red-to-green evidence }
+  /v1/github/resolution-plans:
+    get:
+      summary: List versioned GitHub conflict resolution plans
+      parameters:
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+        - name: conflict_set_id
+          in: query
+          required: false
+          schema: { type: string }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 200, default: 100 }
+      responses:
+        '200': { description: Resolution proposals, independent review, validation, ChangeSet, and result commit evidence }
+  /v1/github/resolution-plans/{plan_id}:
+    get:
+      summary: Get one tenant-scoped GitHub resolution plan
+      parameters:
+        - name: plan_id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Resolution plan with red-to-green and review evidence }
+        '404': { description: Resolution plan not found in the project }
+  /v1/github/resolution-plans/{plan_id}/approve:
+    post:
+      summary: Independently approve a GitHub conflict resolution plan
+      description: The reviewer must differ from the proposal creator and attach an approved review verdict and summary.
+      parameters:
+        - name: plan_id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id, review_evidence, actor]
+              properties:
+                project_id: { type: string }
+                review_evidence:
+                  type: object
+                  required: [verdict, summary]
+                  properties:
+                    verdict: { type: string, enum: [approved] }
+                    summary: { type: string }
+                actor: { type: string }
+      responses:
+        '200': { description: Independently approved resolution plan }
+        '403': { description: Actor lacks github_manage permission }
+        '404': { description: Resolution plan not found in the project }
+        '409': { description: Self-review, invalid evidence, or invalid plan state }
+  /v1/github/resolution-plans/{plan_id}/apply:
+    post:
+      summary: Apply an approved resolution commit to its dedicated branch
+      description: Verifies unchanged ours/theirs identities and the exact resolution-branch lease, creates an explicit two-parent commit, then performs a non-force fast-forward. It never writes the protected target branch.
+      parameters:
+        - name: plan_id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id, lease_id, lease_token, fencing_token]
+              properties:
+                project_id: { type: string }
+                lease_id: { type: string }
+                lease_token: { type: string }
+                fencing_token: { type: integer, minimum: 1 }
+                actor: { type: string, default: ceo }
+      responses:
+        '200': { description: Applied/failed plan plus conflict-set and sync-run state }
+        '403': { description: Actor lacks github_manage permission }
+        '404': { description: Resolution plan, conflict set, sync run, lease, or binding not found }
+        '409': { description: Invalid review/state, stale remote inputs, stale policy, or invalid lease/fence }
+  /v1/github/merge-authorizations:
+    get:
+      summary: List exact-snapshot GitHub merge authorizations and queue state
+      parameters:
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+        - name: repository_binding_id
+          in: query
+          required: false
+          schema: { type: string }
+        - name: target_ref
+          in: query
+          required: false
+          schema: { type: string }
+        - name: status
+          in: query
+          required: false
+          schema: { type: string }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 200, default: 100 }
+      responses:
+        '200': { description: Merge authorizations ordered by per-target queue position with policy, proof, receipts, and rollback evidence }
+    post:
+      summary: Request governed authorization for an exact GitHub PR base/head snapshot
+      description: Observes the PR, commits, trees, target head, checks, and reviews through the project binding; pins the active policy; creates a zero-cost risk-tier-3 ChangeSet; and never mutates the provider.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                [project_id, repository_binding_id, pull_request_number, source_ref, target_ref, dedupe_key, evidence_bundle]
+              properties:
+                project_id: { type: string }
+                repository_binding_id: { type: string }
+                pull_request_number: { type: integer, minimum: 1 }
+                source_ref: { type: string }
+                target_ref: { type: string }
+                merge_method:
+                  type: string
+                  enum: [merge, squash, rebase]
+                  default: merge
+                dedupe_key: { type: string }
+                evidence_bundle:
+                  type: object
+                  required: [evidence_refs]
+                  properties:
+                    evidence_refs:
+                      type: array
+                      minItems: 1
+                      maxItems: 100
+                      items: { type: string }
+                expires_in_seconds:
+                  type: integer
+                  minimum: 60
+                  maximum: 86400
+                  default: 3600
+                code_sync_run_id: { type: string }
+                resolution_plan_id: { type: string }
+                actor: { type: string, default: ceo }
+      responses:
+        '201': { description: Pending or policy-blocked MergeAuthorization over immutable base/head/tree identities }
+        '403': { description: Actor lacks github_manage permission }
+        '404': { description: Repository binding or branch policy not found }
+        '409': { description: Invalid evidence, dedupe collision, stale target, mismatched PR/work linkage, or policy denial }
+  /v1/github/merge-authorizations/{authorization_id}:
+    get:
+      summary: Get one tenant-scoped GitHub MergeAuthorization
+      parameters:
+        - name: authorization_id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Exact identities, policy, evidence, queue, lease, receipt, result, and rollback state }
+        '404': { description: Merge authorization not found in the project }
+  /v1/github/merge-authorizations/{authorization_id}/authorize:
+    post:
+      summary: Independently approve an exact GitHub MergeAuthorization
+      description: Requires a github_manage actor different from the requester and preserves the approved evidence without extending the authorization expiry.
+      parameters:
+        - name: authorization_id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id, review_evidence, actor]
+              properties:
+                project_id: { type: string }
+                review_evidence:
+                  type: object
+                  required: [verdict, summary]
+                  properties:
+                    verdict: { type: string, enum: [approved] }
+                    summary: { type: string }
+                actor: { type: string }
+      responses:
+        '200': { description: Independently authorized exact merge snapshot }
+        '403': { description: Actor lacks github_manage permission }
+        '404': { description: Merge authorization not found in the project }
+        '409': { description: Self-approval, expiry, stale policy, invalid evidence, or invalid state }
+  /v1/github/merge-authorizations/{authorization_id}/enqueue:
+    post:
+      summary: Enqueue an approved GitHub merge for its project repository target
+      description: Preserves deterministic queue ordering; only the earliest active item for a repository target can apply.
+      parameters:
+        - name: authorization_id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id]
+              properties:
+                project_id: { type: string }
+                actor: { type: string, default: ceo }
+      responses:
+        '200': { description: Authorized merge placed in the target queue }
+        '403': { description: Actor lacks github_manage permission }
+        '404': { description: Merge authorization not found in the project }
+        '409': { description: Expired or invalid authorization state }
+  /v1/github/merge-authorizations/{authorization_id}/apply:
+    post:
+      summary: Reverify and execute the queue-head protected-branch PR merge
+      description: Requires the exact target BranchLease and fence, current policy, unchanged base/head commits and trees, an open mergeable non-draft PR, passing required checks, current-head approvals, and no requested changes. The adapter performs one guarded PR merge; BOSS never directly pushes or force-updates the protected ref.
+      parameters:
+        - name: authorization_id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id, lease_id, lease_token, fencing_token]
+              properties:
+                project_id: { type: string }
+                lease_id: { type: string }
+                lease_token: { type: string }
+                fencing_token: { type: integer, minimum: 1 }
+                actor: { type: string, default: ceo }
+      responses:
+        '200': { description: Merged, safely blocked, retryable failed, or deadlettered MergeAuthorization with result and rollback evidence }
+        '403': { description: Actor lacks github_manage permission }
+        '404': { description: Merge authorization, branch lease, or repository binding not found }
+        '409': { description: Invalid queue order, expiry/state, stale policy, or invalid lease/fence }
+  /v1/github/reconciliation-runs:
+    get:
+      summary: List durable GitHub webhook, poll, and repair reconciliation runs
+      parameters:
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+        - name: repository_binding_id
+          in: query
+          required: false
+          schema: { type: string }
+        - name: status
+          in: query
+          required: false
+          schema: { type: string }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 200, default: 100 }
+      responses:
+        '200': { description: Reconciliation runs with attempts, observations, Receipts, rate-limit state, and deadletters }
+  /v1/github/reconciliation-runs/poll:
+    post:
+      summary: Schedule receipt-backed GitHub repository reconciliation
+      description: Enqueues one leased, deduplicated reconciliation job per active project repository binding. If refs are omitted, BOSS discovers the default and all currently managed refs without performing provider work inline.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id, dedupe_key]
+              properties:
+                project_id: { type: string }
+                repository_binding_id: { type: string }
+                refs:
+                  type: array
+                  minItems: 1
+                  maxItems: 100
+                  items: { type: string }
+                dedupe_key: { type: string }
+                actor: { type: string, default: ceo }
+      responses:
+        '201': { description: Queued reconciliation runs and leased job identities }
+        '403': { description: Actor lacks github_manage permission }
+        '404': { description: No active repository binding matched }
+        '409': { description: Invalid refs or dedupe collision }
+  /v1/github/reconciliation-runs/{run_id}:
+    get:
+      summary: Get one tenant-scoped GitHub reconciliation run
+      parameters:
+        - name: run_id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Reconciliation run and retry/deadletter evidence }
+        '404': { description: Reconciliation run not found in the project }
+  /v1/github/reconciliation-runs/{run_id}/execute:
+    post:
+      summary: Execute a GitHub reconciliation under an active worker lease
+      description: Reads current rate limits and exact branch commit/tree/protection state through the project adapter. Each provider read has a Receipt; failures use bounded backoff and deadletters, while stale webhook signals and drifted pending work remain visible.
+      parameters:
+        - name: run_id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id, job_id, worker_id, lease_token]
+              properties:
+                project_id: { type: string }
+                job_id: { type: string }
+                worker_id: { type: string }
+                lease_token: { type: string }
+      responses:
+        '200': { description: Succeeded, retryable failed, or deadlettered run plus job result }
+        '404': { description: Reconciliation run or repository binding not found }
+        '409': { description: Invalid/expired job lease, binding state, or run state }
+  /v1/github/reconciliation-runs/{run_id}/repair:
+    post:
+      summary: Schedule an explicit repair of a failed or deadlettered reconciliation
+      parameters:
+        - name: run_id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id, dedupe_key]
+              properties:
+                project_id: { type: string }
+                dedupe_key: { type: string }
+                actor: { type: string, default: ceo }
+      responses:
+        '201': { description: Queued repair run linked to the failed original }
+        '403': { description: Actor lacks github_manage permission }
+        '404': { description: Reconciliation run not found in the project }
+        '409': { description: Original is not repairable or dedupe collision }
+  /v1/github/reconciliation-signals:
+    get:
+      summary: List deduplicated GitHub webhook branch signals
+      parameters:
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+        - name: repository_binding_id
+          in: query
+          required: false
+          schema: { type: string }
+        - name: status
+          in: query
+          required: false
+          schema: { type: string }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 200, default: 100 }
+      responses:
+        '200': { description: Delivery/ref/SHA signals with pending, applied, stale, failed, or deadlettered state }
+  /v1/github/repository-ref-states:
+    get:
+      summary: List current reconciled branch truth for project repositories
+      parameters:
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+        - name: repository_binding_id
+          in: query
+          required: false
+          schema: { type: string }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 200, default: 200 }
+      responses:
+        '200': { description: Exact current branch existence, commit/tree identity, protection, observation, signal, and Receipt lineage }
   /v1/provider-definitions:
     get:
       summary: List infrastructure provider connection and authentication contracts

@@ -1,11 +1,11 @@
 # BOSS Autonomous Delivery Status
 
-**Last updated**: 2026-07-26 (BOSS-237 System Configuration UX)
+**Last updated**: 2026-07-26 (v0.9.0 integration)
 **Repo root**: /Volumes/DataSSD1/test/boss
 **Git remote**: https://github.com/seanheiney/boss
-**Current branch**: ai/codex/boss-237-system-config-ux
+**Current branch**: ai/codex/release-v0.9.0
 **Base branch**: origin/main
-**Product**: BOSS v0.7.0 target (Business Operating System Sentinel)
+**Product**: BOSS v0.9.0 target (Business Operating System Sentinel)
 **Mission**: Complete product to production-grade, tested, documented, pushed, Codex-coordinated, ready for real users. Grind until all discovered PRD/spec features satisfy world-class DoD or truly blocked.
 
 ## Discovered Spec Sources (see .ai/spec-index.md)
@@ -21,6 +21,32 @@
   resource scope; evidence drawers; partial-feed resilience; and responsive
   table containment. Automated web tests and production build pass, and live
   desktop/mobile validation confirms no viewport overflow or browser errors.
+- BOSS-246 defines full project-scoped GitHub integration as nine Plane-backed
+  delivery slices. BOSS-247 implements project-scoped connections/bindings.
+  BOSS-248/BOSS-249 add immutable versioned branch policies plus Receipt-backed
+  commit/tree/merge-base/protection/check snapshots with deterministic
+  equal/rewrite/fast-forward/behind/diverged/missing/protected-blocked
+  classification. BOSS-250 adds serialized one-owner branch/worktree leases
+  with hashed one-time tokens, monotonic fencing, heartbeat, release,
+  expiry/reclaim lineage, tenant scope, RBAC and audit. BOSS-251/BOSS-252 add
+  deterministic CodeSyncRuns, canonical ChangeSets, exact lease/fence and fresh
+  topology gates, non-force owned-branch sync, protected-target holds, typed
+  ConflictSets, dedicated resolution branches, mandatory red-to-green proof,
+  independent review, and receipted two-parent resolution commits without
+  writing the protected target. BOSS-253 adds expiring exact-snapshot merge
+  authorization, independent approval, a deterministic per-target queue,
+  protected-target lease/fencing, fresh policy/check/review/topology gates,
+  guarded PR-only merge, receipted result verification, rollback evidence,
+  bounded retry and deadletter. BOSS-254 adds binding-resolved enqueue-only
+  webhook signals, scheduled poll and explicit repair convergence, leased
+  Receipt-backed rate/ref reads, immutable observations and canonical ref
+  state, stale/out-of-order handling, drift invalidation, reset-aware bounded
+  retry, redaction and deadletters. BOSS-255 completes Mission Control with a
+  project/repository selector, canonical ref topology, branch evidence and
+  divergence inspector, lease/sync/conflict/merge/reconciliation lanes,
+  Receipt/rollback visibility, independently degrading read streams, and
+  `github_manage`-aware setup/review/poll/repair controls. Apply operations
+  requiring one-time lease secrets remain worker-only.
 - BOSS-236 implements the provider-account credential lifecycle foundation
   beneath BOSS-235: truthful initial-cloud auth definitions, multi-slot
   SecretRefs, safe metadata, rotation lineage/overlap, disable/revoke gates,

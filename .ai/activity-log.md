@@ -21,6 +21,141 @@ All 15-min terminal updates and major milestones appended here. Chronological, n
   build, strict docs, smoke, diff hygiene, and secret-pattern scan pass.
 
 ---
+## 2026-07-26 — Codex — BOSS-255 GitHub Mission Control
+
+- Advanced BOSS-255 Backlog → Todo → In Progress in Plane after publishing
+  clean stacked draft PR #86 for the BOSS-254 reconciler.
+- Added a dedicated project-level GitHub workspace that reads canonical
+  connection, repository, policy, topology, lease, sync, conflict, resolution,
+  merge, reconciliation, signal, and ref state through the typed client.
+- Added permission-aware setup and operations for SecretRef-backed
+  connections, repository binding, immutable policies, connection tests,
+  snapshot capture, sync planning, independent resolution review, merge
+  authorization/queueing, reconciliation poll, and terminal repair. Kept
+  lease-token-bearing apply operations behind workers.
+- Added partial-stream degradation, explicit empty/error states, responsive
+  topology/inspector/workflow layout, Receipt/rollback coverage, and actor RBAC
+  reflection.
+- Added three Mission Control feed/rendering tests. All 128 web tests and 85
+  widened GitHub API/community/worker tests pass alongside TypeScript lint,
+  production build, generated-doc drift and strict docs checks, live local
+  API/browser navigation, and desktop overflow/error inspection.
+- Published draft PR #87, cleanly mergeable on BOSS-254 PR #86, and attached
+  the exact commit, PR stack, validation, and merge-only closure condition to
+  Plane BOSS-255 and parent BOSS-246.
+
+## 2026-07-26 — Codex — BOSS-254 GitHub reconciler
+
+- Advanced BOSS-254 Backlog → Todo → In Progress in Plane after publishing
+  clean stacked draft PR #85 for BOSS-253.
+- Added canonical per-project reconciliation signals, runs, immutable
+  observations, and current repository ref state with webhook, job,
+  Receipt, deadletter, and repair lineage.
+- Changed GitHub ingress to resolve unambiguous active project bindings and
+  enqueue one deduplicated run per affected ref without calling the provider
+  inline. Scheduled polls and explicit repairs converge through the same leased
+  `github.repository.reconcile` worker capability.
+- Each worker attempt first observes the core rate limit, then exact branch
+  commit/tree/protection state. Every provider read is Receipt-backed; stale or
+  out-of-order webhook claims remain visible and cannot roll current truth
+  backward. Reconciled drift blocks pinned pending sync/merge work.
+- Added reset-aware/exponential bounded retry, synchronized run/signal/job
+  state, redacted provider failures, terminal deadletters, repair scheduling,
+  typed API/client/OpenAPI contracts, and worker double-finalization
+  prevention.
+- Validation includes focused reconciliation API/service tests, adapter quota
+  proof, worker lifecycle proof, client contract proof, 67 widened GitHub/
+  webhook API tests, 30 worker tests, 125 web tests, fresh and repeated schema
+  bootstrap, targeted OpenAPI route coverage, repository lint, production web
+  build, strict docs, and diff checks.
+
+## 2026-07-26 — Codex — BOSS-253 governed merge authorization and queue
+
+- Advanced BOSS-253 Backlog → Todo → In Progress in Plane after publishing
+  clean stacked PR #84 for BOSS-251/BOSS-252.
+- Added durable expiring MergeAuthorization state over exact PR, base/head
+  commit/tree, policy, checks, reviews, evidence and optional
+  sync/resolution lineage.
+- Implemented independent approval, deterministic per-target queue ordering,
+  exact target lease/fencing, fresh merge-readiness gates, guarded PR-only
+  merge with expected head SHA, and verified result/rollback evidence.
+- Routed every observation through a Receipt and every merge attempt through a
+  zero-cost risk-tier-three ChangeSet, Receipt, and ResourceReceipt. Failures
+  are redacted, retry three times, and deadletter visibly.
+- Added regression tests for self-approval denial, successful receipted merge,
+  stale head blocking, out-of-order queue denial, failed-check blocking, and
+  bounded provider failure/deadletter behavior.
+- Validation: 40 widened GitHub API/adapter tests, 39 typed-client tests,
+  focused Ruff/compile, TypeScript and route generation, production web build,
+  schema idempotency, OpenAPI route coverage, generated docs, strict MkDocs,
+  and diff checks pass.
+
+## 2026-07-26 — Codex — BOSS-251/BOSS-252 safe sync and conflict resolution
+
+- Advanced BOSS-251 and BOSS-252 Backlog → Todo → In Progress in Plane before
+  implementation and based the work on the published BOSS-250 stack without
+  touching Paramg's BOSS-237 branch.
+- Added canonical CodeSyncRun, ConflictSet, and ResolutionPlan persistence and
+  typed API/client/OpenAPI contracts.
+- Implemented deterministic topology planning, tree-rewrite no-op, exact
+  policy/lease/fence/fresh-snapshot gates, non-force owned-branch sync,
+  protected-target hold, rollback identity, result verification, bounded
+  retry, redacted failure, and terminal deadletter.
+- Routed every GitHub write attempt through a canonical ChangeSet operation,
+  Receipt, and ResourceReceipt. Zero-cost GitHub ref effects explicitly require
+  no BudgetReservation.
+- Implemented dedicated resolution branches, immutable base/ours/theirs/file
+  evidence, failing-red/passing-green proof, independent reviewer enforcement,
+  two-parent resolution commits, and resolution-ref-only non-force updates.
+- Validation: 31 widened GitHub API/adapter tests, 39 typed-client tests,
+  focused Ruff, TypeScript/Next route generation, production web build, schema
+  applied twice, OpenAPI YAML/GitHub route coverage, generated docs, strict
+  MkDocs, compile, and diff checks pass.
+
+## 2026-07-26 — Codex — BOSS-250 fenced branch leases
+
+- Advanced BOSS-250 Backlog → Todo → In Progress in Plane after publishing
+  clean stacked PR #82 for BOSS-248/BOSS-249.
+- Added one-active-owner branch/worktree leases with serialized acquisition,
+  hashed one-time tokens, monotonic fencing, heartbeat, release, expiry/reclaim
+  lineage, exact replay, tenant scope, RBAC and audit events.
+- Acceptance coverage proves token/fence denial, no token persistence/event
+  leakage, expiry/reacquire lineage, unexpired reclaim denial, and exactly one
+  winner under concurrent acquisition.
+- Validation passes double schema application, 65 API tests, 38 client tests,
+  Ruff, TypeScript, production build, OpenAPI, generated docs, strict MkDocs,
+  and diff checks.
+
+---
+## 2026-07-26 — Codex — BOSS-248/BOSS-249 policy and topology
+
+- Advanced BOSS-248/BOSS-249 through Backlog, Todo, and In Progress in Plane
+  after publishing clean draft PR #81 for BOSS-247.
+- Added immutable versioned branch policies, deterministic protected-ref/name/
+  method evaluation, immutable remote commit/tree topology snapshots, Receipt
+  replay scoping, protection/check evidence, and all topology classifications.
+- Added real adapter regression coverage plus typed API/client/OpenAPI and
+  product/technical/acceptance/traceability updates.
+- Validation passes double schema application, 60 API tests, 37 client tests,
+  Ruff, TypeScript, production build, OpenAPI, generated docs, strict MkDocs,
+  and diff checks.
+
+---
+## 2026-07-26 — Codex — BOSS-246/BOSS-247 GitHub project sync
+
+- Created the BOSS-246 parent and BOSS-247–255 delivery slices in Plane before
+  implementation; advanced BOSS-246/BOSS-247 to In Progress.
+- Added project-scoped GitHub App/PAT connections and repository bindings using
+  SecretRefs only, capability/permission discovery, lifecycle controls,
+  receipted idempotent tests, tenant scope, RBAC, and audit events.
+- Added typed API/client/OpenAPI contracts and governing PRD/technical/user
+  stories for safe branch automation. BOSS-248–255 retain the unimplemented
+  branch/sync/conflict/merge/reconciliation/UI work.
+- Validation passes schema reapplication, 54 API tests, 36 client tests, Ruff,
+  TypeScript, OpenAPI parsing, generated-doc checks, strict docs, and diff
+  checks.
+
+---
 ## 2026-07-26 — Codex — BOSS-236 provider credential lifecycle
 
 - Advanced BOSS-236 Backlog → Todo → In Progress in Plane after deduping the

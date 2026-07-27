@@ -2,7 +2,7 @@
 
 # Implemented features
 
-<span class="boss-status boss-status--implemented">Implemented</span> **84 features**
+<span class="boss-status boss-status--implemented">Implemented</span> **93 features**
 
 ## MET-001 — CEO command intake {#met-001-ceo-command-intake}
 
@@ -279,6 +279,114 @@
 **Automated evidence:** `apps/api/tests/test_github_community_adapter.py`, `apps/api/tests/test_webhook_foundation.py`
 
 **Ledger detail:** Implemented: repository-scoped issue/PR write permissions, four community subscriptions, canonical webhook setup, source-specific secret mapping, and fail-closed 503/no-persistence behavior when unconfigured
+
+## GHX-001 — Project GitHub connection and repository binding {#ghx-001-project-github-connection-and-repository-binding}
+
+<span class="boss-status boss-status--implemented">Implemented</span>
+
+**Source:** PRD GitHub Project Sync; BOSS-246/BOSS-247
+
+**Implementation:** `db/schema.sql`, `engine/boss_engine/services/github_connections.py`, `engine/boss_engine/services/github_adapter.py`, `engine/boss_engine/services/github_app_adapter.py`, `apps/api/app/main.py`, `engine/boss_engine/schemas.py`, `api/openapi.yaml`, `packages/api-client/src/index.ts`, `docs/product/GITHUB_PROJECT_SYNC.md`
+
+**Automated evidence:** `apps/api/tests/test_github_project_connections.py`, `apps/web/tests/api-client.test.ts`
+
+**Ledger detail:** Implemented foundation: project-scoped App/PAT SecretRefs, canonical primary/source/upstream/mirror bindings, `github_manage`, permission discovery, receipted/idempotent tests, tenant isolation, audited disable/enable, and irreversible revoke.
+
+## GHX-002 — Versioned branch policy {#ghx-002-versioned-branch-policy}
+
+<span class="boss-status boss-status--implemented">Implemented</span>
+
+**Source:** PRD GitHub Project Sync; BOSS-248
+
+**Implementation:** `db/schema.sql`, `engine/boss_engine/services/github_branches.py`, `apps/api/app/main.py`, `engine/boss_engine/schemas.py`, `api/openapi.yaml`, `packages/api-client/src/index.ts`
+
+**Automated evidence:** `apps/api/tests/test_github_branch_topology.py`, `apps/web/tests/api-client.test.ts`
+
+**Ledger detail:** Implemented: immutable supersession lineage, protected-ref patterns, naming/prefix rules, allowed update/merge methods, checks/reviews, force-push denial, deterministic allowed/approval-required/blocked evaluation, RBAC and audit events.
+
+## GHX-003 — Immutable remote topology snapshot {#ghx-003-immutable-remote-topology-snapshot}
+
+<span class="boss-status boss-status--implemented">Implemented</span>
+
+**Source:** PRD GitHub Project Sync; BOSS-249
+
+**Implementation:** `db/schema.sql`, `engine/boss_engine/services/github_branches.py`, `engine/boss_engine/services/github_adapter.py`, `apps/api/app/main.py`, `api/openapi.yaml`, `packages/api-client/src/index.ts`
+
+**Automated evidence:** `apps/api/tests/test_github_branch_topology.py`, `apps/web/tests/api-client.test.ts`
+
+**Ledger detail:** Implemented: receipt-backed remote head/tree/parents/protection/check capture, merge-base and ahead/behind evidence, immutable tenant-scoped snapshots, dedupe replay, redacted failure evidence, and equal/rewrite/fast-forward/behind/diverged/missing/protected-blocked classification.
+
+## GHX-004 — Fenced branch and worktree lease {#ghx-004-fenced-branch-and-worktree-lease}
+
+<span class="boss-status boss-status--implemented">Implemented</span>
+
+**Source:** PRD GitHub Project Sync; BOSS-250
+
+**Implementation:** `db/schema.sql`, `engine/boss_engine/services/github_branch_leases.py`, `apps/api/app/main.py`, `engine/boss_engine/schemas.py`, `api/openapi.yaml`, `packages/api-client/src/index.ts`
+
+**Automated evidence:** `apps/api/tests/test_github_branch_leases.py`, `apps/web/tests/api-client.test.ts`
+
+**Ledger detail:** Implemented: one active TTL owner per repository ref, serialized concurrent acquisition, hashed one-time token, monotonic fencing token, heartbeat, release, expiry/reclaim lineage, exact acquire replay, tenant/RBAC enforcement and audit events.
+
+## GHX-005 — Safe code synchronization {#ghx-005-safe-code-synchronization}
+
+<span class="boss-status boss-status--implemented">Implemented</span>
+
+**Source:** PRD GitHub Project Sync; BOSS-251
+
+**Implementation:** `db/schema.sql`, `engine/boss_engine/services/github_code_sync.py`, `engine/boss_engine/services/github_adapter.py`, `apps/api/app/main.py`, `engine/boss_engine/schemas.py`, `api/openapi.yaml`, `packages/api-client/src/index.ts`, `docs/product/GITHUB_PROJECT_SYNC.md`
+
+**Automated evidence:** `apps/api/tests/test_github_code_sync.py`, `apps/api/tests/test_github_community_adapter.py`, `apps/web/tests/api-client.test.ts`
+
+**Ledger detail:** Implemented: deterministic snapshot-to-action planning, tree-rewrite no-op, policy-pinned ChangeSets, exact-ref lease/fence and fresh-topology verification, non-force owned-branch fast-forward, protected-target hold, per-write Receipt/ResourceReceipt, rollback identity, result snapshot, bounded retry, redacted failures, and deadletter.
+
+## GHX-006 — Conflict branch and reviewed resolution {#ghx-006-conflict-branch-and-reviewed-resolution}
+
+<span class="boss-status boss-status--implemented">Implemented</span>
+
+**Source:** PRD GitHub Project Sync; BOSS-252
+
+**Implementation:** `db/schema.sql`, `engine/boss_engine/services/github_code_sync.py`, `engine/boss_engine/services/github_adapter.py`, `apps/api/app/main.py`, `engine/boss_engine/schemas.py`, `api/openapi.yaml`, `packages/api-client/src/index.ts`, `docs/product/GITHUB_PROJECT_SYNC.md`
+
+**Automated evidence:** `apps/api/tests/test_github_code_sync.py`, `apps/api/tests/test_github_community_adapter.py`, `apps/web/tests/api-client.test.ts`
+
+**Ledger detail:** Implemented: dedicated policy-approved resolution branch, immutable base/ours/theirs and bounded file evidence, versioned resolution plans, mandatory failing-red/passing-green proof, independent reviewer enforcement, stale-input/fence rejection, explicit two-parent resolution commit, non-force resolution-ref update, ChangeSet/Receipt/ResourceReceipt coverage, and no protected-target write.
+
+## GHX-007 — Governed merge authorization and queue {#ghx-007-governed-merge-authorization-and-queue}
+
+<span class="boss-status boss-status--implemented">Implemented</span>
+
+**Source:** PRD GitHub Project Sync; BOSS-253
+
+**Implementation:** `db/schema.sql`, `engine/boss_engine/services/github_merges.py`, `engine/boss_engine/services/github_adapter.py`, `apps/api/app/main.py`, `engine/boss_engine/schemas.py`, `api/openapi.yaml`, `packages/api-client/src/index.ts`, `docs/product/GITHUB_PROJECT_SYNC.md`
+
+**Automated evidence:** `apps/api/tests/test_github_merge_authorizations.py`, `apps/api/tests/test_github_community_adapter.py`, `apps/web/tests/api-client.test.ts`
+
+**Ledger detail:** Implemented: expiring exact base/head/tree authorization, independent approval, deterministic per-target queue, target lease/fence, current policy/check/review/mergeability rechecks, guarded PR-only merge with expected head SHA, no direct/force target update, Receipt/ResourceReceipt coverage, verified result, manual newly authorized revert-PR plan, bounded retry, redaction, and deadletter.
+
+## GHX-008 — Webhook and polling reconciler {#ghx-008-webhook-and-polling-reconciler}
+
+<span class="boss-status boss-status--implemented">Implemented</span>
+
+**Source:** PRD GitHub Project Sync; BOSS-254
+
+**Implementation:** `db/schema.sql`, `engine/boss_engine/services/github_reconciliation.py`, `engine/boss_engine/services/webhooks.py`, `engine/boss_engine/services/github_adapter.py`, `apps/api/app/main.py`, `engine/boss_engine/schemas.py`, `apps/worker/boss_worker/runner.py`, `api/openapi.yaml`, `packages/api-client/src/index.ts`, `docs/product/GITHUB_PROJECT_SYNC.md`
+
+**Automated evidence:** `apps/api/tests/test_github_reconciliation.py`, `apps/api/tests/test_github_community_adapter.py`, `apps/worker/tests/test_worker.py`, `apps/web/tests/api-client.test.ts`
+
+**Ledger detail:** Implemented: binding-resolved enqueue-only webhook signals; scheduled poll and explicit repair convergence; delivery/ref/SHA dedupe; leased Receipt-backed rate-limit and branch reads; immutable observations and canonical ref state; stale/out-of-order classification; pinned sync/merge drift invalidation; bounded reset-aware/exponential retry; redacted failures; deadletters; and no worker double-finalization.
+
+## GHX-009 — GitHub Mission Control {#ghx-009-github-mission-control}
+
+<span class="boss-status boss-status--implemented">Implemented</span>
+
+**Source:** PRD GitHub Project Sync; BOSS-255
+
+**Implementation:** `apps/web/lib/github-operations.ts`, `apps/web/app/github-operations-ui.tsx`, `apps/web/app/actions.ts`, `apps/web/app/page.tsx`, `apps/web/app/ConsoleShell.tsx`, `apps/web/app/globals.css`, `docs/product/GITHUB_PROJECT_SYNC.md`
+
+**Automated evidence:** `apps/web/tests/github-operations.test.tsx`, `apps/web/tests/accessibility.test.ts`, web TypeScript validation and production build
+
+**Ledger detail:** Implemented: project/repository selection, connection health, canonical ref topology, branch evidence inspector, divergence, fenced lease ownership, sync/conflict/resolution/merge/reconciliation lanes, Receipt and rollback coverage, partial-stream failure visibility, responsive empty/error/success states, and `github_manage`-aware controls for connection, repository, policy, snapshot, plan, review, queue, poll, and repair operations. Lease-token-bearing apply remains worker-only.
 
 ## ORC-001 — Conversational thread store/API {#orc-001-conversational-thread-store-api}
 

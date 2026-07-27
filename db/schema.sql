@@ -1029,6 +1029,499 @@ ALTER TABLE secret_refs ADD COLUMN IF NOT EXISTS revoked_by TEXT;
 CREATE INDEX IF NOT EXISTS idx_secret_refs_project
   ON secret_refs(project_id, provider, status);
 
+-- Project-scoped GitHub connectivity. Credential material remains outside BOSS;
+-- github_connections stores only a SecretRef pointer and non-secret installation
+-- identity. Repository bindings are the canonical target boundary consumed by
+-- future branch-policy, sync, lease, and merge-orchestration slices.
+CREATE TABLE IF NOT EXISTS github_connections (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  connection_label TEXT NOT NULL,
+  auth_method TEXT NOT NULL,
+  credential_ref TEXT NOT NULL,
+  app_id TEXT,
+  installation_id TEXT,
+  api_base_url TEXT NOT NULL DEFAULT 'https://api.github.com',
+  status TEXT NOT NULL DEFAULT 'configured',
+  required_permissions JSONB NOT NULL DEFAULT '["pull"]'::jsonb,
+  granted_permissions JSONB NOT NULL DEFAULT '[]'::jsonb,
+  missing_permissions JSONB NOT NULL DEFAULT '[]'::jsonb,
+  account_login TEXT,
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+  last_test_status TEXT,
+  last_tested_at TIMESTAMPTZ,
+  last_error JSONB,
+  disabled_at TIMESTAMPTZ,
+  disabled_by TEXT,
+  revoked_at TIMESTAMPTZ,
+  revoked_by TEXT,
+  created_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(project_id, connection_label),
+  CHECK (auth_method IN ('github_app', 'personal_access_token')),
+  CHECK (status IN ('configured', 'active', 'error', 'disabled', 'revoked'))
+);
+CREATE INDEX IF NOT EXISTS idx_github_connections_project
+  ON github_connections(project_id, status, updated_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_github_connections_project_label_ci
+  ON github_connections(project_id, lower(connection_label));
+
+CREATE TABLE IF NOT EXISTS github_repository_bindings (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  connection_id TEXT NOT NULL REFERENCES github_connections(id) ON DELETE CASCADE,
+  repository_id BIGINT,
+  owner TEXT NOT NULL,
+  name TEXT NOT NULL,
+  full_name TEXT NOT NULL,
+  role TEXT NOT NULL DEFAULT 'primary',
+  default_branch TEXT,
+  visibility TEXT,
+  archived BOOLEAN NOT NULL DEFAULT false,
+  status TEXT NOT NULL DEFAULT 'active',
+  permissions JSONB NOT NULL DEFAULT '{}'::jsonb,
+  capabilities JSONB NOT NULL DEFAULT '[]'::jsonb,
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+  last_synced_at TIMESTAMPTZ,
+  created_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(project_id, full_name),
+  CHECK (role IN ('primary', 'source', 'upstream', 'mirror')),
+  CHECK (status IN ('active', 'disabled'))
+);
+CREATE INDEX IF NOT EXISTS idx_github_repository_bindings_project
+  ON github_repository_bindings(project_id, status, role, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_github_repository_bindings_connection
+  ON github_repository_bindings(connection_id, status, updated_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_github_repository_bindings_project_name_ci
+  ON github_repository_bindings(project_id, lower(full_name));
+CREATE UNIQUE INDEX IF NOT EXISTS uq_github_repository_binding_primary
+  ON github_repository_bindings(project_id)
+  WHERE role = 'primary' AND status = 'active';
+
+CREATE TABLE IF NOT EXISTS github_branch_policies (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  repository_binding_id TEXT NOT NULL REFERENCES github_repository_bindings(id) ON DELETE CASCADE,
+  version INTEGER NOT NULL,
+  supersedes_policy_id TEXT REFERENCES github_branch_policies(id),
+  status TEXT NOT NULL DEFAULT 'active',
+  protected_ref_patterns JSONB NOT NULL DEFAULT '["main", "master", "release/*"]'::jsonb,
+  allowed_branch_prefixes JSONB NOT NULL DEFAULT '["ai/", "feat/", "fix/", "chore/", "docs/", "release/"]'::jsonb,
+  branch_name_pattern TEXT NOT NULL DEFAULT '^[A-Za-z0-9._/-]+$',
+  allowed_update_methods JSONB NOT NULL DEFAULT '["fast_forward", "merge_commit", "rebase"]'::jsonb,
+  allowed_merge_methods JSONB NOT NULL DEFAULT '["merge", "squash", "rebase"]'::jsonb,
+  required_checks JSONB NOT NULL DEFAULT '[]'::jsonb,
+  required_approvals INTEGER NOT NULL DEFAULT 1,
+  require_pull_request BOOLEAN NOT NULL DEFAULT true,
+  require_linear_history BOOLEAN NOT NULL DEFAULT false,
+  require_signed_commits BOOLEAN NOT NULL DEFAULT false,
+  automation_updates_enabled BOOLEAN NOT NULL DEFAULT true,
+  force_push_allowed BOOLEAN NOT NULL DEFAULT false,
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(repository_binding_id, version),
+  CHECK (version > 0),
+  CHECK (required_approvals >= 0),
+  CHECK (status IN ('active', 'superseded', 'disabled'))
+);
+CREATE INDEX IF NOT EXISTS idx_github_branch_policies_project
+  ON github_branch_policies(project_id, status, updated_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_github_branch_policy_active
+  ON github_branch_policies(repository_binding_id)
+  WHERE status = 'active';
+
+CREATE TABLE IF NOT EXISTS github_branch_snapshots (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  repository_binding_id TEXT NOT NULL REFERENCES github_repository_bindings(id) ON DELETE CASCADE,
+  branch_policy_id TEXT REFERENCES github_branch_policies(id),
+  branch_policy_version INTEGER,
+  source_ref TEXT NOT NULL,
+  target_ref TEXT NOT NULL,
+  source_commit_sha TEXT,
+  source_tree_sha TEXT,
+  target_commit_sha TEXT,
+  target_tree_sha TEXT,
+  merge_base_commit_sha TEXT,
+  merge_base_tree_sha TEXT,
+  ahead_by INTEGER NOT NULL DEFAULT 0,
+  behind_by INTEGER NOT NULL DEFAULT 0,
+  topology_classification TEXT NOT NULL,
+  classification TEXT NOT NULL,
+  refs JSONB NOT NULL DEFAULT '{}'::jsonb,
+  comparison JSONB NOT NULL DEFAULT '{}'::jsonb,
+  protection JSONB NOT NULL DEFAULT '{}'::jsonb,
+  checks JSONB NOT NULL DEFAULT '[]'::jsonb,
+  policy_evaluation JSONB NOT NULL DEFAULT '{}'::jsonb,
+  receipt_id TEXT NOT NULL REFERENCES receipts(id),
+  dedupe_key TEXT NOT NULL,
+  observed_by TEXT NOT NULL,
+  observed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(project_id, dedupe_key),
+  CHECK (ahead_by >= 0),
+  CHECK (behind_by >= 0),
+  CHECK (topology_classification IN (
+    'equal', 'tree_equivalent_rewrite', 'fast_forward', 'behind',
+    'diverged', 'missing'
+  )),
+  CHECK (classification IN (
+    'equal', 'tree_equivalent_rewrite', 'fast_forward', 'behind',
+    'diverged', 'missing', 'protected_blocked'
+  ))
+);
+CREATE INDEX IF NOT EXISTS idx_github_branch_snapshots_binding
+  ON github_branch_snapshots(
+    repository_binding_id, observed_at DESC, source_ref, target_ref
+  );
+
+CREATE TABLE IF NOT EXISTS github_branch_leases (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  repository_binding_id TEXT NOT NULL REFERENCES github_repository_bindings(id) ON DELETE CASCADE,
+  ref_name TEXT NOT NULL,
+  owner_kind TEXT NOT NULL,
+  owner_id TEXT NOT NULL,
+  run_id TEXT,
+  worktree_path TEXT,
+  acquire_key TEXT NOT NULL,
+  lease_token_hash TEXT NOT NULL,
+  fencing_token BIGSERIAL NOT NULL UNIQUE,
+  status TEXT NOT NULL DEFAULT 'active',
+  acquired_by TEXT NOT NULL,
+  acquired_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  heartbeat_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  lease_expires_at TIMESTAMPTZ NOT NULL,
+  released_by TEXT,
+  released_at TIMESTAMPTZ,
+  release_reason TEXT,
+  reclaimed_from_lease_id TEXT REFERENCES github_branch_leases(id),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(project_id, acquire_key),
+  CHECK (status IN ('active', 'released', 'expired', 'reclaimed')),
+  CHECK (owner_kind IN (
+    'task', 'workflow_run', 'code_task_run', 'agent', 'manual'
+  ))
+);
+CREATE INDEX IF NOT EXISTS idx_github_branch_leases_binding
+  ON github_branch_leases(
+    repository_binding_id, ref_name, status, lease_expires_at DESC
+  );
+CREATE UNIQUE INDEX IF NOT EXISTS uq_github_branch_lease_active
+  ON github_branch_leases(repository_binding_id, ref_name)
+  WHERE status = 'active';
+
+CREATE TABLE IF NOT EXISTS github_code_sync_runs (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  repository_binding_id TEXT NOT NULL REFERENCES github_repository_bindings(id) ON DELETE CASCADE,
+  branch_policy_id TEXT NOT NULL REFERENCES github_branch_policies(id),
+  branch_policy_version INTEGER NOT NULL,
+  initial_snapshot_id TEXT NOT NULL REFERENCES github_branch_snapshots(id),
+  result_snapshot_id TEXT REFERENCES github_branch_snapshots(id),
+  branch_lease_id TEXT REFERENCES github_branch_leases(id),
+  fencing_token BIGINT,
+  source_ref TEXT NOT NULL,
+  target_ref TEXT NOT NULL,
+  topology_classification TEXT NOT NULL,
+  action TEXT NOT NULL,
+  status TEXT NOT NULL,
+  dedupe_key TEXT NOT NULL,
+  changeset_id TEXT,
+  conflict_set_id TEXT,
+  decision_id TEXT REFERENCES decisions(id),
+  resolution_branch TEXT,
+  rollback_ref TEXT,
+  rollback_sha TEXT,
+  apply_attempts INTEGER NOT NULL DEFAULT 0,
+  receipt_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
+  resource_receipt_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
+  error JSONB,
+  created_by TEXT NOT NULL,
+  approved_by TEXT,
+  applied_by TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  completed_at TIMESTAMPTZ,
+  UNIQUE(project_id, dedupe_key),
+  CHECK (action IN (
+    'noop', 'preserve_remote_identity', 'fast_forward_target',
+    'fast_forward_source', 'create_resolution_branch', 'blocked'
+  )),
+  CHECK (status IN (
+    'planned', 'pending_approval', 'approved', 'applying', 'succeeded',
+    'noop', 'conflicted', 'blocked', 'failed', 'deadlettered'
+  ))
+);
+CREATE INDEX IF NOT EXISTS idx_github_code_sync_runs_project
+  ON github_code_sync_runs(project_id, status, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_github_code_sync_runs_binding
+  ON github_code_sync_runs(repository_binding_id, source_ref, target_ref, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS github_conflict_sets (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  code_sync_run_id TEXT NOT NULL REFERENCES github_code_sync_runs(id) ON DELETE CASCADE,
+  repository_binding_id TEXT NOT NULL REFERENCES github_repository_bindings(id) ON DELETE CASCADE,
+  resolution_branch TEXT NOT NULL,
+  resolution_branch_head_sha TEXT NOT NULL,
+  base_commit_sha TEXT,
+  base_tree_sha TEXT,
+  ours_commit_sha TEXT NOT NULL,
+  ours_tree_sha TEXT NOT NULL,
+  theirs_commit_sha TEXT NOT NULL,
+  theirs_tree_sha TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'open',
+  files JSONB NOT NULL DEFAULT '[]'::jsonb,
+  conflict_count INTEGER NOT NULL DEFAULT 0,
+  decision_id TEXT REFERENCES decisions(id),
+  resolved_by_plan_id TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  resolved_at TIMESTAMPTZ,
+  CHECK (status IN (
+    'open', 'resolution_proposed', 'approved', 'resolved', 'blocked'
+  )),
+  CHECK (conflict_count >= 0)
+);
+CREATE INDEX IF NOT EXISTS idx_github_conflict_sets_project
+  ON github_conflict_sets(project_id, status, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS github_resolution_plans (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  conflict_set_id TEXT NOT NULL REFERENCES github_conflict_sets(id) ON DELETE CASCADE,
+  version INTEGER NOT NULL,
+  status TEXT NOT NULL DEFAULT 'proposed',
+  resolved_files JSONB NOT NULL DEFAULT '[]'::jsonb,
+  validation_evidence JSONB NOT NULL DEFAULT '{}'::jsonb,
+  independent_review JSONB NOT NULL DEFAULT '{}'::jsonb,
+  decision_id TEXT REFERENCES decisions(id),
+  changeset_id TEXT,
+  result_commit_sha TEXT,
+  created_by TEXT NOT NULL,
+  approved_by TEXT,
+  applied_by TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  applied_at TIMESTAMPTZ,
+  UNIQUE(conflict_set_id, version),
+  CHECK (version > 0),
+  CHECK (status IN ('proposed', 'approved', 'applied', 'rejected', 'failed'))
+);
+CREATE INDEX IF NOT EXISTS idx_github_resolution_plans_project
+  ON github_resolution_plans(project_id, status, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS github_merge_authorizations (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  repository_binding_id TEXT NOT NULL REFERENCES github_repository_bindings(id) ON DELETE CASCADE,
+  branch_policy_id TEXT NOT NULL REFERENCES github_branch_policies(id),
+  branch_policy_version INTEGER NOT NULL,
+  code_sync_run_id TEXT REFERENCES github_code_sync_runs(id),
+  resolution_plan_id TEXT REFERENCES github_resolution_plans(id),
+  pull_request_number BIGINT NOT NULL,
+  pull_request_url TEXT NOT NULL,
+  source_ref TEXT NOT NULL,
+  target_ref TEXT NOT NULL,
+  head_commit_sha TEXT NOT NULL,
+  head_tree_sha TEXT NOT NULL,
+  base_commit_sha TEXT NOT NULL,
+  base_tree_sha TEXT NOT NULL,
+  merge_method TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending_approval',
+  dedupe_key TEXT NOT NULL,
+  required_checks JSONB NOT NULL DEFAULT '[]'::jsonb,
+  observed_checks JSONB NOT NULL DEFAULT '[]'::jsonb,
+  required_approvals INTEGER NOT NULL DEFAULT 1,
+  observed_reviews JSONB NOT NULL DEFAULT '[]'::jsonb,
+  evidence_bundle JSONB NOT NULL DEFAULT '{}'::jsonb,
+  policy_evaluation JSONB NOT NULL DEFAULT '{}'::jsonb,
+  authorized_by TEXT,
+  authorized_at TIMESTAMPTZ,
+  expires_at TIMESTAMPTZ NOT NULL,
+  queue_position BIGSERIAL NOT NULL UNIQUE,
+  queued_at TIMESTAMPTZ,
+  branch_lease_id TEXT REFERENCES github_branch_leases(id),
+  fencing_token BIGINT,
+  changeset_id TEXT,
+  apply_attempts INTEGER NOT NULL DEFAULT 0,
+  receipt_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
+  resource_receipt_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
+  result_merge_sha TEXT,
+  result_target_tree_sha TEXT,
+  rollback_plan JSONB NOT NULL DEFAULT '{}'::jsonb,
+  error JSONB,
+  created_by TEXT NOT NULL,
+  applied_by TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  merged_at TIMESTAMPTZ,
+  UNIQUE(project_id, dedupe_key),
+  CHECK (pull_request_number > 0),
+  CHECK (required_approvals >= 0),
+  CHECK (merge_method IN ('merge', 'squash', 'rebase')),
+  CHECK (status IN (
+    'pending_approval', 'authorized', 'queued', 'applying', 'merged',
+    'blocked', 'expired', 'failed', 'deadlettered', 'cancelled'
+  ))
+);
+CREATE INDEX IF NOT EXISTS idx_github_merge_authorizations_project
+  ON github_merge_authorizations(project_id, status, queue_position);
+CREATE INDEX IF NOT EXISTS idx_github_merge_authorizations_target_queue
+  ON github_merge_authorizations(
+    repository_binding_id, target_ref, status, queue_position
+  );
+CREATE UNIQUE INDEX IF NOT EXISTS uq_github_merge_authorizations_active_pr
+  ON github_merge_authorizations(repository_binding_id, pull_request_number)
+  WHERE status IN (
+    'pending_approval', 'authorized', 'queued', 'applying'
+  );
+
+CREATE TABLE IF NOT EXISTS github_reconciliation_signals (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  repository_binding_id TEXT NOT NULL REFERENCES github_repository_bindings(id) ON DELETE CASCADE,
+  -- Inbound webhooks are declared later in this bootstrap file.
+  inbound_webhook_id TEXT,
+  source TEXT NOT NULL,
+  delivery_id TEXT,
+  provider_event TEXT,
+  action TEXT,
+  ref_name TEXT NOT NULL,
+  expected_commit_sha TEXT,
+  expected_deleted BOOLEAN NOT NULL DEFAULT false,
+  payload_hash TEXT,
+  dedupe_key TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending',
+  reconciliation_run_id TEXT,
+  observed_commit_sha TEXT,
+  error JSONB,
+  provider_occurred_at TIMESTAMPTZ,
+  processed_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(project_id, dedupe_key),
+  CHECK (source IN ('webhook', 'poll', 'repair')),
+  CHECK (status IN (
+    'pending', 'processing', 'applied', 'stale', 'failed', 'deadlettered'
+  ))
+);
+CREATE INDEX IF NOT EXISTS idx_github_reconciliation_signals_binding
+  ON github_reconciliation_signals(
+    repository_binding_id, ref_name, status, created_at DESC
+  );
+
+CREATE TABLE IF NOT EXISTS github_reconciliation_runs (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  repository_binding_id TEXT NOT NULL REFERENCES github_repository_bindings(id) ON DELETE CASCADE,
+  trigger_signal_id TEXT REFERENCES github_reconciliation_signals(id) ON DELETE SET NULL,
+  repair_of_run_id TEXT REFERENCES github_reconciliation_runs(id) ON DELETE SET NULL,
+  source TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'queued',
+  dedupe_key TEXT NOT NULL,
+  requested_refs JSONB NOT NULL DEFAULT '[]'::jsonb,
+  attempt_count INTEGER NOT NULL DEFAULT 0,
+  max_attempts INTEGER NOT NULL DEFAULT 3,
+  job_id TEXT REFERENCES jobs(id) ON DELETE SET NULL,
+  observation_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
+  receipt_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
+  rate_limit_status JSONB NOT NULL DEFAULT '{}'::jsonb,
+  next_attempt_at TIMESTAMPTZ,
+  deadletter_id TEXT,
+  error JSONB,
+  created_by TEXT NOT NULL,
+  started_at TIMESTAMPTZ,
+  completed_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(project_id, dedupe_key),
+  CHECK (source IN ('webhook', 'poll', 'repair')),
+  CHECK (status IN (
+    'queued', 'running', 'succeeded', 'failed', 'deadlettered', 'cancelled'
+  )),
+  CHECK (attempt_count >= 0),
+  CHECK (max_attempts BETWEEN 1 AND 10)
+);
+CREATE INDEX IF NOT EXISTS idx_github_reconciliation_runs_project
+  ON github_reconciliation_runs(project_id, status, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_github_reconciliation_runs_binding
+  ON github_reconciliation_runs(
+    repository_binding_id, status, created_at DESC
+  );
+ALTER TABLE github_reconciliation_runs
+  ADD COLUMN IF NOT EXISTS observation_ids JSONB NOT NULL DEFAULT '[]'::jsonb;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'fk_github_reconciliation_signal_run'
+  ) THEN
+    ALTER TABLE github_reconciliation_signals
+      ADD CONSTRAINT fk_github_reconciliation_signal_run
+      FOREIGN KEY (reconciliation_run_id)
+      REFERENCES github_reconciliation_runs(id) ON DELETE SET NULL;
+  END IF;
+END
+$$;
+
+CREATE TABLE IF NOT EXISTS github_repository_observations (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  repository_binding_id TEXT NOT NULL REFERENCES github_repository_bindings(id) ON DELETE CASCADE,
+  reconciliation_run_id TEXT NOT NULL REFERENCES github_reconciliation_runs(id) ON DELETE CASCADE,
+  signal_id TEXT REFERENCES github_reconciliation_signals(id) ON DELETE SET NULL,
+  ref_name TEXT NOT NULL,
+  expected_commit_sha TEXT,
+  exists BOOLEAN NOT NULL,
+  commit_sha TEXT,
+  tree_sha TEXT,
+  protected BOOLEAN NOT NULL DEFAULT false,
+  protection JSONB NOT NULL DEFAULT '{}'::jsonb,
+  classification TEXT NOT NULL,
+  receipt_id TEXT NOT NULL REFERENCES receipts(id),
+  observed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(reconciliation_run_id, ref_name),
+  CHECK (classification IN (
+    'current', 'advanced', 'changed', 'deleted', 'missing',
+    'stale_signal', 'unexpected_reappearance'
+  ))
+);
+CREATE INDEX IF NOT EXISTS idx_github_repository_observations_binding
+  ON github_repository_observations(
+    repository_binding_id, ref_name, observed_at DESC
+  );
+
+CREATE TABLE IF NOT EXISTS github_repository_ref_states (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  repository_binding_id TEXT NOT NULL REFERENCES github_repository_bindings(id) ON DELETE CASCADE,
+  ref_name TEXT NOT NULL,
+  exists BOOLEAN NOT NULL,
+  commit_sha TEXT,
+  tree_sha TEXT,
+  protected BOOLEAN NOT NULL DEFAULT false,
+  protection JSONB NOT NULL DEFAULT '{}'::jsonb,
+  latest_observation_id TEXT NOT NULL REFERENCES github_repository_observations(id) ON DELETE CASCADE,
+  latest_signal_id TEXT REFERENCES github_reconciliation_signals(id) ON DELETE SET NULL,
+  latest_receipt_id TEXT NOT NULL REFERENCES receipts(id),
+  observed_at TIMESTAMPTZ NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(repository_binding_id, ref_name)
+);
+CREATE INDEX IF NOT EXISTS idx_github_repository_ref_states_project
+  ON github_repository_ref_states(project_id, repository_binding_id, ref_name);
+
 CREATE TABLE IF NOT EXISTS provider_adapters (
   id TEXT PRIMARY KEY,
   provider TEXT NOT NULL,
@@ -1710,6 +2203,19 @@ ALTER TABLE deadletters ADD COLUMN IF NOT EXISTS requeued_job_id TEXT;
 ALTER TABLE deadletters ADD COLUMN IF NOT EXISTS resolved_by TEXT;
 ALTER TABLE deadletters ADD COLUMN IF NOT EXISTS resolved_at TIMESTAMPTZ;
 ALTER TABLE deadletters ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now();
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'fk_github_reconciliation_run_deadletter'
+  ) THEN
+    ALTER TABLE github_reconciliation_runs
+      ADD CONSTRAINT fk_github_reconciliation_run_deadletter
+      FOREIGN KEY (deadletter_id)
+      REFERENCES deadletters(id) ON DELETE SET NULL;
+  END IF;
+END
+$$;
 
 CREATE TABLE IF NOT EXISTS events (
   id TEXT PRIMARY KEY,
@@ -1796,6 +2302,19 @@ CREATE TABLE IF NOT EXISTS inbound_webhooks (
 );
 CREATE INDEX IF NOT EXISTS idx_inbound_webhooks_project_created
   ON inbound_webhooks(project_id, created_at DESC);
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'fk_github_reconciliation_signal_inbound'
+  ) THEN
+    ALTER TABLE github_reconciliation_signals
+      ADD CONSTRAINT fk_github_reconciliation_signal_inbound
+      FOREIGN KEY (inbound_webhook_id)
+      REFERENCES inbound_webhooks(id) ON DELETE SET NULL;
+  END IF;
+END
+$$;
 
 CREATE TABLE IF NOT EXISTS feature_catalog (
   id TEXT PRIMARY KEY,

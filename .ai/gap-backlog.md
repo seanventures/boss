@@ -1,5 +1,36 @@
 # BOSS Gap Backlog (.ai Autonomous Version)
 
+## 2026-07-26 GitHub project sync delivery map
+
+- BOSS-247 closes the project-scoped connection/repository-binding foundation
+  once PR #81 merges.
+- BOSS-248/BOSS-249 implement immutable versioned branch policy plus
+  Receipt-backed repository snapshots/topology and close once their stacked PR
+  merges.
+- BOSS-250 implements fenced TTL branch/worktree ownership and closes once its
+  stacked PR merges.
+- BOSS-251/BOSS-252 implement safe synchronization, typed conflict-resolution
+  branches, red-to-green proof, independent review, and receipted non-force
+  resolution commits; they close once their stacked PR merges.
+- BOSS-253 implements exact-snapshot merge authorization, independent approval,
+  deterministic target queues, protected-target lease/fence verification,
+  fresh checks/reviews, guarded PR-only merge, receipted rollback evidence, and
+  bounded retry/deadletter; it closes once its stacked PR merges.
+- BOSS-254 implements the webhook/poll/repair reconciler with binding-resolved
+  enqueue-only ingress, delivery/ref/SHA dedupe, leased Receipt-backed
+  rate/ref reads, canonical observations/ref state, stale/out-of-order
+  handling, drift invalidation, reset-aware bounded retry, deadletter and
+  repair; it closes once its stacked PR merges.
+- BOSS-255 implements Mission Control repository topology and branch
+  operations with canonical multi-stream reads, partial-failure visibility,
+  branch evidence/divergence/lease inspection, linear sync/conflict/merge/
+  reconciliation state, Receipts/rollback, responsive empty/error states, and
+  `github_manage`-aware controls. It closes once its stacked PR merges.
+- The governing GHX-001 contract requires immutable observed SHAs, no silent
+  reset/force-push, visible rewrite/divergence classification, provider writes
+  through ChangeSets/ResourceReceipts, unique dedupe keys, and approval gates
+  for protected/destructive operations.
+
 ## 2026-07-26 Provider suite foundation
 
 - BOSS-236 closes the connection/credential lifecycle foundation for BOSS-235.

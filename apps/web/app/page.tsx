@@ -140,6 +140,8 @@ import { fetchMcpServers } from "../lib/mcp";
 import { fetchPackFeed } from "../lib/packs";
 import { fetchProviderOpsFeed } from "../lib/providerops";
 import { ProviderConfigurationSuite } from "./provider-configuration-ui";
+import { fetchGitHubOperationsFeed } from "../lib/github-operations";
+import { GitHubOperations } from "./github-operations-ui";
 import { DeploymentPromotionTimeline } from "./deployment-promotion-timeline";
 import { fetchProjectFeed } from "../lib/projects";
 import { fetchReceiptFeed } from "../lib/receipts";
@@ -474,6 +476,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
     routingLogs,
     skills,
     providerOps,
+    githubOperations,
     receipts,
     infrastructureResources,
     budgetStatus,
@@ -539,6 +542,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
       }),
       fetchSkillFeed(),
       fetchProviderOpsFeed(activeProjectId),
+      fetchGitHubOperationsFeed(activeProjectId),
       fetchReceiptFeed(activeProjectId, 100),
       fetchInfrastructureResourceFeed(activeProjectId),
       fetchBudgetStatus(activeProjectId),
@@ -612,6 +616,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
   const activeActor = actorOptions.find(
     (member) => member.memberId === activeActorId,
   );
+  const canManageGitHub =
+    activeActor?.status === "active" &&
+    activeActor.permissions.includes("github_manage");
   const softwareFactoryDecisionEvidence = extractSoftwareFactoryDecisionEvidence(
     decisions.items,
   );
@@ -660,6 +667,12 @@ export default async function HomePage({ searchParams }: HomePageProps) {
           </div>
           <DashboardPanel snapshot={dashboardSnapshot} />
         </section>
+
+        <GitHubOperations
+          feed={githubOperations}
+          actor={activeActorId}
+          canManage={canManageGitHub}
+        />
 
         <section className="panel-stack mission-roster-section" data-area="org" aria-label="Agent roster">
           <div className="section-head">

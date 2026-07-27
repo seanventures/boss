@@ -2,7 +2,7 @@
 
 Status: Governing product-intent specification
 Date: June 3, 2026
-Last updated: July 18, 2026
+Last updated: July 26, 2026
 Supersedes: `docs/product/PRD-v1.1.md`
 Product: BOSS - Business Operating System Sentinel
 
@@ -106,6 +106,8 @@ Core objects: `Org`, `Workspace`, `Project`, `User`, `Membership`, `Task`, `Plan
 Collaboration objects: `AgentGroupSpec`, `AgentGroupVersion`, `AgentGroupRun`, `AgentGroupMemberRun`, `AgentFinding`, `DissentRecord`.
 
 Capability/integration objects: `SkillSpec`, `IntegrationDefinition`, `IntegrationConnection`, `IntegrationHealth`, `SkillInvocation`, `ExecutorBinding`.
+
+GitHub/software-change objects: `ProjectGitHubConnection`, `GitHubRepositoryBinding`, `BranchPolicy`, `BranchLease`, `BranchSnapshot`, `CodeSyncRun`, `ConflictSet`, `ResolutionPlan`, `MergeAuthorization`.
 
 Workflow objects: `WorkflowDefinition`, `WorkflowVersion`, `WorkflowMapping`, `WorkflowRun`, `WorkflowStepRun`, `WorkflowMigration`, `CompensationRun`.
 
@@ -500,6 +502,58 @@ Evidence bundles must include spec refs, task refs, diffs, test results, build l
 
 Definition of done: software work is complete only when objective evidence demonstrates builds pass, tests pass, runtime behavior satisfies acceptance criteria, required artifacts are attached, and required receipts exist.
 
+### GitHub Project Sync and Branch Orchestration
+
+GitHub connectivity is project-scoped durable state, not process-wide ambient
+configuration. Each project can install a GitHub App or reference an approved
+PAT through a named `SecretRef`, bind one primary repository plus optional
+source, upstream, and mirror repositories, and declare the protected refs,
+branch naming, sync, conflict, merge, and rollback policies that govern them.
+
+Required behavior:
+
+- Store only SecretRef pointers and non-secret App/installation identity. Raw
+  tokens and private keys never enter agent context, API responses, artifacts,
+  events, or repository-binding metadata.
+- Test every connection through the deterministic GitHub adapter and record a
+  deduplicated `Receipt`, effective repository permissions, missing authority,
+  health state, and canonical repository identity.
+- Fetch and persist a `BranchSnapshot` before making any synchronization,
+  conflict, or merge decision. A rewritten commit identity with an equivalent
+  tree is not content divergence.
+- Require a TTL `BranchLease` with heartbeat for each agent-owned mutable
+  branch/worktree. Concurrent owners cannot silently write the same branch.
+- Prefer fast-forward synchronization. Divergence creates a dedicated
+  resolution branch and typed `ConflictSet`; BOSS never rewrites another
+  contributor's branch or protected ref in place.
+- Represent every remote branch mutation by a policy result, dedupe key,
+  `ChangeSet`, `ResourceReceipt`, audit event, and rollback evidence. A
+  read-only topology refresh still produces a normal `Receipt`.
+- Resolve conflicts file-by-file with preserved base/ours/theirs provenance,
+  reproducible red-to-green validation, an independent review result, and a
+  human Decision when policy, ownership, or evidence is ambiguous.
+- Merge only through a governed queue using current remote topology, required
+  checks, ownership, approvals, evidence, and an explicit
+  `MergeAuthorization`. Protected refs never auto-merge by default.
+- Reconcile webhook events with scheduled polling, bounded retry, and visible
+  deadletters so branch state cannot silently drift.
+- Surface connection health, repository topology, leases, ahead/behind state,
+  rewritten-history equivalence, conflicts, checks, authorizations, receipts,
+  and rollback points in Mission Control.
+
+The detailed contract and staged delivery map live in
+`docs/product/GITHUB_PROJECT_SYNC.md`. Plane BOSS-246 is the parent feature;
+BOSS-247 through BOSS-255 are dependency-ordered implementation slices.
+BOSS-247 through BOSS-255 now provide the connection/binding, immutable
+versioned policy, Receipt-backed remote topology observation, fenced TTL
+branch/worktree ownership, safe synchronization, reviewed conflict resolution,
+exact-snapshot governed merge queue, and webhook/poll/repair reconciliation
+with bounded retries and visible deadletters. Mission Control completes the
+journey with project/repository selection, live branch and divergence truth,
+leases, sync/conflict/merge/reconciliation state, evidence and rollback
+inspection, explicit degraded states, and `github_manage`-aware controls while
+keeping lease-token-bearing writes behind workers.
+
 ## Roles, Role Packs, and Agent Factory
 
 Core v2 role pack:
@@ -692,6 +746,9 @@ Phase 1 - BOSS builds BOSS:
 - Basic Agent Group runtime with producer-reviewer and bounded-debate protocols.
 - Generic Integration Registry layered over the existing SkillSpec and provider-adapter foundations.
 - Branch/worktree isolation.
+- Project-scoped GitHub connection and repository-binding registry.
+- Branch policy, topology snapshots, leases, safe synchronization, conflict
+  resolution branches, and governed merge authorization.
 - Evidence bundles.
 - Model entitlement broker.
 - Local/subscription/API routing.
@@ -797,6 +854,9 @@ Ground-truth/assurance: regression detection latency, evidence-backed claim rate
 ## Release-Grade Acceptance Criteria
 
 - Every implemented requirement maps to tests and traceability records.
+- Every GitHub operation resolves a project repository binding; mutable branch
+  operations additionally require current topology, policy, ownership,
+  dedupe, receipt, and rollback evidence.
 - Every spendy action has quote/reserve/execute/receipt/reconcile coverage.
 - Every provider write has ChangeSet, BudgetReservation, approval when required, ResourceReceipt, and rollback plan.
 - Every provider-backed non-sandbox deployment run has an explicit environment rollout policy before any provider ChangeSet is planned.

@@ -19,6 +19,7 @@ import {
   Code,
   Database,
   Gauge,
+  GitBranch,
   House,
   List,
   MagnifyingGlass,
@@ -49,6 +50,7 @@ type AreaId =
   | "budget"
   | "pipeline"
   | "comms"
+  | "github"
   | "infra"
   | "capabilities"
   | "sandboxes"
@@ -73,6 +75,7 @@ const ICONS = {
   budget: Wallet,
   pipeline: ArrowsClockwise,
   comms: ChatsCircle,
+  github: GitBranch,
   infra: Database,
   ops: Pulse,
   org: Users,
@@ -102,6 +105,7 @@ const AREAS: AreaDef[] = [
   { id: "comms", label: "Communications", sub: "Outbox discipline before external sends", group: "Govern", icon: ICONS.comms },
   { id: "ops", label: "Operations", sub: "Health, audit, replay, and self-improvement", group: "Govern", icon: ICONS.ops },
   { id: "org", label: "Agent Roster", sub: "Actors, access, packs, and agent modules", group: "Govern", icon: ICONS.org },
+  { id: "github", label: "GitHub", sub: "Repositories, branch truth, sync, conflict resolution, and merges", group: "Platform", icon: ICONS.github },
   { id: "infra", label: "System Configuration", sub: "Connections, providers, resources, health, and FinOps", group: "Platform", icon: ICONS.infra },
   { id: "capabilities", label: "Capabilities", sub: "Agent tools & MCP servers — discover, audit, extend", group: "Platform", icon: ICONS.capabilities },
   { id: "sandboxes", label: "Sandboxes", sub: "Execution plane — inspect sandboxes & governed console", group: "Platform", icon: ICONS.sandboxes },

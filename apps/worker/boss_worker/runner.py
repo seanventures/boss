@@ -285,6 +285,7 @@ def capabilities() -> list[str]:
         "webhook.outbound.deliver",
         "github.triage",
         "github.pr_review",
+        "github.repository.reconcile",
         "skill.execute",
     ]
 
@@ -574,6 +575,21 @@ def execute_job(job: LeasedJob, client: ControlPlaneClient) -> dict[str, Any]:
             job.id,
             {
                 "project_id": job.project_id,
+                "worker_id": client.worker_id,
+                "lease_token": job.lease_token,
+            },
+        )
+    if job.kind == "github.repository.reconcile":
+        run_id = str(job.payload.get("run_id") or "").strip()
+        if not run_id:
+            raise ValueError(
+                "github.repository.reconcile requires payload.run_id"
+            )
+        return client.run_github_reconciliation(
+            run_id,
+            {
+                "project_id": job.project_id,
+                "job_id": job.id,
                 "worker_id": client.worker_id,
                 "lease_token": job.lease_token,
             },
@@ -875,6 +891,17 @@ def run_worker_cycle(client: ControlPlaneClient, settings: WorkerSettings) -> bo
                 hb_client.close()
             except Exception:  # noqa: BLE001
                 pass
+
+    # Reconciliation owns its bounded retry/deadletter transition in the same
+    # transaction that records provider-read Receipts and observations.
+    if job.kind == "github.repository.reconcile":
+        LOGGER.info(
+            "job_finalized_by_reconciler worker_id=%s job_id=%s status=%s",
+            settings.worker_id,
+            job.id,
+            (result.get("job") or {}).get("status"),
+        )
+        return True
 
     completion = client.complete(
         settings.worker_id,

@@ -188,6 +188,16 @@ class ControlPlaneClient:
         response.raise_for_status()
         return response.json()
 
+    def run_github_reconciliation(
+        self, run_id: str, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        response = self._client.post(
+            f"/v1/github/reconciliation-runs/{run_id}/execute",
+            json=payload,
+        )
+        response.raise_for_status()
+        return response.json()
+
     def invoke_skill(
         self, skill_id: str, payload: dict[str, Any]
     ) -> dict[str, Any]:
