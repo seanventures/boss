@@ -10290,6 +10290,15 @@ def create_budget_allocation(
         return budget_allocation_summary_from_service(allocation)
 
 
+@app.get("/v1/budget/insights")
+def budget_insights(project_id: str):
+    """BOSS-280 P2 — automated cost insights: deterministic top-cost-saves generated from the
+    real spend ledger (llm_calls). Each insight names the money and the one capturing action."""
+    from boss_engine.services.cost_insights import build_insights
+    with begin(engine) as connection:
+        return JSONResponse(content=jsonable_encoder(build_insights(connection, project_id)))
+
+
 @app.get("/v1/budget/status", response_model=BudgetStatusResponse)
 def budget_status(scope_type: str, scope_id: str) -> BudgetStatusResponse:
     if scope_type != "project":
