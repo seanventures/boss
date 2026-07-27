@@ -1359,6 +1359,12 @@ class BudgetStatusResponse(BaseModel):
     active_reservations_count: int
     top_cost_drivers: list[dict[str, Any]]
     operational_intensity: Optional[int] = None
+    # BOSS-280: the enforced thresholds, surfaced so the console shows REAL knobs
+    soft_cap_pct: Optional[float] = None
+    auto_lite_mode_pct: Optional[float] = None
+    freeze_provisioning_pct: Optional[float] = None
+    freeze_tier2_pct: Optional[float] = None
+    tier2_frozen: Optional[bool] = None
 
 
 class BudgetForecastResponse(BaseModel):

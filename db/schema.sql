@@ -2579,3 +2579,16 @@ ALTER TABLE llm_calls ADD COLUMN IF NOT EXISTS role TEXT;
 ALTER TABLE llm_calls ADD COLUMN IF NOT EXISTS cache_read_tokens INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE llm_calls ADD COLUMN IF NOT EXISTS cache_write_tokens INTEGER NOT NULL DEFAULT 0;
 CREATE INDEX IF NOT EXISTS idx_llm_calls_role ON llm_calls(project_id, role, created_at DESC);
+
+-- ── BOSS-280 P1 backfill: attribute historical llm_calls to agent roles ───────
+-- role is derived from stage; rows written before the column existed are backfilled once
+-- (idempotent — only touches NULL roles), so $/agent covers history, not just new spend.
+UPDATE llm_calls SET role = CASE
+    WHEN stage IN ('standards','spec','plan','review_plan','design') THEN 'architect'
+    WHEN stage = 'write_tests' THEN 'qa'
+    WHEN stage IN ('check_tests','run_all_tests') THEN 'qa'
+    WHEN stage IN ('implement','repair','guest','solo') THEN 'software_engineer'
+    WHEN stage IN ('review_code','consistency_check') THEN 'reviewer'
+    WHEN stage = 'security_check' THEN 'security_reviewer'
+    ELSE NULL END
+WHERE role IS NULL AND stage IS NOT NULL;
