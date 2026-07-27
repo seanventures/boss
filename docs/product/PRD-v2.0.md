@@ -2,7 +2,7 @@
 
 Status: Governing product-intent specification
 Date: June 3, 2026
-Last updated: July 18, 2026
+Last updated: July 26, 2026
 Supersedes: `docs/product/PRD-v1.1.md`
 Product: BOSS - Business Operating System Sentinel
 
@@ -44,6 +44,9 @@ BOSS is an open-core product: BOSS Community must be useful, self-hostable, and 
 18. Repeatable classes of work use approved, versioned workflow mappings; a model may propose a workflow but may not silently invent an authoritative process when no mapping exists.
 19. Agent-group agreement is not proof. Consensus, quorum, or model confidence cannot bypass evidence, policy, budget, approval, ownership, or safety gates.
 20. Skills describe typed capabilities; integrations provide configured implementations. Agents and workflows receive resolved capabilities, never raw credentials or ambient provider access.
+21. Every task, bug, feature, incident, and PRD change has an external work-tracker binding; Plane is the default open-source tracker and alternatives are plugins.
+22. The work tracker owns intake and human-visible status; the BOSS job ledger owns leases, heartbeats, retries, dedupe, receipts, and execution.
+23. Priority can influence allocation but cannot bypass quota, budget, policy, approval, data-boundary, or evidence gates.
 
 ## Architecture Position
 
@@ -89,6 +92,12 @@ Owns reusable multi-agent collaboration definitions and runs: member roles, topo
 
 Owns versioned executable agent definitions, model-selection policy, prompt layers, deterministic rules, requested capabilities, project/data scope, limits, validation, test evidence, publish state, seeded agent catalog, a guided agent-commissioning wizard, and a visual operator workbench. Agent Studio references RoleSpecs and Agent Modules but does not redefine company authority or package installation. Its Panel object is an explicit versioned composition profile over the Agent Group runtime.
 
+### Work Orchestration and Delivery Presence
+
+Owns the explainable ranked portfolio, hierarchical resource quotas, dynamic allocations, mandatory work-tracker bindings, and the operator-facing projection of tickets, jobs, pull requests, deployments, and bot activity. Plane is the default open-source intake and status system; GitHub Issues, Linear, Jira, and future trackers plug into the same typed `WorkTracker` boundary. All agent execution still enters the fenced Postgres job system so ticket APIs never become an execution queue by accident.
+
+The Product Manager agent owns PRD currency, ticket hygiene, acceptance criteria, priority rationale, dependency visibility, and shipment evidence. It may propose priority or state changes, but it cannot mark work solved or done without the evidence required by policy.
+
 ### Workflow Registry and Runtime
 
 Owns reusable WorkflowDefinitions, immutable versions, deterministic mappings from work classes to approved versions, durable WorkflowRuns and StepRuns, branching, fan-out/join, timers, approvals, subworkflows, retries/deadletters, compensation, and migration. Workflows coordinate roles or Agent Groups and bind them to skills/integrations under policy.
@@ -112,6 +121,8 @@ Agent Studio objects: `AgentDefinition`, `AgentVersion`, `AgentTestRun`, `AgentR
 Collaboration objects: `AgentGroupSpec`, `AgentGroupVersion`, `AgentGroupRun`, `AgentGroupMemberRun`, `AgentFinding`, `DissentRecord`.
 
 A2A coordination objects: `A2AChannel`, `A2ASubscription`, `A2AEnvelope`, `A2ADelivery`, `A2AAcknowledgement`, `A2ATransportAttempt`.
+
+Work orchestration objects: `WorkItem`, `ResourceQuota`, `ResourceAllocation`, `WorkTrackerProvider`, `WorkTrackerBinding`, `DeliveryBotIdentity`, `DeliveryStatusChannel`, `DeliveryPresenceEvent`.
 
 Capability/integration objects: `SkillSpec`, `IntegrationDefinition`, `IntegrationConnection`, `IntegrationHealth`, `SkillInvocation`, `ExecutorBinding`.
 
@@ -776,6 +787,8 @@ Workflows: mapped-work coverage, version adoption, successful recovery/replay, s
 
 Ground-truth/assurance: regression detection latency, evidence-backed claim rate, closed-question tripwire hits, stale evidence blocks, verifier overturn rate, and ownership-conflict prevention.
 
+Work orchestration: externally tracked work coverage, priority-rationale coverage, ticket-sync latency, quota-denied job count, allocation utilization, priority-to-start latency, tracker drift, and operator clicks avoided by the embedded delivery view.
+
 ## Conflicts and Resolutions
 
 1. Plugin vs core plane. Resolution: provider adapters are plugins. The Resource Plane is core.
@@ -792,6 +805,8 @@ Ground-truth/assurance: regression detection latency, evidence-backed claim rate
 12. Multi-agent consensus vs correctness. Resolution: Agent Groups preserve independent findings and dissent; evidence and deterministic policy—not vote count—establish authoritative status.
 13. Skill vs integration. Resolution: SkillSpec describes what may be requested; IntegrationConnection describes which configured system can implement it under current scope, health, and authority.
 14. Composition vs coupling. Resolution: Agent Groups, Skills, Integrations, Workflows, and Assurance are separate runtimes connected by versioned references and typed contracts.
+15. Plane vs BOSS jobs. Resolution: Plane is the default open-source intake and human collaboration system; the BOSS Postgres job ledger remains the only execution authority.
+16. High priority vs hard limits. Resolution: ranked work receives capacity first, but Budget Governor, hard quota, policy, approval, and data-boundary rules always win.
 
 ## Release-Grade Acceptance Criteria
 
@@ -804,6 +819,9 @@ Ground-truth/assurance: regression detection latency, evidence-backed claim rate
 - Every repeatable work class with an active mapping runs the pinned WorkflowVersion; missing mappings create a proposal/Decision rather than invisible process invention.
 - Every Agent Group run preserves member provenance and dissent and cannot use consensus to bypass deterministic gates.
 - Every skill invocation identifies the resolved SkillSpec, executor, IntegrationConnection where applicable, authority, evidence/artifacts, costs, and receipts.
+- Every newly created work item has a tracker binding; a required tracker must be synchronized before its non-sync agent jobs can lease.
+- Every agent run is represented by a ranked work item, tracker binding, allocation, and fenced job; tracker writes are themselves leased, deduplicated, receipt-producing jobs.
+- Operators can inspect ranked work, quota pressure, job leases, ticket state, pull requests, deployments, bots, and status channels from BOSS without opening the tracker for routine monitoring.
 - Every authoritative solved/fixed/regressed/caused-by claim links the required reproducible evidence and Assurance Case.
 - Community runs locally without BOSS Account Connect.
 - Cloud uses BOSS Account Connect.

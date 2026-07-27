@@ -296,6 +296,7 @@ def capabilities() -> list[str]:
         "a2a.dispatch",
         "enterprise.marketplace.validate",
         "providerops.sync.readonly",
+        "work_tracker.issue.sync",
         "plan.command",
         "plan.generate",
         "openai.plan",
@@ -618,6 +619,24 @@ def execute_job(job: LeasedJob, client: ControlPlaneClient) -> dict[str, Any]:
             )
         except Exception as error:  # transport/API outages use durable retry
             raise RetryableJobError(str(error)) from error
+    if job.kind == "work_tracker.issue.sync":
+        try:
+            result = client.sync_work_tracker(
+                {
+                    "project_id": job.project_id,
+                    "binding_id": job.payload["binding_id"],
+                    "worker_id": client.worker_id,
+                    "lease_token": job.lease_token,
+                    "created_by_job_id": job.id,
+                }
+            )
+        except Exception as error:  # provider/API outages use durable retry
+            raise RetryableJobError(str(error)) from error
+        if result.get("status") != "succeeded":
+            raise RetryableJobError(
+                result.get("reason") or "Work-tracker sync failed."
+            )
+        return result
     if job.kind.startswith("agent.") and job.kind != "agent.resume":
         return build_agent_brief_result(job)
     if job.kind == "enterprise.marketplace.validate":

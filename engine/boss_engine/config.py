@@ -125,6 +125,12 @@ class Settings(BaseSettings):
     slack_webhook_url: Optional[str] = Field(
         default=None, alias="BOSS_SLACK_WEBHOOK_URL"
     )
+    mattermost_base_url: Optional[str] = Field(
+        default=None, alias="BOSS_MATTERMOST_BASE_URL"
+    )
+    mattermost_bot_token: Optional[str] = Field(
+        default=None, alias="BOSS_MATTERMOST_BOT_TOKEN"
+    )
     infra_real_provision_allowed: bool = Field(
         default=False, alias="BOSS_INFRA_REAL_PROVISION_ALLOWED"
     )
@@ -453,6 +459,9 @@ class Settings(BaseSettings):
     )
     slack_real_send_allowed: bool = Field(
         default=False, alias="BOSS_SLACK_REAL_SEND_ALLOWED"
+    )
+    mattermost_real_send_allowed: bool = Field(
+        default=False, alias="BOSS_MATTERMOST_REAL_SEND_ALLOWED"
     )
     enable_sandbox_merge: bool = Field(
         default=False, alias="BOSS_ENABLE_SANDBOX_MERGE"

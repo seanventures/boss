@@ -1,10 +1,10 @@
 # BOSS Autonomous Delivery Status
 
-**Last updated**: 2026-07-26 (BOSS-236 provider credential lifecycle)
+**Last updated**: 2026-07-26 (BOSS-270–278 work orchestration)
 **Repo root**: /Volumes/DataSSD1/test/boss
 **Git remote**: https://github.com/seanheiney/boss
-**Current branch**: ai/codex/boss-236-provider-credential-lifecycle
-**Base branch**: origin/main
+**Current branch**: ai/codex/boss-270-work-orchestration
+**Base branch**: ai/codex/boss-256-agent-studio-a2a (stacked PR #88)
 **Product**: BOSS v0.7.0 target (Business Operating System Sentinel)
 **Mission**: Complete product to production-grade, tested, documented, pushed, Codex-coordinated, ready for real users. Grind until all discovered PRD/spec features satisfy world-class DoD or truly blocked.
 
@@ -14,6 +14,10 @@
 - GitHub: draft PR #16 carries BOSS-22/BOSS-23 and is stacked on draft PR #15; other open PRs were inspected for overlap before implementation.
 
 ## Overall Product Status
+- BOSS-270–278 provide one ranked and quota-bounded path from Plane-backed
+  intake to fenced agent execution. Plane creation is a leased,
+  receipt-producing job; Mission Control embeds priority, quota, ticket, job,
+  GitHub deployment, Mattermost channel, and bot-presence truth.
 - BOSS-236 implements the provider-account credential lifecycle foundation
   beneath BOSS-235: truthful initial-cloud auth definitions, multi-slot
   SecretRefs, safe metadata, rotation lineage/overlap, disable/revoke gates,

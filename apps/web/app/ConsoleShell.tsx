@@ -27,6 +27,7 @@ import {
   Pulse,
   Robot,
   Rows,
+  SlidersHorizontal,
   TerminalWindow,
   UserCircle,
   Users,
@@ -42,6 +43,7 @@ type AreaId =
   | "overview"
   | "decisions"
   | "work"
+  | "portfolio"
   | "discovery"
   | "meetings"
   | "code_tasks"
@@ -72,6 +74,7 @@ const ICONS = {
   overview: House,
   decisions: CheckCircle,
   work: Rows,
+  portfolio: SlidersHorizontal,
   budget: Wallet,
   pipeline: ArrowsClockwise,
   comms: ChatsCircle,
@@ -95,6 +98,7 @@ const AREAS: AreaDef[] = [
   { id: "overview", label: "Command Center", sub: "What changed · top risks · next actions", group: "Run", icon: ICONS.overview },
   { id: "decisions", label: "Approvals", sub: "Explicit approvals before real effects", group: "Run", icon: ICONS.decisions },
   { id: "work", label: "Task Board", sub: "Tasks, artifacts, and the activity feed", group: "Run", icon: ICONS.work },
+  { id: "portfolio", label: "Work Allocation", sub: "Ranked priorities, quotas, leases, tickets, and delivery status", group: "Run", icon: ICONS.portfolio },
   { id: "discovery", label: "Discovery", sub: "Research a signal — cited dossier & candidate outcomes", group: "Run", icon: ICONS.discovery },
   { id: "meetings", label: "Meetings", sub: "Cross-functional agent panels — debate to a PRD", group: "Run", icon: ICONS.meetings },
   { id: "code_tasks", label: "Code Tasks", sub: "Agent edits code in a sandbox — tested, gated PRs", group: "Run", icon: ICONS.code_tasks },

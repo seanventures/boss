@@ -2,7 +2,7 @@
 
 Status: Technical companion to `docs/product/PRD-v2.0.md`
 Date: June 3, 2026
-Last updated: July 18, 2026
+Last updated: July 26, 2026
 Supersedes: `docs/product/TECHNICAL_SPEC-v1.1.md`
 
 ## Architecture Overview
@@ -18,12 +18,38 @@ BOSS is a durable, API-first control plane for accountable AI labor. The technic
 - Integration Registry: connector/adapter definitions, installed connections, SecretRefs, granted capabilities, scope, health/freshness, provenance, rate-limit state, and revocation.
 - Agent Group Runtime: versioned collaboration definitions, member-role resolution, topology/protocol, context boundaries, independence, dissent, bounded rounds, budgets, and durable runs.
 - Agent Studio: stable agent/panel identities, immutable executable versions, model/prompt/rule/capability/scope contracts, seeded catalog, validation/test/publish gates, and live operator topology.
+- Work Orchestration and Delivery Presence: explainable portfolio ranking, hierarchical quotas, dynamic allocations, tracker plugins and bindings, mandatory tracked jobs, bot identities, status channels, and embedded ticket/PR/deployment activity.
 - Workflow Registry and Runtime: immutable definitions/versions, deterministic work mappings, durable runs/step runs, branching, fan-out/join, approvals, subworkflows, retries/deadletters, compensation, and migration.
 - Ground-truth and Assurance Runtime: metric observations, settled conclusions, typed claims/evidence, surface ownership, Assurance Cases, and scheduled adversarial verification.
 - BOSS Account Connect: hosted account identity, licensing, marketplace identity, cloud org/workspace membership, team invites, billing portal, managed connector authorization, and optional telemetry/health sync.
 - Enterprise Identity Runtime: OIDC/SAML/SCIM provider metadata, SecretRefs, certificate/JWKS configuration, and explicit per-project rollout policies. Provider metadata alone is not sufficient for live SSO or SCIM; runtime paths require matching rollout policy.
 
 OpenClaw is not the BOSS foundation or durable runtime. External runtimes, legacy systems, and coding agents are adapters behind BOSS-owned state, policy, budget, routing, receipt, and observability layers.
+
+## Work Orchestration Kernel
+
+The Work Orchestration Kernel separates human-visible work management from durable execution:
+
+- A `WorkTrackerProvider` is the plugin registration and capability contract. Plane is seeded as the default open-source provider. GitHub Issues, Linear, and Jira are adapter registrations, not hard-coded domain models.
+- A `WorkTrackerBinding` maps one canonical BOSS `WorkItem` to one external issue. Required providers must reach `synced` before ordinary agent work can lease.
+- A `WorkItem` stores normalized score inputs, confidence, manual adjustment, rationale, priority band, workload class, estimated units, current allocation, ownership, and evidence.
+- A `ResourceQuota` is a bounded capacity envelope for a global, org, workspace, project, agent, or workload scope. Hard limits are inviolate; burst and borrowing exist only when explicit policy enables them.
+- A `ResourceAllocation` records requested, granted, and currently used units plus score and policy snapshots. Rebalancing is deterministic and sorted by effective score.
+- The Postgres `Job` remains execution authority. Tracked jobs carry work-item, tracker-binding, allocation, priority-score, workload-class, and resource-unit references.
+
+The default score is:
+
+`((0.25 strategic value) + (0.22 customer impact) + (0.18 urgency) + (0.15 cost of delay) + (0.10 risk reduction) + (0.10 dependency pressure)) × confidence factor + manual adjustment`
+
+The confidence factor ranges from `0.65` to `1.00`. The result is bounded to `0..100` and mapped to `P0..P4`. Every score preserves its inputs and rationale so the operator can challenge a ranking rather than debate a hidden model intuition.
+
+Lease order is effective score descending, legacy numeric priority ascending, then creation time. Before a tracked job leases, the allocator atomically verifies its tracker binding and consumes allocation units. Completion, retry, terminal failure, budget deferral, and lease recovery release units. Capacity denial keeps the job queued with a visible reason; it never silently drops work.
+
+Tracker synchronization is also a leased job (`work_tracker.issue.sync`). The worker calls the control plane with its lease token; the control plane creates or reuses an external-effect `Receipt`, invokes the configured tracker adapter, updates the binding, and returns the provider reference. Plane creation uses `X-API-Key` behind `PlaneClient`; credentials remain configuration/SecretRefs and are never placed in prompts, payloads, events, or UI responses.
+
+`DeliveryBotIdentity`, `DeliveryStatusChannel`, and `DeliveryPresenceEvent` project Plane, GitHub, and Mattermost activity into Mission Control. GitHub PR/merge/deployment completion and Mattermost delivery create deduplicated presence records. Channel policies constrain event kinds and data boundaries. Mattermost uses the official `/api/v4/posts` bot-token API behind an explicit real-send rollout flag.
+
+The seeded Product Manager AgentDefinition owns PRD currency, acceptance criteria, ticket hygiene, priority rationale, dependencies, and completion evidence. Its skills are limited to tracker ensure/update, priority update, research, artifacts, and decisions; it cannot bypass policy or self-certify evidence.
 
 ## Resource Plane Kernel
 
@@ -493,6 +519,18 @@ Reusable Workflows:
 - `POST /v1/workflow-runs/{id}/compensate`
 - `POST /v1/workflow-runs/{id}/compensations/claim`
 - `POST /v1/workflow-compensation-runs/{id}/complete|fail`
+
+Work Orchestration and Delivery Presence:
+
+- `GET /v1/work-orchestration/overview`
+- `POST /v1/work-orchestration/items`
+- `POST /v1/work-orchestration/quotas`
+- `POST /v1/work-orchestration/allocations/plan`
+- `POST /v1/work-orchestration/tracker-bindings`
+- `POST /v1/work-orchestration/tracker-sync/execute`
+- `POST /v1/work-orchestration/bot-identities`
+- `POST /v1/work-orchestration/status-channels`
+- `POST /v1/work-orchestration/presence-events`
 
 Ground-truth and Assurance (planned):
 

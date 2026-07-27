@@ -456,6 +456,14 @@ from .schemas import (
     PanelDefinitionCreateRequest,
     PanelRunRequest,
     PanelVersionCreateRequest,
+    DeliveryBotIdentityUpsertRequest,
+    DeliveryPresenceEventCreateRequest,
+    DeliveryStatusChannelUpsertRequest,
+    ResourceAllocationPlanRequest,
+    ResourceQuotaUpsertRequest,
+    WorkItemUpsertRequest,
+    WorkTrackerBindingUpsertRequest,
+    WorkTrackerSyncExecuteRequest,
 )
 from .services.a2a import (
     A2ANotFoundError,
@@ -523,6 +531,7 @@ from .services.webhooks import (
     WebhookService,
 )
 from .services.plane_webhooks import PlaneWebhookService
+from .services.plane_client import PlaneClient
 from .services.github_community_service import GitHubCommunityService
 from .services.infrastructure import (
     InfraResourceNotFoundError,
@@ -536,6 +545,7 @@ from .services.agent_service import (
     AgentThreadOwnershipError,
 )
 from .services.jobs import JobLeaseService, LeaseNotFoundError
+from .services.work_orchestration import WorkOrchestrationService
 from .services.members import (
     DEFAULT_MEMBER_IDS,
     MemberDirectoryService,
@@ -670,6 +680,7 @@ break_glass = BreakGlassService()
 resource_plane = ResourcePlaneService(settings)
 agent_studio = AgentStudioService(settings)
 a2a = A2AService(settings)
+work_orchestration = WorkOrchestrationService(settings)
 deployment_rollout_engine = DeploymentRolloutEngine(settings)
 promotion_orchestrator = PromotionOrchestrator(
     settings,
@@ -1366,10 +1377,20 @@ def job_summary_from_row(row) -> JobSummary:
         id=row["id"],
         project_id=row["project_id"],
         task_id=row["task_id"],
+        work_item_id=row.get("work_item_id"),
+        tracker_binding_id=row.get("tracker_binding_id"),
+        allocation_id=row.get("allocation_id"),
         kind=row["kind"],
         status=row["status"],
         data_boundary=row.get("data_boundary") or "internal",
         priority=row["priority"],
+        priority_score=(
+            float(row["priority_score"])
+            if row.get("priority_score") is not None
+            else None
+        ),
+        workload_class=row.get("workload_class") or "general",
+        resource_units=int(row.get("resource_units") or 1),
         max_attempts=row["max_attempts"],
         attempt=row["attempt"],
         run_after=row["run_after"].isoformat(),
@@ -6939,6 +6960,8 @@ def get_job(job_id: str) -> JobSummary:
             text(
                 """
                 SELECT id, project_id, task_id, kind, status, data_boundary, priority,
+                       work_item_id, tracker_binding_id, allocation_id,
+                       priority_score, workload_class, resource_units,
                        max_attempts, attempt, run_after
                 FROM jobs
                 WHERE id = :job_id
@@ -10211,6 +10234,12 @@ def create_job(payload: JobCreateRequest) -> JobSummary:
                 max_attempts=payload.max_attempts,
                 run_after_seconds=payload.run_after_seconds,
                 data_boundary=payload.data_boundary,
+                work_item_id=payload.work_item_id,
+                tracker_binding_id=payload.tracker_binding_id,
+                allocation_id=payload.allocation_id,
+                priority_score=payload.priority_score,
+                workload_class=payload.workload_class,
+                resource_units=payload.resource_units,
             )
         except ValueError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
@@ -12147,6 +12176,416 @@ def fail_workflow_compensation(
             )
         except workflow_runtime.WorkflowError as error:
             raise_workflow_error(error)
+
+
+# ── Ranked work, quotas, tracker plugins, and delivery presence ─────────────
+def _raise_work_orchestration_error(error: Exception) -> None:
+    raise HTTPException(status_code=422, detail=str(error)) from error
+
+
+@app.get("/v1/work-orchestration/overview")
+def get_work_orchestration_overview(
+    project_id: str = Query(...),
+) -> dict[str, Any]:
+    with begin(engine) as connection:
+        return work_orchestration.overview(connection, project_id)
+
+
+@app.post("/v1/work-orchestration/items")
+def upsert_ranked_work_item(
+    payload: WorkItemUpsertRequest,
+) -> dict[str, Any]:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection, payload.project_id, payload.actor, "command_submit"
+        )
+        try:
+            work_item = work_orchestration.upsert_work_item(
+                connection,
+                project_id=payload.project_id,
+                subject_type=payload.subject_type,
+                subject_id=payload.subject_id,
+                title=payload.title,
+                description=payload.description,
+                status=payload.status,
+                strategic_value=payload.strategic_value,
+                customer_impact=payload.customer_impact,
+                urgency=payload.urgency,
+                cost_of_delay=payload.cost_of_delay,
+                risk_reduction=payload.risk_reduction,
+                dependency_pressure=payload.dependency_pressure,
+                confidence=payload.confidence,
+                manual_adjustment=payload.manual_adjustment,
+                rationale=payload.rationale,
+                workload_class=payload.workload_class,
+                estimated_units=payload.estimated_units,
+                due_at=payload.due_at,
+                owner_actor=payload.owner_actor,
+                evidence=payload.evidence,
+                source=payload.source,
+                actor=payload.actor,
+            )
+            binding = work_orchestration.bind_tracker(
+                connection,
+                project_id=payload.project_id,
+                work_item_id=work_item["id"],
+                provider_key=None,
+                actor=payload.actor,
+            )
+            allocation = work_orchestration.ensure_allocation(
+                connection,
+                project_id=payload.project_id,
+                work_item_id=work_item["id"],
+                actor=payload.actor,
+            )
+            sync_job = work_orchestration.enqueue_tracker_sync(
+                connection,
+                project_id=payload.project_id,
+                binding_id=binding["id"],
+                actor=payload.actor,
+            )
+            return {
+                "work_item": work_item,
+                "tracker_binding": binding,
+                "allocation": allocation,
+                "tracker_sync_job": sync_job,
+            }
+        except ValueError as error:
+            _raise_work_orchestration_error(error)
+
+
+@app.post("/v1/work-orchestration/quotas")
+def upsert_resource_quota(
+    payload: ResourceQuotaUpsertRequest,
+) -> dict[str, Any]:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection, payload.project_id, payload.actor, "command_submit"
+        )
+        try:
+            quota = work_orchestration.upsert_quota(
+                connection,
+                project_id=payload.project_id,
+                scope_type=payload.scope_type,
+                scope_id=payload.scope_id,
+                resource_kind=payload.resource_kind,
+                reserved_min=payload.reserved_min,
+                soft_limit=payload.soft_limit,
+                hard_limit=payload.hard_limit,
+                burst_limit=payload.burst_limit,
+                allocation_weight=payload.allocation_weight,
+                borrow_enabled=payload.borrow_enabled,
+                policy=payload.policy,
+                actor=payload.actor,
+            )
+            allocation_plan = work_orchestration.plan_allocations(
+                connection,
+                project_id=payload.project_id,
+                resource_kind=payload.resource_kind,
+                actor=payload.actor,
+            )
+            return {
+                "quota": quota,
+                "allocation_plan": allocation_plan,
+            }
+        except ValueError as error:
+            _raise_work_orchestration_error(error)
+
+
+@app.post("/v1/work-orchestration/allocations/plan")
+def plan_resource_allocations(
+    payload: ResourceAllocationPlanRequest,
+) -> dict[str, Any]:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection, payload.project_id, payload.actor, "command_submit"
+        )
+        try:
+            return work_orchestration.plan_allocations(
+                connection,
+                project_id=payload.project_id,
+                resource_kind=payload.resource_kind,
+                actor=payload.actor,
+            )
+        except ValueError as error:
+            _raise_work_orchestration_error(error)
+
+
+@app.post("/v1/work-orchestration/tracker-bindings")
+def upsert_work_tracker_binding(
+    payload: WorkTrackerBindingUpsertRequest,
+) -> dict[str, Any]:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection, payload.project_id, payload.actor, "command_submit"
+        )
+        try:
+            binding = work_orchestration.bind_tracker(
+                connection,
+                project_id=payload.project_id,
+                work_item_id=payload.work_item_id,
+                provider_key=payload.provider_key,
+                external_workspace_id=payload.external_workspace_id,
+                external_project_id=payload.external_project_id,
+                external_issue_id=payload.external_issue_id,
+                external_key=payload.external_key,
+                external_url=payload.external_url,
+                external_state=payload.external_state,
+                metadata=payload.metadata,
+                actor=payload.actor,
+            )
+            sync_job = (
+                None
+                if binding["sync_status"] == "synced"
+                else work_orchestration.enqueue_tracker_sync(
+                    connection,
+                    project_id=payload.project_id,
+                    binding_id=binding["id"],
+                    actor=payload.actor,
+                )
+            )
+            return {**binding, "tracker_sync_job": sync_job}
+        except ValueError as error:
+            _raise_work_orchestration_error(error)
+
+
+@app.post("/v1/work-orchestration/tracker-sync/execute")
+def execute_work_tracker_sync(
+    payload: WorkTrackerSyncExecuteRequest,
+) -> dict[str, Any]:
+    """Execute a tracker write only inside a fenced, receipt-producing job."""
+    with begin(engine) as connection:
+        try:
+            leased_job = jobs.require_active_lease(
+                connection,
+                payload.worker_id,
+                payload.created_by_job_id,
+                payload.lease_token,
+            )
+            if (
+                leased_job["project_id"] != payload.project_id
+                or leased_job["kind"] != "work_tracker.issue.sync"
+                or (leased_job["payload"] or {}).get("binding_id")
+                != payload.binding_id
+            ):
+                raise ValueError(
+                    "Active lease does not authorize this work-tracker sync."
+                )
+            context = work_orchestration.tracker_sync_context(
+                connection,
+                project_id=payload.project_id,
+                binding_id=payload.binding_id,
+            )
+            provider_key = context["provider"]["provider_key"]
+            tenant = connection.execute(
+                text(
+                    """
+                    SELECT w.org_id, p.workspace_id
+                    FROM projects p
+                    JOIN workspaces w ON w.id=p.workspace_id
+                    WHERE p.id=:project_id
+                    """
+                ),
+                {"project_id": payload.project_id},
+            ).mappings().one()
+            effect_payload = {
+                "binding_id": payload.binding_id,
+                "provider": provider_key,
+                "title": context["work_item"]["title"],
+                "description_html": context["description_html"],
+            }
+            receipt, created = receipts.create_or_reuse(
+                connection,
+                tenant["org_id"],
+                tenant["workspace_id"],
+                payload.project_id,
+                f"work-tracker-sync:{provider_key}:{payload.binding_id}",
+                f"{provider_key}.issue.ensure",
+                {
+                    "binding_id": payload.binding_id,
+                    "work_item_id": context["work_item"]["id"],
+                    "provider": provider_key,
+                },
+                effect_payload,
+                created_by_job_id=payload.created_by_job_id,
+                data_boundary=leased_job["data_boundary"],
+            )
+            if not created and receipt["status"] == "succeeded":
+                return {
+                    "status": "succeeded",
+                    "receipt_id": receipt["id"],
+                    "binding": context["binding"],
+                    "reused": True,
+                }
+            if provider_key != "plane":
+                error = {
+                    "reason": "tracker_plugin_executor_not_configured",
+                    "provider": provider_key,
+                }
+                receipts.mark_failed(connection, receipt["id"], error)
+                work_orchestration.mark_tracker_sync_failed(
+                    connection,
+                    project_id=payload.project_id,
+                    binding_id=payload.binding_id,
+                    error=error,
+                    actor=payload.worker_id,
+                )
+                return {
+                    "status": "failed",
+                    "receipt_id": receipt["id"],
+                    "reason": error["reason"],
+                }
+            provider_project_id = (
+                context["binding"]["external_project_id"]
+                or context["provider"]["configuration"].get("project_id")
+            )
+            if not provider_project_id:
+                issue = None
+                failure_reason = "plane_project_not_configured"
+            else:
+                issue = PlaneClient(settings).create_issue(
+                    str(provider_project_id),
+                    name=context["work_item"]["title"],
+                    description_html=context["description_html"],
+                )
+                failure_reason = "plane_issue_create_failed"
+            if issue is None:
+                error = {
+                    "reason": failure_reason,
+                    "provider": "plane",
+                }
+                receipts.mark_failed(connection, receipt["id"], error)
+                work_orchestration.mark_tracker_sync_failed(
+                    connection,
+                    project_id=payload.project_id,
+                    binding_id=payload.binding_id,
+                    error=error,
+                    actor=payload.worker_id,
+                )
+                return {
+                    "status": "failed",
+                    "receipt_id": receipt["id"],
+                    "reason": failure_reason,
+                }
+            external_issue_id = str(issue["id"])
+            sequence_id = issue.get("sequence_id")
+            external_key = (
+                str(issue.get("identifier") or "")
+                or (f"#{sequence_id}" if sequence_id is not None else None)
+            )
+            binding = work_orchestration.mark_tracker_synced(
+                connection,
+                project_id=payload.project_id,
+                binding_id=payload.binding_id,
+                external_issue_id=external_issue_id,
+                external_key=external_key,
+                external_url=None,
+                external_state=str(issue.get("state") or "Backlog"),
+                actor=payload.worker_id,
+            )
+            result = {
+                "binding_id": payload.binding_id,
+                "external_issue_id": external_issue_id,
+                "external_key": external_key,
+                "external_url": binding.get("external_url"),
+            }
+            receipts.mark_succeeded(
+                connection,
+                receipt["id"],
+                external_issue_id,
+                result,
+            )
+            return {
+                "status": "succeeded",
+                "receipt_id": receipt["id"],
+                "binding": binding,
+                "reused": False,
+            }
+        except (LeaseNotFoundError, ValueError) as error:
+            _raise_work_orchestration_error(error)
+
+
+@app.post("/v1/work-orchestration/bot-identities")
+def upsert_delivery_bot_identity(
+    payload: DeliveryBotIdentityUpsertRequest,
+) -> dict[str, Any]:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection, payload.project_id, payload.actor, "command_submit"
+        )
+        try:
+            return work_orchestration.upsert_bot_identity(
+                connection,
+                project_id=payload.project_id,
+                provider=payload.provider,
+                agent_key=payload.agent_key,
+                display_name=payload.display_name,
+                external_identity=payload.external_identity,
+                agent_definition_id=payload.agent_definition_id,
+                credential_secret_ref_id=payload.credential_secret_ref_id,
+                avatar_url=payload.avatar_url,
+                policy=payload.policy,
+                actor=payload.actor,
+            )
+        except ValueError as error:
+            _raise_work_orchestration_error(error)
+
+
+@app.post("/v1/work-orchestration/status-channels")
+def upsert_delivery_status_channel(
+    payload: DeliveryStatusChannelUpsertRequest,
+) -> dict[str, Any]:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection, payload.project_id, payload.actor, "command_submit"
+        )
+        try:
+            return work_orchestration.upsert_status_channel(
+                connection,
+                project_id=payload.project_id,
+                provider=payload.provider,
+                channel_key=payload.channel_key,
+                display_name=payload.display_name,
+                purpose=payload.purpose,
+                external_channel_id=payload.external_channel_id,
+                external_url=payload.external_url,
+                bot_identity_id=payload.bot_identity_id,
+                event_kinds=payload.event_kinds,
+                allowed_data_boundaries=payload.allowed_data_boundaries,
+                configuration=payload.configuration,
+                actor=payload.actor,
+            )
+        except ValueError as error:
+            _raise_work_orchestration_error(error)
+
+
+@app.post("/v1/work-orchestration/presence-events")
+def record_delivery_presence_event(
+    payload: DeliveryPresenceEventCreateRequest,
+) -> dict[str, Any]:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection, payload.project_id, payload.actor, "command_submit"
+        )
+        try:
+            return work_orchestration.record_delivery_event(
+                connection,
+                project_id=payload.project_id,
+                provider=payload.provider,
+                event_kind=payload.event_kind,
+                subject_type=payload.subject_type,
+                subject_id=payload.subject_id,
+                status=payload.status,
+                summary=payload.summary,
+                dedupe_key=payload.dedupe_key,
+                channel_id=payload.channel_id,
+                bot_identity_id=payload.bot_identity_id,
+                external_url=payload.external_url,
+                receipt_id=payload.receipt_id,
+                metadata=payload.metadata,
+            )
+        except ValueError as error:
+            _raise_work_orchestration_error(error)
 
 
 # ── Agent Studio, executable Panels, and durable A2A coordination ────────────

@@ -93,7 +93,7 @@ def test_seeded_catalog_compiles_and_runs_a_specialist(engine):
     with engine.begin() as connection:
         agents = studio.list_agents(connection, settings.default_project_id)
         panels = studio.list_panels(connection, settings.default_project_id)
-        assert len(agents) == 12
+        assert len(agents) == 13
         assert len(panels) == 3
         assert all(item["status"] == "active" for item in agents)
         assert all(item["status"] == "active" for item in panels)
@@ -619,7 +619,7 @@ def test_agent_studio_catalog_api_exposes_seeded_objects(client):
     )
     assert response.status_code == 200
     payload = response.json()
-    assert len(payload["agents"]) == 12
+    assert len(payload["agents"]) == 13
     assert len(payload["panels"]) == 3
     assert len(payload["workflows"]) >= 1
     assert all("versions" in workflow for workflow in payload["workflows"])

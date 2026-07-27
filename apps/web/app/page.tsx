@@ -68,6 +68,8 @@ import { fetchArtifactFeed } from "../lib/artifacts";
 import { fetchAgentModuleFeed } from "../lib/agent-modules";
 import { fetchAgentStudioFeed } from "../lib/agent-studio";
 import { AgentStudio } from "./agent-studio-ui";
+import { fetchWorkOrchestrationFeed } from "../lib/work-orchestration";
+import { WorkOrchestration } from "./work-orchestration-ui";
 import { fetchAuthSession } from "../lib/auth-session";
 import { fetchInboxFeed, fetchOutboxFeed } from "../lib/comms";
 import { fetchBudgetAllocationFeed } from "../lib/budget-allocations";
@@ -517,6 +519,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
     commitmentRecons,
     workflowFeed,
     agentStudioFeed,
+    workOrchestrationFeed,
   ] =
     await Promise.all([
       fetchStatus(activeProjectId),
@@ -592,6 +595,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
       fetchCommitmentReconciliations(activeProjectId),
       fetchWorkflowFeed(activeProjectId),
       fetchAgentStudioFeed(activeProjectId),
+      fetchWorkOrchestrationFeed(activeProjectId),
     ]);
   const reliabilityFeed = await fetchReliabilityFeed(activeProjectId);
 
@@ -682,6 +686,13 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             feed={agentStudioFeed}
             roles={roles.items}
             skills={skills.items}
+          />
+        </section>
+
+        <section className="panel-stack" data-area="portfolio" aria-label="Work allocation">
+          <WorkOrchestration
+            feed={workOrchestrationFeed}
+            actor={activeActorId}
           />
         </section>
 

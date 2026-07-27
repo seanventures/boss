@@ -18,6 +18,12 @@ class LeasedJob:
     lease_token: str
     lease_expires_at: str
     data_boundary: str = "internal"
+    work_item_id: Optional[str] = None
+    tracker_binding_id: Optional[str] = None
+    allocation_id: Optional[str] = None
+    priority_score: Optional[float] = None
+    workload_class: str = "general"
+    resource_units: int = 1
 
 
 class ControlPlaneClient:
@@ -208,6 +214,14 @@ class ControlPlaneClient:
 
     def sync_provider_resources(self, payload: dict[str, Any]) -> dict[str, Any]:
         response = self._client.post("/v1/resources/sync", json=payload)
+        response.raise_for_status()
+        return response.json()
+
+    def sync_work_tracker(self, payload: dict[str, Any]) -> dict[str, Any]:
+        response = self._client.post(
+            "/v1/work-orchestration/tracker-sync/execute",
+            json=payload,
+        )
         response.raise_for_status()
         return response.json()
 

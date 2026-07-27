@@ -60,6 +60,9 @@ def clean_tables(engine):
         # Original explicit list preserved (in designed child-to-parent delete order to avoid FK violations);
         # missing tables (commercial/enterprise) are skipped. Enables budget/kpi/concurrent tests + full -k matrix.
         for tbl in [
+            "delivery_presence_events",
+            "delivery_status_channels",
+            "delivery_bot_identities",
             # AI SRE reliability pipeline + knowledge graph + learning loop (child → parent)
             "incident_evidence",
             "reliability_policies",
@@ -177,6 +180,11 @@ def clean_tables(engine):
             "artifacts",
             "decisions",
             "jobs",
+            "work_tracker_bindings",
+            "work_tracker_providers",
+            "resource_allocations",
+            "resource_quotas",
+            "work_items",
             "tasks",
         ]:
             try:
@@ -211,6 +219,13 @@ def clean_tables(engine):
             "test-reset",
         )
         AgentStudioService(settings).seed_catalog(
+            connection,
+            settings.default_project_id,
+            "test-reset",
+        )
+        from apps.api.app.services.work_orchestration import WorkOrchestrationService
+
+        WorkOrchestrationService(settings).seed_defaults(
             connection,
             settings.default_project_id,
             "test-reset",

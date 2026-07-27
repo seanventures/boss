@@ -15,6 +15,7 @@ from .services.members import MemberDirectoryService
 from .services.skill_registry import seed_system_skills
 from .services.specpack import SpecPackService
 from .services.workflows import seed_specpack_workflows
+from .services.work_orchestration import WorkOrchestrationService
 
 
 # Built-in MCP servers BOSS ships with — idempotently registered so they're
@@ -156,6 +157,7 @@ def seed_project_defaults(
         actor=actor,
     )
     AgentStudioService(settings).seed_catalog(connection, project_id, actor)
+    WorkOrchestrationService(settings).seed_defaults(connection, project_id, actor)
     a2a = A2AService(settings)
     for channel in (
         {

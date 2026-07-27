@@ -733,12 +733,234 @@ CREATE TABLE IF NOT EXISTS health_snapshots (
 CREATE INDEX IF NOT EXISTS idx_health_snapshots_project
   ON health_snapshots(project_id, created_at DESC);
 
+-- Work Orchestration Plane (BOSS-270..278): one explainable portfolio,
+-- quota ledger, external work-tracker binding, and delivery-presence surface.
+-- Plane is the default work tracker; the durable BOSS jobs table below remains
+-- the execution authority for leases, retries, deadletters, and receipts.
+CREATE TABLE IF NOT EXISTS work_items (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  subject_type TEXT NOT NULL,
+  subject_id TEXT NOT NULL,
+  title TEXT NOT NULL,
+  description TEXT,
+  status TEXT NOT NULL DEFAULT 'active',
+  priority_band TEXT NOT NULL DEFAULT 'p2',
+  effective_score NUMERIC(7, 2) NOT NULL DEFAULT 50,
+  strategic_value INTEGER NOT NULL DEFAULT 50,
+  customer_impact INTEGER NOT NULL DEFAULT 50,
+  urgency INTEGER NOT NULL DEFAULT 50,
+  cost_of_delay INTEGER NOT NULL DEFAULT 50,
+  risk_reduction INTEGER NOT NULL DEFAULT 50,
+  dependency_pressure INTEGER NOT NULL DEFAULT 50,
+  confidence INTEGER NOT NULL DEFAULT 75,
+  manual_adjustment INTEGER NOT NULL DEFAULT 0,
+  rationale TEXT NOT NULL DEFAULT '',
+  workload_class TEXT NOT NULL DEFAULT 'general',
+  estimated_units INTEGER NOT NULL DEFAULT 1,
+  allocated_units INTEGER NOT NULL DEFAULT 0,
+  allocation_status TEXT NOT NULL DEFAULT 'unallocated',
+  due_at TIMESTAMPTZ,
+  owner_actor TEXT,
+  evidence JSONB NOT NULL DEFAULT '[]'::jsonb,
+  source TEXT NOT NULL DEFAULT 'boss',
+  created_by TEXT NOT NULL DEFAULT 'system',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(project_id, subject_type, subject_id),
+  CHECK (priority_band IN ('p0', 'p1', 'p2', 'p3', 'p4')),
+  CHECK (strategic_value BETWEEN 0 AND 100),
+  CHECK (customer_impact BETWEEN 0 AND 100),
+  CHECK (urgency BETWEEN 0 AND 100),
+  CHECK (cost_of_delay BETWEEN 0 AND 100),
+  CHECK (risk_reduction BETWEEN 0 AND 100),
+  CHECK (dependency_pressure BETWEEN 0 AND 100),
+  CHECK (confidence BETWEEN 0 AND 100),
+  CHECK (manual_adjustment BETWEEN -100 AND 100),
+  CHECK (estimated_units > 0),
+  CHECK (allocated_units >= 0)
+);
+CREATE INDEX IF NOT EXISTS idx_work_items_ranked
+  ON work_items(project_id, status, effective_score DESC, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_work_items_workload
+  ON work_items(project_id, workload_class, allocation_status);
+
+CREATE TABLE IF NOT EXISTS resource_quotas (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  scope_type TEXT NOT NULL,
+  scope_id TEXT NOT NULL,
+  resource_kind TEXT NOT NULL,
+  reserved_min INTEGER NOT NULL DEFAULT 0,
+  soft_limit INTEGER NOT NULL DEFAULT 1,
+  hard_limit INTEGER NOT NULL DEFAULT 1,
+  burst_limit INTEGER NOT NULL DEFAULT 0,
+  allocation_weight NUMERIC(8, 3) NOT NULL DEFAULT 1,
+  borrow_enabled BOOLEAN NOT NULL DEFAULT false,
+  status TEXT NOT NULL DEFAULT 'active',
+  policy JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_by TEXT NOT NULL DEFAULT 'system',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(project_id, scope_type, scope_id, resource_kind),
+  CHECK (scope_type IN ('global', 'org', 'workspace', 'project', 'agent', 'workload')),
+  CHECK (reserved_min >= 0),
+  CHECK (soft_limit >= reserved_min),
+  CHECK (hard_limit >= soft_limit),
+  CHECK (burst_limit >= 0),
+  CHECK (allocation_weight > 0)
+);
+CREATE INDEX IF NOT EXISTS idx_resource_quotas_project
+  ON resource_quotas(project_id, resource_kind, status);
+
+CREATE TABLE IF NOT EXISTS resource_allocations (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  work_item_id TEXT NOT NULL REFERENCES work_items(id) ON DELETE CASCADE,
+  quota_id TEXT NOT NULL REFERENCES resource_quotas(id) ON DELETE CASCADE,
+  resource_kind TEXT NOT NULL,
+  requested_units INTEGER NOT NULL,
+  granted_units INTEGER NOT NULL DEFAULT 0,
+  used_units INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'planned',
+  reason TEXT NOT NULL DEFAULT '',
+  score_snapshot NUMERIC(7, 2) NOT NULL,
+  policy_snapshot JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_by TEXT NOT NULL DEFAULT 'allocator',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  expires_at TIMESTAMPTZ,
+  released_at TIMESTAMPTZ,
+  CHECK (requested_units > 0),
+  CHECK (granted_units >= 0),
+  CHECK (used_units >= 0),
+  CHECK (used_units <= granted_units)
+);
+CREATE INDEX IF NOT EXISTS idx_resource_allocations_work
+  ON resource_allocations(project_id, work_item_id, status, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_resource_allocations_quota
+  ON resource_allocations(quota_id, status, expires_at);
+
+CREATE TABLE IF NOT EXISTS work_tracker_providers (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  provider_key TEXT NOT NULL,
+  display_name TEXT NOT NULL,
+  adapter_kind TEXT NOT NULL DEFAULT 'plugin',
+  status TEXT NOT NULL DEFAULT 'active',
+  is_default BOOLEAN NOT NULL DEFAULT false,
+  enforcement_mode TEXT NOT NULL DEFAULT 'required',
+  capabilities JSONB NOT NULL DEFAULT '[]'::jsonb,
+  configuration JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_by TEXT NOT NULL DEFAULT 'system',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(project_id, provider_key),
+  CHECK (enforcement_mode IN ('required', 'advisory', 'disabled'))
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_work_tracker_default
+  ON work_tracker_providers(project_id)
+  WHERE is_default = true AND status = 'active';
+
+CREATE TABLE IF NOT EXISTS work_tracker_bindings (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  provider_id TEXT NOT NULL REFERENCES work_tracker_providers(id),
+  work_item_id TEXT NOT NULL REFERENCES work_items(id) ON DELETE CASCADE,
+  external_workspace_id TEXT,
+  external_project_id TEXT,
+  external_issue_id TEXT,
+  external_key TEXT,
+  external_url TEXT,
+  external_state TEXT,
+  sync_status TEXT NOT NULL DEFAULT 'pending_create',
+  sync_error JSONB NOT NULL DEFAULT '{}'::jsonb,
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_by TEXT NOT NULL DEFAULT 'system',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_synced_at TIMESTAMPTZ,
+  UNIQUE(project_id, provider_id, work_item_id)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_work_tracker_external_issue
+  ON work_tracker_bindings(project_id, provider_id, external_issue_id)
+  WHERE external_issue_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_work_tracker_bindings_status
+  ON work_tracker_bindings(project_id, sync_status, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS delivery_bot_identities (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  provider TEXT NOT NULL,
+  -- Agent Studio and secret_refs are declared later in this bootstrap file.
+  -- Their foreign keys are attached after those tables exist.
+  agent_definition_id TEXT,
+  agent_key TEXT NOT NULL,
+  display_name TEXT NOT NULL,
+  external_identity TEXT,
+  credential_secret_ref_id TEXT,
+  avatar_url TEXT,
+  status TEXT NOT NULL DEFAULT 'active',
+  policy JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_by TEXT NOT NULL DEFAULT 'system',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(project_id, provider, agent_key)
+);
+
+CREATE TABLE IF NOT EXISTS delivery_status_channels (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  provider TEXT NOT NULL,
+  channel_key TEXT NOT NULL,
+  display_name TEXT NOT NULL,
+  purpose TEXT NOT NULL,
+  external_channel_id TEXT,
+  external_url TEXT,
+  bot_identity_id TEXT REFERENCES delivery_bot_identities(id),
+  event_kinds JSONB NOT NULL DEFAULT '[]'::jsonb,
+  allowed_data_boundaries JSONB NOT NULL DEFAULT '["public", "internal"]'::jsonb,
+  status TEXT NOT NULL DEFAULT 'active',
+  configuration JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_by TEXT NOT NULL DEFAULT 'system',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(project_id, provider, channel_key)
+);
+
+CREATE TABLE IF NOT EXISTS delivery_presence_events (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  channel_id TEXT REFERENCES delivery_status_channels(id),
+  bot_identity_id TEXT REFERENCES delivery_bot_identities(id),
+  provider TEXT NOT NULL,
+  event_kind TEXT NOT NULL,
+  subject_type TEXT NOT NULL,
+  subject_id TEXT NOT NULL,
+  status TEXT NOT NULL,
+  summary TEXT NOT NULL,
+  external_url TEXT,
+  receipt_id TEXT,
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+  dedupe_key TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(project_id, dedupe_key)
+);
+CREATE INDEX IF NOT EXISTS idx_delivery_presence_project
+  ON delivery_presence_events(project_id, created_at DESC);
+
 CREATE TABLE IF NOT EXISTS jobs (
   id TEXT PRIMARY KEY,
   project_id TEXT NOT NULL REFERENCES projects(id),
   task_id TEXT REFERENCES tasks(id),
+  work_item_id TEXT REFERENCES work_items(id),
+  tracker_binding_id TEXT REFERENCES work_tracker_bindings(id),
+  allocation_id TEXT REFERENCES resource_allocations(id),
   kind TEXT NOT NULL,
   priority INTEGER NOT NULL DEFAULT 100,
+  priority_score NUMERIC(7, 2),
+  workload_class TEXT NOT NULL DEFAULT 'general',
+  resource_units INTEGER NOT NULL DEFAULT 1,
   status TEXT NOT NULL DEFAULT 'queued',
   payload JSONB NOT NULL DEFAULT '{}'::jsonb,
   data_boundary TEXT NOT NULL DEFAULT 'internal',
@@ -755,7 +977,15 @@ CREATE TABLE IF NOT EXISTS jobs (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 ALTER TABLE jobs ADD COLUMN IF NOT EXISTS dedupe_key TEXT;
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS work_item_id TEXT REFERENCES work_items(id);
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS tracker_binding_id TEXT REFERENCES work_tracker_bindings(id);
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS allocation_id TEXT REFERENCES resource_allocations(id);
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS priority_score NUMERIC(7, 2);
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS workload_class TEXT NOT NULL DEFAULT 'general';
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS resource_units INTEGER NOT NULL DEFAULT 1;
 CREATE INDEX IF NOT EXISTS idx_jobs_claimable ON jobs (status, run_after, priority, created_at);
+CREATE INDEX IF NOT EXISTS idx_jobs_ranked_claimable
+  ON jobs (status, run_after, priority_score DESC, priority, created_at);
 CREATE UNIQUE INDEX IF NOT EXISTS uq_jobs_project_dedupe
   ON jobs(project_id, dedupe_key)
   WHERE dedupe_key IS NOT NULL;
@@ -779,6 +1009,16 @@ CREATE TABLE IF NOT EXISTS receipts (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE(org_id, dedupe_key)
 );
+DO $$ BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'delivery_presence_events_receipt_id_fkey'
+  ) THEN
+    ALTER TABLE delivery_presence_events
+      ADD CONSTRAINT delivery_presence_events_receipt_id_fkey
+      FOREIGN KEY (receipt_id) REFERENCES receipts(id);
+  END IF;
+END $$;
 -- account_connect_auth_sessions.receipt_id is declared before receipts exists;
 -- attach the foreign key now that receipts is defined (idempotent guard).
 DO $$ BEGIN
@@ -1028,6 +1268,16 @@ ALTER TABLE secret_refs ADD COLUMN IF NOT EXISTS revoked_at TIMESTAMPTZ;
 ALTER TABLE secret_refs ADD COLUMN IF NOT EXISTS revoked_by TEXT;
 CREATE INDEX IF NOT EXISTS idx_secret_refs_project
   ON secret_refs(project_id, provider, status);
+DO $$ BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'delivery_bot_identities_credential_secret_ref_id_fkey'
+  ) THEN
+    ALTER TABLE delivery_bot_identities
+      ADD CONSTRAINT delivery_bot_identities_credential_secret_ref_id_fkey
+      FOREIGN KEY (credential_secret_ref_id) REFERENCES secret_refs(id);
+  END IF;
+END $$;
 
 CREATE TABLE IF NOT EXISTS provider_adapters (
   id TEXT PRIMARY KEY,
@@ -2440,6 +2690,16 @@ CREATE TABLE IF NOT EXISTS agent_definitions (
 );
 CREATE INDEX IF NOT EXISTS idx_agent_definitions_project
   ON agent_definitions(project_id, status, updated_at DESC);
+DO $$ BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'delivery_bot_identities_agent_definition_id_fkey'
+  ) THEN
+    ALTER TABLE delivery_bot_identities
+      ADD CONSTRAINT delivery_bot_identities_agent_definition_id_fkey
+      FOREIGN KEY (agent_definition_id) REFERENCES agent_definitions(id);
+  END IF;
+END $$;
 
 CREATE TABLE IF NOT EXISTS agent_versions (
   id TEXT PRIMARY KEY,

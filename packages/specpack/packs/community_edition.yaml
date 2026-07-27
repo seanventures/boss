@@ -26,10 +26,10 @@ requires:
   - default_safety
   - budget_governor_policy
   - model_entitlement_policy
+  - work_orchestration_policy
 installs:
   roles: [metatron, coo, cto, pm, qa, release_manager]
   workflows: [ceo_command_to_pr, decision_inbox, budget_gated_job, model_entitlement_routing]
-  policies: [default_safety, budget_governor_policy, model_entitlement_policy, commercial_packaging_policy]
-  skills: [model_gateway, github, software_factory, model_providers]
+  policies: [default_safety, budget_governor_policy, model_entitlement_policy, commercial_packaging_policy, work_orchestration_policy]
+  skills: [model_gateway, github, software_factory, model_providers, work_tracker, mattermost]
 status: active
-

@@ -9,9 +9,11 @@ from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
 from ..config import Settings
-from .core import emit_event, json_hash, make_id, normalize_data_boundary, now_utc
+from .core import emit_event, json_hash, make_id, normalize_data_boundary
 from .entitlements import EntitlementBrokerService
+from .jobs import enqueue_job
 from .skill_scope import matching_skill_ids
+from .work_orchestration import WorkOrchestrationService
 
 
 class AgentDefinitionNotFoundError(ValueError):
@@ -724,15 +726,41 @@ class AgentStudioService:
             )
             return self.get_agent_run(connection, project_id, run_id)
 
-        job_id = make_id("job")
+        objective = str(
+            input_data.get("objective")
+            or input_data.get("prompt")
+            or version["agent_name"]
+        )
+        priority_inputs = input_data.get("priority_inputs")
+        work_orchestration = WorkOrchestrationService(self.settings)
+        tracked = work_orchestration.ensure_tracked_work(
+            connection,
+            project_id=project_id,
+            subject_type="agent_studio_run",
+            subject_id=run_id,
+            title=f"{version['agent_name']}: {objective[:160]}",
+            description=objective,
+            workload_class=f"agent:{version['role_key']}",
+            actor=actor,
+            priority_inputs=(
+                priority_inputs if isinstance(priority_inputs, dict) else None
+            ),
+        )
+        work_item = tracked["work_item"]
+        tracker_binding = tracked["tracker_binding"]
+        allocation = tracked["allocation"]
+        tracker_sync_job = work_orchestration.enqueue_tracker_sync(
+            connection,
+            project_id=project_id,
+            binding_id=tracker_binding["id"],
+            actor=actor,
+        )
         payload = {
             "agent_studio_run_id": run_id,
             "agent_version_id": agent_version_id,
             "panel_run_id": panel_run_id,
             "member_key": member_key,
-            "summary": input_data.get("objective")
-            or input_data.get("prompt")
-            or version["agent_name"],
+            "summary": objective,
             "context": input_data,
             "evidence_refs": input_data.get("evidence_refs") or [],
             "agent_module": {
@@ -744,36 +772,32 @@ class AgentStudioService:
             "agent_runtime": compiled["agent_runtime"],
             "data_boundary": compiled["data_boundary"],
             "requires_reservation": False,
+            "work_item_id": work_item["id"],
+            "tracker_binding_id": tracker_binding["id"],
+            "allocation_id": allocation["id"],
         }
-        connection.execute(
-            text(
-                """
-                INSERT INTO jobs (
-                    id, project_id, task_id, kind, priority, status, payload,
-                    data_boundary, max_attempts, attempt, dedupe_key, run_after
-                )
-                VALUES (
-                    :id, :project_id, :task_id, 'agent.studio.execute', 80,
-                    'queued', CAST(:payload AS JSONB), :data_boundary,
-                    :max_attempts, 0, :dedupe_key, :run_after
-                )
-                """
+        queued_job = enqueue_job(
+            connection,
+            project_id,
+            "agent.studio.execute",
+            payload,
+            task_id=task_id,
+            priority=max(0, 100 - round(float(work_item["effective_score"]))),
+            priority_score=float(work_item["effective_score"]),
+            workload_class=work_item["workload_class"],
+            resource_units=1,
+            max_attempts=int(version["limits"].get("max_retries") or 0) + 1,
+            data_boundary=compiled["data_boundary"],
+            dedupe_key=(
+                f"agent-studio:{dedupe_key}"
+                if dedupe_key
+                else f"agent-studio-run:{run_id}"
             ),
-            {
-                "id": job_id,
-                "project_id": project_id,
-                "task_id": task_id,
-                "payload": json.dumps(payload),
-                "data_boundary": compiled["data_boundary"],
-                "max_attempts": int(version["limits"].get("max_retries") or 0) + 1,
-                "dedupe_key": (
-                    f"agent-studio:{dedupe_key}"
-                    if dedupe_key
-                    else f"agent-studio-run:{run_id}"
-                ),
-                "run_after": now_utc(),
-            },
+            work_item_id=work_item["id"],
+            tracker_binding_id=tracker_binding["id"],
+            allocation_id=allocation["id"],
         )
+        job_id = queued_job["id"]
         connection.execute(
             text(
                 "UPDATE agent_studio_runs SET job_id = :job_id WHERE id = :id"
@@ -792,6 +816,10 @@ class AgentStudioService:
                 "job_id": job_id,
                 "execution_mode": execution_mode,
                 "panel_run_id": panel_run_id,
+                "work_item_id": work_item["id"],
+                "tracker_binding_id": tracker_binding["id"],
+                "allocation_id": allocation["id"],
+                "tracker_sync_job_id": tracker_sync_job["job_id"],
             },
         )
         return self.get_agent_run(connection, project_id, run_id)
