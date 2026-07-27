@@ -126,6 +126,26 @@ class IntentRouter:
         self.canonical = CanonicalObjectService()
         self.budget = BudgetGovernor(settings)
         self.receipts = ReceiptService()
+        self._answer_agent_obj = None  # lazy: read-only tool-grounded answerer
+
+    def _answer_agent(self):
+        """A read-only, tool-grounded agent used by the DISCUSS/answer path so the
+        one chat interface can answer 'what's running / preview this / query the DB'
+        with REAL engine data — not a blind LLM reply. Built once, lazily; imported
+        inside the method to avoid any services<->agent import cycle."""
+        if self._answer_agent_obj is None:
+            from ..agent.engine_agent import EngineAgent
+            from ..context import EngineContext
+            from ..db import get_engine
+            from ..tools import ToolRegistry, build_default_registry
+
+            ctx = EngineContext(settings=self.settings, engine=get_engine(self.settings))
+            # read-only view of the tool layer (no write tools on the discuss path)
+            read_only = ToolRegistry()
+            for spec in build_default_registry().specs(kind="read"):
+                read_only.register(spec)
+            self._answer_agent_obj = EngineAgent(ctx, registry=read_only)
+        return self._answer_agent_obj
 
     def route_turn(
         self,
@@ -238,15 +258,21 @@ class IntentRouter:
         system = (
             "You are BOSS, the assistant for an autonomous software factory. Answer the user's "
             "question or discuss their request clearly and concisely, grounded in the conversation. "
-            "If they clearly want you to BUILD or CHANGE something, briefly say what you'd do and that "
-            "you'll start once they confirm (e.g. 'build it' / 'go') — do NOT claim you already "
-            "started anything, and do NOT invent facts."
+            "You have READ-ONLY tools into the live engine — USE them to ground factual answers "
+            "(what's running, a task's status/PR, live preview links, the microVM fleet, arbitrary "
+            "data) instead of guessing. If they clearly want you to BUILD or CHANGE something, "
+            "briefly say what you'd do and that you'll start once they confirm (e.g. 'build it' / "
+            "'go') — do NOT claim you already started anything, and do NOT invent facts."
         )
-        convo = [{"role": "system", "content": system}] + [
+        # last 12 user/assistant turns as history; newest user message drives the turn
+        convo = [
             {"role": m["role"], "content": m["content"]}
             for m in messages[-12:]
             if isinstance(m, dict) and m.get("role") in ("user", "assistant") and m.get("content")
         ]
+        latest = convo[-1]["content"] if convo and convo[-1]["role"] == "user" else (
+            convo[-1]["content"] if convo else "")
+        history = convo[:-1] if convo else []
         reply = ""
         try:
             reservation = self.budget.reserve(
@@ -255,8 +281,15 @@ class IntentRouter:
                 "Orchestration conversational answer.", 10)
             if reservation.get("status") == "reserved":
                 try:
-                    response, _usage = make_chat_adapter(self.settings).create_chat_completion(convo)
-                    reply = str((response.get("content") if isinstance(response, dict) else response) or "").strip()
+                    # Tool-grounded answer: the read-only agent may call engine read
+                    # tools to fetch real data, then reply. Falls back to a plain
+                    # reply if the tool loop yields nothing.
+                    turn = self._answer_agent().chat(
+                        project_id=project_id, actor="orchestrator",
+                        message=latest, history=history, system=system,
+                        allow_writes=False, max_steps=4,
+                    )
+                    reply = str(turn.reply or "").strip()
                 finally:
                     try:
                         self.budget.release(connection, project_id, reservation["reservation_id"], "answer")

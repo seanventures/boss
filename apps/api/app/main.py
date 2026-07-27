@@ -6455,11 +6455,13 @@ def propose_command(payload: CommandProposeRequest, request: Request) -> Command
         return CommandProposeResponse(**result)
 
 
-@app.post("/v1/agent/chat", response_model=AgentChatResponse)
-def agent_chat(payload: AgentChatRequest, request: Request) -> AgentChatResponse:
-    """Persist one conversational turn and route it to an existing BOSS initiator."""
+def _run_agent_chat(payload: AgentChatRequest, request: Request, *, endpoint: str) -> AgentChatResponse:
+    """Shared handler for the BOSS chat interface. One brain (AgentService →
+    IntentRouter) behind both the canonical endpoint and its deprecated alias, so
+    all callers hit identical routing/persistence/confirmation logic and the
+    (now tool-grounded) discuss path."""
     _enforce_high_cost_rate_limit(
-        request, payload.project_id, payload.actor, endpoint="/v1/agent/chat"
+        request, payload.project_id, payload.actor, endpoint=endpoint
     )
     with begin(engine) as connection:
         require_project_actor(
@@ -6484,6 +6486,23 @@ def agent_chat(payload: AgentChatRequest, request: Request) -> AgentChatResponse
         except AgentThreadOwnershipError as error:
             raise HTTPException(status_code=403, detail=str(error)) from error
         return AgentChatResponse(**result)
+
+
+@app.post("/v1/engine/agent/chat", response_model=AgentChatResponse)
+def engine_agent_chat(payload: AgentChatRequest, request: Request) -> AgentChatResponse:
+    """The BOSS chat interface — one engine-native agent: routes intents, persists
+    threads, gates confirmations, and answers questions grounded in live engine
+    data via the read-tool layer. This is the canonical endpoint."""
+    return _run_agent_chat(payload, request, endpoint="/v1/engine/agent/chat")
+
+
+@app.post("/v1/agent/chat", response_model=AgentChatResponse, deprecated=True)
+def agent_chat(payload: AgentChatRequest, request: Request, response: Response) -> AgentChatResponse:
+    """DEPRECATED alias of POST /v1/engine/agent/chat — identical behavior. Kept so
+    existing callers keep working; migrate to the engine endpoint."""
+    response.headers["Deprecation"] = "true"
+    response.headers["Link"] = '</v1/engine/agent/chat>; rel="successor-version"'
+    return _run_agent_chat(payload, request, endpoint="/v1/agent/chat")
 
 
 @app.get("/v1/agent/threads")

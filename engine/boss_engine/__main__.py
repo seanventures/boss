@@ -100,8 +100,27 @@ def _cmd_chat(args) -> int:
         print(f"boss> {turn.reply}")
         history.append({"role": "user", "content": message})
         history.append({"role": "assistant", "content": turn.reply})
-        if turn.pending_writes:
-            print(f"  [held for confirmation: {[w['tool'] for w in turn.pending_writes]}]")
+        # Confirmation gate: the agent proposes writes but doesn't run them unless
+        # allow_writes is on. Here the y/N prompt IS the authorization — on 'yes'
+        # we execute the exact proposed tool call and feed the result back.
+        for w in (turn.pending_writes or []):
+            preview = json.dumps(w.get("args") or {})
+            if len(preview) > 140:
+                preview = preview[:140] + "…"
+            ans = input(f"  ⏵ run write '{w['tool']}' {preview} ? [y/N] ").strip().lower()
+            if ans in ("y", "yes"):
+                result = agent.registry.invoke(
+                    w["tool"], agent.ctx,
+                    project_id=args.project, actor="cli", args=w.get("args") or {},
+                )
+                print(f"  ✓ {w['tool']} → {json.dumps(result, default=str)[:400]}")
+                history.append({
+                    "role": "user",
+                    "content": f"[confirmed] {w['tool']} was executed; result: "
+                               f"{json.dumps(result, default=str)[:600]}",
+                })
+            else:
+                print("  ✗ skipped")
     return 0
 
 
