@@ -47,6 +47,42 @@ export type StudioPanel = {
   };
 };
 
+export type StudioWorkflowStep = {
+  id: string;
+  kind: string;
+  next?: string[];
+  binding?: Record<string, unknown>;
+  [key: string]: unknown;
+};
+
+export type StudioWorkflowSpec = {
+  entry_step: string;
+  steps: StudioWorkflowStep[];
+  input_schema?: Record<string, unknown>;
+  output_schema?: Record<string, unknown>;
+  [key: string]: unknown;
+};
+
+export type StudioWorkflowVersion = {
+  id: string;
+  version: number;
+  status: string;
+  spec: StudioWorkflowSpec;
+  content_hash: string;
+  published_at: string;
+};
+
+export type StudioWorkflow = {
+  id: string;
+  workflow_key: string;
+  name: string;
+  description?: string;
+  status: string;
+  active_version_id?: string;
+  version_count?: number;
+  versions: StudioWorkflowVersion[];
+};
+
 export type StudioRun = {
   id: string;
   status: string;
@@ -85,8 +121,10 @@ export type AgentStudioFeed = {
   blockedReason?: string;
   agents: StudioAgent[];
   panels: StudioPanel[];
+  workflows: StudioWorkflow[];
   agentRuns: StudioRun[];
   panelRuns: StudioRun[];
+  workflowRuns: StudioRun[];
   tests: Array<{
     id: string;
     status: string;
@@ -131,8 +169,10 @@ export async function fetchAgentStudioFeed(
       apiReachable: true,
       agents: (payload.agents as StudioAgent[]) ?? [],
       panels: (payload.panels as StudioPanel[]) ?? [],
+      workflows: (payload.workflows as StudioWorkflow[]) ?? [],
       agentRuns: (payload.agent_runs as StudioRun[]) ?? [],
       panelRuns: (payload.panel_runs as StudioRun[]) ?? [],
+      workflowRuns: (payload.workflow_runs as StudioRun[]) ?? [],
       tests: (payload.tests as AgentStudioFeed["tests"]) ?? [],
       a2a: {
         channels: (a2a.channels as AgentStudioFeed["a2a"]["channels"]) ?? [],
@@ -158,8 +198,10 @@ function emptyFeed(projectId: string, blockedReason: string): AgentStudioFeed {
     blockedReason,
     agents: [],
     panels: [],
+    workflows: [],
     agentRuns: [],
     panelRuns: [],
+    workflowRuns: [],
     tests: [],
     a2a: {
       channels: [],

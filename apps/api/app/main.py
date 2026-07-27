@@ -418,6 +418,7 @@ from .schemas import (
     WorkflowDefinitionDetail,
     WorkflowDefinitionListResponse,
     WorkflowDefinitionSummary,
+    WorkflowDraftValidateRequest,
     WorkflowMappingCreateRequest,
     WorkflowMappingListResponse,
     WorkflowMappingResolveRequest,
@@ -12160,8 +12161,14 @@ def get_agent_studio_catalog(
             "project_id": project_id,
             "agents": agent_studio.list_agents(connection, project_id),
             "panels": agent_studio.list_panels(connection, project_id),
+            "workflows": workflow_runtime.list_definition_details(
+                connection, project_id, include_retired=False
+            ),
             "agent_runs": agent_studio.list_agent_runs(connection, project_id, 50),
             "panel_runs": agent_studio.list_panel_runs(connection, project_id, 50),
+            "workflow_runs": workflow_runtime.list_runs(
+                connection, project_id, status=None, limit=50
+            ),
             "tests": agent_studio.list_agent_tests(connection, project_id, 50),
             "a2a": {
                 "channels": a2a.list_channels(connection, project_id),
@@ -12169,6 +12176,43 @@ def get_agent_studio_catalog(
                 "messages": a2a.list_messages(connection, project_id, limit=100),
                 "health": a2a.health(connection, project_id),
             },
+        }
+
+
+@app.post("/v1/agent-studio/workflows/validate")
+def validate_agent_studio_workflow(
+    payload: WorkflowDraftValidateRequest,
+) -> dict[str, Any]:
+    """Compile a workflow draft without publishing or producing side effects."""
+    with begin(engine) as connection:
+        require_project_actor(
+            connection, payload.project_id, payload.actor, "workflow_manage"
+        )
+        try:
+            normalized = workflow_runtime.validate_workflow_spec(payload.spec)
+        except workflow_runtime.WorkflowError as error:
+            raise_workflow_error(error)
+        steps = normalized["steps"]
+        return {
+            "valid": True,
+            "normalized_spec": normalized,
+            "checks": [
+                {
+                    "kind": "graph",
+                    "passed": True,
+                    "detail": f"{len(steps)} reachable step(s); no unbounded cycles.",
+                },
+                {
+                    "kind": "bindings",
+                    "passed": True,
+                    "detail": "Required typed bindings are present.",
+                },
+                {
+                    "kind": "side_effects",
+                    "passed": True,
+                    "detail": "Validation did not publish a version or execute work.",
+                },
+            ],
         }
 
 

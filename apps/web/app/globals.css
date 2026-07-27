@@ -2757,7 +2757,7 @@ select.input:focus {
 .as-pane-head small { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); letter-spacing: 0; text-transform: none; }
 .as-mode-switch {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(3, 1fr);
   margin: 12px;
   border: 1px solid var(--as-line);
   border-radius: 7px;
@@ -2767,20 +2767,22 @@ select.input:focus {
   display: flex;
   justify-content: center;
   align-items: center;
-  gap: 7px;
+  gap: 4px;
   min-height: 35px;
+  min-width: 0;
+  padding: 0 4px;
   border: 0;
   border-left: 1px solid var(--as-line);
   border-radius: 0;
   background: transparent;
   color: var(--muted);
   font-family: var(--mono);
-  font-size: 0.67rem;
+  font-size: 0.59rem;
   box-shadow: none;
 }
 .as-mode-switch button:first-child { border-left: 0; }
 .as-mode-switch button.active { background: var(--as-cyan-dim); color: var(--as-cyan); }
-.as-mode-switch button svg { width: 15px; height: 15px; }
+.as-mode-switch button svg { display: none; }
 .as-search {
   display: flex;
   align-items: center;
@@ -2861,6 +2863,47 @@ select.input:focus {
   font-weight: 800;
 }
 .as-mini-orb.panel { border-radius: 8px; border-color: rgba(185, 153, 255, 0.45); color: var(--as-purple); }
+.as-mini-orb.workflow { border-radius: 5px; border-color: rgba(99, 230, 216, 0.45); color: var(--as-cyan); }
+.as-new-workflow {
+  margin: 12px;
+  padding: 10px;
+  border: 1px solid var(--as-line);
+  background: #0c1725;
+}
+.as-new-workflow summary {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--as-cyan);
+  cursor: pointer;
+  font-family: var(--mono);
+  font-size: 0.6rem;
+  text-transform: uppercase;
+}
+.as-new-workflow[open] summary { margin-bottom: 10px; }
+.as-new-workflow label {
+  display: grid;
+  gap: 4px;
+  margin-top: 8px;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 0.52rem;
+  text-transform: uppercase;
+}
+.as-new-workflow input {
+  width: 100%;
+  min-width: 0;
+  height: 34px;
+  padding: 0 8px;
+  border: 1px solid var(--as-line);
+  border-radius: 4px;
+  background: #07101a;
+  color: var(--ink);
+  font-size: 0.65rem;
+  outline: none;
+}
+.as-new-workflow input:focus { border-color: rgba(99, 230, 216, 0.55); }
+.as-new-workflow .as-button { width: 100%; justify-content: center; margin-top: 10px; }
 
 .as-canvas {
   position: relative;
@@ -3037,11 +3080,70 @@ select.input:focus {
 .as-consolidator b { font-size: 0.68rem; text-transform: capitalize; }
 .as-consolidator em { color: var(--muted); font-size: 0.53rem; font-style: normal; }
 
-.as-command { padding: 18px 20px 22px; }
+.as-workflow-graph {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  min-height: 385px;
+  padding: 24px 20px 18px;
+}
+.as-flow-summary, .as-flow-foot {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 0.52rem;
+  text-transform: uppercase;
+}
+.as-flow-summary span { display: inline-flex; align-items: center; gap: 5px; }
+.as-flow-summary svg { color: var(--as-cyan); }
+.as-flow-lane {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  padding: 24px 4px;
+  overflow-x: auto;
+}
+.as-flow-segment { display: flex; align-items: center; flex: 1 0 auto; }
+.as-flow-node {
+  display: grid;
+  width: clamp(120px, 9vw, 150px);
+  min-height: 142px;
+  padding: 13px;
+  border: 1px solid var(--as-line);
+  background: rgba(9, 20, 33, 0.94);
+  box-shadow: 0 9px 28px rgba(0, 0, 0, 0.16);
+}
+.as-flow-node.entry {
+  border-color: rgba(99, 230, 216, 0.58);
+  box-shadow: 0 0 28px rgba(99, 230, 216, 0.08);
+}
+.as-flow-node small { color: var(--as-cyan); font-family: var(--mono); font-size: 0.48rem; letter-spacing: 0.12em; }
+.as-flow-node b { margin-top: 8px; overflow: hidden; text-overflow: ellipsis; font-size: 0.72rem; }
+.as-flow-node > span { color: var(--as-purple); font-family: var(--mono); font-size: 0.54rem; text-transform: uppercase; }
+.as-flow-node em { margin-top: 8px; color: var(--muted); font-size: 0.52rem; font-style: normal; line-height: 1.35; }
+.as-flow-node footer { align-self: end; margin-top: 10px; color: var(--ink-soft); font-family: var(--mono); font-size: 0.48rem; }
+.as-flow-arrow {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  color: var(--as-cyan);
+}
+.as-flow-foot {
+  justify-content: space-between;
+  padding-top: 13px;
+  border-top: 1px solid rgba(151, 177, 205, 0.12);
+}
+
+.as-command, .as-workflow-editor { padding: 18px 20px 22px; }
+.as-workflow-editor { border-bottom: 1px solid var(--as-line); background: rgba(12, 23, 37, 0.68); }
 .as-command-label { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 9px; }
 .as-command-label span { display: inline-flex; align-items: center; gap: 7px; color: var(--as-cyan); font-family: var(--mono); font-size: 0.62rem; text-transform: uppercase; }
 .as-command-label small { color: var(--muted); font-size: 0.6rem; }
-.as-command textarea {
+.as-command textarea, .as-workflow-editor textarea {
   width: 100%;
   min-height: 72px;
   padding: 11px 12px;
@@ -3055,7 +3157,8 @@ select.input:focus {
   line-height: 1.55;
   outline: none;
 }
-.as-command textarea:focus { border-color: rgba(99, 230, 216, 0.55); box-shadow: 0 0 0 3px var(--as-cyan-dim); }
+.as-workflow-editor textarea { min-height: 190px; tab-size: 2; }
+.as-command textarea:focus, .as-workflow-editor textarea:focus { border-color: rgba(99, 230, 216, 0.55); box-shadow: 0 0 0 3px var(--as-cyan-dim); }
 .as-command-actions { display: flex; align-items: center; gap: 9px; margin-top: 10px; }
 .as-button {
   display: inline-flex;
@@ -3190,6 +3293,8 @@ select.input:focus {
   .as-panel-graph { min-height: 520px; overflow-x: auto; }
   .as-member-row { min-width: 700px; }
   .as-panel-links { min-width: 700px; }
+  .as-flow-summary, .as-flow-foot { align-items: flex-start; flex-direction: column; gap: 6px; }
+  .as-flow-lane { padding-right: 18px; }
   .as-command-label { align-items: flex-start; flex-direction: column; }
   .as-command-actions { align-items: stretch; flex-direction: column; }
   .as-run-contract { margin-left: 0; }

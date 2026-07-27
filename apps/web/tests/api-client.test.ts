@@ -3316,6 +3316,14 @@ describe("createBossApiClient", () => {
     });
 
     await client.getAgentStudioCatalog("boss-dogfood");
+    await client.validateStudioWorkflow({
+      project_id: "boss-dogfood",
+      actor: "ceo",
+      spec: {
+        entry_step: "plan",
+        steps: [{ id: "plan", kind: "task" }],
+      },
+    });
     await client.cancelA2AMessage("a2amsg_1", {
       project_id: "boss-dogfood",
       actor: "coo",
@@ -3330,13 +3338,17 @@ describe("createBossApiClient", () => {
 
     expect(calls.map((call) => call.url)).toEqual([
       "http://127.0.0.1:8000/v1/agent-studio/catalog?project_id=boss-dogfood",
+      "http://127.0.0.1:8000/v1/agent-studio/workflows/validate",
       "http://127.0.0.1:8000/v1/a2a/messages/a2amsg_1/cancel",
       "http://127.0.0.1:8000/v1/a2a/messages/a2amsg_1/replay",
     ]);
     expect(JSON.parse(String(calls[1].init?.body))).toMatchObject({
-      reason: "Superseded instruction.",
+      spec: { entry_step: "plan" },
     });
     expect(JSON.parse(String(calls[2].init?.body))).toMatchObject({
+      reason: "Superseded instruction.",
+    });
+    expect(JSON.parse(String(calls[3].init?.body))).toMatchObject({
       dedupe_key: "replay:a2amsg_1:1",
     });
   });

@@ -5635,7 +5635,13 @@ paths:
       parameters:
         - { name: project_id, in: query, required: true, schema: { type: string } }
       responses:
-        '200': { description: Agents, Panels, runs, tests, and A2A health/feed }
+        '200': { description: Agents, Panels, Workflow graphs/runs, tests, and A2A health/feed }
+  /v1/agent-studio/workflows/validate:
+    post:
+      summary: Validate and normalize a Workflow draft without publishing or executing it
+      responses:
+        '200': { description: Reachability, binding, bound, and no-side-effect validation evidence }
+        '422': { description: Invalid graph, binding, control-flow bound, or schema }
   /v1/agent-studio/agents:
     get:
       summary: List versioned AgentDefinitions

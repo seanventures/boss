@@ -3134,6 +3134,19 @@ class WorkflowVersionCreateRequest(BaseModel):
         return self
 
 
+class WorkflowDraftValidateRequest(BaseModel):
+    project_id: str
+    spec: dict[str, Any]
+    actor: str = "ceo"
+
+    @model_validator(mode="after")
+    def validate_fields(self) -> "WorkflowDraftValidateRequest":
+        self.project_id = _require_text(self.project_id, "project_id")
+        self.actor = _require_text(self.actor, "actor")
+        self.spec = _require_non_empty_mapping(self.spec, "spec")
+        return self
+
+
 class WorkflowVersionSummary(BaseModel):
     id: str
     project_id: str

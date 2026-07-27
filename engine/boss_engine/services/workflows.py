@@ -437,6 +437,35 @@ def get_definition(
     return result
 
 
+def list_definition_details(
+    connection: Connection, project_id: str, *, include_retired: bool = False
+) -> list[dict[str, Any]]:
+    """List full definitions without issuing one versions query per definition."""
+    definitions = list_definitions(
+        connection, project_id, include_retired=include_retired
+    )
+    if not definitions:
+        return []
+    versions = connection.execute(
+        text(
+            """
+            SELECT * FROM workflow_versions
+            WHERE project_id=:project_id
+            ORDER BY workflow_definition_id, version DESC
+            """
+        ),
+        {"project_id": project_id},
+    ).mappings().all()
+    versions_by_definition: dict[str, list[dict[str, Any]]] = {}
+    for version in versions:
+        versions_by_definition.setdefault(
+            version["workflow_definition_id"], []
+        ).append(_serialize_version(version))
+    for definition in definitions:
+        definition["versions"] = versions_by_definition.get(definition["id"], [])
+    return definitions
+
+
 def publish_version(
     connection: Connection,
     *,

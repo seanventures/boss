@@ -591,6 +591,28 @@ def test_a2a_filters_unmatched_groups_and_deadletters_stale_claims(engine):
 
 def test_agent_studio_catalog_api_exposes_seeded_objects(client):
     settings = get_settings()
+    definition = client.post(
+        "/v1/workflows",
+        json={
+            "project_id": settings.default_project_id,
+            "workflow_key": "studio_catalog_proof",
+            "name": "Studio catalog proof",
+            "actor": "ceo",
+        },
+    )
+    assert definition.status_code == 201, definition.text
+    version = client.post(
+        f"/v1/workflows/{definition.json()['id']}/versions",
+        json={
+            "project_id": settings.default_project_id,
+            "actor": "ceo",
+            "spec": {
+                "entry_step": "prove",
+                "steps": [{"id": "prove", "kind": "task"}],
+            },
+        },
+    )
+    assert version.status_code == 201, version.text
     response = client.get(
         "/v1/agent-studio/catalog",
         params={"project_id": settings.default_project_id},
@@ -599,4 +621,61 @@ def test_agent_studio_catalog_api_exposes_seeded_objects(client):
     payload = response.json()
     assert len(payload["agents"]) == 12
     assert len(payload["panels"]) == 3
+    assert len(payload["workflows"]) >= 1
+    assert all("versions" in workflow for workflow in payload["workflows"])
+    assert payload["workflows"][0]["versions"][0]["id"] == version.json()["id"]
+    assert "workflow_runs" in payload
     assert "health" in payload["a2a"]
+
+
+def test_agent_studio_validates_workflow_drafts_without_publishing(client):
+    settings = get_settings()
+    definitions_before = client.get(
+        "/v1/workflows",
+        params={"project_id": settings.default_project_id},
+    ).json()["items"]
+    valid = client.post(
+        "/v1/agent-studio/workflows/validate",
+        json={
+            "project_id": settings.default_project_id,
+            "actor": "ceo",
+            "spec": {
+                "entry_step": "scope",
+                "steps": [
+                    {"id": "scope", "kind": "task", "next": ["verify"]},
+                    {"id": "verify", "kind": "task"},
+                ],
+            },
+        },
+    )
+    assert valid.status_code == 200, valid.text
+    assert valid.json()["valid"] is True
+    assert valid.json()["normalized_spec"]["steps"][0]["max_attempts"] == 3
+    assert {check["kind"] for check in valid.json()["checks"]} == {
+        "graph",
+        "bindings",
+        "side_effects",
+    }
+
+    invalid = client.post(
+        "/v1/agent-studio/workflows/validate",
+        json={
+            "project_id": settings.default_project_id,
+            "actor": "ceo",
+            "spec": {
+                "entry_step": "a",
+                "steps": [
+                    {"id": "a", "kind": "task", "next": ["b"]},
+                    {"id": "b", "kind": "task", "next": ["a"]},
+                ],
+            },
+        },
+    )
+    assert invalid.status_code == 422
+    assert "unbounded cycle" in invalid.json()["detail"]
+
+    definitions_after = client.get(
+        "/v1/workflows",
+        params={"project_id": settings.default_project_id},
+    ).json()["items"]
+    assert len(definitions_after) == len(definitions_before)

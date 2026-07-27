@@ -10,6 +10,7 @@ import {
   GitBranch,
   LockKey,
   Play,
+  Plus,
   Pulse,
   Robot,
   ShieldCheck,
@@ -22,17 +23,40 @@ import type {
   AgentStudioFeed,
   StudioAgent,
   StudioPanel,
+  StudioWorkflow,
+  StudioWorkflowSpec,
 } from "../lib/agent-studio";
 import {
+  createStudioWorkflow,
+  publishStudioWorkflowVersion,
   runStudioAgent,
   runStudioPanel,
+  runStudioWorkflow,
   testStudioAgent,
+  validateStudioWorkflow,
   type StudioActionResult,
 } from "./agent-studio-actions";
 
 type Selection =
   | { kind: "agent"; item: StudioAgent }
-  | { kind: "panel"; item: StudioPanel };
+  | { kind: "panel"; item: StudioPanel }
+  | { kind: "workflow"; item: StudioWorkflow };
+
+type StudioMode = "agents" | "panels" | "workflows";
+
+const STARTER_WORKFLOW: StudioWorkflowSpec = {
+  entry_step: "plan",
+  input_schema: {
+    type: "object",
+    properties: { objective: { type: "string" } },
+    required: ["objective"],
+  },
+  output_schema: { type: "object" },
+  steps: [
+    { id: "plan", kind: "task", next: ["verify"] },
+    { id: "verify", kind: "task" },
+  ],
+};
 
 function initials(name: string): string {
   return name
@@ -81,13 +105,29 @@ export function AgentStudio({
     ? { kind: "panel", item: feed.panels[0] }
     : feed.agents[0]
       ? { kind: "agent", item: feed.agents[0] }
+      : feed.workflows[0]
+        ? { kind: "workflow", item: feed.workflows[0] }
+        : undefined;
+  const initialWorkflowVersion =
+    initial?.kind === "workflow"
+      ? initial.item.versions.find(
+          (version) => version.id === initial.item.active_version_id,
+        ) ?? initial.item.versions[0]
       : undefined;
-  const [mode, setMode] = useState<"agents" | "panels">(initial?.kind === "agent" ? "agents" : "panels");
+  const [mode, setMode] = useState<StudioMode>(
+    initial ? `${initial.kind}s` as StudioMode : "agents",
+  );
   const [selection, setSelection] = useState<Selection | undefined>(initial);
   const [query, setQuery] = useState("");
   const [objective, setObjective] = useState(
     "Review the proposed change, identify evidence gaps, and return the safest high-leverage next move.",
   );
+  const [workflowSpec, setWorkflowSpec] = useState(
+    JSON.stringify(initialWorkflowVersion?.spec ?? STARTER_WORKFLOW, null, 2),
+  );
+  const [newWorkflowKey, setNewWorkflowKey] = useState("");
+  const [newWorkflowName, setNewWorkflowName] = useState("");
+  const [newWorkflowDescription, setNewWorkflowDescription] = useState("");
   const [result, setResult] = useState<StudioActionResult | undefined>();
   const [pending, startTransition] = useTransition();
 
@@ -113,18 +153,70 @@ export function AgentStudio({
     );
   }, [feed.panels, query]);
 
+  const filteredWorkflows = useMemo(() => {
+    const q = query.toLowerCase().trim();
+    return feed.workflows.filter(
+      (workflow) =>
+        !q ||
+        workflow.name.toLowerCase().includes(q) ||
+        workflow.workflow_key.toLowerCase().includes(q) ||
+        workflow.description?.toLowerCase().includes(q),
+    );
+  }, [feed.workflows, query]);
+
+  const selectedWorkflowVersion =
+    selection?.kind === "workflow"
+      ? selection.item.versions.find(
+          (version) => version.id === selection.item.active_version_id,
+        ) ?? selection.item.versions[0]
+      : undefined;
+  const workflowPreview = useMemo(() => {
+    try {
+      const candidate = JSON.parse(workflowSpec) as StudioWorkflowSpec;
+      return candidate && Array.isArray(candidate.steps)
+        ? candidate
+        : selectedWorkflowVersion?.spec ?? STARTER_WORKFLOW;
+    } catch {
+      return selectedWorkflowVersion?.spec ?? STARTER_WORKFLOW;
+    }
+  }, [selectedWorkflowVersion?.spec, workflowSpec]);
   const activeVersion =
     selection?.kind === "agent"
       ? selection.item.active_version
-      : selection?.item.active_version;
-  const activeRuns = feed.agentRuns.filter((run) =>
-    ["queued", "leased", "running", "waiting_decision"].includes(run.status),
+      : selection?.kind === "panel"
+        ? selection.item.active_version
+        : selectedWorkflowVersion;
+  const activeRuns = [...feed.agentRuns, ...feed.panelRuns, ...feed.workflowRuns].filter((run) =>
+    ["queued", "validating", "leased", "running", "waiting", "waiting_decision"].includes(
+      run.status,
+    ),
   ).length;
   const liveMessages = feed.a2a.messages.filter((message) =>
     ["queued", "dispatching", "published", "delivering", "partially_acknowledged"].includes(
       message.status,
     ),
   ).length;
+
+  const selectWorkflow = (workflow: StudioWorkflow) => {
+    const version =
+      workflow.versions.find((item) => item.id === workflow.active_version_id) ??
+      workflow.versions[0];
+    setSelection({ kind: "workflow", item: workflow });
+    setWorkflowSpec(JSON.stringify(version?.spec ?? STARTER_WORKFLOW, null, 2));
+    setResult(undefined);
+  };
+
+  const switchMode = (next: StudioMode) => {
+    setMode(next);
+    setResult(undefined);
+    if (next === "agents" && feed.agents[0]) {
+      setSelection({ kind: "agent", item: feed.agents[0] });
+    } else if (next === "panels" && feed.panels[0]) {
+      setSelection({ kind: "panel", item: feed.panels[0] });
+    } else if (next === "workflows" && feed.workflows[0]) {
+      selectWorkflow(feed.workflows[0]);
+    }
+  };
 
   const execute = (kind: "test" | "run") => {
     if (!selection || !activeVersion?.id) return;
@@ -133,10 +225,80 @@ export function AgentStudio({
       const next =
         kind === "test" && selection.kind === "agent"
           ? await testStudioAgent(feed.projectId, activeVersion.id)
+          : selection.kind === "workflow"
+            ? await runStudioWorkflow(feed.projectId, activeVersion.id, objective)
           : selection.kind === "panel"
             ? await runStudioPanel(feed.projectId, activeVersion.id, objective)
             : await runStudioAgent(feed.projectId, activeVersion.id, objective);
       setResult(next);
+    });
+  };
+
+  const parseWorkflowSpec = (): Record<string, unknown> | undefined => {
+    try {
+      const parsed = JSON.parse(workflowSpec) as unknown;
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        throw new Error("Workflow spec must be a JSON object.");
+      }
+      return parsed as Record<string, unknown>;
+    } catch (error) {
+      setResult({
+        ok: false,
+        message:
+          error instanceof Error ? error.message : "Workflow spec is not valid JSON.",
+      });
+      return undefined;
+    }
+  };
+
+  const validateOrPublishWorkflow = (action: "validate" | "publish") => {
+    const spec = parseWorkflowSpec();
+    if (!spec || selection?.kind !== "workflow") return;
+    setResult(undefined);
+    startTransition(async () => {
+      const next =
+        action === "validate"
+          ? await validateStudioWorkflow(feed.projectId, spec)
+          : await publishStudioWorkflowVersion(
+              feed.projectId,
+              selection.item.id,
+              spec,
+            );
+      setResult(next);
+    });
+  };
+
+  const createWorkflow = () => {
+    const spec = parseWorkflowSpec();
+    if (!spec || !newWorkflowKey.trim() || !newWorkflowName.trim()) {
+      if (spec) {
+        setResult({
+          ok: false,
+          message: "Workflow key and name are required.",
+        });
+      }
+      return;
+    }
+    setResult(undefined);
+    startTransition(async () => {
+      const validated = await validateStudioWorkflow(feed.projectId, spec);
+      if (!validated.ok) {
+        setResult(validated);
+        return;
+      }
+      const created = await createStudioWorkflow(
+        feed.projectId,
+        newWorkflowKey.trim(),
+        newWorkflowName.trim(),
+        newWorkflowDescription.trim(),
+        spec,
+      );
+      setResult(created);
+      if (created.ok) {
+        setNewWorkflowKey("");
+        setNewWorkflowName("");
+        setNewWorkflowDescription("");
+      }
     });
   };
 
@@ -159,8 +321,8 @@ export function AgentStudio({
           <span className="as-kicker"><Sparkle weight="fill" /> Agent Studio / live system</span>
           <h2>Compose intelligence. Watch the work.</h2>
           <p>
-            Versioned agents, executable panels, and every coordination message on one
-            governed surface.
+            Versioned agents, executable panels, reusable workflows, and every
+            coordination message on one governed surface.
           </p>
         </div>
         <div className="as-header-signal" aria-label="A2A transport health">
@@ -178,21 +340,28 @@ export function AgentStudio({
       <div className="as-metrics" aria-label="Agent Studio summary">
         <div><span>Published agents</span><b>{feed.agents.length}</b><small>immutable active versions</small></div>
         <div><span>Executable panels</span><b>{feed.panels.length}</b><small>attributed consolidation</small></div>
+        <div><span>Workflows</span><b>{feed.workflows.length}</b><small>validated reusable graphs</small></div>
         <div><span>Active runs</span><b>{activeRuns}</b><small>leased or waiting</small></div>
         <div><span>Live A2A</span><b>{liveMessages}</b><small>{feed.a2a.channels.length} governed channels</small></div>
-        <div><span>Proof runs</span><b>{feed.tests.length}</b><small>deterministic test bench</small></div>
       </div>
 
       <div className="as-workbench">
-        <aside className="as-library" aria-label="Agent and panel library">
+        <aside className="as-library" aria-label="Agent, panel, and workflow library">
           <div className="as-pane-head">
             <span>Library</span>
-            <small>{mode === "agents" ? filteredAgents.length : filteredPanels.length} objects</small>
+            <small>
+              {mode === "agents"
+                ? filteredAgents.length
+                : mode === "panels"
+                  ? filteredPanels.length
+                  : filteredWorkflows.length}{" "}
+              objects
+            </small>
           </div>
           <div className="as-mode-switch" role="tablist">
             <button
               className={mode === "agents" ? "active" : ""}
-              onClick={() => setMode("agents")}
+              onClick={() => switchMode("agents")}
               role="tab"
               aria-selected={mode === "agents"}
             >
@@ -200,11 +369,19 @@ export function AgentStudio({
             </button>
             <button
               className={mode === "panels" ? "active" : ""}
-              onClick={() => setMode("panels")}
+              onClick={() => switchMode("panels")}
               role="tab"
               aria-selected={mode === "panels"}
             >
               <UsersThree /> Panels
+            </button>
+            <button
+              className={mode === "workflows" ? "active" : ""}
+              onClick={() => switchMode("workflows")}
+              role="tab"
+              aria-selected={mode === "workflows"}
+            >
+              <GitBranch /> Flows
             </button>
           </div>
           <label className="as-search">
@@ -212,13 +389,13 @@ export function AgentStudio({
             <input
               value={query}
               onChange={(event) => setQuery(event.target.value)}
-              placeholder="Filter by name or role…"
+              placeholder="Filter the active library…"
             />
             <span>⌘ K</span>
           </label>
           <div className="as-object-list">
-            {mode === "agents"
-              ? filteredAgents.map((agent) => (
+            {mode === "agents" ? (
+              filteredAgents.map((agent) => (
                   <button
                     key={agent.id}
                     className={
@@ -236,7 +413,8 @@ export function AgentStudio({
                     <i className={tone(agent.status)}>{agent.status}</i>
                   </button>
                 ))
-              : filteredPanels.map((panel) => (
+            ) : mode === "panels" ? (
+              filteredPanels.map((panel) => (
                   <button
                     key={panel.id}
                     className={
@@ -253,8 +431,65 @@ export function AgentStudio({
                     </span>
                     <i className={tone(panel.status)}>{panel.status}</i>
                   </button>
-                ))}
+                ))
+            ) : (
+              filteredWorkflows.map((workflow) => (
+                <button
+                  key={workflow.id}
+                  className={
+                    selection?.kind === "workflow" &&
+                    selection.item.id === workflow.id
+                      ? "as-object active"
+                      : "as-object"
+                  }
+                  onClick={() => selectWorkflow(workflow)}
+                >
+                  <span className="as-mini-orb workflow"><GitBranch /></span>
+                  <span>
+                    <b>{workflow.name}</b>
+                    <small>{workflow.workflow_key}</small>
+                  </span>
+                  <i className={tone(workflow.status)}>{workflow.status}</i>
+                </button>
+              ))
+            )}
           </div>
+          {mode === "workflows" && (
+            <details className="as-new-workflow">
+              <summary><Plus /> New governed workflow</summary>
+              <label>
+                Key
+                <input
+                  value={newWorkflowKey}
+                  onChange={(event) => setNewWorkflowKey(event.target.value)}
+                  placeholder="release_readiness"
+                />
+              </label>
+              <label>
+                Name
+                <input
+                  value={newWorkflowName}
+                  onChange={(event) => setNewWorkflowName(event.target.value)}
+                  placeholder="Release readiness"
+                />
+              </label>
+              <label>
+                Purpose
+                <input
+                  value={newWorkflowDescription}
+                  onChange={(event) => setNewWorkflowDescription(event.target.value)}
+                  placeholder="What this workflow governs"
+                />
+              </label>
+              <button
+                className="as-button primary"
+                disabled={pending}
+                onClick={createWorkflow}
+              >
+                <Plus /> {pending ? "Validating…" : "Validate + publish"}
+              </button>
+            </details>
+          )}
         </aside>
 
         <main className="as-canvas">
@@ -263,7 +498,11 @@ export function AgentStudio({
               <div className="as-canvas-head">
                 <div>
                   <span>
-                    {selection.kind === "panel" ? "Panel topology" : "Agent authority graph"}
+                    {selection.kind === "panel"
+                      ? "Panel topology"
+                      : selection.kind === "workflow"
+                        ? "Workflow graph / draft preview"
+                        : "Agent authority graph"}
                   </span>
                   <h3>{selection.item.name}</h3>
                 </div>
@@ -276,10 +515,49 @@ export function AgentStudio({
                 <div className="as-grid-lines" aria-hidden="true" />
                 {selection.kind === "panel" ? (
                   <PanelTopology panel={selection.item} />
+                ) : selection.kind === "workflow" ? (
+                  <WorkflowTopology workflow={selection.item} spec={workflowPreview} />
                 ) : (
                   <AgentTopology agent={selection.item} />
                 )}
               </div>
+
+              {selection.kind === "workflow" && (
+                <div className="as-workflow-editor">
+                  <div className="as-command-label">
+                    <span><BracketsCurly /> Governed workflow spec</span>
+                    <small>
+                      Edit JSON, prove the graph, then publish an immutable version.
+                    </small>
+                  </div>
+                  <textarea
+                    aria-label="Workflow JSON specification"
+                    value={workflowSpec}
+                    onChange={(event) => setWorkflowSpec(event.target.value)}
+                    rows={12}
+                    spellCheck={false}
+                  />
+                  <div className="as-command-actions">
+                    <button
+                      className="as-button secondary"
+                      disabled={pending}
+                      onClick={() => validateOrPublishWorkflow("validate")}
+                    >
+                      <Flask /> Validate draft
+                    </button>
+                    <button
+                      className="as-button primary"
+                      disabled={pending}
+                      onClick={() => validateOrPublishWorkflow("publish")}
+                    >
+                      <GitBranch /> Publish version
+                    </button>
+                    <span className="as-run-contract">
+                      <ShieldCheck /> reachability · bindings · bounded loops
+                    </span>
+                  </div>
+                </div>
+              )}
 
               <div className="as-command">
                 <div className="as-command-label">
@@ -306,7 +584,8 @@ export function AgentStudio({
                     disabled={pending || !activeVersion || !objective.trim()}
                     onClick={() => execute("run")}
                   >
-                    <Play weight="fill" /> {pending ? "Dispatching…" : `Run ${selection.kind}`}
+                    <Play weight="fill" />{" "}
+                    {pending ? "Dispatching…" : `Run ${selection.kind}`}
                   </button>
                   <span className="as-run-contract">
                     <LockKey /> policy · budget · lease · receipt
@@ -321,7 +600,9 @@ export function AgentStudio({
               </div>
             </>
           ) : (
-            <div className="as-empty">Select an agent or panel to inspect its graph.</div>
+            <div className="as-empty">
+              Select an agent, panel, or workflow to inspect its graph.
+            </div>
           )}
         </main>
 
@@ -447,6 +728,70 @@ function PanelTopology({ panel }: { panel: StudioPanel }) {
           <b>{compact(panel.active_version?.consolidation_policy.kind)}</b>
           <em>attribution + dissent preserved</em>
         </div>
+      </div>
+    </div>
+  );
+}
+
+function WorkflowTopology({
+  workflow,
+  spec,
+}: {
+  workflow: StudioWorkflow;
+  spec: StudioWorkflowSpec;
+}) {
+  const steps = spec.steps ?? [];
+  return (
+    <div className="as-workflow-graph">
+      <div className="as-flow-summary">
+        <span><GitBranch /> {steps.length} steps</span>
+        <span><Play /> entry {spec.entry_step}</span>
+        <span><ShieldCheck /> immutable on publish</span>
+      </div>
+      <div className="as-flow-lane">
+        {steps.map((step, index) => {
+          const targets = Array.isArray(step.next)
+            ? step.next
+            : typeof step.next === "string"
+              ? [step.next]
+              : [];
+          const binding = step.binding ?? {};
+          const bindingLabel = Object.entries(binding)
+            .slice(0, 2)
+            .map(([key, value]) => `${compact(key)}: ${String(value)}`)
+            .join(" · ");
+          return (
+            <div className="as-flow-segment" key={`${step.id}-${index}`}>
+              <article
+                className={
+                  step.id === spec.entry_step
+                    ? "as-flow-node entry"
+                    : "as-flow-node"
+                }
+              >
+                <small>{step.id === spec.entry_step ? "ENTRY" : `STEP ${index + 1}`}</small>
+                <b>{step.id}</b>
+                <span>{compact(step.kind)}</span>
+                <em>{bindingLabel || "runtime-scoped binding"}</em>
+                <footer>
+                  {targets.length
+                    ? `next → ${targets.join(", ")}`
+                    : "terminal frontier"}
+                </footer>
+              </article>
+              {index < steps.length - 1 && (
+                <span className="as-flow-arrow" aria-hidden="true">
+                  <ArrowRight />
+                </span>
+              )}
+            </div>
+          );
+        })}
+      </div>
+      <div className="as-flow-foot">
+        <span>{workflow.workflow_key}</span>
+        <span>{workflow.version_count ?? workflow.versions.length} published version(s)</span>
+        <span>policy snapshot captured per run</span>
       </div>
     </div>
   );

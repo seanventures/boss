@@ -244,6 +244,8 @@ Canonical records:
 
 Published versions are immutable. Draft changes create new versions. Content hashes deduplicate identical versions. Publish validates schema, RoleSpec lineage, scope, message permissions, output contract, bounded calls/runtime, capability references and model posture, but runtime resolution rechecks current project policy, connections, health, budget and actor authority.
 
+The Studio workflow lane is an authoring and observability client over the canonical Workflow Registry and Runtime. Its catalog joins full WorkflowDefinition/version graphs and recent WorkflowRuns into the live Studio feed. Draft validation calls the runtime compiler without inserting a definition/version or executing work; create, publish, and run operations reuse `/v1/workflows`, immutable version publication, and `/v1/workflow-runs`. The graph preview renders the draft while execution always pins a published version.
+
 Seeded agents default to `deterministic_brief`, a zero-cost and side-effect-free leased execution mode. A live model mode must select through the Model Entitlement Broker and requires a BudgetReservation and Receipt. Agent tool effects still execute only through the Skill Runtime.
 
 Panel runs fan out one leased `AgentRun` per member. Each result remains attributable. Consolidation creates a separate artifact over member findings; it never mutates or discards them. Evidence-ranked, attributed-synthesis, weighted-recommendation, majority-with-minority-report, producer-reviewer and hold-for-evidence policies are deterministic. Any missing proof, budget, approval, ownership or capability gate yields `waiting_decision`, `blocked` or `deadlettered`, never synthetic consensus.
@@ -426,6 +428,8 @@ BOSS Account Connect provides marketplace identity for Cloud and attached Enterp
 
 Agent Studio:
 
+- `GET /v1/agent-studio/catalog`
+- `POST /v1/agent-studio/workflows/validate`
 - `GET/POST /v1/agent-studio/agents`
 - `GET /v1/agent-studio/agents/{id}`
 - `POST /v1/agent-studio/agents/{id}/versions`

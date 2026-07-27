@@ -1113,3 +1113,23 @@ PR: https://github.com/seanheiney/boss/pull/3
   and https://github.com/seanheiney/boss/releases/tag/v0.8.0 is the latest
   release. Plane BOSS-215–234 and reconciled BOSS-32/33 are Done with final
   provenance and validation evidence.
+
+## 2026-07-26 — BOSS-256–266 Agent Studio, Panels, Workflows, and A2A
+
+- Built immutable Agent and Panel definitions/versions, deterministic
+  validation and test evidence, leased specialist execution, attributed Panel
+  consolidation, twelve seeded agents, and three seeded Panels.
+- Added the Agent Studio Workflow lane over the existing canonical registry:
+  full definitions and recent runs in the catalog, editable live graph
+  preview, side-effect-free draft validation, create-and-publish, immutable
+  version publication, and pinned execution.
+- Built the global Postgres-canonical, Redis Streams A2A bus with governed
+  channels/subscriptions, typed envelopes, consumer groups, receipts for
+  XADD/XACK, visibility reclaim, bounded retry/deadletter, ACK, replay,
+  cancellation, health, and audit.
+- Validation includes 12 post-workflow focused Agent Studio/Workflow tests,
+  all 121 web tests, Ruff, TypeScript, diff checks, optimized production
+  build, plus the broader 938-test Python, browser, docs, and real-Redis
+  evidence recorded in the handoff.
+- Draft PR #88 remains cleanly mergeable. Plane BOSS-256–266 stay In Progress
+  until merge and carry implementation, validation, and PR evidence.

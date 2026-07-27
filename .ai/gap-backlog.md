@@ -86,8 +86,9 @@
   A2A transport scope. Redis loss is visible and recoverable from Postgres;
   consumer loss is reclaimed and bounded; all external transport writes have
   Receipts.
+- Agent Studio now includes operator-authored Workflow creation, live graph
+  preview, side-effect-free validation, immutable version publication, and
+  pinned execution on top of the existing reusable Workflow registry/runtime.
 - Deliberate next-lane work, not silently implied by this delivery: enable
   live-model AgentVersions only through the existing model adapter,
-  BudgetReservation, cost Receipt, and provider entitlement path; add
-  operator-authored visual Workflow editing on top of the existing reusable
-  Workflow registry/runtime.
+  BudgetReservation, cost Receipt, and provider entitlement path.

@@ -4278,8 +4278,10 @@ export type AgentStudioCatalogResponse = {
   project_id: string;
   agents: Array<Record<string, unknown>>;
   panels: Array<Record<string, unknown>>;
+  workflows: WorkflowDefinitionDetail[];
   agent_runs: Array<Record<string, unknown>>;
   panel_runs: Array<Record<string, unknown>>;
+  workflow_runs: WorkflowRunSummary[];
   tests: Array<Record<string, unknown>>;
   a2a: {
     channels: Array<Record<string, unknown>>;
@@ -4380,6 +4382,17 @@ export function createBossApiClient(config: BossApiClientConfig) {
         "/v1/agent-studio/catalog",
         { query: { project_id: projectId } },
       );
+    },
+    validateStudioWorkflow(payload: {
+      project_id: string;
+      spec: Record<string, unknown>;
+      actor?: string;
+    }) {
+      return request<{
+        valid: boolean;
+        normalized_spec: Record<string, unknown>;
+        checks: Array<{ kind: string; passed: boolean; detail: string }>;
+      }>("POST", "/v1/agent-studio/workflows/validate", { body: payload });
     },
     createAgentDefinition(payload: Record<string, unknown>) {
       return request<Record<string, unknown>>(

@@ -218,6 +218,9 @@ Implementation is complete on `ai/codex/boss-256-agent-studio-a2a`.
 Agent Studio now owns immutable agent/panel configuration and test/run
 evidence while RoleSpec, project entitlements, policy, budget, and leases
 retain authority. Twelve seeded specialists and three Panels are executable.
+Its Workflow lane now exposes the canonical Workflow registry in the same
+workbench with creation, editable graph preview, side-effect-free validation,
+immutable publication, pinned execution, and recent-run visibility.
 
 The A2A bus uses Postgres as canonical truth and Redis Streams only as the
 delivery adapter. XADD/XACK are Receipt-backed; consumer loss uses XAUTOCLAIM
@@ -230,3 +233,8 @@ tests; Ruff, TypeScript, OpenAPI YAML, diff checks, optimized Next build,
 desktop/responsive browser QA, and two real-Redis lifecycle proofs. Draft PR
 #88 is cleanly mergeable against `main`; Plane BOSS-256–266 carry the commit,
 PR, and validation evidence and remain In Progress until merge.
+
+Post-workflow-lane evidence is also green: 12 focused Agent Studio/Workflow
+runtime tests, all 121 web tests, Ruff, TypeScript, diff checks, and the
+optimized Next production build. Draft validation proves graph reachability,
+typed bindings, and bounds without publishing or executing work.

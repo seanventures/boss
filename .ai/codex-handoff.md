@@ -525,6 +525,10 @@ Slice complete; accelerating full product with parallel agents.
   leased deterministic specialist execution, attributed Panel fan-out and
   consolidation, twelve seeded specialists, three seeded Panels, and a
   responsive live Agent Studio workbench.
+- Delivered Workflow Studio lane: canonical Workflow definitions and recent
+  runs in the catalog, live draft graph preview, no-side-effect validation,
+  create-and-publish, immutable version publication, and pinned execution
+  through the existing Workflow Registry/Runtime rather than a second engine.
 - Delivered A2A: canonical Postgres ledger/outbox/deliveries, Redis Streams
   adapter, leased Receipt-backed XADD, consumer groups, filtered-cursor
   cleanup, visibility leases/XAUTOCLAIM, bounded retry/deadletter, actor-bound
@@ -537,7 +541,9 @@ Slice complete; accelerating full product with parallel agents.
 - Validation: 121 web and 938 Python tests pass (four intentional external/live
   skips); 39 focused tests, Ruff, TypeScript, OpenAPI YAML, diff checks,
   optimized build, responsive browser QA, and real Redis delivery/reclaim
-  proofs pass.
+  proofs pass. The Workflow Studio follow-up additionally passes 12 focused
+  Agent Studio/Workflow runtime tests, the full 121-test web suite,
+  TypeScript, Ruff, diff checks, and the optimized production build.
 - Draft PR: https://github.com/seanheiney/boss/pull/88. Implementation commit:
   `a2daccfa5d81f0b1687c3e77925e981820274375`. GitHub reports the PR cleanly
   mergeable against `main`.
