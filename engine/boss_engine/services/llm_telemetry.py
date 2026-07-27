@@ -50,6 +50,24 @@ def get_llm_context() -> dict:
     return dict(_llm_ctx.get())
 
 
+# Which AGENT a pipeline stage belongs to — derived at write time so per-agent spend
+# ($/qa vs $/implementer vs $/reviewer) is a plain GROUP BY, no joins (BOSS-280 P1).
+STAGE_ROLES = {
+    "standards": "architect", "spec": "architect", "plan": "architect",
+    "review_plan": "architect", "design": "architect",
+    "write_tests": "qa",
+    "implement": "software_engineer", "repair": "software_engineer",
+    "review_code": "reviewer", "consistency_check": "reviewer",
+    "security_check": "security_reviewer",
+    "check_tests": "qa", "run_all_tests": "qa",
+    "guest": "software_engineer", "solo": "software_engineer",
+}
+
+
+def role_for_stage(stage: Optional[str]) -> Optional[str]:
+    return STAGE_ROLES.get((stage or "").strip().lower())
+
+
 def record_llm_call(
     *,
     engine_name: str,
@@ -79,22 +97,26 @@ def record_llm_call(
             c.execute(
                 text("""
                     INSERT INTO llm_calls (
-                        id, project_id, code_task_run_id, stage, engine, model,
-                        prompt_tokens, completion_tokens, total_tokens, cost_usd_micros,
+                        id, project_id, code_task_run_id, stage, engine, model, role,
+                        prompt_tokens, completion_tokens, total_tokens,
+                        cache_read_tokens, cache_write_tokens, cost_usd_micros,
                         price_estimated, latency_ms, retries, turns, ok, error)
-                    VALUES (:id, :p, :run, :stage, :eng, :model, :pt, :ct, :tt, :cost,
-                            :pe, :lat, :retries, :turns, :ok, :err)
+                    VALUES (:id, :p, :run, :stage, :eng, :model, :role, :pt, :ct, :tt,
+                            :crt, :cwt, :cost, :pe, :lat, :retries, :turns, :ok, :err)
                 """),
                 {
                     "id": f"llmc_{uuid4().hex[:20]}",
                     "p": ctx.get("project_id"),
                     "run": ctx.get("run_id"),
                     "stage": stage or ctx.get("stage"),
+                    "role": role_for_stage(stage or ctx.get("stage")),
                     "eng": engine_name,
                     "model": model or None,
                     "pt": int(u.get("prompt_tokens") or 0),
                     "ct": int(u.get("completion_tokens") or 0),
                     "tt": int(u.get("total_tokens") or 0),
+                    "crt": int(u.get("cache_read_tokens") or 0),
+                    "cwt": int(u.get("cache_write_tokens") or 0),
                     "cost": int(cost_usd_micros or 0),
                     "pe": price_estimated,
                     "lat": int(latency_ms or 0),

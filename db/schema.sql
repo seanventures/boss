@@ -2573,3 +2573,9 @@ CREATE TABLE IF NOT EXISTS reliability_policies (
     CHECK (max_auto_severity IN ('info', 'warning', 'critical')),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- ── Cost governance P1 (BOSS-280): per-agent attribution + cache-aware pricing ─
+ALTER TABLE llm_calls ADD COLUMN IF NOT EXISTS role TEXT;
+ALTER TABLE llm_calls ADD COLUMN IF NOT EXISTS cache_read_tokens INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE llm_calls ADD COLUMN IF NOT EXISTS cache_write_tokens INTEGER NOT NULL DEFAULT 0;
+CREATE INDEX IF NOT EXISTS idx_llm_calls_role ON llm_calls(project_id, role, created_at DESC);

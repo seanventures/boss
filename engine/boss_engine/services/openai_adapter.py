@@ -87,8 +87,15 @@ def price_for_model(model: str) -> tuple[float, float, bool]:
     return (*DEFAULT_PRICE, False)
 
 
+# Cache pricing multipliers vs the input rate (Anthropic: reads 0.1x, 5-min writes 1.25x;
+# OpenAI cached input is 0.25-0.5x — 0.1/1.25 is the conservative Anthropic default since
+# that's the engine most of our cache traffic rides). Override via env if a provider differs.
+CACHE_READ_MULT = 0.1
+CACHE_WRITE_MULT = 1.25
+
+
 def estimate_cost_usd_micros(usage: dict) -> int:
-    """micros = prompt_tokens * input_$/Mtok + completion_tokens * output_$/Mtok.
+    """micros = prompt*input + completion*output + cache_read*input*0.1 + cache_write*input*1.25.
 
     If the backend already reported an exact cost (e.g. the Claude CLI returns
     total_cost_usd per call), honor that instead of the token price table."""
@@ -97,7 +104,11 @@ def estimate_cost_usd_micros(usage: dict) -> int:
     inp, out, _ = price_for_model(str(usage.get("model") or ""))
     prompt = int(usage.get("prompt_tokens") or 0)
     completion = int(usage.get("completion_tokens") or 0)
-    return int(round(prompt * inp + completion * out))
+    cache_read = int(usage.get("cache_read_tokens") or 0)
+    cache_write = int(usage.get("cache_write_tokens") or 0)
+    return int(round(prompt * inp + completion * out
+                     + cache_read * inp * CACHE_READ_MULT
+                     + cache_write * inp * CACHE_WRITE_MULT))
 
 
 def _usage_from_response(response, model: str) -> dict:
