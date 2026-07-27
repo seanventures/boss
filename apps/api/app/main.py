@@ -10326,6 +10326,11 @@ def budget_status(scope_type: str, scope_id: str) -> BudgetStatusResponse:
             active_reservations_count=snapshot["active_reservations_count"],
             top_cost_drivers=snapshot["top_cost_drivers"],
             operational_intensity=snapshot.get("operational_intensity"),
+            soft_cap_pct=snapshot.get("soft_cap_pct"),
+            auto_lite_mode_pct=snapshot.get("auto_lite_mode_pct"),
+            freeze_provisioning_pct=snapshot.get("freeze_provisioning_pct"),
+            freeze_tier2_pct=snapshot.get("freeze_tier2_pct"),
+            tier2_frozen=snapshot.get("tier2_frozen"),
         )
 
 
