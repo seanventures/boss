@@ -547,5 +547,9 @@ Slice complete; accelerating full product with parallel agents.
 - Draft PR: https://github.com/seanheiney/boss/pull/88. Implementation commit:
   `a2daccfa5d81f0b1687c3e77925e981820274375`. GitHub reports the PR cleanly
   mergeable against `main`.
+- Workflow Studio implementation is `d5dc58105b598209868543629526cfd6a5bd3b59`;
+  current contributor `main` through BOSS-267 was merged without conflict at
+  code/integration head `d0d3a6354a1214459db23e212c1467cd292d1506`.
+  GitHub still reports draft PR #88 cleanly mergeable.
 - Plane BOSS-256–266 remain In Progress until the PR is merged. Attach the
   final commit/PR and merge evidence before moving them to Done.

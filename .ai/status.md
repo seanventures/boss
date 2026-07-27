@@ -238,3 +238,8 @@ Post-workflow-lane evidence is also green: 12 focused Agent Studio/Workflow
 runtime tests, all 121 web tests, Ruff, TypeScript, diff checks, and the
 optimized Next production build. Draft validation proves graph reachability,
 typed bindings, and bounds without publishing or executing work.
+
+Contributor `main` tip `98ab5f4` (BOSS-267) was merged without conflict at
+code/integration head `d0d3a6354a1214459db23e212c1467cd292d1506`;
+22/22 combined Studio, Workflow Runtime, and repo-host tests pass, and GitHub
+reports draft PR #88 cleanly mergeable.
