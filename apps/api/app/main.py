@@ -1297,9 +1297,26 @@ def project_id_for_deployment_run(connection, deployment_run_id: str) -> str:
     return row["project_id"]
 
 
+def derive_task_status(row) -> str:
+    """BOSS-281 — the board lifecycle a task is ACTUALLY in, derived from its activity:
+    the tasks table only ever holds open/archived, so board columns must come from the
+    latest job + pending decisions."""
+    job = str(row.get("latest_job_status") or "").lower()
+    if row.get("has_open_decision"):
+        return "review"
+    if job in ("failed", "deadlettered", "cancelled"):
+        return "blocked"
+    if job == "succeeded":
+        return "done"
+    if job in ("running", "leased", "executing"):
+        return "in_progress"
+    return str(row.get("status") or "open")
+
+
 def task_summary_from_row(row) -> TaskSummary:
     return TaskSummary(
         id=row["id"],
+        derived_status=derive_task_status(row) if "latest_job_status" in row else None,
         project_id=row["project_id"],
         title=row["title"],
         description=row["description"],
@@ -6333,12 +6350,19 @@ def list_tasks(
         rows = connection.execute(
             text(
                 """
-                SELECT id, project_id, title, description, status, priority, risk_tier,
-                       owner_role_id, parent_task_id, dependency_task_ids, due_at,
-                       data_boundary, dedupe_key, created_at, updated_at
-                FROM tasks
-                WHERE project_id = :project_id AND status <> 'archived'
-                ORDER BY created_at DESC
+                SELECT t.id, t.project_id, t.title, t.description, t.status, t.priority,
+                       t.risk_tier, t.owner_role_id, t.parent_task_id, t.dependency_task_ids,
+                       t.due_at, t.data_boundary, t.dedupe_key, t.created_at, t.updated_at,
+                       j.status AS latest_job_status,
+                       EXISTS(SELECT 1 FROM decisions d WHERE d.task_id = t.id
+                              AND d.status IN ('pending', 'delegated')) AS has_open_decision
+                FROM tasks t
+                LEFT JOIN LATERAL (
+                    SELECT status FROM jobs WHERE task_id = t.id
+                    ORDER BY created_at DESC LIMIT 1
+                ) j ON TRUE
+                WHERE t.project_id = :project_id AND t.status <> 'archived'
+                ORDER BY t.created_at DESC
                 LIMIT :limit OFFSET :offset
                 """
             ),

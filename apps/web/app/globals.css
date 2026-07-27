@@ -580,6 +580,7 @@ h1, h2, h3, h4, h5, h6 {
 .bx-content[data-active="meetings"] .frame > section:is([data-area="meetings"], :has([data-area="meetings"])),
 .bx-content[data-active="code_tasks"] .frame > section:is([data-area="code_tasks"], :has([data-area="code_tasks"])),
 .bx-content[data-active="reliability"] .frame > section:is([data-area="reliability"], :has([data-area="reliability"])),
+.bx-content[data-active="foundations"] .frame > section:is([data-area="foundations"], :has([data-area="foundations"])),
 .bx-content[data-active="discovery"] .frame > section:is([data-area="discovery"], :has([data-area="discovery"])),
 .bx-content[data-active="budget"] .frame > section:is([data-area="budget"], :has([data-area="budget"])),
 .bx-content[data-active="pipeline"] .frame > section:is([data-area="pipeline"], :has([data-area="pipeline"])),

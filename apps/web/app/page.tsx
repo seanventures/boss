@@ -125,6 +125,9 @@ import { MeetingsHome } from "./meeting-room-ui";
 import { fetchCodeTasksFeed, fetchPreviews } from "../lib/code-tasks";
 import { CodeTasksHome } from "./code-tasks-ui";
 import { fetchReliabilityFeed } from "../lib/reliability";
+import { fetchCostInsights, fetchLlmSpend } from "../lib/budget-status";
+import { CostInsightsCard, LlmSpendCard, BudgetThresholdsCard } from "./cost-governance-ui";
+import { FoundationsHome } from "./foundations-ui";
 import { ReliabilityHome } from "./reliability-ui";
 import { fetchDiscoveriesFeed } from "../lib/discoveries";
 import { DiscoveriesHome } from "./discoveries-ui";
@@ -590,6 +593,10 @@ export default async function HomePage({ searchParams }: HomePageProps) {
       fetchWorkflowFeed(activeProjectId),
     ]);
   const reliabilityFeed = await fetchReliabilityFeed(activeProjectId);
+  const [costInsights, llmSpend] = await Promise.all([
+    fetchCostInsights(activeProjectId),
+    fetchLlmSpend(activeProjectId),
+  ]);
 
   const deadletterCount = deadletters.items.length;
   const disableCommandEntry = !status.apiReachable || !status.databaseConnected;
@@ -1429,6 +1436,23 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               </>
             )}
           </article>
+        </section>
+
+        <section className="panel-stack" data-area="budget" aria-label="Cost governance">
+          <div className="section-head">
+            <div>
+              <span className="eyebrow">Cost Governance</span>
+              <h2>Real model spend, enforced thresholds, and the top cost saves.</h2>
+            </div>
+            <p className="status-meta">
+              llm_calls is the ledger of record — per agent, per model, cache leverage.
+            </p>
+          </div>
+          <div className="stack-grid" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))" }}>
+            <CostInsightsCard feed={costInsights} />
+            <LlmSpendCard feed={llmSpend} />
+            <BudgetThresholdsCard status={budgetStatus} />
+          </div>
         </section>
 
         <section className="panel-stack" data-area="budget" aria-label="FinOps reconciler">
@@ -6119,6 +6143,16 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             apiReachable={codeTasksFeed.apiReachable}
             previews={previewFeed}
           />
+        </section>
+
+        <section className="panel-stack" data-area="foundations" aria-label="Foundations">
+          <div className="section-head">
+            <div>
+              <span className="eyebrow">Foundations</span>
+              <h2>The BOSS design system — rendered from the live tokens.</h2>
+            </div>
+          </div>
+          <FoundationsHome />
         </section>
 
         <section className="panel-stack" data-area="reliability" aria-label="Reliability">

@@ -804,6 +804,8 @@ export type TaskSummary = {
   title: string;
   description?: string;
   status: string;
+  /** BOSS-281: activity-derived lifecycle (latest job + pending decisions). */
+  derived_status?: string;
   owner_role_id?: string;
   parent_task_id?: string;
   dependency_task_ids: string[];

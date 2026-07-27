@@ -23,6 +23,7 @@ import {
   List,
   MagnifyingGlass,
   Heartbeat,
+  PaintBrush,
   Pulse,
   Robot,
   Rows,
@@ -52,6 +53,7 @@ type AreaId =
   | "infra"
   | "capabilities"
   | "sandboxes"
+  | "foundations"
   | "ops"
   | "org"
   | "enterprise";
@@ -84,6 +86,7 @@ const ICONS = {
   reliability: Heartbeat,
   discovery: MagnifyingGlass,
   sandboxes: TerminalWindow,
+  foundations: PaintBrush,
 } as const;
 
 const AREAS: AreaDef[] = [
@@ -105,6 +108,7 @@ const AREAS: AreaDef[] = [
   { id: "infra", label: "Infrastructure", sub: "Providers, resources, and AI capacity", group: "Platform", icon: ICONS.infra },
   { id: "capabilities", label: "Capabilities", sub: "Agent tools & MCP servers — discover, audit, extend", group: "Platform", icon: ICONS.capabilities },
   { id: "sandboxes", label: "Sandboxes", sub: "Execution plane — inspect sandboxes & governed console", group: "Platform", icon: ICONS.sandboxes },
+  { id: "foundations", label: "Foundations", sub: "Design system — tokens, type, motion, status language", group: "Platform", icon: ICONS.foundations },
   { id: "enterprise", label: "Enterprise", sub: "Editions, identity, and account connect", group: "Platform", icon: ICONS.enterprise },
 ];
 

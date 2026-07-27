@@ -111,3 +111,23 @@ def test_release_with_zero_spend_releases_cleanly(engine):
         row = c.execute(text("SELECT status FROM budget_reservations WHERE id = :id"),
                         {"id": rid}).scalar_one()
         assert row == "released"
+
+
+# --- BOSS-281: task board derived status --------------------------------------
+def test_tasks_endpoint_derives_lifecycle_from_jobs(engine, client):
+    from boss_engine.services.core import make_id as mk
+    with begin(engine) as c:
+        tid = mk("task")
+        c.execute(text(
+            "INSERT INTO tasks (id, project_id, title, status, priority, risk_tier, dedupe_key) "
+            "VALUES (:id, :p, 'board task', 'open', 'medium', 1, :dk)"),
+            {"id": tid, "p": PID, "dk": mk("dk")})
+        c.execute(text(
+            "INSERT INTO jobs (id, project_id, task_id, kind, status, payload) "
+            "VALUES (:id, :p, :t, 'code.task', 'running', '{}'::jsonb)"),
+            {"id": mk("job"), "p": PID, "t": tid})
+    r = client.get("/v1/tasks", params={"project_id": PID, "limit": 50})
+    assert r.status_code == 200
+    mine = next(t for t in r.json()["items"] if t["id"] == tid)
+    assert mine["status"] == "open"
+    assert mine["derived_status"] == "in_progress"     # latest job drives the board column

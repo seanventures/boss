@@ -2198,6 +2198,10 @@ class TaskSummary(BaseModel):
     title: str
     description: Optional[str] = None
     status: str
+    # BOSS-281: activity-derived lifecycle (from the task's latest job + pending decisions) —
+    # the tasks table itself only ever holds open/archived, which made every board column
+    # except Backlog permanently empty.
+    derived_status: Optional[str] = None
     owner_role_id: Optional[str] = None
     parent_task_id: Optional[str] = None
     dependency_task_ids: list[str] = Field(default_factory=list)

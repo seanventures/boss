@@ -1,5 +1,9 @@
+"use client";
+
 import type { OpsQueueJobItem } from "@boss/api-client";
 import React from "react";
+
+import { pushUrlParam } from "./url-nav";
 
 import type { ReceiptFeedItem } from "../lib/receipts";
 import type { RoleFeedItem } from "../lib/roles";
@@ -29,6 +33,13 @@ function normalizedIdentifier(value?: string): string {
   return (value ?? "").trim().toLowerCase().replaceAll("-", "_");
 }
 
+export function boardStatus(task: { status: string; derivedStatus?: string }): string {
+  // BOSS-281: the tasks table only ever holds open/archived — the ACTUAL lifecycle is
+  // derived server-side from the task's latest job + pending decisions.
+  return task.derivedStatus || task.status;
+}
+
+
 export function taskBoardColumn(status: string): TaskBoardColumn {
   const value = status.toLowerCase();
   if (["done", "completed", "succeeded", "shipped"].includes(value)) return "done";
@@ -46,7 +57,7 @@ export function taskBoardColumn(status: string): TaskBoardColumn {
 
 function stateForTask(task?: TaskFeedItem): AgentOperationalState {
   if (!task) return "idle";
-  const column = taskBoardColumn(task.status);
+  const column = taskBoardColumn(boardStatus(task));
   if (column === "blocked") return "blocked";
   if (column === "in_progress") return "running";
   if (column === "review" || column === "done") return "verified";
@@ -76,7 +87,7 @@ function taskMatchesRole(task: TaskFeedItem, role: RoleFeedItem): boolean {
 
 function currentTaskLabel(task?: TaskFeedItem): string {
   if (!task) return "No assigned work";
-  const column = taskBoardColumn(task.status);
+  const column = taskBoardColumn(boardStatus(task));
   if (column === "done") return `Last verified · ${task.title}`;
   if (column === "review") return `In review · ${task.title}`;
   if (column === "backlog") return `Queued · ${task.title}`;
@@ -198,7 +209,7 @@ export function MissionTaskBoard({
   return (
     <div className="mission-task-board" aria-label="Task status board">
       {TASK_BOARD_COLUMNS.map((column) => {
-        const columnTasks = tasks.filter((task) => taskBoardColumn(task.status) === column.id);
+        const columnTasks = tasks.filter((task) => taskBoardColumn(boardStatus(task)) === column.id);
         return (
           <section className={`mission-task-column column-${column.id}`} key={column.id}>
             <header>
@@ -208,9 +219,29 @@ export function MissionTaskBoard({
             <div className="mission-task-list">
               {columnTasks.map((task) => {
                 const receiptCount = receiptCountForTask(task.id, jobs, receipts);
-                const state = taskBoardColumn(task.status);
+                const state = taskBoardColumn(boardStatus(task));
                 return (
-                  <article className="mission-task-card" key={task.id}>
+                  <article
+                    className="mission-task-card"
+                    key={task.id}
+                    role="link"
+                    tabIndex={0}
+                    style={{ cursor: "pointer" }}
+                    aria-label={`Open task ${task.title}`}
+                    onClick={() => {
+                      pushUrlParam("task", task.id);
+                      window.dispatchEvent(new PopStateEvent("popstate"));
+                      document.querySelector(".wf-board")?.scrollIntoView({
+                        behavior: "smooth", block: "start" });
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        pushUrlParam("task", task.id);
+                        window.dispatchEvent(new PopStateEvent("popstate"));
+                      }
+                    }}
+                  >
                     <span className="task-priority" title={task.id}>
                       {task.priority} · {compactTaskId(task.id)}
                     </span>
@@ -226,7 +257,7 @@ export function MissionTaskBoard({
                         {receiptCount} {receiptCount === 1 ? "receipt" : "receipts"}
                       </span>
                       <span className={`mission-task-state state-${state}`}>
-                        {task.status.replaceAll("_", " ")}
+                        {boardStatus(task).replaceAll("_", " ")}
                       </span>
                     </footer>
                     <time dateTime={task.updatedAt}>{formatDateTime(task.updatedAt)}</time>
