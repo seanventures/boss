@@ -2728,3 +2728,174 @@ select.input:focus,
     transition-duration: 0.01ms !important;
   }
 }
+
+/* ============================================================================
+   Ported from feat/ui-redesign-design-system — Approvals legibility + Evidence
+   code-task receipt (commits 4be2605, 97a3eaa, 8791e86, 79599a8), adapted to
+   this design system's tokens. Appended-only section.
+   ============================================================================ */
+
+/* Decision card — task-under-review banner + on-approve effect hint */
+.decision-task {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 11px 14px;
+  margin-bottom: 14px;
+  border: 1px solid var(--panel-border);
+  border-left: 2px solid var(--teal);
+  border-radius: var(--r-sm);
+  background: var(--raised);
+}
+
+.decision-task-eyebrow {
+  color: var(--accent-text);
+  font-family: var(--mono);
+  font-size: 0.6rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.decision-task-title {
+  color: var(--ink);
+  font-family: var(--display);
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.decision-task-id {
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 0.7rem;
+}
+
+.decision-task .decision-task-status {
+  margin-left: auto;
+}
+
+.decision-task--none {
+  border-left-color: var(--strong);
+}
+
+.decision-task--none .decision-task-eyebrow {
+  color: var(--muted);
+}
+
+.decision-effect {
+  flex: 1 1 100%; /* full row inside the flex .decision-actions form */
+  margin: 0 0 4px;
+  padding: 8px 11px;
+  border: 1px solid var(--panel-border);
+  border-radius: var(--r-sm);
+  background: var(--raised);
+  color: var(--ink-soft);
+  font-size: 0.74rem;
+  line-height: 1.45;
+}
+
+/* Plan-approval decision — WHY + the collapsible plan/automated review */
+.decision-plan {
+  margin-bottom: 14px;
+}
+
+.decision-plan-why {
+  margin: 0 0 10px;
+  padding: 11px 13px;
+  border: 1px solid var(--panel-border);
+  border-left: 2px solid var(--amber);
+  border-radius: var(--r-sm);
+  background: var(--amber-soft);
+  color: var(--ink-soft);
+  font-size: 0.8rem;
+  line-height: 1.5;
+}
+
+.decision-plan-details {
+  border: 1px solid var(--panel-border);
+  border-radius: var(--r-sm);
+  background: var(--raised);
+}
+
+.decision-plan-details > summary {
+  cursor: pointer;
+  padding: 9px 13px;
+  color: var(--accent-text);
+  font-family: var(--mono);
+  font-size: 0.62rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  user-select: none;
+}
+
+.decision-plan-sec {
+  padding: 2px 13px 12px;
+  border-top: 1px solid var(--hair-2);
+}
+
+.decision-plan-sec h4 {
+  margin: 10px 0 6px;
+  color: var(--faint);
+  font-family: var(--mono);
+  font-size: 0.58rem;
+  font-weight: 500;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+
+.decision-plan-sec pre {
+  margin: 0;
+  max-height: 320px;
+  overflow: auto;
+  color: var(--ink-soft);
+  font-family: var(--mono);
+  font-size: 0.68rem;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* Evidence — governed code-task receipt variant */
+.status-text.blocked {
+  color: var(--red);
+}
+
+/* Four metrics only above the 760px stack breakpoint — below it the base
+   .mission-receipt-metrics mobile rule (grid-template-columns: 1fr) applies. */
+@media (min-width: 761px) {
+  .mission-receipt-metrics--four {
+    grid-template-columns: repeat(4, 1fr);
+  }
+}
+
+.mission-receipt-changes .add {
+  color: var(--green);
+}
+
+.mission-receipt-changes .del {
+  color: var(--red);
+}
+
+.mission-receipt-files {
+  display: grid;
+  gap: 5px;
+  padding: 15px 18px;
+  border-top: 1px solid var(--hair-2);
+}
+
+.mission-receipt-files code {
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 0.62rem;
+}
+
+.mission-receipt-files a {
+  color: var(--teal);
+  font-family: var(--mono);
+  font-size: 0.62rem;
+  text-decoration: none;
+}
+
+.mission-receipt-files a:hover {
+  text-decoration: underline;
+}

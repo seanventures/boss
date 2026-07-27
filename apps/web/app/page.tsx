@@ -130,6 +130,7 @@ import { fetchReliabilityFeed } from "../lib/reliability";
 import { fetchCostInsights, fetchLlmSpend } from "../lib/budget-status";
 import { CostInsightsCard, LlmSpendCard, BudgetThresholdsCard } from "./cost-governance-ui";
 import { FoundationsHome } from "./foundations-ui";
+import { ComponentsScreen } from "./design-system-showcase";
 import { ReliabilityHome } from "./reliability-ui";
 import { fetchDiscoveriesFeed } from "../lib/discoveries";
 import { DiscoveriesHome } from "./discoveries-ui";
@@ -242,6 +243,44 @@ function decisionRuleLabel(decision: DecisionFeedItem): string {
   if (map[action]) return map[action];
   if (action) return action.replaceAll("_", " ").replace(/\./g, " · ");
   return "governance gate";
+}
+
+// Plain-English description of what approving a decision actually triggers,
+// keyed off recommendation.action (mirrors decisions._handle_approved_follow_on).
+// Makes the otherwise-silent follow-on legible so "approve did nothing" is clear.
+function approvalEffectLabel(recommendation: Record<string, unknown>): string {
+  const action = typeof recommendation.action === "string" ? recommendation.action : "";
+  // Meeting PRD publish also auto-starts a governed code task.
+  if (
+    action === "execute_agent_tool" &&
+    (recommendation.start_code_task === true || recommendation.tool === "publish_document")
+  ) {
+    return "Approving publishes the PRD and starts a governed code task for this task.";
+  }
+  switch (action) {
+    case "review_plan_draft": return "Approving queues a PR proposal (code work) for this task.";
+    case "resume_code_task": return "Approving resumes the paused code task.";
+    case "review_pull_request": return "Approving authorizes the pull-request merge.";
+    case "review_deployment": return "Approving authorizes the deployment.";
+    case "review_infra_provisioning": return "Approving authorizes infrastructure provisioning.";
+    case "execute_agent_tool": return "Approving runs the deferred agent tool now.";
+    case "resume_agent_run": return "Approving resumes the paused agent run.";
+    case "role.autonomy_change": return "Approving applies the role autonomy change.";
+    case "github.community.dispatch_plan": return "Approving dispatches the community plan into tasks.";
+    case "github.community.merge_authorization": return "Approving records merge authorization (maintainer still merges).";
+    case "self_improvement.begin_canary":
+    case "self_improvement.rollout": return "Approving proceeds with the self-improvement rollout.";
+    default: return "Approving records your decision — this type has no automated follow-on (no code task is started).";
+  }
+}
+
+function formatMsDuration(ms?: number): string {
+  if (!ms || ms <= 0) return "—";
+  if (ms < 1000) return `${Math.round(ms)}ms`;
+  const s = ms / 1000;
+  if (s < 60) return `${s.toFixed(1)}s`;
+  const m = Math.floor(s / 60);
+  return `${m}m ${Math.round(s % 60)}s`;
 }
 
 function formatDeadline(deadlineAt?: string): string {
@@ -5882,31 +5921,155 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               <h2>Holistic view — throughput, cost, and agent performance.</h2>
             </div>
           </div>
-          {receipts.items[0] ? (
-            <article className="mission-evidence-receipt">
-              <header>
-                <span className="mission-receipt-avatar">RC</span>
-                <span>
-                  <strong>{titleCaseToken(receipts.items[0].effectKind)}</strong>
-                  <small>{receipts.items[0].id} · {formatDateTime(receipts.items[0].createdAt)}</small>
-                </span>
-                <span className="status-text verified"><span className="dot green" />{receipts.items[0].status}</span>
-              </header>
-              <div className="mission-receipt-metrics">
-                <span><small>Provider ref</small><strong>{receipts.items[0].providerRef ?? "Local control plane"}</strong></span>
-                <span><small>Job lineage</small><strong>{receipts.items[0].createdByJobId ?? "Canonical event"}</strong></span>
-                <span><small>Dedupe key</small><strong>{receipts.items[0].dedupeKey}</strong></span>
-              </div>
-              <div className="mission-receipt-verification">
-                <span className="eyebrow">Verification</span>
-                <p><span className="dot green" aria-hidden /> Durable receipt recorded in the control plane</p>
-                <p><span className="dot green" aria-hidden /> Unique dedupe key prevents duplicate effects</p>
-                <p><span className="dot green" aria-hidden /> Provider and job lineage remain auditable</p>
-              </div>
-            </article>
-          ) : (
-            <p className="empty-state">No effect receipts have been recorded for this project yet.</p>
-          )}
+          {(() => {
+            const receipt = receipts.items[0];
+            // Prefer a governed code-task receipt: it carries the real changes /
+            // tests / cost / files behind the effect. Match the latest receipt to
+            // its run when possible, else fall back to any run with evidence.
+            const codeTask =
+              (receipt
+                ? codeTasksFeed.items.find(
+                    (ct) =>
+                      (receipt.createdByJobId?.includes(ct.id) ?? false) ||
+                      receipt.dedupeKey.includes(ct.id) ||
+                      (ct.pull_request_url != null && receipt.providerRef === ct.pull_request_url),
+                  )
+                : undefined) ??
+              codeTasksFeed.items.find(
+                (ct) =>
+                  ct.state &&
+                  (ct.state.additions != null ||
+                    ct.state.files_changed != null ||
+                    (ct.state.tests?.length ?? 0) > 0),
+              );
+            if (codeTask) {
+              const st = codeTask.state ?? {};
+              const tests = st.tests ?? [];
+              const testTotal = tests.length;
+              const testPass = tests.filter((t) => t.exit_code === 0).length;
+              const testDurationMs = tests.reduce((acc, t) => acc + (t.duration_ms ?? 0), 0);
+              const costMicros = st.cost_usd_micros ?? codeTask.usage?.cost_usd_micros;
+              const testsGreen = testTotal > 0 ? testPass === testTotal : st.tests_passed === true;
+              const verified = codeTask.status === "completed" && testsGreen;
+              const failed = codeTask.status === "failed" || codeTask.status === "blocked";
+              const modelName = st.model ?? codeTask.usage?.model;
+              const paths = st.paths ?? [];
+              const checks: { ok: boolean; label: string }[] = [];
+              if (st.tests_passed != null || testTotal > 0)
+                checks.push({
+                  ok: testsGreen,
+                  label: `Tests ${testTotal > 0 ? `pass (${testPass}/${testTotal})` : st.tests_passed ? "pass" : "did not pass"}`,
+                });
+              if (st.security_verdict)
+                checks.push({ ok: /pass|clean|ok|none/i.test(st.security_verdict), label: `Security scan — ${st.security_verdict}` });
+              if (st.reviewer_independent != null)
+                checks.push({ ok: st.reviewer_independent, label: "Independent reviewer signed off" });
+              if (st.regressions_ok != null)
+                checks.push({ ok: st.regressions_ok, label: "No regressions detected" });
+              if (st.consistency_verdict)
+                checks.push({ ok: /pass|ok|consistent/i.test(st.consistency_verdict), label: `Consistency — ${st.consistency_verdict}` });
+              if (checks.length === 0)
+                checks.push({ ok: verified, label: verified ? "Governed pipeline completed" : `Status — ${codeTask.status}` });
+              return (
+                <article className="mission-evidence-receipt">
+                  <header>
+                    <span className="mission-receipt-avatar">CT</span>
+                    <span>
+                      <strong>{codeTask.title}</strong>
+                      <small>
+                        {codeTask.id}
+                        {modelName ? ` · ${modelName}` : ""} · {codeTask.phase}
+                      </small>
+                    </span>
+                    <span className={`status-text ${verified ? "verified" : failed ? "blocked" : "running"}`}>
+                      <span className={`dot ${verified ? "green" : failed ? "red" : "teal"}`} />
+                      {verified ? "verified" : codeTask.status}
+                    </span>
+                  </header>
+                  <div className="mission-receipt-metrics mission-receipt-metrics--four">
+                    <span>
+                      <small>Changes</small>
+                      <strong className="mission-receipt-changes">
+                        {st.additions != null || st.deletions != null ? (
+                          <>
+                            <span className="add">+{st.additions ?? 0}</span>{" "}
+                            <span className="del">−{st.deletions ?? 0}</span>
+                          </>
+                        ) : (
+                          "—"
+                        )}
+                      </strong>
+                    </span>
+                    <span>
+                      <small>Tests</small>
+                      <strong>
+                        {testTotal > 0
+                          ? `${testPass}/${testTotal} passed`
+                          : st.tests_passed != null
+                            ? st.tests_passed
+                              ? "pass"
+                              : "fail"
+                            : "—"}
+                      </strong>
+                    </span>
+                    <span><small>Cost</small><strong>{costMicros != null ? formatMicros(costMicros) : "—"}</strong></span>
+                    <span><small>Test duration</small><strong>{formatMsDuration(testDurationMs)}</strong></span>
+                  </div>
+                  <div className="mission-receipt-verification">
+                    <span className="eyebrow">Verification</span>
+                    {checks.map((c, i) => (
+                      <p key={i}>
+                        <span className={`dot ${c.ok ? "green" : "red"}`} aria-hidden /> {c.label}
+                      </p>
+                    ))}
+                  </div>
+                  <div className="mission-receipt-files">
+                    <span className="eyebrow">
+                      Files changed{st.files_changed != null ? ` · ${st.files_changed}` : ""}
+                    </span>
+                    {paths.length > 0 ? (
+                      paths.slice(0, 14).map((p, i) => <code key={i}>{p}</code>)
+                    ) : (
+                      <code>{st.summary ?? "No file manifest recorded"}</code>
+                    )}
+                    {codeTask.pull_request_url ? (
+                      <a href={codeTask.pull_request_url} target="_blank" rel="noreferrer">
+                        → {codeTask.pull_request_url}
+                      </a>
+                    ) : null}
+                  </div>
+                </article>
+              );
+            }
+            if (receipt) {
+              return (
+                <article className="mission-evidence-receipt">
+                  <header>
+                    <span className="mission-receipt-avatar">RC</span>
+                    <span>
+                      <strong>{titleCaseToken(receipt.effectKind)}</strong>
+                      <small>{receipt.id} · {formatDateTime(receipt.createdAt)}</small>
+                    </span>
+                    <span className="status-text verified"><span className="dot green" />{receipt.status}</span>
+                  </header>
+                  <div className="mission-receipt-metrics">
+                    <span><small>Provider ref</small><strong>{receipt.providerRef ?? "Local control plane"}</strong></span>
+                    <span><small>Job lineage</small><strong>{receipt.createdByJobId ?? "Canonical event"}</strong></span>
+                    <span><small>Dedupe key</small><strong>{receipt.dedupeKey}</strong></span>
+                  </div>
+                  <div className="mission-receipt-verification">
+                    <span className="eyebrow">Verification</span>
+                    <p><span className="dot green" aria-hidden /> Durable receipt recorded in the control plane</p>
+                    <p><span className="dot green" aria-hidden /> Unique dedupe key prevents duplicate effects</p>
+                    <p><span className="dot green" aria-hidden /> Provider and job lineage remain auditable</p>
+                  </div>
+                </article>
+              );
+            }
+            return (
+              <p className="empty-state">No effect receipts have been recorded for this project yet.</p>
+            );
+          })()}
           <ReportsView report={report} />
         </section>
 
@@ -5972,6 +6135,16 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             </div>
           </div>
           <FoundationsHome />
+        </section>
+
+        <section className="panel-stack" data-area="components" aria-label="Components">
+          <div className="section-head">
+            <div>
+              <span className="eyebrow">Components</span>
+              <h2>The component library — buttons, composer, agent state, overlays.</h2>
+            </div>
+          </div>
+          <ComponentsScreen />
         </section>
 
         <section className="panel-stack" data-area="reliability" aria-label="Reliability">
@@ -6476,9 +6649,28 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                 const isPending =
                   decision.status === "pending" || decision.status === "delegated";
                 const isApproved = decision.status === "approved";
+                const linkedTask = decision.taskId
+                  ? tasks.items.find((task) => task.id === decision.taskId)
+                  : undefined;
 
                 return (
                   <article className="decision-card" key={decision.id}>
+                    {decision.taskId ? (
+                      <div className="decision-task">
+                        <span className="decision-task-eyebrow">Task under review</span>
+                        <span className="decision-task-title">{linkedTask?.title ?? "Linked task"}</span>
+                        <span className="decision-task-id">T-{decision.taskId.slice(-4)}</span>
+                        {linkedTask ? (
+                          <span className="status-text decision-task-status">
+                            {titleCaseToken(linkedTask.derivedStatus ?? linkedTask.status)}
+                          </span>
+                        ) : null}
+                      </div>
+                    ) : (
+                      <div className="decision-task decision-task--none">
+                        <span className="decision-task-eyebrow">Control-plane decision · no linked task</span>
+                      </div>
+                    )}
                     <div className="decision-head">
                       <div>
                         <span className={`pill${isPending ? " warn" : ""}`}>
@@ -6493,6 +6685,39 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                         <span>Deadline: {formatDeadline(decision.deadlineAt)}</span>
                       </div>
                     </div>
+
+                    {(() => {
+                      // Plan-approval decision (Wire-Phase 2b): surface WHY it needs a human
+                      // plus the actual plan + automated review so approval is informed.
+                      const rec = decision.recommendation;
+                      if (rec.action !== "resume_code_task") return null;
+                      const why = typeof rec.why === "string" ? rec.why : "";
+                      const plan = typeof rec.plan === "string" ? rec.plan : "";
+                      const review = typeof rec.plan_review === "string" ? rec.plan_review : "";
+                      if (!why && !plan && !review) return null;
+                      return (
+                        <div className="decision-plan">
+                          {why ? <p className="decision-plan-why">{why}</p> : null}
+                          {plan || review ? (
+                            <details className="decision-plan-details">
+                              <summary>Read the technical plan{review ? " & automated review" : ""}</summary>
+                              {plan ? (
+                                <div className="decision-plan-sec">
+                                  <h4>Technical plan</h4>
+                                  <pre>{plan}</pre>
+                                </div>
+                              ) : null}
+                              {review ? (
+                                <div className="decision-plan-sec">
+                                  <h4>Automated plan review</h4>
+                                  <pre>{review}</pre>
+                                </div>
+                              ) : null}
+                            </details>
+                          ) : null}
+                        </div>
+                      );
+                    })()}
 
                     <div className="decision-grid">
                       <div>
@@ -6530,6 +6755,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                           />
                           <input type="hidden" name="project_id" value={activeProjectId} />
                           <input type="hidden" name="actor" value={activeActorId} />
+                          <p className="decision-effect">{approvalEffectLabel(decision.recommendation)}</p>
                           <textarea
                             aria-label={`Decision note for ${decision.id}`}
                             className="textarea decision-note"

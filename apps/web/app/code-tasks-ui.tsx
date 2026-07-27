@@ -2,11 +2,12 @@
 
 import { useState, useEffect, useActionState } from "react";
 import { useRouter } from "next/navigation";
-import type { CodeTaskRun, PreviewRec } from "@boss/api-client";
+import type { CodeTaskRun, LlmCallRow, PreviewRec } from "@boss/api-client";
 
 import {
   confirmCodeTaskFeedbackAction,
   createCodeTaskAction,
+  getCodeTaskActivityAction,
   startPreviewAction,
   submitCodeTaskFeedbackAction,
   overrideCodeTaskAction,
@@ -311,6 +312,61 @@ function fmtDuration(ms: number): string {
   return rs ? `${m}m ${rs}s` : `${m}m`;
 }
 
+// Per-stage model-call detail (the internal "why is this slow"): model, turns, latency,
+// retries, cost, errors per governed stage. Auto-refreshes while the task is live.
+function CodeTaskActivity({ runId, live }: { runId: string; live: boolean }) {
+  const [open, setOpen] = useState(live);
+  const [calls, setCalls] = useState<LlmCallRow[]>([]);
+  const [loaded, setLoaded] = useState(false);
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    const load = async () => {
+      const data = await getCodeTaskActivityAction(runId);
+      if (!cancelled) {
+        setCalls(data);
+        setLoaded(true);
+      }
+    };
+    void load();
+    const id = live ? setInterval(load, 4000) : undefined;
+    return () => {
+      cancelled = true;
+      if (id) clearInterval(id);
+    };
+  }, [runId, open, live]);
+  return (
+    <div className="ct-activity-wrap">
+      <button type="button" className="cap-btn" onClick={() => setOpen((o) => !o)}>
+        {open ? "Hide agent activity" : "Show agent activity"}
+      </button>
+      {open ? (
+        <div className="ct-activity">
+          {!loaded ? (
+            <p className="detail">Loading…</p>
+          ) : calls.length === 0 ? (
+            <p className="detail">No model calls recorded yet — the current stage hasn’t returned a call.</p>
+          ) : (
+            calls.map((c, i) => (
+              <div className={`ct-call${c.ok ? "" : " err"}`} key={i}>
+                <span className="ct-call-stage">{PHASE_LABEL[c.stage] ?? c.stage}</span>
+                <span className="ct-call-model">{c.model || c.engine}</span>
+                <span>{c.turns} turn{c.turns === 1 ? "" : "s"}</span>
+                <span className="ct-call-lat">{fmtDuration(c.latency_ms)}</span>
+                {c.retries > 0 ? (
+                  <span className="ct-call-retry">{c.retries} retr{c.retries === 1 ? "y" : "ies"}</span>
+                ) : null}
+                <span className="ct-call-cost">${(c.cost_usd_micros / 1e6).toFixed(3)}</span>
+                {!c.ok ? <span className="ct-call-err">✗ {(c.error ?? "error").slice(0, 60)}</span> : null}
+              </div>
+            ))
+          )}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function CodeTaskDetail({ run, previews = [], onBack }: { run: CodeTaskRun; previews?: PreviewRec[]; onBack: () => void }) {
   const st = run.state ?? {};
   const tests = st.tests ?? [];
@@ -389,6 +445,8 @@ function CodeTaskDetail({ run, previews = [], onBack }: { run: CodeTaskRun; prev
           </div>
         </div>
       ) : null}
+
+      <CodeTaskActivity runId={run.id} live={live} />
 
       {run.error ? (
         <div className="ct-error">

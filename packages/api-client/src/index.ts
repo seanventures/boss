@@ -1040,6 +1040,24 @@ export type CodeTaskRun = {
 
 export type CodeTasksResponse = { code_tasks: CodeTaskRun[] };
 
+// One per-stage model call recorded for a code task (GET /v1/code-tasks/{id}/activity) —
+// the internal detail behind each phase: model, turns, latency, retries, cost, ok/error.
+export type LlmCallRow = {
+  stage: string;
+  engine: string;
+  model: string;
+  total_tokens: number;
+  cost_usd_micros: number;
+  latency_ms: number;
+  retries: number;
+  turns: number;
+  ok: boolean;
+  error: string | null;
+  created_at: string | null;
+};
+
+export type CodeTaskActivityResponse = { run_id: string; calls: LlmCallRow[] };
+
 export type PreviewRec = {
   id: string;
   run_id?: string | null;
@@ -5549,6 +5567,10 @@ export function createBossApiClient(config: BossApiClientConfig) {
     },
     getCodeTask(runId: string) {
       return request<CodeTaskRun>("GET", `/v1/code-tasks/${encodeURIComponent(runId)}`);
+    },
+    getCodeTaskActivity(runId: string) {
+      return request<CodeTaskActivityResponse>(
+        "GET", `/v1/code-tasks/${encodeURIComponent(runId)}/activity`);
     },
     createCodeTask(payload: CodeTaskCreatePayload) {
       return request<{ status: string; run_id: string }>("POST", "/v1/code-tasks", { body: payload });

@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import type { DataBoundary } from "@boss/api-client";
+import type { DataBoundary, LlmCallRow } from "@boss/api-client";
 import { API_URL, client, PROJECT_ID, resolveProjectId, authHeaders} from "../lib/client";
 import { buildCommandRequest } from "../lib/commands";
 
@@ -2359,6 +2359,17 @@ export async function createCodeTaskAction(formData: FormData): Promise<void> {
     base_branch: String(formData.get("base_branch") ?? "").trim() || undefined,
   });
   revalidatePath("/");
+}
+
+// Per-stage model-call activity for a code task (the internal detail behind each phase).
+// Returns [] on any failure so the activity panel degrades gracefully in the UI.
+export async function getCodeTaskActivityAction(runId: string): Promise<LlmCallRow[]> {
+  try {
+    const res = await client.getCodeTaskActivity(runId);
+    return Array.isArray(res?.calls) ? res.calls : [];
+  } catch {
+    return [];
+  }
 }
 
 export async function startDiscoveryAction(

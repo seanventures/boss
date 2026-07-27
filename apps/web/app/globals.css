@@ -1003,6 +1003,7 @@ h1, h2, h3, h4, h5, h6 {
 .bx-content[data-active="code_tasks"] .frame > section:is([data-area="code_tasks"], :has([data-area="code_tasks"])),
 .bx-content[data-active="reliability"] .frame > section:is([data-area="reliability"], :has([data-area="reliability"])),
 .bx-content[data-active="foundations"] .frame > section:is([data-area="foundations"], :has([data-area="foundations"])),
+.bx-content[data-active="components"] .frame > section:is([data-area="components"], :has([data-area="components"])),
 .bx-content[data-active="discovery"] .frame > section:is([data-area="discovery"], :has([data-area="discovery"])),
 .bx-content[data-active="budget"] .frame > section:is([data-area="budget"], :has([data-area="budget"])),
 .bx-content[data-active="pipeline"] .frame > section:is([data-area="pipeline"], :has([data-area="pipeline"])),
@@ -4796,3 +4797,28 @@ select.input:focus {
   .aw-footer > div { display: grid; grid-template-columns: repeat(2, 1fr); }
   .aw-footer .as-button { justify-content: center; }
 }
+
+/* ================================================================
+   Code task — agent activity (per-stage model calls)
+   Ported from feat/ui-redesign-design-system (b10dacd); variables
+   adapted to this stylesheet's palette (--border/--surface-2).
+   ================================================================ */
+.ct-activity-wrap { margin: 8px 0 2px; }
+.ct-activity {
+  margin-top: 8px; border: 1px solid var(--border); border-radius: 8px;
+  background: var(--surface-2); overflow: hidden;
+}
+.ct-activity > .detail { margin: 0; padding: 8px 12px; }
+.ct-call {
+  display: flex; align-items: baseline; flex-wrap: wrap; gap: 12px;
+  padding: 8px 12px; border-bottom: 1px solid var(--border);
+  font-family: var(--mono); font-size: 0.68rem; color: var(--muted);
+}
+.ct-call:last-child { border-bottom: 0; }
+.ct-call.err { background: var(--red-soft); }
+.ct-call-stage { color: var(--ink-soft); font-weight: 600; min-width: 128px; }
+.ct-call-model { color: var(--accent-text); }
+.ct-call-lat { color: var(--teal); }
+.ct-call-retry { color: var(--amber); }
+.ct-call-cost { color: var(--muted); }
+.ct-call-err { color: var(--red); }

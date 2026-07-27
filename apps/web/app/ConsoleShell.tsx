@@ -26,6 +26,7 @@ import {
   MagnifyingGlass,
   Heartbeat,
   PaintBrush,
+  SquaresFour,
   Pulse,
   Robot,
   Rows,
@@ -60,6 +61,7 @@ type AreaId =
   | "studio"
   | "sandboxes"
   | "foundations"
+  | "components"
   | "ops"
   | "org"
   | "enterprise";
@@ -96,6 +98,7 @@ const ICONS = {
   sandboxes: TerminalWindow,
   studio: Graph,
   foundations: PaintBrush,
+  components: SquaresFour,
 } as const;
 
 const AREAS: AreaDef[] = [
@@ -121,6 +124,7 @@ const AREAS: AreaDef[] = [
   { id: "studio", label: "Agent Studio", sub: "Build, test, compose, and observe agents working together", group: "Platform", icon: ICONS.studio },
   { id: "sandboxes", label: "Sandboxes", sub: "Execution plane — inspect sandboxes & governed console", group: "Platform", icon: ICONS.sandboxes },
   { id: "foundations", label: "Foundations", sub: "Design system — tokens, type, motion, status language", group: "Platform", icon: ICONS.foundations },
+  { id: "components", label: "Components", sub: "Component library — buttons, composer, orbs, overlays", group: "Platform", icon: ICONS.components },
   { id: "enterprise", label: "Enterprise", sub: "Editions, identity, and account connect", group: "Platform", icon: ICONS.enterprise },
 ];
 
