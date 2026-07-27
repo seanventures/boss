@@ -30,7 +30,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: worker
-          image: ghcr.io/seanheiney/boss-worker:0.8.0
+          image: ghcr.io/seanheiney/boss-worker:0.9.1
           imagePullPolicy: IfNotPresent
           env:
             - name: BOSS_API_KEY

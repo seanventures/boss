@@ -43,8 +43,14 @@ class InstallationToken:
 
 
 class GitHubAppAdapter:
-    def __init__(self, settings: Settings):
+    def __init__(
+        self,
+        settings: Settings,
+        *,
+        api_base_url: str = "https://api.github.com",
+    ):
         self.settings = settings
+        self.api_base_url = api_base_url.rstrip("/")
         self._cache: dict[str, tuple[float, InstallationToken]] = {}
 
     # -- configuration ------------------------------------------------------
@@ -128,7 +134,7 @@ class GitHubAppAdapter:
             "Authorization": f"Bearer {self._app_jwt()}",
             "X-GitHub-Api-Version": "2022-11-28",
         }
-        url = f"https://api.github.com/app/installations/{inst}/access_tokens"
+        url = f"{self.api_base_url}/app/installations/{inst}/access_tokens"
         with httpx.Client(timeout=20) as client:
             resp = client.post(url, headers=headers, json=body or None)
         if resp.status_code not in (200, 201):

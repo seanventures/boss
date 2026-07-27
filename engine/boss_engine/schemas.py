@@ -1975,10 +1975,16 @@ class JobSummary(BaseModel):
     id: str
     project_id: str
     task_id: Optional[str] = None
+    work_item_id: Optional[str] = None
+    tracker_binding_id: Optional[str] = None
+    allocation_id: Optional[str] = None
     kind: str
     status: str
     data_boundary: DataBoundary = "internal"
     priority: int
+    priority_score: Optional[float] = None
+    workload_class: str = "general"
+    resource_units: int = 1
     max_attempts: int
     attempt: int
     run_after: str
@@ -1986,6 +1992,10 @@ class JobSummary(BaseModel):
 
 class JobListItem(JobSummary):
     task_title: Optional[str] = None
+    work_title: Optional[str] = None
+    tracker_provider: Optional[str] = None
+    external_key: Optional[str] = None
+    external_url: Optional[str] = None
     lease_owner: Optional[str] = None
     lease_expires_at: Optional[str] = None
     heartbeat_at: Optional[str] = None
@@ -2005,11 +2015,17 @@ class JobCreateRequest(BaseModel):
     project_id: str
     kind: str
     task_id: Optional[str] = None
+    work_item_id: Optional[str] = None
+    tracker_binding_id: Optional[str] = None
+    allocation_id: Optional[str] = None
     payload: dict[str, Any] = Field(default_factory=dict)
     data_boundary: Optional[DataBoundary] = None
     requires_reservation: bool = False
     reservation_id: Optional[str] = None
     priority: int = Field(default=100, ge=0)
+    priority_score: Optional[float] = Field(default=None, ge=0, le=100)
+    workload_class: str = "general"
+    resource_units: int = Field(default=1, ge=1, le=1000)
     max_attempts: int = Field(default=3, ge=1, le=20)
     run_after_seconds: int = Field(default=0, ge=0, le=86_400)
 
@@ -2102,9 +2118,15 @@ class LeasedJob(BaseModel):
     id: str
     project_id: str
     task_id: Optional[str] = None
+    work_item_id: Optional[str] = None
+    tracker_binding_id: Optional[str] = None
+    allocation_id: Optional[str] = None
     kind: str
     payload: dict[str, Any]
     data_boundary: DataBoundary = "internal"
+    priority_score: Optional[float] = None
+    workload_class: str = "general"
+    resource_units: int = 1
     attempt: int
     max_attempts: int
     lease_token: str
@@ -3144,6 +3166,19 @@ class WorkflowVersionCreateRequest(BaseModel):
         return self
 
 
+class WorkflowDraftValidateRequest(BaseModel):
+    project_id: str
+    spec: dict[str, Any]
+    actor: str = "ceo"
+
+    @model_validator(mode="after")
+    def validate_fields(self) -> "WorkflowDraftValidateRequest":
+        self.project_id = _require_text(self.project_id, "project_id")
+        self.actor = _require_text(self.actor, "actor")
+        self.spec = _require_non_empty_mapping(self.spec, "spec")
+        return self
+
+
 class WorkflowVersionSummary(BaseModel):
     id: str
     project_id: str
@@ -4074,6 +4109,1036 @@ class ModelRouteDecisionSimulateRequest(RoutingPreviewRequest):
 class ModelRouteDecisionSimulateResponse(BaseModel):
     project_id: str
     decision: ModelRouteDecisionSummary
+
+
+class GitHubConnectionSummary(BaseModel):
+    id: str
+    project_id: str
+    connection_label: str
+    auth_method: Literal["github_app", "personal_access_token"]
+    credential_configured: bool
+    app_id: Optional[str] = None
+    installation_id: Optional[str] = None
+    api_base_url: str
+    status: Literal["configured", "active", "error", "disabled", "revoked"]
+    required_permissions: list[str] = Field(default_factory=list)
+    granted_permissions: list[str] = Field(default_factory=list)
+    missing_permissions: list[str] = Field(default_factory=list)
+    account_login: Optional[str] = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    last_test_status: Optional[str] = None
+    last_tested_at: Optional[str] = None
+    last_error: Optional[dict[str, Any]] = None
+    disabled_at: Optional[str] = None
+    disabled_by: Optional[str] = None
+    revoked_at: Optional[str] = None
+    revoked_by: Optional[str] = None
+    created_by: str
+    created_at: str
+    updated_at: str
+
+
+class GitHubConnectionListResponse(BaseModel):
+    project_id: str
+    items: list[GitHubConnectionSummary]
+
+
+class GitHubConnectionCreateRequest(BaseModel):
+    project_id: str
+    connection_label: str
+    auth_method: Literal["github_app", "personal_access_token"]
+    credential_ref: str
+    app_id: Optional[str] = None
+    installation_id: Optional[str] = None
+    api_base_url: str = "https://api.github.com"
+    required_permissions: list[str] = Field(default_factory=lambda: ["pull"])
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    actor: str = "ceo"
+
+    @model_validator(mode="after")
+    def validate_github_connection(self) -> "GitHubConnectionCreateRequest":
+        self.project_id = _require_text(self.project_id, "project_id")
+        self.connection_label = _require_text(
+            self.connection_label, "connection_label"
+        )
+        self.credential_ref = _require_text(self.credential_ref, "credential_ref")
+        self.api_base_url = _require_text(self.api_base_url, "api_base_url")
+        self.required_permissions = _require_non_empty_string_list(
+            self.required_permissions, "required_permissions"
+        )
+        self.actor = _require_text(self.actor, "actor")
+        return self
+
+
+class GitHubConnectionLifecycleRequest(BaseModel):
+    project_id: str
+    actor: str = "ceo"
+
+    @model_validator(mode="after")
+    def validate_github_connection_lifecycle(
+        self,
+    ) -> "GitHubConnectionLifecycleRequest":
+        self.project_id = _require_text(self.project_id, "project_id")
+        self.actor = _require_text(self.actor, "actor")
+        return self
+
+
+class GitHubRepositoryBindingSummary(BaseModel):
+    id: str
+    project_id: str
+    connection_id: str
+    repository_id: Optional[int] = None
+    owner: str
+    name: str
+    full_name: str
+    role: Literal["primary", "source", "upstream", "mirror"]
+    default_branch: Optional[str] = None
+    visibility: Optional[str] = None
+    archived: bool
+    status: Literal["active", "disabled"]
+    permissions: dict[str, bool] = Field(default_factory=dict)
+    capabilities: list[str] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    last_synced_at: Optional[str] = None
+    created_by: str
+    created_at: str
+    updated_at: str
+
+
+class GitHubRepositoryBindingListResponse(BaseModel):
+    project_id: str
+    items: list[GitHubRepositoryBindingSummary]
+
+
+class GitHubRepositoryBindingCreateRequest(BaseModel):
+    project_id: str
+    connection_id: str
+    repository: str
+    role: Literal["primary", "source", "upstream", "mirror"] = "primary"
+    default_branch: Optional[str] = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    actor: str = "ceo"
+
+    @model_validator(mode="after")
+    def validate_github_repository_binding(
+        self,
+    ) -> "GitHubRepositoryBindingCreateRequest":
+        self.project_id = _require_text(self.project_id, "project_id")
+        self.connection_id = _require_text(self.connection_id, "connection_id")
+        self.repository = _require_text(self.repository, "repository")
+        if self.default_branch is not None:
+            self.default_branch = _require_text(
+                self.default_branch, "default_branch"
+            )
+        self.actor = _require_text(self.actor, "actor")
+        return self
+
+
+class GitHubRepositoryBindingUpdateRequest(BaseModel):
+    project_id: str
+    role: Optional[Literal["primary", "source", "upstream", "mirror"]] = None
+    status: Optional[Literal["active", "disabled"]] = None
+    default_branch: Optional[str] = None
+    metadata: Optional[dict[str, Any]] = None
+    actor: str = "ceo"
+
+    @model_validator(mode="after")
+    def validate_github_repository_binding_update(
+        self,
+    ) -> "GitHubRepositoryBindingUpdateRequest":
+        self.project_id = _require_text(self.project_id, "project_id")
+        if self.default_branch is not None:
+            self.default_branch = _require_text(
+                self.default_branch, "default_branch"
+            )
+        self.actor = _require_text(self.actor, "actor")
+        return self
+
+
+class GitHubConnectionTestRequest(BaseModel):
+    project_id: str
+    repository_binding_id: str
+    dedupe_key: str
+    actor: str = "ceo"
+
+    @model_validator(mode="after")
+    def validate_github_connection_test(self) -> "GitHubConnectionTestRequest":
+        self.project_id = _require_text(self.project_id, "project_id")
+        self.repository_binding_id = _require_text(
+            self.repository_binding_id, "repository_binding_id"
+        )
+        self.dedupe_key = _require_text(self.dedupe_key, "dedupe_key")
+        self.actor = _require_text(self.actor, "actor")
+        return self
+
+
+class GitHubConnectionTestResponse(BaseModel):
+    status: Literal["passed", "failed"]
+    duplicate: bool
+    receipt_id: str
+    connection: GitHubConnectionSummary
+    repository_binding: GitHubRepositoryBindingSummary
+    detail: dict[str, Any] = Field(default_factory=dict)
+
+
+class GitHubBranchPolicySummary(BaseModel):
+    id: str
+    project_id: str
+    repository_binding_id: str
+    version: int
+    supersedes_policy_id: Optional[str] = None
+    status: Literal["active", "superseded", "disabled"]
+    protected_ref_patterns: list[str]
+    allowed_branch_prefixes: list[str]
+    branch_name_pattern: str
+    allowed_update_methods: list[str]
+    allowed_merge_methods: list[str]
+    required_checks: list[str]
+    required_approvals: int
+    require_pull_request: bool
+    require_linear_history: bool
+    require_signed_commits: bool
+    automation_updates_enabled: bool
+    force_push_allowed: bool
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    created_by: str
+    created_at: str
+    updated_at: str
+
+
+class GitHubBranchPolicyListResponse(BaseModel):
+    project_id: str
+    items: list[GitHubBranchPolicySummary]
+
+
+class GitHubBranchPolicyCreateRequest(BaseModel):
+    project_id: str
+    repository_binding_id: str
+    protected_ref_patterns: list[str] = Field(
+        default_factory=lambda: ["main", "master", "release/*"]
+    )
+    allowed_branch_prefixes: list[str] = Field(
+        default_factory=lambda: [
+            "ai/",
+            "feat/",
+            "fix/",
+            "chore/",
+            "docs/",
+            "release/",
+        ]
+    )
+    branch_name_pattern: str = r"^[A-Za-z0-9._/-]+$"
+    allowed_update_methods: list[str] = Field(
+        default_factory=lambda: ["fast_forward", "merge_commit", "rebase"]
+    )
+    allowed_merge_methods: list[str] = Field(
+        default_factory=lambda: ["merge", "squash", "rebase"]
+    )
+    required_checks: list[str] = Field(default_factory=list)
+    required_approvals: int = 1
+    require_pull_request: bool = True
+    require_linear_history: bool = False
+    require_signed_commits: bool = False
+    automation_updates_enabled: bool = True
+    force_push_allowed: bool = False
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    actor: str = "ceo"
+
+    @model_validator(mode="after")
+    def validate_github_branch_policy(self) -> "GitHubBranchPolicyCreateRequest":
+        self.project_id = _require_text(self.project_id, "project_id")
+        self.repository_binding_id = _require_text(
+            self.repository_binding_id, "repository_binding_id"
+        )
+        self.branch_name_pattern = _require_text(
+            self.branch_name_pattern, "branch_name_pattern"
+        )
+        self.actor = _require_text(self.actor, "actor")
+        return self
+
+
+class GitHubBranchPolicyUpdateRequest(BaseModel):
+    project_id: str
+    status: Optional[Literal["active", "disabled"]] = None
+    protected_ref_patterns: Optional[list[str]] = None
+    allowed_branch_prefixes: Optional[list[str]] = None
+    branch_name_pattern: Optional[str] = None
+    allowed_update_methods: Optional[list[str]] = None
+    allowed_merge_methods: Optional[list[str]] = None
+    required_checks: Optional[list[str]] = None
+    required_approvals: Optional[int] = None
+    require_pull_request: Optional[bool] = None
+    require_linear_history: Optional[bool] = None
+    require_signed_commits: Optional[bool] = None
+    automation_updates_enabled: Optional[bool] = None
+    force_push_allowed: Optional[bool] = None
+    metadata: Optional[dict[str, Any]] = None
+    actor: str = "ceo"
+
+    @model_validator(mode="after")
+    def validate_github_branch_policy_update(
+        self,
+    ) -> "GitHubBranchPolicyUpdateRequest":
+        self.project_id = _require_text(self.project_id, "project_id")
+        if self.branch_name_pattern is not None:
+            self.branch_name_pattern = _require_text(
+                self.branch_name_pattern, "branch_name_pattern"
+            )
+        self.actor = _require_text(self.actor, "actor")
+        return self
+
+
+class GitHubBranchPolicyEvaluateRequest(BaseModel):
+    project_id: str
+    ref: str
+    operation: Literal["observe", "create", "update", "merge", "delete"]
+    method: Optional[str] = None
+
+    @model_validator(mode="after")
+    def validate_github_branch_policy_evaluate(
+        self,
+    ) -> "GitHubBranchPolicyEvaluateRequest":
+        self.project_id = _require_text(self.project_id, "project_id")
+        self.ref = _require_text(self.ref, "ref")
+        if self.method is not None:
+            self.method = _require_text(self.method, "method")
+        return self
+
+
+class GitHubBranchPolicyEvaluationResponse(BaseModel):
+    policy_id: str
+    policy_version: int
+    status: Literal["allowed", "approval_required", "blocked"]
+    ref: str
+    operation: str
+    method: Optional[str] = None
+    protected: bool
+    reasons: list[str]
+    required_checks: list[str]
+    required_approvals: int
+    require_pull_request: bool
+    require_linear_history: bool
+    require_signed_commits: bool
+
+
+class GitHubBranchSnapshotSummary(BaseModel):
+    id: str
+    project_id: str
+    repository_binding_id: str
+    branch_policy_id: Optional[str] = None
+    branch_policy_version: Optional[int] = None
+    source_ref: str
+    target_ref: str
+    source_commit_sha: Optional[str] = None
+    source_tree_sha: Optional[str] = None
+    target_commit_sha: Optional[str] = None
+    target_tree_sha: Optional[str] = None
+    merge_base_commit_sha: Optional[str] = None
+    merge_base_tree_sha: Optional[str] = None
+    ahead_by: int
+    behind_by: int
+    topology_classification: Literal[
+        "equal",
+        "tree_equivalent_rewrite",
+        "fast_forward",
+        "behind",
+        "diverged",
+        "missing",
+    ]
+    classification: Literal[
+        "equal",
+        "tree_equivalent_rewrite",
+        "fast_forward",
+        "behind",
+        "diverged",
+        "missing",
+        "protected_blocked",
+    ]
+    refs: dict[str, Any] = Field(default_factory=dict)
+    comparison: dict[str, Any] = Field(default_factory=dict)
+    protection: dict[str, Any] = Field(default_factory=dict)
+    checks: list[dict[str, Any]] = Field(default_factory=list)
+    policy_evaluation: dict[str, Any] = Field(default_factory=dict)
+    receipt_id: str
+    dedupe_key: str
+    observed_by: str
+    observed_at: str
+    created_at: str
+
+
+class GitHubBranchSnapshotListResponse(BaseModel):
+    project_id: str
+    items: list[GitHubBranchSnapshotSummary]
+
+
+class GitHubBranchSnapshotCaptureRequest(BaseModel):
+    project_id: str
+    repository_binding_id: str
+    source_ref: str
+    target_ref: str
+    dedupe_key: str
+    actor: str = "ceo"
+
+    @model_validator(mode="after")
+    def validate_github_branch_snapshot_capture(
+        self,
+    ) -> "GitHubBranchSnapshotCaptureRequest":
+        self.project_id = _require_text(self.project_id, "project_id")
+        self.repository_binding_id = _require_text(
+            self.repository_binding_id, "repository_binding_id"
+        )
+        self.source_ref = _require_text(self.source_ref, "source_ref")
+        self.target_ref = _require_text(self.target_ref, "target_ref")
+        self.dedupe_key = _require_text(self.dedupe_key, "dedupe_key")
+        self.actor = _require_text(self.actor, "actor")
+        return self
+
+
+class GitHubBranchSnapshotCaptureResponse(BaseModel):
+    status: Literal["succeeded", "failed"]
+    duplicate: bool
+    receipt_id: str
+    snapshot: Optional[GitHubBranchSnapshotSummary] = None
+    error: Optional[dict[str, Any]] = None
+
+
+class GitHubBranchLeaseSummary(BaseModel):
+    id: str
+    project_id: str
+    repository_binding_id: str
+    ref_name: str
+    owner_kind: Literal[
+        "task", "workflow_run", "code_task_run", "agent", "manual"
+    ]
+    owner_id: str
+    run_id: Optional[str] = None
+    worktree_path: Optional[str] = None
+    acquire_key: str
+    fencing_token: int
+    status: Literal["active", "released", "expired", "reclaimed"]
+    acquired_by: str
+    acquired_at: str
+    heartbeat_at: str
+    lease_expires_at: str
+    released_by: Optional[str] = None
+    released_at: Optional[str] = None
+    release_reason: Optional[str] = None
+    reclaimed_from_lease_id: Optional[str] = None
+    created_at: str
+    updated_at: str
+
+
+class GitHubBranchLeaseListResponse(BaseModel):
+    project_id: str
+    items: list[GitHubBranchLeaseSummary]
+
+
+class GitHubBranchLeaseAcquireRequest(BaseModel):
+    project_id: str
+    repository_binding_id: str
+    ref_name: str
+    owner_kind: Literal[
+        "task", "workflow_run", "code_task_run", "agent", "manual"
+    ]
+    owner_id: str
+    run_id: Optional[str] = None
+    worktree_path: Optional[str] = None
+    acquire_key: str
+    ttl_seconds: int = Field(default=300, ge=30, le=3600)
+    actor: str = "ceo"
+
+    @model_validator(mode="after")
+    def validate_github_branch_lease_acquire(
+        self,
+    ) -> "GitHubBranchLeaseAcquireRequest":
+        self.project_id = _require_text(self.project_id, "project_id")
+        self.repository_binding_id = _require_text(
+            self.repository_binding_id, "repository_binding_id"
+        )
+        self.ref_name = _require_text(self.ref_name, "ref_name")
+        self.owner_id = _require_text(self.owner_id, "owner_id")
+        self.acquire_key = _require_text(self.acquire_key, "acquire_key")
+        if self.run_id is not None:
+            self.run_id = _require_text(self.run_id, "run_id")
+        if self.worktree_path is not None:
+            self.worktree_path = _require_text(
+                self.worktree_path, "worktree_path"
+            )
+        self.actor = _require_text(self.actor, "actor")
+        return self
+
+
+class GitHubBranchLeaseAcquireResponse(BaseModel):
+    lease: GitHubBranchLeaseSummary
+    lease_token: Optional[str] = None
+    duplicate: bool
+
+
+class GitHubBranchLeaseHeartbeatRequest(BaseModel):
+    project_id: str
+    lease_token: str
+    fencing_token: int
+    ttl_seconds: int = Field(default=300, ge=30, le=3600)
+    actor: str = "system"
+
+    @model_validator(mode="after")
+    def validate_github_branch_lease_heartbeat(
+        self,
+    ) -> "GitHubBranchLeaseHeartbeatRequest":
+        self.project_id = _require_text(self.project_id, "project_id")
+        self.lease_token = _require_text(self.lease_token, "lease_token")
+        self.actor = _require_text(self.actor, "actor")
+        return self
+
+
+class GitHubBranchLeaseReleaseRequest(BaseModel):
+    project_id: str
+    lease_token: str
+    fencing_token: int
+    reason: str
+    actor: str = "ceo"
+
+    @model_validator(mode="after")
+    def validate_github_branch_lease_release(
+        self,
+    ) -> "GitHubBranchLeaseReleaseRequest":
+        self.project_id = _require_text(self.project_id, "project_id")
+        self.lease_token = _require_text(self.lease_token, "lease_token")
+        self.reason = _require_text(self.reason, "reason")
+        self.actor = _require_text(self.actor, "actor")
+        return self
+
+
+class GitHubBranchLeaseReclaimRequest(BaseModel):
+    project_id: str
+    reason: str
+    actor: str = "ceo"
+
+    @model_validator(mode="after")
+    def validate_github_branch_lease_reclaim(
+        self,
+    ) -> "GitHubBranchLeaseReclaimRequest":
+        self.project_id = _require_text(self.project_id, "project_id")
+        self.reason = _require_text(self.reason, "reason")
+        self.actor = _require_text(self.actor, "actor")
+        return self
+
+
+class GitHubCodeSyncRunSummary(BaseModel):
+    id: str
+    project_id: str
+    repository_binding_id: str
+    branch_policy_id: str
+    branch_policy_version: int
+    initial_snapshot_id: str
+    result_snapshot_id: Optional[str] = None
+    branch_lease_id: Optional[str] = None
+    fencing_token: Optional[int] = None
+    source_ref: str
+    target_ref: str
+    topology_classification: Literal[
+        "equal",
+        "tree_equivalent_rewrite",
+        "fast_forward",
+        "behind",
+        "diverged",
+        "missing",
+    ]
+    action: Literal[
+        "noop",
+        "preserve_remote_identity",
+        "fast_forward_target",
+        "fast_forward_source",
+        "create_resolution_branch",
+        "blocked",
+    ]
+    status: Literal[
+        "planned",
+        "pending_approval",
+        "approved",
+        "applying",
+        "succeeded",
+        "noop",
+        "conflicted",
+        "blocked",
+        "failed",
+        "deadlettered",
+    ]
+    dedupe_key: str
+    changeset_id: Optional[str] = None
+    conflict_set_id: Optional[str] = None
+    decision_id: Optional[str] = None
+    resolution_branch: Optional[str] = None
+    rollback_ref: Optional[str] = None
+    rollback_sha: Optional[str] = None
+    apply_attempts: int
+    receipt_ids: list[str] = Field(default_factory=list)
+    resource_receipt_ids: list[str] = Field(default_factory=list)
+    error: Optional[dict[str, Any]] = None
+    created_by: str
+    approved_by: Optional[str] = None
+    applied_by: Optional[str] = None
+    created_at: str
+    updated_at: str
+    completed_at: Optional[str] = None
+
+
+class GitHubCodeSyncRunListResponse(BaseModel):
+    project_id: str
+    items: list[GitHubCodeSyncRunSummary]
+
+
+class GitHubCodeSyncPlanRequest(BaseModel):
+    project_id: str
+    repository_binding_id: str
+    snapshot_id: str
+    dedupe_key: str
+    resolution_branch: Optional[str] = None
+    actor: str = "ceo"
+
+    @model_validator(mode="after")
+    def validate_github_code_sync_plan(self) -> "GitHubCodeSyncPlanRequest":
+        self.project_id = _require_text(self.project_id, "project_id")
+        self.repository_binding_id = _require_text(
+            self.repository_binding_id, "repository_binding_id"
+        )
+        self.snapshot_id = _require_text(self.snapshot_id, "snapshot_id")
+        self.dedupe_key = _require_text(self.dedupe_key, "dedupe_key")
+        if self.resolution_branch is not None:
+            self.resolution_branch = _require_text(
+                self.resolution_branch, "resolution_branch"
+            )
+        self.actor = _require_text(self.actor, "actor")
+        return self
+
+
+class GitHubCodeSyncApplyRequest(BaseModel):
+    project_id: str
+    lease_id: str
+    lease_token: str
+    fencing_token: int = Field(ge=1)
+    actor: str = "ceo"
+
+    @model_validator(mode="after")
+    def validate_github_code_sync_apply(self) -> "GitHubCodeSyncApplyRequest":
+        self.project_id = _require_text(self.project_id, "project_id")
+        self.lease_id = _require_text(self.lease_id, "lease_id")
+        self.lease_token = _require_text(self.lease_token, "lease_token")
+        self.actor = _require_text(self.actor, "actor")
+        return self
+
+
+class GitHubConflictSetSummary(BaseModel):
+    id: str
+    project_id: str
+    code_sync_run_id: str
+    repository_binding_id: str
+    resolution_branch: str
+    resolution_branch_head_sha: str
+    base_commit_sha: Optional[str] = None
+    base_tree_sha: Optional[str] = None
+    ours_commit_sha: str
+    ours_tree_sha: str
+    theirs_commit_sha: str
+    theirs_tree_sha: str
+    status: Literal[
+        "open", "resolution_proposed", "approved", "resolved", "blocked"
+    ]
+    files: list[dict[str, Any]] = Field(default_factory=list)
+    conflict_count: int
+    decision_id: Optional[str] = None
+    resolved_by_plan_id: Optional[str] = None
+    created_at: str
+    updated_at: str
+    resolved_at: Optional[str] = None
+
+
+class GitHubConflictSetListResponse(BaseModel):
+    project_id: str
+    items: list[GitHubConflictSetSummary]
+
+
+class GitHubResolutionPlanSummary(BaseModel):
+    id: str
+    project_id: str
+    conflict_set_id: str
+    version: int
+    status: Literal["proposed", "approved", "applied", "rejected", "failed"]
+    resolved_files: list[dict[str, Any]] = Field(default_factory=list)
+    validation_evidence: dict[str, Any] = Field(default_factory=dict)
+    independent_review: dict[str, Any] = Field(default_factory=dict)
+    decision_id: Optional[str] = None
+    changeset_id: Optional[str] = None
+    result_commit_sha: Optional[str] = None
+    created_by: str
+    approved_by: Optional[str] = None
+    applied_by: Optional[str] = None
+    created_at: str
+    updated_at: str
+    applied_at: Optional[str] = None
+
+
+class GitHubResolutionPlanListResponse(BaseModel):
+    project_id: str
+    items: list[GitHubResolutionPlanSummary]
+
+
+class GitHubResolutionPlanCreateRequest(BaseModel):
+    project_id: str
+    resolved_files: list[dict[str, Any]]
+    validation_evidence: dict[str, Any]
+    actor: str = "ceo"
+
+    @model_validator(mode="after")
+    def validate_github_resolution_plan_create(
+        self,
+    ) -> "GitHubResolutionPlanCreateRequest":
+        self.project_id = _require_text(self.project_id, "project_id")
+        self.actor = _require_text(self.actor, "actor")
+        return self
+
+
+class GitHubResolutionPlanApproveRequest(BaseModel):
+    project_id: str
+    review_evidence: dict[str, Any]
+    actor: str
+
+    @model_validator(mode="after")
+    def validate_github_resolution_plan_approve(
+        self,
+    ) -> "GitHubResolutionPlanApproveRequest":
+        self.project_id = _require_text(self.project_id, "project_id")
+        self.actor = _require_text(self.actor, "actor")
+        return self
+
+
+class GitHubResolutionPlanApplyRequest(BaseModel):
+    project_id: str
+    lease_id: str
+    lease_token: str
+    fencing_token: int = Field(ge=1)
+    actor: str = "ceo"
+
+    @model_validator(mode="after")
+    def validate_github_resolution_plan_apply(
+        self,
+    ) -> "GitHubResolutionPlanApplyRequest":
+        self.project_id = _require_text(self.project_id, "project_id")
+        self.lease_id = _require_text(self.lease_id, "lease_id")
+        self.lease_token = _require_text(self.lease_token, "lease_token")
+        self.actor = _require_text(self.actor, "actor")
+        return self
+
+
+class GitHubResolutionApplyResponse(BaseModel):
+    plan: GitHubResolutionPlanSummary
+    conflict_set: GitHubConflictSetSummary
+    sync_run: GitHubCodeSyncRunSummary
+
+
+class GitHubMergeAuthorizationSummary(BaseModel):
+    id: str
+    project_id: str
+    repository_binding_id: str
+    branch_policy_id: str
+    branch_policy_version: int
+    code_sync_run_id: Optional[str] = None
+    resolution_plan_id: Optional[str] = None
+    pull_request_number: int
+    pull_request_url: str
+    source_ref: str
+    target_ref: str
+    head_commit_sha: str
+    head_tree_sha: str
+    base_commit_sha: str
+    base_tree_sha: str
+    merge_method: Literal["merge", "squash", "rebase"]
+    status: Literal[
+        "pending_approval",
+        "authorized",
+        "queued",
+        "applying",
+        "merged",
+        "blocked",
+        "expired",
+        "failed",
+        "deadlettered",
+        "cancelled",
+    ]
+    dedupe_key: str
+    required_checks: list[str] = Field(default_factory=list)
+    observed_checks: list[dict[str, Any]] = Field(default_factory=list)
+    required_approvals: int
+    observed_reviews: list[dict[str, Any]] = Field(default_factory=list)
+    evidence_bundle: dict[str, Any] = Field(default_factory=dict)
+    policy_evaluation: dict[str, Any] = Field(default_factory=dict)
+    authorized_by: Optional[str] = None
+    authorized_at: Optional[str] = None
+    expires_at: str
+    queue_position: int
+    queued_at: Optional[str] = None
+    branch_lease_id: Optional[str] = None
+    fencing_token: Optional[int] = None
+    changeset_id: str
+    apply_attempts: int
+    receipt_ids: list[str] = Field(default_factory=list)
+    resource_receipt_ids: list[str] = Field(default_factory=list)
+    result_merge_sha: Optional[str] = None
+    result_target_tree_sha: Optional[str] = None
+    rollback_plan: dict[str, Any] = Field(default_factory=dict)
+    error: Optional[dict[str, Any]] = None
+    created_by: str
+    applied_by: Optional[str] = None
+    created_at: str
+    updated_at: str
+    merged_at: Optional[str] = None
+
+
+class GitHubMergeAuthorizationListResponse(BaseModel):
+    project_id: str
+    items: list[GitHubMergeAuthorizationSummary]
+
+
+class GitHubMergeAuthorizationCreateRequest(BaseModel):
+    project_id: str
+    repository_binding_id: str
+    pull_request_number: int = Field(ge=1)
+    source_ref: str
+    target_ref: str
+    merge_method: Literal["merge", "squash", "rebase"] = "merge"
+    dedupe_key: str
+    evidence_bundle: dict[str, Any]
+    expires_in_seconds: int = Field(default=3600, ge=60, le=86400)
+    code_sync_run_id: Optional[str] = None
+    resolution_plan_id: Optional[str] = None
+    actor: str = "ceo"
+
+    @model_validator(mode="after")
+    def validate_github_merge_authorization_create(
+        self,
+    ) -> "GitHubMergeAuthorizationCreateRequest":
+        self.project_id = _require_text(self.project_id, "project_id")
+        self.repository_binding_id = _require_text(
+            self.repository_binding_id, "repository_binding_id"
+        )
+        self.source_ref = _require_text(self.source_ref, "source_ref")
+        self.target_ref = _require_text(self.target_ref, "target_ref")
+        self.dedupe_key = _require_text(self.dedupe_key, "dedupe_key")
+        if self.code_sync_run_id is not None:
+            self.code_sync_run_id = _require_text(
+                self.code_sync_run_id, "code_sync_run_id"
+            )
+        if self.resolution_plan_id is not None:
+            self.resolution_plan_id = _require_text(
+                self.resolution_plan_id, "resolution_plan_id"
+            )
+        self.actor = _require_text(self.actor, "actor")
+        return self
+
+
+class GitHubMergeAuthorizationApproveRequest(BaseModel):
+    project_id: str
+    review_evidence: dict[str, Any]
+    actor: str
+
+    @model_validator(mode="after")
+    def validate_github_merge_authorization_approve(
+        self,
+    ) -> "GitHubMergeAuthorizationApproveRequest":
+        self.project_id = _require_text(self.project_id, "project_id")
+        self.actor = _require_text(self.actor, "actor")
+        return self
+
+
+class GitHubMergeAuthorizationEnqueueRequest(BaseModel):
+    project_id: str
+    actor: str = "ceo"
+
+    @model_validator(mode="after")
+    def validate_github_merge_authorization_enqueue(
+        self,
+    ) -> "GitHubMergeAuthorizationEnqueueRequest":
+        self.project_id = _require_text(self.project_id, "project_id")
+        self.actor = _require_text(self.actor, "actor")
+        return self
+
+
+class GitHubMergeAuthorizationApplyRequest(BaseModel):
+    project_id: str
+    lease_id: str
+    lease_token: str
+    fencing_token: int = Field(ge=1)
+    actor: str = "ceo"
+
+    @model_validator(mode="after")
+    def validate_github_merge_authorization_apply(
+        self,
+    ) -> "GitHubMergeAuthorizationApplyRequest":
+        self.project_id = _require_text(self.project_id, "project_id")
+        self.lease_id = _require_text(self.lease_id, "lease_id")
+        self.lease_token = _require_text(self.lease_token, "lease_token")
+        self.actor = _require_text(self.actor, "actor")
+        return self
+
+
+class GitHubReconciliationRunSummary(BaseModel):
+    id: str
+    project_id: str
+    repository_binding_id: str
+    trigger_signal_id: Optional[str] = None
+    repair_of_run_id: Optional[str] = None
+    source: Literal["webhook", "poll", "repair"]
+    status: Literal[
+        "queued",
+        "running",
+        "succeeded",
+        "failed",
+        "deadlettered",
+        "cancelled",
+    ]
+    dedupe_key: str
+    requested_refs: list[str] = Field(default_factory=list)
+    attempt_count: int
+    max_attempts: int
+    job_id: Optional[str] = None
+    observation_ids: list[str] = Field(default_factory=list)
+    receipt_ids: list[str] = Field(default_factory=list)
+    rate_limit_status: dict[str, Any] = Field(default_factory=dict)
+    next_attempt_at: Optional[str] = None
+    deadletter_id: Optional[str] = None
+    error: Optional[dict[str, Any]] = None
+    created_by: str
+    started_at: Optional[str] = None
+    completed_at: Optional[str] = None
+    created_at: str
+    updated_at: str
+
+
+class GitHubReconciliationRunListResponse(BaseModel):
+    project_id: str
+    items: list[GitHubReconciliationRunSummary]
+
+
+class GitHubReconciliationSignalSummary(BaseModel):
+    id: str
+    project_id: str
+    repository_binding_id: str
+    inbound_webhook_id: Optional[str] = None
+    source: Literal["webhook", "poll", "repair"]
+    delivery_id: Optional[str] = None
+    provider_event: Optional[str] = None
+    action: Optional[str] = None
+    ref_name: str
+    expected_commit_sha: Optional[str] = None
+    expected_deleted: bool
+    payload_hash: Optional[str] = None
+    dedupe_key: str
+    status: Literal[
+        "pending",
+        "processing",
+        "applied",
+        "stale",
+        "failed",
+        "deadlettered",
+    ]
+    reconciliation_run_id: Optional[str] = None
+    observed_commit_sha: Optional[str] = None
+    error: Optional[dict[str, Any]] = None
+    provider_occurred_at: Optional[str] = None
+    processed_at: Optional[str] = None
+    created_at: str
+    updated_at: str
+
+
+class GitHubReconciliationSignalListResponse(BaseModel):
+    project_id: str
+    items: list[GitHubReconciliationSignalSummary]
+
+
+class GitHubRepositoryRefStateSummary(BaseModel):
+    id: str
+    project_id: str
+    repository_binding_id: str
+    ref_name: str
+    exists: bool
+    commit_sha: Optional[str] = None
+    tree_sha: Optional[str] = None
+    protected: bool
+    protection: dict[str, Any] = Field(default_factory=dict)
+    latest_observation_id: str
+    latest_signal_id: Optional[str] = None
+    latest_receipt_id: str
+    observed_at: str
+    created_at: str
+    updated_at: str
+
+
+class GitHubRepositoryRefStateListResponse(BaseModel):
+    project_id: str
+    items: list[GitHubRepositoryRefStateSummary]
+
+
+class GitHubReconciliationPollRequest(BaseModel):
+    project_id: str
+    repository_binding_id: Optional[str] = None
+    refs: Optional[list[str]] = None
+    dedupe_key: str
+    actor: str = "ceo"
+
+    @model_validator(mode="after")
+    def validate_github_reconciliation_poll(
+        self,
+    ) -> "GitHubReconciliationPollRequest":
+        self.project_id = _require_text(self.project_id, "project_id")
+        if self.repository_binding_id is not None:
+            self.repository_binding_id = _require_text(
+                self.repository_binding_id, "repository_binding_id"
+            )
+        self.dedupe_key = _require_text(self.dedupe_key, "dedupe_key")
+        self.actor = _require_text(self.actor, "actor")
+        return self
+
+
+class GitHubReconciliationPollResponse(BaseModel):
+    project_id: str
+    items: list[GitHubReconciliationRunSummary]
+
+
+class GitHubReconciliationExecuteRequest(BaseModel):
+    project_id: str
+    job_id: str
+    worker_id: str
+    lease_token: str
+
+    @model_validator(mode="after")
+    def validate_github_reconciliation_execute(
+        self,
+    ) -> "GitHubReconciliationExecuteRequest":
+        self.project_id = _require_text(self.project_id, "project_id")
+        self.job_id = _require_text(self.job_id, "job_id")
+        self.worker_id = _require_text(self.worker_id, "worker_id")
+        self.lease_token = _require_text(self.lease_token, "lease_token")
+        return self
+
+
+class GitHubReconciliationExecuteResponse(BaseModel):
+    run: GitHubReconciliationRunSummary
+    job: dict[str, Any]
+
+
+class GitHubReconciliationRepairRequest(BaseModel):
+    project_id: str
+    dedupe_key: str
+    actor: str = "ceo"
+
+    @model_validator(mode="after")
+    def validate_github_reconciliation_repair(
+        self,
+    ) -> "GitHubReconciliationRepairRequest":
+        self.project_id = _require_text(self.project_id, "project_id")
+        self.dedupe_key = _require_text(self.dedupe_key, "dedupe_key")
+        self.actor = _require_text(self.actor, "actor")
+        return self
 
 
 class ProviderAccountSummary(BaseModel):
@@ -5205,3 +6270,311 @@ class ReliabilityDecisionResponse(BaseModel):
     confidence: float = 0.0
     blast_radius: int = 0
     policy: dict[str, Any] = Field(default_factory=dict)
+
+
+# ── Agent Studio, executable Panels, and durable A2A coordination ────────────
+class AgentDefinitionCreateRequest(BaseModel):
+    project_id: str
+    agent_key: str
+    name: str
+    description: str = ""
+    owner: str = "vp_agents"
+    actor: str = "vp_agents"
+
+    @model_validator(mode="after")
+    def _validate(self) -> "AgentDefinitionCreateRequest":
+        self.project_id = _require_text(self.project_id, "project_id")
+        self.agent_key = _require_text(self.agent_key, "agent_key")
+        self.name = _require_text(self.name, "name")
+        self.actor = _require_text(self.actor, "actor")
+        return self
+
+
+class AgentVersionCreateRequest(BaseModel):
+    project_id: str
+    role_key: str
+    model_policy: dict[str, Any] = Field(default_factory=dict)
+    prompts: dict[str, Any] = Field(default_factory=dict)
+    rules: list[Any] = Field(default_factory=list)
+    requested_skills: list[str] = Field(default_factory=list)
+    requested_integrations: list[str] = Field(default_factory=list)
+    scopes: dict[str, Any] = Field(default_factory=dict)
+    limits: dict[str, Any] = Field(default_factory=dict)
+    output_contract: dict[str, Any] = Field(default_factory=dict)
+    a2a_policy: dict[str, Any] = Field(default_factory=dict)
+    provenance: dict[str, Any] = Field(default_factory=dict)
+    agent_module_id: Optional[str] = None
+    actor: str = "vp_agents"
+
+
+class AgentStudioActorRequest(BaseModel):
+    project_id: str
+    actor: str = "vp_agents"
+
+
+class AgentTestRunRequest(AgentStudioActorRequest):
+    scenario: dict[str, Any] = Field(default_factory=dict)
+    assertions: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class AgentStudioRunRequest(AgentStudioActorRequest):
+    input: dict[str, Any] = Field(default_factory=dict)
+    dedupe_key: Optional[str] = None
+    task_id: Optional[str] = None
+    workflow_run_id: Optional[str] = None
+    budget_reservation_id: Optional[str] = None
+
+
+class PanelDefinitionCreateRequest(BaseModel):
+    project_id: str
+    panel_key: str
+    name: str
+    description: str = ""
+    purpose: str
+    owner: str = "vp_agents"
+    actor: str = "vp_agents"
+
+
+class PanelVersionCreateRequest(AgentStudioActorRequest):
+    topology: str = "panel"
+    members: list[dict[str, Any]] = Field(default_factory=list)
+    context_policy: dict[str, Any] = Field(default_factory=dict)
+    independence_policy: dict[str, Any] = Field(default_factory=dict)
+    quorum_policy: dict[str, Any] = Field(default_factory=dict)
+    bounds: dict[str, Any] = Field(default_factory=dict)
+    evidence_policy: dict[str, Any] = Field(default_factory=dict)
+    consolidation_policy: dict[str, Any] = Field(default_factory=dict)
+    dissent_policy: dict[str, Any] = Field(default_factory=dict)
+    escalation_policy: dict[str, Any] = Field(default_factory=dict)
+    output_contract: dict[str, Any] = Field(default_factory=dict)
+
+
+class PanelRunRequest(AgentStudioActorRequest):
+    input: dict[str, Any] = Field(default_factory=dict)
+    context: dict[str, Any] = Field(default_factory=dict)
+    dedupe_key: Optional[str] = None
+    task_id: Optional[str] = None
+    workflow_run_id: Optional[str] = None
+
+
+class A2AChannelCreateRequest(BaseModel):
+    project_id: str
+    channel_key: str
+    name: str
+    description: str = ""
+    allowed_message_kinds: list[str] = Field(default_factory=list)
+    allowed_schema_versions: dict[str, Any] = Field(default_factory=dict)
+    retention_seconds: int = 604800
+    max_payload_bytes: int = 65536
+    actor: str = "coo"
+
+
+class A2ASubscriptionCreateRequest(BaseModel):
+    project_id: str
+    channel_id: str
+    subscriber_kind: str
+    subscriber_id: str
+    consumer_group: Optional[str] = None
+    recipient_filter: dict[str, Any] = Field(default_factory=dict)
+    ack_mode: str = "processed"
+    visibility_timeout_seconds: int = 60
+    max_attempts: int = 3
+    data_boundaries: list[DataBoundary] = Field(
+        default_factory=lambda: ["public", "internal"]
+    )
+    actor: str = "coo"
+
+
+class A2AMessagePublishRequest(BaseModel):
+    project_id: str
+    channel_id: str
+    message_kind: str
+    schema_name: str
+    schema_version: int = 1
+    sender_kind: str
+    sender_id: str
+    sender_version_id: Optional[str] = None
+    recipient: dict[str, Any] = Field(default_factory=dict)
+    payload: dict[str, Any] = Field(default_factory=dict)
+    dedupe_key: str
+    data_boundary: DataBoundary = "internal"
+    priority: int = 100
+    ttl_seconds: Optional[int] = None
+    ack_mode: str = "processed"
+    conversation_id: Optional[str] = None
+    correlation_id: Optional[str] = None
+    causation_id: Optional[str] = None
+    trace_id: Optional[str] = None
+    reply_to_id: Optional[str] = None
+    lineage: dict[str, Any] = Field(default_factory=dict)
+    actor: str = "coo"
+
+
+class A2ADispatchRequest(BaseModel):
+    project_id: str
+    worker_id: str
+    lease_token: str
+    created_by_job_id: str
+
+
+class A2APollRequest(BaseModel):
+    project_id: str
+    subscription_id: str
+    consumer_name: str
+    count: int = 10
+    block_ms: int = 0
+    actor: str = "coo"
+
+
+class A2AAcknowledgeRequest(BaseModel):
+    project_id: str
+    acknowledgement: str
+    actor_kind: str
+    actor_id: str
+    result: dict[str, Any] = Field(default_factory=dict)
+    evidence_refs: list[str] = Field(default_factory=list)
+    reason: Optional[str] = None
+
+
+class A2AMessageCancelRequest(BaseModel):
+    project_id: str
+    actor: str = "coo"
+    reason: str
+
+    @model_validator(mode="after")
+    def _validate(self) -> "A2AMessageCancelRequest":
+        self.project_id = _require_text(self.project_id, "project_id")
+        self.actor = _require_text(self.actor, "actor")
+        self.reason = _require_text(self.reason, "reason")
+        return self
+
+
+class A2AMessageReplayRequest(BaseModel):
+    project_id: str
+    dedupe_key: str
+    reason: str
+    ttl_seconds: Optional[int] = None
+    actor: str = "coo"
+
+    @model_validator(mode="after")
+    def _validate(self) -> "A2AMessageReplayRequest":
+        self.project_id = _require_text(self.project_id, "project_id")
+        self.dedupe_key = _require_text(self.dedupe_key, "dedupe_key")
+        self.reason = _require_text(self.reason, "reason")
+        self.actor = _require_text(self.actor, "actor")
+        return self
+
+
+class WorkItemUpsertRequest(BaseModel):
+    project_id: str
+    subject_type: str
+    subject_id: str
+    title: str
+    description: str = ""
+    status: str = "active"
+    strategic_value: int = Field(default=50, ge=0, le=100)
+    customer_impact: int = Field(default=50, ge=0, le=100)
+    urgency: int = Field(default=50, ge=0, le=100)
+    cost_of_delay: int = Field(default=50, ge=0, le=100)
+    risk_reduction: int = Field(default=50, ge=0, le=100)
+    dependency_pressure: int = Field(default=50, ge=0, le=100)
+    confidence: int = Field(default=75, ge=0, le=100)
+    manual_adjustment: int = Field(default=0, ge=-100, le=100)
+    rationale: str = ""
+    workload_class: str = "general"
+    estimated_units: int = Field(default=1, ge=1, le=10000)
+    due_at: Optional[datetime] = None
+    owner_actor: Optional[str] = None
+    evidence: list[Any] = Field(default_factory=list)
+    source: str = "boss"
+    actor: str = "product_manager"
+
+
+class ResourceQuotaUpsertRequest(BaseModel):
+    project_id: str
+    scope_type: Literal["global", "org", "workspace", "project", "agent", "workload"]
+    scope_id: str
+    resource_kind: str = "job_concurrency"
+    reserved_min: int = Field(default=0, ge=0)
+    soft_limit: int = Field(default=1, ge=0)
+    hard_limit: int = Field(default=1, ge=1)
+    burst_limit: int = Field(default=0, ge=0)
+    allocation_weight: float = Field(default=1, gt=0)
+    borrow_enabled: bool = False
+    policy: dict[str, Any] = Field(default_factory=dict)
+    actor: str = "chief_operator"
+
+
+class ResourceAllocationPlanRequest(BaseModel):
+    project_id: str
+    resource_kind: str = "job_concurrency"
+    actor: str = "chief_operator"
+
+
+class WorkTrackerBindingUpsertRequest(BaseModel):
+    project_id: str
+    work_item_id: str
+    provider_key: Optional[str] = None
+    external_workspace_id: Optional[str] = None
+    external_project_id: Optional[str] = None
+    external_issue_id: Optional[str] = None
+    external_key: Optional[str] = None
+    external_url: Optional[str] = None
+    external_state: Optional[str] = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    actor: str = "product_manager"
+
+
+class WorkTrackerSyncExecuteRequest(BaseModel):
+    project_id: str
+    binding_id: str
+    worker_id: str
+    lease_token: str
+    created_by_job_id: str
+
+
+class DeliveryBotIdentityUpsertRequest(BaseModel):
+    project_id: str
+    provider: Literal["mattermost", "github", "plane"]
+    agent_key: str
+    display_name: str
+    external_identity: Optional[str] = None
+    agent_definition_id: Optional[str] = None
+    credential_secret_ref_id: Optional[str] = None
+    avatar_url: Optional[str] = None
+    policy: dict[str, Any] = Field(default_factory=dict)
+    actor: str = "chief_operator"
+
+
+class DeliveryStatusChannelUpsertRequest(BaseModel):
+    project_id: str
+    provider: Literal["mattermost", "github", "plane"]
+    channel_key: str
+    display_name: str
+    purpose: str
+    external_channel_id: Optional[str] = None
+    external_url: Optional[str] = None
+    bot_identity_id: Optional[str] = None
+    event_kinds: list[str] = Field(default_factory=list)
+    allowed_data_boundaries: list[DataBoundary] = Field(
+        default_factory=lambda: ["public", "internal"]
+    )
+    configuration: dict[str, Any] = Field(default_factory=dict)
+    actor: str = "chief_operator"
+
+
+class DeliveryPresenceEventCreateRequest(BaseModel):
+    project_id: str
+    provider: Literal["mattermost", "github", "plane"]
+    event_kind: str
+    subject_type: str
+    subject_id: str
+    status: str
+    summary: str
+    dedupe_key: str
+    channel_id: Optional[str] = None
+    bot_identity_id: Optional[str] = None
+    external_url: Optional[str] = None
+    receipt_id: Optional[str] = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    actor: str = "delivery_presence"

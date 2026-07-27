@@ -225,6 +225,62 @@ from .schemas import (
     FileChange,
     InboundWebhookResponse,
     GitHubCommunityJobExecuteRequest,
+    GitHubBranchPolicyCreateRequest,
+    GitHubBranchPolicyEvaluateRequest,
+    GitHubBranchPolicyEvaluationResponse,
+    GitHubBranchPolicyListResponse,
+    GitHubBranchPolicySummary,
+    GitHubBranchPolicyUpdateRequest,
+    GitHubBranchLeaseAcquireRequest,
+    GitHubBranchLeaseAcquireResponse,
+    GitHubBranchLeaseHeartbeatRequest,
+    GitHubBranchLeaseListResponse,
+    GitHubBranchLeaseReclaimRequest,
+    GitHubBranchLeaseReleaseRequest,
+    GitHubBranchLeaseSummary,
+    GitHubBranchSnapshotCaptureRequest,
+    GitHubBranchSnapshotCaptureResponse,
+    GitHubBranchSnapshotListResponse,
+    GitHubBranchSnapshotSummary,
+    GitHubCodeSyncApplyRequest,
+    GitHubCodeSyncPlanRequest,
+    GitHubCodeSyncRunListResponse,
+    GitHubCodeSyncRunSummary,
+    GitHubConflictSetListResponse,
+    GitHubConflictSetSummary,
+    GitHubConnectionCreateRequest,
+    GitHubConnectionLifecycleRequest,
+    GitHubConnectionListResponse,
+    GitHubConnectionSummary,
+    GitHubConnectionTestRequest,
+    GitHubConnectionTestResponse,
+    GitHubMergeAuthorizationApplyRequest,
+    GitHubMergeAuthorizationApproveRequest,
+    GitHubMergeAuthorizationCreateRequest,
+    GitHubMergeAuthorizationEnqueueRequest,
+    GitHubMergeAuthorizationListResponse,
+    GitHubMergeAuthorizationSummary,
+    GitHubReconciliationExecuteRequest,
+    GitHubReconciliationExecuteResponse,
+    GitHubReconciliationPollRequest,
+    GitHubReconciliationPollResponse,
+    GitHubReconciliationRepairRequest,
+    GitHubReconciliationRunListResponse,
+    GitHubReconciliationRunSummary,
+    GitHubReconciliationSignalListResponse,
+    GitHubReconciliationSignalSummary,
+    GitHubRepositoryRefStateListResponse,
+    GitHubRepositoryRefStateSummary,
+    GitHubRepositoryBindingCreateRequest,
+    GitHubRepositoryBindingListResponse,
+    GitHubRepositoryBindingSummary,
+    GitHubRepositoryBindingUpdateRequest,
+    GitHubResolutionApplyResponse,
+    GitHubResolutionPlanApplyRequest,
+    GitHubResolutionPlanApproveRequest,
+    GitHubResolutionPlanCreateRequest,
+    GitHubResolutionPlanListResponse,
+    GitHubResolutionPlanSummary,
     WebhookDeliveryCreateRequest,
     WebhookDeliveryExecuteRequest,
     WebhookDeliveryListResponse,
@@ -418,6 +474,7 @@ from .schemas import (
     WorkflowDefinitionDetail,
     WorkflowDefinitionListResponse,
     WorkflowDefinitionSummary,
+    WorkflowDraftValidateRequest,
     WorkflowMappingCreateRequest,
     WorkflowMappingListResponse,
     WorkflowMappingResolveRequest,
@@ -437,6 +494,47 @@ from .schemas import (
     WorkflowStepRunSummary,
     WorkflowVersionCreateRequest,
     WorkflowVersionSummary,
+)
+from .schemas import (
+    A2AAcknowledgeRequest,
+    A2AChannelCreateRequest,
+    A2ADispatchRequest,
+    A2AMessageCancelRequest,
+    A2AMessagePublishRequest,
+    A2AMessageReplayRequest,
+    A2APollRequest,
+    A2ASubscriptionCreateRequest,
+    AgentDefinitionCreateRequest,
+    AgentStudioActorRequest,
+    AgentStudioRunRequest,
+    AgentTestRunRequest,
+    AgentVersionCreateRequest,
+    PanelDefinitionCreateRequest,
+    PanelRunRequest,
+    PanelVersionCreateRequest,
+    DeliveryBotIdentityUpsertRequest,
+    DeliveryPresenceEventCreateRequest,
+    DeliveryStatusChannelUpsertRequest,
+    ResourceAllocationPlanRequest,
+    ResourceQuotaUpsertRequest,
+    WorkItemUpsertRequest,
+    WorkTrackerBindingUpsertRequest,
+    WorkTrackerSyncExecuteRequest,
+)
+from .services.a2a import (
+    A2ANotFoundError,
+    A2AService,
+    A2AStateError,
+    A2ATransportUnavailable,
+)
+from .services.agent_studio import (
+    AgentDefinitionNotFoundError,
+    AgentStudioService,
+    AgentVersionNotFoundError,
+    AgentVersionStateError,
+    PanelDefinitionNotFoundError,
+    PanelVersionNotFoundError,
+    PanelVersionStateError,
 )
 from .services.audit import AuditTrailService
 from .services.agent_loop import conversation_from_messages, describe_native_tools
@@ -489,7 +587,45 @@ from .services.webhooks import (
     WebhookService,
 )
 from .services.plane_webhooks import PlaneWebhookService
+from .services.plane_client import PlaneClient
 from .services.github_community_service import GitHubCommunityService
+from .services.github_branches import (
+    GitHubBranchPolicyNotFoundError,
+    GitHubBranchService,
+    GitHubBranchSnapshotNotFoundError,
+)
+from .services.github_branch_leases import (
+    GitHubBranchLeaseConflictError,
+    GitHubBranchLeaseNotFoundError,
+    GitHubBranchLeaseService,
+    GitHubBranchLeaseTokenError,
+)
+from .services.github_code_sync import (
+    GitHubCodeSyncNotFoundError,
+    GitHubCodeSyncService,
+    GitHubCodeSyncStaleError,
+    GitHubCodeSyncStateError,
+    GitHubConflictSetNotFoundError,
+    GitHubResolutionPlanNotFoundError,
+)
+from .services.github_connections import (
+    GitHubConnectionNotFoundError,
+    GitHubConnectionService,
+    GitHubConnectionStateError,
+    GitHubRepositoryBindingNotFoundError,
+)
+from .services.github_merges import (
+    GitHubMergeAuthorizationNotFoundError,
+    GitHubMergeAuthorizationService,
+    GitHubMergeAuthorizationStaleError,
+    GitHubMergeAuthorizationStateError,
+)
+from .services.github_reconciliation import (
+    GitHubReconciliationNotFoundError,
+    GitHubReconciliationProviderError,
+    GitHubReconciliationService,
+    GitHubReconciliationStateError,
+)
 from .services.infrastructure import (
     InfraResourceNotFoundError,
     InfrastructureService,
@@ -502,6 +638,7 @@ from .services.agent_service import (
     AgentThreadOwnershipError,
 )
 from .services.jobs import JobLeaseService, LeaseNotFoundError
+from .services.work_orchestration import WorkOrchestrationService
 from .services.members import (
     DEFAULT_MEMBER_IDS,
     MemberDirectoryService,
@@ -603,6 +740,28 @@ webhooks = WebhookService(settings)
 inbound_webhooks = InboundWebhookService(settings)
 plane_webhooks = PlaneWebhookService(settings)
 github_community = GitHubCommunityService(settings)
+github_connections = GitHubConnectionService(settings)
+github_branches = GitHubBranchService(
+    settings,
+    github_connections=github_connections,
+)
+github_branch_leases = GitHubBranchLeaseService(
+    github_connections=github_connections,
+)
+github_code_sync = GitHubCodeSyncService(
+    github_connections=github_connections,
+    github_branches=github_branches,
+    github_branch_leases=github_branch_leases,
+)
+github_merge_authorizations = GitHubMergeAuthorizationService(
+    github_connections=github_connections,
+    github_branches=github_branches,
+    github_branch_leases=github_branch_leases,
+)
+github_reconciler = GitHubReconciliationService(
+    settings,
+    github_connections=github_connections,
+)
 software_factory = SoftwareFactoryService(settings, ports=engine_ports)
 decisions = DecisionService(settings)
 specpack = SpecPackService(settings)
@@ -634,6 +793,9 @@ ops_queue = OpsQueueService(settings)
 reports = ReportService(settings)
 break_glass = BreakGlassService()
 resource_plane = ResourcePlaneService(settings)
+agent_studio = AgentStudioService(settings)
+a2a = A2AService(settings)
+work_orchestration = WorkOrchestrationService(settings)
 deployment_rollout_engine = DeploymentRolloutEngine(settings)
 promotion_orchestrator = PromotionOrchestrator(
     settings,
@@ -1347,10 +1509,20 @@ def job_summary_from_row(row) -> JobSummary:
         id=row["id"],
         project_id=row["project_id"],
         task_id=row["task_id"],
+        work_item_id=row.get("work_item_id"),
+        tracker_binding_id=row.get("tracker_binding_id"),
+        allocation_id=row.get("allocation_id"),
         kind=row["kind"],
         status=row["status"],
         data_boundary=row.get("data_boundary") or "internal",
         priority=row["priority"],
+        priority_score=(
+            float(row["priority_score"])
+            if row.get("priority_score") is not None
+            else None
+        ),
+        workload_class=row.get("workload_class") or "general",
+        resource_units=int(row.get("resource_units") or 1),
         max_attempts=row["max_attempts"],
         attempt=row["attempt"],
         run_after=row["run_after"].isoformat(),
@@ -4588,6 +4760,15 @@ async def receive_inbound_webhook(
             raw_body,
             headers,
         )
+        if (
+            source.strip().lower() == "github"
+            and result["status"] == "accepted"
+            and result.get("inbound_webhook_id")
+        ):
+            github_reconciler.ingest_inbound_webhook(
+                connection,
+                inbound_webhook_id=result["inbound_webhook_id"],
+            )
     if result["status"] == "rejected":
         raise HTTPException(status_code=401, detail="Invalid webhook signature.")
     if result["status"] == "not_configured":
@@ -4610,6 +4791,11 @@ async def receive_github_webhook(request: Request):
             headers,
             github_community_only=True,
         )
+        if result["status"] == "accepted" and result.get("inbound_webhook_id"):
+            github_reconciler.ingest_inbound_webhook(
+                connection,
+                inbound_webhook_id=result["inbound_webhook_id"],
+            )
     if result["status"] == "rejected":
         raise HTTPException(status_code=401, detail="Invalid webhook signature.")
     if result["status"] == "not_configured":
@@ -6927,6 +7113,8 @@ def get_job(job_id: str) -> JobSummary:
             text(
                 """
                 SELECT id, project_id, task_id, kind, status, data_boundary, priority,
+                       work_item_id, tracker_binding_id, allocation_id,
+                       priority_score, workload_class, resource_units,
                        max_attempts, attempt, run_after
                 FROM jobs
                 WHERE id = :job_id
@@ -8546,6 +8734,1424 @@ def delete_secret_ref(
         except SecretRefNotFoundError as error:
             raise HTTPException(status_code=404, detail=str(error)) from error
     return Response(status_code=204)
+
+
+@app.get(
+    "/v1/github/connections",
+    response_model=GitHubConnectionListResponse,
+)
+def list_github_connections(project_id: str) -> GitHubConnectionListResponse:
+    with begin(engine) as connection:
+        return GitHubConnectionListResponse(
+            project_id=project_id,
+            items=[
+                GitHubConnectionSummary(**item)
+                for item in github_connections.list_connections(
+                    connection, project_id
+                )
+            ],
+        )
+
+
+@app.post(
+    "/v1/github/connections",
+    response_model=GitHubConnectionSummary,
+    status_code=201,
+)
+def create_github_connection(
+    payload: GitHubConnectionCreateRequest,
+) -> GitHubConnectionSummary:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection,
+            payload.project_id,
+            payload.actor,
+            "github_manage",
+        )
+        try:
+            item = github_connections.create_connection(
+                connection,
+                project_id=payload.project_id,
+                connection_label=payload.connection_label,
+                auth_method=payload.auth_method,
+                credential_ref=payload.credential_ref,
+                app_id=payload.app_id,
+                installation_id=payload.installation_id,
+                api_base_url=payload.api_base_url,
+                required_permissions=payload.required_permissions,
+                metadata=payload.metadata,
+                actor=payload.actor,
+            )
+        except (SecretRefNotFoundError, ValueError) as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        return GitHubConnectionSummary(**item)
+
+
+@app.get(
+    "/v1/github/connections/{connection_id}",
+    response_model=GitHubConnectionSummary,
+)
+def get_github_connection(
+    connection_id: str,
+    project_id: str,
+) -> GitHubConnectionSummary:
+    with begin(engine) as connection:
+        try:
+            item = github_connections.get_connection(
+                connection, project_id, connection_id
+            )
+        except GitHubConnectionNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        return GitHubConnectionSummary(**item)
+
+
+def _transition_github_connection(
+    connection_id: str,
+    payload: GitHubConnectionLifecycleRequest,
+    action: str,
+) -> GitHubConnectionSummary:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection,
+            payload.project_id,
+            payload.actor,
+            "github_manage",
+        )
+        try:
+            item = github_connections.transition_connection(
+                connection,
+                project_id=payload.project_id,
+                connection_id=connection_id,
+                action=action,
+                actor=payload.actor,
+            )
+        except GitHubConnectionNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except (GitHubConnectionStateError, ValueError) as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        return GitHubConnectionSummary(**item)
+
+
+@app.post(
+    "/v1/github/connections/{connection_id}/enable",
+    response_model=GitHubConnectionSummary,
+)
+def enable_github_connection(
+    connection_id: str,
+    payload: GitHubConnectionLifecycleRequest,
+) -> GitHubConnectionSummary:
+    return _transition_github_connection(connection_id, payload, "enable")
+
+
+@app.post(
+    "/v1/github/connections/{connection_id}/disable",
+    response_model=GitHubConnectionSummary,
+)
+def disable_github_connection(
+    connection_id: str,
+    payload: GitHubConnectionLifecycleRequest,
+) -> GitHubConnectionSummary:
+    return _transition_github_connection(connection_id, payload, "disable")
+
+
+@app.post(
+    "/v1/github/connections/{connection_id}/revoke",
+    response_model=GitHubConnectionSummary,
+)
+def revoke_github_connection(
+    connection_id: str,
+    payload: GitHubConnectionLifecycleRequest,
+) -> GitHubConnectionSummary:
+    return _transition_github_connection(connection_id, payload, "revoke")
+
+
+@app.get(
+    "/v1/github/repository-bindings",
+    response_model=GitHubRepositoryBindingListResponse,
+)
+def list_github_repository_bindings(
+    project_id: str,
+    connection_id: Optional[str] = None,
+) -> GitHubRepositoryBindingListResponse:
+    with begin(engine) as connection:
+        return GitHubRepositoryBindingListResponse(
+            project_id=project_id,
+            items=[
+                GitHubRepositoryBindingSummary(**item)
+                for item in github_connections.list_repository_bindings(
+                    connection,
+                    project_id,
+                    connection_id=connection_id,
+                )
+            ],
+        )
+
+
+@app.post(
+    "/v1/github/repository-bindings",
+    response_model=GitHubRepositoryBindingSummary,
+    status_code=201,
+)
+def create_github_repository_binding(
+    payload: GitHubRepositoryBindingCreateRequest,
+) -> GitHubRepositoryBindingSummary:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection,
+            payload.project_id,
+            payload.actor,
+            "github_manage",
+        )
+        try:
+            item = github_connections.create_repository_binding(
+                connection,
+                project_id=payload.project_id,
+                connection_id=payload.connection_id,
+                repository=payload.repository,
+                role=payload.role,
+                default_branch=payload.default_branch,
+                metadata=payload.metadata,
+                actor=payload.actor,
+            )
+        except GitHubConnectionNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except (GitHubConnectionStateError, ValueError) as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        return GitHubRepositoryBindingSummary(**item)
+
+
+@app.get(
+    "/v1/github/repository-bindings/{binding_id}",
+    response_model=GitHubRepositoryBindingSummary,
+)
+def get_github_repository_binding(
+    binding_id: str,
+    project_id: str,
+) -> GitHubRepositoryBindingSummary:
+    with begin(engine) as connection:
+        try:
+            item = github_connections.get_repository_binding(
+                connection, project_id, binding_id
+            )
+        except GitHubRepositoryBindingNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        return GitHubRepositoryBindingSummary(**item)
+
+
+@app.patch(
+    "/v1/github/repository-bindings/{binding_id}",
+    response_model=GitHubRepositoryBindingSummary,
+)
+def update_github_repository_binding(
+    binding_id: str,
+    payload: GitHubRepositoryBindingUpdateRequest,
+) -> GitHubRepositoryBindingSummary:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection,
+            payload.project_id,
+            payload.actor,
+            "github_manage",
+        )
+        try:
+            item = github_connections.update_repository_binding(
+                connection,
+                project_id=payload.project_id,
+                binding_id=binding_id,
+                role=payload.role,
+                status=payload.status,
+                default_branch=payload.default_branch,
+                metadata=payload.metadata,
+                actor=payload.actor,
+            )
+        except (
+            GitHubConnectionNotFoundError,
+            GitHubRepositoryBindingNotFoundError,
+        ) as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except (GitHubConnectionStateError, ValueError) as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        return GitHubRepositoryBindingSummary(**item)
+
+
+@app.post(
+    "/v1/github/connections/{connection_id}/test",
+    response_model=GitHubConnectionTestResponse,
+)
+def test_github_connection(
+    connection_id: str,
+    payload: GitHubConnectionTestRequest,
+) -> GitHubConnectionTestResponse:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection,
+            payload.project_id,
+            payload.actor,
+            "github_manage",
+        )
+        try:
+            result = github_connections.test_connection(
+                connection,
+                project_id=payload.project_id,
+                connection_id=connection_id,
+                binding_id=payload.repository_binding_id,
+                dedupe_key=payload.dedupe_key,
+                actor=payload.actor,
+            )
+        except (
+            GitHubConnectionNotFoundError,
+            GitHubRepositoryBindingNotFoundError,
+        ) as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except (GitHubConnectionStateError, ValueError) as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        return GitHubConnectionTestResponse(
+            status=result["status"],
+            duplicate=result["duplicate"],
+            receipt_id=result["receipt_id"],
+            connection=GitHubConnectionSummary(**result["connection"]),
+            repository_binding=GitHubRepositoryBindingSummary(
+                **result["repository_binding"]
+            ),
+            detail=result["detail"],
+        )
+
+
+@app.get(
+    "/v1/github/branch-policies",
+    response_model=GitHubBranchPolicyListResponse,
+)
+def list_github_branch_policies(
+    project_id: str,
+    repository_binding_id: Optional[str] = None,
+    include_history: bool = False,
+) -> GitHubBranchPolicyListResponse:
+    with begin(engine) as connection:
+        return GitHubBranchPolicyListResponse(
+            project_id=project_id,
+            items=[
+                GitHubBranchPolicySummary(**item)
+                for item in github_branches.list_policies(
+                    connection,
+                    project_id,
+                    repository_binding_id=repository_binding_id,
+                    include_history=include_history,
+                )
+            ],
+        )
+
+
+@app.post(
+    "/v1/github/branch-policies",
+    response_model=GitHubBranchPolicySummary,
+    status_code=201,
+)
+def create_github_branch_policy(
+    payload: GitHubBranchPolicyCreateRequest,
+) -> GitHubBranchPolicySummary:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection,
+            payload.project_id,
+            payload.actor,
+            "github_manage",
+        )
+        try:
+            item = github_branches.create_policy(
+                connection,
+                project_id=payload.project_id,
+                repository_binding_id=payload.repository_binding_id,
+                protected_ref_patterns=payload.protected_ref_patterns,
+                allowed_branch_prefixes=payload.allowed_branch_prefixes,
+                branch_name_pattern=payload.branch_name_pattern,
+                allowed_update_methods=payload.allowed_update_methods,
+                allowed_merge_methods=payload.allowed_merge_methods,
+                required_checks=payload.required_checks,
+                required_approvals=payload.required_approvals,
+                require_pull_request=payload.require_pull_request,
+                require_linear_history=payload.require_linear_history,
+                require_signed_commits=payload.require_signed_commits,
+                automation_updates_enabled=payload.automation_updates_enabled,
+                force_push_allowed=payload.force_push_allowed,
+                metadata=payload.metadata,
+                actor=payload.actor,
+            )
+        except GitHubRepositoryBindingNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except (GitHubConnectionStateError, ValueError) as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        return GitHubBranchPolicySummary(**item)
+
+
+@app.get(
+    "/v1/github/branch-policies/{policy_id}",
+    response_model=GitHubBranchPolicySummary,
+)
+def get_github_branch_policy(
+    policy_id: str,
+    project_id: str,
+) -> GitHubBranchPolicySummary:
+    with begin(engine) as connection:
+        try:
+            item = github_branches.get_policy(connection, project_id, policy_id)
+        except GitHubBranchPolicyNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        return GitHubBranchPolicySummary(**item)
+
+
+@app.patch(
+    "/v1/github/branch-policies/{policy_id}",
+    response_model=GitHubBranchPolicySummary,
+)
+def revise_github_branch_policy(
+    policy_id: str,
+    payload: GitHubBranchPolicyUpdateRequest,
+) -> GitHubBranchPolicySummary:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection,
+            payload.project_id,
+            payload.actor,
+            "github_manage",
+        )
+        try:
+            item = github_branches.revise_policy(
+                connection,
+                project_id=payload.project_id,
+                policy_id=policy_id,
+                updates=payload.model_dump(
+                    exclude={"project_id", "actor"},
+                    exclude_none=True,
+                ),
+                actor=payload.actor,
+            )
+        except GitHubBranchPolicyNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except ValueError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        return GitHubBranchPolicySummary(**item)
+
+
+@app.post(
+    "/v1/github/branch-policies/{policy_id}/evaluate",
+    response_model=GitHubBranchPolicyEvaluationResponse,
+)
+def evaluate_github_branch_policy(
+    policy_id: str,
+    payload: GitHubBranchPolicyEvaluateRequest,
+) -> GitHubBranchPolicyEvaluationResponse:
+    with begin(engine) as connection:
+        try:
+            policy = github_branches.get_policy(
+                connection, payload.project_id, policy_id
+            )
+            result = github_branches.evaluate_policy(
+                policy,
+                ref=payload.ref,
+                operation=payload.operation,
+                method=payload.method,
+            )
+        except GitHubBranchPolicyNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        return GitHubBranchPolicyEvaluationResponse(**result)
+
+
+@app.get(
+    "/v1/github/branch-snapshots",
+    response_model=GitHubBranchSnapshotListResponse,
+)
+def list_github_branch_snapshots(
+    project_id: str,
+    repository_binding_id: Optional[str] = None,
+    limit: int = Query(default=50, ge=1, le=200),
+) -> GitHubBranchSnapshotListResponse:
+    with begin(engine) as connection:
+        return GitHubBranchSnapshotListResponse(
+            project_id=project_id,
+            items=[
+                GitHubBranchSnapshotSummary(**item)
+                for item in github_branches.list_snapshots(
+                    connection,
+                    project_id,
+                    repository_binding_id=repository_binding_id,
+                    limit=limit,
+                )
+            ],
+        )
+
+
+@app.post(
+    "/v1/github/branch-snapshots/capture",
+    response_model=GitHubBranchSnapshotCaptureResponse,
+)
+def capture_github_branch_snapshot(
+    payload: GitHubBranchSnapshotCaptureRequest,
+) -> GitHubBranchSnapshotCaptureResponse:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection,
+            payload.project_id,
+            payload.actor,
+            "github_manage",
+        )
+        try:
+            result = github_branches.capture_snapshot(
+                connection,
+                project_id=payload.project_id,
+                repository_binding_id=payload.repository_binding_id,
+                source_ref=payload.source_ref,
+                target_ref=payload.target_ref,
+                dedupe_key=payload.dedupe_key,
+                actor=payload.actor,
+            )
+        except GitHubRepositoryBindingNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except GitHubBranchPolicyNotFoundError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        except (GitHubConnectionStateError, ValueError) as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        return GitHubBranchSnapshotCaptureResponse(
+            status=result["status"],
+            duplicate=result["duplicate"],
+            receipt_id=result["receipt_id"],
+            snapshot=(
+                GitHubBranchSnapshotSummary(**result["snapshot"])
+                if result["snapshot"]
+                else None
+            ),
+            error=result["error"],
+        )
+
+
+@app.get(
+    "/v1/github/branch-snapshots/{snapshot_id}",
+    response_model=GitHubBranchSnapshotSummary,
+)
+def get_github_branch_snapshot(
+    snapshot_id: str,
+    project_id: str,
+) -> GitHubBranchSnapshotSummary:
+    with begin(engine) as connection:
+        try:
+            item = github_branches.get_snapshot(
+                connection, project_id, snapshot_id
+            )
+        except GitHubBranchSnapshotNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        return GitHubBranchSnapshotSummary(**item)
+
+
+@app.get(
+    "/v1/github/branch-leases",
+    response_model=GitHubBranchLeaseListResponse,
+)
+def list_github_branch_leases(
+    project_id: str,
+    repository_binding_id: Optional[str] = None,
+    ref_name: Optional[str] = None,
+    include_history: bool = False,
+    limit: int = Query(default=100, ge=1, le=200),
+) -> GitHubBranchLeaseListResponse:
+    with begin(engine) as connection:
+        return GitHubBranchLeaseListResponse(
+            project_id=project_id,
+            items=[
+                GitHubBranchLeaseSummary(**item)
+                for item in github_branch_leases.list(
+                    connection,
+                    project_id,
+                    repository_binding_id=repository_binding_id,
+                    ref_name=ref_name,
+                    include_history=include_history,
+                    limit=limit,
+                )
+            ],
+        )
+
+
+@app.post(
+    "/v1/github/branch-leases",
+    response_model=GitHubBranchLeaseAcquireResponse,
+    status_code=201,
+)
+def acquire_github_branch_lease(
+    payload: GitHubBranchLeaseAcquireRequest,
+) -> GitHubBranchLeaseAcquireResponse:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection,
+            payload.project_id,
+            payload.actor,
+            "github_manage",
+        )
+        try:
+            result = github_branch_leases.acquire(
+                connection,
+                project_id=payload.project_id,
+                repository_binding_id=payload.repository_binding_id,
+                ref_name=payload.ref_name,
+                owner_kind=payload.owner_kind,
+                owner_id=payload.owner_id,
+                run_id=payload.run_id,
+                worktree_path=payload.worktree_path,
+                acquire_key=payload.acquire_key,
+                ttl_seconds=payload.ttl_seconds,
+                actor=payload.actor,
+            )
+        except GitHubRepositoryBindingNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except (
+            GitHubBranchLeaseConflictError,
+            GitHubConnectionStateError,
+            ValueError,
+        ) as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        return GitHubBranchLeaseAcquireResponse(
+            lease=GitHubBranchLeaseSummary(**result["lease"]),
+            lease_token=result["lease_token"],
+            duplicate=result["duplicate"],
+        )
+
+
+@app.get(
+    "/v1/github/branch-leases/{lease_id}",
+    response_model=GitHubBranchLeaseSummary,
+)
+def get_github_branch_lease(
+    lease_id: str,
+    project_id: str,
+) -> GitHubBranchLeaseSummary:
+    with begin(engine) as connection:
+        try:
+            item = github_branch_leases.get(connection, project_id, lease_id)
+        except GitHubBranchLeaseNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        return GitHubBranchLeaseSummary(**item)
+
+
+@app.post(
+    "/v1/github/branch-leases/{lease_id}/heartbeat",
+    response_model=GitHubBranchLeaseSummary,
+)
+def heartbeat_github_branch_lease(
+    lease_id: str,
+    payload: GitHubBranchLeaseHeartbeatRequest,
+) -> GitHubBranchLeaseSummary:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection,
+            payload.project_id,
+            payload.actor,
+            "github_manage",
+        )
+        try:
+            item = github_branch_leases.heartbeat(
+                connection,
+                project_id=payload.project_id,
+                lease_id=lease_id,
+                lease_token=payload.lease_token,
+                fencing_token=payload.fencing_token,
+                ttl_seconds=payload.ttl_seconds,
+                actor=payload.actor,
+            )
+        except GitHubBranchLeaseNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except (
+            GitHubBranchLeaseConflictError,
+            GitHubBranchLeaseTokenError,
+            ValueError,
+        ) as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        return GitHubBranchLeaseSummary(**item)
+
+
+@app.post(
+    "/v1/github/branch-leases/{lease_id}/release",
+    response_model=GitHubBranchLeaseSummary,
+)
+def release_github_branch_lease(
+    lease_id: str,
+    payload: GitHubBranchLeaseReleaseRequest,
+) -> GitHubBranchLeaseSummary:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection,
+            payload.project_id,
+            payload.actor,
+            "github_manage",
+        )
+        try:
+            item = github_branch_leases.release(
+                connection,
+                project_id=payload.project_id,
+                lease_id=lease_id,
+                lease_token=payload.lease_token,
+                fencing_token=payload.fencing_token,
+                reason=payload.reason,
+                actor=payload.actor,
+            )
+        except GitHubBranchLeaseNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except (
+            GitHubBranchLeaseConflictError,
+            GitHubBranchLeaseTokenError,
+            ValueError,
+        ) as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        return GitHubBranchLeaseSummary(**item)
+
+
+@app.post(
+    "/v1/github/branch-leases/{lease_id}/reclaim",
+    response_model=GitHubBranchLeaseSummary,
+)
+def reclaim_github_branch_lease(
+    lease_id: str,
+    payload: GitHubBranchLeaseReclaimRequest,
+) -> GitHubBranchLeaseSummary:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection,
+            payload.project_id,
+            payload.actor,
+            "github_manage",
+        )
+        try:
+            item = github_branch_leases.reclaim_expired(
+                connection,
+                project_id=payload.project_id,
+                lease_id=lease_id,
+                reason=payload.reason,
+                actor=payload.actor,
+            )
+        except GitHubBranchLeaseNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except (GitHubBranchLeaseConflictError, ValueError) as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        return GitHubBranchLeaseSummary(**item)
+
+
+@app.get(
+    "/v1/github/code-sync-runs",
+    response_model=GitHubCodeSyncRunListResponse,
+)
+def list_github_code_sync_runs(
+    project_id: str,
+    repository_binding_id: Optional[str] = None,
+    status: Optional[str] = None,
+    limit: int = Query(default=100, ge=1, le=200),
+) -> GitHubCodeSyncRunListResponse:
+    with begin(engine) as connection:
+        return GitHubCodeSyncRunListResponse(
+            project_id=project_id,
+            items=[
+                GitHubCodeSyncRunSummary(**item)
+                for item in github_code_sync.list_runs(
+                    connection,
+                    project_id,
+                    repository_binding_id=repository_binding_id,
+                    status=status,
+                    limit=limit,
+                )
+            ],
+        )
+
+
+@app.post(
+    "/v1/github/code-sync-runs/plan",
+    response_model=GitHubCodeSyncRunSummary,
+    status_code=201,
+)
+def plan_github_code_sync(
+    payload: GitHubCodeSyncPlanRequest,
+) -> GitHubCodeSyncRunSummary:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection,
+            payload.project_id,
+            payload.actor,
+            "github_manage",
+        )
+        try:
+            item = github_code_sync.plan(
+                connection,
+                project_id=payload.project_id,
+                repository_binding_id=payload.repository_binding_id,
+                snapshot_id=payload.snapshot_id,
+                dedupe_key=payload.dedupe_key,
+                resolution_branch=payload.resolution_branch,
+                actor=payload.actor,
+            )
+        except (
+            GitHubBranchSnapshotNotFoundError,
+            GitHubBranchPolicyNotFoundError,
+            GitHubRepositoryBindingNotFoundError,
+        ) as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except (
+            GitHubCodeSyncStateError,
+            GitHubConnectionStateError,
+            ValueError,
+        ) as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        return GitHubCodeSyncRunSummary(**item)
+
+
+@app.get(
+    "/v1/github/code-sync-runs/{sync_run_id}",
+    response_model=GitHubCodeSyncRunSummary,
+)
+def get_github_code_sync_run(
+    sync_run_id: str,
+    project_id: str,
+) -> GitHubCodeSyncRunSummary:
+    with begin(engine) as connection:
+        try:
+            item = github_code_sync.get(connection, project_id, sync_run_id)
+        except GitHubCodeSyncNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        return GitHubCodeSyncRunSummary(**item)
+
+
+@app.post(
+    "/v1/github/code-sync-runs/{sync_run_id}/apply",
+    response_model=GitHubCodeSyncRunSummary,
+)
+def apply_github_code_sync(
+    sync_run_id: str,
+    payload: GitHubCodeSyncApplyRequest,
+) -> GitHubCodeSyncRunSummary:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection,
+            payload.project_id,
+            payload.actor,
+            "github_manage",
+        )
+        try:
+            item = github_code_sync.apply(
+                connection,
+                project_id=payload.project_id,
+                sync_run_id=sync_run_id,
+                lease_id=payload.lease_id,
+                lease_token=payload.lease_token,
+                fencing_token=payload.fencing_token,
+                actor=payload.actor,
+            )
+        except (
+            GitHubCodeSyncNotFoundError,
+            GitHubBranchLeaseNotFoundError,
+            GitHubRepositoryBindingNotFoundError,
+        ) as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except (
+            GitHubCodeSyncStateError,
+            GitHubCodeSyncStaleError,
+            GitHubBranchLeaseConflictError,
+            GitHubBranchLeaseTokenError,
+            GitHubConnectionStateError,
+            ValueError,
+        ) as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        return GitHubCodeSyncRunSummary(**item)
+
+
+@app.get(
+    "/v1/github/conflict-sets",
+    response_model=GitHubConflictSetListResponse,
+)
+def list_github_conflict_sets(
+    project_id: str,
+    status: Optional[str] = None,
+    limit: int = Query(default=100, ge=1, le=200),
+) -> GitHubConflictSetListResponse:
+    with begin(engine) as connection:
+        return GitHubConflictSetListResponse(
+            project_id=project_id,
+            items=[
+                GitHubConflictSetSummary(**item)
+                for item in github_code_sync.list_conflicts(
+                    connection,
+                    project_id,
+                    status=status,
+                    limit=limit,
+                )
+            ],
+        )
+
+
+@app.get(
+    "/v1/github/conflict-sets/{conflict_set_id}",
+    response_model=GitHubConflictSetSummary,
+)
+def get_github_conflict_set(
+    conflict_set_id: str,
+    project_id: str,
+) -> GitHubConflictSetSummary:
+    with begin(engine) as connection:
+        try:
+            item = github_code_sync.get_conflict(
+                connection, project_id, conflict_set_id
+            )
+        except GitHubConflictSetNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        return GitHubConflictSetSummary(**item)
+
+
+@app.get(
+    "/v1/github/resolution-plans",
+    response_model=GitHubResolutionPlanListResponse,
+)
+def list_github_resolution_plans(
+    project_id: str,
+    conflict_set_id: Optional[str] = None,
+    limit: int = Query(default=100, ge=1, le=200),
+) -> GitHubResolutionPlanListResponse:
+    with begin(engine) as connection:
+        return GitHubResolutionPlanListResponse(
+            project_id=project_id,
+            items=[
+                GitHubResolutionPlanSummary(**item)
+                for item in github_code_sync.list_resolution_plans(
+                    connection,
+                    project_id,
+                    conflict_set_id=conflict_set_id,
+                    limit=limit,
+                )
+            ],
+        )
+
+
+@app.post(
+    "/v1/github/conflict-sets/{conflict_set_id}/resolution-plans",
+    response_model=GitHubResolutionPlanSummary,
+    status_code=201,
+)
+def create_github_resolution_plan(
+    conflict_set_id: str,
+    payload: GitHubResolutionPlanCreateRequest,
+) -> GitHubResolutionPlanSummary:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection,
+            payload.project_id,
+            payload.actor,
+            "github_manage",
+        )
+        try:
+            item = github_code_sync.propose_resolution(
+                connection,
+                project_id=payload.project_id,
+                conflict_set_id=conflict_set_id,
+                resolved_files=payload.resolved_files,
+                validation_evidence=payload.validation_evidence,
+                actor=payload.actor,
+            )
+        except GitHubConflictSetNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except (GitHubCodeSyncStateError, ValueError) as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        return GitHubResolutionPlanSummary(**item)
+
+
+@app.get(
+    "/v1/github/resolution-plans/{plan_id}",
+    response_model=GitHubResolutionPlanSummary,
+)
+def get_github_resolution_plan(
+    plan_id: str,
+    project_id: str,
+) -> GitHubResolutionPlanSummary:
+    with begin(engine) as connection:
+        try:
+            item = github_code_sync.get_resolution_plan(
+                connection, project_id, plan_id
+            )
+        except GitHubResolutionPlanNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        return GitHubResolutionPlanSummary(**item)
+
+
+@app.post(
+    "/v1/github/resolution-plans/{plan_id}/approve",
+    response_model=GitHubResolutionPlanSummary,
+)
+def approve_github_resolution_plan(
+    plan_id: str,
+    payload: GitHubResolutionPlanApproveRequest,
+) -> GitHubResolutionPlanSummary:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection,
+            payload.project_id,
+            payload.actor,
+            "github_manage",
+        )
+        try:
+            item = github_code_sync.approve_resolution(
+                connection,
+                project_id=payload.project_id,
+                plan_id=plan_id,
+                review_evidence=payload.review_evidence,
+                actor=payload.actor,
+            )
+        except GitHubResolutionPlanNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except (GitHubCodeSyncStateError, ValueError) as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        return GitHubResolutionPlanSummary(**item)
+
+
+@app.post(
+    "/v1/github/resolution-plans/{plan_id}/apply",
+    response_model=GitHubResolutionApplyResponse,
+)
+def apply_github_resolution_plan(
+    plan_id: str,
+    payload: GitHubResolutionPlanApplyRequest,
+) -> GitHubResolutionApplyResponse:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection,
+            payload.project_id,
+            payload.actor,
+            "github_manage",
+        )
+        try:
+            result = github_code_sync.apply_resolution(
+                connection,
+                project_id=payload.project_id,
+                plan_id=plan_id,
+                lease_id=payload.lease_id,
+                lease_token=payload.lease_token,
+                fencing_token=payload.fencing_token,
+                actor=payload.actor,
+            )
+        except (
+            GitHubResolutionPlanNotFoundError,
+            GitHubConflictSetNotFoundError,
+            GitHubCodeSyncNotFoundError,
+            GitHubBranchLeaseNotFoundError,
+            GitHubRepositoryBindingNotFoundError,
+        ) as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except (
+            GitHubCodeSyncStateError,
+            GitHubCodeSyncStaleError,
+            GitHubBranchLeaseConflictError,
+            GitHubBranchLeaseTokenError,
+            GitHubConnectionStateError,
+            ValueError,
+        ) as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        return GitHubResolutionApplyResponse(
+            plan=GitHubResolutionPlanSummary(**result["plan"]),
+            conflict_set=GitHubConflictSetSummary(**result["conflict_set"]),
+            sync_run=GitHubCodeSyncRunSummary(**result["sync_run"]),
+        )
+
+
+@app.get(
+    "/v1/github/merge-authorizations",
+    response_model=GitHubMergeAuthorizationListResponse,
+)
+def list_github_merge_authorizations(
+    project_id: str,
+    repository_binding_id: Optional[str] = None,
+    target_ref: Optional[str] = None,
+    status: Optional[str] = None,
+    limit: int = Query(default=100, ge=1, le=200),
+) -> GitHubMergeAuthorizationListResponse:
+    with begin(engine) as connection:
+        return GitHubMergeAuthorizationListResponse(
+            project_id=project_id,
+            items=[
+                GitHubMergeAuthorizationSummary(**item)
+                for item in github_merge_authorizations.list(
+                    connection,
+                    project_id,
+                    repository_binding_id=repository_binding_id,
+                    target_ref=target_ref,
+                    status=status,
+                    limit=limit,
+                )
+            ],
+        )
+
+
+@app.post(
+    "/v1/github/merge-authorizations",
+    response_model=GitHubMergeAuthorizationSummary,
+    status_code=201,
+)
+def create_github_merge_authorization(
+    payload: GitHubMergeAuthorizationCreateRequest,
+) -> GitHubMergeAuthorizationSummary:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection,
+            payload.project_id,
+            payload.actor,
+            "github_manage",
+        )
+        try:
+            item = github_merge_authorizations.request_authorization(
+                connection,
+                project_id=payload.project_id,
+                repository_binding_id=payload.repository_binding_id,
+                pull_request_number=payload.pull_request_number,
+                source_ref=payload.source_ref,
+                target_ref=payload.target_ref,
+                merge_method=payload.merge_method,
+                dedupe_key=payload.dedupe_key,
+                evidence_bundle=payload.evidence_bundle,
+                expires_in_seconds=payload.expires_in_seconds,
+                code_sync_run_id=payload.code_sync_run_id,
+                resolution_plan_id=payload.resolution_plan_id,
+                actor=payload.actor,
+            )
+        except (
+            GitHubRepositoryBindingNotFoundError,
+            GitHubBranchPolicyNotFoundError,
+        ) as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except (
+            GitHubMergeAuthorizationStateError,
+            GitHubMergeAuthorizationStaleError,
+            GitHubConnectionStateError,
+            ValueError,
+        ) as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        return GitHubMergeAuthorizationSummary(**item)
+
+
+@app.get(
+    "/v1/github/merge-authorizations/{authorization_id}",
+    response_model=GitHubMergeAuthorizationSummary,
+)
+def get_github_merge_authorization(
+    authorization_id: str,
+    project_id: str,
+) -> GitHubMergeAuthorizationSummary:
+    with begin(engine) as connection:
+        try:
+            item = github_merge_authorizations.get(
+                connection, project_id, authorization_id
+            )
+        except GitHubMergeAuthorizationNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        return GitHubMergeAuthorizationSummary(**item)
+
+
+@app.post(
+    "/v1/github/merge-authorizations/{authorization_id}/authorize",
+    response_model=GitHubMergeAuthorizationSummary,
+)
+def authorize_github_merge(
+    authorization_id: str,
+    payload: GitHubMergeAuthorizationApproveRequest,
+) -> GitHubMergeAuthorizationSummary:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection,
+            payload.project_id,
+            payload.actor,
+            "github_manage",
+        )
+        try:
+            item = github_merge_authorizations.authorize(
+                connection,
+                project_id=payload.project_id,
+                authorization_id=authorization_id,
+                review_evidence=payload.review_evidence,
+                actor=payload.actor,
+            )
+        except GitHubMergeAuthorizationNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except (
+            GitHubMergeAuthorizationStateError,
+            GitHubMergeAuthorizationStaleError,
+            ValueError,
+        ) as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        return GitHubMergeAuthorizationSummary(**item)
+
+
+@app.post(
+    "/v1/github/merge-authorizations/{authorization_id}/enqueue",
+    response_model=GitHubMergeAuthorizationSummary,
+)
+def enqueue_github_merge(
+    authorization_id: str,
+    payload: GitHubMergeAuthorizationEnqueueRequest,
+) -> GitHubMergeAuthorizationSummary:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection,
+            payload.project_id,
+            payload.actor,
+            "github_manage",
+        )
+        try:
+            item = github_merge_authorizations.enqueue(
+                connection,
+                project_id=payload.project_id,
+                authorization_id=authorization_id,
+                actor=payload.actor,
+            )
+        except GitHubMergeAuthorizationNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except GitHubMergeAuthorizationStateError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        return GitHubMergeAuthorizationSummary(**item)
+
+
+@app.post(
+    "/v1/github/merge-authorizations/{authorization_id}/apply",
+    response_model=GitHubMergeAuthorizationSummary,
+)
+def apply_github_merge(
+    authorization_id: str,
+    payload: GitHubMergeAuthorizationApplyRequest,
+) -> GitHubMergeAuthorizationSummary:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection,
+            payload.project_id,
+            payload.actor,
+            "github_manage",
+        )
+        try:
+            item = github_merge_authorizations.apply(
+                connection,
+                project_id=payload.project_id,
+                authorization_id=authorization_id,
+                lease_id=payload.lease_id,
+                lease_token=payload.lease_token,
+                fencing_token=payload.fencing_token,
+                actor=payload.actor,
+            )
+        except (
+            GitHubMergeAuthorizationNotFoundError,
+            GitHubBranchLeaseNotFoundError,
+            GitHubRepositoryBindingNotFoundError,
+        ) as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except (
+            GitHubMergeAuthorizationStateError,
+            GitHubMergeAuthorizationStaleError,
+            GitHubBranchLeaseConflictError,
+            GitHubBranchLeaseTokenError,
+            GitHubConnectionStateError,
+            ValueError,
+        ) as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        return GitHubMergeAuthorizationSummary(**item)
+
+
+@app.get(
+    "/v1/github/reconciliation-runs",
+    response_model=GitHubReconciliationRunListResponse,
+)
+def list_github_reconciliation_runs(
+    project_id: str,
+    repository_binding_id: Optional[str] = None,
+    status: Optional[str] = None,
+    limit: int = Query(default=100, ge=1, le=200),
+) -> GitHubReconciliationRunListResponse:
+    with begin(engine) as connection:
+        return GitHubReconciliationRunListResponse(
+            project_id=project_id,
+            items=[
+                GitHubReconciliationRunSummary(**item)
+                for item in github_reconciler.list_runs(
+                    connection,
+                    project_id,
+                    repository_binding_id=repository_binding_id,
+                    status=status,
+                    limit=limit,
+                )
+            ],
+        )
+
+
+@app.post(
+    "/v1/github/reconciliation-runs/poll",
+    response_model=GitHubReconciliationPollResponse,
+    status_code=201,
+)
+def schedule_github_reconciliation_poll(
+    payload: GitHubReconciliationPollRequest,
+) -> GitHubReconciliationPollResponse:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection,
+            payload.project_id,
+            payload.actor,
+            "github_manage",
+        )
+        try:
+            items = github_reconciler.schedule_poll(
+                connection,
+                project_id=payload.project_id,
+                repository_binding_id=payload.repository_binding_id,
+                refs=payload.refs,
+                dedupe_key=payload.dedupe_key,
+                actor=payload.actor,
+            )
+        except (
+            GitHubReconciliationNotFoundError,
+            GitHubRepositoryBindingNotFoundError,
+        ) as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except (
+            GitHubReconciliationStateError,
+            GitHubConnectionStateError,
+            ValueError,
+        ) as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        return GitHubReconciliationPollResponse(
+            project_id=payload.project_id,
+            items=[GitHubReconciliationRunSummary(**item) for item in items],
+        )
+
+
+@app.get(
+    "/v1/github/reconciliation-runs/{run_id}",
+    response_model=GitHubReconciliationRunSummary,
+)
+def get_github_reconciliation_run(
+    run_id: str,
+    project_id: str,
+) -> GitHubReconciliationRunSummary:
+    with begin(engine) as connection:
+        try:
+            item = github_reconciler.get_run(connection, project_id, run_id)
+        except GitHubReconciliationNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        return GitHubReconciliationRunSummary(**item)
+
+
+@app.post(
+    "/v1/github/reconciliation-runs/{run_id}/execute",
+    response_model=GitHubReconciliationExecuteResponse,
+)
+def execute_github_reconciliation_run(
+    run_id: str,
+    payload: GitHubReconciliationExecuteRequest,
+) -> GitHubReconciliationExecuteResponse:
+    with begin(engine) as connection:
+        try:
+            result = github_reconciler.execute(
+                connection,
+                project_id=payload.project_id,
+                run_id=run_id,
+                job_id=payload.job_id,
+                worker_id=payload.worker_id,
+                lease_token=payload.lease_token,
+            )
+        except GitHubReconciliationNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except (
+            LeaseNotFoundError,
+            GitHubReconciliationStateError,
+            GitHubReconciliationProviderError,
+            GitHubConnectionStateError,
+            GitHubRepositoryBindingNotFoundError,
+            ValueError,
+        ) as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        return GitHubReconciliationExecuteResponse(
+            run=GitHubReconciliationRunSummary(**result["run"]),
+            job=result["job"],
+        )
+
+
+@app.post(
+    "/v1/github/reconciliation-runs/{run_id}/repair",
+    response_model=GitHubReconciliationRunSummary,
+    status_code=201,
+)
+def repair_github_reconciliation_run(
+    run_id: str,
+    payload: GitHubReconciliationRepairRequest,
+) -> GitHubReconciliationRunSummary:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection,
+            payload.project_id,
+            payload.actor,
+            "github_manage",
+        )
+        try:
+            item = github_reconciler.repair(
+                connection,
+                project_id=payload.project_id,
+                run_id=run_id,
+                dedupe_key=payload.dedupe_key,
+                actor=payload.actor,
+            )
+        except GitHubReconciliationNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except (
+            GitHubReconciliationStateError,
+            GitHubConnectionStateError,
+            ValueError,
+        ) as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        return GitHubReconciliationRunSummary(**item)
+
+
+@app.get(
+    "/v1/github/reconciliation-signals",
+    response_model=GitHubReconciliationSignalListResponse,
+)
+def list_github_reconciliation_signals(
+    project_id: str,
+    repository_binding_id: Optional[str] = None,
+    status: Optional[str] = None,
+    limit: int = Query(default=100, ge=1, le=200),
+) -> GitHubReconciliationSignalListResponse:
+    with begin(engine) as connection:
+        return GitHubReconciliationSignalListResponse(
+            project_id=project_id,
+            items=[
+                GitHubReconciliationSignalSummary(**item)
+                for item in github_reconciler.list_signals(
+                    connection,
+                    project_id,
+                    repository_binding_id=repository_binding_id,
+                    status=status,
+                    limit=limit,
+                )
+            ],
+        )
+
+
+@app.get(
+    "/v1/github/repository-ref-states",
+    response_model=GitHubRepositoryRefStateListResponse,
+)
+def list_github_repository_ref_states(
+    project_id: str,
+    repository_binding_id: Optional[str] = None,
+    limit: int = Query(default=200, ge=1, le=200),
+) -> GitHubRepositoryRefStateListResponse:
+    with begin(engine) as connection:
+        return GitHubRepositoryRefStateListResponse(
+            project_id=project_id,
+            items=[
+                GitHubRepositoryRefStateSummary(**item)
+                for item in github_reconciler.list_ref_states(
+                    connection,
+                    project_id,
+                    repository_binding_id=repository_binding_id,
+                    limit=limit,
+                )
+            ],
+        )
 
 
 @app.get("/v1/provider-definitions", response_model=ProviderDefinitionListResponse)
@@ -10199,6 +11805,12 @@ def create_job(payload: JobCreateRequest) -> JobSummary:
                 max_attempts=payload.max_attempts,
                 run_after_seconds=payload.run_after_seconds,
                 data_boundary=payload.data_boundary,
+                work_item_id=payload.work_item_id,
+                tracker_binding_id=payload.tracker_binding_id,
+                allocation_id=payload.allocation_id,
+                priority_score=payload.priority_score,
+                workload_class=payload.workload_class,
+                resource_units=payload.resource_units,
             )
         except ValueError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
@@ -12149,6 +13761,992 @@ def fail_workflow_compensation(
             )
         except workflow_runtime.WorkflowError as error:
             raise_workflow_error(error)
+
+
+# ── Ranked work, quotas, tracker plugins, and delivery presence ─────────────
+def _raise_work_orchestration_error(error: Exception) -> None:
+    raise HTTPException(status_code=422, detail=str(error)) from error
+
+
+@app.get("/v1/work-orchestration/overview")
+def get_work_orchestration_overview(
+    project_id: str = Query(...),
+) -> dict[str, Any]:
+    with begin(engine) as connection:
+        return work_orchestration.overview(connection, project_id)
+
+
+@app.post("/v1/work-orchestration/items")
+def upsert_ranked_work_item(
+    payload: WorkItemUpsertRequest,
+) -> dict[str, Any]:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection, payload.project_id, payload.actor, "command_submit"
+        )
+        try:
+            work_item = work_orchestration.upsert_work_item(
+                connection,
+                project_id=payload.project_id,
+                subject_type=payload.subject_type,
+                subject_id=payload.subject_id,
+                title=payload.title,
+                description=payload.description,
+                status=payload.status,
+                strategic_value=payload.strategic_value,
+                customer_impact=payload.customer_impact,
+                urgency=payload.urgency,
+                cost_of_delay=payload.cost_of_delay,
+                risk_reduction=payload.risk_reduction,
+                dependency_pressure=payload.dependency_pressure,
+                confidence=payload.confidence,
+                manual_adjustment=payload.manual_adjustment,
+                rationale=payload.rationale,
+                workload_class=payload.workload_class,
+                estimated_units=payload.estimated_units,
+                due_at=payload.due_at,
+                owner_actor=payload.owner_actor,
+                evidence=payload.evidence,
+                source=payload.source,
+                actor=payload.actor,
+            )
+            binding = work_orchestration.bind_tracker(
+                connection,
+                project_id=payload.project_id,
+                work_item_id=work_item["id"],
+                provider_key=None,
+                actor=payload.actor,
+            )
+            allocation = work_orchestration.ensure_allocation(
+                connection,
+                project_id=payload.project_id,
+                work_item_id=work_item["id"],
+                actor=payload.actor,
+            )
+            sync_job = work_orchestration.enqueue_tracker_sync(
+                connection,
+                project_id=payload.project_id,
+                binding_id=binding["id"],
+                actor=payload.actor,
+            )
+            return {
+                "work_item": work_item,
+                "tracker_binding": binding,
+                "allocation": allocation,
+                "tracker_sync_job": sync_job,
+            }
+        except ValueError as error:
+            _raise_work_orchestration_error(error)
+
+
+@app.post("/v1/work-orchestration/quotas")
+def upsert_resource_quota(
+    payload: ResourceQuotaUpsertRequest,
+) -> dict[str, Any]:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection, payload.project_id, payload.actor, "command_submit"
+        )
+        try:
+            quota = work_orchestration.upsert_quota(
+                connection,
+                project_id=payload.project_id,
+                scope_type=payload.scope_type,
+                scope_id=payload.scope_id,
+                resource_kind=payload.resource_kind,
+                reserved_min=payload.reserved_min,
+                soft_limit=payload.soft_limit,
+                hard_limit=payload.hard_limit,
+                burst_limit=payload.burst_limit,
+                allocation_weight=payload.allocation_weight,
+                borrow_enabled=payload.borrow_enabled,
+                policy=payload.policy,
+                actor=payload.actor,
+            )
+            allocation_plan = work_orchestration.plan_allocations(
+                connection,
+                project_id=payload.project_id,
+                resource_kind=payload.resource_kind,
+                actor=payload.actor,
+            )
+            return {
+                "quota": quota,
+                "allocation_plan": allocation_plan,
+            }
+        except ValueError as error:
+            _raise_work_orchestration_error(error)
+
+
+@app.post("/v1/work-orchestration/allocations/plan")
+def plan_resource_allocations(
+    payload: ResourceAllocationPlanRequest,
+) -> dict[str, Any]:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection, payload.project_id, payload.actor, "command_submit"
+        )
+        try:
+            return work_orchestration.plan_allocations(
+                connection,
+                project_id=payload.project_id,
+                resource_kind=payload.resource_kind,
+                actor=payload.actor,
+            )
+        except ValueError as error:
+            _raise_work_orchestration_error(error)
+
+
+@app.post("/v1/work-orchestration/tracker-bindings")
+def upsert_work_tracker_binding(
+    payload: WorkTrackerBindingUpsertRequest,
+) -> dict[str, Any]:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection, payload.project_id, payload.actor, "command_submit"
+        )
+        try:
+            binding = work_orchestration.bind_tracker(
+                connection,
+                project_id=payload.project_id,
+                work_item_id=payload.work_item_id,
+                provider_key=payload.provider_key,
+                external_workspace_id=payload.external_workspace_id,
+                external_project_id=payload.external_project_id,
+                external_issue_id=payload.external_issue_id,
+                external_key=payload.external_key,
+                external_url=payload.external_url,
+                external_state=payload.external_state,
+                metadata=payload.metadata,
+                actor=payload.actor,
+            )
+            sync_job = (
+                None
+                if binding["sync_status"] == "synced"
+                else work_orchestration.enqueue_tracker_sync(
+                    connection,
+                    project_id=payload.project_id,
+                    binding_id=binding["id"],
+                    actor=payload.actor,
+                )
+            )
+            return {**binding, "tracker_sync_job": sync_job}
+        except ValueError as error:
+            _raise_work_orchestration_error(error)
+
+
+@app.post("/v1/work-orchestration/tracker-sync/execute")
+def execute_work_tracker_sync(
+    payload: WorkTrackerSyncExecuteRequest,
+) -> dict[str, Any]:
+    """Execute a tracker write only inside a fenced, receipt-producing job."""
+    with begin(engine) as connection:
+        try:
+            leased_job = jobs.require_active_lease(
+                connection,
+                payload.worker_id,
+                payload.created_by_job_id,
+                payload.lease_token,
+            )
+            if (
+                leased_job["project_id"] != payload.project_id
+                or leased_job["kind"] != "work_tracker.issue.sync"
+                or (leased_job["payload"] or {}).get("binding_id")
+                != payload.binding_id
+            ):
+                raise ValueError(
+                    "Active lease does not authorize this work-tracker sync."
+                )
+            context = work_orchestration.tracker_sync_context(
+                connection,
+                project_id=payload.project_id,
+                binding_id=payload.binding_id,
+            )
+            provider_key = context["provider"]["provider_key"]
+            tenant = connection.execute(
+                text(
+                    """
+                    SELECT w.org_id, p.workspace_id
+                    FROM projects p
+                    JOIN workspaces w ON w.id=p.workspace_id
+                    WHERE p.id=:project_id
+                    """
+                ),
+                {"project_id": payload.project_id},
+            ).mappings().one()
+            effect_payload = {
+                "binding_id": payload.binding_id,
+                "provider": provider_key,
+                "title": context["work_item"]["title"],
+                "description_html": context["description_html"],
+            }
+            receipt, created = receipts.create_or_reuse(
+                connection,
+                tenant["org_id"],
+                tenant["workspace_id"],
+                payload.project_id,
+                f"work-tracker-sync:{provider_key}:{payload.binding_id}",
+                f"{provider_key}.issue.ensure",
+                {
+                    "binding_id": payload.binding_id,
+                    "work_item_id": context["work_item"]["id"],
+                    "provider": provider_key,
+                },
+                effect_payload,
+                created_by_job_id=payload.created_by_job_id,
+                data_boundary=leased_job["data_boundary"],
+            )
+            if not created and receipt["status"] == "succeeded":
+                return {
+                    "status": "succeeded",
+                    "receipt_id": receipt["id"],
+                    "binding": context["binding"],
+                    "reused": True,
+                }
+            if provider_key != "plane":
+                error = {
+                    "reason": "tracker_plugin_executor_not_configured",
+                    "provider": provider_key,
+                }
+                receipts.mark_failed(connection, receipt["id"], error)
+                work_orchestration.mark_tracker_sync_failed(
+                    connection,
+                    project_id=payload.project_id,
+                    binding_id=payload.binding_id,
+                    error=error,
+                    actor=payload.worker_id,
+                )
+                return {
+                    "status": "failed",
+                    "receipt_id": receipt["id"],
+                    "reason": error["reason"],
+                }
+            provider_project_id = (
+                context["binding"]["external_project_id"]
+                or context["provider"]["configuration"].get("project_id")
+            )
+            if not provider_project_id:
+                issue = None
+                failure_reason = "plane_project_not_configured"
+            else:
+                issue = PlaneClient(settings).create_issue(
+                    str(provider_project_id),
+                    name=context["work_item"]["title"],
+                    description_html=context["description_html"],
+                )
+                failure_reason = "plane_issue_create_failed"
+            if issue is None:
+                error = {
+                    "reason": failure_reason,
+                    "provider": "plane",
+                }
+                receipts.mark_failed(connection, receipt["id"], error)
+                work_orchestration.mark_tracker_sync_failed(
+                    connection,
+                    project_id=payload.project_id,
+                    binding_id=payload.binding_id,
+                    error=error,
+                    actor=payload.worker_id,
+                )
+                return {
+                    "status": "failed",
+                    "receipt_id": receipt["id"],
+                    "reason": failure_reason,
+                }
+            external_issue_id = str(issue["id"])
+            sequence_id = issue.get("sequence_id")
+            external_key = (
+                str(issue.get("identifier") or "")
+                or (f"#{sequence_id}" if sequence_id is not None else None)
+            )
+            binding = work_orchestration.mark_tracker_synced(
+                connection,
+                project_id=payload.project_id,
+                binding_id=payload.binding_id,
+                external_issue_id=external_issue_id,
+                external_key=external_key,
+                external_url=None,
+                external_state=str(issue.get("state") or "Backlog"),
+                actor=payload.worker_id,
+            )
+            result = {
+                "binding_id": payload.binding_id,
+                "external_issue_id": external_issue_id,
+                "external_key": external_key,
+                "external_url": binding.get("external_url"),
+            }
+            receipts.mark_succeeded(
+                connection,
+                receipt["id"],
+                external_issue_id,
+                result,
+            )
+            return {
+                "status": "succeeded",
+                "receipt_id": receipt["id"],
+                "binding": binding,
+                "reused": False,
+            }
+        except (LeaseNotFoundError, ValueError) as error:
+            _raise_work_orchestration_error(error)
+
+
+@app.post("/v1/work-orchestration/bot-identities")
+def upsert_delivery_bot_identity(
+    payload: DeliveryBotIdentityUpsertRequest,
+) -> dict[str, Any]:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection, payload.project_id, payload.actor, "command_submit"
+        )
+        try:
+            return work_orchestration.upsert_bot_identity(
+                connection,
+                project_id=payload.project_id,
+                provider=payload.provider,
+                agent_key=payload.agent_key,
+                display_name=payload.display_name,
+                external_identity=payload.external_identity,
+                agent_definition_id=payload.agent_definition_id,
+                credential_secret_ref_id=payload.credential_secret_ref_id,
+                avatar_url=payload.avatar_url,
+                policy=payload.policy,
+                actor=payload.actor,
+            )
+        except ValueError as error:
+            _raise_work_orchestration_error(error)
+
+
+@app.post("/v1/work-orchestration/status-channels")
+def upsert_delivery_status_channel(
+    payload: DeliveryStatusChannelUpsertRequest,
+) -> dict[str, Any]:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection, payload.project_id, payload.actor, "command_submit"
+        )
+        try:
+            return work_orchestration.upsert_status_channel(
+                connection,
+                project_id=payload.project_id,
+                provider=payload.provider,
+                channel_key=payload.channel_key,
+                display_name=payload.display_name,
+                purpose=payload.purpose,
+                external_channel_id=payload.external_channel_id,
+                external_url=payload.external_url,
+                bot_identity_id=payload.bot_identity_id,
+                event_kinds=payload.event_kinds,
+                allowed_data_boundaries=payload.allowed_data_boundaries,
+                configuration=payload.configuration,
+                actor=payload.actor,
+            )
+        except ValueError as error:
+            _raise_work_orchestration_error(error)
+
+
+@app.post("/v1/work-orchestration/presence-events")
+def record_delivery_presence_event(
+    payload: DeliveryPresenceEventCreateRequest,
+) -> dict[str, Any]:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection, payload.project_id, payload.actor, "command_submit"
+        )
+        try:
+            return work_orchestration.record_delivery_event(
+                connection,
+                project_id=payload.project_id,
+                provider=payload.provider,
+                event_kind=payload.event_kind,
+                subject_type=payload.subject_type,
+                subject_id=payload.subject_id,
+                status=payload.status,
+                summary=payload.summary,
+                dedupe_key=payload.dedupe_key,
+                channel_id=payload.channel_id,
+                bot_identity_id=payload.bot_identity_id,
+                external_url=payload.external_url,
+                receipt_id=payload.receipt_id,
+                metadata=payload.metadata,
+            )
+        except ValueError as error:
+            _raise_work_orchestration_error(error)
+
+
+# ── Agent Studio, executable Panels, and durable A2A coordination ────────────
+def _raise_agent_studio_error(error: Exception) -> None:
+    if isinstance(
+        error,
+        (
+            AgentDefinitionNotFoundError,
+            AgentVersionNotFoundError,
+            PanelDefinitionNotFoundError,
+            PanelVersionNotFoundError,
+            A2ANotFoundError,
+        ),
+    ):
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    if isinstance(
+        error,
+        (
+            AgentVersionStateError,
+            PanelVersionStateError,
+            A2AStateError,
+        ),
+    ):
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    if isinstance(error, A2ATransportUnavailable):
+        raise HTTPException(status_code=503, detail=str(error)) from error
+    raise HTTPException(status_code=422, detail=str(error)) from error
+
+
+@app.get("/v1/agent-studio/catalog")
+def get_agent_studio_catalog(
+    project_id: str = Query(...),
+) -> dict[str, Any]:
+    with begin(engine) as connection:
+        return {
+            "project_id": project_id,
+            "agents": agent_studio.list_agents(connection, project_id),
+            "panels": agent_studio.list_panels(connection, project_id),
+            "workflows": workflow_runtime.list_definition_details(
+                connection, project_id, include_retired=False
+            ),
+            "agent_runs": agent_studio.list_agent_runs(connection, project_id, 50),
+            "panel_runs": agent_studio.list_panel_runs(connection, project_id, 50),
+            "workflow_runs": workflow_runtime.list_runs(
+                connection, project_id, status=None, limit=50
+            ),
+            "tests": agent_studio.list_agent_tests(connection, project_id, 50),
+            "a2a": {
+                "channels": a2a.list_channels(connection, project_id),
+                "subscriptions": a2a.list_subscriptions(connection, project_id),
+                "messages": a2a.list_messages(connection, project_id, limit=100),
+                "health": a2a.health(connection, project_id),
+            },
+        }
+
+
+@app.post("/v1/agent-studio/workflows/validate")
+def validate_agent_studio_workflow(
+    payload: WorkflowDraftValidateRequest,
+) -> dict[str, Any]:
+    """Compile a workflow draft without publishing or producing side effects."""
+    with begin(engine) as connection:
+        require_project_actor(
+            connection, payload.project_id, payload.actor, "workflow_manage"
+        )
+        try:
+            normalized = workflow_runtime.validate_workflow_spec(payload.spec)
+        except workflow_runtime.WorkflowError as error:
+            raise_workflow_error(error)
+        steps = normalized["steps"]
+        return {
+            "valid": True,
+            "normalized_spec": normalized,
+            "checks": [
+                {
+                    "kind": "graph",
+                    "passed": True,
+                    "detail": f"{len(steps)} reachable step(s); no unbounded cycles.",
+                },
+                {
+                    "kind": "bindings",
+                    "passed": True,
+                    "detail": "Required typed bindings are present.",
+                },
+                {
+                    "kind": "side_effects",
+                    "passed": True,
+                    "detail": "Validation did not publish a version or execute work.",
+                },
+            ],
+        }
+
+
+@app.get("/v1/agent-studio/agents")
+def list_agent_definitions(project_id: str = Query(...)) -> dict[str, Any]:
+    with begin(engine) as connection:
+        return {
+            "project_id": project_id,
+            "items": agent_studio.list_agents(connection, project_id),
+        }
+
+
+@app.post("/v1/agent-studio/agents")
+def create_agent_definition(
+    payload: AgentDefinitionCreateRequest,
+) -> dict[str, Any]:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection, payload.project_id, payload.actor, "role_review"
+        )
+        try:
+            return agent_studio.create_agent(
+                connection,
+                project_id=payload.project_id,
+                agent_key=payload.agent_key,
+                name=payload.name,
+                description=payload.description,
+                owner=payload.owner,
+                actor=payload.actor,
+            )
+        except Exception as error:  # noqa: BLE001 - typed API mapping
+            _raise_agent_studio_error(error)
+
+
+@app.post("/v1/agent-studio/agents/{agent_id}/versions")
+def create_agent_version(
+    agent_id: str, payload: AgentVersionCreateRequest
+) -> dict[str, Any]:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection, payload.project_id, payload.actor, "role_review"
+        )
+        try:
+            return agent_studio.create_agent_version(
+                connection,
+                agent_id,
+                project_id=payload.project_id,
+                role_key=payload.role_key,
+                model_policy=payload.model_policy,
+                prompts=payload.prompts,
+                rules=payload.rules,
+                requested_skills=payload.requested_skills,
+                requested_integrations=payload.requested_integrations,
+                scopes=payload.scopes,
+                limits=payload.limits,
+                output_contract=payload.output_contract,
+                a2a_policy=payload.a2a_policy,
+                provenance=payload.provenance,
+                agent_module_id=payload.agent_module_id,
+                actor=payload.actor,
+            )
+        except Exception as error:  # noqa: BLE001
+            _raise_agent_studio_error(error)
+
+
+@app.post("/v1/agent-studio/agent-versions/{version_id}/validate")
+def validate_agent_version(
+    version_id: str, payload: AgentStudioActorRequest
+) -> dict[str, Any]:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection, payload.project_id, payload.actor, "role_review"
+        )
+        try:
+            return agent_studio.validate_agent_version(
+                connection, payload.project_id, version_id, actor=payload.actor
+            )
+        except Exception as error:  # noqa: BLE001
+            _raise_agent_studio_error(error)
+
+
+@app.post("/v1/agent-studio/agent-versions/{version_id}/publish")
+def publish_agent_version(
+    version_id: str, payload: AgentStudioActorRequest
+) -> dict[str, Any]:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection, payload.project_id, payload.actor, "role_review"
+        )
+        try:
+            return agent_studio.publish_agent_version(
+                connection, payload.project_id, version_id, actor=payload.actor
+            )
+        except Exception as error:  # noqa: BLE001
+            _raise_agent_studio_error(error)
+
+
+@app.post("/v1/agent-studio/agent-versions/{version_id}/tests")
+def run_agent_version_test(
+    version_id: str, payload: AgentTestRunRequest
+) -> dict[str, Any]:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection, payload.project_id, payload.actor, "role_review"
+        )
+        try:
+            return agent_studio.run_agent_test(
+                connection,
+                project_id=payload.project_id,
+                agent_version_id=version_id,
+                scenario=payload.scenario,
+                assertions=payload.assertions,
+                actor=payload.actor,
+            )
+        except Exception as error:  # noqa: BLE001
+            _raise_agent_studio_error(error)
+
+
+@app.post("/v1/agent-studio/agent-versions/{version_id}/runs")
+def run_agent_version(
+    version_id: str, payload: AgentStudioRunRequest
+) -> dict[str, Any]:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection, payload.project_id, payload.actor, "role_review"
+        )
+        try:
+            return agent_studio.start_agent_run(
+                connection,
+                project_id=payload.project_id,
+                agent_version_id=version_id,
+                input_data=payload.input,
+                actor=payload.actor,
+                dedupe_key=payload.dedupe_key,
+                task_id=payload.task_id,
+                workflow_run_id=payload.workflow_run_id,
+                budget_reservation_id=payload.budget_reservation_id,
+            )
+        except Exception as error:  # noqa: BLE001
+            _raise_agent_studio_error(error)
+
+
+@app.get("/v1/agent-studio/panels")
+def list_panel_definitions(project_id: str = Query(...)) -> dict[str, Any]:
+    with begin(engine) as connection:
+        return {
+            "project_id": project_id,
+            "items": agent_studio.list_panels(connection, project_id),
+        }
+
+
+@app.post("/v1/agent-studio/panels")
+def create_panel_definition(
+    payload: PanelDefinitionCreateRequest,
+) -> dict[str, Any]:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection, payload.project_id, payload.actor, "role_review"
+        )
+        try:
+            return agent_studio.create_panel(
+                connection,
+                project_id=payload.project_id,
+                panel_key=payload.panel_key,
+                name=payload.name,
+                description=payload.description,
+                purpose=payload.purpose,
+                owner=payload.owner,
+                actor=payload.actor,
+            )
+        except Exception as error:  # noqa: BLE001
+            _raise_agent_studio_error(error)
+
+
+@app.post("/v1/agent-studio/panels/{panel_id}/versions")
+def create_panel_version(
+    panel_id: str, payload: PanelVersionCreateRequest
+) -> dict[str, Any]:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection, payload.project_id, payload.actor, "role_review"
+        )
+        try:
+            return agent_studio.create_panel_version(
+                connection,
+                panel_id,
+                project_id=payload.project_id,
+                members=payload.members,
+                topology=payload.topology,
+                context_policy=payload.context_policy,
+                independence_policy=payload.independence_policy,
+                quorum_policy=payload.quorum_policy,
+                bounds=payload.bounds,
+                evidence_policy=payload.evidence_policy,
+                consolidation_policy=payload.consolidation_policy,
+                dissent_policy=payload.dissent_policy,
+                escalation_policy=payload.escalation_policy,
+                output_contract=payload.output_contract,
+                actor=payload.actor,
+            )
+        except Exception as error:  # noqa: BLE001
+            _raise_agent_studio_error(error)
+
+
+@app.post("/v1/agent-studio/panel-versions/{version_id}/publish")
+def publish_panel_version(
+    version_id: str, payload: AgentStudioActorRequest
+) -> dict[str, Any]:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection, payload.project_id, payload.actor, "role_review"
+        )
+        try:
+            return agent_studio.publish_panel_version(
+                connection, payload.project_id, version_id, actor=payload.actor
+            )
+        except Exception as error:  # noqa: BLE001
+            _raise_agent_studio_error(error)
+
+
+@app.post("/v1/agent-studio/panel-versions/{version_id}/runs")
+def run_panel_version(
+    version_id: str, payload: PanelRunRequest
+) -> dict[str, Any]:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection, payload.project_id, payload.actor, "role_review"
+        )
+        try:
+            return agent_studio.start_panel_run(
+                connection,
+                project_id=payload.project_id,
+                panel_version_id=version_id,
+                input_data=payload.input,
+                context=payload.context,
+                actor=payload.actor,
+                dedupe_key=payload.dedupe_key,
+                task_id=payload.task_id,
+                workflow_run_id=payload.workflow_run_id,
+            )
+        except Exception as error:  # noqa: BLE001
+            _raise_agent_studio_error(error)
+
+
+@app.get("/v1/a2a/channels")
+def list_a2a_channels(project_id: str = Query(...)) -> dict[str, Any]:
+    with begin(engine) as connection:
+        return {
+            "project_id": project_id,
+            "items": a2a.list_channels(connection, project_id),
+        }
+
+
+@app.post("/v1/a2a/channels")
+def create_a2a_channel(payload: A2AChannelCreateRequest) -> dict[str, Any]:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection, payload.project_id, payload.actor, "agent_chat"
+        )
+        try:
+            return a2a.create_channel(
+                connection,
+                project_id=payload.project_id,
+                channel_key=payload.channel_key,
+                name=payload.name,
+                description=payload.description,
+                allowed_message_kinds=payload.allowed_message_kinds,
+                allowed_schema_versions=payload.allowed_schema_versions,
+                retention_seconds=payload.retention_seconds,
+                max_payload_bytes=payload.max_payload_bytes,
+                actor=payload.actor,
+            )
+        except Exception as error:  # noqa: BLE001
+            _raise_agent_studio_error(error)
+
+
+@app.post("/v1/a2a/subscriptions")
+def create_a2a_subscription(
+    payload: A2ASubscriptionCreateRequest,
+) -> dict[str, Any]:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection, payload.project_id, payload.actor, "agent_chat"
+        )
+        try:
+            return a2a.create_subscription(
+                connection,
+                project_id=payload.project_id,
+                channel_id=payload.channel_id,
+                subscriber_kind=payload.subscriber_kind,
+                subscriber_id=payload.subscriber_id,
+                consumer_group=payload.consumer_group,
+                recipient_filter=payload.recipient_filter,
+                ack_mode=payload.ack_mode,
+                visibility_timeout_seconds=payload.visibility_timeout_seconds,
+                max_attempts=payload.max_attempts,
+                data_boundaries=list(payload.data_boundaries),
+                actor=payload.actor,
+            )
+        except Exception as error:  # noqa: BLE001
+            _raise_agent_studio_error(error)
+
+
+@app.post("/v1/a2a/messages")
+def publish_a2a_message(payload: A2AMessagePublishRequest) -> dict[str, Any]:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection, payload.project_id, payload.actor, "agent_chat"
+        )
+        try:
+            return a2a.publish(
+                connection,
+                project_id=payload.project_id,
+                channel_id=payload.channel_id,
+                message_kind=payload.message_kind,
+                schema_name=payload.schema_name,
+                schema_version=payload.schema_version,
+                sender_kind=payload.sender_kind,
+                sender_id=payload.sender_id,
+                sender_version_id=payload.sender_version_id,
+                recipient=payload.recipient,
+                payload=payload.payload,
+                dedupe_key=payload.dedupe_key,
+                data_boundary=payload.data_boundary,
+                priority=payload.priority,
+                ttl_seconds=payload.ttl_seconds,
+                ack_mode=payload.ack_mode,
+                conversation_id=payload.conversation_id,
+                correlation_id=payload.correlation_id,
+                causation_id=payload.causation_id,
+                trace_id=payload.trace_id,
+                reply_to_id=payload.reply_to_id,
+                lineage=payload.lineage,
+                actor=payload.actor,
+            )
+        except Exception as error:  # noqa: BLE001
+            _raise_agent_studio_error(error)
+
+
+@app.get("/v1/a2a/messages")
+def list_a2a_messages(
+    project_id: str = Query(...),
+    limit: int = Query(100, ge=1, le=500),
+    status: Optional[str] = Query(None),
+    trace_id: Optional[str] = Query(None),
+) -> dict[str, Any]:
+    with begin(engine) as connection:
+        return {
+            "project_id": project_id,
+            "items": a2a.list_messages(
+                connection,
+                project_id,
+                limit=limit,
+                status=status,
+                trace_id=trace_id,
+            ),
+        }
+
+
+@app.post("/v1/a2a/messages/{message_id}/cancel")
+def cancel_a2a_message(
+    message_id: str, payload: A2AMessageCancelRequest
+) -> dict[str, Any]:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection, payload.project_id, payload.actor, "agent_chat"
+        )
+        try:
+            return a2a.cancel(
+                connection,
+                project_id=payload.project_id,
+                message_id=message_id,
+                actor=payload.actor,
+                reason=payload.reason,
+            )
+        except Exception as error:  # noqa: BLE001
+            _raise_agent_studio_error(error)
+
+
+@app.post("/v1/a2a/messages/{message_id}/replay", status_code=201)
+def replay_a2a_message(
+    message_id: str, payload: A2AMessageReplayRequest
+) -> dict[str, Any]:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection, payload.project_id, payload.actor, "agent_chat"
+        )
+        try:
+            return a2a.replay(
+                connection,
+                project_id=payload.project_id,
+                message_id=message_id,
+                dedupe_key=payload.dedupe_key,
+                reason=payload.reason,
+                ttl_seconds=payload.ttl_seconds,
+                actor=payload.actor,
+            )
+        except Exception as error:  # noqa: BLE001
+            _raise_agent_studio_error(error)
+
+
+@app.post("/v1/a2a/messages/{message_id}/dispatch")
+def dispatch_a2a_message(
+    message_id: str, payload: A2ADispatchRequest
+) -> dict[str, Any]:
+    with begin(engine) as connection:
+        try:
+            job = jobs.require_active_lease(
+                connection,
+                payload.worker_id,
+                payload.created_by_job_id,
+                payload.lease_token,
+            )
+            if (
+                job["kind"] != "a2a.dispatch"
+                or (job["payload"] or {}).get("message_id") != message_id
+            ):
+                raise A2AStateError(
+                    "Active lease does not authorize this A2A message."
+                )
+            return a2a.dispatch(
+                connection,
+                project_id=payload.project_id,
+                message_id=message_id,
+                created_by_job_id=payload.created_by_job_id,
+                actor=payload.worker_id,
+            )
+        except Exception as error:  # noqa: BLE001
+            _raise_agent_studio_error(error)
+
+
+@app.post("/v1/a2a/poll")
+def poll_a2a(payload: A2APollRequest) -> dict[str, Any]:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection, payload.project_id, payload.actor, "agent_chat"
+        )
+        try:
+            return {
+                "items": a2a.poll(
+                    connection,
+                    project_id=payload.project_id,
+                    subscription_id=payload.subscription_id,
+                    consumer_name=payload.consumer_name,
+                    count=payload.count,
+                    block_ms=payload.block_ms,
+                    actor=payload.actor,
+                )
+            }
+        except Exception as error:  # noqa: BLE001
+            _raise_agent_studio_error(error)
+
+
+@app.post("/v1/a2a/deliveries/{delivery_id}/acknowledge")
+def acknowledge_a2a_delivery(
+    delivery_id: str, payload: A2AAcknowledgeRequest
+) -> dict[str, Any]:
+    with begin(engine) as connection:
+        try:
+            return a2a.acknowledge(
+                connection,
+                project_id=payload.project_id,
+                delivery_id=delivery_id,
+                acknowledgement=payload.acknowledgement,
+                actor_kind=payload.actor_kind,
+                actor_id=payload.actor_id,
+                result=payload.result,
+                evidence_refs=payload.evidence_refs,
+                reason=payload.reason,
+            )
+        except Exception as error:  # noqa: BLE001
+            _raise_agent_studio_error(error)
+
+
+@app.get("/v1/a2a/health")
+def get_a2a_health(project_id: str = Query(...)) -> dict[str, Any]:
+    with begin(engine) as connection:
+        return a2a.health(connection, project_id)
+
+
+@app.get("/v1/a2a/audit")
+def get_a2a_audit(
+    project_id: str = Query(...), limit: int = Query(100, ge=1, le=500)
+) -> dict[str, Any]:
+    with begin(engine) as connection:
+        return a2a.audit_feed(connection, project_id, limit)
 
 
 mount_edition_routers(app, settings.boss_edition)

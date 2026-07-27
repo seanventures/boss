@@ -6,6 +6,7 @@ requires:
   - budget_governor_policy
   - model_entitlement_policy
   - resource_plane_policy
+  - work_orchestration_policy
 installs:
   roles:
     - metatron
@@ -45,6 +46,7 @@ installs:
     - autonomy_ladder
     - resource_plane_policy
     - governed_coding_pipeline_policy
+    - work_orchestration_policy
   skills:
     - model_gateway
     - github
@@ -58,5 +60,7 @@ installs:
     - deployment
     - ssh_host
     - coding_pipeline
+    - work_tracker
+    - mattermost
   canaries: []
 status: planned

@@ -3300,4 +3300,516 @@ describe("createBossApiClient", () => {
     expect(run.workflow_version_id).toBe("wfv_1");
     expect(step?.step_id).toBe("build");
   });
+
+  it("uses project-scoped GitHub connection and repository binding contracts", async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const fetchImpl = async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({ url: String(input), init });
+      return new Response(JSON.stringify({ items: [] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    };
+    const client = createBossApiClient({
+      baseUrl: "http://127.0.0.1:8000",
+      fetchImpl,
+    });
+
+    await client.listGitHubConnections("boss-dogfood");
+    await client.createGitHubConnection({
+      project_id: "boss-dogfood",
+      connection_label: "BOSS GitHub App",
+      auth_method: "github_app",
+      credential_ref: "env:BOSS_GITHUB_APP_PRIVATE_KEY",
+      app_id: "123",
+      installation_id: "456",
+      required_permissions: ["pull", "push"],
+      actor: "ceo",
+    });
+    await client.getGitHubConnection("boss-dogfood", "ghconn_1");
+    await client.disableGitHubConnection("ghconn_1", {
+      project_id: "boss-dogfood",
+      actor: "ceo",
+    });
+    await client.testGitHubConnection("ghconn_1", {
+      project_id: "boss-dogfood",
+      repository_binding_id: "ghrepo_1",
+      dedupe_key: "github-test:1",
+      actor: "ceo",
+    });
+    await client.listGitHubRepositoryBindings("boss-dogfood", "ghconn_1");
+    await client.createGitHubRepositoryBinding({
+      project_id: "boss-dogfood",
+      connection_id: "ghconn_1",
+      repository: "seanheiney/boss",
+      role: "primary",
+      actor: "ceo",
+    });
+    await client.getGitHubRepositoryBinding("boss-dogfood", "ghrepo_1");
+    await client.updateGitHubRepositoryBinding("ghrepo_1", {
+      project_id: "boss-dogfood",
+      status: "disabled",
+      actor: "ceo",
+    });
+
+    expect(calls.map((call) => call.url)).toEqual([
+      "http://127.0.0.1:8000/v1/github/connections?project_id=boss-dogfood",
+      "http://127.0.0.1:8000/v1/github/connections",
+      "http://127.0.0.1:8000/v1/github/connections/ghconn_1?project_id=boss-dogfood",
+      "http://127.0.0.1:8000/v1/github/connections/ghconn_1/disable",
+      "http://127.0.0.1:8000/v1/github/connections/ghconn_1/test",
+      "http://127.0.0.1:8000/v1/github/repository-bindings?project_id=boss-dogfood&connection_id=ghconn_1",
+      "http://127.0.0.1:8000/v1/github/repository-bindings",
+      "http://127.0.0.1:8000/v1/github/repository-bindings/ghrepo_1?project_id=boss-dogfood",
+      "http://127.0.0.1:8000/v1/github/repository-bindings/ghrepo_1",
+    ]);
+    expect(JSON.parse(String(calls[1].init?.body))).not.toHaveProperty("token");
+    expect(JSON.parse(String(calls[4].init?.body))).toMatchObject({
+      repository_binding_id: "ghrepo_1",
+      dedupe_key: "github-test:1",
+    });
+  });
+
+  it("uses versioned GitHub branch policy and immutable snapshot contracts", async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const fetchImpl = async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({ url: String(input), init });
+      return new Response(JSON.stringify({ items: [] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    };
+    const client = createBossApiClient({
+      baseUrl: "http://127.0.0.1:8000",
+      fetchImpl,
+    });
+
+    await client.listGitHubBranchPolicies("boss-dogfood", {
+      repository_binding_id: "ghrepo_1",
+      include_history: true,
+    });
+    await client.createGitHubBranchPolicy({
+      project_id: "boss-dogfood",
+      repository_binding_id: "ghrepo_1",
+      protected_ref_patterns: ["main"],
+      allowed_branch_prefixes: ["ai/"],
+      actor: "ceo",
+    });
+    await client.getGitHubBranchPolicy("boss-dogfood", "ghpolicy_1");
+    await client.reviseGitHubBranchPolicy("ghpolicy_1", {
+      project_id: "boss-dogfood",
+      required_approvals: 2,
+      actor: "ceo",
+    });
+    await client.evaluateGitHubBranchPolicy("ghpolicy_2", {
+      project_id: "boss-dogfood",
+      ref: "main",
+      operation: "update",
+      method: "fast_forward",
+    });
+    await client.listGitHubBranchSnapshots("boss-dogfood", {
+      repository_binding_id: "ghrepo_1",
+      limit: 25,
+    });
+    await client.captureGitHubBranchSnapshot({
+      project_id: "boss-dogfood",
+      repository_binding_id: "ghrepo_1",
+      source_ref: "ai/codex/work",
+      target_ref: "main",
+      dedupe_key: "snapshot:1",
+      actor: "ceo",
+    });
+    await client.getGitHubBranchSnapshot("boss-dogfood", "ghsnap_1");
+
+    expect(calls.map((call) => call.url)).toEqual([
+      "http://127.0.0.1:8000/v1/github/branch-policies?project_id=boss-dogfood&repository_binding_id=ghrepo_1&include_history=true",
+      "http://127.0.0.1:8000/v1/github/branch-policies",
+      "http://127.0.0.1:8000/v1/github/branch-policies/ghpolicy_1?project_id=boss-dogfood",
+      "http://127.0.0.1:8000/v1/github/branch-policies/ghpolicy_1",
+      "http://127.0.0.1:8000/v1/github/branch-policies/ghpolicy_2/evaluate",
+      "http://127.0.0.1:8000/v1/github/branch-snapshots?project_id=boss-dogfood&repository_binding_id=ghrepo_1&limit=25",
+      "http://127.0.0.1:8000/v1/github/branch-snapshots/capture",
+      "http://127.0.0.1:8000/v1/github/branch-snapshots/ghsnap_1?project_id=boss-dogfood",
+    ]);
+    expect(JSON.parse(String(calls[6].init?.body))).toMatchObject({
+      source_ref: "ai/codex/work",
+      target_ref: "main",
+      dedupe_key: "snapshot:1",
+    });
+  });
+
+  it("uses fenced GitHub branch lease lifecycle contracts", async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const fetchImpl = async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({ url: String(input), init });
+      return new Response(JSON.stringify({ items: [] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    };
+    const client = createBossApiClient({
+      baseUrl: "http://127.0.0.1:8000",
+      fetchImpl,
+    });
+
+    await client.listGitHubBranchLeases("boss-dogfood", {
+      repository_binding_id: "ghrepo_1",
+      ref_name: "ai/codex/work",
+      include_history: true,
+      limit: 25,
+    });
+    await client.acquireGitHubBranchLease({
+      project_id: "boss-dogfood",
+      repository_binding_id: "ghrepo_1",
+      ref_name: "ai/codex/work",
+      owner_kind: "code_task_run",
+      owner_id: "run-1",
+      acquire_key: "lease:1",
+      ttl_seconds: 300,
+      actor: "ceo",
+    });
+    await client.getGitHubBranchLease("boss-dogfood", "ghlease_1");
+    await client.heartbeatGitHubBranchLease("ghlease_1", {
+      project_id: "boss-dogfood",
+      lease_token: "lease-token",
+      fencing_token: 7,
+      ttl_seconds: 300,
+      actor: "system",
+    });
+    await client.releaseGitHubBranchLease("ghlease_1", {
+      project_id: "boss-dogfood",
+      lease_token: "lease-token",
+      fencing_token: 7,
+      reason: "complete",
+      actor: "ceo",
+    });
+    await client.reclaimGitHubBranchLease("ghlease_2", {
+      project_id: "boss-dogfood",
+      reason: "expired",
+      actor: "ceo",
+    });
+
+    expect(calls.map((call) => call.url)).toEqual([
+      "http://127.0.0.1:8000/v1/github/branch-leases?project_id=boss-dogfood&repository_binding_id=ghrepo_1&ref_name=ai%2Fcodex%2Fwork&include_history=true&limit=25",
+      "http://127.0.0.1:8000/v1/github/branch-leases",
+      "http://127.0.0.1:8000/v1/github/branch-leases/ghlease_1?project_id=boss-dogfood",
+      "http://127.0.0.1:8000/v1/github/branch-leases/ghlease_1/heartbeat",
+      "http://127.0.0.1:8000/v1/github/branch-leases/ghlease_1/release",
+      "http://127.0.0.1:8000/v1/github/branch-leases/ghlease_2/reclaim",
+    ]);
+    expect(JSON.parse(String(calls[1].init?.body))).not.toHaveProperty(
+      "lease_token",
+    );
+    expect(JSON.parse(String(calls[3].init?.body))).toMatchObject({
+      lease_token: "lease-token",
+      fencing_token: 7,
+    });
+  });
+
+  it("uses receipted GitHub sync and reviewed conflict resolution contracts", async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const fetchImpl = async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({ url: String(input), init });
+      return new Response(JSON.stringify({ items: [] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    };
+    const client = createBossApiClient({
+      baseUrl: "http://127.0.0.1:8000",
+      fetchImpl,
+    });
+
+    await client.listGitHubCodeSyncRuns("boss-dogfood", {
+      repository_binding_id: "ghrepo_1",
+      status: "conflicted",
+      limit: 25,
+    });
+    await client.planGitHubCodeSync({
+      project_id: "boss-dogfood",
+      repository_binding_id: "ghrepo_1",
+      snapshot_id: "ghsnap_1",
+      dedupe_key: "sync:1",
+      resolution_branch: "ai/boss/resolve/work-into-main",
+      actor: "ceo",
+    });
+    await client.getGitHubCodeSyncRun("boss-dogfood", "ghsync_1");
+    await client.applyGitHubCodeSync("ghsync_1", {
+      project_id: "boss-dogfood",
+      lease_id: "ghlease_1",
+      lease_token: "lease-token",
+      fencing_token: 7,
+      actor: "ceo",
+    });
+    await client.listGitHubConflictSets("boss-dogfood", {
+      status: "open",
+      limit: 25,
+    });
+    await client.getGitHubConflictSet("boss-dogfood", "ghconflict_1");
+    await client.listGitHubResolutionPlans("boss-dogfood", {
+      conflict_set_id: "ghconflict_1",
+      limit: 25,
+    });
+    await client.createGitHubResolutionPlan("ghconflict_1", {
+      project_id: "boss-dogfood",
+      resolved_files: [
+        {
+          path: "engine/example.py",
+          content: "resolved = true\n",
+          mode: "100644",
+        },
+      ],
+      validation_evidence: {
+        red: {
+          command: "pytest test_example.py",
+          exit_code: 1,
+          evidence_ref: "artifact://red",
+        },
+        green: {
+          command: "pytest test_example.py",
+          exit_code: 0,
+          evidence_ref: "artifact://green",
+        },
+      },
+      actor: "ceo",
+    });
+    await client.getGitHubResolutionPlan("boss-dogfood", "ghresolve_1");
+    await client.approveGitHubResolutionPlan("ghresolve_1", {
+      project_id: "boss-dogfood",
+      review_evidence: {
+        verdict: "approved",
+        summary: "Independent review passed.",
+      },
+      actor: "cto",
+    });
+    await client.applyGitHubResolutionPlan("ghresolve_1", {
+      project_id: "boss-dogfood",
+      lease_id: "ghlease_1",
+      lease_token: "lease-token",
+      fencing_token: 7,
+      actor: "ceo",
+    });
+    await client.listGitHubMergeAuthorizations("boss-dogfood", {
+      repository_binding_id: "ghrepo_1",
+      target_ref: "main",
+      status: "queued",
+      limit: 25,
+    });
+    await client.createGitHubMergeAuthorization({
+      project_id: "boss-dogfood",
+      repository_binding_id: "ghrepo_1",
+      pull_request_number: 84,
+      source_ref: "ai/codex/work",
+      target_ref: "main",
+      merge_method: "merge",
+      dedupe_key: "merge:84",
+      evidence_bundle: { evidence_refs: ["artifact://tests"] },
+      expires_in_seconds: 3600,
+      actor: "ceo",
+    });
+    await client.getGitHubMergeAuthorization("boss-dogfood", "ghmerge_1");
+    await client.authorizeGitHubMerge("ghmerge_1", {
+      project_id: "boss-dogfood",
+      review_evidence: {
+        verdict: "approved",
+        summary: "Independent release review passed.",
+      },
+      actor: "cto",
+    });
+    await client.enqueueGitHubMerge("ghmerge_1", {
+      project_id: "boss-dogfood",
+      actor: "cto",
+    });
+    await client.applyGitHubMerge("ghmerge_1", {
+      project_id: "boss-dogfood",
+      lease_id: "ghlease_main",
+      lease_token: "lease-token-main",
+      fencing_token: 8,
+      actor: "ceo",
+    });
+
+    expect(calls.map((call) => call.url)).toEqual([
+      "http://127.0.0.1:8000/v1/github/code-sync-runs?project_id=boss-dogfood&repository_binding_id=ghrepo_1&status=conflicted&limit=25",
+      "http://127.0.0.1:8000/v1/github/code-sync-runs/plan",
+      "http://127.0.0.1:8000/v1/github/code-sync-runs/ghsync_1?project_id=boss-dogfood",
+      "http://127.0.0.1:8000/v1/github/code-sync-runs/ghsync_1/apply",
+      "http://127.0.0.1:8000/v1/github/conflict-sets?project_id=boss-dogfood&status=open&limit=25",
+      "http://127.0.0.1:8000/v1/github/conflict-sets/ghconflict_1?project_id=boss-dogfood",
+      "http://127.0.0.1:8000/v1/github/resolution-plans?project_id=boss-dogfood&conflict_set_id=ghconflict_1&limit=25",
+      "http://127.0.0.1:8000/v1/github/conflict-sets/ghconflict_1/resolution-plans",
+      "http://127.0.0.1:8000/v1/github/resolution-plans/ghresolve_1?project_id=boss-dogfood",
+      "http://127.0.0.1:8000/v1/github/resolution-plans/ghresolve_1/approve",
+      "http://127.0.0.1:8000/v1/github/resolution-plans/ghresolve_1/apply",
+      "http://127.0.0.1:8000/v1/github/merge-authorizations?project_id=boss-dogfood&repository_binding_id=ghrepo_1&target_ref=main&status=queued&limit=25",
+      "http://127.0.0.1:8000/v1/github/merge-authorizations",
+      "http://127.0.0.1:8000/v1/github/merge-authorizations/ghmerge_1?project_id=boss-dogfood",
+      "http://127.0.0.1:8000/v1/github/merge-authorizations/ghmerge_1/authorize",
+      "http://127.0.0.1:8000/v1/github/merge-authorizations/ghmerge_1/enqueue",
+      "http://127.0.0.1:8000/v1/github/merge-authorizations/ghmerge_1/apply",
+    ]);
+    expect(JSON.parse(String(calls[3].init?.body))).toMatchObject({
+      lease_id: "ghlease_1",
+      lease_token: "lease-token",
+      fencing_token: 7,
+    });
+    expect(JSON.parse(String(calls[9].init?.body))).toMatchObject({
+      actor: "cto",
+      review_evidence: { verdict: "approved" },
+    });
+    expect(JSON.parse(String(calls[16].init?.body))).toMatchObject({
+      lease_id: "ghlease_main",
+      lease_token: "lease-token-main",
+      fencing_token: 8,
+    });
+  });
+
+  it("uses durable GitHub reconciliation, repair, and ref-state contracts", async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const fetchImpl = async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({ url: String(input), init });
+      return new Response(JSON.stringify({ items: [] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    };
+    const client = createBossApiClient({
+      baseUrl: "http://127.0.0.1:8000",
+      fetchImpl,
+    });
+
+    await client.listGitHubReconciliationRuns("boss-dogfood", {
+      repository_binding_id: "ghrepo_1",
+      status: "deadlettered",
+      limit: 25,
+    });
+    await client.scheduleGitHubReconciliationPoll({
+      project_id: "boss-dogfood",
+      repository_binding_id: "ghrepo_1",
+      refs: ["main", "ai/codex/work"],
+      dedupe_key: "reconcile:poll:1",
+      actor: "ceo",
+    });
+    await client.getGitHubReconciliationRun("boss-dogfood", "ghrecon_1");
+    await client.executeGitHubReconciliationRun("ghrecon_1", {
+      project_id: "boss-dogfood",
+      job_id: "job_1",
+      worker_id: "reconcile-worker",
+      lease_token: "job-lease-token",
+    });
+    await client.repairGitHubReconciliationRun("ghrecon_1", {
+      project_id: "boss-dogfood",
+      dedupe_key: "reconcile:repair:1",
+      actor: "ceo",
+    });
+    await client.listGitHubReconciliationSignals("boss-dogfood", {
+      repository_binding_id: "ghrepo_1",
+      status: "stale",
+      limit: 25,
+    });
+    await client.listGitHubRepositoryRefStates("boss-dogfood", {
+      repository_binding_id: "ghrepo_1",
+      limit: 50,
+    });
+
+    expect(calls.map((call) => call.url)).toEqual([
+      "http://127.0.0.1:8000/v1/github/reconciliation-runs?project_id=boss-dogfood&repository_binding_id=ghrepo_1&status=deadlettered&limit=25",
+      "http://127.0.0.1:8000/v1/github/reconciliation-runs/poll",
+      "http://127.0.0.1:8000/v1/github/reconciliation-runs/ghrecon_1?project_id=boss-dogfood",
+      "http://127.0.0.1:8000/v1/github/reconciliation-runs/ghrecon_1/execute",
+      "http://127.0.0.1:8000/v1/github/reconciliation-runs/ghrecon_1/repair",
+      "http://127.0.0.1:8000/v1/github/reconciliation-signals?project_id=boss-dogfood&repository_binding_id=ghrepo_1&status=stale&limit=25",
+      "http://127.0.0.1:8000/v1/github/repository-ref-states?project_id=boss-dogfood&repository_binding_id=ghrepo_1&limit=50",
+    ]);
+    expect(JSON.parse(String(calls[1].init?.body))).toMatchObject({
+      refs: ["main", "ai/codex/work"],
+      dedupe_key: "reconcile:poll:1",
+    });
+    expect(JSON.parse(String(calls[3].init?.body))).toMatchObject({
+      job_id: "job_1",
+      worker_id: "reconcile-worker",
+      lease_token: "job-lease-token",
+    });
+  });
+
+  it("uses Agent Studio and A2A lifecycle contracts", async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const fetchImpl = async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({ url: String(input), init });
+      return new Response(
+        JSON.stringify({ id: "a2amsg_1", status: "queued" }),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        },
+      );
+    };
+    const client = createBossApiClient({
+      baseUrl: "http://127.0.0.1:8000",
+      fetchImpl,
+    });
+
+    await client.getAgentStudioCatalog("boss-dogfood");
+    await client.validateStudioWorkflow({
+      project_id: "boss-dogfood",
+      actor: "ceo",
+      spec: {
+        entry_step: "plan",
+        steps: [{ id: "plan", kind: "task" }],
+      },
+    });
+    await client.createAgentDefinition({
+      project_id: "boss-dogfood",
+      agent_key: "release_sentinel",
+      name: "Release Sentinel",
+      actor: "vp_agents",
+    });
+    await client.createAgentVersion("agent_1", {
+      project_id: "boss-dogfood",
+      role_key: "software_engineer",
+      actor: "vp_agents",
+    });
+    await client.validateAgentVersion("agentv_1", {
+      project_id: "boss-dogfood",
+      actor: "vp_agents",
+    });
+    await client.publishAgentVersion("agentv_1", {
+      project_id: "boss-dogfood",
+      actor: "vp_agents",
+    });
+    await client.cancelA2AMessage("a2amsg_1", {
+      project_id: "boss-dogfood",
+      actor: "coo",
+      reason: "Superseded instruction.",
+    });
+    await client.replayA2AMessage("a2amsg_1", {
+      project_id: "boss-dogfood",
+      actor: "coo",
+      dedupe_key: "replay:a2amsg_1:1",
+      reason: "Reproduce the terminal delivery.",
+    });
+
+    expect(calls.map((call) => call.url)).toEqual([
+      "http://127.0.0.1:8000/v1/agent-studio/catalog?project_id=boss-dogfood",
+      "http://127.0.0.1:8000/v1/agent-studio/workflows/validate",
+      "http://127.0.0.1:8000/v1/agent-studio/agents",
+      "http://127.0.0.1:8000/v1/agent-studio/agents/agent_1/versions",
+      "http://127.0.0.1:8000/v1/agent-studio/agent-versions/agentv_1/validate",
+      "http://127.0.0.1:8000/v1/agent-studio/agent-versions/agentv_1/publish",
+      "http://127.0.0.1:8000/v1/a2a/messages/a2amsg_1/cancel",
+      "http://127.0.0.1:8000/v1/a2a/messages/a2amsg_1/replay",
+    ]);
+    expect(JSON.parse(String(calls[1].init?.body))).toMatchObject({
+      spec: { entry_step: "plan" },
+    });
+    expect(JSON.parse(String(calls[4].init?.body))).toMatchObject({
+      project_id: "boss-dogfood",
+      actor: "vp_agents",
+    });
+    expect(JSON.parse(String(calls[6].init?.body))).toMatchObject({
+      reason: "Superseded instruction.",
+    });
+    expect(JSON.parse(String(calls[7].init?.body))).toMatchObject({
+      dedupe_key: "replay:a2amsg_1:1",
+    });
+  });
 });

@@ -1,5 +1,69 @@
 # Changelog
 
+## v0.9.1 - 2026-07-27
+
+This patch release completes the BOSS-280 budget-settlement integrity work from
+contributor PR #98.
+
+### Fixed
+
+- Settle recorded model spend before releasing reservations for
+  `completed_no_pr`, non-final decomposition, and automated review-repair
+  outcomes.
+- Settle only the previously unbilled delta when a run resumes under a new
+  reservation, preventing both dropped spend and double-counted receipts.
+- Preserve the BOSS-281 Task Board lifecycle regression coverage alongside the
+  new budget-settlement tests.
+
+### Release notes
+
+- The patch retains every v0.9.0 feature and fail-closed external rollout
+  boundary.
+- GitHub Actions remain intentionally disabled; local clean, lint, test, build,
+  docs, manifest, infrastructure, dependency, and smoke evidence is recorded
+  in Plane BOSS-282.
+
+## v0.9.0 - 2026-07-26
+
+This release integrates the System Configuration, project-scoped GitHub
+operations, Agent Studio/A2A, and Plane-first Work Orchestration slices tracked
+in BOSS-237, BOSS-246–268, and BOSS-270–279.
+
+### Added
+
+- Added a unified System Configuration workspace for provider connections,
+  scoped resources, scaling and health, and cloud FinOps with safe credential
+  lifecycle controls and partial-feed resilience.
+- Added full project-scoped GitHub connection, repository binding, immutable
+  topology, branch policy, fenced branch ownership, synchronization, conflict
+  resolution, governed merge, reconciliation, and Mission Control operations.
+- Added Agent Studio with seeded specialist personas, immutable versions,
+  guided agent creation, reusable workflows, multi-agent panels, test runs,
+  scoped capabilities, and a durable, auditable A2A communication bus.
+- Added explainable work ranking, hierarchical resource quotas, dynamic
+  allocation, durable tracked jobs, Plane-first tracker bindings, Product
+  Manager ownership, embedded work visibility, Mattermost status channels,
+  and bot delivery presence.
+- Added a safe `make clean` target for generated caches and build artifacts.
+
+### Changed
+
+- Aligned application, engine, Helm, and Kubernetes metadata and image tags on
+  `v0.9.0`.
+- Consolidated the outstanding reviewed feature stacks onto one release commit
+  while preserving their independent audit, policy, budget, lease, Receipt,
+  ChangeSet, and rollback boundaries.
+
+### Release notes
+
+- Plane remains the mandatory system of record; the release issue and shipped
+  feature tickets carry commit, tag, validation, and release evidence.
+- Live Mattermost sending and unfinished provider executors remain fail-closed
+  until their explicit credentials and rollout policies are configured.
+- GitHub Actions are intentionally disabled; this source release is gated by
+  the equivalent local clean, lint, test, build, docs, schema, smoke, manifest,
+  infrastructure, and dependency validations.
+
 ## v0.8.0 - 2026-07-26
 
 This release integrates Paramg's standalone OSS engine split, the consolidated

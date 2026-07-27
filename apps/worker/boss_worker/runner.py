@@ -142,6 +142,31 @@ AGENT_WORK_PRODUCT_STRATEGIES: dict[str, dict[str, Any]] = {
         "safety_gates": ["no_silent_autonomy_upgrade", "evidence_required"],
         "required_decision_when": ["autonomy_upgrade", "high_risk_skill_install"],
     },
+    "agent.studio.execute": {
+        "contract": "AgentStudioWorkProduct",
+        "role_logic": (
+            "Execute the immutable Agent Studio version inside its compiled "
+            "RoleSpec, scope, skill, integration, model, and budget envelope."
+        ),
+        "sections": [
+            "objective",
+            "findings",
+            "recommendations",
+            "dissent",
+            "required_decisions",
+        ],
+        "evidence": ["agent_version", "artifact", "event", "receipt"],
+        "safety_gates": [
+            "effective_capability_is_intersection",
+            "preserve_role_authority",
+            "evidence_before_claim",
+        ],
+        "required_decision_when": [
+            "scope_expansion",
+            "policy_override",
+            "budget_change",
+        ],
+    },
     "agent.providerops_manager.providerops_brief": {
         "contract": "ProviderOpsBrief",
         "role_logic": "Review provider connections, resource inventory, ChangeSets, and provider risk.",
@@ -267,8 +292,11 @@ def capabilities() -> list[str]:
         "agent.resource_janitor.cleanup_brief",
         "agent.secrets_steward.secret_boundary_review",
         "agent.vp_agents.role_review",
+        "agent.studio.execute",
+        "a2a.dispatch",
         "enterprise.marketplace.validate",
         "providerops.sync.readonly",
+        "work_tracker.issue.sync",
         "plan.command",
         "plan.generate",
         "openai.plan",
@@ -285,6 +313,7 @@ def capabilities() -> list[str]:
         "webhook.outbound.deliver",
         "github.triage",
         "github.pr_review",
+        "github.repository.reconcile",
         "skill.execute",
     ]
 
@@ -309,6 +338,22 @@ def build_agent_brief_result(job: LeasedJob) -> dict[str, Any]:
         "safety_gates": ["respect_role_boundaries", "escalate_missing_data"],
         "required_decision_when": ["scope_expansion", "policy_override"],
     }
+    runtime_contract = compiled_prompt.get("runtime_contract")
+    if job.kind == "agent.studio.execute" and isinstance(runtime_contract, dict):
+        declared_sections = runtime_contract.get("sections")
+        if isinstance(declared_sections, list) and declared_sections:
+            strategy = {
+                **strategy,
+                "contract": str(
+                    runtime_contract.get("artifact_type")
+                    or strategy["contract"]
+                ),
+                "sections": [
+                    str(section)
+                    for section in declared_sections
+                    if str(section).strip()
+                ],
+            }
     grounding_context = _agent_grounding_context(job)
     grounding_status = "grounded_in_payload_context" if grounding_context else "needs_control_plane_context"
     findings = [
@@ -578,6 +623,52 @@ def execute_job(job: LeasedJob, client: ControlPlaneClient) -> dict[str, Any]:
                 "lease_token": job.lease_token,
             },
         )
+    if job.kind == "github.repository.reconcile":
+        run_id = str(job.payload.get("run_id") or "").strip()
+        if not run_id:
+            raise ValueError(
+                "github.repository.reconcile requires payload.run_id"
+            )
+        return client.run_github_reconciliation(
+            run_id,
+            {
+                "project_id": job.project_id,
+                "job_id": job.id,
+                "worker_id": client.worker_id,
+                "lease_token": job.lease_token,
+            },
+        )
+    if job.kind == "a2a.dispatch":
+        try:
+            return client.dispatch_a2a_message(
+                job.payload["message_id"],
+                {
+                    "project_id": job.project_id,
+                    "worker_id": client.worker_id,
+                    "lease_token": job.lease_token,
+                    "created_by_job_id": job.id,
+                },
+            )
+        except Exception as error:  # transport/API outages use durable retry
+            raise RetryableJobError(str(error)) from error
+    if job.kind == "work_tracker.issue.sync":
+        try:
+            result = client.sync_work_tracker(
+                {
+                    "project_id": job.project_id,
+                    "binding_id": job.payload["binding_id"],
+                    "worker_id": client.worker_id,
+                    "lease_token": job.lease_token,
+                    "created_by_job_id": job.id,
+                }
+            )
+        except Exception as error:  # provider/API outages use durable retry
+            raise RetryableJobError(str(error)) from error
+        if result.get("status") != "succeeded":
+            raise RetryableJobError(
+                result.get("reason") or "Work-tracker sync failed."
+            )
+        return result
     if job.kind.startswith("agent.") and job.kind != "agent.resume":
         return build_agent_brief_result(job)
     if job.kind == "enterprise.marketplace.validate":
@@ -875,6 +966,17 @@ def run_worker_cycle(client: ControlPlaneClient, settings: WorkerSettings) -> bo
                 hb_client.close()
             except Exception:  # noqa: BLE001
                 pass
+
+    # Reconciliation owns its bounded retry/deadletter transition in the same
+    # transaction that records provider-read Receipts and observations.
+    if job.kind == "github.repository.reconcile":
+        LOGGER.info(
+            "job_finalized_by_reconciler worker_id=%s job_id=%s status=%s",
+            settings.worker_id,
+            job.id,
+            (result.get("job") or {}).get("status"),
+        )
+        return True
 
     completion = client.complete(
         settings.worker_id,

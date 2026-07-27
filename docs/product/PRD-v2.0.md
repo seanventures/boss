@@ -2,7 +2,7 @@
 
 Status: Governing product-intent specification
 Date: June 3, 2026
-Last updated: July 18, 2026
+Last updated: July 26, 2026
 Supersedes: `docs/product/PRD-v1.1.md`
 Product: BOSS - Business Operating System Sentinel
 
@@ -44,6 +44,9 @@ BOSS is an open-core product: BOSS Community must be useful, self-hostable, and 
 18. Repeatable classes of work use approved, versioned workflow mappings; a model may propose a workflow but may not silently invent an authoritative process when no mapping exists.
 19. Agent-group agreement is not proof. Consensus, quorum, or model confidence cannot bypass evidence, policy, budget, approval, ownership, or safety gates.
 20. Skills describe typed capabilities; integrations provide configured implementations. Agents and workflows receive resolved capabilities, never raw credentials or ambient provider access.
+21. Every task, bug, feature, incident, and PRD change has an external work-tracker binding; Plane is the default open-source tracker and alternatives are plugins.
+22. The work tracker owns intake and human-visible status; the BOSS job ledger owns leases, heartbeats, retries, dedupe, receipts, and execution.
+23. Priority can influence allocation but cannot bypass quota, budget, policy, approval, data-boundary, or evidence gates.
 
 ## Architecture Position
 
@@ -63,7 +66,7 @@ Owns stateless workers, local runners, code workers, review workers, test worker
 
 ### Communications Plane
 
-Owns Slack, email, chat, optional voice/SMS later, outbox/inbox ACK, persona rendering, quiet hours, escalation rules, threading, channel rollout policies, delivery receipts, and communication deadletters.
+Owns Slack, email, chat, optional voice/SMS later, outbox/inbox ACK, persona rendering, quiet hours, escalation rules, threading, channel rollout policies, delivery receipts, and communication deadletters. Its internal A2A coordination fabric provides typed instructions, status, task/job coordination, handoffs, resource requests, telemetry, acknowledgements, replay, and deadletters. Redis Streams is delivery transport; Postgres remains canonical audit truth.
 
 ### Elastic Resource Plane / ProviderOps
 
@@ -85,6 +88,16 @@ Owns integration definitions, installed connections, connector/adapter bindings,
 
 Owns reusable multi-agent collaboration definitions and runs: member roles, topology, collaboration protocol, context-sharing boundaries, independence constraints, dissent, completion rules, time/budget bounds, and escalation. Agent Groups can be invoked by workflows and can use resolved skills/integrations, but group consensus never becomes ground truth by itself.
 
+### Agent Studio
+
+Owns versioned executable agent definitions, model-selection policy, prompt layers, deterministic rules, requested capabilities, project/data scope, limits, validation, test evidence, publish state, seeded agent catalog, a guided agent-commissioning wizard, and a visual operator workbench. Agent Studio references RoleSpecs and Agent Modules but does not redefine company authority or package installation. Its Panel object is an explicit versioned composition profile over the Agent Group runtime.
+
+### Work Orchestration and Delivery Presence
+
+Owns the explainable ranked portfolio, hierarchical resource quotas, dynamic allocations, mandatory work-tracker bindings, and the operator-facing projection of tickets, jobs, pull requests, deployments, and bot activity. Plane is the default open-source intake and status system; GitHub Issues, Linear, Jira, and future trackers plug into the same typed `WorkTracker` boundary. All agent execution still enters the fenced Postgres job system so ticket APIs never become an execution queue by accident.
+
+The Product Manager agent owns PRD currency, ticket hygiene, acceptance criteria, priority rationale, dependency visibility, and shipment evidence. It may propose priority or state changes, but it cannot mark work solved or done without the evidence required by policy.
+
 ### Workflow Registry and Runtime
 
 Owns reusable WorkflowDefinitions, immutable versions, deterministic mappings from work classes to approved versions, durable WorkflowRuns and StepRuns, branching, fan-out/join, timers, approvals, subworkflows, retries/deadletters, compensation, and migration. Workflows coordinate roles or Agent Groups and bind them to skills/integrations under policy.
@@ -103,9 +116,17 @@ Community works with local auth and no hosted dependency. BOSS Cloud uses BOSS A
 
 Core objects: `Org`, `Workspace`, `Project`, `User`, `Membership`, `Task`, `Plan`, `Decision`, `Approval`, `Policy`, `RoleSpec`, `RolePack`, `Department`, `KPI`, `Meeting`, `Receipt`, `ArtifactManifest`, `OutboxMessage`, `InboxMessage`, `RoutingDecision`, `TrustScore`, `ImprovementProposal`, `EvaluationRun`, `CanaryRun`, `Deadletter`, `SnapshotHealth`.
 
+Agent Studio objects: `AgentDefinition`, `AgentVersion`, `AgentTestRun`, `AgentRun`, `PanelDefinition`, `PanelVersion`, `PanelRun`.
+
 Collaboration objects: `AgentGroupSpec`, `AgentGroupVersion`, `AgentGroupRun`, `AgentGroupMemberRun`, `AgentFinding`, `DissentRecord`.
 
+A2A coordination objects: `A2AChannel`, `A2ASubscription`, `A2AEnvelope`, `A2ADelivery`, `A2AAcknowledgement`, `A2ATransportAttempt`.
+
+Work orchestration objects: `WorkItem`, `ResourceQuota`, `ResourceAllocation`, `WorkTrackerProvider`, `WorkTrackerBinding`, `DeliveryBotIdentity`, `DeliveryStatusChannel`, `DeliveryPresenceEvent`.
+
 Capability/integration objects: `SkillSpec`, `IntegrationDefinition`, `IntegrationConnection`, `IntegrationHealth`, `SkillInvocation`, `ExecutorBinding`.
+
+GitHub/software-change objects: `ProjectGitHubConnection`, `GitHubRepositoryBinding`, `BranchPolicy`, `BranchLease`, `BranchSnapshot`, `CodeSyncRun`, `ConflictSet`, `ResolutionPlan`, `MergeAuthorization`.
 
 Workflow objects: `WorkflowDefinition`, `WorkflowVersion`, `WorkflowMapping`, `WorkflowRun`, `WorkflowStepRun`, `WorkflowMigration`, `CompensationRun`.
 
@@ -125,6 +146,8 @@ These are separate first-class product concepts. They interoperate through versi
 
 | Concept | Owns | Does not own |
 | --- | --- | --- |
+| Agent definition | Versioned executable configuration, prompts, model policy, rules and requested capability scope | Company authority, package installation, workflow sequencing, or integration credentials |
+| Panel | Version-pinned agent composition and consolidation policy | A second collaboration engine or authority to establish truth |
 | Agent Group | Who collaborates and the collaboration protocol | Workflow sequencing, capability implementation, or truth determination |
 | Skill | The typed capability contract that may be requested | Credentials, installed provider configuration, or orchestration |
 | Integration | The installed/configured system that implements skills | Agent roles, business process sequencing, or claim acceptance |
@@ -311,6 +334,31 @@ Provider Connection Center requirements:
   already leased work can finish without exposing either credential value.
 - Audit all provider access.
 
+System Configuration experience requirements:
+
+- Present ProviderOps as one operator workspace with Connections, Resources,
+  Scaling & Health, and Cloud FinOps views instead of independent
+  provider-specific consoles.
+- Persist the selected view in the URL and preserve saved resource scope across
+  provider, account, environment, region, and service.
+- Make adapter truth visible in the provider catalog. Planned adapters must
+  remain inspectable but cannot accept credentials or expose enabled controls.
+- Display credentials only as write-only named SecretRef posture. Never render
+  a stored SecretRef pointer or secret value back to the operator.
+- Distinguish unavailable, partial, empty, pending, untested, fresh, stale,
+  disabled, revoked, and error states without turning a secondary-feed failure
+  into a false total outage.
+- Gate every provider-account mutation by `providerops_manage`; unauthorized
+  actors receive an explicit read-only view rather than controls that fail only
+  after submission.
+- Open provider accounts and resources in evidence-oriented detail drawers
+  linking impact, authority, spend, ChangeSets, tasks, deployments, budgets,
+  receipts, and audit events.
+- Require irreversible provider revocation to state impact, approval,
+  rollback, and evidence consequences and to confirm the account label.
+- Keep the workspace usable without horizontal page overflow on narrow
+  viewports; dense tables may scroll only inside their bounded table region.
+
 Resource Inventory Graph requirements:
 
 - Sync external resources on schedule.
@@ -475,6 +523,58 @@ Evidence bundles must include spec refs, task refs, diffs, test results, build l
 
 Definition of done: software work is complete only when objective evidence demonstrates builds pass, tests pass, runtime behavior satisfies acceptance criteria, required artifacts are attached, and required receipts exist.
 
+### GitHub Project Sync and Branch Orchestration
+
+GitHub connectivity is project-scoped durable state, not process-wide ambient
+configuration. Each project can install a GitHub App or reference an approved
+PAT through a named `SecretRef`, bind one primary repository plus optional
+source, upstream, and mirror repositories, and declare the protected refs,
+branch naming, sync, conflict, merge, and rollback policies that govern them.
+
+Required behavior:
+
+- Store only SecretRef pointers and non-secret App/installation identity. Raw
+  tokens and private keys never enter agent context, API responses, artifacts,
+  events, or repository-binding metadata.
+- Test every connection through the deterministic GitHub adapter and record a
+  deduplicated `Receipt`, effective repository permissions, missing authority,
+  health state, and canonical repository identity.
+- Fetch and persist a `BranchSnapshot` before making any synchronization,
+  conflict, or merge decision. A rewritten commit identity with an equivalent
+  tree is not content divergence.
+- Require a TTL `BranchLease` with heartbeat for each agent-owned mutable
+  branch/worktree. Concurrent owners cannot silently write the same branch.
+- Prefer fast-forward synchronization. Divergence creates a dedicated
+  resolution branch and typed `ConflictSet`; BOSS never rewrites another
+  contributor's branch or protected ref in place.
+- Represent every remote branch mutation by a policy result, dedupe key,
+  `ChangeSet`, `ResourceReceipt`, audit event, and rollback evidence. A
+  read-only topology refresh still produces a normal `Receipt`.
+- Resolve conflicts file-by-file with preserved base/ours/theirs provenance,
+  reproducible red-to-green validation, an independent review result, and a
+  human Decision when policy, ownership, or evidence is ambiguous.
+- Merge only through a governed queue using current remote topology, required
+  checks, ownership, approvals, evidence, and an explicit
+  `MergeAuthorization`. Protected refs never auto-merge by default.
+- Reconcile webhook events with scheduled polling, bounded retry, and visible
+  deadletters so branch state cannot silently drift.
+- Surface connection health, repository topology, leases, ahead/behind state,
+  rewritten-history equivalence, conflicts, checks, authorizations, receipts,
+  and rollback points in Mission Control.
+
+The detailed contract and staged delivery map live in
+`docs/product/GITHUB_PROJECT_SYNC.md`. Plane BOSS-246 is the parent feature;
+BOSS-247 through BOSS-255 are dependency-ordered implementation slices.
+BOSS-247 through BOSS-255 now provide the connection/binding, immutable
+versioned policy, Receipt-backed remote topology observation, fenced TTL
+branch/worktree ownership, safe synchronization, reviewed conflict resolution,
+exact-snapshot governed merge queue, and webhook/poll/repair reconciliation
+with bounded retries and visible deadletters. Mission Control completes the
+journey with project/repository selection, live branch and divergence truth,
+leases, sync/conflict/merge/reconciliation state, evidence and rollback
+inspection, explicit degraded states, and `github_manage`-aware controls while
+keeping lease-token-bearing writes behind workers.
+
 ## Roles, Role Packs, and Agent Factory
 
 Core v2 role pack:
@@ -513,6 +613,20 @@ Agent Factory responsibilities:
 - Roll back bad role changes.
 
 No new role may ship without objective linkage, bounded scope, eval plan, permissions, budget, staged rollout, and rollback plan.
+
+## Agent Studio, Panels, and A2A Coordination
+
+Agent Studio is the governed builder and live operations surface for executable agents, Panels, and reusable Workflows. Operators can author, scope, validate, test, version, publish, retire, and observe agents while choosing a model policy, prompt layers, deterministic rules, output contract, requested skills/integrations, A2A permissions, context policy, autonomy ceiling, budget and runtime limits. The same workbench can create a WorkflowDefinition, edit and preview its typed graph, validate reachability/bindings/bounds without side effects, publish an immutable WorkflowVersion, and execute that pinned version through the canonical Workflow Runtime. Agent Studio never creates a parallel orchestration engine. Effective runtime capability is still the deterministic intersection of RoleSpec, Agent Module, project policy, Workflow or Panel binding, installed Skills/Integrations, data boundary, health, budget and actor permission.
+
+The guided agent wizard is the primary commissioning path. It walks an operator through identity and installed RoleSpec, deterministic or live-model runtime posture, layered prompts, rules, requested skills/integrations, project and data boundary, bounded calls/runtime, output contract, and A2A publish/subscribe topics. Blank, builder, reviewer, and operator patterns accelerate authoring without granting authority. A persistent live blueprint shows the proposed authority envelope before mutation. Saving creates a stable `AgentDefinition` and immutable draft `AgentVersion`; validate-and-publish activates the version only after server-side RoleSpec, capability, scope, output, A2A, and runtime checks pass. A failed validation or publication remains an explicit draft with its definition/version identifiers and errors. Credentials are never accepted by the wizard.
+
+The seeded library includes UX Engineer, UI Designer, Frontend Engineer, Backend Engineer, Full-Stack Engineer, Database Administrator, Chief Architect, Security Engineer, QA Engineer, Chief Operator/Job Captain, CFO/FinOps, and DevOps Engineer. Seeded agents are editable product assets, not privileged actors, and default to a deterministic side-effect-free execution posture until a governed live model/tool path is selected.
+
+A Panel is a first-class, versioned composition object that pins AgentVersions and declares independence, shared/private context, quorum, rounds, cost/call bounds, evidence, consolidation, dissent, tie-break and escalation. Panel execution reuses Agent Group member-run, finding, dissent, lease, budget and receipt primitives. Consolidation may synthesize, rank by evidence, weight recommendations, require producer-reviewer revision, or hold for more evidence; it never erases attributed member outputs or turns consensus into proof.
+
+The global A2A fabric standardizes instructions, status, task/job coordination, joint work, resource requests, handoffs, barriers, findings, dissent, telemetry, replies, cancellation and heartbeat. Every message carries tenant/data scope, typed schema/version, sender/recipient, dedupe, correlation/causation, TTL, priority, acknowledgement mode, and task/job/workflow/group/panel/resource lineage. The durable flow is Postgres envelope/outbox -> leased dispatch -> Receipt-backed Redis Stream -> consumer group -> durable delivery/ACK. Redis failure delays delivery but cannot erase state; retries, lag, deadletters and replay remain visible.
+
+The detailed governing contract is `docs/product/AGENT_STUDIO_A2A.md`.
 
 ## Agent Groups and Reusable Collaboration Protocols
 
@@ -562,7 +676,7 @@ Consensus protocol: `propose -> critique -> revise -> vote -> record dissent -> 
 
 ## Communications and Presence
 
-BOSS supports Slack-style internal chat, email as durable command/receipt backbone, optional Google Chat, optional SMS/voice escalation later, persona identity rendering, urgency tiers, quiet hours, ACK-required critical messages, durable Outbox/Inbox objects, no silent drops, deadletters, and escalations. Real Slack/email sends require an explicit per-project channel rollout policy, allowed data boundary, BudgetReservation, Receipt, provider credentials, and visible policy-block decisions when not configured.
+BOSS supports Slack-style internal chat, email as durable command/receipt backbone, optional Google Chat, optional SMS/voice escalation later, persona identity rendering, urgency tiers, quiet hours, ACK-required critical messages, durable Outbox/Inbox objects, no silent drops, deadletters, and escalations. The internal A2A fabric is a separate typed coordination channel with durable envelopes, deliveries, ACKs, correlation/causation, Redis Streams transport, Postgres audit truth, lag/health, retry and replay. An A2A instruction is coordination evidence, not authority to spend, create a job, or change a resource. Real Slack/email sends require an explicit per-project channel rollout policy, allowed data boundary, BudgetReservation, Receipt, provider credentials, and visible policy-block decisions when not configured.
 
 ## Knowledge, Memory, and SSP
 
@@ -667,6 +781,9 @@ Phase 1 - BOSS builds BOSS:
 - Basic Agent Group runtime with producer-reviewer and bounded-debate protocols.
 - Generic Integration Registry layered over the existing SkillSpec and provider-adapter foundations.
 - Branch/worktree isolation.
+- Project-scoped GitHub connection and repository-binding registry.
+- Branch policy, topology snapshots, leases, safe synchronization, conflict
+  resolution branches, and governed merge authorization.
 - Evidence bundles.
 - Model entitlement broker.
 - Local/subscription/API routing.
@@ -752,6 +869,8 @@ Workflows: mapped-work coverage, version adoption, successful recovery/replay, s
 
 Ground-truth/assurance: regression detection latency, evidence-backed claim rate, closed-question tripwire hits, stale evidence blocks, verifier overturn rate, and ownership-conflict prevention.
 
+Work orchestration: externally tracked work coverage, priority-rationale coverage, ticket-sync latency, quota-denied job count, allocation utilization, priority-to-start latency, tracker drift, and operator clicks avoided by the embedded delivery view.
+
 ## Conflicts and Resolutions
 
 1. Plugin vs core plane. Resolution: provider adapters are plugins. The Resource Plane is core.
@@ -768,10 +887,15 @@ Ground-truth/assurance: regression detection latency, evidence-backed claim rate
 12. Multi-agent consensus vs correctness. Resolution: Agent Groups preserve independent findings and dissent; evidence and deterministic policy—not vote count—establish authoritative status.
 13. Skill vs integration. Resolution: SkillSpec describes what may be requested; IntegrationConnection describes which configured system can implement it under current scope, health, and authority.
 14. Composition vs coupling. Resolution: Agent Groups, Skills, Integrations, Workflows, and Assurance are separate runtimes connected by versioned references and typed contracts.
+15. Plane vs BOSS jobs. Resolution: Plane is the default open-source intake and human collaboration system; the BOSS Postgres job ledger remains the only execution authority.
+16. High priority vs hard limits. Resolution: ranked work receives capacity first, but Budget Governor, hard quota, policy, approval, and data-boundary rules always win.
 
 ## Release-Grade Acceptance Criteria
 
 - Every implemented requirement maps to tests and traceability records.
+- Every GitHub operation resolves a project repository binding; mutable branch
+  operations additionally require current topology, policy, ownership,
+  dedupe, receipt, and rollback evidence.
 - Every spendy action has quote/reserve/execute/receipt/reconcile coverage.
 - Every provider write has ChangeSet, BudgetReservation, approval when required, ResourceReceipt, and rollback plan.
 - Every provider-backed non-sandbox deployment run has an explicit environment rollout policy before any provider ChangeSet is planned.
@@ -780,6 +904,9 @@ Ground-truth/assurance: regression detection latency, evidence-backed claim rate
 - Every repeatable work class with an active mapping runs the pinned WorkflowVersion; missing mappings create a proposal/Decision rather than invisible process invention.
 - Every Agent Group run preserves member provenance and dissent and cannot use consensus to bypass deterministic gates.
 - Every skill invocation identifies the resolved SkillSpec, executor, IntegrationConnection where applicable, authority, evidence/artifacts, costs, and receipts.
+- Every newly created work item has a tracker binding; a required tracker must be synchronized before its non-sync agent jobs can lease.
+- Every agent run is represented by a ranked work item, tracker binding, allocation, and fenced job; tracker writes are themselves leased, deduplicated, receipt-producing jobs.
+- Operators can inspect ranked work, quota pressure, job leases, ticket state, pull requests, deployments, bots, and status channels from BOSS without opening the tracker for routine monitoring.
 - Every authoritative solved/fixed/regressed/caused-by claim links the required reproducible evidence and Assurance Case.
 - Community runs locally without BOSS Account Connect.
 - Cloud uses BOSS Account Connect.

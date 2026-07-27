@@ -1,5 +1,250 @@
 # Codex Handoff
 
+## 2026-07-27 BOSS-282 v0.9.1 budget settlement patch
+
+- Integrated contributor PR #98 on top of released v0.9.0 after verifying its
+  commits were not ancestors or patch-equivalent to main.
+- `completed_no_pr`, non-final decomposition, and automated repair paths now
+  pass `run_id` into settle-before-release.
+- Settlement subtracts existing `code_task:{run_id}` cost receipts so resumed
+  work consumes only its unbilled delta.
+- The merged cost-governance file retains both BOSS-281 Task Board coverage and
+  the contributor settlement regressions.
+- Release evidence passes clean, lint, strict docs, production build,
+  Kubernetes/Helm, infrastructure profiles, dependency audit, smoke, 143 web
+  tests, and 1,031 Python tests with four expected live-provider skips.
+
+## 2026-07-26 BOSS-279 v0.9.0 release integration
+
+- Release branch `ai/codex/release-v0.9.0` integrates BOSS-237, BOSS-246–268,
+  and BOSS-270–278 without dropping the parallel BOSS-269 repository-host work.
+- The release fixes merge-discovered contract regressions: Product Manager
+  retains artifact/decision plus tracker skills; delivery presence only links
+  tenant-scoped canonical Receipts; assurance tests permit additional workflow
+  families; the standalone engine derives Plane configuration; event ordering
+  uses wall-clock timestamps rather than transaction-start timestamps.
+- Local release gates pass: clean, lint, strict docs, production build,
+  Kubernetes/Helm, infrastructure profiles, dependency audit, smoke, 143 web
+  tests, and 1,011 Python tests with four expected live-provider skips.
+- Hosted Account Connect, SCIM/SSO, live-cluster verification, and real
+  provider writes remain fail-closed until explicit external configuration and
+  approval are supplied.
+
+## 2026-07-26 BOSS-270–278 work orchestration and delivery presence
+
+- Branch `ai/codex/boss-270-work-orchestration` is stacked on the Agent Studio
+  branch/PR #88 so Product Manager execution reuses the canonical Studio and
+  A2A runtime instead of creating a second agent system.
+- Added explainable `P0..P4` portfolio scoring, global/org/workspace/project/
+  workload/agent concurrency envelopes, deterministic ranked allocation, and
+  atomic hierarchical quota checks in the fenced Postgres job claim path.
+- Plane is the seeded open-source default WorkTracker. New work receives a
+  binding and a leased `work_tracker.issue.sync` job; provider creation is
+  deduplicated by an external-effect Receipt. Required Plane connections gate
+  ordinary agent leasing until synchronization; unconfigured Community installs
+  retain visible advisory migration behavior.
+- Added the seeded Product Manager agent, work-tracking/allocation skills, and
+  declared output-contract persistence so Product Manager runs create versioned
+  `product_delivery_brief` artifacts with PRD/ticket change sections. Also
+  added Mattermost bot delivery, GitHub/Plane/Mattermost delivery-presence
+  records, bot identities and status channels, plus the Mission Control Work
+  Allocation area for rankings, quota pressure, leases, ticket state, and
+  delivery events. Matching GitHub deployment events project automatically
+  into configured status channels with their bot identity; external Mattermost
+  delivery remains governed by the existing comms effect path.
+- Governing PRD/technical spec, focused product spec, policy, SpecPack manifest,
+  OpenAPI, tests, and coordination evidence are updated. Plane BOSS-270–278
+  remain In Progress until the release merge.
+
+## 2026-07-26 BOSS-237 System Configuration UX
+
+- Branch `ai/codex/boss-237-system-config-ux` starts from `main` after BOSS-236
+  merged as `36144d0`; Plane BOSS-237 is In Progress.
+- Replaced the loose ProviderOps summary with a cohesive System Configuration
+  workspace: Connections, Resources, Scaling & Health, and Cloud FinOps.
+- Provider definitions drive truthful available/planned catalog states and
+  named write-only credential forms. Planned providers fail closed; configured
+  SecretRef pointers never render back to the operator.
+- Added URL-persisted views, saved provider/account/environment/region/service
+  scope, permission-aware lifecycle controls, partial-feed resilience, explicit
+  empty/error/freshness states, and account/resource evidence drawers.
+- Live browser validation covered seeded enterprise data at desktop and 390px
+  mobile. It found and fixed hidden-header horizontal overflow and a transformed
+  ancestor that broke fixed drawer containment. A clean final browser tab had
+  no console errors.
+- Green evidence: 127/127 web tests, repository lint/typecheck, production Next
+  build, strict docs, smoke, diff hygiene, and desktop/mobile interaction and
+  overflow checks. Product, technical, user-story, and `.ai` records are
+  updated here.
+
+## 2026-07-26 BOSS-255 GitHub Mission Control
+## 2026-07-26 BOSS-255 GitHub Mission Control
+
+- Draft PR #87 on `ai/codex/boss-255-github-mission-control` starts from the
+  BOSS-254 reconciler commit and is cleanly mergeable on draft PR #86. The
+  implementation commit is `cd9021e9dafa2ee044d600cf8cdf94486691ceb6`.
+  It does not rewrite Paramg PR #80 or any contributor ref.
+- Adds a dedicated GitHub navigation area backed directly by twelve canonical
+  typed read streams: connections, repository bindings, branch policies,
+  immutable snapshots, fenced leases, code sync runs, conflict sets,
+  resolution plans, merge authorizations, reconciliation runs/signals, and
+  current repository ref state. Partial failures remain named while healthy
+  evidence stays visible.
+- The restrained two-pane workspace centers live branch topology and a shared
+  evidence inspector, followed by linear sync/conflict/merge/reconciliation
+  lanes. It exposes exact commit/tree/observation/Receipt identity, divergence,
+  lease owner/fence/expiry, checks/reviews, rollback, and deadletter repair.
+- `github_manage` controls cover connection, binding, immutable policy,
+  access test, snapshot capture, sync planning, independent resolution review,
+  merge authorization/enqueue, poll, and repair. Raw one-time lease tokens are
+  never sent to the browser, so apply remains a leased worker operation.
+- Validation: 128 web tests pass, including three new Mission Control feed/
+  rendering tests; all 85 widened GitHub API/community/worker tests pass; web
+  lint/typecheck and production build pass; strict docs build passes; live
+  local API navigation shows all GitHub endpoints returning 200, no React
+  errors, and no horizontal page overflow at the inspected desktop viewport.
+
+## 2026-07-26 BOSS-254 GitHub webhook/poll reconciler
+
+- Stacked branch `ai/codex/boss-254-github-reconciler` starts from BOSS-253
+  draft PR #85 and preserves the BOSS-247→253 PR stack.
+- Active repository bindings now route verified GitHub deliveries to
+  deduplicated per-ref `ReconciliationSignal` and
+  `github.repository.reconcile` jobs. The webhook transaction performs no
+  provider reads.
+- Poll and repair requests use the same `GitHubReconciliationRun` state
+  machine. The BOSS worker advertises the capability; reconciliation atomically
+  owns job success/retry/deadletter so the generic worker does not
+  double-finalize its lease.
+- Each attempt records a Receipt-backed core rate-limit read and one
+  Receipt-backed branch identity/protection observation per requested ref.
+  Immutable observations advance canonical `RepositoryRefState`; expected-SHA
+  mismatch and delete/reappearance are explicit stale/out-of-order evidence.
+- Provider errors are redacted. Rate exhaustion uses provider-reset-aware
+  backoff, other read errors use bounded exponential backoff, the third failure
+  deadletters, and operators can schedule a linked repair.
+- Fresh commit/tree drift blocks pending CodeSyncRuns and
+  MergeAuthorizations pinned to stale identities. BOSS never mutates a branch
+  in this reconciler.
+- Validation: 67 widened GitHub/webhook API tests, 30 worker tests, 125 web
+  tests, repository lint, production build, fresh and repeated schema
+  bootstrap, all seven new OpenAPI routes, generated-doc drift, strict
+  MkDocs, and diff checks pass.
+
+## 2026-07-26 BOSS-253 governed merge authorization and queue
+
+- Stacked branch `ai/codex/boss-253-merge-authorizations` starts from
+  BOSS-251/BOSS-252 draft PR #84 and preserves the BOSS-247→252 PR stack.
+- `MergeAuthorization` pins one project binding, active policy ID/version, PR,
+  source/target refs, exact head/base commit and tree identities, checks,
+  effective reviews, evidence bundle, expiry, and optional sync/resolution
+  lineage. Initial and fresh provider observations are Receipt-backed.
+- Approval must be independent from the requester. Authorized merges enter a
+  deterministic per-repository/target queue; only its earliest active entry can
+  apply.
+- Apply requires the exact protected-target BranchLease token and fence, then
+  rechecks policy, PR state/draft/mergeability, commit/tree freshness, target
+  head, required checks, current-head approvals, and requested changes.
+- The adapter performs a second exact-snapshot guard and merges only through
+  the GitHub PR API with the authorized head SHA. BOSS never pushes or
+  force-updates the protected target.
+- Every merge attempt has a risk-tier-three zero-cost ChangeSet operation,
+  Receipt, and ResourceReceipt. Result verification records the merge
+  commit/tree and previous target plus a manual, newly authorized revert-PR
+  plan. Failures redact provider detail, retry three times, then deadletter.
+- Validation: seven merge state-machine tests inside a 40-test widened GitHub
+  API/adapter matrix; 39 typed-client tests; focused Ruff and compile; Next
+  route generation and TypeScript; production web build; schema idempotency;
+  complete BOSS-253 OpenAPI route coverage; generated-doc drift; strict MkDocs;
+  and diff checks pass.
+
+## 2026-07-26 BOSS-251/BOSS-252 safe sync and conflict resolution
+
+- Stacked branch `ai/codex/boss-251-252-safe-sync-conflicts` starts from
+  BOSS-250 draft PR #83 and preserves the BOSS-247→250 PR stack.
+- `CodeSyncRun` maps immutable topology to no-op, preserved tree-equivalent
+  identity, non-force owned-branch fast-forward, protected approval hold,
+  block, or a dedicated policy-approved resolution branch.
+- Apply verifies the exact raw lease token and monotonic fence, requires the
+  pinned policy to remain active, and captures a fresh snapshot before every
+  mutation. Commit/tree/topology drift fails before provider writes.
+- Every GitHub provider write attempt has a canonical ChangeSet operation,
+  Receipt, and ResourceReceipt. GitHub ref writes are explicitly zero-cost,
+  never force, retain rollback identity, retry three times, then deadletter.
+- Divergence creates a typed ConflictSet with immutable base/ours/theirs and
+  bounded file evidence. ResolutionPlans require failing-red/passing-green
+  proof and a reviewer different from the creator.
+- Approved resolution apply creates a two-parent commit through the Git Data
+  adapter and fast-forwards only the resolution branch. The protected target
+  remains unchanged for BOSS-253's exact-snapshot MergeAuthorization.
+- Validation: 31 widened GitHub API/adapter tests and 39 typed-client tests
+  pass; focused Ruff, TypeScript/Next route generation, production web build,
+  schema idempotency, OpenAPI YAML plus complete GitHub route coverage,
+  generated-doc drift, strict MkDocs, compile, and diff checks pass.
+
+## 2026-07-26 BOSS-250 fenced branch/worktree leases
+
+- Stacked branch `ai/codex/boss-250-branch-leases` starts from BOSS-248/BOSS-249
+  draft PR #82, which is stacked on BOSS-247 PR #81.
+- `github_branch_leases` permits one active owner per repository binding/ref.
+  Acquisition locks the binding row, so concurrent claimants produce exactly
+  one winner, expires stale ownership atomically, and retains reclaim lineage.
+- The raw high-entropy lease token is returned once and only its SHA-256 hash
+  persists. Exact acquire replay returns the original record but never the raw
+  token. Heartbeat/release verify both token and monotonic fence.
+- Expired leases cannot heartbeat/release; unexpired leases cannot be
+  administratively reclaimed. Reacquisition gets a higher fencing token and
+  links the prior expired lease.
+- Validation: double schema application; 65 widened API/GitHub/provider tests;
+  38 API-client tests; concurrency, token/fence, expiry/reclaim and tenant
+  tests; Ruff; TypeScript; production build; OpenAPI; generated docs; strict
+  MkDocs; and diff checks pass.
+
+## 2026-07-26 BOSS-248/BOSS-249 branch policy and topology
+
+- Stacked branch `ai/codex/boss-248-249-branch-policy-snapshots` starts from
+  BOSS-247 draft PR #81. Target the stacked PR at the BOSS-247 branch until
+  #81 merges, then retarget/rebase by tree without rewriting contributor refs.
+- Branch policies are immutable versions with supersession lineage,
+  protected-ref patterns, branch prefixes/name rules, update/merge methods,
+  checks/approvals, history/signing requirements, automation posture, and
+  deterministic allowed/approval-required/blocked results.
+- Remote snapshots are immutable, tenant-scoped, pinned to a policy version,
+  and Receipt-backed. They retain commit/tree/parents, merge base,
+  ahead/behind, protection, check runs, raw topology, and policy classification.
+- Tree-equivalent commit-identity rewrites remain non-conflicts. A valid
+  fast-forward that policy denies retains raw `fast_forward` topology and final
+  `protected_blocked` classification.
+- Receipt replay now verifies operation scope for both connection tests and
+  snapshots. The BOSS-247 portion was cherry-picked and pushed to PR #81 as
+  `073f3b6`.
+- Validation: schema applied twice; 60 focused/widened API/GitHub/provider
+  tests; 37 API-client tests; Ruff; TypeScript; production Next build; OpenAPI
+  checks; generated-doc drift test; strict MkDocs; and diff checks pass.
+
+## 2026-07-26 BOSS-246/BOSS-247 GitHub project sync foundation
+
+- Branch `ai/codex/boss-247-github-project-connection` starts from rewritten
+  `origin/main` at `1c6de8e`. The rewrite changed commit identities without
+  changing the tree; no contributor branch was reset or force-pushed.
+- Plane BOSS-246 is the governing feature. BOSS-247 implements project-scoped
+  GitHub App/PAT connections, SecretRef-only credentials, repository bindings,
+  permission/capability discovery, connection lifecycle, tenant/RBAC checks,
+  and receipted idempotent health tests.
+- Product and technical contracts define BOSS-248–255 as the remaining branch
+  policy, snapshot, lease/worktree, safe sync, conflict-resolution branch,
+  merge queue, reconciler, and Mission Control slices. This PR does not claim
+  those behaviors are implemented.
+- Existing process-wide GitHub automation remains backward compatible; the new
+  adapter constructor overrides allow scoped execution without mutating global
+  settings.
+- Validation: schema applied twice; 54 focused/widened API tests; 36 API-client
+  tests; Ruff; TypeScript; OpenAPI YAML/route checks; feature-doc generation
+  and drift test; strict MkDocs; and diff checks all pass.
+- The workstation `.venv` is Python 3.9, while the repository now requires
+  Python 3.11+. Generation used the bundled Python 3.12 runtime; installed test
+  dependencies remained in the existing virtualenv.
+
 ## 2026-07-26 BOSS-236 provider credential lifecycle
 
 - Branch `ai/codex/boss-236-provider-credential-lifecycle` starts from
@@ -516,3 +761,57 @@ Slice complete; accelerating full product with parallel agents.
   GitHub records #68/#70 as merged and #23/#69 as superseded/closed. Plane
   BOSS-215–234 and the reconciled package backlog BOSS-32/33 are Done with
   release evidence attached.
+
+## Codex handoff — BOSS-256–266 Agent Studio/A2A (2026-07-26)
+
+- Active branch: `ai/codex/boss-256-agent-studio-a2a`, based independently on
+  `origin/main`; it does not modify Paramg PR #80.
+- Delivered: immutable Agent/Panel versions, validation/test/publish gates,
+  leased deterministic specialist execution, attributed Panel fan-out and
+  consolidation, twelve seeded specialists, three seeded Panels, and a
+  responsive live Agent Studio workbench.
+- Delivered Workflow Studio lane: canonical Workflow definitions and recent
+  runs in the catalog, live draft graph preview, no-side-effect validation,
+  create-and-publish, immutable version publication, and pinned execution
+  through the existing Workflow Registry/Runtime rather than a second engine.
+- Delivered A2A: canonical Postgres ledger/outbox/deliveries, Redis Streams
+  adapter, leased Receipt-backed XADD, consumer groups, filtered-cursor
+  cleanup, visibility leases/XAUTOCLAIM, bounded retry/deadletter, actor-bound
+  ACK, Receipt-backed XACK, replay/cancel, schema/version allowlists, health
+  and audit APIs.
+- Safety: effective capabilities are intersection-only; Panel consensus is not
+  proof; no provider/model secret enters prompts or messages; live-model mode
+  requires a BudgetReservation and remains fail-closed until a governed model
+  provider lane is explicitly enabled.
+- Validation: 121 web and 938 Python tests pass (four intentional external/live
+  skips); 39 focused tests, Ruff, TypeScript, OpenAPI YAML, diff checks,
+  optimized build, responsive browser QA, and real Redis delivery/reclaim
+  proofs pass. The Workflow Studio follow-up additionally passes 12 focused
+  Agent Studio/Workflow runtime tests, the full 121-test web suite,
+  TypeScript, Ruff, diff checks, and the optimized production build.
+- Draft PR: https://github.com/seanheiney/boss/pull/88. Implementation commit:
+  `a2daccfa5d81f0b1687c3e77925e981820274375`. GitHub reports the PR cleanly
+  mergeable against `main`.
+- Workflow Studio implementation is `d5dc58105b598209868543629526cfd6a5bd3b59`;
+  current contributor `main` through BOSS-267 was merged without conflict at
+  code/integration head `d0d3a6354a1214459db23e212c1467cd292d1506`.
+  GitHub still reports draft PR #88 cleanly mergeable.
+- Plane BOSS-256–266 remain In Progress until the PR is merged. Attach the
+  final commit/PR and merge evidence before moving them to Done.
+
+### BOSS-268 follow-up: guided agent commissioning
+
+- Agent Studio now exposes an accessible five-stage wizard from the Agents
+  library. It covers identity, installed RoleSpec, runtime/model policy,
+  layered prompts, deterministic rules, installed Skill and integration
+  references, data scope, limits, output contract, A2A topics, and review.
+- Blank/builder/reviewer/operator patterns feed an always-visible live
+  authority blueprint. Patterns provide content only; effective authority
+  remains the server-validated intersection.
+- Save Draft and Validate + Publish call the existing definition/version/
+  validate/publish APIs in order. Partial failure preserves identifiers and an
+  explicit draft; no credential fields or alternate runtime were introduced.
+- Validation passes 125 web tests, seven focused Agent Studio/A2A API tests,
+  Ruff, TypeScript, generated-doc parity, strict docs, the production build,
+  and a real browser create/validate/publish/refresh journey.
+- Plane BOSS-268 is In Progress on the existing draft PR #88 until merge.

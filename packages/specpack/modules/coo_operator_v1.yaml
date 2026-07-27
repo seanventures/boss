@@ -22,7 +22,7 @@ role:
     can_decide: [Safe requeue recommendations within retry policy, Pausing non-critical loops in degraded mode]
     must_escalate: [Break-glass operations, Budget or autonomy changes]
   permissions:
-    allowed_skills: [queue.inspect, job.requeue, deadletter.summarize, incident.create]
+    allowed_skills: [queue.inspect, job.requeue, deadletter.summarize, incident.create, model.generate_text]
     forbidden_skills: [infra.create_node, github.merge_pr]
   output_contracts: [OpsDigest, IncidentPacket]
   autonomy: {level: 2}

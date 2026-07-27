@@ -3,6 +3,262 @@
 All 15-min terminal updates and major milestones appended here. Chronological, newest at top.
 
 ---
+## 2026-07-27 — Codex — BOSS-282 v0.9.1 budget settlement patch
+
+- Integrated contributor PR #98 after proving its two commits were not present
+  in released main.
+- Preserved BOSS-281 Task Board coverage while adding regressions for
+  completed-no-PR settlement ordering and resumed-run unbilled-delta charging.
+- Budget settlement now records real model spend before release and avoids
+  double-billing spend already settled by an earlier reservation.
+- Release gates pass: `make clean`, lint, strict docs, production build,
+  Kubernetes/Helm, infrastructure profiles, dependency audit, smoke, 143 web
+  tests, and 1,031 Python tests; four live-provider tests skip as expected.
+  Hosted identity/account, live-cluster, and provider-write rollout remain
+  explicitly fail-closed.
+
+---
+## 2026-07-26 — Codex — BOSS-279 v0.9.0 release integration
+
+- Integrated the System Configuration, GitHub operations, Agent Studio/A2A,
+  and Plane-first Work Orchestration stacks on one release branch while
+  preserving BOSS-269 repository-host support from `main`.
+- Resolved additive merge regressions in Product Manager default skills,
+  delivery-presence Receipt references, assurance workflow catalog tests, OSS
+  engine Plane defaults, and same-transaction event ordering.
+- Added a safe generated-artifact `make clean` target and aligned application,
+  engine, Helm, Kubernetes, and API-client metadata on `v0.9.0`.
+- Release evidence: `make clean`, lint, strict docs, production web build,
+  Kubernetes/Helm validation, infrastructure-profile validation, dependency
+  audit, smoke, 143 web tests, and 1,011 Python tests pass; four live-provider
+  tests skip as expected. External hosted identity/account, live-cluster, and
+  provider-write rollout prerequisites remain explicitly fail-closed.
+
+---
+## 2026-07-26 — BOSS-270–278 Work Orchestration and Delivery Presence
+
+- Added canonical ranked work, quota, allocation, tracker binding, bot/channel,
+  and delivery-presence records plus job references and ranked claim ordering.
+- Enforced applicable global through agent/workload concurrency envelopes
+  atomically at claim time and released capacity across completion, retry,
+  budget deferral, and terminal failure.
+- Added Plane-first plugin registration and leased, deduplicated,
+  Receipt-backed issue creation; alternate tracker providers stay typed and
+  fail closed without an executor.
+- Seeded the Product Manager agent and work-tracker/Mattermost capabilities;
+  added official Mattermost bot posting and GitHub/Plane/Mattermost presence.
+- Added the Mission Control Work Allocation area and governing product,
+  technical, policy, OpenAPI, test, and coordination contracts. Browser QA
+  caught and closed the portfolio-area visibility regression.
+- Final local evidence: 23 focused API/Postgres tests, eight widened legacy
+  lease/comms/budget regressions, 30 worker tests, 128 web tests, Ruff,
+  TypeScript, production build, SpecPack YAML, generated docs, compile,
+  schema bootstrap, secret scan, and diff checks pass. The repository-wide
+  OpenAPI audit retains only its pre-existing backlog; every new
+  work-orchestration route is present.
+
+---
+## 2026-07-26 — Codex — BOSS-237 System Configuration UX
+
+- Advanced BOSS-237 Backlog → Todo → In Progress in Plane after merging
+  BOSS-236 and checking contributor branches and GitHub PRs for overlap.
+- Built one System Configuration workspace for Connections, Resources, Scaling
+  & Health, and Cloud FinOps with URL persistence, saved five-dimensional
+  scope, truthful provider definitions, write-only credential posture,
+  permission-aware lifecycle controls, partial-feed resilience, and
+  evidence-oriented account/resource drawers.
+- Live desktop and 390px mobile browser QA found and fixed table-driven
+  horizontal document overflow and transformed-ancestor drawer containment.
+  Planned Azure credentials fail closed, configured SecretRefs remain masked,
+  resource view selection survives reload, and a clean validation tab reports
+  no console errors.
+- Validation: 127/127 web tests, repository lint/typecheck, production Next
+  build, strict docs, smoke, diff hygiene, and secret-pattern scan pass.
+
+---
+## 2026-07-26 — Codex — BOSS-255 GitHub Mission Control
+
+- Advanced BOSS-255 Backlog → Todo → In Progress in Plane after publishing
+  clean stacked draft PR #86 for the BOSS-254 reconciler.
+- Added a dedicated project-level GitHub workspace that reads canonical
+  connection, repository, policy, topology, lease, sync, conflict, resolution,
+  merge, reconciliation, signal, and ref state through the typed client.
+- Added permission-aware setup and operations for SecretRef-backed
+  connections, repository binding, immutable policies, connection tests,
+  snapshot capture, sync planning, independent resolution review, merge
+  authorization/queueing, reconciliation poll, and terminal repair. Kept
+  lease-token-bearing apply operations behind workers.
+- Added partial-stream degradation, explicit empty/error states, responsive
+  topology/inspector/workflow layout, Receipt/rollback coverage, and actor RBAC
+  reflection.
+- Added three Mission Control feed/rendering tests. All 128 web tests and 85
+  widened GitHub API/community/worker tests pass alongside TypeScript lint,
+  production build, generated-doc drift and strict docs checks, live local
+  API/browser navigation, and desktop overflow/error inspection.
+- Published draft PR #87, cleanly mergeable on BOSS-254 PR #86, and attached
+  the exact commit, PR stack, validation, and merge-only closure condition to
+  Plane BOSS-255 and parent BOSS-246.
+
+## 2026-07-26 — Codex — BOSS-254 GitHub reconciler
+
+- Advanced BOSS-254 Backlog → Todo → In Progress in Plane after publishing
+  clean stacked draft PR #85 for BOSS-253.
+- Added canonical per-project reconciliation signals, runs, immutable
+  observations, and current repository ref state with webhook, job,
+  Receipt, deadletter, and repair lineage.
+- Changed GitHub ingress to resolve unambiguous active project bindings and
+  enqueue one deduplicated run per affected ref without calling the provider
+  inline. Scheduled polls and explicit repairs converge through the same leased
+  `github.repository.reconcile` worker capability.
+- Each worker attempt first observes the core rate limit, then exact branch
+  commit/tree/protection state. Every provider read is Receipt-backed; stale or
+  out-of-order webhook claims remain visible and cannot roll current truth
+  backward. Reconciled drift blocks pinned pending sync/merge work.
+- Added reset-aware/exponential bounded retry, synchronized run/signal/job
+  state, redacted provider failures, terminal deadletters, repair scheduling,
+  typed API/client/OpenAPI contracts, and worker double-finalization
+  prevention.
+- Validation includes focused reconciliation API/service tests, adapter quota
+  proof, worker lifecycle proof, client contract proof, 67 widened GitHub/
+  webhook API tests, 30 worker tests, 125 web tests, fresh and repeated schema
+  bootstrap, targeted OpenAPI route coverage, repository lint, production web
+  build, strict docs, and diff checks.
+
+## 2026-07-26 — Codex — BOSS-253 governed merge authorization and queue
+
+- Advanced BOSS-253 Backlog → Todo → In Progress in Plane after publishing
+  clean stacked PR #84 for BOSS-251/BOSS-252.
+- Added durable expiring MergeAuthorization state over exact PR, base/head
+  commit/tree, policy, checks, reviews, evidence and optional
+  sync/resolution lineage.
+- Implemented independent approval, deterministic per-target queue ordering,
+  exact target lease/fencing, fresh merge-readiness gates, guarded PR-only
+  merge with expected head SHA, and verified result/rollback evidence.
+- Routed every observation through a Receipt and every merge attempt through a
+  zero-cost risk-tier-three ChangeSet, Receipt, and ResourceReceipt. Failures
+  are redacted, retry three times, and deadletter visibly.
+- Added regression tests for self-approval denial, successful receipted merge,
+  stale head blocking, out-of-order queue denial, failed-check blocking, and
+  bounded provider failure/deadletter behavior.
+- Validation: 40 widened GitHub API/adapter tests, 39 typed-client tests,
+  focused Ruff/compile, TypeScript and route generation, production web build,
+  schema idempotency, OpenAPI route coverage, generated docs, strict MkDocs,
+  and diff checks pass.
+
+## 2026-07-26 — Codex — BOSS-251/BOSS-252 safe sync and conflict resolution
+
+- Advanced BOSS-251 and BOSS-252 Backlog → Todo → In Progress in Plane before
+  implementation and based the work on the published BOSS-250 stack without
+  touching Paramg's BOSS-237 branch.
+- Added canonical CodeSyncRun, ConflictSet, and ResolutionPlan persistence and
+  typed API/client/OpenAPI contracts.
+- Implemented deterministic topology planning, tree-rewrite no-op, exact
+  policy/lease/fence/fresh-snapshot gates, non-force owned-branch sync,
+  protected-target hold, rollback identity, result verification, bounded
+  retry, redacted failure, and terminal deadletter.
+- Routed every GitHub write attempt through a canonical ChangeSet operation,
+  Receipt, and ResourceReceipt. Zero-cost GitHub ref effects explicitly require
+  no BudgetReservation.
+- Implemented dedicated resolution branches, immutable base/ours/theirs/file
+  evidence, failing-red/passing-green proof, independent reviewer enforcement,
+  two-parent resolution commits, and resolution-ref-only non-force updates.
+- Validation: 31 widened GitHub API/adapter tests, 39 typed-client tests,
+  focused Ruff, TypeScript/Next route generation, production web build, schema
+  applied twice, OpenAPI YAML/GitHub route coverage, generated docs, strict
+  MkDocs, compile, and diff checks pass.
+
+## 2026-07-26 — Codex — BOSS-250 fenced branch leases
+
+- Advanced BOSS-250 Backlog → Todo → In Progress in Plane after publishing
+  clean stacked PR #82 for BOSS-248/BOSS-249.
+- Added one-active-owner branch/worktree leases with serialized acquisition,
+  hashed one-time tokens, monotonic fencing, heartbeat, release, expiry/reclaim
+  lineage, exact replay, tenant scope, RBAC and audit events.
+- Acceptance coverage proves token/fence denial, no token persistence/event
+  leakage, expiry/reacquire lineage, unexpired reclaim denial, and exactly one
+  winner under concurrent acquisition.
+- Validation passes double schema application, 65 API tests, 38 client tests,
+  Ruff, TypeScript, production build, OpenAPI, generated docs, strict MkDocs,
+  and diff checks.
+
+---
+## 2026-07-26 — Codex — BOSS-248/BOSS-249 policy and topology
+
+- Advanced BOSS-248/BOSS-249 through Backlog, Todo, and In Progress in Plane
+  after publishing clean draft PR #81 for BOSS-247.
+- Added immutable versioned branch policies, deterministic protected-ref/name/
+  method evaluation, immutable remote commit/tree topology snapshots, Receipt
+  replay scoping, protection/check evidence, and all topology classifications.
+- Added real adapter regression coverage plus typed API/client/OpenAPI and
+  product/technical/acceptance/traceability updates.
+- Validation passes double schema application, 60 API tests, 37 client tests,
+  Ruff, TypeScript, production build, OpenAPI, generated docs, strict MkDocs,
+  and diff checks.
+
+---
+## 2026-07-26 — Codex — BOSS-246/BOSS-247 GitHub project sync
+
+- Created the BOSS-246 parent and BOSS-247–255 delivery slices in Plane before
+  implementation; advanced BOSS-246/BOSS-247 to In Progress.
+- Added project-scoped GitHub App/PAT connections and repository bindings using
+  SecretRefs only, capability/permission discovery, lifecycle controls,
+  receipted idempotent tests, tenant scope, RBAC, and audit events.
+- Added typed API/client/OpenAPI contracts and governing PRD/technical/user
+  stories for safe branch automation. BOSS-248–255 retain the unimplemented
+  branch/sync/conflict/merge/reconciliation/UI work.
+- Validation passes schema reapplication, 54 API tests, 36 client tests, Ruff,
+  TypeScript, OpenAPI parsing, generated-doc checks, strict docs, and diff
+  checks.
+
+---
+## 2026-07-26 — Codex — BOSS-268 guided Agent Studio wizard
+
+- Advanced the deduplicated BOSS-268 slice through Backlog, Todo, and In
+  Progress before implementation.
+- Added a focused five-stage wizard for agent identity/RoleSpec, runtime and
+  prompts, rules and requested capabilities, scope/limits/output/A2A, and
+  review. Blank, builder, reviewer, and operator patterns update a persistent
+  live authority blueprint without granting ambient permissions.
+- Compiled wizard state into the existing stable AgentDefinition and immutable
+  AgentVersion lifecycle. Operators can save a draft or validate then publish;
+  partial failures retain identifiers and validation detail.
+- Added local preflight/payload tests, API client lifecycle coverage, and a
+  real API create/version/validate/publish integration proof. Credentials
+  remain outside the UI; live-model runs remain budget/provider/policy gated.
+- Final evidence passes 125 web tests, seven focused API tests, Ruff,
+  TypeScript, generated-doc parity, strict docs, optimized build, and the
+  full browser commissioning journey. The browser proof found and closed an
+  overlay-clipping defect and verified Studio refresh after publication.
+
+---
+## 2026-07-26 — Codex — BOSS-256–266 Agent Studio, Panels, and A2A
+
+- Created and advanced the eleven deduplicated Plane slices BOSS-256–266
+  before implementation.
+- Added the Agent Studio/Panel/A2A product and technical contract, canonical
+  Postgres schema, immutable agent and panel versions, validation/publish/test
+  gates, executable leased runs, evidence-attributed consolidation, preserved
+  dissent, and capability-intersection enforcement.
+- Seeded twelve specialist agents and three executable panels from SpecPack
+  YAML while retaining RoleSpec as the authority boundary.
+- Added a Redis Streams A2A adapter backed by the canonical Postgres
+  envelope/delivery/outbox ledger, leased and Receipt-backed XADD, consumer
+  groups, visibility leases, XAUTOCLAIM recovery, bounded deadlettering,
+  actor-bound acknowledgements, Receipt-backed XACK, filtering cleanup,
+  replay/cancel, schema/version allowlists, health, and audit APIs.
+- Added a production-quality Agent Studio workbench with searchable agent and
+  panel library, topology view, governed run/test controls, and live A2A trace.
+  Desktop and 760px responsive browser QA passed.
+- Validation: 121 web tests and 938 executable Python tests pass, with four
+  intentional external/live skips; 39 focused runtime/worker/assurance tests,
+  Ruff, TypeScript, OpenAPI YAML, diff checks, and the optimized Next build
+  pass. Real Redis proofs pass XADD/read-group/XACK, replay/cancel, and
+  consumer-crash XAUTOCLAIM-to-deadletter recovery.
+- Published implementation commit `a2daccf` and opened cleanly mergeable draft
+  PR https://github.com/seanheiney/boss/pull/88. Plane BOSS-256–266 include the
+  implementation, validation, commit, and PR evidence.
+
+---
 ## 2026-07-26 — Codex — BOSS-236 provider credential lifecycle
 
 - Advanced BOSS-236 Backlog → Todo → In Progress in Plane after deduping the
@@ -1085,3 +1341,23 @@ PR: https://github.com/seanheiney/boss/pull/3
   and https://github.com/seanheiney/boss/releases/tag/v0.8.0 is the latest
   release. Plane BOSS-215–234 and reconciled BOSS-32/33 are Done with final
   provenance and validation evidence.
+
+## 2026-07-26 — BOSS-256–266 Agent Studio, Panels, Workflows, and A2A
+
+- Built immutable Agent and Panel definitions/versions, deterministic
+  validation and test evidence, leased specialist execution, attributed Panel
+  consolidation, twelve seeded agents, and three seeded Panels.
+- Added the Agent Studio Workflow lane over the existing canonical registry:
+  full definitions and recent runs in the catalog, editable live graph
+  preview, side-effect-free draft validation, create-and-publish, immutable
+  version publication, and pinned execution.
+- Built the global Postgres-canonical, Redis Streams A2A bus with governed
+  channels/subscriptions, typed envelopes, consumer groups, receipts for
+  XADD/XACK, visibility reclaim, bounded retry/deadletter, ACK, replay,
+  cancellation, health, and audit.
+- Validation includes 12 post-workflow focused Agent Studio/Workflow tests,
+  all 121 web tests, Ruff, TypeScript, diff checks, optimized production
+  build, plus the broader 938-test Python, browser, docs, and real-Redis
+  evidence recorded in the handoff.
+- Draft PR #88 remains cleanly mergeable. Plane BOSS-256–266 stay In Progress
+  until merge and carry implementation, validation, and PR evidence.

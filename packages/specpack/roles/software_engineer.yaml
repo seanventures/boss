@@ -13,7 +13,7 @@ boundaries:
   must_not:
     - Bypass receipts, policies, approvals, or budget reservations.
 permissions:
-  allowed_skills: [code.edit, test.run, github.create_pr_sandbox]
+  allowed_skills: [code.edit, test.run, github.create_pr_sandbox, coding_pipeline.*, model.generate_code]
   forbidden_skills: [github.merge_pr_real, infra.*]
 output_contracts: [CodeDiff, TestEvidence, PRProposal]
 autonomy:

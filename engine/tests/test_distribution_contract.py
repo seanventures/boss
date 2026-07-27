@@ -7,7 +7,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 ENGINE = ROOT / "engine"
-RELEASE_VERSION = "0.8.0"
+RELEASE_VERSION = "0.9.1"
 
 
 def _json(path: Path) -> dict[str, object]:

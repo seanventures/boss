@@ -21,7 +21,7 @@ decision_rights:
 cadence:
   every_15_minutes: Queue/deadletter scan in active mode.
 permissions:
-  allowed_skills: [queue.inspect, job.requeue, deadletter.summarize, incident.create]
+  allowed_skills: [queue.inspect, job.requeue, deadletter.summarize, incident.create, providerops.sync.readonly, providerops.drift.report, model.generate_text]
   forbidden_skills: [infra.create_node, github.merge_pr]
 output_contracts: [OpsDigest, IncidentPacket]
 autonomy:

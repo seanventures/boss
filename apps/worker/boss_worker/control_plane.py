@@ -18,6 +18,12 @@ class LeasedJob:
     lease_token: str
     lease_expires_at: str
     data_boundary: str = "internal"
+    work_item_id: Optional[str] = None
+    tracker_binding_id: Optional[str] = None
+    allocation_id: Optional[str] = None
+    priority_score: Optional[float] = None
+    workload_class: str = "general"
+    resource_units: int = 1
 
 
 class ControlPlaneClient:
@@ -170,6 +176,15 @@ class ControlPlaneClient:
         response.raise_for_status()
         return response.json()
 
+    def dispatch_a2a_message(
+        self, message_id: str, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        response = self._client.post(
+            f"/v1/a2a/messages/{message_id}/dispatch", json=payload
+        )
+        response.raise_for_status()
+        return response.json()
+
     def deliver_webhook(
         self, delivery_id: str, payload: dict[str, Any]
     ) -> dict[str, Any]:
@@ -188,6 +203,16 @@ class ControlPlaneClient:
         response.raise_for_status()
         return response.json()
 
+    def run_github_reconciliation(
+        self, run_id: str, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        response = self._client.post(
+            f"/v1/github/reconciliation-runs/{run_id}/execute",
+            json=payload,
+        )
+        response.raise_for_status()
+        return response.json()
+
     def invoke_skill(
         self, skill_id: str, payload: dict[str, Any]
     ) -> dict[str, Any]:
@@ -199,6 +224,14 @@ class ControlPlaneClient:
 
     def sync_provider_resources(self, payload: dict[str, Any]) -> dict[str, Any]:
         response = self._client.post("/v1/resources/sync", json=payload)
+        response.raise_for_status()
+        return response.json()
+
+    def sync_work_tracker(self, payload: dict[str, Any]) -> dict[str, Any]:
+        response = self._client.post(
+            "/v1/work-orchestration/tracker-sync/execute",
+            json=payload,
+        )
         response.raise_for_status()
         return response.json()
 

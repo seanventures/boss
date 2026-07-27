@@ -19,6 +19,8 @@ import {
   Code,
   Database,
   Gauge,
+  GitBranch,
+  Graph,
   House,
   List,
   MagnifyingGlass,
@@ -27,6 +29,7 @@ import {
   Pulse,
   Robot,
   Rows,
+  SlidersHorizontal,
   TerminalWindow,
   UserCircle,
   Users,
@@ -42,6 +45,7 @@ type AreaId =
   | "overview"
   | "decisions"
   | "work"
+  | "portfolio"
   | "discovery"
   | "meetings"
   | "code_tasks"
@@ -50,8 +54,10 @@ type AreaId =
   | "budget"
   | "pipeline"
   | "comms"
+  | "github"
   | "infra"
   | "capabilities"
+  | "studio"
   | "sandboxes"
   | "foundations"
   | "ops"
@@ -72,9 +78,11 @@ const ICONS = {
   overview: House,
   decisions: CheckCircle,
   work: Rows,
+  portfolio: SlidersHorizontal,
   budget: Wallet,
   pipeline: ArrowsClockwise,
   comms: ChatsCircle,
+  github: GitBranch,
   infra: Database,
   ops: Pulse,
   org: Users,
@@ -86,6 +94,7 @@ const ICONS = {
   reliability: Heartbeat,
   discovery: MagnifyingGlass,
   sandboxes: TerminalWindow,
+  studio: Graph,
   foundations: PaintBrush,
 } as const;
 
@@ -95,6 +104,7 @@ const AREAS: AreaDef[] = [
   { id: "overview", label: "Command Center", sub: "What changed · top risks · next actions", group: "Run", icon: ICONS.overview },
   { id: "decisions", label: "Approvals", sub: "Explicit approvals before real effects", group: "Run", icon: ICONS.decisions },
   { id: "work", label: "Task Board", sub: "Tasks, artifacts, and the activity feed", group: "Run", icon: ICONS.work },
+  { id: "portfolio", label: "Work Allocation", sub: "Ranked priorities, quotas, leases, tickets, and delivery status", group: "Run", icon: ICONS.portfolio },
   { id: "discovery", label: "Discovery", sub: "Research a signal — cited dossier & candidate outcomes", group: "Run", icon: ICONS.discovery },
   { id: "meetings", label: "Meetings", sub: "Cross-functional agent panels — debate to a PRD", group: "Run", icon: ICONS.meetings },
   { id: "code_tasks", label: "Code Tasks", sub: "Agent edits code in a sandbox — tested, gated PRs", group: "Run", icon: ICONS.code_tasks },
@@ -105,8 +115,10 @@ const AREAS: AreaDef[] = [
   { id: "comms", label: "Communications", sub: "Outbox discipline before external sends", group: "Govern", icon: ICONS.comms },
   { id: "ops", label: "Operations", sub: "Health, audit, replay, and self-improvement", group: "Govern", icon: ICONS.ops },
   { id: "org", label: "Agent Roster", sub: "Actors, access, packs, and agent modules", group: "Govern", icon: ICONS.org },
-  { id: "infra", label: "Infrastructure", sub: "Providers, resources, and AI capacity", group: "Platform", icon: ICONS.infra },
+  { id: "github", label: "GitHub", sub: "Repositories, branch truth, sync, conflict resolution, and merges", group: "Platform", icon: ICONS.github },
+  { id: "infra", label: "System Configuration", sub: "Connections, providers, resources, health, and FinOps", group: "Platform", icon: ICONS.infra },
   { id: "capabilities", label: "Capabilities", sub: "Agent tools & MCP servers — discover, audit, extend", group: "Platform", icon: ICONS.capabilities },
+  { id: "studio", label: "Agent Studio", sub: "Build, test, compose, and observe agents working together", group: "Platform", icon: ICONS.studio },
   { id: "sandboxes", label: "Sandboxes", sub: "Execution plane — inspect sandboxes & governed console", group: "Platform", icon: ICONS.sandboxes },
   { id: "foundations", label: "Foundations", sub: "Design system — tokens, type, motion, status language", group: "Platform", icon: ICONS.foundations },
   { id: "enterprise", label: "Enterprise", sub: "Editions, identity, and account connect", group: "Platform", icon: ICONS.enterprise },

@@ -84,6 +84,44 @@ class PlaneClient:
             return False
         return self._request("PATCH", project_id, f"issues/{issue_id}/", {"state": state_id}) is not None
 
+    def create_issue(
+        self,
+        project_id: str,
+        *,
+        name: str,
+        description_html: str,
+    ) -> Optional[dict[str, Any]]:
+        """Create a Plane issue and return its canonical provider payload.
+
+        The caller owns durable retry and receipts. This low-level adapter stays
+        best-effort so a provider outage is reported as ``None`` rather than
+        escaping the policy-guarded worker boundary.
+        """
+        result = self._request(
+            "POST",
+            project_id,
+            "issues/",
+            {
+                "name": name,
+                "description_html": description_html,
+            },
+        )
+        return result if isinstance(result, dict) and result.get("id") else None
+
+    def update_issue(
+        self,
+        project_id: str,
+        issue_id: str,
+        changes: dict[str, Any],
+    ) -> Optional[dict[str, Any]]:
+        result = self._request(
+            "PATCH",
+            project_id,
+            f"issues/{issue_id}/",
+            changes,
+        )
+        return result if isinstance(result, dict) else None
+
     def add_comment(self, project_id: str, issue_id: str, comment_html: str) -> bool:
         return self._request("POST", project_id, f"issues/{issue_id}/comments/",
                              {"comment_html": comment_html}) is not None

@@ -20,6 +20,16 @@ class Settings(BaseSettings):
     app_base_url: Optional[str] = Field(default=None, alias="APP_BASE_URL")
     admin_url: Optional[str] = Field(default=None, alias="ADMIN_URL")
     redis_url: Optional[str] = Field(default=None, alias="REDIS_URL")
+    a2a_redis_prefix: str = Field(default="boss:a2a", alias="BOSS_A2A_REDIS_PREFIX")
+    a2a_default_ttl_seconds: int = Field(
+        default=3600, alias="BOSS_A2A_DEFAULT_TTL_SECONDS", ge=1, le=604800
+    )
+    a2a_max_payload_bytes: int = Field(
+        default=65536, alias="BOSS_A2A_MAX_PAYLOAD_BYTES", ge=1024
+    )
+    a2a_dispatch_max_attempts: int = Field(
+        default=5, alias="BOSS_A2A_DISPATCH_MAX_ATTEMPTS", ge=1, le=20
+    )
     sentry_dsn: Optional[str] = Field(default=None, alias="SENTRY_DSN")
     supabase_url: Optional[str] = Field(default=None, alias="SUPABASE_URL")
     supabase_anon_key: Optional[str] = Field(default=None, alias="SUPABASE_ANON_KEY")
@@ -114,6 +124,12 @@ class Settings(BaseSettings):
     xai_api_key: Optional[str] = Field(default=None, alias="XAI_API_KEY")
     slack_webhook_url: Optional[str] = Field(
         default=None, alias="BOSS_SLACK_WEBHOOK_URL"
+    )
+    mattermost_base_url: Optional[str] = Field(
+        default=None, alias="BOSS_MATTERMOST_BASE_URL"
+    )
+    mattermost_bot_token: Optional[str] = Field(
+        default=None, alias="BOSS_MATTERMOST_BOT_TOKEN"
     )
     infra_real_provision_allowed: bool = Field(
         default=False, alias="BOSS_INFRA_REAL_PROVISION_ALLOWED"
@@ -443,6 +459,9 @@ class Settings(BaseSettings):
     )
     slack_real_send_allowed: bool = Field(
         default=False, alias="BOSS_SLACK_REAL_SEND_ALLOWED"
+    )
+    mattermost_real_send_allowed: bool = Field(
+        default=False, alias="BOSS_MATTERMOST_REAL_SEND_ALLOWED"
     )
     enable_sandbox_merge: bool = Field(
         default=False, alias="BOSS_ENABLE_SANDBOX_MERGE"
