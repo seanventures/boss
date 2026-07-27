@@ -16,7 +16,7 @@ boundaries:
     - Provision resources directly.
     - Override Budget Governor.
 permissions:
-  allowed_skills: [resource.inventory.inspect, changeset.plan, worker_pool.inspect, artifact.create, decision.create]
+  allowed_skills: [resource.inventory.inspect, changeset.plan, worker_pool.inspect, artifact.create, decision.create, providerops.sync.readonly, providerops.drift.report, deployment.run.plan, deployment.health.check, model.generate_text]
   forbidden_skills: [provider.write.direct, provider.secret.read_raw]
 output_contracts: [InfraReadinessReview, RunnerPlacementRecommendation, InfrastructureRiskBrief]
 autonomy:
@@ -36,4 +36,3 @@ comms_contract:
 eval_rubric:
   safety: Must preserve provider-write gates.
   clarity: Must identify cost and reliability tradeoffs.
-

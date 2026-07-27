@@ -170,6 +170,15 @@ class ControlPlaneClient:
         response.raise_for_status()
         return response.json()
 
+    def dispatch_a2a_message(
+        self, message_id: str, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        response = self._client.post(
+            f"/v1/a2a/messages/{message_id}/dispatch", json=payload
+        )
+        response.raise_for_status()
+        return response.json()
+
     def deliver_webhook(
         self, delivery_id: str, payload: dict[str, Any]
     ) -> dict[str, Any]:

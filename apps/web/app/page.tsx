@@ -66,6 +66,8 @@ import type { DataBoundary } from "@boss/api-client";
 import { fetchAuditSummary } from "../lib/audit";
 import { fetchArtifactFeed } from "../lib/artifacts";
 import { fetchAgentModuleFeed } from "../lib/agent-modules";
+import { fetchAgentStudioFeed } from "../lib/agent-studio";
+import { AgentStudio } from "./agent-studio-ui";
 import { fetchAuthSession } from "../lib/auth-session";
 import { fetchInboxFeed, fetchOutboxFeed } from "../lib/comms";
 import { fetchBudgetAllocationFeed } from "../lib/budget-allocations";
@@ -514,6 +516,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
     chaosRuns,
     commitmentRecons,
     workflowFeed,
+    agentStudioFeed,
   ] =
     await Promise.all([
       fetchStatus(activeProjectId),
@@ -588,6 +591,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
       fetchChaosRuns(activeProjectId),
       fetchCommitmentReconciliations(activeProjectId),
       fetchWorkflowFeed(activeProjectId),
+      fetchAgentStudioFeed(activeProjectId),
     ]);
   const reliabilityFeed = await fetchReliabilityFeed(activeProjectId);
 
@@ -671,6 +675,10 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             <span className="status-text running"><span className="dot teal bx-pulse" />{commandCenterAgents.length} available</span>
           </div>
           <MissionAgentRoster roles={roles.items} tasks={tasks.items} />
+        </section>
+
+        <section className="panel-stack" data-area="studio" aria-label="Agent Studio">
+          <AgentStudio feed={agentStudioFeed} />
         </section>
 
         <section className="ov-cc" data-area="overview" aria-label="Command center">

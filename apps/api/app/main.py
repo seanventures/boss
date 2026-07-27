@@ -438,6 +438,39 @@ from .schemas import (
     WorkflowVersionCreateRequest,
     WorkflowVersionSummary,
 )
+from .schemas import (
+    A2AAcknowledgeRequest,
+    A2AChannelCreateRequest,
+    A2ADispatchRequest,
+    A2AMessageCancelRequest,
+    A2AMessagePublishRequest,
+    A2AMessageReplayRequest,
+    A2APollRequest,
+    A2ASubscriptionCreateRequest,
+    AgentDefinitionCreateRequest,
+    AgentStudioActorRequest,
+    AgentStudioRunRequest,
+    AgentTestRunRequest,
+    AgentVersionCreateRequest,
+    PanelDefinitionCreateRequest,
+    PanelRunRequest,
+    PanelVersionCreateRequest,
+)
+from .services.a2a import (
+    A2ANotFoundError,
+    A2AService,
+    A2AStateError,
+    A2ATransportUnavailable,
+)
+from .services.agent_studio import (
+    AgentDefinitionNotFoundError,
+    AgentStudioService,
+    AgentVersionNotFoundError,
+    AgentVersionStateError,
+    PanelDefinitionNotFoundError,
+    PanelVersionNotFoundError,
+    PanelVersionStateError,
+)
 from .services.audit import AuditTrailService
 from .services.agent_loop import conversation_from_messages, describe_native_tools
 from .services.agent_runtime import AgentRuntimeService
@@ -634,6 +667,8 @@ ops_queue = OpsQueueService(settings)
 reports = ReportService(settings)
 break_glass = BreakGlassService()
 resource_plane = ResourcePlaneService(settings)
+agent_studio = AgentStudioService(settings)
+a2a = A2AService(settings)
 deployment_rollout_engine = DeploymentRolloutEngine(settings)
 promotion_orchestrator = PromotionOrchestrator(
     settings,
@@ -12087,6 +12122,539 @@ def fail_workflow_compensation(
             )
         except workflow_runtime.WorkflowError as error:
             raise_workflow_error(error)
+
+
+# ── Agent Studio, executable Panels, and durable A2A coordination ────────────
+def _raise_agent_studio_error(error: Exception) -> None:
+    if isinstance(
+        error,
+        (
+            AgentDefinitionNotFoundError,
+            AgentVersionNotFoundError,
+            PanelDefinitionNotFoundError,
+            PanelVersionNotFoundError,
+            A2ANotFoundError,
+        ),
+    ):
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    if isinstance(
+        error,
+        (
+            AgentVersionStateError,
+            PanelVersionStateError,
+            A2AStateError,
+        ),
+    ):
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    if isinstance(error, A2ATransportUnavailable):
+        raise HTTPException(status_code=503, detail=str(error)) from error
+    raise HTTPException(status_code=422, detail=str(error)) from error
+
+
+@app.get("/v1/agent-studio/catalog")
+def get_agent_studio_catalog(
+    project_id: str = Query(...),
+) -> dict[str, Any]:
+    with begin(engine) as connection:
+        return {
+            "project_id": project_id,
+            "agents": agent_studio.list_agents(connection, project_id),
+            "panels": agent_studio.list_panels(connection, project_id),
+            "agent_runs": agent_studio.list_agent_runs(connection, project_id, 50),
+            "panel_runs": agent_studio.list_panel_runs(connection, project_id, 50),
+            "tests": agent_studio.list_agent_tests(connection, project_id, 50),
+            "a2a": {
+                "channels": a2a.list_channels(connection, project_id),
+                "subscriptions": a2a.list_subscriptions(connection, project_id),
+                "messages": a2a.list_messages(connection, project_id, limit=100),
+                "health": a2a.health(connection, project_id),
+            },
+        }
+
+
+@app.get("/v1/agent-studio/agents")
+def list_agent_definitions(project_id: str = Query(...)) -> dict[str, Any]:
+    with begin(engine) as connection:
+        return {
+            "project_id": project_id,
+            "items": agent_studio.list_agents(connection, project_id),
+        }
+
+
+@app.post("/v1/agent-studio/agents")
+def create_agent_definition(
+    payload: AgentDefinitionCreateRequest,
+) -> dict[str, Any]:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection, payload.project_id, payload.actor, "role_review"
+        )
+        try:
+            return agent_studio.create_agent(
+                connection,
+                project_id=payload.project_id,
+                agent_key=payload.agent_key,
+                name=payload.name,
+                description=payload.description,
+                owner=payload.owner,
+                actor=payload.actor,
+            )
+        except Exception as error:  # noqa: BLE001 - typed API mapping
+            _raise_agent_studio_error(error)
+
+
+@app.post("/v1/agent-studio/agents/{agent_id}/versions")
+def create_agent_version(
+    agent_id: str, payload: AgentVersionCreateRequest
+) -> dict[str, Any]:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection, payload.project_id, payload.actor, "role_review"
+        )
+        try:
+            return agent_studio.create_agent_version(
+                connection,
+                agent_id,
+                project_id=payload.project_id,
+                role_key=payload.role_key,
+                model_policy=payload.model_policy,
+                prompts=payload.prompts,
+                rules=payload.rules,
+                requested_skills=payload.requested_skills,
+                requested_integrations=payload.requested_integrations,
+                scopes=payload.scopes,
+                limits=payload.limits,
+                output_contract=payload.output_contract,
+                a2a_policy=payload.a2a_policy,
+                provenance=payload.provenance,
+                agent_module_id=payload.agent_module_id,
+                actor=payload.actor,
+            )
+        except Exception as error:  # noqa: BLE001
+            _raise_agent_studio_error(error)
+
+
+@app.post("/v1/agent-studio/agent-versions/{version_id}/validate")
+def validate_agent_version(
+    version_id: str, payload: AgentStudioActorRequest
+) -> dict[str, Any]:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection, payload.project_id, payload.actor, "role_review"
+        )
+        try:
+            return agent_studio.validate_agent_version(
+                connection, payload.project_id, version_id, actor=payload.actor
+            )
+        except Exception as error:  # noqa: BLE001
+            _raise_agent_studio_error(error)
+
+
+@app.post("/v1/agent-studio/agent-versions/{version_id}/publish")
+def publish_agent_version(
+    version_id: str, payload: AgentStudioActorRequest
+) -> dict[str, Any]:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection, payload.project_id, payload.actor, "role_review"
+        )
+        try:
+            return agent_studio.publish_agent_version(
+                connection, payload.project_id, version_id, actor=payload.actor
+            )
+        except Exception as error:  # noqa: BLE001
+            _raise_agent_studio_error(error)
+
+
+@app.post("/v1/agent-studio/agent-versions/{version_id}/tests")
+def run_agent_version_test(
+    version_id: str, payload: AgentTestRunRequest
+) -> dict[str, Any]:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection, payload.project_id, payload.actor, "role_review"
+        )
+        try:
+            return agent_studio.run_agent_test(
+                connection,
+                project_id=payload.project_id,
+                agent_version_id=version_id,
+                scenario=payload.scenario,
+                assertions=payload.assertions,
+                actor=payload.actor,
+            )
+        except Exception as error:  # noqa: BLE001
+            _raise_agent_studio_error(error)
+
+
+@app.post("/v1/agent-studio/agent-versions/{version_id}/runs")
+def run_agent_version(
+    version_id: str, payload: AgentStudioRunRequest
+) -> dict[str, Any]:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection, payload.project_id, payload.actor, "role_review"
+        )
+        try:
+            return agent_studio.start_agent_run(
+                connection,
+                project_id=payload.project_id,
+                agent_version_id=version_id,
+                input_data=payload.input,
+                actor=payload.actor,
+                dedupe_key=payload.dedupe_key,
+                task_id=payload.task_id,
+                workflow_run_id=payload.workflow_run_id,
+                budget_reservation_id=payload.budget_reservation_id,
+            )
+        except Exception as error:  # noqa: BLE001
+            _raise_agent_studio_error(error)
+
+
+@app.get("/v1/agent-studio/panels")
+def list_panel_definitions(project_id: str = Query(...)) -> dict[str, Any]:
+    with begin(engine) as connection:
+        return {
+            "project_id": project_id,
+            "items": agent_studio.list_panels(connection, project_id),
+        }
+
+
+@app.post("/v1/agent-studio/panels")
+def create_panel_definition(
+    payload: PanelDefinitionCreateRequest,
+) -> dict[str, Any]:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection, payload.project_id, payload.actor, "role_review"
+        )
+        try:
+            return agent_studio.create_panel(
+                connection,
+                project_id=payload.project_id,
+                panel_key=payload.panel_key,
+                name=payload.name,
+                description=payload.description,
+                purpose=payload.purpose,
+                owner=payload.owner,
+                actor=payload.actor,
+            )
+        except Exception as error:  # noqa: BLE001
+            _raise_agent_studio_error(error)
+
+
+@app.post("/v1/agent-studio/panels/{panel_id}/versions")
+def create_panel_version(
+    panel_id: str, payload: PanelVersionCreateRequest
+) -> dict[str, Any]:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection, payload.project_id, payload.actor, "role_review"
+        )
+        try:
+            return agent_studio.create_panel_version(
+                connection,
+                panel_id,
+                project_id=payload.project_id,
+                members=payload.members,
+                topology=payload.topology,
+                context_policy=payload.context_policy,
+                independence_policy=payload.independence_policy,
+                quorum_policy=payload.quorum_policy,
+                bounds=payload.bounds,
+                evidence_policy=payload.evidence_policy,
+                consolidation_policy=payload.consolidation_policy,
+                dissent_policy=payload.dissent_policy,
+                escalation_policy=payload.escalation_policy,
+                output_contract=payload.output_contract,
+                actor=payload.actor,
+            )
+        except Exception as error:  # noqa: BLE001
+            _raise_agent_studio_error(error)
+
+
+@app.post("/v1/agent-studio/panel-versions/{version_id}/publish")
+def publish_panel_version(
+    version_id: str, payload: AgentStudioActorRequest
+) -> dict[str, Any]:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection, payload.project_id, payload.actor, "role_review"
+        )
+        try:
+            return agent_studio.publish_panel_version(
+                connection, payload.project_id, version_id, actor=payload.actor
+            )
+        except Exception as error:  # noqa: BLE001
+            _raise_agent_studio_error(error)
+
+
+@app.post("/v1/agent-studio/panel-versions/{version_id}/runs")
+def run_panel_version(
+    version_id: str, payload: PanelRunRequest
+) -> dict[str, Any]:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection, payload.project_id, payload.actor, "role_review"
+        )
+        try:
+            return agent_studio.start_panel_run(
+                connection,
+                project_id=payload.project_id,
+                panel_version_id=version_id,
+                input_data=payload.input,
+                context=payload.context,
+                actor=payload.actor,
+                dedupe_key=payload.dedupe_key,
+                task_id=payload.task_id,
+                workflow_run_id=payload.workflow_run_id,
+            )
+        except Exception as error:  # noqa: BLE001
+            _raise_agent_studio_error(error)
+
+
+@app.get("/v1/a2a/channels")
+def list_a2a_channels(project_id: str = Query(...)) -> dict[str, Any]:
+    with begin(engine) as connection:
+        return {
+            "project_id": project_id,
+            "items": a2a.list_channels(connection, project_id),
+        }
+
+
+@app.post("/v1/a2a/channels")
+def create_a2a_channel(payload: A2AChannelCreateRequest) -> dict[str, Any]:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection, payload.project_id, payload.actor, "agent_chat"
+        )
+        try:
+            return a2a.create_channel(
+                connection,
+                project_id=payload.project_id,
+                channel_key=payload.channel_key,
+                name=payload.name,
+                description=payload.description,
+                allowed_message_kinds=payload.allowed_message_kinds,
+                allowed_schema_versions=payload.allowed_schema_versions,
+                retention_seconds=payload.retention_seconds,
+                max_payload_bytes=payload.max_payload_bytes,
+                actor=payload.actor,
+            )
+        except Exception as error:  # noqa: BLE001
+            _raise_agent_studio_error(error)
+
+
+@app.post("/v1/a2a/subscriptions")
+def create_a2a_subscription(
+    payload: A2ASubscriptionCreateRequest,
+) -> dict[str, Any]:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection, payload.project_id, payload.actor, "agent_chat"
+        )
+        try:
+            return a2a.create_subscription(
+                connection,
+                project_id=payload.project_id,
+                channel_id=payload.channel_id,
+                subscriber_kind=payload.subscriber_kind,
+                subscriber_id=payload.subscriber_id,
+                consumer_group=payload.consumer_group,
+                recipient_filter=payload.recipient_filter,
+                ack_mode=payload.ack_mode,
+                visibility_timeout_seconds=payload.visibility_timeout_seconds,
+                max_attempts=payload.max_attempts,
+                data_boundaries=list(payload.data_boundaries),
+                actor=payload.actor,
+            )
+        except Exception as error:  # noqa: BLE001
+            _raise_agent_studio_error(error)
+
+
+@app.post("/v1/a2a/messages")
+def publish_a2a_message(payload: A2AMessagePublishRequest) -> dict[str, Any]:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection, payload.project_id, payload.actor, "agent_chat"
+        )
+        try:
+            return a2a.publish(
+                connection,
+                project_id=payload.project_id,
+                channel_id=payload.channel_id,
+                message_kind=payload.message_kind,
+                schema_name=payload.schema_name,
+                schema_version=payload.schema_version,
+                sender_kind=payload.sender_kind,
+                sender_id=payload.sender_id,
+                sender_version_id=payload.sender_version_id,
+                recipient=payload.recipient,
+                payload=payload.payload,
+                dedupe_key=payload.dedupe_key,
+                data_boundary=payload.data_boundary,
+                priority=payload.priority,
+                ttl_seconds=payload.ttl_seconds,
+                ack_mode=payload.ack_mode,
+                conversation_id=payload.conversation_id,
+                correlation_id=payload.correlation_id,
+                causation_id=payload.causation_id,
+                trace_id=payload.trace_id,
+                reply_to_id=payload.reply_to_id,
+                lineage=payload.lineage,
+                actor=payload.actor,
+            )
+        except Exception as error:  # noqa: BLE001
+            _raise_agent_studio_error(error)
+
+
+@app.get("/v1/a2a/messages")
+def list_a2a_messages(
+    project_id: str = Query(...),
+    limit: int = Query(100, ge=1, le=500),
+    status: Optional[str] = Query(None),
+    trace_id: Optional[str] = Query(None),
+) -> dict[str, Any]:
+    with begin(engine) as connection:
+        return {
+            "project_id": project_id,
+            "items": a2a.list_messages(
+                connection,
+                project_id,
+                limit=limit,
+                status=status,
+                trace_id=trace_id,
+            ),
+        }
+
+
+@app.post("/v1/a2a/messages/{message_id}/cancel")
+def cancel_a2a_message(
+    message_id: str, payload: A2AMessageCancelRequest
+) -> dict[str, Any]:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection, payload.project_id, payload.actor, "agent_chat"
+        )
+        try:
+            return a2a.cancel(
+                connection,
+                project_id=payload.project_id,
+                message_id=message_id,
+                actor=payload.actor,
+                reason=payload.reason,
+            )
+        except Exception as error:  # noqa: BLE001
+            _raise_agent_studio_error(error)
+
+
+@app.post("/v1/a2a/messages/{message_id}/replay", status_code=201)
+def replay_a2a_message(
+    message_id: str, payload: A2AMessageReplayRequest
+) -> dict[str, Any]:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection, payload.project_id, payload.actor, "agent_chat"
+        )
+        try:
+            return a2a.replay(
+                connection,
+                project_id=payload.project_id,
+                message_id=message_id,
+                dedupe_key=payload.dedupe_key,
+                reason=payload.reason,
+                ttl_seconds=payload.ttl_seconds,
+                actor=payload.actor,
+            )
+        except Exception as error:  # noqa: BLE001
+            _raise_agent_studio_error(error)
+
+
+@app.post("/v1/a2a/messages/{message_id}/dispatch")
+def dispatch_a2a_message(
+    message_id: str, payload: A2ADispatchRequest
+) -> dict[str, Any]:
+    with begin(engine) as connection:
+        try:
+            job = jobs.require_active_lease(
+                connection,
+                payload.worker_id,
+                payload.created_by_job_id,
+                payload.lease_token,
+            )
+            if (
+                job["kind"] != "a2a.dispatch"
+                or (job["payload"] or {}).get("message_id") != message_id
+            ):
+                raise A2AStateError(
+                    "Active lease does not authorize this A2A message."
+                )
+            return a2a.dispatch(
+                connection,
+                project_id=payload.project_id,
+                message_id=message_id,
+                created_by_job_id=payload.created_by_job_id,
+                actor=payload.worker_id,
+            )
+        except Exception as error:  # noqa: BLE001
+            _raise_agent_studio_error(error)
+
+
+@app.post("/v1/a2a/poll")
+def poll_a2a(payload: A2APollRequest) -> dict[str, Any]:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection, payload.project_id, payload.actor, "agent_chat"
+        )
+        try:
+            return {
+                "items": a2a.poll(
+                    connection,
+                    project_id=payload.project_id,
+                    subscription_id=payload.subscription_id,
+                    consumer_name=payload.consumer_name,
+                    count=payload.count,
+                    block_ms=payload.block_ms,
+                    actor=payload.actor,
+                )
+            }
+        except Exception as error:  # noqa: BLE001
+            _raise_agent_studio_error(error)
+
+
+@app.post("/v1/a2a/deliveries/{delivery_id}/acknowledge")
+def acknowledge_a2a_delivery(
+    delivery_id: str, payload: A2AAcknowledgeRequest
+) -> dict[str, Any]:
+    with begin(engine) as connection:
+        try:
+            return a2a.acknowledge(
+                connection,
+                project_id=payload.project_id,
+                delivery_id=delivery_id,
+                acknowledgement=payload.acknowledgement,
+                actor_kind=payload.actor_kind,
+                actor_id=payload.actor_id,
+                result=payload.result,
+                evidence_refs=payload.evidence_refs,
+                reason=payload.reason,
+            )
+        except Exception as error:  # noqa: BLE001
+            _raise_agent_studio_error(error)
+
+
+@app.get("/v1/a2a/health")
+def get_a2a_health(project_id: str = Query(...)) -> dict[str, Any]:
+    with begin(engine) as connection:
+        return a2a.health(connection, project_id)
+
+
+@app.get("/v1/a2a/audit")
+def get_a2a_audit(
+    project_id: str = Query(...), limit: int = Query(100, ge=1, le=500)
+) -> dict[str, Any]:
+    with begin(engine) as connection:
+        return a2a.audit_feed(connection, project_id, limit)
 
 
 mount_edition_routers(app, settings.boss_edition)

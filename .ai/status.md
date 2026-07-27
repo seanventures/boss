@@ -211,3 +211,20 @@ Kubernetes/Helm, and infra profiles. PR #76 merged as `bc4c4d6`; the annotated
 release. Source PRs #68/#70 are merged and #23/#69 are closed as superseded.
 Plane BOSS-215–234 plus stale shipped package tickets BOSS-32/33 are Done.
 External hosted/provider rollout remains fail-closed by design.
+
+## 2026-07-26 — BOSS-256–266 Agent Studio and global A2A fabric
+
+Implementation is complete on `ai/codex/boss-256-agent-studio-a2a`.
+Agent Studio now owns immutable agent/panel configuration and test/run
+evidence while RoleSpec, project entitlements, policy, budget, and leases
+retain authority. Twelve seeded specialists and three Panels are executable.
+
+The A2A bus uses Postgres as canonical truth and Redis Streams only as the
+delivery adapter. XADD/XACK are Receipt-backed; consumer loss uses XAUTOCLAIM
+and bounded deadlettering; unknown schemas, incompatible boundaries, missing
+leases, and unavailable live-model budget/provider paths fail closed.
+
+Current evidence is green: 121 web tests; 938 Python tests with four
+intentional live/external skips; 39 focused Agent Studio/A2A/worker/assurance
+tests; Ruff, TypeScript, OpenAPI YAML, diff checks, optimized Next build,
+desktop/responsive browser QA, and two real-Redis lifecycle proofs.

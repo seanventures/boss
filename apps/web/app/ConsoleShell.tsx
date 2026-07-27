@@ -19,6 +19,7 @@ import {
   Code,
   Database,
   Gauge,
+  Graph,
   House,
   List,
   MagnifyingGlass,
@@ -51,6 +52,7 @@ type AreaId =
   | "comms"
   | "infra"
   | "capabilities"
+  | "studio"
   | "sandboxes"
   | "ops"
   | "org"
@@ -84,6 +86,7 @@ const ICONS = {
   reliability: Heartbeat,
   discovery: MagnifyingGlass,
   sandboxes: TerminalWindow,
+  studio: Graph,
 } as const;
 
 const AREAS: AreaDef[] = [
@@ -104,6 +107,7 @@ const AREAS: AreaDef[] = [
   { id: "org", label: "Agent Roster", sub: "Actors, access, packs, and agent modules", group: "Govern", icon: ICONS.org },
   { id: "infra", label: "Infrastructure", sub: "Providers, resources, and AI capacity", group: "Platform", icon: ICONS.infra },
   { id: "capabilities", label: "Capabilities", sub: "Agent tools & MCP servers — discover, audit, extend", group: "Platform", icon: ICONS.capabilities },
+  { id: "studio", label: "Agent Studio", sub: "Build, test, compose, and observe agents working together", group: "Platform", icon: ICONS.studio },
   { id: "sandboxes", label: "Sandboxes", sub: "Execution plane — inspect sandboxes & governed console", group: "Platform", icon: ICONS.sandboxes },
   { id: "enterprise", label: "Enterprise", sub: "Editions, identity, and account connect", group: "Platform", icon: ICONS.enterprise },
 ];

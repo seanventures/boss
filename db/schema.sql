@@ -2418,6 +2418,413 @@ CREATE TABLE IF NOT EXISTS workflow_compensation_runs (
 CREATE INDEX IF NOT EXISTS idx_workflow_compensation_claim
   ON workflow_compensation_runs(project_id, workflow_run_id, status, sequence);
 
+-- Agent Studio, executable panels, and the global agent-to-agent coordination
+-- fabric (BOSS-256..266). Stable definitions point at immutable versions.
+-- Runtime authority is still resolved from RoleSpecs, Agent Modules, Skills,
+-- Integrations, policies, budgets, leases and data boundaries at execution time.
+CREATE TABLE IF NOT EXISTS agent_definitions (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  agent_key TEXT NOT NULL,
+  name TEXT NOT NULL,
+  description TEXT,
+  owner TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'draft'
+    CHECK (status IN ('draft', 'active', 'retired')),
+  active_version_id TEXT,
+  source TEXT NOT NULL DEFAULT 'operator',
+  created_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(project_id, agent_key)
+);
+CREATE INDEX IF NOT EXISTS idx_agent_definitions_project
+  ON agent_definitions(project_id, status, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS agent_versions (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  agent_definition_id TEXT NOT NULL REFERENCES agent_definitions(id) ON DELETE CASCADE,
+  version INTEGER NOT NULL CHECK (version > 0),
+  status TEXT NOT NULL DEFAULT 'draft'
+    CHECK (status IN ('draft', 'published', 'retired')),
+  role_key TEXT NOT NULL,
+  agent_module_id TEXT,
+  model_policy JSONB NOT NULL DEFAULT '{}'::jsonb,
+  prompts JSONB NOT NULL DEFAULT '{}'::jsonb,
+  rules JSONB NOT NULL DEFAULT '[]'::jsonb,
+  requested_skills JSONB NOT NULL DEFAULT '[]'::jsonb,
+  requested_integrations JSONB NOT NULL DEFAULT '[]'::jsonb,
+  scopes JSONB NOT NULL DEFAULT '{}'::jsonb,
+  limits JSONB NOT NULL DEFAULT '{}'::jsonb,
+  output_contract JSONB NOT NULL DEFAULT '{}'::jsonb,
+  a2a_policy JSONB NOT NULL DEFAULT '{}'::jsonb,
+  provenance JSONB NOT NULL DEFAULT '{}'::jsonb,
+  validation JSONB NOT NULL DEFAULT '{}'::jsonb,
+  content_hash TEXT NOT NULL,
+  created_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  published_at TIMESTAMPTZ,
+  retired_at TIMESTAMPTZ,
+  UNIQUE(agent_definition_id, version),
+  UNIQUE(agent_definition_id, content_hash)
+);
+CREATE INDEX IF NOT EXISTS idx_agent_versions_project
+  ON agent_versions(project_id, agent_definition_id, version DESC);
+CREATE INDEX IF NOT EXISTS idx_agent_versions_role
+  ON agent_versions(project_id, role_key, status);
+
+CREATE TABLE IF NOT EXISTS agent_test_runs (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  agent_version_id TEXT NOT NULL REFERENCES agent_versions(id) ON DELETE CASCADE,
+  scenario JSONB NOT NULL DEFAULT '{}'::jsonb,
+  compiled_context JSONB NOT NULL DEFAULT '{}'::jsonb,
+  assertions JSONB NOT NULL DEFAULT '[]'::jsonb,
+  evidence JSONB NOT NULL DEFAULT '[]'::jsonb,
+  status TEXT NOT NULL DEFAULT 'queued'
+    CHECK (status IN ('queued', 'running', 'passed', 'failed', 'blocked', 'cancelled')),
+  result JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  completed_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_agent_test_runs_version
+  ON agent_test_runs(project_id, agent_version_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS panel_definitions (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  panel_key TEXT NOT NULL,
+  name TEXT NOT NULL,
+  description TEXT,
+  purpose TEXT NOT NULL,
+  owner TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'draft'
+    CHECK (status IN ('draft', 'active', 'retired')),
+  active_version_id TEXT,
+  source TEXT NOT NULL DEFAULT 'operator',
+  created_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(project_id, panel_key)
+);
+CREATE INDEX IF NOT EXISTS idx_panel_definitions_project
+  ON panel_definitions(project_id, status, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS panel_versions (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  panel_definition_id TEXT NOT NULL REFERENCES panel_definitions(id) ON DELETE CASCADE,
+  version INTEGER NOT NULL CHECK (version > 0),
+  status TEXT NOT NULL DEFAULT 'draft'
+    CHECK (status IN ('draft', 'published', 'retired')),
+  topology TEXT NOT NULL,
+  context_policy JSONB NOT NULL DEFAULT '{}'::jsonb,
+  independence_policy JSONB NOT NULL DEFAULT '{}'::jsonb,
+  quorum_policy JSONB NOT NULL DEFAULT '{}'::jsonb,
+  bounds JSONB NOT NULL DEFAULT '{}'::jsonb,
+  evidence_policy JSONB NOT NULL DEFAULT '{}'::jsonb,
+  consolidation_policy JSONB NOT NULL DEFAULT '{}'::jsonb,
+  dissent_policy JSONB NOT NULL DEFAULT '{}'::jsonb,
+  escalation_policy JSONB NOT NULL DEFAULT '{}'::jsonb,
+  output_contract JSONB NOT NULL DEFAULT '{}'::jsonb,
+  validation JSONB NOT NULL DEFAULT '{}'::jsonb,
+  content_hash TEXT NOT NULL,
+  created_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  published_at TIMESTAMPTZ,
+  retired_at TIMESTAMPTZ,
+  UNIQUE(panel_definition_id, version),
+  UNIQUE(panel_definition_id, content_hash)
+);
+CREATE INDEX IF NOT EXISTS idx_panel_versions_project
+  ON panel_versions(project_id, panel_definition_id, version DESC);
+
+CREATE TABLE IF NOT EXISTS panel_version_members (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  panel_version_id TEXT NOT NULL REFERENCES panel_versions(id) ON DELETE CASCADE,
+  member_key TEXT NOT NULL,
+  agent_version_id TEXT NOT NULL REFERENCES agent_versions(id),
+  weight DOUBLE PRECISION NOT NULL DEFAULT 1.0 CHECK (weight > 0),
+  required BOOLEAN NOT NULL DEFAULT true,
+  perspective TEXT,
+  private_context JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(panel_version_id, member_key)
+);
+CREATE INDEX IF NOT EXISTS idx_panel_version_members_agent
+  ON panel_version_members(project_id, agent_version_id);
+
+CREATE TABLE IF NOT EXISTS panel_runs (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  panel_version_id TEXT NOT NULL REFERENCES panel_versions(id),
+  task_id TEXT REFERENCES tasks(id),
+  workflow_run_id TEXT REFERENCES workflow_runs(id),
+  agent_group_run_id TEXT,
+  status TEXT NOT NULL DEFAULT 'queued'
+    CHECK (status IN (
+      'queued', 'resolving', 'running', 'waiting_member', 'waiting_decision',
+      'blocked', 'completed', 'failed', 'deadlettered', 'cancelled'
+    )),
+  input JSONB NOT NULL DEFAULT '{}'::jsonb,
+  context JSONB NOT NULL DEFAULT '{}'::jsonb,
+  policy_snapshot JSONB NOT NULL DEFAULT '{}'::jsonb,
+  evidence JSONB NOT NULL DEFAULT '[]'::jsonb,
+  consolidation JSONB NOT NULL DEFAULT '{}'::jsonb,
+  output JSONB NOT NULL DEFAULT '{}'::jsonb,
+  dedupe_key TEXT,
+  blocked_reason TEXT,
+  error JSONB,
+  created_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  completed_at TIMESTAMPTZ
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_panel_runs_dedupe
+  ON panel_runs(project_id, dedupe_key) WHERE dedupe_key IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_panel_runs_project
+  ON panel_runs(project_id, status, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS agent_studio_runs (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  agent_version_id TEXT NOT NULL REFERENCES agent_versions(id),
+  panel_run_id TEXT REFERENCES panel_runs(id) ON DELETE CASCADE,
+  member_key TEXT,
+  task_id TEXT REFERENCES tasks(id),
+  workflow_run_id TEXT REFERENCES workflow_runs(id),
+  job_id TEXT REFERENCES jobs(id),
+  status TEXT NOT NULL DEFAULT 'queued'
+    CHECK (status IN (
+      'queued', 'leased', 'running', 'waiting_decision', 'blocked',
+      'completed', 'failed', 'deadlettered', 'cancelled'
+    )),
+  input JSONB NOT NULL DEFAULT '{}'::jsonb,
+  compiled_context JSONB NOT NULL DEFAULT '{}'::jsonb,
+  output JSONB NOT NULL DEFAULT '{}'::jsonb,
+  evidence JSONB NOT NULL DEFAULT '[]'::jsonb,
+  budget_reservation_id TEXT REFERENCES budget_reservations(id),
+  receipt_id TEXT REFERENCES receipts(id),
+  dedupe_key TEXT,
+  error JSONB,
+  created_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  completed_at TIMESTAMPTZ
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_agent_studio_runs_dedupe
+  ON agent_studio_runs(project_id, dedupe_key) WHERE dedupe_key IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_agent_studio_runs_project
+  ON agent_studio_runs(project_id, status, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_agent_studio_runs_panel
+  ON agent_studio_runs(panel_run_id, member_key);
+
+CREATE TABLE IF NOT EXISTS panel_findings (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  panel_run_id TEXT NOT NULL REFERENCES panel_runs(id) ON DELETE CASCADE,
+  agent_run_id TEXT NOT NULL REFERENCES agent_studio_runs(id) ON DELETE CASCADE,
+  member_key TEXT NOT NULL,
+  finding JSONB NOT NULL,
+  recommendation JSONB NOT NULL DEFAULT '{}'::jsonb,
+  evidence_refs JSONB NOT NULL DEFAULT '[]'::jsonb,
+  confidence DOUBLE PRECISION NOT NULL DEFAULT 0.0 CHECK (confidence >= 0 AND confidence <= 1),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_panel_findings_run
+  ON panel_findings(panel_run_id, member_key, created_at);
+
+CREATE TABLE IF NOT EXISTS panel_dissent (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  panel_run_id TEXT NOT NULL REFERENCES panel_runs(id) ON DELETE CASCADE,
+  agent_run_id TEXT REFERENCES agent_studio_runs(id) ON DELETE SET NULL,
+  member_key TEXT NOT NULL,
+  dissent_kind TEXT NOT NULL DEFAULT 'minority_report',
+  statement TEXT NOT NULL,
+  evidence_refs JSONB NOT NULL DEFAULT '[]'::jsonb,
+  status TEXT NOT NULL DEFAULT 'open'
+    CHECK (status IN ('open', 'acknowledged', 'resolved', 'withdrawn')),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_panel_dissent_run
+  ON panel_dissent(panel_run_id, status, created_at);
+
+-- The A2A ledger is deliberately normalized around immutable envelopes and
+-- per-subscriber deliveries. Redis stream IDs are transport cursors only.
+CREATE TABLE IF NOT EXISTS a2a_channels (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  channel_key TEXT NOT NULL,
+  name TEXT NOT NULL,
+  description TEXT,
+  allowed_message_kinds JSONB NOT NULL DEFAULT '[]'::jsonb,
+  allowed_schema_versions JSONB NOT NULL DEFAULT '{}'::jsonb,
+  retention_seconds INTEGER NOT NULL DEFAULT 604800 CHECK (retention_seconds > 0),
+  max_payload_bytes INTEGER NOT NULL DEFAULT 65536 CHECK (max_payload_bytes > 0),
+  status TEXT NOT NULL DEFAULT 'active'
+    CHECK (status IN ('active', 'paused', 'retired')),
+  created_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(project_id, channel_key)
+);
+CREATE INDEX IF NOT EXISTS idx_a2a_channels_project
+  ON a2a_channels(project_id, status, channel_key);
+
+CREATE TABLE IF NOT EXISTS a2a_subscriptions (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  channel_id TEXT NOT NULL REFERENCES a2a_channels(id) ON DELETE CASCADE,
+  subscriber_kind TEXT NOT NULL
+    CHECK (subscriber_kind IN ('agent', 'panel', 'workflow', 'worker', 'system', 'operator')),
+  subscriber_id TEXT NOT NULL,
+  consumer_group TEXT NOT NULL,
+  recipient_filter JSONB NOT NULL DEFAULT '{}'::jsonb,
+  ack_mode TEXT NOT NULL DEFAULT 'processed'
+    CHECK (ack_mode IN ('none', 'accepted', 'processed')),
+  visibility_timeout_seconds INTEGER NOT NULL DEFAULT 60
+    CHECK (visibility_timeout_seconds BETWEEN 5 AND 3600),
+  max_attempts INTEGER NOT NULL DEFAULT 3 CHECK (max_attempts BETWEEN 1 AND 20),
+  data_boundaries JSONB NOT NULL DEFAULT '["public","internal"]'::jsonb,
+  status TEXT NOT NULL DEFAULT 'active'
+    CHECK (status IN ('active', 'paused', 'revoked')),
+  created_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(channel_id, consumer_group, subscriber_kind, subscriber_id)
+);
+CREATE INDEX IF NOT EXISTS idx_a2a_subscriptions_project
+  ON a2a_subscriptions(project_id, channel_id, status);
+
+CREATE TABLE IF NOT EXISTS a2a_envelopes (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  channel_id TEXT NOT NULL REFERENCES a2a_channels(id),
+  message_kind TEXT NOT NULL,
+  schema_name TEXT NOT NULL,
+  schema_version INTEGER NOT NULL DEFAULT 1 CHECK (schema_version > 0),
+  sender_kind TEXT NOT NULL,
+  sender_id TEXT NOT NULL,
+  sender_version_id TEXT,
+  recipient JSONB NOT NULL,
+  data_boundary TEXT NOT NULL DEFAULT 'internal',
+  priority INTEGER NOT NULL DEFAULT 100,
+  ttl_seconds INTEGER NOT NULL DEFAULT 3600 CHECK (ttl_seconds BETWEEN 1 AND 604800),
+  not_before TIMESTAMPTZ NOT NULL DEFAULT now(),
+  expires_at TIMESTAMPTZ NOT NULL,
+  ack_mode TEXT NOT NULL DEFAULT 'processed'
+    CHECK (ack_mode IN ('none', 'accepted', 'processed')),
+  conversation_id TEXT,
+  correlation_id TEXT NOT NULL,
+  causation_id TEXT REFERENCES a2a_envelopes(id),
+  trace_id TEXT NOT NULL,
+  reply_to_id TEXT REFERENCES a2a_envelopes(id),
+  lineage JSONB NOT NULL DEFAULT '{}'::jsonb,
+  payload JSONB NOT NULL,
+  payload_hash TEXT NOT NULL,
+  dedupe_key TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'queued'
+    CHECK (status IN (
+      'draft', 'queued', 'dispatching', 'published', 'delivering',
+      'acknowledged', 'partially_acknowledged', 'expired', 'cancelled', 'deadlettered'
+    )),
+  receipt_id TEXT REFERENCES receipts(id),
+  redis_stream_id TEXT,
+  created_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(project_id, dedupe_key)
+);
+CREATE INDEX IF NOT EXISTS idx_a2a_envelopes_project
+  ON a2a_envelopes(project_id, status, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_a2a_envelopes_correlation
+  ON a2a_envelopes(project_id, correlation_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_a2a_envelopes_conversation
+  ON a2a_envelopes(project_id, conversation_id, created_at);
+
+CREATE TABLE IF NOT EXISTS a2a_deliveries (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  envelope_id TEXT NOT NULL REFERENCES a2a_envelopes(id) ON DELETE CASCADE,
+  subscription_id TEXT NOT NULL REFERENCES a2a_subscriptions(id) ON DELETE CASCADE,
+  status TEXT NOT NULL DEFAULT 'pending'
+    CHECK (status IN (
+      'pending', 'published', 'claimed', 'processing', 'retry_wait',
+      'acknowledged', 'rejected', 'deadlettered', 'expired', 'cancelled'
+    )),
+  attempt INTEGER NOT NULL DEFAULT 0 CHECK (attempt >= 0),
+  redis_stream_id TEXT,
+  consumer_name TEXT,
+  lease_owner TEXT,
+  visibility_expires_at TIMESTAMPTZ,
+  next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_error JSONB,
+  claimed_at TIMESTAMPTZ,
+  acknowledged_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(envelope_id, subscription_id)
+);
+CREATE INDEX IF NOT EXISTS idx_a2a_deliveries_claim
+  ON a2a_deliveries(project_id, subscription_id, status, next_attempt_at, visibility_expires_at);
+
+CREATE TABLE IF NOT EXISTS a2a_acknowledgements (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  delivery_id TEXT NOT NULL REFERENCES a2a_deliveries(id) ON DELETE CASCADE,
+  acknowledgement TEXT NOT NULL
+    CHECK (acknowledgement IN ('accepted', 'processed', 'rejected', 'deferred')),
+  actor_kind TEXT NOT NULL,
+  actor_id TEXT NOT NULL,
+  result JSONB NOT NULL DEFAULT '{}'::jsonb,
+  evidence_refs JSONB NOT NULL DEFAULT '[]'::jsonb,
+  reason TEXT,
+  receipt_id TEXT REFERENCES receipts(id),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+ALTER TABLE a2a_acknowledgements
+  ADD COLUMN IF NOT EXISTS receipt_id TEXT REFERENCES receipts(id);
+CREATE INDEX IF NOT EXISTS idx_a2a_acknowledgements_delivery
+  ON a2a_acknowledgements(delivery_id, created_at);
+
+CREATE TABLE IF NOT EXISTS a2a_transport_attempts (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  envelope_id TEXT REFERENCES a2a_envelopes(id) ON DELETE CASCADE,
+  delivery_id TEXT REFERENCES a2a_deliveries(id) ON DELETE CASCADE,
+  operation TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('started', 'succeeded', 'failed')),
+  attempt INTEGER NOT NULL DEFAULT 1 CHECK (attempt > 0),
+  redis_stream_id TEXT,
+  consumer_group TEXT,
+  latency_ms INTEGER,
+  error JSONB,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_a2a_transport_attempts_project
+  ON a2a_transport_attempts(project_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS a2a_outbox (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  envelope_id TEXT NOT NULL REFERENCES a2a_envelopes(id) ON DELETE CASCADE,
+  job_id TEXT REFERENCES jobs(id),
+  status TEXT NOT NULL DEFAULT 'pending'
+    CHECK (status IN ('pending', 'dispatching', 'published', 'retry_wait', 'deadlettered', 'cancelled')),
+  attempt INTEGER NOT NULL DEFAULT 0 CHECK (attempt >= 0),
+  next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_error JSONB,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(envelope_id)
+);
+CREATE INDEX IF NOT EXISTS idx_a2a_outbox_pending
+  ON a2a_outbox(project_id, status, next_attempt_at);
+
 -- ── AI SRE knowledge graph (RB-15) ────────────────────────────────────────────
 -- A layered service/infra topology used to (a) build root-cause CONTEXT (the
 -- subgraph around a failing service) and (b) capture LEARNING — confirmed causes

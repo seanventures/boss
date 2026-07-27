@@ -89,6 +89,23 @@ objects:
   agent_groups:
     - agent_group_spec
     - agent_group_run
+  agent_studio:
+    - agent_definition
+    - agent_version
+    - agent_test_run
+    - agent_studio_run
+    - panel_definition
+    - panel_version
+    - panel_run
+    - panel_finding
+    - panel_dissent
+  a2a:
+    - a2a_channel
+    - a2a_subscription
+    - a2a_envelope
+    - a2a_delivery
+    - a2a_acknowledgement
+    - a2a_transport_attempt
   integrations:
     - integration_definition
     - integration_connection

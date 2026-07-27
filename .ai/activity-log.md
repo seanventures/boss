@@ -3,6 +3,31 @@
 All 15-min terminal updates and major milestones appended here. Chronological, newest at top.
 
 ---
+## 2026-07-26 — Codex — BOSS-256–266 Agent Studio, Panels, and A2A
+
+- Created and advanced the eleven deduplicated Plane slices BOSS-256–266
+  before implementation.
+- Added the Agent Studio/Panel/A2A product and technical contract, canonical
+  Postgres schema, immutable agent and panel versions, validation/publish/test
+  gates, executable leased runs, evidence-attributed consolidation, preserved
+  dissent, and capability-intersection enforcement.
+- Seeded twelve specialist agents and three executable panels from SpecPack
+  YAML while retaining RoleSpec as the authority boundary.
+- Added a Redis Streams A2A adapter backed by the canonical Postgres
+  envelope/delivery/outbox ledger, leased and Receipt-backed XADD, consumer
+  groups, visibility leases, XAUTOCLAIM recovery, bounded deadlettering,
+  actor-bound acknowledgements, Receipt-backed XACK, filtering cleanup,
+  replay/cancel, schema/version allowlists, health, and audit APIs.
+- Added a production-quality Agent Studio workbench with searchable agent and
+  panel library, topology view, governed run/test controls, and live A2A trace.
+  Desktop and 760px responsive browser QA passed.
+- Validation: 121 web tests and 938 executable Python tests pass, with four
+  intentional external/live skips; 39 focused runtime/worker/assurance tests,
+  Ruff, TypeScript, OpenAPI YAML, diff checks, and the optimized Next build
+  pass. Real Redis proofs pass XADD/read-group/XACK, replay/cancel, and
+  consumer-crash XAUTOCLAIM-to-deadletter recovery.
+
+---
 ## 2026-07-26 — Codex — BOSS-236 provider credential lifecycle
 
 - Advanced BOSS-236 Backlog → Todo → In Progress in Plane after deduping the

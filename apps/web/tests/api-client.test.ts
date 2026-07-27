@@ -3300,4 +3300,44 @@ describe("createBossApiClient", () => {
     expect(run.workflow_version_id).toBe("wfv_1");
     expect(step?.step_id).toBe("build");
   });
+
+  it("uses Agent Studio and A2A lifecycle contracts", async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const fetchImpl = async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({ url: String(input), init });
+      return new Response(JSON.stringify({ id: "a2amsg_1", status: "queued" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    };
+    const client = createBossApiClient({
+      baseUrl: "http://127.0.0.1:8000",
+      fetchImpl,
+    });
+
+    await client.getAgentStudioCatalog("boss-dogfood");
+    await client.cancelA2AMessage("a2amsg_1", {
+      project_id: "boss-dogfood",
+      actor: "coo",
+      reason: "Superseded instruction.",
+    });
+    await client.replayA2AMessage("a2amsg_1", {
+      project_id: "boss-dogfood",
+      actor: "coo",
+      dedupe_key: "replay:a2amsg_1:1",
+      reason: "Reproduce the terminal delivery.",
+    });
+
+    expect(calls.map((call) => call.url)).toEqual([
+      "http://127.0.0.1:8000/v1/agent-studio/catalog?project_id=boss-dogfood",
+      "http://127.0.0.1:8000/v1/a2a/messages/a2amsg_1/cancel",
+      "http://127.0.0.1:8000/v1/a2a/messages/a2amsg_1/replay",
+    ]);
+    expect(JSON.parse(String(calls[1].init?.body))).toMatchObject({
+      reason: "Superseded instruction.",
+    });
+    expect(JSON.parse(String(calls[2].init?.body))).toMatchObject({
+      dedupe_key: "replay:a2amsg_1:1",
+    });
+  });
 });

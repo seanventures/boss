@@ -11,12 +11,13 @@ BOSS is a durable, API-first control plane for accountable AI labor. The technic
 
 - Control Plane: canonical tenant state, tasks, plans, decisions, approvals, policies, budgets, receipts, events, audit, roles, packs, Mission Control, and Metatron.
 - Execution Plane: leases, stateless workers, local runners, cloud workers, browser workers, code/test/review workers, deployment workers, comms workers, worker pools, local model serving, and enterprise private workers.
-- Communications Plane: outbox/inbox, ACK, persona rendering, quiet hours, escalation, channel rollout policies, delivery receipts, and deadletters.
+- Communications Plane: external outbox/inbox plus the internal typed A2A envelope/outbox/delivery/ACK ledger, Redis Streams transport, consumer groups, correlation/causation, lag, replay, quiet hours, escalation, delivery receipts, and deadletters.
 - Elastic Resource Plane / ProviderOps: provider accounts, adapters, inventory, billing, deployments, ChangeSets, ResourceReceipts, drift, health, reconciliation, janitor, and autoscaler policy.
 - Model Entitlement Broker / AI Capacity Router: adapter discovery, entitlement pools, capacity state, route decisions, cooldowns, fallback selection, local/subscription/API/enterprise gateway routing.
 - Skills Registry: typed skills, risk tier, data boundary, permissions, retry policy, cost estimates, artifact requirements, receipt requirements.
 - Integration Registry: connector/adapter definitions, installed connections, SecretRefs, granted capabilities, scope, health/freshness, provenance, rate-limit state, and revocation.
 - Agent Group Runtime: versioned collaboration definitions, member-role resolution, topology/protocol, context boundaries, independence, dissent, bounded rounds, budgets, and durable runs.
+- Agent Studio: stable agent/panel identities, immutable executable versions, model/prompt/rule/capability/scope contracts, seeded catalog, validation/test/publish gates, and live operator topology.
 - Workflow Registry and Runtime: immutable definitions/versions, deterministic work mappings, durable runs/step runs, branching, fan-out/join, approvals, subworkflows, retries/deadletters, compensation, and migration.
 - Ground-truth and Assurance Runtime: metric observations, settled conclusions, typed claims/evidence, surface ownership, Assurance Cases, and scheduled adversarial verification.
 - BOSS Account Connect: hosted account identity, licensing, marketplace identity, cloud org/workspace membership, team invites, billing portal, managed connector authorization, and optional telemetry/health sync.
@@ -229,6 +230,57 @@ Group-run state machine:
 
 Completion rules decide whether the collaboration protocol is finished, not whether a claim is true. Evidence/approval/safety gates execute after group completion. Every spendy member call uses BudgetReservation and Receipt; every member job uses lease, heartbeat, bounded retry, and deadletter.
 
+## Agent Studio and Panel Runtime
+
+Canonical records:
+
+- `AgentDefinition`: stable project-scoped key, purpose, owner, lifecycle and active version.
+- `AgentVersion`: immutable RoleSpec/AgentModule lineage, model policy, prompt layers, rules, requested skills/integrations, scope, data boundary, A2A permissions, limits, output contract, validation result and content hash.
+- `AgentTestRun`: pinned version, scenario, compiled effective-capability preview, assertions, evidence, status and artifacts.
+- `AgentRun`: pinned version, input, task/job/workflow/panel references, lease-owned job, budget/receipt lineage, output and status.
+- `PanelDefinition`: stable reusable panel key, purpose and active version.
+- `PanelVersion`: pinned member AgentVersions plus topology, context, independence, quorum, rounds, evidence, consolidation, dissent and escalation policy.
+- `PanelRun`: pinned panel version and optional AgentGroupRun/WorkflowRun lineage.
+
+Published versions are immutable. Draft changes create new versions. Content hashes deduplicate identical versions. Publish validates schema, RoleSpec lineage, scope, message permissions, output contract, bounded calls/runtime, capability references and model posture, but runtime resolution rechecks current project policy, connections, health, budget and actor authority.
+
+Seeded agents default to `deterministic_brief`, a zero-cost and side-effect-free leased execution mode. A live model mode must select through the Model Entitlement Broker and requires a BudgetReservation and Receipt. Agent tool effects still execute only through the Skill Runtime.
+
+Panel runs fan out one leased `AgentRun` per member. Each result remains attributable. Consolidation creates a separate artifact over member findings; it never mutates or discards them. Evidence-ranked, attributed-synthesis, weighted-recommendation, majority-with-minority-report, producer-reviewer and hold-for-evidence policies are deterministic. Any missing proof, budget, approval, ownership or capability gate yields `waiting_decision`, `blocked` or `deadlettered`, never synthetic consensus.
+
+## Global A2A Coordination Fabric
+
+Canonical records:
+
+- `A2AChannel`: project-scoped channel key, schema allowlist, retention and status.
+- `A2ASubscription`: channel, consumer group, subscriber AgentVersion/system identity, recipient filters, ACK mode, visibility timeout and retry policy.
+- `A2AEnvelope`: immutable typed payload, sender/recipient, scope, data boundary, priority, TTL, dedupe, correlation/causation/conversation/trace IDs and canonical lineage references.
+- `A2ADelivery`: per-subscription state, attempt count, visibility/lease owner, Redis stream ID, last error and terminal time.
+- `A2AAcknowledgement`: accepted, processed, rejected or deferred result with evidence.
+- `A2ATransportAttempt`: dispatch/poll/claim/replay action, status, latency, stream/cursor and redacted error.
+
+Envelope state:
+
+`draft -> queued -> dispatching -> published -> delivering -> acknowledged|partially_acknowledged|expired|cancelled|deadlettered`.
+
+Delivery state:
+
+`pending -> published -> claimed -> processing -> acknowledged|rejected|retry_wait -> deadlettered|expired|cancelled`.
+
+Publishing is transactional:
+
+1. validate message schema, tenant/data scope, recipient and TTL;
+2. insert the immutable envelope, target deliveries and Postgres outbox record;
+3. enqueue a deduplicated leased `a2a.dispatch` job;
+4. create/reuse a Receipt for the Redis publish attempt;
+5. `XADD` to the project/channel stream and persist the returned stream ID;
+6. a consumer uses `XREADGROUP`; BOSS persists the claim before handing payload to the subscriber;
+7. ACK/NACK writes durable acknowledgement and audit state before `XACK`.
+
+Redis is an adapter behind `A2ATransport`. No production in-memory fallback is allowed. Missing or unhealthy Redis leaves Postgres work queued, reports `degraded`, retries with bounded backoff, and deadletters visibly. Pending entries can be reclaimed after their visibility timeout. Replay creates a new envelope whose `causation_id` points to the original.
+
+A2A payloads never contain secrets; they may contain SecretRefs. Unknown schema versions, oversize payloads, expired TTL, cross-tenant recipients and boundary-incompatible subscribers fail closed. A message cannot grant capability, create spend or authorize a provider write. Those effects continue through Jobs/Workflows, BudgetReservations, approvals, ChangeSets and Receipts.
+
 ## Skill and Integration Runtime
 
 `SkillSpec` remains the requested capability boundary. `IntegrationDefinition` lists connector metadata and supported SkillSpecs. `IntegrationConnection` is a scoped installation with `SecretRef`, permission grants, health/freshness, rate-limit state, owner, provenance, and enabled/revoked status. `ExecutorBinding` maps a SkillSpec and compatible IntegrationDefinition to a deterministic local/server/plugin executor.
@@ -371,6 +423,34 @@ Pack types:
 BOSS Account Connect provides marketplace identity for Cloud and attached Enterprise. Community must support local import/export of packs without hosted identity.
 
 ## API Surface Inventory
+
+Agent Studio:
+
+- `GET/POST /v1/agent-studio/agents`
+- `GET /v1/agent-studio/agents/{id}`
+- `POST /v1/agent-studio/agents/{id}/versions`
+- `POST /v1/agent-studio/agent-versions/{id}/validate`
+- `POST /v1/agent-studio/agent-versions/{id}/publish`
+- `POST /v1/agent-studio/agent-versions/{id}/runs`
+- `GET/POST /v1/agent-studio/panels`
+- `POST /v1/agent-studio/panels/{id}/versions`
+- `POST /v1/agent-studio/panel-versions/{id}/publish`
+- `GET/POST /v1/agent-studio/panel-runs`
+- `GET /v1/agent-studio/panel-runs/{id}`
+
+A2A coordination:
+
+- `GET/POST /v1/a2a/channels`
+- `GET/POST /v1/a2a/subscriptions`
+- `GET/POST /v1/a2a/messages`
+- `GET /v1/a2a/messages/{id}`
+- `POST /v1/a2a/messages/{id}/dispatch`
+- `POST /v1/a2a/subscriptions/{id}/poll`
+- `POST /v1/a2a/deliveries/{id}/ack`
+- `POST /v1/a2a/messages/{id}/cancel`
+- `POST /v1/a2a/messages/{id}/replay`
+- `GET /v1/a2a/audit`
+- `GET /v1/a2a/health`
 
 Agent Groups (planned):
 

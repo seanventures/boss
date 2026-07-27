@@ -16,6 +16,19 @@ services:
       - boss-postgres-data:/var/lib/postgresql/data
       - ./postgres-init:/docker-entrypoint-initdb.d:ro
 
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec"]
+    ports:
+      - "${BOSS_REDIS_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    volumes:
+      - boss-redis-data:/data
+
   account-connect:
     image: python:3.11-slim
     working_dir: /app
@@ -38,3 +51,4 @@ services:
 
 volumes:
   boss-postgres-data:
+  boss-redis-data:

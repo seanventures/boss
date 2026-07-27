@@ -516,3 +516,27 @@ Slice complete; accelerating full product with parallel agents.
   GitHub records #68/#70 as merged and #23/#69 as superseded/closed. Plane
   BOSS-215–234 and the reconciled package backlog BOSS-32/33 are Done with
   release evidence attached.
+
+## Codex handoff — BOSS-256–266 Agent Studio/A2A (2026-07-26)
+
+- Active branch: `ai/codex/boss-256-agent-studio-a2a`, based independently on
+  `origin/main`; it does not modify Paramg PR #80.
+- Delivered: immutable Agent/Panel versions, validation/test/publish gates,
+  leased deterministic specialist execution, attributed Panel fan-out and
+  consolidation, twelve seeded specialists, three seeded Panels, and a
+  responsive live Agent Studio workbench.
+- Delivered A2A: canonical Postgres ledger/outbox/deliveries, Redis Streams
+  adapter, leased Receipt-backed XADD, consumer groups, filtered-cursor
+  cleanup, visibility leases/XAUTOCLAIM, bounded retry/deadletter, actor-bound
+  ACK, Receipt-backed XACK, replay/cancel, schema/version allowlists, health
+  and audit APIs.
+- Safety: effective capabilities are intersection-only; Panel consensus is not
+  proof; no provider/model secret enters prompts or messages; live-model mode
+  requires a BudgetReservation and remains fail-closed until a governed model
+  provider lane is explicitly enabled.
+- Validation: 121 web and 938 Python tests pass (four intentional external/live
+  skips); 39 focused tests, Ruff, TypeScript, OpenAPI YAML, diff checks,
+  optimized build, responsive browser QA, and real Redis delivery/reclaim
+  proofs pass.
+- Plane BOSS-256–266 remain In Progress until the PR is merged. Attach the
+  final commit/PR and merge evidence before moving them to Done.

@@ -1,0 +1,23 @@
+id: product_delivery_council
+name: Product Delivery Council
+description: Cross-functional product, design, engineering, security, QA, and operations review.
+purpose: Produce an attributed, evidence-ranked delivery recommendation without erasing dissent.
+owner: chief_operator
+version:
+  topology: fan_out
+  members:
+    - {member_key: ux, agent_key: ux_engineer, weight: 1.0, required: true, perspective: user journey and accessibility}
+    - {member_key: ui, agent_key: ui_designer, weight: 0.8, required: false, perspective: visual system and interaction states}
+    - {member_key: architecture, agent_key: chief_architect, weight: 1.2, required: true, perspective: canonical boundaries and invariants}
+    - {member_key: delivery, agent_key: full_stack_engineer, weight: 1.0, required: true, perspective: smallest viable vertical slice}
+    - {member_key: security, agent_key: security_engineer, weight: 1.1, required: true, perspective: abuse paths and control proof}
+    - {member_key: qa, agent_key: qa_engineer, weight: 1.1, required: true, perspective: reproducible acceptance evidence}
+  context_policy: {shared: [objective, constraints, acceptance_criteria, evidence_refs], private_member_context: true}
+  independence_policy: {initial_reviews_independent: true, reveal_after_submission: true}
+  quorum_policy: {min_members: 5, required_members: [ux, architecture, delivery, security, qa]}
+  bounds: {max_rounds: 2, timeout_seconds: 1800, max_total_calls: 60}
+  evidence_policy: {minimum_evidence_refs: 5, reject_unsupported_claims: true}
+  consolidation_policy: {kind: evidence_ranked, preserve_attribution: true}
+  dissent_policy: {preserve_all: true, block_on_security_dissent: true}
+  escalation_policy: {on_no_quorum: decision, on_evidence_gap: decision}
+  output_contract: {artifact_type: panel_delivery_review, sections: [findings, dissent, evidence, recommendation, conditions]}

@@ -1,0 +1,22 @@
+id: release_readiness_panel
+name: Release Readiness Panel
+description: Producer-reviewer gate spanning implementation, security, QA, DevOps, and job-captain operations.
+purpose: Produce a go, conditional-go, or hold recommendation backed by attributable release evidence.
+owner: chief_operator
+version:
+  topology: producer_reviewer
+  members:
+    - {member_key: producer, agent_key: full_stack_engineer, weight: 1.0, required: true, perspective: implementation and change summary}
+    - {member_key: security, agent_key: security_engineer, weight: 1.2, required: true, perspective: security gate}
+    - {member_key: qa, agent_key: qa_engineer, weight: 1.2, required: true, perspective: validation and regression proof}
+    - {member_key: devops, agent_key: devops_engineer, weight: 1.1, required: true, perspective: rollout, health, and rollback}
+    - {member_key: operator, agent_key: chief_operator, weight: 1.0, required: true, perspective: ownership, incidents, and coordination}
+  context_policy: {shared: [change, acceptance_criteria, test_evidence, rollout_plan, evidence_refs], private_member_context: true}
+  independence_policy: {initial_reviews_independent: true, reveal_after_submission: true}
+  quorum_policy: {min_members: 5, required_members: [producer, security, qa, devops, operator]}
+  bounds: {max_rounds: 2, timeout_seconds: 1800, max_total_calls: 40}
+  evidence_policy: {minimum_evidence_refs: 5, reject_unsupported_claims: true}
+  consolidation_policy: {kind: producer_reviewer, preserve_attribution: true}
+  dissent_policy: {preserve_all: true, block_on_security_dissent: true, block_on_qa_dissent: true}
+  escalation_policy: {on_no_quorum: decision, on_gate_failure: decision}
+  output_contract: {artifact_type: release_readiness_review, sections: [change, evidence, gate_results, dissent, rollout, verdict]}

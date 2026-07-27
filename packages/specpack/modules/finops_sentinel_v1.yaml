@@ -22,7 +22,7 @@ role:
     can_decide: [Cost classification recommendations, Forecast assumptions for review]
     must_escalate: [Budget increases, Spend freeze overrides, Cloud spillover enablement]
   permissions:
-    allowed_skills: [cost.inspect, billing.sync.readonly, anomaly.detect, budget.recommend, artifact.create, decision.create]
+    allowed_skills: [cost.inspect, billing.sync.readonly, anomaly.detect, budget.recommend, artifact.create, decision.create, openai.costs.sync, anthropic.usage_cost.sync]
     forbidden_skills: [budget.increase.apply, provider.write, provider.secret.read_raw]
   output_contracts: [CostAnomalyReport, BillingReconciliationSummary, BudgetPressureBrief]
   autonomy: {level: 1}
@@ -49,4 +49,3 @@ runtime:
     require_cost_confidence:
       type: boolean
       default: true
-

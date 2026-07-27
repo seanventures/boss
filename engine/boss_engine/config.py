@@ -20,6 +20,16 @@ class Settings(BaseSettings):
     app_base_url: Optional[str] = Field(default=None, alias="APP_BASE_URL")
     admin_url: Optional[str] = Field(default=None, alias="ADMIN_URL")
     redis_url: Optional[str] = Field(default=None, alias="REDIS_URL")
+    a2a_redis_prefix: str = Field(default="boss:a2a", alias="BOSS_A2A_REDIS_PREFIX")
+    a2a_default_ttl_seconds: int = Field(
+        default=3600, alias="BOSS_A2A_DEFAULT_TTL_SECONDS", ge=1, le=604800
+    )
+    a2a_max_payload_bytes: int = Field(
+        default=65536, alias="BOSS_A2A_MAX_PAYLOAD_BYTES", ge=1024
+    )
+    a2a_dispatch_max_attempts: int = Field(
+        default=5, alias="BOSS_A2A_DISPATCH_MAX_ATTEMPTS", ge=1, le=20
+    )
     sentry_dsn: Optional[str] = Field(default=None, alias="SENTRY_DSN")
     supabase_url: Optional[str] = Field(default=None, alias="SUPABASE_URL")
     supabase_anon_key: Optional[str] = Field(default=None, alias="SUPABASE_ANON_KEY")

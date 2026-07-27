@@ -77,3 +77,17 @@
   verification, and provider writes with credentials/reservation/approval.
 - The documented legacy monolithic API matrix remains tracked by BOSS-119; its
   old principal-delegation expectations are not a v0.8 release regression.
+
+## 2026-07-26 Agent Studio/A2A disposition
+
+- BOSS-256–266 are implementation-complete on
+  `ai/codex/boss-256-agent-studio-a2a` and stay In Progress until merge.
+- No local P0/P1 gap remains in the delivered deterministic Studio, Panel, or
+  A2A transport scope. Redis loss is visible and recoverable from Postgres;
+  consumer loss is reclaimed and bounded; all external transport writes have
+  Receipts.
+- Deliberate next-lane work, not silently implied by this delivery: enable
+  live-model AgentVersions only through the existing model adapter,
+  BudgetReservation, cost Receipt, and provider entitlement path; add
+  operator-authored visual Workflow editing on top of the existing reusable
+  Workflow registry/runtime.

@@ -1,0 +1,22 @@
+id: architecture_risk_council
+name: Architecture & Risk Council
+description: Independent architecture, database, security, operations, and finance challenge panel.
+purpose: Identify system-level hazards, budget implications, and minority objections before consequential changes.
+owner: chief_architect
+version:
+  topology: bounded_debate
+  members:
+    - {member_key: architecture, agent_key: chief_architect, weight: 1.2, required: true, perspective: invariants and canonical ownership}
+    - {member_key: database, agent_key: database_administrator, weight: 1.0, required: false, perspective: state integrity and recoverability}
+    - {member_key: security, agent_key: security_engineer, weight: 1.2, required: true, perspective: threats and authorization}
+    - {member_key: operations, agent_key: chief_operator, weight: 1.0, required: true, perspective: operability and failure visibility}
+    - {member_key: finance, agent_key: cfo, weight: 1.0, required: false, perspective: budget and cost exposure}
+  context_policy: {shared: [objective, proposed_change, constraints, evidence_refs], private_member_context: true}
+  independence_policy: {initial_reviews_independent: true, reveal_after_submission: true}
+  quorum_policy: {min_members: 3, required_members: [architecture, security, operations]}
+  bounds: {max_rounds: 2, timeout_seconds: 1800, max_total_calls: 40}
+  evidence_policy: {minimum_evidence_refs: 3, reject_unsupported_claims: true}
+  consolidation_policy: {kind: majority_with_minority_report, preserve_attribution: true}
+  dissent_policy: {preserve_all: true, block_on_security_dissent: true}
+  escalation_policy: {on_no_quorum: decision, on_high_risk_dissent: decision}
+  output_contract: {artifact_type: architecture_risk_review, sections: [invariants, threats, operations, finance, dissent, recommendation]}
