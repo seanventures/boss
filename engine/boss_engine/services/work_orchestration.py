@@ -164,14 +164,25 @@ class WorkOrchestrationService:
     ) -> None:
         project_url = str(getattr(self.settings, "plane_project_url", "") or "")
         plane_project_id = self._plane_project_id(project_url)
+        project_url_match = re.match(
+            r"(https?://[^/]+)/([^/]+)/projects/",
+            project_url,
+        )
+        derived_base_url = project_url_match.group(1) if project_url_match else ""
+        derived_workspace = project_url_match.group(2) if project_url_match else ""
+        configured_base_url = str(
+            getattr(self.settings, "plane_base_url", "") or ""
+        ).rstrip("/")
+        configured_workspace = str(
+            getattr(self.settings, "plane_workspace", "") or ""
+        )
         plane_configuration = {
-            "web_base_url": "https://plane.local.sean.network",
-            "api_base_url": str(
-                getattr(self.settings, "plane_base_url", "")
-                or "https://plane.local.sean.network"
-            ).rstrip("/"),
-            "workspace_slug": str(
-                getattr(self.settings, "plane_workspace", "") or "goldeneye"
+            "web_base_url": configured_base_url or derived_base_url,
+            "api_base_url": configured_base_url or derived_base_url,
+            "workspace_slug": (
+                derived_workspace
+                if configured_workspace in {"", "default"} and derived_workspace
+                else configured_workspace or "default"
             ),
             "project_id": plane_project_id,
             "credential_ref": "secret:PLANE_API_KEY",

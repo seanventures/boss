@@ -14,6 +14,11 @@
 - GitHub: draft PR #16 carries BOSS-22/BOSS-23 and is stacked on draft PR #15; other open PRs were inspected for overlap before implementation.
 
 ## Overall Product Status
+- BOSS-279 integrates the v0.9.0 source release. Clean, lint, docs, production
+  build, manifests, infrastructure profiles, dependency audit, smoke, 143 web
+  tests, and 1,011 Python tests pass locally; four live-provider tests skip as
+  expected. Hosted identity/account, live-cluster, and provider-write rollout
+  remain explicitly fail-closed pending external configuration and approval.
 - BOSS-270–278 provide one ranked and quota-bounded path from Plane-backed
   intake to fenced agent execution. Plane creation is a leased,
   receipt-producing job; Mission Control embeds priority, quota, ticket, job,

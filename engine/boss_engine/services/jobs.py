@@ -1249,6 +1249,23 @@ class JobLeaseService:
         summary: str,
         external_url: Optional[str],
     ) -> None:
+        reported_receipt_id = result.get("receipt_id")
+        receipt_id = None
+        if reported_receipt_id:
+            receipt_id = connection.execute(
+                text(
+                    """
+                    SELECT id
+                    FROM receipts
+                    WHERE id = :receipt_id
+                      AND project_id = :project_id
+                    """
+                ),
+                {
+                    "receipt_id": reported_receipt_id,
+                    "project_id": job_row["project_id"],
+                },
+            ).scalar_one_or_none()
         self.work_orchestration.record_delivery_event(
             connection,
             project_id=job_row["project_id"],
@@ -1262,12 +1279,20 @@ class JobLeaseService:
             summary=summary,
             dedupe_key=f"presence:{job_row['id']}:{event_kind}",
             external_url=external_url,
-            receipt_id=result.get("receipt_id"),
+            receipt_id=receipt_id,
             metadata={
                 "job_id": job_row["id"],
                 "task_id": job_row.get("task_id"),
                 "tracker_binding_id": job_row.get("tracker_binding_id"),
                 "allocation_id": job_row.get("allocation_id"),
+                "reported_receipt_id": reported_receipt_id,
+                "receipt_reference_status": (
+                    "resolved"
+                    if receipt_id
+                    else "not_reported"
+                    if not reported_receipt_id
+                    else "unresolved"
+                ),
             },
         )
 

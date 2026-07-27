@@ -43,7 +43,7 @@ runtime:
   job_kinds: [agent.pm.scope_brief]
   prompt_key_by_job_kind:
     agent.pm.scope_brief: scope_brief
-  default_skill_ids: [work_tracker.issue.ensure, work_tracker.issue.update, work.priority.update]
+  default_skill_ids: [artifact.create, decision.create, work_tracker.issue.ensure, work_tracker.issue.update, work.priority.update]
   preferred_capabilities: [product-scope, acceptance-criteria]
   configuration_schema:
     require_non_goals:

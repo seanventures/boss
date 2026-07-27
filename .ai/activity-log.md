@@ -3,6 +3,23 @@
 All 15-min terminal updates and major milestones appended here. Chronological, newest at top.
 
 ---
+## 2026-07-26 — Codex — BOSS-279 v0.9.0 release integration
+
+- Integrated the System Configuration, GitHub operations, Agent Studio/A2A,
+  and Plane-first Work Orchestration stacks on one release branch while
+  preserving BOSS-269 repository-host support from `main`.
+- Resolved additive merge regressions in Product Manager default skills,
+  delivery-presence Receipt references, assurance workflow catalog tests, OSS
+  engine Plane defaults, and same-transaction event ordering.
+- Added a safe generated-artifact `make clean` target and aligned application,
+  engine, Helm, Kubernetes, and API-client metadata on `v0.9.0`.
+- Release evidence: `make clean`, lint, strict docs, production web build,
+  Kubernetes/Helm validation, infrastructure-profile validation, dependency
+  audit, smoke, 143 web tests, and 1,011 Python tests pass; four live-provider
+  tests skip as expected. External hosted identity/account, live-cluster, and
+  provider-write rollout prerequisites remain explicitly fail-closed.
+
+---
 ## 2026-07-26 — BOSS-270–278 Work Orchestration and Delivery Presence
 
 - Added canonical ranked work, quota, allocation, tracker binding, bot/channel,

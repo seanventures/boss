@@ -1,5 +1,21 @@
 # Codex Handoff
 
+## 2026-07-26 BOSS-279 v0.9.0 release integration
+
+- Release branch `ai/codex/release-v0.9.0` integrates BOSS-237, BOSS-246–268,
+  and BOSS-270–278 without dropping the parallel BOSS-269 repository-host work.
+- The release fixes merge-discovered contract regressions: Product Manager
+  retains artifact/decision plus tracker skills; delivery presence only links
+  tenant-scoped canonical Receipts; assurance tests permit additional workflow
+  families; the standalone engine derives Plane configuration; event ordering
+  uses wall-clock timestamps rather than transaction-start timestamps.
+- Local release gates pass: clean, lint, strict docs, production build,
+  Kubernetes/Helm, infrastructure profiles, dependency audit, smoke, 143 web
+  tests, and 1,011 Python tests with four expected live-provider skips.
+- Hosted Account Connect, SCIM/SSO, live-cluster verification, and real
+  provider writes remain fail-closed until explicit external configuration and
+  approval are supplied.
+
 ## 2026-07-26 BOSS-270–278 work orchestration and delivery presence
 
 - Branch `ai/codex/boss-270-work-orchestration` is stacked on the Agent Studio

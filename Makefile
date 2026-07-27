@@ -7,9 +7,14 @@ PYTHON_REQUIREMENTS_STAMP := $(VENV)/.boss-requirements-installed
 BOSS_POSTGRES_PORT ?= 5432
 DATABASE_URL ?= postgresql+psycopg://boss:boss@localhost:$(BOSS_POSTGRES_PORT)/boss
 
-.PHONY: install install-node install-python wait-db dev test lint build docs docs-install docs-generate docs-check seed seed-demo smoke k8s-validate infra-validate release-blockers real-smoke-plan real-smoke-pr real-smoke-merge real-smoke-deploy worker-drain-once sandbox-template deps-audit full-validate
+.PHONY: install install-node install-python clean wait-db dev test lint build docs docs-install docs-generate docs-check seed seed-demo smoke k8s-validate infra-validate release-blockers real-smoke-plan real-smoke-pr real-smoke-merge real-smoke-deploy worker-drain-once sandbox-template deps-audit full-validate
 
 install: install-node install-python
+
+clean:
+	rm -rf apps/web/.next apps/web/coverage .pytest_cache .ruff_cache htmlcov
+	find apps engine scripts -type d -name __pycache__ -prune -exec rm -rf {} +
+	find apps engine scripts -type f \( -name '*.pyc' -o -name '*.pyo' \) -delete
 
 install-node:
 	pnpm install

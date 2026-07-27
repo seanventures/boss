@@ -2475,8 +2475,10 @@ CREATE TABLE IF NOT EXISTS events (
   entity_type TEXT NOT NULL,
   entity_id TEXT NOT NULL,
   data JSONB NOT NULL DEFAULT '{}'::jsonb,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
 );
+ALTER TABLE events
+  ALTER COLUMN created_at SET DEFAULT clock_timestamp();
 CREATE INDEX IF NOT EXISTS idx_events_project_created ON events(project_id, created_at DESC);
 
 CREATE TABLE IF NOT EXISTS event_subscriptions (
