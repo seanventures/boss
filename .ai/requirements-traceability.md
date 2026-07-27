@@ -1,9 +1,15 @@
 # BOSS Requirements Traceability Matrix (Autonomous .ai version)
 
-**Last rebuilt**: 2026-07-26 by Codex (BOSS-25–31 OSS runtime seams)
+**Last rebuilt**: 2026-07-26 by Codex (BOSS-268 Agent Studio wizard)
 **Sources**: docs/product/PRD-v2.0.md, TECHNICAL_SPEC-v2.0.md, REQUIREMENT_INVENTORY.md, TRACEABILITY.md, user-stories.md, AGENTS.md, README, api/openapi.yaml, db/schema.sql, packages/specpack/*, code + tests scan.
 **Status key**: Implemented (full vertical + tests + states + audit + DoD), Partial, Planned, Blocked (external per real-only), In-Progress (this session).
 **DoD reminder**: Requirement complete only when traced, full journey, UI nav, backend, persistence, auth server+client, validations, loading/empty/error/success, edges, mobile/a11y basics, security/arch/QA review, tests pass, lint/build, docs updated, NO mocks/fakes/TODOs for required behavior.
+
+## 2026-07-26 Agent Studio wizard trace
+
+| Plane | Requirement | Implementation | Verification | Status |
+| --- | --- | --- | --- | --- |
+| BOSS-268 / AST-08 | Guided creation of governed agents inside Agent Studio | five-stage responsive commissioning wizard; blank/builder/reviewer/operator patterns; installed RoleSpec and Skill selection; prompt/rule/runtime/scope/output/A2A/limit authoring; live authority blueprint; explicit draft and validate/publish lifecycle over canonical APIs | pure payload/preflight tests, typed client lifecycle coverage, real API create/version/validate/publish integration test, web lint/build, browser QA | Implemented; In Progress until PR merge |
 
 ## 2026-07-26 Provider connection lifecycle trace
 

@@ -19,6 +19,7 @@ import {
   Warning,
 } from "@phosphor-icons/react";
 import { useMemo, useState, useTransition } from "react";
+import { createPortal } from "react-dom";
 import type {
   AgentStudioFeed,
   StudioAgent,
@@ -26,6 +27,8 @@ import type {
   StudioWorkflow,
   StudioWorkflowSpec,
 } from "../lib/agent-studio";
+import type { RoleFeedItem } from "../lib/roles";
+import type { SkillFeedItem } from "../lib/skills";
 import {
   createStudioWorkflow,
   publishStudioWorkflowVersion,
@@ -36,6 +39,7 @@ import {
   validateStudioWorkflow,
   type StudioActionResult,
 } from "./agent-studio-actions";
+import { AgentCreationWizard } from "./agent-creation-wizard";
 
 type Selection =
   | { kind: "agent"; item: StudioAgent }
@@ -98,8 +102,12 @@ function tone(status: string): "ok" | "warn" | "bad" | "quiet" {
 
 export function AgentStudio({
   feed,
+  roles,
+  skills,
 }: {
   feed: AgentStudioFeed;
+  roles: RoleFeedItem[];
+  skills: SkillFeedItem[];
 }) {
   const initial: Selection | undefined = feed.panels[0]
     ? { kind: "panel", item: feed.panels[0] }
@@ -129,6 +137,7 @@ export function AgentStudio({
   const [newWorkflowName, setNewWorkflowName] = useState("");
   const [newWorkflowDescription, setNewWorkflowDescription] = useState("");
   const [result, setResult] = useState<StudioActionResult | undefined>();
+  const [wizardOpen, setWizardOpen] = useState(false);
   const [pending, startTransition] = useTransition();
 
   const filteredAgents = useMemo(() => {
@@ -454,6 +463,19 @@ export function AgentStudio({
               ))
             )}
           </div>
+          {mode === "agents" && (
+            <button
+              className="as-create-agent"
+              onClick={() => setWizardOpen(true)}
+            >
+              <Plus />
+              <span>
+                <b>Create agent</b>
+                <small>Guided, governed commissioning</small>
+              </span>
+              <ArrowRight />
+            </button>
+          )}
           {mode === "workflows" && (
             <details className="as-new-workflow">
               <summary><Plus /> New governed workflow</summary>
@@ -664,6 +686,17 @@ export function AgentStudio({
           </div>
         </aside>
       </div>
+      {wizardOpen && (
+        createPortal(
+          <AgentCreationWizard
+            projectId={feed.projectId}
+            roles={roles}
+            skills={skills}
+            onClose={() => setWizardOpen(false)}
+          />,
+          document.body,
+        )
+      )}
     </div>
   );
 }

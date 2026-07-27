@@ -679,3 +679,98 @@ def test_agent_studio_validates_workflow_drafts_without_publishing(client):
         params={"project_id": settings.default_project_id},
     ).json()["items"]
     assert len(definitions_after) == len(definitions_before)
+
+
+def test_agent_creation_wizard_contract_creates_validates_and_publishes(client):
+    settings = get_settings()
+    definition = client.post(
+        "/v1/agent-studio/agents",
+        json={
+            "project_id": settings.default_project_id,
+            "agent_key": "wizard_contract_proof",
+            "name": "Wizard Contract Proof",
+            "description": "Proves the guided commissioning API lifecycle.",
+            "owner": "vp_agents",
+            "actor": "vp_agents",
+        },
+    )
+    assert definition.status_code == 200, definition.text
+
+    version = client.post(
+        f"/v1/agent-studio/agents/{definition.json()['id']}/versions",
+        json={
+            "project_id": settings.default_project_id,
+            "role_key": "software_engineer",
+            "model_policy": {
+                "execution_mode": "deterministic_brief",
+                "selection_mode": "router",
+                "preferred_capabilities": [],
+            },
+            "prompts": {
+                "system": "You are a bounded implementation specialist.",
+                "developer": "",
+                "job": "Return a verified implementation brief.",
+                "operator": "",
+            },
+            "rules": [
+                "Never bypass policy gates.",
+                "Attach evidence to completion claims.",
+            ],
+            "requested_skills": [],
+            "requested_integrations": [],
+            "scopes": {"project": "current", "data_boundary": "internal"},
+            "limits": {
+                "max_steps": 8,
+                "max_calls": 8,
+                "timeout_seconds": 300,
+                "max_retries": 2,
+            },
+            "output_contract": {
+                "artifact_type": "implementation_brief",
+                "sections": ["summary", "evidence", "risks"],
+            },
+            "a2a_policy": {
+                "publish": ["artifact.ready"],
+                "subscribe": ["job.assigned"],
+            },
+            "provenance": {
+                "source": "agent_studio_wizard",
+                "pattern": "builder",
+            },
+            "actor": "vp_agents",
+        },
+    )
+    assert version.status_code == 200, version.text
+    assert version.json()["status"] == "draft"
+
+    validation = client.post(
+        f"/v1/agent-studio/agent-versions/{version.json()['id']}/validate",
+        json={
+            "project_id": settings.default_project_id,
+            "actor": "vp_agents",
+        },
+    )
+    assert validation.status_code == 200, validation.text
+    assert validation.json()["valid"] is True
+
+    published = client.post(
+        f"/v1/agent-studio/agent-versions/{version.json()['id']}/publish",
+        json={
+            "project_id": settings.default_project_id,
+            "actor": "vp_agents",
+        },
+    )
+    assert published.status_code == 200, published.text
+    assert published.json()["status"] == "published"
+
+    stored = client.get(
+        "/v1/agent-studio/agents",
+        params={"project_id": settings.default_project_id},
+    )
+    created = next(
+        item
+        for item in stored.json()["items"]
+        if item["id"] == definition.json()["id"]
+    )
+    assert created["status"] == "active"
+    assert created["active_version_id"] == version.json()["id"]

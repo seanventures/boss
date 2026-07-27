@@ -553,3 +553,20 @@ Slice complete; accelerating full product with parallel agents.
   GitHub still reports draft PR #88 cleanly mergeable.
 - Plane BOSS-256–266 remain In Progress until the PR is merged. Attach the
   final commit/PR and merge evidence before moving them to Done.
+
+### BOSS-268 follow-up: guided agent commissioning
+
+- Agent Studio now exposes an accessible five-stage wizard from the Agents
+  library. It covers identity, installed RoleSpec, runtime/model policy,
+  layered prompts, deterministic rules, installed Skill and integration
+  references, data scope, limits, output contract, A2A topics, and review.
+- Blank/builder/reviewer/operator patterns feed an always-visible live
+  authority blueprint. Patterns provide content only; effective authority
+  remains the server-validated intersection.
+- Save Draft and Validate + Publish call the existing definition/version/
+  validate/publish APIs in order. Partial failure preserves identifiers and an
+  explicit draft; no credential fields or alternate runtime were introduced.
+- Validation passes 125 web tests, seven focused Agent Studio/A2A API tests,
+  Ruff, TypeScript, generated-doc parity, strict docs, the production build,
+  and a real browser create/validate/publish/refresh journey.
+- Plane BOSS-268 is In Progress on the existing draft PR #88 until merge.

@@ -678,7 +678,11 @@ export default async function HomePage({ searchParams }: HomePageProps) {
         </section>
 
         <section className="panel-stack" data-area="studio" aria-label="Agent Studio">
-          <AgentStudio feed={agentStudioFeed} />
+          <AgentStudio
+            feed={agentStudioFeed}
+            roles={roles.items}
+            skills={skills.items}
+          />
         </section>
 
         <section className="ov-cc" data-area="overview" aria-label="Command center">

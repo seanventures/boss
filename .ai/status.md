@@ -243,3 +243,24 @@ Contributor `main` tip `98ab5f4` (BOSS-267) was merged without conflict at
 code/integration head `d0d3a6354a1214459db23e212c1467cd292d1506`;
 22/22 combined Studio, Workflow Runtime, and repo-host tests pass, and GitHub
 reports draft PR #88 cleanly mergeable.
+
+## 2026-07-26 — BOSS-268 guided Agent Studio wizard
+
+Implementation is complete on `ai/codex/boss-256-agent-studio-a2a` and extends
+draft PR #88. Agent Studio now has a five-stage agent commissioning flow for
+identity/RoleSpec, runtime and prompt layers, deterministic rules and requested
+capabilities, scope/limits/output/A2A contracts, and final compile review.
+Blank, builder, reviewer, and operator patterns remain editable and do not
+grant authority. The live blueprint exposes the proposed RoleSpec, model
+posture, capability requests, coordination topics, and runtime envelope.
+
+Save Draft creates the stable definition plus immutable version. Validate +
+Publish uses the existing server lifecycle in order and preserves partial
+draft identifiers and errors on failure. The UI accepts integration references
+only, never credentials. Plane BOSS-268 remains In Progress until PR #88
+merges.
+
+Validation is green: 125 web tests, seven focused Agent Studio/A2A API tests,
+Ruff, TypeScript, generated feature-doc parity, strict MkDocs, optimized Next
+build, and a real browser create/validate/publish/refresh journey. Browser QA
+also verified the portal-based full-screen focus layer and all five stages.

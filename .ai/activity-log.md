@@ -3,6 +3,26 @@
 All 15-min terminal updates and major milestones appended here. Chronological, newest at top.
 
 ---
+## 2026-07-26 — Codex — BOSS-268 guided Agent Studio wizard
+
+- Advanced the deduplicated BOSS-268 slice through Backlog, Todo, and In
+  Progress before implementation.
+- Added a focused five-stage wizard for agent identity/RoleSpec, runtime and
+  prompts, rules and requested capabilities, scope/limits/output/A2A, and
+  review. Blank, builder, reviewer, and operator patterns update a persistent
+  live authority blueprint without granting ambient permissions.
+- Compiled wizard state into the existing stable AgentDefinition and immutable
+  AgentVersion lifecycle. Operators can save a draft or validate then publish;
+  partial failures retain identifiers and validation detail.
+- Added local preflight/payload tests, API client lifecycle coverage, and a
+  real API create/version/validate/publish integration proof. Credentials
+  remain outside the UI; live-model runs remain budget/provider/policy gated.
+- Final evidence passes 125 web tests, seven focused API tests, Ruff,
+  TypeScript, generated-doc parity, strict docs, optimized build, and the
+  full browser commissioning journey. The browser proof found and closed an
+  overlay-clipping defect and verified Studio refresh after publication.
+
+---
 ## 2026-07-26 — Codex — BOSS-256–266 Agent Studio, Panels, and A2A
 
 - Created and advanced the eleven deduplicated Plane slices BOSS-256–266

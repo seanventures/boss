@@ -87,7 +87,7 @@ Owns reusable multi-agent collaboration definitions and runs: member roles, topo
 
 ### Agent Studio
 
-Owns versioned executable agent definitions, model-selection policy, prompt layers, deterministic rules, requested capabilities, project/data scope, limits, validation, test evidence, publish state, seeded agent catalog, and a visual operator workbench. Agent Studio references RoleSpecs and Agent Modules but does not redefine company authority or package installation. Its Panel object is an explicit versioned composition profile over the Agent Group runtime.
+Owns versioned executable agent definitions, model-selection policy, prompt layers, deterministic rules, requested capabilities, project/data scope, limits, validation, test evidence, publish state, seeded agent catalog, a guided agent-commissioning wizard, and a visual operator workbench. Agent Studio references RoleSpecs and Agent Modules but does not redefine company authority or package installation. Its Panel object is an explicit versioned composition profile over the Agent Group runtime.
 
 ### Workflow Registry and Runtime
 
@@ -527,6 +527,8 @@ No new role may ship without objective linkage, bounded scope, eval plan, permis
 ## Agent Studio, Panels, and A2A Coordination
 
 Agent Studio is the governed builder and live operations surface for executable agents, Panels, and reusable Workflows. Operators can author, scope, validate, test, version, publish, retire, and observe agents while choosing a model policy, prompt layers, deterministic rules, output contract, requested skills/integrations, A2A permissions, context policy, autonomy ceiling, budget and runtime limits. The same workbench can create a WorkflowDefinition, edit and preview its typed graph, validate reachability/bindings/bounds without side effects, publish an immutable WorkflowVersion, and execute that pinned version through the canonical Workflow Runtime. Agent Studio never creates a parallel orchestration engine. Effective runtime capability is still the deterministic intersection of RoleSpec, Agent Module, project policy, Workflow or Panel binding, installed Skills/Integrations, data boundary, health, budget and actor permission.
+
+The guided agent wizard is the primary commissioning path. It walks an operator through identity and installed RoleSpec, deterministic or live-model runtime posture, layered prompts, rules, requested skills/integrations, project and data boundary, bounded calls/runtime, output contract, and A2A publish/subscribe topics. Blank, builder, reviewer, and operator patterns accelerate authoring without granting authority. A persistent live blueprint shows the proposed authority envelope before mutation. Saving creates a stable `AgentDefinition` and immutable draft `AgentVersion`; validate-and-publish activates the version only after server-side RoleSpec, capability, scope, output, A2A, and runtime checks pass. A failed validation or publication remains an explicit draft with its definition/version identifiers and errors. Credentials are never accepted by the wizard.
 
 The seeded library includes UX Engineer, UI Designer, Frontend Engineer, Backend Engineer, Full-Stack Engineer, Database Administrator, Chief Architect, Security Engineer, QA Engineer, Chief Operator/Job Captain, CFO/FinOps, and DevOps Engineer. Seeded agents are editable product assets, not privileged actors, and default to a deterministic side-effect-free execution posture until a governed live model/tool path is selected.
 

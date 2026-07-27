@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { API_KEY, API_URL } from "../lib/client";
+import type { AgentWizardSubmission } from "../lib/agent-wizard";
 
 export type StudioActionResult = {
   ok: boolean;
@@ -50,8 +51,11 @@ async function post(
 function describeResult(payload: Record<string, unknown>): string {
   if (payload.valid === true) {
     const spec = payload.normalized_spec as Record<string, unknown> | undefined;
-    const steps = Array.isArray(spec?.steps) ? spec.steps.length : 0;
-    return `Draft passed graph, binding, and side-effect checks (${steps} steps).`;
+    if (spec) {
+      const steps = Array.isArray(spec.steps) ? spec.steps.length : 0;
+      return `Draft passed graph, binding, and side-effect checks (${steps} steps).`;
+    }
+    return "Agent authority envelope passed validation.";
   }
   const result = payload.result as Record<string, unknown> | undefined;
   if (typeof result?.summary === "string") return result.summary;
@@ -59,6 +63,98 @@ function describeResult(payload: Record<string, unknown>): string {
     return `Recorded ${String(payload.status).replaceAll("_", " ")} state.`;
   }
   return "Agent Studio accepted the operation.";
+}
+
+function validationFailureMessage(payload: Record<string, unknown>): string {
+  const errors = Array.isArray(payload.errors)
+    ? payload.errors.filter((item): item is string => typeof item === "string")
+    : [];
+  return errors.length
+    ? `Draft created, but validation blocked publish: ${errors.join(" ")}`
+    : "Draft created, but validation blocked publish. Review the authority envelope.";
+}
+
+export async function createStudioAgent(
+  submission: AgentWizardSubmission,
+  publish: boolean,
+): Promise<StudioActionResult> {
+  const definition = await post("/v1/agent-studio/agents", submission.definition);
+  if (!definition.ok || typeof definition.item?.id !== "string") {
+    return definition;
+  }
+
+  const definitionId = definition.item.id;
+  const version = await post(
+    `/v1/agent-studio/agents/${encodeURIComponent(definitionId)}/versions`,
+    submission.version,
+  );
+  if (!version.ok || typeof version.item?.id !== "string") {
+    return {
+      ...version,
+      item: { definition_id: definitionId },
+      message: `Agent identity was created, but its first version was not: ${version.message}`,
+    };
+  }
+
+  const versionId = version.item.id;
+  const created = {
+    definition_id: definitionId,
+    version_id: versionId,
+    status: "draft",
+  };
+  if (!publish) {
+    return {
+      ok: true,
+      message: "Agent definition and immutable draft version created.",
+      item: created,
+    };
+  }
+
+  const projectId = String(submission.definition.project_id);
+  const validation = await post(
+    `/v1/agent-studio/agent-versions/${encodeURIComponent(versionId)}/validate`,
+    { project_id: projectId, actor: "vp_agents" },
+  );
+  if (!validation.ok) {
+    return {
+      ...validation,
+      item: created,
+      message: `Draft created, but validation could not complete: ${validation.message}`,
+    };
+  }
+  if (validation.item?.valid !== true) {
+    return {
+      ok: false,
+      message: validationFailureMessage(validation.item ?? {}),
+      item: {
+        ...created,
+        errors: validation.item?.errors ?? [],
+        warnings: validation.item?.warnings ?? [],
+      },
+    };
+  }
+
+  const published = await post(
+    `/v1/agent-studio/agent-versions/${encodeURIComponent(versionId)}/publish`,
+    { project_id: projectId, actor: "vp_agents" },
+  );
+  if (!published.ok) {
+    return {
+      ...published,
+      item: created,
+      message: `Validated draft was preserved, but publish failed: ${published.message}`,
+    };
+  }
+  return {
+    ok: true,
+    message: "Agent compiled, validated, and published as an immutable active version.",
+    item: {
+      definition_id: definitionId,
+      version_id: versionId,
+      status: "published",
+      warnings: validation.item?.warnings ?? [],
+    },
+  };
 }
 
 export async function testStudioAgent(
