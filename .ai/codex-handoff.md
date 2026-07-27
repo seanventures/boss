@@ -1,5 +1,19 @@
 # Codex Handoff
 
+## 2026-07-27 BOSS-282 v0.9.1 budget settlement patch
+
+- Integrated contributor PR #98 on top of released v0.9.0 after verifying its
+  commits were not ancestors or patch-equivalent to main.
+- `completed_no_pr`, non-final decomposition, and automated repair paths now
+  pass `run_id` into settle-before-release.
+- Settlement subtracts existing `code_task:{run_id}` cost receipts so resumed
+  work consumes only its unbilled delta.
+- The merged cost-governance file retains both BOSS-281 Task Board coverage and
+  the contributor settlement regressions.
+- Release evidence passes clean, lint, strict docs, production build,
+  Kubernetes/Helm, infrastructure profiles, dependency audit, smoke, 143 web
+  tests, and 1,031 Python tests with four expected live-provider skips.
+
 ## 2026-07-26 BOSS-279 v0.9.0 release integration
 
 - Release branch `ai/codex/release-v0.9.0` integrates BOSS-237, BOSS-246–268,

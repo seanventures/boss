@@ -1,5 +1,28 @@
 # Changelog
 
+## v0.9.1 - 2026-07-27
+
+This patch release completes the BOSS-280 budget-settlement integrity work from
+contributor PR #98.
+
+### Fixed
+
+- Settle recorded model spend before releasing reservations for
+  `completed_no_pr`, non-final decomposition, and automated review-repair
+  outcomes.
+- Settle only the previously unbilled delta when a run resumes under a new
+  reservation, preventing both dropped spend and double-counted receipts.
+- Preserve the BOSS-281 Task Board lifecycle regression coverage alongside the
+  new budget-settlement tests.
+
+### Release notes
+
+- The patch retains every v0.9.0 feature and fail-closed external rollout
+  boundary.
+- GitHub Actions remain intentionally disabled; local clean, lint, test, build,
+  docs, manifest, infrastructure, dependency, and smoke evidence is recorded
+  in Plane BOSS-282.
+
 ## v0.9.0 - 2026-07-26
 
 This release integrates the System Configuration, project-scoped GitHub

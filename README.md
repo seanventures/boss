@@ -2,7 +2,7 @@
 
 BOSS, the Business Operating System Sentinel, is a financially controlled autonomous company operating system. This repository is the real control plane and dogfood environment for BOSS itself.
 
-Current release: `v0.9.0`
+Current release: `v0.9.1`
 
 ## Operating invariants
 

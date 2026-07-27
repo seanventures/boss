@@ -3,6 +3,21 @@
 All 15-min terminal updates and major milestones appended here. Chronological, newest at top.
 
 ---
+## 2026-07-27 — Codex — BOSS-282 v0.9.1 budget settlement patch
+
+- Integrated contributor PR #98 after proving its two commits were not present
+  in released main.
+- Preserved BOSS-281 Task Board coverage while adding regressions for
+  completed-no-PR settlement ordering and resumed-run unbilled-delta charging.
+- Budget settlement now records real model spend before release and avoids
+  double-billing spend already settled by an earlier reservation.
+- Release gates pass: `make clean`, lint, strict docs, production build,
+  Kubernetes/Helm, infrastructure profiles, dependency audit, smoke, 143 web
+  tests, and 1,031 Python tests; four live-provider tests skip as expected.
+  Hosted identity/account, live-cluster, and provider-write rollout remain
+  explicitly fail-closed.
+
+---
 ## 2026-07-26 — Codex — BOSS-279 v0.9.0 release integration
 
 - Integrated the System Configuration, GitHub operations, Agent Studio/A2A,

@@ -1,11 +1,11 @@
 # BOSS Autonomous Delivery Status
 
-**Last updated**: 2026-07-26 (v0.9.0 integration)
+**Last updated**: 2026-07-27 (v0.9.1 budget settlement patch)
 **Repo root**: /Volumes/DataSSD1/test/boss
 **Git remote**: https://github.com/seanheiney/boss
 **Current branch**: ai/codex/release-v0.9.0
 **Base branch**: origin/main
-**Product**: BOSS v0.9.0 target (Business Operating System Sentinel)
+**Product**: BOSS v0.9.1 target (Business Operating System Sentinel)
 **Mission**: Complete product to production-grade, tested, documented, pushed, Codex-coordinated, ready for real users. Grind until all discovered PRD/spec features satisfy world-class DoD or truly blocked.
 
 ## Discovered Spec Sources (see .ai/spec-index.md)
@@ -14,6 +14,9 @@
 - GitHub: draft PR #16 carries BOSS-22/BOSS-23 and is stacked on draft PR #15; other open PRs were inspected for overlap before implementation.
 
 ## Overall Product Status
+- BOSS-282 integrates the contributor budget-settlement patch: completed-no-PR
+  and repair outcomes settle before release, while resumed runs charge only
+  their previously unbilled delta.
 - BOSS-279 integrates the v0.9.0 source release. Clean, lint, docs, production
   build, manifests, infrastructure profiles, dependency audit, smoke, 143 web
   tests, and 1,011 Python tests pass locally; four live-provider tests skip as
