@@ -196,8 +196,9 @@ def _resolve_repo_branch(run: dict, settings: Settings) -> tuple[str, str, str]:
 def _build_dist(settings: Settings, owner: str, repo: str, branch: str) -> Path:
     """Clone the run's branch and `npm run build` -> ./dist (in-container Node; no docker)."""
     token = settings.github_token
-    url = (f"https://x-access-token:{token}@github.com/{owner}/{repo}.git" if token
-           else f"https://github.com/{owner}/{repo}.git")
+    from .repo_host import clone_url_for  # BOSS-267: host-aware clone
+    url = clone_url_for(getattr(settings, "target_repo_host", "github") or "github",
+                        owner, repo, token or "")
     work = Path(tempfile.mkdtemp(prefix="boss-deploy-"))
     subprocess.run(["git", "clone", "--depth", "1", "--branch", branch, url, str(work)],
                    capture_output=True, text=True, timeout=180, check=True)

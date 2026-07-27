@@ -97,6 +97,7 @@ class EphemeralSandbox:
         base_branch: str = "main",
         work_branch: Optional[str] = None,
         token: Optional[str] = None,
+        repo_host: str = "github",
     ) -> Path:
         """Shallow-clone ``owner/repo`` into a fresh temp dir and check out a work
         branch. ``token`` (PAT or short-lived GitHub-App installation token) is
@@ -109,10 +110,9 @@ class EphemeralSandbox:
         self._owns_dir = True
         self.base_branch = base_branch
 
-        if token:
-            clone_url = f"https://x-access-token:{token}@github.com/{owner}/{repo}.git"
-        else:
-            clone_url = f"https://github.com/{owner}/{repo}.git"
+        # BOSS-267: the host's authenticated clone-URL form lives in ONE place now.
+        from .repo_host import clone_url_for
+        clone_url = clone_url_for(repo_host, owner, repo, token or "")
 
         depth = max(1, int(self.settings.sandbox_clone_depth or 1))
         self._git(

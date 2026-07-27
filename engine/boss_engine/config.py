@@ -285,6 +285,25 @@ class Settings(BaseSettings):
     target_github_repo: str = Field(
         default="boss-sandbox", alias="BOSS_TARGET_GITHUB_REPO"
     )
+    # --- Repo-host extension seam (BOSS-267): SCM providers as add-ins ---------------------
+    # Which host customer target repos live on: github (default, zero behavior change) or
+    # bitbucket. Per-task spec.repo_host overrides this project-level setting.
+    target_repo_host: str = Field(default="github", alias="BOSS_TARGET_REPO_HOST")
+    # Bitbucket Cloud target (workspace/repo_slug — the owner/repo analog). Fall back to the
+    # target_github_* pair so a single-target deployment only sets what differs.
+    target_bitbucket_workspace: Optional[str] = Field(
+        default=None, alias="BOSS_TARGET_BITBUCKET_WORKSPACE"
+    )
+    target_bitbucket_repo: Optional[str] = Field(
+        default=None, alias="BOSS_TARGET_BITBUCKET_REPO"
+    )
+    # Bitbucket auth: a workspace/repository access token (Bearer) — preferred — or a
+    # username + app password (Basic). Env-indirect like every BOSS connector credential.
+    bitbucket_token: Optional[str] = Field(default=None, alias="BOSS_BITBUCKET_TOKEN")
+    bitbucket_username: Optional[str] = Field(default=None, alias="BOSS_BITBUCKET_USERNAME")
+    bitbucket_app_password: Optional[str] = Field(
+        default=None, alias="BOSS_BITBUCKET_APP_PASSWORD"
+    )
     github_webhook_secret: Optional[str] = Field(
         default=None, alias="BOSS_GITHUB_WEBHOOK_SECRET"
     )

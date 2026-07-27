@@ -74,6 +74,8 @@ class PullRequestValidationResult:
 
 
 class GitHubAdapter:
+    kind = "github"        # RepoHost conformance (BOSS-267) — the reference plugin
+
     def __init__(self, settings: Settings):
         self.settings = settings
         self._app = None
@@ -81,6 +83,11 @@ class GitHubAdapter:
     @property
     def repository_full_name(self) -> str:
         return f"{self.settings.target_github_owner}/{self.settings.target_github_repo}"
+
+    def clone_url(self, token: str) -> str:
+        from .repo_host import clone_url_for
+        return clone_url_for("github", self.settings.target_github_owner,
+                             self.settings.target_github_repo, token)
 
     def _auth_token(self) -> str:
         """Prefer a short-lived, repo-scoped GitHub-App installation token
