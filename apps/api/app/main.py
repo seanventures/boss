@@ -2350,11 +2350,28 @@ def model_route_decision_summary_from_service(payload) -> ModelRouteDecisionSumm
     return ModelRouteDecisionSummary(**payload)
 
 
+# Liveness must never queue behind the sync-endpoint threadpool or the DB pool:
+# under console-SSR bursts the pools saturate for seconds, /health exceeded the
+# container healthcheck's 5s budget, and the watchdog restart-looped a healthy api
+# (Traefik 404s during every restart). Async handler + cached DB reachability keep
+# the probe O(ms); DB state refreshes off the hot path at most every 15s.
+_db_health_cache = {"ok": True, "checked_at": 0.0}
+
+
 @app.get("/health", response_model=HealthResponse)
-def health() -> HealthResponse:
+async def health() -> HealthResponse:
+    now = time.monotonic()
+    if now - _db_health_cache["checked_at"] > 15.0:
+        _db_health_cache["checked_at"] = now
+        try:
+            _db_health_cache["ok"] = await asyncio.wait_for(
+                asyncio.to_thread(database_is_reachable, engine), timeout=3.0
+            )
+        except (asyncio.TimeoutError, RuntimeError):
+            _db_health_cache["ok"] = False
     return HealthResponse(
         status="ok",
-        database_connected=database_is_reachable(engine),
+        database_connected=_db_health_cache["ok"],
         github_configured=bool(settings.github_token),
         openai_configured=bool(settings.openai_api_key),
     )
