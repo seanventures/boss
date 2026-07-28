@@ -2899,3 +2899,178 @@ select.input:focus,
 .mission-receipt-files a:hover {
   text-decoration: underline;
 }
+
+/* ================================================================
+   Decision Queue — the handoff's Approvals format: one hairline
+   container of proposal rows (orb · who proposes · impact chip ·
+   Sora title · rationale · evidence chips) with an action footer
+   (Approve / Request changes / Reject · waited).
+   ================================================================ */
+.dq {
+  border: 1px solid var(--panel-border);
+  max-width: 900px;
+}
+.dq-row + .dq-row { border-top: 1px solid var(--panel-border); }
+.dq-body {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  padding: 18px 22px;
+}
+.dq-orb {
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  background: linear-gradient(140deg, #1e3a63, #122845);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--display);
+  font-weight: 700;
+  font-size: 12px;
+  color: #dce8fb;
+  flex-shrink: 0;
+}
+.dq-main { flex: 1; min-width: 0; }
+.dq-propose {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 4px;
+}
+.dq-who { font-size: 12.5px; color: var(--muted); }
+.dq-who b { font-weight: 700; color: var(--ink); }
+.dq-impact {
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.dq-impact.amber { color: var(--amber); }
+.dq-impact.blue { color: var(--blue); }
+.dq-impact.teal { color: var(--teal); }
+.dq-impact.red { color: var(--red); }
+.dq-impact.muted { color: var(--faint); }
+.dq-title {
+  font-family: var(--display);
+  font-size: 17px;
+  font-weight: 600;
+  color: var(--ink);
+  margin: 0 0 8px;
+  letter-spacing: 0;
+}
+.dq-rationale {
+  font-size: 13.5px;
+  color: var(--muted);
+  line-height: 1.55;
+  margin: 0 0 12px;
+}
+.dq-evidence {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+.dq-ev-label {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--quiet);
+}
+.dq-ev {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--muted);
+}
+.dq-effect {
+  font-size: 11.5px;
+  color: var(--faint);
+  margin: 10px 0 0;
+}
+.dq-foot {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 13px 22px;
+  border-top: 1px solid var(--raised);
+  flex-wrap: wrap;
+}
+.dq-actions {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex: 1;
+  flex-wrap: wrap;
+}
+.dq-btn {
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 8px 16px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.dq-btn.approve {
+  font-weight: 700;
+  color: #06121f;
+  border: none;
+  background: var(--green);
+}
+.dq-btn.neutral {
+  color: var(--ink-soft);
+  border: 1px solid var(--strong);
+  background: transparent;
+}
+.dq-btn.reject {
+  color: #ff9fb0;
+  border: 1px solid rgba(242, 100, 122, 0.45);
+  background: transparent;
+}
+.dq-waited {
+  margin-left: auto;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--quiet);
+  white-space: nowrap;
+}
+.dq-verdict {
+  font-family: var(--mono);
+  font-size: 12.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+.dq-verdict.green { color: var(--green); }
+.dq-verdict.red { color: var(--red); }
+.dq-verdict.muted { color: var(--faint); }
+.dq-note { font-size: 12.5px; color: var(--faint); }
+.dq-more summary {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--faint);
+  cursor: pointer;
+  list-style: none;
+  white-space: nowrap;
+}
+.dq-more summary::before { content: "▸ "; }
+.dq-more[open] summary::before { content: "▾ "; }
+.dq-more-body {
+  margin-top: 10px;
+  display: grid;
+  gap: 8px;
+  min-width: 300px;
+}
+.dq-you-decide { color: var(--amber); }
+.dq-digest { margin-top: 14px; max-width: 900px; }
+.dq-digest > summary {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--faint);
+  cursor: pointer;
+}
+.dq-digest-body {
+  border: 1px solid var(--panel-border);
+  padding: 14px 18px;
+  margin-top: 8px;
+  display: grid;
+  gap: 10px;
+}

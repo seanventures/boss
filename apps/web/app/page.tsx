@@ -273,6 +273,42 @@ function approvalEffectLabel(recommendation: Record<string, unknown>): string {
   }
 }
 
+// Decision Queue (handoff format): category chip for what kind of effect the
+// proposal is, colored by the signal palette.
+function decisionImpact(decision: DecisionFeedItem): { label: string; tone: string } {
+  const action =
+    typeof decision.recommendation.action === "string" ? decision.recommendation.action : "";
+  if (action === "resume_code_task" || action === "review_plan_draft") return { label: "plan", tone: "amber" };
+  if (action === "review_pull_request" || action.startsWith("github.")) return { label: "merge", tone: "blue" };
+  if (action === "review_deployment") return { label: "deploy", tone: "teal" };
+  if (action === "review_infra_provisioning") return { label: "infra", tone: "amber" };
+  if (action === "role.autonomy_change") return { label: "access", tone: "red" };
+  if (action.startsWith("self_improvement")) return { label: "rollout", tone: "teal" };
+  if (action === "execute_agent_tool") return { label: "publish", tone: "teal" };
+  if (action === "resume_agent_run") return { label: "agent tool", tone: "teal" };
+  if (action === "resume_code_task") return { label: "plan", tone: "amber" };
+  const rule = decisionRuleLabel(decision);
+  return { label: rule.length > 18 ? rule.slice(0, 18).trimEnd() + "…" : rule, tone: "muted" };
+}
+
+function roleInitials(name: string): string {
+  const words = name.replace(/[_-]+/g, " ").trim().split(/\s+/).filter(Boolean);
+  if (words.length === 0) return "CP";
+  const initials =
+    words.length === 1 ? words[0].slice(0, 3) : words.map((word) => word[0]).join("").slice(0, 3);
+  return initials.toUpperCase();
+}
+
+function waitedLabel(createdAt: string): string {
+  const created = Date.parse(createdAt);
+  if (Number.isNaN(created)) return "";
+  const minutes = Math.max(0, Math.floor((Date.now() - created) / 60_000));
+  if (minutes < 60) return `waited ${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 48) return `waited ${hours}h`;
+  return `waited ${Math.floor(hours / 24)}d`;
+}
+
 function formatMsDuration(ms?: number): string {
   if (!ms || ms <= 0) return "—";
   if (ms < 1000) return `${Math.round(ms)}ms`;
@@ -6540,27 +6576,18 @@ export default async function HomePage({ searchParams }: HomePageProps) {
           </div>
         </section>
 
-        <section className="panel-stack approval-rules-section" data-area="decisions" aria-label="Approval rules">
-          <div className="section-head">
-            <div>
-              <span className="eyebrow">Approval Rules</span>
-              <h2>What requires your approval — and why.</h2>
-            </div>
-          </div>
-          <ApprovalRulesView rules={approvalRules.rules} apiReachable={approvalRules.apiReachable} />
-        </section>
-
         <section
           aria-labelledby="decision-inbox-title"
           className="panel-stack decision-inbox-section"
+          data-area="decisions"
           id="decision-inbox"
           tabIndex={-1}
         >
           <div className="section-head">
             <div>
-              <span className="eyebrow" data-area="decisions">Decision Inbox</span>
+              <span className="eyebrow">Decision Queue</span>
               <h2 id="decision-inbox-title">
-                Explicit approvals before real effects.
+                Agents proposed — <span className="dq-you-decide">you decide</span>.
               </h2>
             </div>
             <p className="status-meta">
@@ -6568,47 +6595,6 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               default when their deadline passes.
             </p>
           </div>
-
-          {decisions.apiReachable ? (
-            <article className="decision-card">
-              <div className="decision-head">
-                <div>
-                  <span className="pill">Digest</span>
-                  <h3>Create decision digest</h3>
-                </div>
-                <p className="detail">
-                  Creates a durable digest artifact. Optional channel creates an
-                  outbox draft only; sending still requires a budgeted queue action.
-                </p>
-              </div>
-              <form action={createDecisionDigestAction} className="decision-actions">
-                <input type="hidden" name="project_id" value={activeProjectId} />
-                <input type="hidden" name="actor" value={activeActorId} />
-                <label className="field">
-                  <span>Max items</span>
-                  <input
-                    className="input"
-                    defaultValue={20}
-                    max={100}
-                    min={1}
-                    name="max_items"
-                    type="number"
-                  />
-                </label>
-                <label className="field">
-                  <span>Optional outbox channel</span>
-                  <input
-                    className="input"
-                    name="channel"
-                    placeholder="email:founder@example.com or slack:#ops"
-                  />
-                </label>
-                <button className="button secondary" type="submit">
-                  Create digest
-                </button>
-              </form>
-            </article>
-          ) : null}
 
           {!decisions.apiReachable ? (
             <article className="decision-card empty">
@@ -6627,7 +6613,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               </p>
             </article>
           ) : (
-            <div className="decision-list">
+            <div className="dq">
               {decisions.items.map((decision) => {
                 const estimatedCost =
                   typeof decision.costSummary.estimated_usd_micros === "number"
@@ -6639,185 +6625,201 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                 const linkedTask = decision.taskId
                   ? tasks.items.find((task) => task.id === decision.taskId)
                   : undefined;
+                const ownerRole = linkedTask?.ownerRoleId
+                  ? roles.items.find((role) => role.id === linkedTask.ownerRoleId)
+                  : undefined;
+                const who = ownerRole?.displayName ?? "Control plane";
+                const impact = decisionImpact(decision);
+                const rec = decision.recommendation;
+                const why = typeof rec.why === "string" ? rec.why : "";
+                const plan = typeof rec.plan === "string" ? rec.plan : "";
+                const review = typeof rec.plan_review === "string" ? rec.plan_review : "";
 
                 return (
-                  <article className="decision-card" key={decision.id}>
-                    {decision.taskId ? (
-                      <div className="decision-task">
-                        <span className="decision-task-eyebrow">Task under review</span>
-                        <span className="decision-task-title">{linkedTask?.title ?? "Linked task"}</span>
-                        <span className="decision-task-id">T-{decision.taskId.slice(-4)}</span>
-                        {linkedTask ? (
-                          <span className="status-text decision-task-status">
-                            {titleCaseToken(linkedTask.derivedStatus ?? linkedTask.status)}
-                          </span>
+                  <article className="dq-row" key={decision.id}>
+                    <div className="dq-body">
+                      <div className="dq-orb" aria-hidden>{roleInitials(who)}</div>
+                      <div className="dq-main">
+                        <div className="dq-propose">
+                          <span className="dq-who"><b>{who}</b> proposes</span>
+                          <span className={`dq-impact ${impact.tone}`}>{impact.label}</span>
+                        </div>
+                        <h3 className="dq-title">{decision.question}</h3>
+                        <p className="dq-rationale">
+                          {why || formatRecommendation(decision)}
+                        </p>
+                        {plan || review ? (
+                          <details className="decision-plan-details">
+                            <summary>Read the technical plan{review ? " & automated review" : ""}</summary>
+                            {plan ? (
+                              <div className="decision-plan-sec">
+                                <h4>Technical plan</h4>
+                                <pre>{plan}</pre>
+                              </div>
+                            ) : null}
+                            {review ? (
+                              <div className="decision-plan-sec">
+                                <h4>Automated plan review</h4>
+                                <pre>{review}</pre>
+                              </div>
+                            ) : null}
+                          </details>
+                        ) : null}
+                        <div className="dq-evidence">
+                          <span className="dq-ev-label">evidence</span>
+                          {linkedTask ? (
+                            <span className="dq-ev">
+                              T-{decision.taskId?.slice(-4)} · {linkedTask.title.slice(0, 44)}
+                              {linkedTask.title.length > 44 ? "…" : ""}
+                            </span>
+                          ) : null}
+                          <span className="dq-ev">risk tier {decision.riskTier}</span>
+                          <span className="dq-ev">default {decision.defaultAction ?? "hold"}</span>
+                          {estimatedCost != null ? (
+                            <span className="dq-ev">{formatMicros(estimatedCost)}</span>
+                          ) : null}
+                          <span className="dq-ev">{formatDeadline(decision.deadlineAt)}</span>
+                        </div>
+                        {isPending ? (
+                          <p className="dq-effect">{approvalEffectLabel(decision.recommendation)}</p>
                         ) : null}
                       </div>
-                    ) : (
-                      <div className="decision-task decision-task--none">
-                        <span className="decision-task-eyebrow">Control-plane decision · no linked task</span>
-                      </div>
-                    )}
-                    <div className="decision-head">
-                      <div>
-                        <span className={`pill${isPending ? " warn" : ""}`}>
-                          {decision.status}
-                        </span>
-                        <h3>{decision.question}</h3>
-                      </div>
-                      <div className="decision-meta">
-                        <span className="decision-rule">Rule · {decisionRuleLabel(decision)}</span>
-                        <span>Risk tier {decision.riskTier}</span>
-                        <span>Default: {decision.defaultAction ?? "hold"}</span>
-                        <span>Deadline: {formatDeadline(decision.deadlineAt)}</span>
-                      </div>
                     </div>
-
-                    {(() => {
-                      // Plan-approval decision (Wire-Phase 2b): surface WHY it needs a human
-                      // plus the actual plan + automated review so approval is informed.
-                      const rec = decision.recommendation;
-                      if (rec.action !== "resume_code_task") return null;
-                      const why = typeof rec.why === "string" ? rec.why : "";
-                      const plan = typeof rec.plan === "string" ? rec.plan : "";
-                      const review = typeof rec.plan_review === "string" ? rec.plan_review : "";
-                      if (!why && !plan && !review) return null;
-                      return (
-                        <div className="decision-plan">
-                          {why ? <p className="decision-plan-why">{why}</p> : null}
-                          {plan || review ? (
-                            <details className="decision-plan-details">
-                              <summary>Read the technical plan{review ? " & automated review" : ""}</summary>
-                              {plan ? (
-                                <div className="decision-plan-sec">
-                                  <h4>Technical plan</h4>
-                                  <pre>{plan}</pre>
-                                </div>
-                              ) : null}
-                              {review ? (
-                                <div className="decision-plan-sec">
-                                  <h4>Automated plan review</h4>
-                                  <pre>{review}</pre>
-                                </div>
-                              ) : null}
-                            </details>
-                          ) : null}
-                        </div>
-                      );
-                    })()}
-
-                    <div className="decision-grid">
-                      <div>
-                        <h4>Recommendation</h4>
-                        <p className="detail">{formatRecommendation(decision)}</p>
-                      </div>
-                      <div>
-                        <h4>Estimated Cost</h4>
-                        <p className="detail">{formatMicros(estimatedCost)}</p>
-                      </div>
-                      <div>
-                        <h4>Options</h4>
-                        <p className="detail">
-                          {decision.options
-                            .map((option) =>
-                              typeof option.label === "string"
-                                ? option.label
-                                : typeof option.action === "string"
-                                  ? option.action
-                                  : "review",
-                            )
-                            .join(" / ")}
-                        </p>
-                      </div>
-                    </div>
-
-                    <div className="decision-footer">
-                      <p className="detail">{decisionStatusDetail(decision)}</p>
+                    <div className="dq-foot">
                       {isPending ? (
-                        <form action={resolveDecisionAction} className="decision-actions">
-                          <input
-                            type="hidden"
-                            name="decision_id"
-                            value={decision.id}
-                          />
+                        <form action={resolveDecisionAction} className="dq-actions">
+                          <input type="hidden" name="decision_id" value={decision.id} />
                           <input type="hidden" name="project_id" value={activeProjectId} />
                           <input type="hidden" name="actor" value={activeActorId} />
-                          <p className="decision-effect">{approvalEffectLabel(decision.recommendation)}</p>
-                          <textarea
-                            aria-label={`Decision note for ${decision.id}`}
-                            className="textarea decision-note"
-                            name="note"
-                            rows={3}
-                            placeholder="Optional note or required revision request rationale."
-                          />
-                          <input
-                            aria-label={`Delegate target for ${decision.id}`}
-                            className="input"
-                            name="delegate_to"
-                            placeholder="Delegate to role or approver"
-                          />
-                          <button className="button" name="action" value="approve">
+                          <button className="dq-btn approve" name="action" value="approve">
                             Approve
                           </button>
-                          <button className="button secondary" name="action" value="revise">
+                          <button className="dq-btn neutral" name="action" value="revise">
                             Request changes
                           </button>
-                          <button
-                            className="button secondary"
-                            name="action"
-                            value="reject"
-                          >
+                          <button className="dq-btn reject" name="action" value="reject">
                             Reject
                           </button>
-                          <button
-                            className="button secondary"
-                            name="action"
-                            value="revise"
-                          >
-                            Request revision
-                          </button>
-                          <button
-                            className="button secondary"
-                            name="action"
-                            value="delegate"
-                          >
-                            Delegate
-                          </button>
+                          <details className="dq-more">
+                            <summary>Note · delegate</summary>
+                            <div className="dq-more-body">
+                              <textarea
+                                aria-label={`Decision note for ${decision.id}`}
+                                className="textarea decision-note"
+                                name="note"
+                                rows={3}
+                                placeholder="Optional note or required revision request rationale."
+                              />
+                              <input
+                                aria-label={`Delegate target for ${decision.id}`}
+                                className="input"
+                                name="delegate_to"
+                                placeholder="Delegate to role or approver"
+                              />
+                              <button className="dq-btn neutral" name="action" value="delegate">
+                                Delegate
+                              </button>
+                            </div>
+                          </details>
+                          <span className="dq-waited">{waitedLabel(decision.createdAt)}</span>
                         </form>
-                      ) : null}
-                      {isApproved ? (
-                        <form action={resolveDecisionAction} className="decision-actions">
-                          <input
-                            type="hidden"
-                            name="decision_id"
-                            value={decision.id}
-                          />
-                          <input type="hidden" name="project_id" value={activeProjectId} />
-                          <input type="hidden" name="actor" value={activeActorId} />
-                          <textarea
-                            aria-label={`Execution note for ${decision.id}`}
-                            className="textarea decision-note"
-                            name="note"
-                            rows={2}
-                            placeholder="Record what was executed."
-                          />
-                          <input
-                            aria-label={`Execution external reference for ${decision.id}`}
-                            className="input"
-                            name="external_ref"
-                            placeholder="External reference (PR URL, commit SHA, ticket)"
-                          />
-                          <button className="button" name="action" value="execute">
-                            Mark executed
-                          </button>
-                        </form>
-                      ) : null}
+                      ) : (
+                        <>
+                          <span
+                            className={`dq-verdict ${
+                              isApproved || decision.status === "executed"
+                                ? "green"
+                                : decision.status === "rejected"
+                                  ? "red"
+                                  : "muted"
+                            }`}
+                          >
+                            {decision.status.toUpperCase()}
+                          </span>
+                          <span className="dq-note">{decisionStatusDetail(decision)}</span>
+                          {isApproved ? (
+                            <details className="dq-more">
+                              <summary>Mark executed</summary>
+                              <form action={resolveDecisionAction} className="dq-more-body">
+                                <input type="hidden" name="decision_id" value={decision.id} />
+                                <input type="hidden" name="project_id" value={activeProjectId} />
+                                <input type="hidden" name="actor" value={activeActorId} />
+                                <textarea
+                                  aria-label={`Execution note for ${decision.id}`}
+                                  className="textarea decision-note"
+                                  name="note"
+                                  rows={2}
+                                  placeholder="Record what was executed."
+                                />
+                                <input
+                                  aria-label={`Execution external reference for ${decision.id}`}
+                                  className="input"
+                                  name="external_ref"
+                                  placeholder="External reference (PR URL, commit SHA, ticket)"
+                                />
+                                <button className="dq-btn approve" name="action" value="execute">
+                                  Mark executed
+                                </button>
+                              </form>
+                            </details>
+                          ) : null}
+                          <span className="dq-waited">{waitedLabel(decision.createdAt)}</span>
+                        </>
+                      )}
                     </div>
                   </article>
                 );
               })}
             </div>
           )}
+
+          {decisions.apiReachable ? (
+            <details className="dq-digest">
+              <summary>Create decision digest</summary>
+              <div className="dq-digest-body">
+                <p className="detail">
+                  Creates a durable digest artifact. Optional channel creates an
+                  outbox draft only; sending still requires a budgeted queue action.
+                </p>
+                <form action={createDecisionDigestAction} className="decision-actions">
+                  <input type="hidden" name="project_id" value={activeProjectId} />
+                  <input type="hidden" name="actor" value={activeActorId} />
+                  <label className="field">
+                    <span>Max items</span>
+                    <input
+                      className="input"
+                      defaultValue={20}
+                      max={100}
+                      min={1}
+                      name="max_items"
+                      type="number"
+                    />
+                  </label>
+                  <label className="field">
+                    <span>Optional outbox channel</span>
+                    <input
+                      className="input"
+                      name="channel"
+                      placeholder="email:founder@example.com or slack:#ops"
+                    />
+                  </label>
+                  <button className="button secondary" type="submit">
+                    Create digest
+                  </button>
+                </form>
+              </div>
+            </details>
+          ) : null}
+        </section>
+
+        <section className="panel-stack approval-rules-section" aria-label="Approval rules">
+          <div className="section-head">
+            <div>
+              <span className="eyebrow" data-area="decisions">Approval Rules</span>
+              <h2>What requires your approval — and why.</h2>
+            </div>
+          </div>
+          <ApprovalRulesView rules={approvalRules.rules} apiReachable={approvalRules.apiReachable} />
         </section>
       </div>
     </ConsoleShell>
