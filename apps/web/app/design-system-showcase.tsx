@@ -186,3 +186,76 @@ export function ComponentsScreen() {
     </section>
   );
 }
+
+/* ============ FOUNDATIONS ============ */
+export function FoundationsScreen() {
+  return (
+    <section data-screen-label="Foundations">
+      <Keyframes />
+      <div style={{ position: "relative", padding: "60px 58px 50px", overflow: "hidden", borderBottom: "1px solid #16213c" }}>
+        <div style={{ position: "absolute", inset: 0, background: "radial-gradient(520px 320px at 88% 15%, rgba(46,197,197,0.09), transparent 60%)", pointerEvents: "none" }} />
+        <div style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: "11px", letterSpacing: "0.26em", textTransform: "uppercase", color: "#2ec5c5", marginBottom: "20px" }}>BOSS / Design System</div>
+        <h1 style={{ fontFamily: "'Sora',sans-serif", fontWeight: 800, fontSize: "52px", lineHeight: 1.03, margin: 0, maxWidth: "780px", letterSpacing: "-0.02em" }}>
+          Run a company of <span style={{ background: "linear-gradient(120deg,#2ec5c5,#4a90ff)", WebkitBackgroundClip: "text", backgroundClip: "text", color: "transparent" }}>AI workers.</span>
+          <br />Stay in command.
+        </h1>
+        <p style={{ maxWidth: "600px", margin: "22px 0 0", fontSize: "16.5px", lineHeight: 1.6, color: "#9fb0ce" }}>The visual language for BOSS — an operating system for AI labor. Flat surfaces, hairline structure, accountable agents. Powerful without being loud; the operator is always in control.</p>
+      </div>
+
+      {/* Colors */}
+      <div style={{ padding: "48px 58px 42px", borderBottom: "1px solid #14203a" }}>
+        <div style={{ display: "flex", alignItems: "baseline", gap: "15px", marginBottom: "26px" }}>
+          <span style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: "11px", letterSpacing: "0.2em", textTransform: "uppercase", color: "#5e719a" }}>01</span>
+          <h2 style={{ fontFamily: "'Sora',sans-serif", fontWeight: 700, fontSize: "24px", margin: 0, letterSpacing: "-0.01em" }}>Color</h2>
+        </div>
+
+        <div style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: "10.5px", letterSpacing: "0.16em", textTransform: "uppercase", color: "#64769a", marginBottom: "13px" }}>Surfaces</div>
+        <div style={{ display: "flex", border: "1px solid #1c2740", marginBottom: "30px" }}>
+          <div style={{ flex: 1, borderRight: "1px solid #1c2740" }}><div style={{ height: "64px", background: "#090d17" }} /><div style={{ padding: "10px 13px", borderTop: "1px solid #1c2740" }}><div style={{ fontSize: "12.5px", fontWeight: 600 }}>Void</div><div style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: "10.5px", color: "#64769a", marginTop: "2px" }}>#090D17</div></div></div>
+          <div style={{ flex: 1, borderRight: "1px solid #1c2740" }}><div style={{ height: "64px", background: "#0c1424" }} /><div style={{ padding: "10px 13px", borderTop: "1px solid #1c2740" }}><div style={{ fontSize: "12.5px", fontWeight: 600 }}>Base</div><div style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: "10.5px", color: "#64769a", marginTop: "2px" }}>#0C1424</div></div></div>
+          <div style={{ flex: 1, borderRight: "1px solid #1c2740" }}><div style={{ height: "64px", background: "#101a30" }} /><div style={{ padding: "10px 13px", borderTop: "1px solid #1c2740" }}><div style={{ fontSize: "12.5px", fontWeight: 600 }}>Panel</div><div style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: "10.5px", color: "#64769a", marginTop: "2px" }}>#101A30</div></div></div>
+          <div style={{ flex: 1, borderRight: "1px solid #1c2740" }}><div style={{ height: "64px", background: "#16213c" }} /><div style={{ padding: "10px 13px", borderTop: "1px solid #1c2740" }}><div style={{ fontSize: "12.5px", fontWeight: 600 }}>Raised</div><div style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: "10.5px", color: "#64769a", marginTop: "2px" }}>#16213C</div></div></div>
+          <div style={{ flex: 1 }}><div style={{ height: "64px", background: "linear-gradient(135deg,#2ec5c5,#2f6fe0 55%,#1b3a6b)" }} /><div style={{ padding: "10px 13px", borderTop: "1px solid #1c2740" }}><div style={{ fontSize: "12.5px", fontWeight: 600 }}>Brand</div><div style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: "10.5px", color: "#64769a", marginTop: "2px" }}>teal {"→"} navy</div></div></div>
+        </div>
+
+        <div style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: "10.5px", letterSpacing: "0.16em", textTransform: "uppercase", color: "#64769a", marginBottom: "13px" }}>Signal — agent state</div>
+        <div style={{ display: "flex", border: "1px solid #1c2740" }}>
+          <div style={{ flex: 1, borderRight: "1px solid #1c2740" }}><div style={{ height: "64px", background: "#2ec5c5" }} /><div style={{ padding: "10px 13px", borderTop: "1px solid #1c2740" }}><div style={{ fontSize: "12.5px", fontWeight: 600 }}>Running</div><div style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: "10.5px", color: "#64769a", marginTop: "2px" }}>#2EC5C5</div></div></div>
+          <div style={{ flex: 1, borderRight: "1px solid #1c2740" }}><div style={{ height: "64px", background: "#34d399" }} /><div style={{ padding: "10px 13px", borderTop: "1px solid #1c2740" }}><div style={{ fontSize: "12.5px", fontWeight: 600 }}>Verified</div><div style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: "10.5px", color: "#64769a", marginTop: "2px" }}>#34D399</div></div></div>
+          <div style={{ flex: 1, borderRight: "1px solid #1c2740" }}><div style={{ height: "64px", background: "#f5b544" }} /><div style={{ padding: "10px 13px", borderTop: "1px solid #1c2740" }}><div style={{ fontSize: "12.5px", fontWeight: 600 }}>Awaiting</div><div style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: "10.5px", color: "#64769a", marginTop: "2px" }}>#F5B544</div></div></div>
+          <div style={{ flex: 1, borderRight: "1px solid #1c2740" }}><div style={{ height: "64px", background: "#f2647a" }} /><div style={{ padding: "10px 13px", borderTop: "1px solid #1c2740" }}><div style={{ fontSize: "12.5px", fontWeight: 600 }}>Blocked</div><div style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: "10.5px", color: "#64769a", marginTop: "2px" }}>#F2647A</div></div></div>
+          <div style={{ flex: 1, borderRight: "1px solid #1c2740" }}><div style={{ height: "64px", background: "#2f6fe0" }} /><div style={{ padding: "10px 13px", borderTop: "1px solid #1c2740" }}><div style={{ fontSize: "12.5px", fontWeight: 600 }}>Primary</div><div style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: "10.5px", color: "#64769a", marginTop: "2px" }}>#2F6FE0</div></div></div>
+          <div style={{ flex: 1 }}><div style={{ height: "64px", background: "#64769a" }} /><div style={{ padding: "10px 13px", borderTop: "1px solid #1c2740" }}><div style={{ fontSize: "12.5px", fontWeight: 600 }}>Idle</div><div style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: "10.5px", color: "#64769a", marginTop: "2px" }}>#64769A</div></div></div>
+        </div>
+      </div>
+
+      {/* Type + Motion legend */}
+      <div style={{ display: "grid", gridTemplateColumns: "1.3fr 1fr", borderBottom: "1px solid #14203a" }}>
+        <div style={{ padding: "44px 44px 48px 58px", borderRight: "1px solid #14203a" }}>
+          <div style={{ display: "flex", alignItems: "baseline", gap: "15px", marginBottom: "22px" }}>
+            <span style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: "11px", letterSpacing: "0.2em", textTransform: "uppercase", color: "#5e719a" }}>02</span>
+            <h2 style={{ fontFamily: "'Sora',sans-serif", fontWeight: 700, fontSize: "24px", margin: 0, letterSpacing: "-0.01em" }}>Typography</h2>
+          </div>
+          <div style={{ border: "1px solid #1c2740" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: "24px", padding: "20px 22px", borderBottom: "1px solid #14203a" }}><div style={{ width: "140px", flexShrink: 0 }}><div style={{ fontSize: "13.5px", fontWeight: 700 }}>Sora</div><div style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: "10.5px", color: "#64769a", marginTop: "3px" }}>Display</div></div><div style={{ fontFamily: "'Sora',sans-serif", fontWeight: 800, fontSize: "28px", letterSpacing: "-0.02em" }}>Assign the outcome</div></div>
+            <div style={{ display: "flex", alignItems: "center", gap: "24px", padding: "20px 22px", borderBottom: "1px solid #14203a" }}><div style={{ width: "140px", flexShrink: 0 }}><div style={{ fontSize: "13.5px", fontWeight: 700 }}>Manrope</div><div style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: "10.5px", color: "#64769a", marginTop: "3px" }}>Interface</div></div><div style={{ fontSize: "17px", color: "#c3d0e8" }}>The architect drafted a schema and routed it to QA.</div></div>
+            <div style={{ display: "flex", alignItems: "center", gap: "24px", padding: "20px 22px" }}><div style={{ width: "140px", flexShrink: 0 }}><div style={{ fontSize: "13.5px", fontWeight: 700 }}>JetBrains Mono</div><div style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: "10.5px", color: "#64769a", marginTop: "3px" }}>Data · Receipts</div></div><div style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: "15px", color: "#2ec5c5" }}>rcpt_8f2a · +142 −18 · 0.9s</div></div>
+          </div>
+        </div>
+        <div style={{ padding: "44px 58px 48px 44px" }}>
+          <div style={{ display: "flex", alignItems: "baseline", gap: "15px", marginBottom: "22px" }}>
+            <span style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: "11px", letterSpacing: "0.2em", textTransform: "uppercase", color: "#5e719a" }}>03</span>
+            <h2 style={{ fontFamily: "'Sora',sans-serif", fontWeight: 700, fontSize: "24px", margin: 0, letterSpacing: "-0.01em" }}>Motion = liveness</h2>
+          </div>
+          <p style={{ fontSize: "14px", color: "#9fb0ce", margin: "0 0 20px", lineHeight: 1.6 }}>Motion signals that agents are <em style={{ color: "#c3d0e8", fontStyle: "normal", fontWeight: 600 }}>alive and accountable</em>. Running work breathes; nothing decorative moves.</p>
+          <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: "14px" }}><span style={{ position: "relative", width: "12px", height: "12px", display: "inline-flex", alignItems: "center", justifyContent: "center" }}><span style={{ position: "absolute", width: "12px", height: "12px", borderRadius: "50%", background: "#2ec5c5", animation: "bpPulse 2s ease-out infinite" }} /><span style={{ width: "8px", height: "8px", borderRadius: "50%", background: "#2ec5c5" }} /></span><span style={{ fontSize: "14px", color: "#c3d0e8" }}>Pulse — active / running</span></div>
+            <div style={{ display: "flex", alignItems: "center", gap: "14px" }}><span style={{ width: "16px", height: "16px", borderRadius: "50%", background: conic, WebkitMask: orbitMask, mask: orbitMask, animation: "bpSpin 2.6s linear infinite" }} /><span style={{ fontSize: "14px", color: "#c3d0e8" }}>Orbit ring — agent working</span></div>
+            <div style={{ display: "flex", alignItems: "center", gap: "14px" }}><svg width="52" height="16"><line x1="2" y1="8" x2="50" y2="8" stroke="#2f6fe0" strokeWidth="2" strokeDasharray="5 5" style={{ animation: "bpFlow 1s linear infinite" }} /></svg><span style={{ fontSize: "14px", color: "#c3d0e8" }}>Flow — handoff between agents</span></div>
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+

@@ -129,8 +129,7 @@ import { CodeTasksHome } from "./code-tasks-ui";
 import { fetchReliabilityFeed } from "../lib/reliability";
 import { fetchCostInsights, fetchLlmSpend } from "../lib/budget-status";
 import { CostInsightsCard, LlmSpendCard, BudgetThresholdsCard } from "./cost-governance-ui";
-import { FoundationsHome } from "./foundations-ui";
-import { ComponentsScreen } from "./design-system-showcase";
+import { FoundationsScreen, ComponentsScreen } from "./design-system-showcase";
 import { ReliabilityHome } from "./reliability-ui";
 import { fetchDiscoveriesFeed } from "../lib/discoveries";
 import { DiscoveriesHome } from "./discoveries-ui";
@@ -6127,23 +6126,11 @@ export default async function HomePage({ searchParams }: HomePageProps) {
           />
         </section>
 
-        <section className="panel-stack" data-area="foundations" aria-label="Foundations">
-          <div className="section-head">
-            <div>
-              <span className="eyebrow">Foundations</span>
-              <h2>The BOSS design system — rendered from the live tokens.</h2>
-            </div>
-          </div>
-          <FoundationsHome />
+        <section data-area="foundations" aria-label="Design foundations">
+          <FoundationsScreen />
         </section>
 
-        <section className="panel-stack" data-area="components" aria-label="Components">
-          <div className="section-head">
-            <div>
-              <span className="eyebrow">Components</span>
-              <h2>The component library — buttons, composer, agent state, overlays.</h2>
-            </div>
-          </div>
+        <section data-area="components" aria-label="Component library">
           <ComponentsScreen />
         </section>
 
