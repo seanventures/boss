@@ -264,6 +264,18 @@ class Settings(BaseSettings):
     deepseek_base_url: str = Field(
         default="https://api.deepseek.com/v1", alias="DEEPSEEK_BASE_URL"
     )
+    # Local / self-hosted OpenAI-compatible lanes (the OSS community wedge — no
+    # cloud key required). ollama: the OpenAI client insists on a non-empty api
+    # key, and Ollama ignores it, so a placeholder default keeps `ollama` a
+    # zero-config lane on a dev box. vllm: no conventional port/host exists, so
+    # the base URL must be configured explicitly (e.g. http://gpubox:8000/v1).
+    # Local inference is $0 — zero-price the models via BOSS_MODEL_PRICES_JSON.
+    ollama_api_key: str = Field(default="ollama", alias="OLLAMA_API_KEY")
+    ollama_base_url: str = Field(
+        default="http://localhost:11434/v1", alias="OLLAMA_BASE_URL"
+    )
+    vllm_api_key: str = Field(default="vllm", alias="VLLM_API_KEY")
+    vllm_base_url: str = Field(default="", alias="VLLM_BASE_URL")
     # Output-token cap for native chat-API calls. Metered gateways (OpenRouter) RESERVE
     # credits for the requested maximum — an uncapped request can 402 on reservation
     # alone even when the actual completion would be affordable. 0 disables the cap.
@@ -370,6 +382,9 @@ class Settings(BaseSettings):
     )
     artifact_dir: Path = Field(default=Path("artifacts"), alias="BOSS_ARTIFACTS_DIR")
     core_pack_id: str = Field(default="core_v1", alias="BOSS_CORE_PACK_ID")
+    # Standalone/pip installs don't have the monorepo layout, so let them point
+    # at a spec pack directly instead of relying on repo_root discovery.
+    specpack_root_override: str = Field(default="", alias="BOSS_SPECPACK_ROOT")
     skill_trust_keys: str = Field(default="", alias="BOSS_SKILL_TRUST_KEYS")
     skill_signing_private_key: str = Field(
         default="", alias="BOSS_SKILL_SIGNING_PRIVATE_KEY"
@@ -856,6 +871,8 @@ class Settings(BaseSettings):
 
     @property
     def specpack_root(self) -> Path:
+        if self.specpack_root_override:
+            return Path(self.specpack_root_override).resolve()
         return (self.repo_root / "packages" / "specpack").resolve()
 
     @property

@@ -17,8 +17,11 @@ the pure OSS engine keeps its "no HTTP framework" property. Two transports:
 Implements MCP JSON-RPC 2.0: initialize, notifications/initialized, tools/list,
 tools/call.
 """
-from __future__ import annotations
-
+# NOTE: deliberately NO `from __future__ import annotations` here. `asgi_app()`
+# lazily imports FastAPI's `Request` inside the function; with postponed
+# annotations FastAPI would see the string "Request", fail to resolve it in
+# module globals, silently treat the parameter as a query param, and 422 every
+# JSON-RPC POST. Evaluating annotations at def-time keeps the lazy import valid.
 import json
 import sys
 from typing import Any, Optional
@@ -129,9 +132,13 @@ class MCPServer:
                 _write(rout, response)
 
     def asgi_app(self):
-        """Optional HTTP/JSON-RPC transport (POST /mcp, GET /health). Lazily
-        imports FastAPI so the pure engine never depends on it."""
+        """Optional HTTP/JSON-RPC transport (POST /mcp, GET /health) plus the
+        community Mission Control page (GET /). Lazily imports FastAPI so the
+        pure engine never depends on it."""
         from fastapi import FastAPI, Request  # noqa: PLC0415 (intentionally lazy)
+        from fastapi.responses import HTMLResponse  # noqa: PLC0415
+
+        from .ui import mission_control_html  # noqa: PLC0415
 
         app = FastAPI(title="boss-engine-mcp")
         server = self
@@ -146,6 +153,12 @@ class MCPServer:
         async def health():  # type: ignore[no-redef]
             return {"status": "ok", "server": SERVER_INFO["name"],
                     "tools": [t["name"] for t in server._tools()]}
+
+        @app.get("/", response_class=HTMLResponse)
+        async def mission_control():  # type: ignore[no-redef]
+            # Read-only by construction: the page only ever calls read tools
+            # through the same /mcp endpoint (see mcp/ui.py).
+            return mission_control_html()
 
         return app
 

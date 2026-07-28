@@ -534,6 +534,10 @@ _PROVIDER_LANES: dict[str, tuple[str, str]] = {
     "openrouter": ("openrouter_api_key", "openrouter_base_url"),
     "groq": ("groq_api_key", "groq_base_url"),
     "deepseek": ("deepseek_api_key", "deepseek_base_url"),
+    # Local / self-hosted lanes (OSS): same mechanics, no cloud credential.
+    # ollama defaults to the local daemon; vllm requires VLLM_BASE_URL.
+    "ollama": ("ollama_api_key", "ollama_base_url"),
+    "vllm": ("vllm_api_key", "vllm_base_url"),
 }
 
 
@@ -607,6 +611,8 @@ def _build_code_agent(settings: Settings, engine: Optional[str] = None) -> CodeA
         api_key = getattr(settings, key_field)
         if not api_key:
             raise RuntimeError(f"{key_field.upper()} is not configured.")
+        if not getattr(settings, url_field):
+            raise RuntimeError(f"{url_field.upper()} is not configured.")
         bound = settings.model_copy(update={
             "openai_api_key": api_key,
             "openai_base_url": getattr(settings, url_field),

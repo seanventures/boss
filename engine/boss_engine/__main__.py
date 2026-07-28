@@ -1,6 +1,7 @@
 """`python -m boss_engine` — run the BOSS engine standalone, no API or console.
 
 Subcommands:
+  bootstrap                   create the schema + seed defaults in DATABASE_URL
   tools                       list the engine tool layer (name, kind, description)
   status  [--project P]       quick project snapshot (what's running)
   call NAME [--args JSON]     invoke one tool directly and print its JSON result
@@ -25,7 +26,38 @@ DEFAULT_PROJECT = os.environ.get("BOSS_PROJECT_ID", "boss-dogfood")
 def _ctx():
     from .context import EngineContext
 
-    return EngineContext.create()
+    ctx = EngineContext.create()
+    # Standalone composition: the CLI is an application boundary, so when no
+    # DATABASE_URL is configured we deliberately install the OSS default ports
+    # (in-memory persistence, no-op budget, allow-all entitlements) instead of
+    # letting port consumers pick them up as a silent per-service fallback.
+    if not os.environ.get("DATABASE_URL"):
+        from .ports import EnginePorts, configure_engine_ports, get_engine_ports
+
+        if get_engine_ports() is None:
+            configure_engine_ports(EnginePorts.oss_defaults(ctx.settings))
+        print(
+            "boss-engine: DATABASE_URL is not set — running with the standalone "
+            "OSS ports (in-memory persistence, no-op budget). DB-backed tools "
+            "(status, query_db, list_*) need Postgres: set DATABASE_URL and run "
+            "`python -m boss_engine bootstrap` first.",
+            file=sys.stderr,
+        )
+    elif not ctx.database_reachable():
+        print(
+            "boss-engine: warning — database is unreachable; DB-backed tools will "
+            "fail. Check DATABASE_URL and run `python -m boss_engine bootstrap` "
+            "against a fresh database (see engine/README.md).",
+            file=sys.stderr,
+        )
+    return ctx
+
+
+def _cmd_bootstrap(args) -> int:
+    from .bootstrap import main as bootstrap_main
+
+    bootstrap_main()
+    return 0
 
 
 def _cmd_tools(args) -> int:
@@ -131,6 +163,8 @@ def _cmd_serve_mcp(args) -> int:
     if args.http:
         import uvicorn  # lazy: only for HTTP transport
 
+        print(f"Mission Control (read-only): http://{args.host}:{args.port}/",
+              file=sys.stderr)
         uvicorn.run(server.asgi_app(), host=args.host, port=args.port)
         return 0
     # default: stdio (the standard MCP transport)
@@ -143,6 +177,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--project", default=DEFAULT_PROJECT, help=f"project id (default {DEFAULT_PROJECT})")
     sub = p.add_subparsers(dest="cmd", required=True)
 
+    sub.add_parser(
+        "bootstrap", help="create the schema + seed defaults in DATABASE_URL"
+    ).set_defaults(func=_cmd_bootstrap)
     sub.add_parser("tools", help="list the engine tool layer").set_defaults(func=_cmd_tools)
     sub.add_parser("status", help="project snapshot").set_defaults(func=_cmd_status)
 

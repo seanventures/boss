@@ -533,6 +533,15 @@ def _guest_engine_fields(settings: Settings, engine_name: str, model) -> dict:
     if engine_name == "deepseek":
         return {"engine": "openai", "openai_api_key": settings.deepseek_api_key,
                 "openai_base_url": settings.deepseek_base_url, "model": model}
+    if engine_name == "ollama":
+        # Local-model lane. Note for sandboxed guests: "localhost" is the guest,
+        # not the host — point OLLAMA_BASE_URL at a host-reachable address
+        # (e.g. http://host.docker.internal:11434/v1) when tasks run in a VM.
+        return {"engine": "openai", "openai_api_key": settings.ollama_api_key,
+                "openai_base_url": settings.ollama_base_url, "model": model}
+    if engine_name == "vllm":
+        return {"engine": "openai", "openai_api_key": settings.vllm_api_key,
+                "openai_base_url": settings.vllm_base_url, "model": model}
     if engine_name == "azure":
         # Explicit Azure frontier lane in a guest VM. A routed model (azure:<deploy>)
         # overrides the default deployment; no openai_base_url so the guest can't misroute.

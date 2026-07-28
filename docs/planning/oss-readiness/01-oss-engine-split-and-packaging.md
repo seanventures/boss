@@ -243,7 +243,12 @@ The community router set is what could ship in an OSS distribution *if* the stra
 **Key files:** new `packages/engine/pyproject.toml`, `packages/engine/src/boss_engine/**`, root `requirements.txt` / API dependency wiring.
 **Acceptance:**
 - [x] `pip install -e engine` succeeds in a clean venv; FastAPI remains an optional MCP HTTP extra.
-- [x] A stand-alone script imports `boss_engine`, runs a local-subprocess code task against a sample repo + a user-supplied LLM key, and produces a diff — with zero Postgres.
+- [ ] A stand-alone script imports `boss_engine`, runs a local-subprocess code task against a sample repo + a user-supplied LLM key, and produces a diff — with zero Postgres.
+  *(Truth-up 2026-07-28, Docker verification + Plane #308: NOT yet real. The OSS
+  default ports (in-memory persistence, no-op budget) are now composed at the CLI
+  boundary when `DATABASE_URL` is unset, but `SoftwareFactoryService._scope` and
+  the read tools still issue raw SQL, so a code task without Postgres fails.
+  Remaining work: route scope/run lookups through `PersistencePort`.)*
 - [x] The FastAPI app imports engine modules from `boss_engine`; its legacy service package is an identity-preserving compatibility shim.
 
 ### PKG-02 — Add LICENSE files across `packages/*` · size S
