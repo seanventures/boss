@@ -102,10 +102,11 @@ const ICONS = {
 } as const;
 
 const AREAS: AreaDef[] = [
-  { id: "foundations", label: "Foundations", sub: "Design system — tokens, type, motion, status language", group: "Run", icon: ICONS.foundations },
+  { id: "foundations", label: "Foundations", sub: "Design system — tokens, type, motion, status language", group: "Platform", icon: ICONS.foundations },
+  { id: "components", label: "Components", sub: "Component library — buttons, composer, orbs, overlays", group: "Platform", icon: ICONS.components },
+  { id: "overview", label: "Command Center", sub: "What changed · top risks · next actions", group: "Platform", icon: ICONS.overview },
   { id: "agent", label: "BOSS Agent", sub: "One conversation routes into every governed workflow", group: "Run", icon: ICONS.agent },
   { id: "dashboard", label: "Mission Dashboard", sub: "Live cross-phase snapshot — budget, queue, proof, health", group: "Run", icon: ICONS.dashboard },
-  { id: "overview", label: "Command Center", sub: "What changed · top risks · next actions", group: "Run", icon: ICONS.overview },
   { id: "decisions", label: "Approvals", sub: "Explicit approvals before real effects", group: "Run", icon: ICONS.decisions },
   { id: "work", label: "Task Board", sub: "Tasks, artifacts, and the activity feed", group: "Run", icon: ICONS.work },
   { id: "portfolio", label: "Work Allocation", sub: "Ranked priorities, quotas, leases, tickets, and delivery status", group: "Run", icon: ICONS.portfolio },
@@ -124,11 +125,10 @@ const AREAS: AreaDef[] = [
   { id: "capabilities", label: "Capabilities", sub: "Agent tools & MCP servers — discover, audit, extend", group: "Platform", icon: ICONS.capabilities },
   { id: "studio", label: "Agent Studio", sub: "Build, test, compose, and observe agents working together", group: "Platform", icon: ICONS.studio },
   { id: "sandboxes", label: "Sandboxes", sub: "Execution plane — inspect sandboxes & governed console", group: "Platform", icon: ICONS.sandboxes },
-  { id: "components", label: "Components", sub: "Component library — buttons, composer, orbs, overlays", group: "Platform", icon: ICONS.components },
   { id: "enterprise", label: "Enterprise", sub: "Editions, identity, and account connect", group: "Platform", icon: ICONS.enterprise },
 ];
 
-const GROUP_ORDER: AreaDef["group"][] = ["Run", "Govern", "Platform"];
+const GROUP_ORDER: AreaDef["group"][] = ["Platform", "Run", "Govern"];
 
 function budgetTone(state?: string): "green" | "amber" | "red" {
   const s = (state ?? "").toLowerCase();

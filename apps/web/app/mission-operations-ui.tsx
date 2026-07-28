@@ -65,33 +65,30 @@ export function MissionAgentRoster({
   }
 
   return (
-    <div className="mission-agent-roster">
-      <div className="mission-roster-header" aria-hidden>
-        <span />
+    <div className="ar-table">
+      <div className="ar-head" aria-hidden>
         <span>Agent</span>
         <span>Now</span>
         <span>State</span>
-        <span>Trust</span>
       </div>
       {roster.map((agent) => (
-        <article className="mission-agent-row" key={agent.id}>
-          <AgentOrb
-            label={agent.name.slice(0, 2).toUpperCase()}
-            state={agent.state}
-            size={40}
-            title={`${agent.name} is ${agent.state}`}
-          />
-          <span className="mission-agent-identity">
-            <strong>{agent.name}</strong>
-            <small>{agent.role}</small>
+        <article className="ar-row" key={agent.id}>
+          <span className="ar-agent">
+            <AgentOrb
+              label={agent.name.slice(0, 2).toUpperCase()}
+              state={agent.state}
+              size={40}
+              title={`${agent.name} is ${agent.state}`}
+            />
+            <span className="ar-identity">
+              <span className="ar-name">{agent.name}</span>
+              <span className="ar-sub">{agent.role} · trust {Math.round(agent.trust)}%</span>
+            </span>
           </span>
-          <span className="mission-agent-now">{agent.currentTask}</span>
-          <span className={`status-text roster-state state-${agent.state}`}>
+          <span className="ar-now">{agent.currentTask}</span>
+          <span className={`ar-state ${agent.state}`}>
+            <span className="ar-state-dot" aria-hidden />
             {agent.state}
-          </span>
-          <span className="mission-agent-metric">
-            <small>Trust</small>
-            <strong>{Math.round(agent.trust)}%</strong>
           </span>
         </article>
       ))}

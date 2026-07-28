@@ -727,20 +727,6 @@ export default async function HomePage({ searchParams }: HomePageProps) {
   const softwareFactoryArtifactEvidence = extractSoftwareFactoryArtifactEvidence(
     artifacts.items,
   );
-  const commandCenterAgents = roles.items.length > 0
-    ? roles.items.slice(0, 5).map((role) => ({
-        id: role.id,
-        name: role.displayName,
-        role: role.roleKey.replaceAll("_", " "),
-        trust: role.trustScore,
-      }))
-    : [
-        { id: "metatron", name: "Metatron", role: "orchestrator", trust: 100 },
-        { id: "planner", name: "Planner", role: "planning", trust: 100 },
-        { id: "operator", name: "Operator", role: "execution", trust: 100 },
-        { id: "auditor", name: "Auditor", role: "evidence", trust: 100 },
-      ];
-
   // Command Center (handoff format): live agent states for the coordination
   // graph — the busiest agents first so live work is what orbits the core.
   const ccRoster = buildAgentRoster(roles.items, tasks.items);
@@ -793,7 +779,12 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               <span className="eyebrow">Agent Roster</span>
               <h2>Operators and autonomous roles active in this project.</h2>
             </div>
-            <span className="status-text running"><span className="dot teal bx-pulse" />{commandCenterAgents.length} available</span>
+            <span className="ar-meta">
+              {ccRoster.length} specialized workers ·{" "}
+              <span className="ar-meta-active">
+                {ccRoster.filter((agent) => agent.state !== "idle").length} active
+              </span>
+            </span>
           </div>
           <MissionAgentRoster roles={roles.items} tasks={tasks.items} />
         </section>

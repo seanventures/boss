@@ -3349,3 +3349,73 @@ select.input:focus,
   font-size: 10.5px;
   color: var(--quiet);
 }
+
+/* ---- Agent Roster — the handoff Agents table (orb+name / now / state) ---- */
+.ar-table { border: 1px solid var(--panel-border); }
+.ar-head {
+  display: grid;
+  grid-template-columns: 260px 1fr 130px;
+  gap: 16px;
+  padding: 11px 20px;
+  border-bottom: 1px solid var(--raised);
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--quiet);
+}
+.ar-row {
+  display: grid;
+  grid-template-columns: 260px 1fr 130px;
+  align-items: center;
+  gap: 16px;
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--hair);
+}
+.ar-row:last-child { border-bottom: none; }
+.ar-row:hover { background: rgba(47, 111, 224, 0.04); }
+.ar-agent { display: flex; align-items: center; gap: 13px; min-width: 0; }
+.ar-identity { min-width: 0; display: grid; }
+.ar-name {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ar-sub {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--faint);
+  margin-top: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ar-now { font-size: 13.5px; color: var(--muted); line-height: 1.45; }
+.ar-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.ar-state-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+.ar-state.running { color: var(--teal); }
+.ar-state.running .ar-state-dot { background: var(--teal); animation: bpPulse 2s ease-out infinite; }
+.ar-state.verified { color: var(--green); }
+.ar-state.verified .ar-state-dot { background: var(--green); }
+.ar-state.blocked { color: var(--red); }
+.ar-state.blocked .ar-state-dot { background: var(--red); animation: bpBreathe 1.4s ease-in-out infinite; }
+.ar-state.idle { color: var(--ink-soft); }
+.ar-state.idle .ar-state-dot { background: var(--faint); }
+@media (max-width: 900px) {
+  .ar-head { display: none; }
+  .ar-row { grid-template-columns: 1fr; gap: 8px; }
+}
+.ar-meta { font-family: var(--mono); font-size: 11px; color: var(--faint); }
+.ar-meta-active { color: var(--teal); }
