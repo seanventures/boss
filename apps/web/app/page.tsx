@@ -130,6 +130,8 @@ import { fetchReliabilityFeed } from "../lib/reliability";
 import { fetchCostInsights, fetchLlmSpend } from "../lib/budget-status";
 import { CostInsightsCard, LlmSpendCard, BudgetThresholdsCard } from "./cost-governance-ui";
 import { FoundationsScreen, ComponentsScreen } from "./design-system-showcase";
+import { AgentOrb } from "./agent-orb";
+import { buildAgentRoster } from "../lib/roster";
 import { ReliabilityHome } from "./reliability-ui";
 import { fetchDiscoveriesFeed } from "../lib/discoveries";
 import { DiscoveriesHome } from "./discoveries-ui";
@@ -308,6 +310,17 @@ function waitedLabel(createdAt: string): string {
   if (hours < 48) return `waited ${hours}h`;
   return `waited ${Math.floor(hours / 24)}d`;
 }
+
+// Command Center coordination graph: the handoff's node positions (percent of
+// the stage) with their SVG line endpoints (520x340 viewBox) and staggered
+// animation periods.
+const CC_NODE_SPOTS = [
+  { left: 23, top: 24, lineX: 120, lineY: 80, spinSeconds: 3, flowSeconds: 1.1 },
+  { left: 77, top: 23, lineX: 400, lineY: 78, spinSeconds: 3.4, flowSeconds: 1.3 },
+  { left: 17, top: 68, lineX: 90, lineY: 230, spinSeconds: 2.8, flowSeconds: 1.5 },
+  { left: 83, top: 71, lineX: 430, lineY: 240, spinSeconds: 3.2, flowSeconds: 1.2 },
+  { left: 38, top: 85, lineX: 200, lineY: 290, spinSeconds: 3.6, flowSeconds: 1.6 },
+] as const;
 
 function formatMsDuration(ms?: number): string {
   if (!ms || ms <= 0) return "—";
@@ -728,6 +741,17 @@ export default async function HomePage({ searchParams }: HomePageProps) {
         { id: "auditor", name: "Auditor", role: "evidence", trust: 100 },
       ];
 
+  // Command Center (handoff format): live agent states for the coordination
+  // graph — the busiest agents first so live work is what orbits the core.
+  const ccRoster = buildAgentRoster(roles.items, tasks.items);
+  const ccStateRank = { running: 0, blocked: 1, verified: 2, idle: 3 } as const;
+  const ccGraphAgents = [...ccRoster]
+    .sort((left, right) => ccStateRank[left.state] - ccStateRank[right.state])
+    .slice(0, CC_NODE_SPOTS.length);
+  const ccVerifiedToday = receipts.items.filter(
+    (receipt) => Date.now() - Date.parse(receipt.createdAt) < 86_400_000,
+  ).length;
+
   return (
     <ConsoleShell
       status={{
@@ -790,101 +814,131 @@ export default async function HomePage({ searchParams }: HomePageProps) {
         </section>
 
         <section className="ov-cc" data-area="overview" aria-label="Command center">
-          <form action={submitCommandAction} className="outcome-bar">
+          <form action={submitCommandAction} className="cc-composer">
             <input type="hidden" name="project_id" value={activeProjectId} />
             <input type="hidden" name="actor" value={activeActorId} />
-            <label className="outcome-field">
-              <span className="sr-only">Outcome command</span>
-              <input
-                name="command"
-                placeholder="Describe the outcome you want BOSS to achieve…"
-                disabled={disableCommandEntry}
-                required
-              />
-            </label>
-            <button className="button" disabled={disableCommandEntry} type="submit">
-              Issue command
+            <span className="cc-spinner" aria-hidden />
+            <input
+              aria-label="Outcome command"
+              className="cc-input"
+              name="command"
+              placeholder="Assign an outcome to your team…"
+              disabled={disableCommandEntry}
+              required
+            />
+            <span className="cc-kbd" aria-hidden>⌘K</span>
+            <button className="cc-assign" disabled={disableCommandEntry} type="submit">
+              Assign →
             </button>
           </form>
 
-          <div className="ov-kpis">
-            <AreaLink className={`ov-kpi${status.pendingDecisions > 0 ? " alert" : ""}`} area="decisions" orgId={activeOrgId}>
-              <span className="ov-kpi-n">{status.pendingDecisions}</span>
-              <span className="ov-kpi-l">Pending decisions</span>
-              <span className="ov-kpi-cta">{status.pendingDecisions > 0 ? "Awaiting review" : "All clear"}</span>
+          <div className="cc-kpis">
+            <AreaLink className="cc-kpi" area="work" orgId={activeOrgId}>
+              <span className="cc-kpi-l">Outcomes in flight</span>
+              <span className="cc-kpi-n">{status.openTasks}</span>
             </AreaLink>
-            <AreaLink className="ov-kpi" area="work" orgId={activeOrgId}>
-              <span className="ov-kpi-n">{status.openTasks}</span>
-              <span className="ov-kpi-l">Open tasks</span>
-              <span className="ov-kpi-cta">Across all agents</span>
+            <AreaLink className="cc-kpi teal" area="org" orgId={activeOrgId}>
+              <span className="cc-kpi-l">Agents active</span>
+              <span className="cc-kpi-n">
+                {ccRoster.filter((agent) => agent.state !== "idle").length}
+                <small>/{ccRoster.length}</small>
+              </span>
             </AreaLink>
-            <AreaLink className="ov-kpi" area="code_tasks" orgId={activeOrgId}>
-              <span className="ov-kpi-n">{codeTasksFeed.items.length}</span>
-              <span className="ov-kpi-l">Code tasks</span>
-              <span className="ov-kpi-cta">Governed runs</span>
+            <AreaLink className="cc-kpi amber" area="decisions" orgId={activeOrgId}>
+              <span className="cc-kpi-l">Awaiting you</span>
+              <span className="cc-kpi-n">{status.pendingDecisions}</span>
             </AreaLink>
-            <AreaLink className="ov-kpi" area="meetings" orgId={activeOrgId}>
-              <span className="ov-kpi-n">{meetingRooms.items.length}</span>
-              <span className="ov-kpi-l">Meetings</span>
-              <span className="ov-kpi-cta">Active rooms</span>
-            </AreaLink>
-            <AreaLink className="ov-kpi" area="budget" orgId={activeOrgId}>
-              <span className={`ov-kpi-n ov-state-${status.budgetState}`}>{status.budgetState}</span>
-              <span className="ov-kpi-l">Budget state</span>
-              <span className="ov-kpi-cta">Within policy</span>
+            <AreaLink className="cc-kpi green" area="reports" orgId={activeOrgId}>
+              <span className="cc-kpi-l">Verified today</span>
+              <span className="cc-kpi-n">{ccVerifiedToday}</span>
             </AreaLink>
           </div>
 
-          <div className="mission-grid">
-            <article className="coordination-panel" aria-label="Active coordination">
-              <div className="mission-panel-head">
-                <span>
-                  <span className="eyebrow">Coordination graph</span>
-                  <strong>Active coordination</strong>
+          <div className="cc-grid">
+            <article className="cc-coord" aria-label="Live coordination">
+              <div className="cc-panel-head">
+                <strong>Live coordination</strong>
+                <span className="cc-panel-meta">
+                  {ccRoster.filter((agent) => agent.state === "running").length} running
                 </span>
-                <span className="status-text running"><span className="dot teal bx-pulse" />Live</span>
               </div>
-              <div className="coordination-stage">
-                <div className="agent-orb agent-orb-primary" aria-label="BOSS orchestration active">
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img className="agent-orb-core" src="/boss-mark.png" alt="" />
+              <div className="cc-stage">
+                <svg className="cc-stage-lines" viewBox="0 0 520 340" aria-hidden>
+                  <g strokeWidth="1.6" fill="none" strokeDasharray="4 6">
+                    {CC_NODE_SPOTS.slice(0, ccGraphAgents.length).map((spot, index) => (
+                      <line
+                        key={index}
+                        x1="260"
+                        y1="170"
+                        x2={spot.lineX}
+                        y2={spot.lineY}
+                        stroke={index % 2 === 0 ? "#2f6fe0" : "#2ec5c5"}
+                        style={{ animation: `bpFlow ${spot.flowSeconds}s linear infinite` }}
+                      />
+                    ))}
+                    {ccGraphAgents.length >= 2 ? (
+                      <line
+                        x1={CC_NODE_SPOTS[0].lineX}
+                        y1={CC_NODE_SPOTS[0].lineY}
+                        x2={CC_NODE_SPOTS[1].lineX}
+                        y2={CC_NODE_SPOTS[1].lineY}
+                        stroke="#26365c"
+                        style={{ animation: "bpFlow 2s linear infinite" }}
+                      />
+                    ) : null}
+                  </g>
+                </svg>
+                <div className="cc-core">
+                  <div className="cc-core-tile">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src="/boss-mark.png" alt="" />
+                  </div>
+                  <span className="cc-core-label">BOSS core</span>
                 </div>
-                <div className="coordination-agents">
-                  {commandCenterAgents.map((agent, index) => (
-                    <div className={`coordination-agent agent-${index + 1}`} key={agent.id}>
-                      <span className="agent-initial">{agent.name.slice(0, 1)}</span>
-                      <span>
-                        <strong>{agent.name}</strong>
-                        <small>{agent.role}</small>
-                      </span>
-                      <span className="agent-trust">{Math.round(agent.trust)}%</span>
+                {ccGraphAgents.map((agent, index) => {
+                  const spot = CC_NODE_SPOTS[index];
+                  return (
+                    <div
+                      className="cc-node"
+                      key={agent.id}
+                      style={{ left: `${spot.left}%`, top: `${spot.top}%` }}
+                    >
+                      <AgentOrb
+                        label={roleInitials(agent.name)}
+                        state={agent.state}
+                        spinSeconds={spot.spinSeconds}
+                        title={`${agent.name} — ${agent.state}`}
+                      />
+                      <span className="cc-node-label">{agent.name}</span>
                     </div>
-                  ))}
-                </div>
+                  );
+                })}
               </div>
             </article>
 
-            <article className="activity-panel" aria-label="Live activity">
-              <div className="mission-panel-head">
-                <span>
-                  <span className="eyebrow">Event stream</span>
-                  <strong>Live activity</strong>
-                </span>
-                <AreaLink className="text-link" area="work" orgId={activeOrgId}>All events</AreaLink>
+            <article className="cc-feed" aria-label="What changed">
+              <div className="cc-panel-head">
+                <span className="cc-live-dot" aria-hidden />
+                <strong>What changed</strong>
+                <span className="cc-feed-meta">live</span>
               </div>
-              <div className="activity-list">
-                {events.items.slice(0, 7).map((event) => (
-                  <div className="activity-row" key={event.id}>
-                    <span className="activity-marker" aria-hidden />
-                    <span className="activity-copy">
-                      <strong>{event.eventType.replaceAll("_", " ").replaceAll(".", " · ")}</strong>
-                      <small>{event.actor} · {event.entityType}</small>
-                    </span>
-                    <time dateTime={event.createdAt}>{formatDateTime(event.createdAt)}</time>
+              <div className="cc-feed-list">
+                {events.items.slice(0, 8).map((event) => (
+                  <div className="cc-feed-row" key={event.id}>
+                    <span className="cc-feed-orb" aria-hidden>{roleInitials(event.actor)}</span>
+                    <div className="cc-feed-main">
+                      <div className="cc-feed-text">
+                        <b>{event.actor}</b> {event.eventType.replaceAll("_", " ").replaceAll(".", " · ")}{" "}
+                        <span>{event.entityType}</span>
+                      </div>
+                      <div className="cc-feed-sub">
+                        <time dateTime={event.createdAt}>{formatDateTime(event.createdAt)}</time>
+                      </div>
+                    </div>
                   </div>
                 ))}
                 {events.items.length === 0 ? (
-                  <p className="empty-state">No activity yet. Issue a command to start the event stream.</p>
+                  <p className="empty-state">No activity yet. Assign an outcome to start the event stream.</p>
                 ) : null}
               </div>
             </article>
