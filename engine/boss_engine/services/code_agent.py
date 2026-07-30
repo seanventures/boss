@@ -242,6 +242,17 @@ class ClaudeCodeAgent:
             except Exception:
                 data = None
             if isinstance(data, dict):
+                if data.get("subtype") == "error_max_turns":
+                    # Ran out of turns ≠ failed: it's a PARTIAL attempt. Return it like a
+                    # normal result so (a) the spend is recorded instead of vanishing from
+                    # the ledger, and (b) the governed repair loop can run the authoritative
+                    # tests, gather evidence, and RESUME this session to finish the work —
+                    # aborting here wasted the entire stage's tokens.
+                    data.setdefault(
+                        "result",
+                        "(ran out of turns before finishing — partial attempt; resume to continue)",
+                    )
+                    return data
                 reason = str(data.get("result") or data.get("error") or "").strip()
                 subtype = str(data.get("subtype") or data.get("stop_reason") or "").strip()
                 if reason or subtype:
