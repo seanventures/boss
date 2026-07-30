@@ -225,9 +225,22 @@ class ClaudeCodeAgent:
         except subprocess.TimeoutExpired as exc:
             raise RuntimeError(f"claude code agent timed out after {timeout}s") from exc
         if proc.returncode != 0:
+            # The CLI still prints its result JSON on stdout when it exits
+            # non-zero; the human-readable reason lives in `result` (e.g.
+            # "You've hit your monthly spend limit …"). Surface THAT instead of
+            # an opaque truncated JSON prefix so the console error is legible.
+            detail = (proc.stderr or proc.stdout or "")[:300]
+            try:
+                data = json.loads(proc.stdout)
+            except Exception:
+                data = None
+            if isinstance(data, dict):
+                reason = str(data.get("result") or data.get("error") or "").strip()
+                subtype = str(data.get("subtype") or data.get("stop_reason") or "").strip()
+                if reason or subtype:
+                    detail = " — ".join(p for p in (subtype, reason[:220]) if p)
             raise RuntimeError(
-                f"claude code agent exited {proc.returncode}: "
-                f"{(proc.stderr or proc.stdout or '')[:300]}"
+                f"claude code agent exited {proc.returncode}: {detail}"
             )
         try:
             return json.loads(proc.stdout)
