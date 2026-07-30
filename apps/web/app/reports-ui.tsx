@@ -175,7 +175,7 @@ export function ReportsView({ report }: { report: ReportFeed }) {
                 <span>L{a.autonomy_level}</span>
                 <span>{a.successful_runs}</span>
                 <span className={viol > 0 ? "tone-red" : "tone-muted"}>{viol > 0 ? `${viol}` : "0"}</span>
-                <span className="tone-muted">{a.last_reviewed_at ? new Date(a.last_reviewed_at).toLocaleDateString() : "never"}</span>
+                <span className="tone-muted" suppressHydrationWarning>{a.last_reviewed_at ? new Date(a.last_reviewed_at).toLocaleDateString() : "never"}</span>
               </div>
             );
           })}

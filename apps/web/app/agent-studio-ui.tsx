@@ -659,7 +659,7 @@ export function AgentStudio({
                 <div>
                   <div className="as-message-top">
                     <b>{message.message_kind.replaceAll("_", " ")}</b>
-                    <time>{timeAgo(message.created_at)}</time>
+                    <time suppressHydrationWarning>{timeAgo(message.created_at)}</time>
                   </div>
                   <p>{message.sender_id} <ArrowRight /> {String(message.payload.objective ?? message.payload.summary ?? message.channel_key)}</p>
                   <small>

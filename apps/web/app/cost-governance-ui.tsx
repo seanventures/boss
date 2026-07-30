@@ -131,8 +131,8 @@ export function LlmSpendCard({ feed }: { feed: LlmSpendFeed }) {
                   ? "n/a"
                   : `${Math.round(feed.cache.cacheHitRatio * 100)}% hit ratio`}
               </b>{" "}
-              · {feed.cache.freshInputTokens.toLocaleString()} fresh ·{" "}
-              {feed.cache.cacheReadTokens.toLocaleString()} cached reads
+              · {feed.cache.freshInputTokens.toLocaleString("en-US")} fresh ·{" "}
+              {feed.cache.cacheReadTokens.toLocaleString("en-US")} cached reads
             </p>
           ) : null}
         </>

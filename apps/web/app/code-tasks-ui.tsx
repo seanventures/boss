@@ -417,7 +417,7 @@ function CodeTaskDetail({ run, previews = [], onBack }: { run: CodeTaskRun; prev
       {live ? (
         <div className="detail" style={{ margin: "8px 0", color: "#58a6ff", fontWeight: 600 }}>
           <span style={{ animation: "pulse 1.5s infinite" }}>●</span>{" "}
-          {PHASE_LABEL[run.phase] ?? run.phase} — running {currentPhaseMs != null ? fmtDuration(currentPhaseMs) : "…"}{" "}
+          {PHASE_LABEL[run.phase] ?? run.phase} — running <span suppressHydrationWarning>{currentPhaseMs != null ? fmtDuration(currentPhaseMs) : "…"}</span>{" "}
           <span className="detail" style={{ fontWeight: 400 }}>(auto‑refreshing every 4s)</span>
         </div>
       ) : null}
@@ -435,12 +435,12 @@ function CodeTaskDetail({ run, previews = [], onBack }: { run: CodeTaskRun; prev
             {live && currentPhaseMs != null ? (
               <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13 }}>
                 <span style={{ color: "#58a6ff", fontWeight: 600 }}>● {PHASE_LABEL[run.phase] ?? run.phase} (running)</span>
-                <span style={{ color: "#58a6ff", fontWeight: 600 }}>{fmtDuration(currentPhaseMs)}</span>
+                <span style={{ color: "#58a6ff", fontWeight: 600 }} suppressHydrationWarning>{fmtDuration(currentPhaseMs)}</span>
               </div>
             ) : null}
             <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, borderTop: "1px solid var(--border)", paddingTop: 4, marginTop: 2 }}>
               <span style={{ color: "var(--muted)" }}>Total{live ? " so far" : ""}</span>
-              <span className="detail">{fmtDuration(totalMs)}</span>
+              <span className="detail" suppressHydrationWarning>{fmtDuration(totalMs)}</span>
             </div>
           </div>
         </div>

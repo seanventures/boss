@@ -220,7 +220,7 @@ export function WorkOrchestration({ feed, actor }: Props) {
                   </div>
                   <div className="wo-job-state">
                     <span>{job.status}</span>
-                    <small>{job.lease_owner ?? `ready ${timeAgo(job.run_after)}`}</small>
+                    <small suppressHydrationWarning>{job.lease_owner ?? `ready ${timeAgo(job.run_after)}`}</small>
                   </div>
                 </div>
               ))
@@ -301,7 +301,7 @@ export function WorkOrchestration({ feed, actor }: Props) {
                   <span>{event.provider === "github" ? <GitBranch size={15} /> : <Broadcast size={15} />}</span>
                   <div>
                     <strong>{event.summary}</strong>
-                    <small>{event.bot_name ?? event.provider} · {timeAgo(event.created_at)}</small>
+                    <small suppressHydrationWarning>{event.bot_name ?? event.provider} · {timeAgo(event.created_at)}</small>
                   </div>
                 </div>
               ))

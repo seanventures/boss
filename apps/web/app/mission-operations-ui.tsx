@@ -159,7 +159,7 @@ export function MissionTaskBoard({
                         {boardStatus(task).replaceAll("_", " ")}
                       </span>
                     </footer>
-                    <time dateTime={task.updatedAt}>{formatDateTime(task.updatedAt)}</time>
+                    <time dateTime={task.updatedAt} suppressHydrationWarning>{formatDateTime(task.updatedAt)}</time>
                   </article>
                 );
               })}
