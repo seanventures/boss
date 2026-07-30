@@ -219,26 +219,33 @@ class ClaudeCodeAgent:
         # `--` ends option parsing: a prompt that BEGINS with a dash (e.g. a
         # "--- SECTION ---" header) must never be read as a CLI option.
         cmd += ["--", prompt]
-        try:
-            proc = subprocess.run(
-                cmd,
-                stdin=subprocess.DEVNULL,
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-                cwd=str(cwd),
-            )
-        except FileNotFoundError as exc:
-            raise RuntimeError(
-                "claude CLI not found. Install Claude Code and ensure `claude` is on PATH."
-            ) from exc
-        except subprocess.TimeoutExpired as exc:
-            raise RuntimeError(f"claude code agent timed out after {timeout}s") from exc
-        if proc.returncode != 0:
-            # The CLI still prints its result JSON on stdout when it exits
-            # non-zero; the human-readable reason lives in `result` (e.g.
-            # "You've hit your monthly spend limit …"). Surface THAT instead of
-            # an opaque truncated JSON prefix so the console error is legible.
+        last_error = ""
+        for attempt in range(3):
+            try:
+                proc = subprocess.run(
+                    cmd,
+                    stdin=subprocess.DEVNULL,
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout,
+                    cwd=str(cwd),
+                )
+            except FileNotFoundError as exc:
+                raise RuntimeError(
+                    "claude CLI not found. Install Claude Code and ensure `claude` is on PATH."
+                ) from exc
+            except subprocess.TimeoutExpired as exc:
+                raise RuntimeError(f"claude code agent timed out after {timeout}s") from exc
+            if proc.returncode == 0:
+                try:
+                    return json.loads(proc.stdout)
+                except Exception as exc:
+                    raise RuntimeError(
+                        f"claude code agent returned non-JSON: {proc.stdout[:300]}"
+                    ) from exc
+            # Non-zero exit: the CLI still prints its result JSON on stdout; the
+            # human-readable reason lives in `result` (e.g. "You've hit your monthly
+            # spend limit …"). Surface THAT instead of an opaque JSON prefix.
             detail = (proc.stderr or proc.stdout or "")[:300]
             try:
                 data = json.loads(proc.stdout)
@@ -249,8 +256,7 @@ class ClaudeCodeAgent:
                     # Ran out of turns ≠ failed: it's a PARTIAL attempt. Return it like a
                     # normal result so (a) the spend is recorded instead of vanishing from
                     # the ledger, and (b) the governed repair loop can run the authoritative
-                    # tests, gather evidence, and RESUME this session to finish the work —
-                    # aborting here wasted the entire stage's tokens.
+                    # tests, gather evidence, and RESUME this session to finish the work.
                     data.setdefault(
                         "result",
                         "(ran out of turns before finishing — partial attempt; resume to continue)",
@@ -260,15 +266,21 @@ class ClaudeCodeAgent:
                 subtype = str(data.get("subtype") or data.get("stop_reason") or "").strip()
                 if reason or subtype:
                     detail = " — ".join(p for p in (subtype, reason[:220]) if p)
-            raise RuntimeError(
-                f"claude code agent exited {proc.returncode}: {detail}"
-            )
-        try:
-            return json.loads(proc.stdout)
-        except Exception as exc:
-            raise RuntimeError(
-                f"claude code agent returned non-JSON: {proc.stdout[:300]}"
-            ) from exc
+            last_error = f"claude code agent exited {proc.returncode}: {detail}"
+            # TRANSIENT infra errors (dropped connection, overloaded upstream, gateway
+            # blips) must not fail a whole governed run — retry the invocation with a
+            # short backoff. Anything non-transient (spend limit, bad flags, real agent
+            # errors) raises immediately.
+            transient = any(marker in detail.lower() for marker in (
+                "connection closed mid-response", "connection error", "overloaded",
+                "internal server error", "network error", "econnreset", "socket hang up",
+                "529", "503", "bad gateway",
+            ))
+            if transient and attempt < 2:
+                time.sleep(5 * (attempt + 1))
+                continue
+            raise RuntimeError(last_error)
+        raise RuntimeError(last_error or "claude code agent failed")
 
     @staticmethod
     def _usage(data: dict, settings: Settings) -> tuple[dict, int]:
