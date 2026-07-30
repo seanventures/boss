@@ -299,6 +299,21 @@ def _repair_prompt(base_prompt: str, evidence: str, attempt: int) -> str:
     )
 
 
+def _targeted_fix_prompt(findings: str, round_i: int) -> str:
+    """In-run convergence (review → implementer conversation): hand the panel's CONCRETE
+    findings back to the implementer, which resumes its own warm session and fixes only
+    what was flagged — no pipeline re-run, no cold context."""
+    return (
+        f"--- REVIEW CONVERGENCE ROUND {round_i} ---\n"
+        "The independent review panel found the following CONCRETE issues in your "
+        "implementation. Fix ONLY these findings — smallest correct change. Do NOT "
+        "refactor unrelated code, do NOT touch any test file, and keep every "
+        "currently-passing behavior intact. Run the tests to confirm they still pass, "
+        "then end with a one-line summary of what you fixed.\n\n"
+        f"{findings}\n"
+    )
+
+
 def _repair_resume_prompt(evidence: str, attempt: int) -> str:
     """Resume-mode repair (token optimization): the implementer's session already holds
     the full task context and its own work, so the follow-up sends ONLY the evidence —
@@ -368,6 +383,9 @@ def _review_prompt(title, criteria, *, instructions="", ui=False, change=""):
         + "Judge ONLY against the stated task and acceptance criteria. A concern that is OUT OF SCOPE "
         "— a feature that was not asked for, or a spec stricter than what was agreed — is NOT a "
         "defect; note it but do not fail the change for it.\n\n"
+        "Triage by SEVERITY: a MINOR finding (style, a robustness nicety, a missed edge case that "
+        "no acceptance criterion requires) is a RECOMMENDATION — list it, but it must NOT drive the "
+        "verdict. Refute ONLY for a defect that materially violates the task or a criterion.\n\n"
         + (design_prompts.design_review_clause() + "\n\n" if ui else "")  # APP-2: incoherence in scope for UI
         + "Do NOT edit any files. End your response with EXACTLY one final line:\n"
         "  VERDICT: REFUTED   — ONLY if you found a CONCRETE defect that violates the task/criteria.\n"
@@ -1556,6 +1574,100 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
         # failing=[] but stayed inside the `!= pass` block, so it still blocked with an empty list.)
         if qg_status != "pass":
             failing = [k for k, v in gates.items() if not v]
+
+            # IN-RUN CONVERGENCE: when the only failures are JUDGMENT gates, the agents
+            # converse instead of blocking or re-running the pipeline — the panel's
+            # concrete findings go back to the implementer (resuming its warm session,
+            # so the context is cache reads), the frozen tests re-verify, and ONLY the
+            # failed judges re-review the delta. Ships when every gate turns green;
+            # falls back to the legacy paths below if it can't converge.
+            inrun_max = max(0, int(getattr(settings, "code_review_inrun_max_rounds", 2) or 2))
+            if (failing and not use_microvm and impl_session_id
+                    and set(failing) <= {"code_review_passed", "consistent"}):
+                for round_i in range(1, inrun_max + 1):
+                    finding_bits = []
+                    if "code_review_passed" in failing:
+                        finding_bits.append(
+                            "ADVERSARIAL REVIEW FINDINGS:\n" + (r3.get("summary") or "")[:3000])
+                    if "consistent" in failing:
+                        finding_bits.append(
+                            "CONSISTENCY FINDINGS:\n" + (r6.get("summary") or "")[:2000])
+                    with _transaction(engine) as c:
+                        emit_event(c, project_id, "code_task.inrun_convergence_round", "boss",
+                                   "code_task_run", run_id,
+                                   {"round": round_i, "of": inrun_max, "failing_gates": failing})
+                        _set_phase(c, run_id, "implement")
+                    set_llm_context(db_engine=engine, project_id=project_id, run_id=run_id,
+                                    stage="implement")
+                    a_fix, m_fix = _route("implement")
+                    rfix = a_fix.run_role(
+                        _targeted_fix_prompt("\n\n".join(finding_bits), round_i), root,
+                        model=m_fix, resume_session_id=impl_session_id)
+                    impl_session_id = rfix.get("session_id") or impl_session_id
+                    cost += int(rfix.get("cost_usd_micros") or 0)
+                    r2 = {**r2, "summary": (rfix.get("summary") or r2.get("summary", ""))}
+                    if not sandbox.run(test_cmd).ok:
+                        break  # the fix broke the frozen tests — legacy handling below
+                    change_block = _render_change_for_review(
+                        {fc.path: fc.content for fc in sandbox.diff()})
+                    impl_files = [fc.path for fc in sandbox.diff()
+                                  if not _is_test_path(fc.path)] or impl_files
+                    if "code_review_passed" in failing:
+                        with _transaction(engine) as c:
+                            _set_phase(c, run_id, "review_code")
+                        set_llm_context(db_engine=engine, project_id=project_id,
+                                        run_id=run_id, stage="review_code")
+                        rr = review_agent.run_role(
+                            _review_prompt(title, criteria, instructions=instructions,
+                                           ui=ui_task, change=change_block),
+                            review_root, read_only=True, model=review_model)
+                        cost += int(rr.get("cost_usd_micros") or 0)
+                        verdict = _parse_verdict(rr.get("summary", ""))
+                        r3 = rr
+                        review_confidence = 1.0 if verdict == "survived" else 0.0
+                        gates["code_review_passed"] = verdict == "survived"
+                    if "consistent" in failing:
+                        with _transaction(engine) as c:
+                            _set_phase(c, run_id, "consistency_check")
+                        set_llm_context(db_engine=engine, project_id=project_id,
+                                        run_id=run_id, stage="consistency_check")
+                        rc2 = consistency_agent.run_role(
+                            _consistency_prompt(title, criteria, design,
+                                                instructions=instructions, change=change_block),
+                            review_root, read_only=True, model=consistency_model)
+                        cost += int(rc2.get("cost_usd_micros") or 0)
+                        cons_verdict = _parse_consistency(rc2.get("summary", ""))
+                        r6 = rc2
+                        gates["consistent"] = cons_verdict != "drift"
+                    failing = [k for k, v in gates.items() if not v]
+                    if not failing:
+                        evidence.update({
+                            "adversarial_verdict": verdict,
+                            "review_confidence": review_confidence,
+                            "consistency_verdict": cons_verdict,
+                            "cost_usd_micros": cost,
+                            "impl_files": impl_files,
+                            "review_summary": (r3.get("summary") or "")[:4000],
+                            "consistency_summary": (r6.get("summary") or "")[:1500],
+                            "inrun_convergence_rounds": round_i,
+                        })
+                        with _transaction(engine) as c:
+                            c.execute(sql(
+                                "UPDATE code_task_runs SET state=CAST(:s AS JSONB), "
+                                "usage=jsonb_build_object('cost_usd_micros', "
+                                "CAST(:cost AS bigint), 'model', CAST(:m AS text)), "
+                                "updated_at=now() WHERE id=:id"),
+                                {"s": json.dumps(evidence), "cost": cost,
+                                 "m": evidence.get("model"), "id": run_id})
+                            qg_id, qg_status = _record_quality_gate(
+                                c, run_id=run_id, project_id=project_id, task_id=task_id,
+                                job_id=job_id, evidence=evidence, gates=gates)
+                            emit_event(c, project_id, "code_task.inrun_convergence_pass",
+                                       "boss", "code_task_run", run_id, {"rounds": round_i})
+                        break
+                    if set(failing) - {"code_review_passed", "consistent"}:
+                        break  # a non-judgment gate regressed — legacy handling below
+
             rounds_used = max(0, int(fctx.get("attempt", 1)) - 1)
             # Fallback 2 (not 0): a missing/blank config field must never SILENTLY disable the moat.
             max_repair_rounds = max(0, int(getattr(settings, "code_review_repair_max_rounds", 2) or 2))
