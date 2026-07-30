@@ -105,10 +105,20 @@ PROFILES: dict[str, dict] = {
     # verify. Classes degrade to lane defaults until the deployment binds them, e.g.
     # BOSS_CODE_AGENT_LOW_COST_ENGINE=native + BOSS_CODE_AGENT_LOW_COST_MODEL=deepseek-chat.
     "vag": {
-        "label": "VAG junior/senior — cheap implementer, frontier design + verification",
+        "label": "VAG junior/senior — cheap build + test author, frontier design + verification",
         "tier_floor": 2,
         "tier_cap": 3,
-        "model": {"default": "strong", "implement": "low_cost", "standards": "low_cost"},
+        # Economics decision (2026-07-30, measured): the low-cost lane AUTHORS the tests
+        # too — the frontier lane still judges them (review_code, consistency, the
+        # mutation gate), so the bar stays frontier-graded without paying frontier rates
+        # for authoring. Measured on the same task: strong-lane write_tests was 34
+        # turns / $4.96; low-cost was 7 turns / $0.42 with the same gate outcome.
+        "model": {
+            "default": "strong",
+            "implement": "low_cost",
+            "write_tests": "low_cost",
+            "standards": "low_cost",
+        },
         "caching": True,
         "parallel_checks": True,
     },
