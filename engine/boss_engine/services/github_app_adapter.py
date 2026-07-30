@@ -20,6 +20,7 @@ id are configured; otherwise BOSS falls back to the PAT path (Phase 0).
 """
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 import time
@@ -28,6 +29,8 @@ from typing import Optional
 import httpx
 
 from ..config import Settings
+
+logger = logging.getLogger("boss.github_app")
 
 
 class GitHubAppConfigurationError(RuntimeError):
@@ -137,6 +140,24 @@ class GitHubAppAdapter:
         url = f"{self.api_base_url}/app/installations/{inst}/access_tokens"
         with httpx.Client(timeout=20) as client:
             resp = client.post(url, headers=headers, json=body or None)
+            if (
+                resp.status_code == 422
+                and permissions
+                and "permissions requested are not granted" in resp.text
+            ):
+                # The installation grants fewer permissions than we tried to
+                # downscope to (GitHub 422s the whole mint, it does not
+                # intersect). Fall back to the installation's own permission
+                # set — still repo-scoped — instead of failing the pipeline
+                # over an optional permission (e.g. issues:write not granted).
+                logger.warning(
+                    "github_app: installation %s lacks some requested permissions "
+                    "(%s); retrying with the installation's granted set",
+                    inst,
+                    ",".join(sorted(permissions)),
+                )
+                body.pop("permissions", None)
+                resp = client.post(url, headers=headers, json=body or None)
         if resp.status_code not in (200, 201):
             raise GitHubAppConfigurationError(
                 f"Failed to mint installation token ({resp.status_code}): {resp.text[:300]}"

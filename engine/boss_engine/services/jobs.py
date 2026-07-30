@@ -795,12 +795,63 @@ class JobLeaseService:
         self._mark_agent_system_failure(
             connection, row, error, terminal=True, actor=worker_id
         )
+        self._mark_related_code_task_failed(connection, row, error, actor=worker_id)
         return {
             "job_id": job_id,
             "status": "deadlettered",
             "run_after": None,
             "deadletter_id": deadletter_id,
         }
+
+    def _mark_related_code_task_failed(
+        self,
+        connection: Connection,
+        row: dict[str, Any],
+        error: dict[str, Any],
+        *,
+        actor: str,
+    ) -> None:
+        """Keep the code-task run truthful when its driving job deadletters.
+
+        Without this, a `code.task` job that dies terminally (e.g. the step
+        endpoint 500s on a config error) leaves the run stuck at
+        status='running' phase='queued' forever — invisible failure in the
+        console. Mirror the terminal job state onto the run."""
+        if row.get("kind") != "code.task":
+            return
+        payload = row.get("payload") or {}
+        if isinstance(payload, str):
+            try:
+                payload = json.loads(payload)
+            except json.JSONDecodeError:
+                return
+        run_id = payload.get("run_id")
+        if not run_id:
+            return
+        message = str(error.get("message") or "job deadlettered")[:500]
+        updated = connection.execute(
+            text(
+                """
+                UPDATE code_task_runs
+                SET status = 'failed',
+                    error = :error,
+                    updated_at = :updated_at
+                WHERE id = :run_id
+                  AND status NOT IN ('completed', 'failed', 'cancelled')
+                """
+            ),
+            {"run_id": run_id, "error": message, "updated_at": now_utc()},
+        )
+        if updated.rowcount:
+            emit_event(
+                connection,
+                row["project_id"],
+                "code_task.failed",
+                actor,
+                "code_task_run",
+                run_id,
+                {"reason": "job_deadlettered", "job_id": row.get("id"), "error": message},
+            )
 
     def _load_leased_job_for_update(
         self,
