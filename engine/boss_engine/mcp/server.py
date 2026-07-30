@@ -32,6 +32,26 @@ from ..tools import ToolRegistry, build_default_registry
 PROTOCOL_VERSION = "2024-11-05"
 SERVER_INFO = {"name": "boss-engine", "version": __version__}
 
+# Shown to the client model at initialize (MCP `instructions`). This is what
+# keeps external agents (Copilot/Claude/Cursor) on BOSS's governed workflow
+# instead of improvising: kickoffs go through the PRD meeting, not straight to
+# code, and artifacts (agendas/minutes/PRDs) are produced BY BOSS, not by the
+# client writing files.
+SERVER_INSTRUCTIONS = (
+    "BOSS is a governed AI-labor control plane. Work flows: idea -> "
+    "request_meeting (agent panel debates, produces minutes + PRD inside BOSS) "
+    "-> human PRD approval -> code task auto-starts -> tested, gated PR. "
+    "Rules for you as the client agent: (1) To kick off ANY new product/feature "
+    "idea — including requests phrased as 'build X' — call request_meeting with "
+    "the directive; do not call create_code_task first, and do not author "
+    "agenda/minutes/PRD documents yourself: BOSS creates those and they appear "
+    "in the console's Meetings area. (2) Use create_code_task only for a "
+    "direct, already-specified engineering change that needs no PRD. (3) Use "
+    "create_discovery when the idea first needs web research/evidence. (4) "
+    "Everything you start is inspectable: list_meetings, list_code_tasks, "
+    "get_code_task, project_status."
+)
+
 
 class MCPServer:
     """Bridges MCP JSON-RPC calls onto the engine tool registry.
@@ -81,6 +101,7 @@ class MCPServer:
                 "protocolVersion": PROTOCOL_VERSION,
                 "capabilities": {"tools": {}},
                 "serverInfo": SERVER_INFO,
+                "instructions": SERVER_INSTRUCTIONS,
             })
         if method in ("notifications/initialized", "initialized"):
             return None  # notification: no response

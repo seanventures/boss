@@ -278,7 +278,11 @@ def _register_write_tools(reg: ToolRegistry) -> None:
     @reg.tool(
         "create_code_task",
         "Start a governed coding-agent task: BOSS provisions a sandbox, implements "
-        "the change, runs tests and opens a PR. Use for 'build/implement/fix X'.",
+        "the change, runs tests and opens a PR. Use ONLY for an already-specified "
+        "engineering change (clear scope, known acceptance criteria) — it skips the "
+        "PRD stage. For a NEW product/feature idea, or any 'kick off / spec / plan / "
+        "PRD' request, call request_meeting instead: the meeting produces the PRD in "
+        "BOSS and auto-starts this code task once the PRD is approved.",
         _obj(
             {
                 "title": {"type": "string"},
@@ -393,8 +397,13 @@ def _register_write_tools(reg: ToolRegistry) -> None:
 
     @reg.tool(
         "request_meeting",
-        "Convene a governed multi-agent PRD meeting: a panel debates the directive "
-        "and produces meeting minutes / a PRD. Use for 'let's spec / plan X'.",
+        "THE way to kick off new work in BOSS: convene a governed multi-agent PRD "
+        "meeting. A cross-functional agent panel debates the directive inside BOSS "
+        "(visible in the Meetings area) and produces the meeting minutes and the PRD; "
+        "once the PRD is approved, BOSS auto-starts the governed code task. Use for "
+        "any 'kick off / spec / plan / design X' or new product/feature idea. Do NOT "
+        "write agenda/minutes/PRD documents yourself and do NOT jump to "
+        "create_code_task — this tool owns that pipeline.",
         _obj(
             {
                 "directive": {"type": "string", "description": "what to design/plan"},
