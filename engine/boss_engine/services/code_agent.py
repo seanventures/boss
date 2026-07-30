@@ -119,12 +119,14 @@ class CodeAgent(Protocol):
     ) -> CodeAgentResult: ...
 
     def run_role(
-        self, prompt: str, cwd: Path, *, read_only: bool = False, model: Optional[str] = None
+        self, prompt: str, cwd: Path, *, read_only: bool = False, model: Optional[str] = None,
+        resume_session_id: Optional[str] = None,
     ) -> dict:
         """Run one isolated, role-scoped invocation against an existing workdir.
-        Returns {summary, usage, cost_usd_micros, turns, model}. The role prompt is the
-        guidance; the model impersonates the role. read_only stages must not edit files;
-        model overrides which model runs this step (low-cost vs strong routing)."""
+        Returns {summary, usage, cost_usd_micros, turns, model, session_id?}. The role
+        prompt is the guidance; the model impersonates the role. read_only stages must
+        not edit files; model overrides which model runs this step (low-cost vs strong
+        routing). resume_session_id continues a prior SAME-role session (cache reuse)."""
         ...
 
 
@@ -174,7 +176,7 @@ class ClaudeCodeAgent:
 
     def _invoke(
         self, prompt: str, cwd: Path, *, read_only: bool = False, model: Optional[str] = None,
-        allowed_tools: Optional[str] = None,
+        allowed_tools: Optional[str] = None, resume_session_id: Optional[str] = None,
     ) -> dict:
         timeout = int(self.settings.code_agent_timeout_seconds or 900)
         # A full web build (in-container / local_subprocess) needs well beyond the legacy 900s that
@@ -206,6 +208,11 @@ class ClaudeCodeAgent:
             "--allowedTools", allowed,
             "--permission-mode", permission,
         ]
+        if resume_session_id:
+            # Token optimization: continue the prior session instead of cold-starting —
+            # the follow-up rides the warm prompt cache (repo context + conversation are
+            # cache READS, not fresh ingestion). Used by the repair loop.
+            cmd += ["--resume", resume_session_id]
         model = model or getattr(self.settings, "claude_cli_model", None)
         if model:
             cmd += ["--model", model]
@@ -276,17 +283,22 @@ class ClaudeCodeAgent:
         return usage, cost_micros
 
     def run_role(
-        self, prompt: str, cwd: Path, *, read_only: bool = False, model: Optional[str] = None
+        self, prompt: str, cwd: Path, *, read_only: bool = False, model: Optional[str] = None,
+        resume_session_id: Optional[str] = None,
     ) -> dict:
         """Run a single role-scoped agent invocation against an existing workdir and
-        return {summary, usage, cost_usd_micros, turns, model}. Used by the governed
-        pipeline to dispatch each step as an ISOLATED context — a fresh `claude -p` process
-        with no shared session state between roles. `model` routes low-cost vs strong."""
+        return {summary, usage, cost_usd_micros, turns, model, session_id}. Used by the
+        governed pipeline to dispatch each step as an ISOLATED context — a fresh
+        `claude -p` process with no shared session state between roles. `model` routes
+        low-cost vs strong. `resume_session_id` continues a prior session of the SAME
+        role (repair loop) so the follow-up hits the warm prompt cache — never used
+        across roles, which would break reviewer independence."""
         if getattr(self, "redact", False):  # data-boundary: mask PII for restricted tasks
             prompt = _redact_pii(prompt)[0]
         started = time.monotonic()
         try:
-            data = self._invoke(prompt, cwd, read_only=read_only, model=model)
+            data = self._invoke(prompt, cwd, read_only=read_only, model=model,
+                                resume_session_id=resume_session_id)
         except Exception as exc:
             failed_model = model or getattr(self.settings, "claude_cli_model", None) or ""
             record_llm_call(engine_name=self.engine, usage={"model": failed_model},
@@ -303,6 +315,7 @@ class ClaudeCodeAgent:
             "cost_usd_micros": cost_micros,
             "turns": turns,
             "model": model or usage.get("model"),
+            "session_id": data.get("session_id"),
         }
 
     def run_research(self, prompt: str, *, model: Optional[str] = None) -> dict:
@@ -465,7 +478,8 @@ class NativeCodeAgent:
         return written
 
     def run_role(
-        self, prompt: str, cwd: Path, *, read_only: bool = False, model: Optional[str] = None
+        self, prompt: str, cwd: Path, *, read_only: bool = False, model: Optional[str] = None,
+        resume_session_id: Optional[str] = None,  # accepted for interface parity; native has no session store
     ) -> dict:
         from .openai_adapter import estimate_cost_usd_micros
 

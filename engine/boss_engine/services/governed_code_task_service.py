@@ -239,12 +239,24 @@ _IAC_QA_GUIDANCE = (
 )
 
 
-def _qa_prompt(title, instructions, criteria, test_cmd, *, iac=False):
-    crit = "\n".join(f"- {c}" for c in criteria) or "- (none specified)"
+def _ctx_block(title, instructions, criteria) -> str:
+    """Identical task-context preamble for EVERY pipeline stage — byte-identical on
+    purpose. The model API's prompt cache is keyed on the request prefix, so stages
+    launched back-to-back (within the cache TTL) re-READ this block from cache instead
+    of cold-ingesting it in each fresh session. Keep all stage-specific text AFTER it."""
+    crit = "\n".join(f"- {c}" for c in criteria or []) or "- (none specified)"
     return (
-        "You are a QA engineer. Your ONLY job is to author tests for the task below, BEFORE any "
+        "=== TASK CONTEXT (shared verbatim across all pipeline stages) ===\n"
+        f"TASK: {title}\n\n{instructions}\n\nACCEPTANCE CRITERIA:\n{crit}\n"
+        "=== END TASK CONTEXT ===\n\n"
+    )
+
+
+def _qa_prompt(title, instructions, criteria, test_cmd, *, iac=False):
+    return (
+        _ctx_block(title, instructions, criteria)
+        + "You are a QA engineer. Your ONLY job is to author tests for the task above, BEFORE any "
         "implementation exists.\n\n"
-        f"TASK: {title}\n\n{instructions}\n\nACCEPTANCE CRITERIA:\n{crit}\n\n"
         "RULES:\n"
         "- Create test file(s) ONLY, using the stdlib `unittest` module (e.g. `test_<thing>.py`).\n"
         "- Do NOT create or modify any implementation/source file. Import the module-under-test by "
@@ -256,12 +268,12 @@ def _qa_prompt(title, instructions, criteria, test_cmd, *, iac=False):
     )
 
 
-def _impl_prompt(title, instructions, test_files, test_cmd, *, iac=False, ui=False):
+def _impl_prompt(title, instructions, test_files, test_cmd, *, criteria=(), iac=False, ui=False):
     tf = ", ".join(test_files) or "(the test files in this repo)"
     return (
-        "You are a software engineer. QA has ALREADY written the tests; implement the change to make "
-        "those existing tests pass.\n\n"
-        f"TASK: {title}\n\n{instructions}\n\n"
+        _ctx_block(title, instructions, criteria)
+        + "You are a software engineer. QA has ALREADY written the tests; implement the change to "
+        "make those existing tests pass.\n\n"
         f"RULES:\n"
         f"- Edit/create implementation files ONLY. You MUST NOT edit, delete, or weaken any test file "
         f"({tf}) — they are the spec. If a test looks wrong, STOP and explain rather than change it.\n"
@@ -287,12 +299,24 @@ def _repair_prompt(base_prompt: str, evidence: str, attempt: int) -> str:
     )
 
 
-def _solo_prompt(title, instructions, criteria, test_cmd, *, iac=False):
-    crit = "\n".join(f"- {c}" for c in criteria) or "- (none specified)"
+def _repair_resume_prompt(evidence: str, attempt: int) -> str:
+    """Resume-mode repair (token optimization): the implementer's session already holds
+    the full task context and its own work, so the follow-up sends ONLY the evidence —
+    the rest is warm prompt-cache reads instead of a cold re-ingestion."""
     return (
-        "You are a software engineer. Implement the task below AND write tests for it, then make "
+        f"--- REPAIR ATTEMPT {attempt} ---\n"
+        "Your implementation did NOT pass BOSS's authoritative check (BOSS ran the tests "
+        "itself; your self-report is not trusted). The tests are FROZEN and correct — do "
+        "NOT edit, delete, or weaken any test file. Fix ONLY the implementation. Concrete "
+        f"evidence from the failed check:\n{evidence}\n"
+    )
+
+
+def _solo_prompt(title, instructions, criteria, test_cmd, *, iac=False):
+    return (
+        _ctx_block(title, instructions, criteria)
+        + "You are a software engineer. Implement the task above AND write tests for it, then make "
         "the tests pass. This is a low-risk task, so one agent does both.\n\n"
-        f"TASK: {title}\n\n{instructions}\n\nACCEPTANCE CRITERIA:\n{crit}\n\n"
         "RULES:\n"
         "- Create the implementation file(s) and stdlib `unittest` test file(s).\n"
         f"- Run `{test_cmd}` and iterate until it passes. Do NOT commit.\n"
@@ -333,14 +357,13 @@ def _change_clause(change: str) -> str:
             f"genuinely need more context.\n{change}\n\n")
 
 
-def _review_prompt(title, criteria, *, ui=False, change=""):
-    crit = "\n".join(f"- {c}" for c in criteria) or "- (judge against the task description)"
+def _review_prompt(title, criteria, *, instructions="", ui=False, change=""):
     return (
-        "You are an adversarial code reviewer with FRESH context — you did NOT write this code or "
+        _ctx_block(title, instructions, criteria)
+        + "You are an adversarial code reviewer with FRESH context — you did NOT write this code or "
         "these tests. Try HARD to break the change: read the implementation and the tests and look "
         "for a REAL correctness or edge-case failure (invalid inputs, empty/boundary values, case "
         "sensitivity, error handling, off-by-one).\n\n"
-        f"TASK UNDER REVIEW: {title}\n\nACCEPTANCE CRITERIA (the agreed scope):\n{crit}\n\n"
         + _change_clause(change)
         + "Judge ONLY against the stated task and acceptance criteria. A concern that is OUT OF SCOPE "
         "— a feature that was not asked for, or a spec stricter than what was agreed — is NOT a "
@@ -393,13 +416,13 @@ def _aggregate_panel(verdicts: list[str], quorum: float) -> tuple[str, float]:
     return ("survived" if confidence >= quorum else "refuted"), confidence
 
 
-def _security_prompt(title, *, change=""):
+def _security_prompt(title, *, instructions="", criteria=(), change=""):
     return (
-        "You are a security reviewer. Assess the change for EXPLOITABLE vulnerabilities — things an "
+        _ctx_block(title, instructions, criteria)
+        + "You are a security reviewer. Assess the change for EXPLOITABLE vulnerabilities — things an "
         "attacker could actually use: injection (SQL / command / HTML-XSS), auth or access-control "
         "bypass, unsafe secret/credential handling, unsafe deserialization or parsing, SSRF, path "
         "traversal, or a denial-of-service vector reachable from untrusted input.\n\n"
-        f"TASK UNDER REVIEW: {title}\n\n"
         + _change_clause(change)
         + "Read the change and the implementation. Classify each finding by severity "
         "(CRITICAL / HIGH / MEDIUM / LOW / ADVISORY). Do NOT edit any files.\n\n"
@@ -440,12 +463,11 @@ def _standards_prompt():
 
 
 def _spec_prompt(title, instructions, criteria):
-    crit = "\n".join(f"- {c}" for c in criteria) or "- (none given)"
     return (
-        "You are a product engineer. Turn the task into a clear, testable specification: a "
+        _ctx_block(title, instructions, criteria)
+        + "You are a product engineer. Turn the task above into a clear, testable specification: a "
         "one-paragraph summary, a change list (added / changed / removed), and a clarified, testable "
-        "list of acceptance criteria — resolve any ambiguity explicitly. Do NOT edit any files.\n\n"
-        f"TASK: {title}\n\n{instructions}\n\nACCEPTANCE CRITERIA:\n{crit}"
+        "list of acceptance criteria — resolve any ambiguity explicitly. Do NOT edit any files."
     )
 
 
@@ -492,18 +514,18 @@ def _is_not_a_code_task(plan_review: str) -> bool:
     return bool(_NOT_A_CODE_TASK_RE.search(plan_review or ""))
 
 
-def _consistency_prompt(title, criteria, design, *, change=""):
-    crit = "\n".join(f"- {c}" for c in criteria) or "- (the task description)"
+def _consistency_prompt(title, criteria, design, *, instructions="", change=""):
     spec = (design or {}).get("spec", "")
     extra = f"\n\nAGREED SPEC:\n{spec}" if spec else ""
     return (
-        "You are a reviewer checking internal consistency. Read the implementation and the tests "
+        _ctx_block(title, instructions, criteria)
+        + "You are a reviewer checking internal consistency. Read the implementation and the tests "
         "and confirm they agree with the task and its acceptance criteria: every criterion is "
         "implemented and tested, names and behaviour match the spec, and nothing contradicts. Do "
         "NOT edit any files. End with EXACTLY one final line:\n"
         "  CONSISTENT: YES\n  CONSISTENT: NO\n\n"
         + _change_clause(change)
-        + f"TASK: {title}\n\nACCEPTANCE CRITERIA:\n{crit}{extra}"
+        + extra
     )
 
 
@@ -1058,7 +1080,7 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
         # pass but never soften the gate. 0 retries == the pre-Phase-3 single pass.
         with _transaction(engine) as c:
             _set_phase(c, run_id, "implement")
-        base_impl_prompt = (_impl_prompt(title, instructions, test_files, test_cmd,
+        base_impl_prompt = (_impl_prompt(title, instructions, test_files, test_cmd, criteria=criteria,
                                          iac=iac_task, ui=ui_task)
                             if do_separate_tests
                             else _solo_prompt(title, instructions, criteria, test_cmd,
@@ -1068,6 +1090,7 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
         repair_attempts = 0
         repair_log: list[dict] = []
         evidence_text = ""
+        impl_session_id = None  # resume-based repair (cache reuse)
         r2 = {"cost_usd_micros": 0, "summary": "", "usage": {}, "model": None}
         impl_files: list[str] = []
         tests_passed = False
@@ -1120,7 +1143,21 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
             else:
                 set_llm_context(stage="implement" if do_separate_tests else "solo")
                 a, m = _route_escalated("implement") if escalate_impl else _route("implement")
-                r2 = a.run_role(impl_prompt, root, model=m)
+                # Resume-based repair: continue the implementer's own session so the
+                # repair rides the warm prompt cache (task context + its prior work are
+                # cache READS, not fresh ingestion). Escalated attempts stay cold —
+                # different model, fresh eyes. Cold full-prompt fallback if resume fails.
+                resume_sid = impl_session_id if (attempt and not escalate_impl) else None
+                if resume_sid:
+                    try:
+                        r2 = a.run_role(
+                            _repair_resume_prompt(evidence_text, attempt), root,
+                            model=m, resume_session_id=resume_sid)
+                    except Exception:
+                        r2 = a.run_role(impl_prompt, root, model=m)
+                else:
+                    r2 = a.run_role(impl_prompt, root, model=m)
+                impl_session_id = r2.get("session_id") or impl_session_id
                 cost += int(r2.get("cost_usd_micros") or 0)
                 if do_separate_tests:
                     tests_untouched = tests_before == _hash_files(root, test_files)
@@ -1251,7 +1288,7 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
                     set_llm_context(db_engine=engine, project_id=project_id, run_id=run_id,
                                     stage="review_code")
                     rr = seat_agent.run_role(
-                        _review_prompt(title, criteria, ui=ui_task, change=change_block),
+                        _review_prompt(title, criteria, instructions=instructions, ui=ui_task, change=change_block),
                         review_root, read_only=True, model=seat_model)
                     with lock:
                         panel_cost["v"] += int(rr.get("cost_usd_micros") or 0)
@@ -1263,7 +1300,7 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
             def _do_security():
                 set_llm_context(db_engine=engine, project_id=project_id, run_id=run_id,
                                 stage="security_check")
-                rr = security_agent.run_role(_security_prompt(title, change=change_block),
+                rr = security_agent.run_role(_security_prompt(title, instructions=instructions, criteria=criteria, change=change_block),
                                              review_root, read_only=True, model=security_model)
                 with lock:
                     panel_cost["v"] += int(rr.get("cost_usd_micros") or 0)
@@ -1287,7 +1324,7 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
                 set_llm_context(db_engine=engine, project_id=project_id, run_id=run_id,
                                 stage="consistency_check")
                 rr = consistency_agent.run_role(
-                    _consistency_prompt(title, criteria, design, change=change_block),
+                    _consistency_prompt(title, criteria, design, instructions=instructions, change=change_block),
                     review_root, read_only=True, model=consistency_model)
                 with lock:
                     panel_cost["v"] += int(rr.get("cost_usd_micros") or 0)
