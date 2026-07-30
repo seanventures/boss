@@ -1584,6 +1584,7 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
             inrun_max = max(0, int(getattr(settings, "code_review_inrun_max_rounds", 2) or 2))
             if (failing and not use_microvm and impl_session_id
                     and set(failing) <= {"code_review_passed", "consistent"}):
+              try:  # a convergence failure must DEGRADE to the legacy paths, never kill the run
                 for round_i in range(1, inrun_max + 1):
                     finding_bits = []
                     if "code_review_passed" in failing:
@@ -1667,6 +1668,12 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
                         break
                     if set(failing) - {"code_review_passed", "consistent"}:
                         break  # a non-judgment gate regressed — legacy handling below
+              except Exception as exc:  # noqa: BLE001
+                with _transaction(engine) as c:
+                    emit_event(c, project_id, "code_task.inrun_convergence_degraded", "boss",
+                               "code_task_run", run_id,
+                               {"error": f"{type(exc).__name__}: {exc}"[:300]})
+                failing = [k for k, v in gates.items() if not v]
 
             rounds_used = max(0, int(fctx.get("attempt", 1)) - 1)
             # Fallback 2 (not 0): a missing/blank config field must never SILENTLY disable the moat.

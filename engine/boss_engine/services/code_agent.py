@@ -202,7 +202,7 @@ class ClaudeCodeAgent:
             _max_turns = min(_max_turns, int(getattr(self.settings, "code_agent_review_max_turns", 16) or 16))
         cmd = [
             self._claude_bin(),
-            "-p", prompt,
+            "-p",
             "--output-format", "json",
             "--max-turns", str(_max_turns),
             "--allowedTools", allowed,
@@ -216,6 +216,9 @@ class ClaudeCodeAgent:
         model = model or getattr(self.settings, "claude_cli_model", None)
         if model:
             cmd += ["--model", model]
+        # `--` ends option parsing: a prompt that BEGINS with a dash (e.g. a
+        # "--- SECTION ---" header) must never be read as a CLI option.
+        cmd += ["--", prompt]
         try:
             proc = subprocess.run(
                 cmd,
