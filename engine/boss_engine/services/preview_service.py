@@ -59,6 +59,15 @@ def _low_priority(command: list[str]) -> list[str]:
     return prefix + command
 
 
+# Single source of truth for "which python file starts this app". Kept as one constant because
+# the host path (_detect_command) and the container path (_generate_dockerfile) MUST agree --
+# they previously carried separate copies of this tuple, and an app whose entrypoint was named
+# serve.py failed to launch in both while the test fallback reported a misleading 'verified'.
+_PY_ENTRYPOINTS = ("server.py", "serve.py", "app.py", "wsgi.py", "main.py")
+# Directories a static build drops its index.html into, in priority order ("." = repo root).
+_STATIC_DIRS = (".", "web", "public", "dist", "site", "static")
+
+
 def _detect_command(workdir: Path) -> Optional[list[str]]:
     """Detect the repo's declared preview command before falling back to stack hints."""
     hint = workdir / "boss.preview.command"
@@ -110,9 +119,16 @@ def _detect_command(workdir: Path) -> Optional[list[str]]:
         for target in ("dev", "run"):
             if re.search(rf"(?m)^{target}\s*:", content):
                 return ["make", target]
-    for entry in ("server.py", "app.py", "wsgi.py", "main.py"):
+    for entry in _PY_ENTRYPOINTS:
         if (workdir / entry).exists():
             return ["python3", entry]
+    # A plain static site still needs a SERVER -- ES modules refuse to load over file:// -- so a
+    # bare index.html is a runnable app, not a library. Without this it fell through to the test
+    # fallback and reported a passing test suite as though it were a preview.
+    for rel in _STATIC_DIRS:
+        if (workdir / rel / "index.html").is_file():
+            return ["sh", "-lc",
+                    f'python3 -m http.server "$PORT" --bind 0.0.0.0 --directory {rel}']
     return None
 
 
@@ -309,8 +325,11 @@ def start_preview(engine, settings: Settings, run_id: str, *, ttl_minutes: int =
             "command": cmd_str, "exit_code": exit_code, "passed": passed,
             "output": output[-6000:],
             "message": (
-                f"This build is a library/module — there is no web app to serve, so nothing runs "
-                f"as a live URL. Instead I ran its test suite (`{cmd_str}`): "
+                f"Verified by tests — NOT a live app preview. No runnable entrypoint was detected "
+                f"(looked for: boss.preview.command, package.json dev/start, Procfile web, Makefile "
+                f"dev/run, {'/'.join(_PY_ENTRYPOINTS)}, index.html in {'/'.join(_STATIC_DIRS[1:])}), "
+                f"so this is either a library/module or an app whose entrypoint is named something "
+                f"unrecognised. Ran its test suite (`{cmd_str}`): "
                 f"{'PASSED ✓' if passed else 'FAILED ✗'} (exit {exit_code}). See the output below "
                 f"and the PR to review the code."),
         }
@@ -381,7 +400,7 @@ def _generate_dockerfile(workdir: Path) -> int:
     if existing.exists():
         m = re.search(r"EXPOSE\s+(\d{2,5})", existing.read_text(errors="ignore"))
         return int(m.group(1)) if m else 8000
-    py_entry = next((e for e in ("server.py", "app.py", "wsgi.py", "main.py") if (workdir / e).exists()), None)
+    py_entry = next((e for e in _PY_ENTRYPOINTS if (workdir / e).exists()), None)
     if py_entry:
         port = 8000
         reqs = "COPY requirements.txt ./\nRUN pip install --no-cache-dir -r requirements.txt\n" \
