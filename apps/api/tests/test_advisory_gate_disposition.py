@@ -32,12 +32,36 @@ def test_blocking_gate_repairs_before_block():
 
 
 def test_blocking_gate_blocks_after_repair_budget():
+    """Opt-in fail-closed: with never_block=False the exhausted gate still parks for a human."""
     assert resolve_gate_failure_action(
         failing=["code_review_passed"],
         advisory_gate=False,
         rounds_used=2,
         max_repair_rounds=2,
         open_pr=True,
+        never_block=False,
+    ) == "block"
+
+
+def test_exhausted_gate_ships_with_dissent_by_default():
+    """Autonomy default: exhausting the repair budget ships with the dissent recorded, never halts."""
+    assert resolve_gate_failure_action(
+        failing=["code_review_passed"],
+        advisory_gate=False,
+        rounds_used=2,
+        max_repair_rounds=2,
+        open_pr=True,
+    ) == "ship_with_dissent"
+
+
+def test_no_pr_run_still_blocks_rather_than_shipping_nothing():
+    """open_pr=False runs measure the gate, not delivery — there is nothing to ship dissent into."""
+    assert resolve_gate_failure_action(
+        failing=["code_review_passed"],
+        advisory_gate=False,
+        rounds_used=2,
+        max_repair_rounds=2,
+        open_pr=False,
     ) == "block"
 
 

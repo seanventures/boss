@@ -115,22 +115,32 @@ def resolve_gate_failure_action(
     rounds_used: int,
     max_repair_rounds: int,
     open_pr: bool = True,
+    never_block: bool = True,
 ) -> str:
     """Decide what to do after a non-passing quality gate.
 
     Returns one of:
-      - ``"ship"``   — open the PR (hard pass, or advisory first-pass with surfaced failures)
-      - ``"repair"`` — autonomous review-repair retry
-      - ``"block"``  — pause for human gate override
+      - ``"ship"``              — open the PR (hard pass, or advisory first-pass)
+      - ``"repair"``            — autonomous review-repair retry
+      - ``"ship_with_dissent"`` — exhausted the loops, still failing: ship anyway, record the
+        unresolved gates, and queue them as follow-up work
+      - ``"block"``             — pause for human gate override (only when never_block=False)
 
     Advisory mode MUST ship: clearing failing gates without short-circuiting used to fall
     through into the block path and permanently stall web-app first-pass builds.
+
+    ``never_block`` is the autonomy default. A system that halts for a human whenever its own
+    reviewers stay unhappy delivers nothing on the runs that need it most — the operator ends up
+    adjudicating exactly the small defects the agents were hired to handle. Shipping with the
+    dissent RECORDED (and re-queued as its own task) keeps every fact a human needs to reverse
+    the call, while the program keeps moving. Set BOSS_CODE_GATE_NEVER_BLOCK=false for the old
+    fail-closed behaviour.
     """
     if not failing or advisory_gate:
         return "ship"
     if rounds_used < max_repair_rounds and open_pr:
         return "repair"
-    return "block"
+    return "ship_with_dissent" if (never_block and open_pr) else "block"
 
 
 def _record_quality_gate(connection, *, run_id, project_id, task_id, job_id, evidence, gates):
@@ -1907,6 +1917,7 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
                 rounds_used=rounds_used,
                 max_repair_rounds=max_repair_rounds,
                 open_pr=spec.get("open_pr", True) is not False,
+                never_block=bool(getattr(settings, "code_gate_never_block", True)),
             )
             if action == "ship" and failing and advisory_gate:
                 # ADVISORY first pass: surface the failing checks (their verdicts are already
@@ -1921,6 +1932,35 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
                     emit_event(c, project_id, "code_task.gate_advisory", "boss",
                                "code_task_run", run_id, {"advisory_failing_gates": failing})
                 # Fall through to GATE PASSED below — do NOT enter repair/block.
+            elif action == "ship_with_dissent":
+                # AUTONOMY TERMINAL: convergence and repair are spent and the panel is still
+                # unhappy. Ship, but make the dissent impossible to miss — the failing gates and
+                # the reviewer's reasoning land on the run AND become their own task, so a human
+                # can reverse this without having to discover it first.
+                dissent = {
+                    "unresolved_gates": failing,
+                    "adversarial_verdict": verdict,
+                    "review_confidence": review_confidence,
+                    "review_summary": (r3.get("summary") or "")[:2000],
+                    "consistency_summary": (r6.get("summary") or "")[:1000],
+                    "rounds_used": rounds_used,
+                    "quality_gate_id": qg_id,
+                }
+                evidence["unresolved_dissent"] = dissent
+                # Carry the unresolved gates into the follow-up task alongside deferred findings.
+                deferred_findings = list(deferred_findings) + [
+                    {"severity": "major", "text": f"Unresolved quality gate '{g}' at ship time"}
+                    for g in failing]
+                with _transaction(engine) as c:
+                    c.execute(sql(
+                        "UPDATE code_task_runs SET state=CAST(:s AS JSONB), "
+                        "finalize_ctx=COALESCE(finalize_ctx,'{}'::jsonb) "
+                        "|| jsonb_build_object('unresolved_dissent', CAST(:d AS JSONB)), "
+                        "updated_at=now() WHERE id=:id"),
+                        {"s": json.dumps(evidence), "d": json.dumps(dissent), "id": run_id})
+                    emit_event(c, project_id, "code_task.shipped_with_dissent", "boss",
+                               "code_task_run", run_id, dissent)
+                # Fall through to GATE PASSED below — ship it.
             elif action == "repair":
                 # AUTONOMOUS REVIEW-REPAIR (BOSS's moat: agents converge in a loop, not a human).
                 # EVERY failure that reaches this quality gate is a code-quality issue a fresh full

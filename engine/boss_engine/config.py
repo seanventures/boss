@@ -645,6 +645,15 @@ class Settings(BaseSettings):
     code_test_arbiter_enabled: bool = Field(
         default=True, alias="BOSS_CODE_TEST_ARBITER_ENABLED"
     )
+    # NEVER BLOCK (autonomy default). When convergence AND repair rounds are exhausted and gates
+    # are still red, ship anyway with the unresolved gates recorded on the run and re-queued as
+    # their own follow-up task, instead of parking in awaiting_gate_override for a human waiver.
+    # Halting there is what turns "10 autonomous tasks" into "10 tickets for the operator" — the
+    # human keeps every fact needed to reverse the call, but the program does not stall on it.
+    # Set false to restore fail-closed blocking.
+    code_gate_never_block: bool = Field(
+        default=True, alias="BOSS_CODE_GATE_NEVER_BLOCK"
+    )
     # Max agent turns inside the sandbox before we stop and take the diff. 40 is fine for a module
     # but too few for APP-SCALE work (scaffolding a whole Vite/React app is more file-writes than
     # that) — a too-low cap surfaces as error_max_turns and fails the task. 90 fits real app tasks.
