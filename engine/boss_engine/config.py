@@ -621,6 +621,30 @@ class Settings(BaseSettings):
     code_review_repair_max_rounds: int = Field(
         default=2, alias="BOSS_CODE_REVIEW_REPAIR_MAX_ROUNDS"
     )
+    # SEVERITY-CALIBRATED REVIEW GATE. The adversarial reviewer emits one
+    # `FINDING: <BLOCKER|MAJOR|MINOR|NIT> — …` line per defect; only findings at or above this
+    # severity fail `code_review_passed`. Without this the verdict is a single bit, so a NIT-level
+    # style note sinks a whole phase exactly like a data-loss bug. Lower-severity findings are
+    # still recorded on the run (and optionally spawned as follow-up tasks) — never silently
+    # dropped. A review that emits NO structured findings falls back to the binary verdict, so
+    # older prompts/models keep their previous fail-closed behaviour.
+    code_review_block_severity: str = Field(
+        default="major", alias="BOSS_CODE_REVIEW_BLOCK_SEVERITY"
+    )
+    # Non-blocking findings (below the threshold) become their own queued code task on the same
+    # repo/branch, so "ship the phase, fix the nit separately" needs no human bookkeeping.
+    code_review_followup_tasks: bool = Field(
+        default=True, alias="BOSS_CODE_REVIEW_FOLLOWUP_TASKS"
+    )
+    # TEST ARBITER. Tests are frozen ground truth: if the test author encoded the criteria WRONG,
+    # the implementer can never satisfy it and the run burns every repair round against a bad
+    # oracle. When tests fail, an INDEPENDENT third agent (never the implementer, never the test
+    # author) rules CODE_WRONG vs TEST_WRONG against the acceptance criteria. Only a TEST_WRONG
+    # ruling may amend a test, and the amendment is recorded in evidence — the implementer still
+    # never gets write access to the oracle, so `coder_did_not_edit_tests` keeps its meaning.
+    code_test_arbiter_enabled: bool = Field(
+        default=True, alias="BOSS_CODE_TEST_ARBITER_ENABLED"
+    )
     # Max agent turns inside the sandbox before we stop and take the diff. 40 is fine for a module
     # but too few for APP-SCALE work (scaffolding a whole Vite/React app is more file-writes than
     # that) — a too-low cap surfaces as error_max_turns and fails the task. 90 fits real app tasks.

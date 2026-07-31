@@ -387,11 +387,148 @@ def _review_prompt(title, criteria, *, instructions="", ui=False, change=""):
         "no acceptance criterion requires) is a RECOMMENDATION — list it, but it must NOT drive the "
         "verdict. Refute ONLY for a defect that materially violates the task or a criterion.\n\n"
         + (design_prompts.design_review_clause() + "\n\n" if ui else "")  # APP-2: incoherence in scope for UI
+        + "For EVERY defect you find, emit one line in EXACTLY this form (severity is graded, and "
+        "it is what decides whether the change ships — so grade honestly):\n"
+        "  FINDING: BLOCKER — data loss, security hole, or the feature does not work at all\n"
+        "  FINDING: MAJOR   — an acceptance criterion is materially violated\n"
+        "  FINDING: MINOR   — a real but non-blocking defect (cosmetic, rare edge case)\n"
+        "  FINDING: NIT     — style or preference\n"
+        "List MINOR/NIT findings too — they are recorded and fixed as separate follow-up work, so "
+        "you lose nothing by grading accurately. Do NOT inflate a cosmetic issue to MAJOR to force "
+        "attention, and do NOT suppress one to let the change through.\n\n"
         + "Do NOT edit any files. End your response with EXACTLY one final line:\n"
         "  VERDICT: REFUTED   — ONLY if you found a CONCRETE defect that violates the task/criteria.\n"
         "  VERDICT: SURVIVED  — if the change satisfies the task and criteria. This is the default "
         "when you did not find a real, in-scope defect.\n"
     )
+
+
+# Severity ladder for the review gate. Index = how blocking it is; a finding at or above the
+# configured threshold fails `code_review_passed`, everything below is recorded as follow-up work.
+_SEVERITY_ORDER = ["nit", "minor", "major", "blocker"]
+
+
+def _parse_findings(summary: str) -> list[dict]:
+    """Extract the reviewer's machine-readable `FINDING: <SEVERITY> — <text>` lines.
+
+    Returns [] when the reviewer emitted none, which the caller MUST treat as "no structured
+    signal" and fall back to the binary verdict — an empty list here never means "clean".
+    """
+    out: list[dict] = []
+    for sev, text in re.findall(
+            r"(?im)^\s*[-*>\s]*FINDING:\s*(BLOCKER|MAJOR|MINOR|NIT)\b[\s—:-]*(.*)$",
+            summary or ""):
+        out.append({"severity": sev.lower(), "text": text.strip()[:300]})
+    return out
+
+
+def _review_gate_from_findings(
+    summary: str, verdict: str, block_severity: str = "major",
+) -> tuple[bool, list[dict], list[dict]]:
+    """Decide `code_review_passed` from graded findings instead of a single bit.
+
+    Returns (passed, blocking, non_blocking). When the reviewer emitted no structured findings
+    we defer entirely to ``verdict`` — the pre-existing fail-closed behaviour — so a model that
+    ignores the FINDING contract can never accidentally turn a refutation into a pass.
+    """
+    findings = _parse_findings(summary)
+    if not findings:
+        return verdict == "survived", [], []
+    try:
+        floor = _SEVERITY_ORDER.index((block_severity or "major").strip().lower())
+    except ValueError:
+        floor = _SEVERITY_ORDER.index("major")
+    blocking = [f for f in findings if _SEVERITY_ORDER.index(f["severity"]) >= floor]
+    non_blocking = [f for f in findings if _SEVERITY_ORDER.index(f["severity"]) < floor]
+    return (not blocking), blocking, non_blocking
+
+
+def _test_arbiter_prompt(title, criteria, *, instructions="", test_output="", change=""):
+    """Rule on a FAILING test: is the code wrong, or did the test author encode the criteria wrong?
+
+    Frozen tests are the moat — the implementer must never edit its own oracle. But a test that
+    asserts something the criteria never required is unsatisfiable, and the run then burns every
+    repair round against it. This is the independent third opinion that breaks that deadlock.
+    """
+    return (
+        _ctx_block(title, instructions, criteria)
+        + "You are an INDEPENDENT test arbiter. You did NOT write this code and did NOT write "
+        "these tests. A test is currently FAILING. Decide ONE thing: is the IMPLEMENTATION wrong, "
+        "or is the TEST wrong?\n\n"
+        "A test is WRONG only when it asserts something the task and acceptance criteria never "
+        "required — it invents a stricter contract, hard-codes an incidental detail (exact "
+        "wording, ordering, whitespace, a specific colour), or contradicts a stated criterion. "
+        "A test is RIGHT — and the code is wrong — whenever it checks something the criteria DO "
+        "require, even if satisfying it is awkward or the implementation would need real work.\n\n"
+        "Default to CODE_WRONG. Ruling TEST_WRONG lets an agent rewrite the oracle, so it demands "
+        "a concrete, quotable justification tied to the criteria. If you are unsure, rule "
+        "CODE_WRONG.\n\n"
+        f"FAILING TEST OUTPUT:\n```\n{(test_output or '')[:4000]}\n```\n\n"
+        + _change_clause(change)
+        + "Do NOT edit any files. End your response with EXACTLY one final line:\n"
+        "  ARBITER: CODE_WRONG — the test faithfully encodes the criteria; fix the implementation.\n"
+        "  ARBITER: TEST_WRONG <test name or file> — the test over-specifies beyond the criteria.\n"
+    )
+
+
+def _parse_arbiter(summary: str) -> tuple[str, str]:
+    """-> (ruling, target). Anything unparseable is CODE_WRONG: never amend the oracle by accident."""
+    m = re.search(r"(?im)^\s*ARBITER:\s*(CODE_WRONG|TEST_WRONG)\b[\s—:-]*(.*)$", summary or "")
+    if not m:
+        return "code_wrong", ""
+    return m.group(1).lower(), (m.group(2) or "").strip()[:200]
+
+
+def _test_amend_prompt(criteria, ruling_target: str, rationale: str) -> str:
+    """Narrow mandate for the ONE agent allowed to touch a test — and only the arbitrated one."""
+    return (
+        "An independent arbiter ruled that a TEST is wrong: it asserts more than the agreed "
+        f"acceptance criteria require.\n\nTEST AT FAULT: {ruling_target or '(see rationale)'}\n"
+        f"ARBITER'S RATIONALE:\n{(rationale or '')[:2000]}\n\n"
+        f"ACCEPTANCE CRITERIA (the ONLY contract that counts):\n{criteria}\n\n"
+        "Amend ONLY that test, and ONLY so far as to stop asserting what the criteria never "
+        "required. Do NOT weaken any assertion that maps to a criterion, do NOT delete the test, "
+        "and do NOT touch the implementation — you are fixing the oracle, not making it pass. "
+        "State in one line what you changed and why it still enforces the criteria."
+    )
+
+
+def _spawn_deferred_findings_task(
+    engine, settings, jobs, *, project_id, task_id, spec, base_branch,
+    findings: list[dict], parent_run_id: str, parent_title: str,
+):
+    """Queue sub-threshold review findings as their own code task on the shipped branch.
+
+    Deferring a finding must never mean losing it: this is what makes "ship the phase over a
+    cosmetic defect" safe, because the defect leaves as tracked work rather than as a note in a
+    receipt nobody reads. Best-effort by construction — a PR that is already open must not be
+    failed by bookkeeping.
+    """
+    lines = [f"- [{f['severity'].upper()}] {f['text']}"
+             for f in (findings or []) if f.get("text")]
+    if not lines:
+        return None
+    from .code_task_service import start_code_task
+    body = "\n".join(lines[:20])
+    with _transaction(engine) as c:
+        return start_code_task(
+            c, project_id=project_id, task_id=task_id,
+            title=f"Follow-up: deferred review findings — {parent_title}"[:160],
+            instructions=(
+                "An adversarial review of the parent change graded these findings BELOW the "
+                "blocking threshold, so the change shipped and they were deferred to this task. "
+                "Fix them on top of the shipped branch.\n\n"
+                f"DEFERRED FINDINGS (from run {parent_run_id}):\n{body}\n\n"
+                "Fix ONLY these. Do not refactor beyond them and do not weaken existing tests."),
+            acceptance_criteria=[f"Deferred finding addressed: {ln[:180]}" for ln in lines[:20]],
+            test_commands=spec.get("test_commands") or [],
+            owner=spec.get("owner"), repo=spec.get("repo"),
+            base_branch=base_branch,
+            # Recursion guard: a follow-up never spawns its own follow-up, so a reviewer that
+            # always emits one NIT can't generate an unbounded chain of tasks (and spend).
+            finalize_ctx={"deferred_from_run": parent_run_id, "is_followup": True},
+            jobs=jobs, profile=spec.get("profile"),
+        )
 
 
 def _parse_verdict(summary: str) -> str:
@@ -1242,6 +1379,8 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
         sec_verdict = "skipped"
         cons_verdict = "skipped"
         review_confidence = None  # #9: fraction of the refute panel that could not refute
+        deferred_findings: list[dict] = []  # sub-threshold review findings → follow-up task
+        test_arbitrations: list[dict] = []  # CODE_WRONG/TEST_WRONG rulings on failing tests
         panel_size = 1
         review_cost = 0
         mutation_caught = None
@@ -1479,7 +1618,14 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
             gates["tests_written_first"] = bool(test_files)
             gates["coder_did_not_edit_tests"] = tests_untouched
         if do_review:
-            gates["code_review_passed"] = verdict == "survived"
+            # SEVERITY-CALIBRATED: a NIT must not sink a phase the way a BLOCKER does. Findings
+            # below the threshold are carried in `deferred_findings` and spawned as their own
+            # task after the PR opens, so nothing the reviewer caught is lost.
+            _rev_pass, _blocking, _deferred = _review_gate_from_findings(
+                r3.get("summary", ""), verdict,
+                getattr(settings, "code_review_block_severity", "major"))
+            deferred_findings = _deferred
+            gates["code_review_passed"] = _rev_pass
             gates["security_clean"] = sec_verdict == "clean"
             if mutation_caught is not None:
                 gates["tests_strong_enough"] = mutation_caught
@@ -1524,6 +1670,10 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
             "iac_task": iac_task,
             "mutation_caught": mutation_caught,
             "regressions_ok": regressions_ok,
+            # Sub-threshold review findings ship WITH the change and become their own task —
+            # recorded here so the receipt shows what was knowingly deferred, not hidden.
+            "deferred_findings": deferred_findings,
+            "test_arbitrations": test_arbitrations,
             "panel_parallel": panel_parallel,
             "design": design,
             "plan_ok": design.get("plan_ok") if do_design else None,
@@ -1582,11 +1732,62 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
             # failed judges re-review the delta. Ships when every gate turns green;
             # falls back to the legacy paths below if it can't converge.
             inrun_max = max(0, int(getattr(settings, "code_review_inrun_max_rounds", 2) or 2))
+            # Test gates are convergeable too. Previously a failing test skipped this loop entirely
+            # and fell through to a FULL cold re-run — discarding the warm session and re-paying for
+            # spec/plan — which is why repeated attempts never converged on test failures.
+            _convergeable = {"code_review_passed", "consistent",
+                             "written_tests_pass", "nothing_broke"}
             if (failing and not use_microvm and impl_session_id
-                    and set(failing) <= {"code_review_passed", "consistent"}):
+                    and set(failing) <= _convergeable):
               try:  # a convergence failure must DEGRADE to the legacy paths, never kill the run
                 for round_i in range(1, inrun_max + 1):
                     finding_bits = []
+                    # TEST ARBITRATION: before making the implementer chase the oracle, establish
+                    # that the oracle is right. An over-specified test is unsatisfiable, and every
+                    # round spent against it is wasted.
+                    if ("written_tests_pass" in failing
+                            and getattr(settings, "code_test_arbiter_enabled", True)):
+                        _tr = sandbox.run(test_cmd)
+                        if not _tr.ok:
+                            with _transaction(engine) as c:
+                                _set_phase(c, run_id, "test_arbitration")
+                            set_llm_context(db_engine=engine, project_id=project_id,
+                                            run_id=run_id, stage="review_code")
+                            a_arb, m_arb = _route("review_code")
+                            r_arb = a_arb.run_role(
+                                _test_arbiter_prompt(
+                                    title, criteria, instructions=instructions,
+                                    test_output=_tr.stdout,
+                                    change=_render_change_for_review(
+                                        {fc.path: fc.content for fc in sandbox.diff()})),
+                                review_root, read_only=True, model=m_arb)
+                            cost += int(r_arb.get("cost_usd_micros") or 0)
+                            ruling, target = _parse_arbiter(r_arb.get("summary", ""))
+                            test_arbitrations.append({
+                                "round": round_i, "ruling": ruling, "target": target,
+                                "rationale": (r_arb.get("summary") or "")[:1200]})
+                            with _transaction(engine) as c:
+                                emit_event(c, project_id, "code_task.test_arbitration", "boss",
+                                           "code_task_run", run_id,
+                                           {"round": round_i, "ruling": ruling, "target": target})
+                            if ruling == "test_wrong":
+                                # ONLY the test-author lane may touch the oracle — never the
+                                # implementer's session, so `coder_did_not_edit_tests` keeps meaning.
+                                with _transaction(engine) as c:
+                                    _set_phase(c, run_id, "write_tests")
+                                set_llm_context(db_engine=engine, project_id=project_id,
+                                                run_id=run_id, stage="write_tests")
+                                a_ta, m_ta = _route("write_tests")
+                                r_ta = a_ta.run_role(
+                                    _test_amend_prompt(criteria, target,
+                                                       r_arb.get("summary", "")),
+                                    root, model=m_ta)
+                                cost += int(r_ta.get("cost_usd_micros") or 0)
+                            else:
+                                finding_bits.append(
+                                    "FAILING TESTS (the arbiter confirmed these tests are "
+                                    "CORRECT — fix the implementation, do NOT touch the "
+                                    "tests):\n" + (_tr.stdout or "")[:3000])
                     if "code_review_passed" in failing:
                         finding_bits.append(
                             "ADVERSARIAL REVIEW FINDINGS:\n" + (r3.get("summary") or "")[:3000])
@@ -1598,17 +1799,33 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
                                    "code_task_run", run_id,
                                    {"round": round_i, "of": inrun_max, "failing_gates": failing})
                         _set_phase(c, run_id, "implement")
-                    set_llm_context(db_engine=engine, project_id=project_id, run_id=run_id,
-                                    stage="implement")
-                    a_fix, m_fix = _route("implement")
-                    rfix = a_fix.run_role(
-                        _targeted_fix_prompt("\n\n".join(finding_bits), round_i), root,
-                        model=m_fix, resume_session_id=impl_session_id)
-                    impl_session_id = rfix.get("session_id") or impl_session_id
-                    cost += int(rfix.get("cost_usd_micros") or 0)
-                    r2 = {**r2, "summary": (rfix.get("summary") or r2.get("summary", ""))}
-                    if not sandbox.run(test_cmd).ok:
-                        break  # the fix broke the frozen tests — legacy handling below
+                    # A TEST_WRONG round amends only the oracle — there is nothing for the
+                    # implementer to do, and resuming it with an empty brief invites churn.
+                    if finding_bits:
+                        set_llm_context(db_engine=engine, project_id=project_id, run_id=run_id,
+                                        stage="implement")
+                        a_fix, m_fix = _route("implement")
+                        rfix = a_fix.run_role(
+                            _targeted_fix_prompt("\n\n".join(finding_bits), round_i), root,
+                            model=m_fix, resume_session_id=impl_session_id)
+                        impl_session_id = rfix.get("session_id") or impl_session_id
+                        cost += int(rfix.get("cost_usd_micros") or 0)
+                        r2 = {**r2, "summary": (rfix.get("summary") or r2.get("summary", ""))}
+                    # Re-verify against the oracle. `nothing_broke` is the same full-suite run
+                    # (regressions_ok = panel["full"]), so one execution refreshes both gates.
+                    _post = sandbox.run(test_cmd)
+                    tests_passed = bool(_post.ok)
+                    gates["written_tests_pass"] = tests_passed
+                    if "nothing_broke" in gates:
+                        gates["nothing_broke"] = tests_passed
+                    if not tests_passed:
+                        # Still red is no longer a dead end: re-arbitrate next round (the fix may
+                        # be partial, or an amended test still over-specified). Only exhausting
+                        # the rounds drops through to the legacy repair/block paths.
+                        failing = [k for k, v in gates.items() if not v]
+                        if round_i >= inrun_max or (set(failing) - _convergeable):
+                            break
+                        continue
                     change_block = _render_change_for_review(
                         {fc.path: fc.content for fc in sandbox.diff()})
                     impl_files = [fc.path for fc in sandbox.diff()
@@ -1626,7 +1843,11 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
                         verdict = _parse_verdict(rr.get("summary", ""))
                         r3 = rr
                         review_confidence = 1.0 if verdict == "survived" else 0.0
-                        gates["code_review_passed"] = verdict == "survived"
+                        _rev_pass, _blocking, _deferred = _review_gate_from_findings(
+                            rr.get("summary", ""), verdict,
+                            getattr(settings, "code_review_block_severity", "major"))
+                        deferred_findings = _deferred
+                        gates["code_review_passed"] = _rev_pass
                     if "consistent" in failing:
                         with _transaction(engine) as c:
                             _set_phase(c, run_id, "consistency_check")
@@ -1651,6 +1872,8 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
                             "review_summary": (r3.get("summary") or "")[:4000],
                             "consistency_summary": (r6.get("summary") or "")[:1500],
                             "inrun_convergence_rounds": round_i,
+                            "deferred_findings": deferred_findings,
+                            "test_arbitrations": test_arbitrations,
                         })
                         with _transaction(engine) as c:
                             c.execute(sql(
@@ -1819,7 +2042,31 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
                        {"pull_request_url": proposal.get("pull_request_url"),
                         "decision_id": proposal.get("decision_id"), "quality_gate_id": qg_id})
         plane_sync.on_event(engine, settings, run_id, "code_task.pr_opened")  # P2: comment the PR link
-        return {"status": "completed", "done": True, "quality_gate_id": qg_id, **proposal}
+        # DEFERRED FINDINGS → their own task on the shipped branch. After the PR exists, so a
+        # bookkeeping failure can never cost the delivery; guarded so follow-ups don't recurse.
+        followup_run_id = None
+        if (deferred_findings
+                and getattr(settings, "code_review_followup_tasks", True)
+                and not fctx.get("is_followup")):
+            try:
+                followup_run_id = _spawn_deferred_findings_task(
+                    engine, settings, jobs, project_id=project_id, task_id=task_id,
+                    spec=spec, base_branch=work_branch, findings=deferred_findings,
+                    parent_run_id=run_id, parent_title=title)
+                with _transaction(engine) as c:
+                    emit_event(c, project_id, "code_task.deferred_findings_task", "boss",
+                               "code_task_run", run_id,
+                               {"followup_run_id": followup_run_id,
+                                "findings": deferred_findings[:20]})
+            except Exception as exc:  # noqa: BLE001 — never fail a shipped PR on follow-up bookkeeping
+                with _transaction(engine) as c:
+                    emit_event(c, project_id, "code_task.deferred_findings_task_failed", "boss",
+                               "code_task_run", run_id,
+                               {"error": f"{type(exc).__name__}: {exc}"[:300],
+                                "findings": deferred_findings[:20]})
+        return {"status": "completed", "done": True, "quality_gate_id": qg_id,
+                "deferred_findings": deferred_findings,
+                "followup_run_id": followup_run_id, **proposal}
 
     except Exception as exc:  # noqa: BLE001 — fail the run gracefully on any agent/model error
         _finish_vms(success=False)  # retain stage VMs for root-causing via the console
