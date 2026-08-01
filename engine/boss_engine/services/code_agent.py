@@ -113,6 +113,50 @@ class CodeAgentResult:
         }
 
 
+def _pack(cwd: Path, *, task: str = "", limit: int = 120) -> str:
+    # IaC authoring (spec 05 §3.2 / T4): .tf/.tfvars/.hcl are context. APP-5 (#95): frontend exts
+    # added so the design system is visible, and selection is retrieval-driven (pin the design
+    # source-of-truth + Terraform core, rank the rest by relevance) instead of first-N-by-path.
+    exts = {".py", ".js", ".ts", ".tsx", ".jsx", ".go", ".java", ".rb", ".rs", ".json", ".md",
+            ".txt", ".cfg", ".toml", ".yaml", ".yml", ".gradle", ".xml", ".css", ".scss",
+            ".html", ".vue", ".svelte", ".tf", ".tfvars", ".hcl"}
+    skip = {"node_modules", "dist", "build", ".next", ".git", ".venv", "venv",
+            "__pycache__", "vendor", "target", "coverage", ".turbo"}
+    files: list[str] = []
+    entries: list[dict] = []
+    for p in sorted(cwd.rglob("*")):
+        if not p.is_file() or skip & set(p.parts):
+            continue
+        rel = p.relative_to(cwd).as_posix()
+        files.append(rel)
+        if p.suffix not in exts:
+            continue
+        try:
+            entries.append({"rel": rel, "content": p.read_text(errors="ignore"),
+                            "size": p.stat().st_size})
+        except OSError:
+            continue
+    # Pin the design-system source of truth (when the repo has one) so a UI task always sees the
+    # tokens + component kit; Terraform core stays pinned too. The 40/20KB caps are gone as the
+    # selection mechanism — max_files/max_bytes are a large safety ceiling.
+    ui = any(repo_retriever.is_design_file(e["rel"]) for e in entries)
+    selection = repo_retriever.select_files(entries, task, ui=ui, pin=_is_core_tf_file,
+                                             max_files=limit)
+    return repo_retriever.render_context(files, selection)
+
+
+def build_repo_context(cwd: Path, *, task: str = "", limit: int = 120) -> str:
+    """Relevance-ranked repo context for a task.
+
+    BOSS has owned a module-aware context packer since spec 09, but only NativeCodeAgent
+    used it — ClaudeCodeAgent started every stage with a bare prompt and rediscovered the
+    repository with its own tools. Measured on the implement stage of crun_08c43028:
+    ~27 of its tool calls were exploration (Read/ls/cat) against 16 real edits. That
+    rediscovery is paid again by every stage of every run.
+    """
+    return _pack(cwd, task=task, limit=limit)
+
+
 class CodeAgent(Protocol):
     def run(
         self, spec: CodeTaskSpec, repo: RepoContext, sandbox: EphemeralSandbox
@@ -153,10 +197,26 @@ class ClaudeCodeAgent:
                 return str(local)
         return configured
 
-    def _build_prompt(self, spec: CodeTaskSpec, repo: RepoContext) -> str:
+    def _build_prompt(self, spec: CodeTaskSpec, repo: RepoContext,
+                      cwd: Optional[Path] = None) -> str:
         criteria = "\n".join(f"- {c}" for c in spec.acceptance_criteria) or "- (none specified)"
         tests = "\n".join(f"- {c}" for c in spec.test_commands) or "- (none specified)"
         guide = f"\n\nREPO GUIDE:\n{repo.repo_guide}\n" if repo.repo_guide else ""
+        # Hand the agent a relevance-ranked map of the repo instead of making it discover the
+        # codebase with Read/ls/cat on every run. Bounded (a focused pack, not the whole tree)
+        # so it orients the agent rather than flooding the context it re-sends each turn.
+        ctx = ""
+        limit = int(getattr(self.settings, "code_agent_context_files", 14) or 0)
+        if cwd is not None and limit > 0:
+            try:
+                packed = build_repo_context(
+                    cwd, task=f"{spec.title}\n{spec.instructions}", limit=limit)
+            except Exception:
+                packed = ""
+            if packed:
+                ctx = ("\n\nREPO CONTEXT (pre-selected as most relevant — start here rather "
+                       "than exploring from scratch; open anything else you need):\n" + packed + "\n")
+        guide = ctx + guide
         return (
             "You are a senior software engineer working in a checked-out git repo "
             "(your current working directory). Implement the task below by editing "
@@ -380,7 +440,7 @@ class ClaudeCodeAgent:
     ) -> CodeAgentResult:
         if sandbox.path is None:
             raise RuntimeError("Sandbox must be provisioned before running the agent.")
-        prompt = self._build_prompt(spec, repo)
+        prompt = self._build_prompt(spec, repo, cwd=sandbox.path)
         started = time.monotonic()
         data = self._invoke(prompt, sandbox.path)
         usage, cost_micros = self._usage(data, self.settings)
@@ -451,6 +511,9 @@ class NativeCodeAgent:
         self._llm = OpenAIAdapter(settings)
 
     def _repo_context(self, cwd: Path, *, task: str = "", limit: int = 120) -> str:
+        return build_repo_context(cwd, task=task, limit=limit)
+
+    def _repo_context_impl(self, cwd: Path, *, task: str = "", limit: int = 120) -> str:
         # IaC authoring (spec 05 §3.2 / T4): .tf/.tfvars/.hcl are context. APP-5 (#95): frontend exts
         # added so the design system is visible, and selection is retrieval-driven (pin the design
         # source-of-truth + Terraform core, rank the rest by relevance) instead of first-N-by-path.

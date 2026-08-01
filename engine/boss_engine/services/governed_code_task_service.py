@@ -1179,7 +1179,14 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
         # Which steps run is set by the risk tier (the cost dial): tier 0 = one agent writes
         # code + tests; tier >=1 = a separate tester; tier >=2 = add a fresh-context code review.
         do_separate_tests = risk_tier >= 1
-        do_review = risk_tier >= 2
+        # The adversarial panel (code review + security + consistency + full-suite regression)
+        # runs its checks CONCURRENTLY — measured wall time 3.3 min for all four, against 12.8
+        # min for the sequential design chain. It was gated at tier 2, so every cheaper run
+        # shipped with "not run at this rigor" on all four gates. That is not a faster pipeline,
+        # it is a pipeline doing less work — and it is not a result anyone can trust.
+        # Verification is cheap because it is parallel; PLANNING is what is expensive. So the
+        # panel now runs from tier 1, and only the design chain stays tier-2+.
+        do_review = risk_tier >= 1
         # ADVISORY GATE: when True, failing quality checks are SURFACED but do NOT block the PR —
         # the build still ships a PR + preview and the user retries-to-improve. Quality feedback
         # without a dead-end (product decision: always produce a result on the first pass).

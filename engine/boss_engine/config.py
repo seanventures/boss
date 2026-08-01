@@ -681,6 +681,11 @@ class Settings(BaseSettings):
     # is what turned one small feature into 28 sessions / 96 model-minutes / $39.
     code_impl_max_continuations: int = Field(
         default=3, alias="BOSS_CODE_IMPL_MAX_CONTINUATIONS")
+    # How many relevance-ranked files are pre-packed into the coding prompt. The agent
+    # otherwise rediscovers the repo every stage (~27 exploration tool-calls vs 16 edits,
+    # measured). 0 disables the pack and restores pure self-exploration.
+    code_agent_context_files: int = Field(
+        default=14, alias="BOSS_CODE_AGENT_CONTEXT_FILES")
     # Hard wall-clock deadline for the whole review panel AND for a single read-only review
     # invocation — so a slow/rate-limited review (e.g. an OpenAI-gateway retry storm) can't
     # blow the review phase out to 20min. On deadline a check degrades to 'not_run' (security
