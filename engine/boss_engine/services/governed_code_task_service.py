@@ -1411,6 +1411,39 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
                     r2 = a.run_role(impl_prompt, root, model=m)
                 impl_session_id = r2.get("session_id") or impl_session_id
                 cost += int(r2.get("cost_usd_micros") or 0)
+                # FINISH THE WORK BEFORE JUDGING IT. The implementer hitting its turn cap
+                # returns a PARTIAL change, and the pipeline used to hand that half-built diff
+                # straight to the reviewers — who correctly found it wanting, which triggered a
+                # full from-scratch repair that hit the same cap again. Measured on one small
+                # feature: implement ran 41/40 turns twice, and the run spent 28 sessions /
+                # 96 model-minutes / $39 without ever finishing the feature.
+                # Resuming the implementer's OWN session continues the work on a warm cache
+                # (its prior turns are cache reads, not fresh ingestion), which is both far
+                # cheaper and far faster than re-deriving the change from zero.
+                _cont = 0
+                _max_cont = max(0, int(getattr(settings, "code_impl_max_continuations", 3) or 3))
+                while (check_is_inconclusive(r2.get("summary", ""))
+                       and _cont < _max_cont and impl_session_id):
+                    _cont += 1
+                    with _transaction(engine) as c:
+                        emit_event(c, project_id, "code_task.implement_continued", "boss",
+                                   "code_task_run", run_id,
+                                   {"continuation": _cont, "of": _max_cont,
+                                    "reason": "implementer hit its turn cap — resuming its own "
+                                              "session to finish, not judging a partial change"})
+                    try:
+                        rc = a.run_role(
+                            "Your previous turn ended because you ran out of turns, not because "
+                            "the work was done. CONTINUE from exactly where you stopped and "
+                            "FINISH the task. Do not restart or re-plan. When the change is "
+                            "complete and the tests pass, end with a summary of what you changed.",
+                            root, model=m, resume_session_id=impl_session_id,
+                            max_turns=int(getattr(settings, "code_agent_max_turns", 40) or 40))
+                    except Exception:
+                        break
+                    cost += int(rc.get("cost_usd_micros") or 0)
+                    impl_session_id = rc.get("session_id") or impl_session_id
+                    r2 = {**r2, "summary": (rc.get("summary") or r2.get("summary", ""))}
                 if do_separate_tests:
                     tests_untouched = tests_before == _hash_files(root, test_files)
                     tampered = [p for p in test_files

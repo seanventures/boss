@@ -676,6 +676,11 @@ class Settings(BaseSettings):
     # CHECK is the only coherent remedy for a check that never judged the code.
     code_review_max_escalations: int = Field(
         default=2, alias="BOSS_CODE_REVIEW_MAX_ESCALATIONS")
+    # How many times an implementer that hit its TURN CAP is resumed (warm session) to
+    # finish, before its partial change is judged. Judging a partial change as defective
+    # is what turned one small feature into 28 sessions / 96 model-minutes / $39.
+    code_impl_max_continuations: int = Field(
+        default=3, alias="BOSS_CODE_IMPL_MAX_CONTINUATIONS")
     # Hard wall-clock deadline for the whole review panel AND for a single read-only review
     # invocation — so a slow/rate-limited review (e.g. an OpenAI-gateway retry storm) can't
     # blow the review phase out to 20min. On deadline a check degrades to 'not_run' (security
