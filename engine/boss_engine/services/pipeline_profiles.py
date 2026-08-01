@@ -9,6 +9,8 @@ caching/parallel hints are recorded now and applied by the runtime in Phase 2.
 """
 from __future__ import annotations
 
+import re
+
 from typing import Optional
 
 # Markers that force a change to high risk regardless of the profile floor.
@@ -30,9 +32,19 @@ _MARKER_HUMAN = {
 }
 
 
-def sensitive_markers_in(spec: dict) -> list[str]:
-    """Which sensitive markers a task's text matches — the concrete reason it may need review."""
-    haystack = " ".join(
+# Text BOSS itself appends to every task. It must NEVER feed the sensitivity classifier: the
+# DEPLOYABILITY note contains the word "deployability", which substring-matched the "deploy"
+# marker, flagged EVERY task as sensitive, and pinned it to tier >= 2 — overriding even an
+# explicit risk_tier from the caller. BOSS was reading its own boilerplate as a risk signal.
+_BOSS_BOILERPLATE_STARTS = (
+    "deployability (required for any network service)",
+    "=== iteration feedback",
+)
+
+
+def _task_haystack(spec: dict) -> str:
+    """The task's OWN words, lowercased, with BOSS-appended boilerplate removed."""
+    text = " ".join(
         [
             str(spec.get("title", "")),
             str(spec.get("instructions", "")),
@@ -40,7 +52,25 @@ def sensitive_markers_in(spec: dict) -> list[str]:
             str(spec.get("repo", "")),
         ]
     ).lower()
-    return [m for m in SENSITIVE_MARKERS if m in haystack]
+    for marker in _BOSS_BOILERPLATE_STARTS:
+        idx = text.find(marker)
+        while idx != -1:
+            end = text.find("\n\n", idx)
+            text = text[:idx] + (text[end:] if end != -1 else "")
+            idx = text.find(marker)
+    return text
+
+
+def _matches(marker: str, haystack: str) -> bool:
+    """Whole-word match. Substring matching is what turned "deployability" into "deploy",
+    and would equally turn "authentic"/"authorised" into "auth" or "tokenizer" into "token"."""
+    return re.search(r"\b" + re.escape(marker) + r"\b", haystack) is not None
+
+
+def sensitive_markers_in(spec: dict) -> list[str]:
+    """Which sensitive markers a task's text matches — the concrete reason it may need review."""
+    haystack = _task_haystack(spec)
+    return [m for m in SENSITIVE_MARKERS if _matches(m, haystack)]
 
 
 # Phrases that say "modify what is already there" rather than "build something new". A change
@@ -196,15 +226,8 @@ def infer_risk_tier(spec: dict, profile: dict) -> int:
     Order: an explicit `risk_tier` on the task wins; otherwise infer — sensitive surfaces
     (auth/payments/secrets/migrations/deploys) are high, everything else is standard.
     """
-    haystack = " ".join(
-        [
-            str(spec.get("title", "")),
-            str(spec.get("instructions", "")),
-            " ".join(spec.get("acceptance_criteria", []) or []),
-            str(spec.get("repo", "")),
-        ]
-    ).lower()
-    sensitive = any(m in haystack for m in SENSITIVE_MARKERS)
+    haystack = _task_haystack(spec)
+    sensitive = any(_matches(m, haystack) for m in SENSITIVE_MARKERS)
     explicit = spec.get("risk_tier")
     if isinstance(explicit, int) and 0 <= explicit <= 3:
         tier = explicit
