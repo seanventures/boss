@@ -8906,6 +8906,22 @@ def revoke_github_connection(
     return _transition_github_connection(connection_id, payload, "revoke")
 
 
+@app.get("/v1/github/repository-activity")
+def github_repository_activity(project_id: str, days: int = 30):
+    """What BOSS DID in each repo — runs, PRs opened/merged, success + first-pass rates,
+    median time-to-PR, spend and $/PR, plus recent runs. Powers the GitHub area's KPIs,
+    which otherwise only showed whether a connection existed."""
+    from .services import repo_registry
+    with begin(engine) as connection:
+        activity = repo_registry.repository_activity(connection, project_id, days=days)
+    try:
+        repo_registry.fill_merged_counts(
+            activity, token=getattr(settings, "github_token", "") or "")
+    except Exception:  # merge state is best-effort enrichment, never a hard failure
+        pass
+    return {"project_id": project_id, "days": days, "items": activity}
+
+
 @app.get(
     "/v1/github/repository-bindings",
     response_model=GitHubRepositoryBindingListResponse,

@@ -749,6 +749,25 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
                 "default_target": target}
 
     @reg.tool(
+        "repo_activity",
+        "What BOSS actually DID in each repo: runs, PRs opened/merged, success and "
+        "first-pass rates, median time-to-PR, spend and $/PR, plus the recent runs. "
+        "The answer to 'how is BOSS performing in my repository?'.",
+        _obj({"days": {"type": "integer", "minimum": 1, "maximum": 365, "default": 30},
+              "project_id": {"type": "string"}}),
+    )
+    def repo_activity(ctx, *, project_id, actor, args):
+        rr = services_module("repo_registry")
+        pid = args.get("project_id") or project_id
+        with ctx.begin() as c:
+            acts = rr.repository_activity(c, pid, days=int(args.get("days") or 30))
+        try:
+            rr.fill_merged_counts(acts, token=getattr(ctx.settings, "github_token", "") or "")
+        except Exception:
+            pass
+        return {"project_id": pid, "repositories": _json_safe(acts)}
+
+    @reg.tool(
         "register_repository",
         "Register a repository against an existing GitHub connection so BOSS can build "
         "in it. Credentials come from the CONNECTION (a stored SecretRef) — never pass a "

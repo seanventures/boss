@@ -3419,3 +3419,37 @@ select.input:focus,
 }
 .ar-meta { font-family: var(--mono); font-size: 11px; color: var(--faint); }
 .ar-meta-active { color: var(--teal); }
+
+/* ── Repository Activity (GitHub area KPIs) ──────────────────────────────────
+   The GitHub area previously showed only connection config. These are the
+   developer-facing numbers: what BOSS ran, shipped, and spent per repo.       */
+.ra-repos { display: flex; flex-direction: column; gap: 18px; }
+.ra-repo {
+  border: 1px solid var(--border, rgba(255,255,255,.12));
+  border-radius: 14px; padding: 18px 20px 14px;
+  background: var(--panel, rgba(255,255,255,.03));
+}
+.ra-repo-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; flex-wrap: wrap; }
+.ra-repo-name { margin: 2px 0 0; font-size: 1.05rem; letter-spacing: -0.01em; }
+.ra-repo-name a { text-decoration: none; color: inherit; border-bottom: 1px solid transparent; }
+.ra-repo-name a:hover { border-bottom-color: currentColor; }
+.ra-repo-meta { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; font-size: .78rem; opacity: .7; }
+.ra-window { opacity: .75; }
+.ra-kpis { margin-top: 14px; display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(132px, 1fr)); }
+.ra-kpi { display: flex; flex-direction: column; gap: 2px; padding: 10px 12px; border-radius: 10px;
+  background: var(--panel-2, rgba(255,255,255,.04)); border: 1px solid transparent; }
+.ra-kpi[data-tone="ok"]   { border-color: rgba( 60,190,120,.35); }
+.ra-kpi[data-tone="bad"]  { border-color: rgba(230, 90, 90,.30); }
+.ra-kpi[data-tone="live"] { border-color: rgba( 90,150,255,.35); }
+.ra-kpi-hint { font-size: .70rem; opacity: .6; }
+.ra-runs { width: 100%; margin-top: 16px; border-collapse: collapse; font-size: .82rem; }
+.ra-runs th { text-align: left; font-weight: 500; opacity: .55; padding: 6px 10px 6px 0; font-size: .72rem;
+  text-transform: uppercase; letter-spacing: .04em; }
+.ra-runs td { padding: 7px 10px 7px 0; border-top: 1px solid var(--border-soft, rgba(255,255,255,.07)); }
+.ra-run-title { max-width: 380px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ra-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 7px; vertical-align: middle; }
+.ra-dot[data-tone="ok"]   { background: rgb( 60,190,120); }
+.ra-dot[data-tone="bad"]  { background: rgb(230, 90, 90); }
+.ra-dot[data-tone="live"] { background: rgb( 90,150,255); }
+.ra-dot[data-tone="idle"] { background: rgba(255,255,255,.35); }
+@media (max-width: 640px) { .ra-run-title { max-width: 180px; } }

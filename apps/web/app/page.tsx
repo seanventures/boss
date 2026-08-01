@@ -151,6 +151,8 @@ import { fetchProviderOpsFeed } from "../lib/providerops";
 import { ProviderConfigurationSuite } from "./provider-configuration-ui";
 import { fetchGitHubOperationsFeed } from "../lib/github-operations";
 import { GitHubOperations } from "./github-operations-ui";
+import { fetchRepoActivity } from "../lib/repo-activity";
+import { RepoActivityPanel } from "./repo-activity-ui";
 import { DeploymentPromotionTimeline } from "./deployment-promotion-timeline";
 import { fetchProjectFeed } from "../lib/projects";
 import { fetchReceiptFeed } from "../lib/receipts";
@@ -571,6 +573,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
     skills,
     providerOps,
     githubOperations,
+    repoActivity,
     receipts,
     infrastructureResources,
     budgetStatus,
@@ -639,6 +642,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
       fetchSkillFeed(),
       fetchProviderOpsFeed(activeProjectId),
       fetchGitHubOperationsFeed(activeProjectId),
+      fetchRepoActivity(activeProjectId, 30),
       fetchReceiptFeed(activeProjectId, 100),
       fetchInfrastructureResourceFeed(activeProjectId),
       fetchBudgetStatus(activeProjectId),
@@ -766,6 +770,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
           </div>
           <DashboardPanel snapshot={dashboardSnapshot} />
         </section>
+
+        <RepoActivityPanel repos={repoActivity} />
 
         <GitHubOperations
           feed={githubOperations}
