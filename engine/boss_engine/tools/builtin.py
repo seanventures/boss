@@ -298,6 +298,16 @@ def _register_write_tools(reg: ToolRegistry) -> None:
                 },
                 "base_branch": {"type": "string", "description": "branch to build on (default main)"},
                 "risk_tier": {"type": "integer", "minimum": 0, "maximum": 3},
+                "profile": {
+                    "type": "string",
+                    "enum": ["lean", "balanced", "strict", "vag"],
+                    "description": "Cost/rigor dial. Use 'lean' for small, low-risk "
+                                   "changes (copy, CSS, a flag): it caps the risk tier "
+                                   "at 1 and runs every stage on the cheap model. The "
+                                   "project default may otherwise force a full "
+                                   "frontier-model pipeline — a one-line change then "
+                                   "costs the same ~9 agent sessions as a whole feature.",
+                },
                 "project_id": {"type": "string"},
             },
             ["title", "instructions"],
@@ -352,6 +362,7 @@ def _register_write_tools(reg: ToolRegistry) -> None:
                 finalize_ctx=finalize_ctx,
                 jobs=ctx.jobs,
                 risk_tier=risk_tier,
+                profile=args.get("profile"),
             )
         return {
             "status": "queued",
