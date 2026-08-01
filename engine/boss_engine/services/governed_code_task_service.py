@@ -108,6 +108,67 @@ def _hash_files(root: Path, paths: list[str]) -> dict[str, str]:
     return out
 
 
+# Markers that a check did not COMPLETE. A check that never finished produced no evidence
+# about the code, so "did not finish" must never be read as "the code is bad".
+_INCONCLUSIVE_MARKERS = (
+    "ran out of turns",
+    "partial attempt",
+    "resume to continue",
+    "exceeded",
+    "timed out",
+    "timeout",
+    "degraded",
+    "not_run",
+)
+
+
+def check_is_inconclusive(summary: str, verdict: Optional[str] = None) -> bool:
+    """True when a check produced NO usable judgement (turn cap, timeout, crash, skip).
+
+    This is the distinction the pipeline was missing. Every check used to be two-valued —
+    pass or fail — so a reviewer that exhausted its turn budget was recorded exactly like a
+    reviewer that read the diff and found a real defect. The remedy chosen for "fail" is to
+    repair the code, which cannot possibly fix a reviewer that never ran; the run then burned
+    a full pipeline (~$12, ~35 min) and arrived at the same non-answer.
+    """
+    text = (summary or "").strip().lower()
+    if not text:
+        return True
+    if verdict is not None and str(verdict).strip().lower() in {"not_run", "", "unknown"}:
+        return True
+    return any(marker in text for marker in _INCONCLUSIVE_MARKERS)
+
+
+def classify_gate_faults(
+    *, failing: list[str], evidence: dict
+) -> dict[str, str]:
+    """Classify each failing gate as WORK (the change is wrong) or HARNESS (the check
+    didn't finish). Only WORK is repairable by re-running the coding agent."""
+    faults: dict[str, str] = {}
+    for gate in failing:
+        if gate == "code_review_passed":
+            inconclusive = check_is_inconclusive(
+                evidence.get("review_summary", ""),
+                evidence.get("adversarial_verdict"),
+            )
+        elif gate == "consistent":
+            inconclusive = check_is_inconclusive(
+                evidence.get("consistency_summary", ""),
+                evidence.get("consistency_verdict"),
+            )
+        elif gate == "no_security_findings":
+            inconclusive = check_is_inconclusive(
+                evidence.get("security_summary", ""),
+                evidence.get("security_verdict"),
+            )
+        else:
+            # Test gates are authoritative: BOSS re-runs the suite itself, so a red suite is
+            # real evidence about the code, not a check that failed to finish.
+            inconclusive = False
+        faults[gate] = "HARNESS" if inconclusive else "WORK"
+    return faults
+
+
 def resolve_gate_failure_action(
     *,
     failing: list[str],
@@ -116,6 +177,7 @@ def resolve_gate_failure_action(
     max_repair_rounds: int,
     open_pr: bool = True,
     never_block: bool = True,
+    faults: Optional[dict[str, str]] = None,
 ) -> str:
     """Decide what to do after a non-passing quality gate.
 
@@ -138,6 +200,13 @@ def resolve_gate_failure_action(
     """
     if not failing or advisory_gate:
         return "ship"
+    # A repair re-runs the CODING agent. That is only a coherent remedy when a check actually
+    # judged the code and found it wanting. If every failing gate is a HARNESS fault — the
+    # check ran out of turns, timed out, or was skipped — then nothing has been said about the
+    # code, and repairing it re-derives the whole pipeline to reach the same non-answer. This
+    # single conflation produced repeated ~35-minute, ~$12 loops on changes whose tests passed.
+    if faults and failing and all(faults.get(g) == "HARNESS" for g in failing):
+        return "inconclusive"
     if rounds_used < max_repair_rounds and open_pr:
         return "repair"
     return "ship_with_dissent" if (never_block and open_pr) else "block"
@@ -1911,6 +1980,7 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
             rounds_used = max(0, int(fctx.get("attempt", 1)) - 1)
             # Fallback 2 (not 0): a missing/blank config field must never SILENTLY disable the moat.
             max_repair_rounds = max(0, int(getattr(settings, "code_review_repair_max_rounds", 2) or 2))
+            gate_faults = classify_gate_faults(failing=failing, evidence=evidence)
             action = resolve_gate_failure_action(
                 failing=failing,
                 advisory_gate=advisory_gate,
@@ -1918,7 +1988,69 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
                 max_repair_rounds=max_repair_rounds,
                 open_pr=spec.get("open_pr", True) is not False,
                 never_block=bool(getattr(settings, "code_gate_never_block", True)),
+                faults=gate_faults,
             )
+            if action == "inconclusive":
+                # The checks never finished, so nothing is known about the code. Re-run the
+                # CHECK with an escalated budget — never the coding agent. Bounded; if it is
+                # still inconclusive we ship with the dissent recorded honestly as "not
+                # reviewed", which is a materially different claim from "review failed".
+                escalations = int(fctx.get("check_escalations", 0) or 0)
+                max_escalations = max(0, int(
+                    getattr(settings, "code_review_max_escalations", 2) or 2))
+                with _transaction(engine) as c:
+                    emit_event(c, project_id, "code_task.check_inconclusive", "boss",
+                               "code_task_run", run_id,
+                               {"failing_gates": failing, "faults": gate_faults,
+                                "escalation": escalations + 1, "of": max_escalations,
+                                "reason": "check did not complete — escalating the CHECK, "
+                                          "not repairing the code"})
+                if escalations < max_escalations:
+                    base_turns = int(getattr(settings, "code_agent_review_max_turns", 16) or 16)
+                    escalated = min(120, base_turns * (2 ** (escalations + 1)))
+                    for gate in failing:
+                        if gate != "code_review_passed":
+                            continue
+                        with _transaction(engine) as c:
+                            _set_phase(c, run_id, "review_code")
+                        set_llm_context(db_engine=engine, project_id=project_id,
+                                        run_id=run_id, stage="review_code")
+                        rr = review_agent.run_role(
+                            _review_prompt(title, criteria, instructions=instructions,
+                                           ui=ui_task, change=change_block),
+                            review_root, read_only=True, model=review_model,
+                            max_turns=escalated)
+                        cost += int(rr.get("cost_usd_micros") or 0)
+                        verdict = _parse_verdict(rr.get("summary", ""))
+                        r3 = rr
+                        _rev_pass, _blocking, _deferred = _review_gate_from_findings(
+                            rr.get("summary", ""), verdict,
+                            getattr(settings, "code_review_block_severity", "major"))
+                        deferred_findings = _deferred
+                        gates["code_review_passed"] = _rev_pass
+                        evidence["review_summary"] = (rr.get("summary") or "")[:4000]
+                        evidence["adversarial_verdict"] = verdict
+                        evidence["review_escalated_turns"] = escalated
+                    failing = [k for k, v in gates.items() if not v]
+                    with _transaction(engine) as c:
+                        c.execute(sql(
+                            "UPDATE code_task_runs SET finalize_ctx="
+                            "COALESCE(finalize_ctx,'{}'::jsonb) || jsonb_build_object("
+                            "'check_escalations', CAST(:n AS int)), updated_at=now() "
+                            "WHERE id=:id"), {"n": escalations + 1, "id": run_id})
+                    gate_faults = classify_gate_faults(failing=failing, evidence=evidence)
+                    action = resolve_gate_failure_action(
+                        failing=failing, advisory_gate=advisory_gate,
+                        rounds_used=rounds_used, max_repair_rounds=max_repair_rounds,
+                        open_pr=spec.get("open_pr", True) is not False,
+                        never_block=bool(getattr(settings, "code_gate_never_block", True)),
+                        faults=gate_faults)
+                if action == "inconclusive":
+                    # Escalations exhausted: ship, recording that the code was NOT reviewed.
+                    action = ("ship_with_dissent"
+                              if (bool(getattr(settings, "code_gate_never_block", True))
+                                  and spec.get("open_pr", True) is not False)
+                              else "block")
             if action == "ship" and failing and advisory_gate:
                 # ADVISORY first pass: surface the failing checks (their verdicts are already
                 # recorded on the run, so the UI shows exactly which failed) but PROCEED to open the

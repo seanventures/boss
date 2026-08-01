@@ -120,7 +120,7 @@ class CodeAgent(Protocol):
 
     def run_role(
         self, prompt: str, cwd: Path, *, read_only: bool = False, model: Optional[str] = None,
-        resume_session_id: Optional[str] = None,
+        resume_session_id: Optional[str] = None, max_turns: Optional[int] = None,
     ) -> dict:
         """Run one isolated, role-scoped invocation against an existing workdir.
         Returns {summary, usage, cost_usd_micros, turns, model, session_id?}. The role
@@ -177,6 +177,7 @@ class ClaudeCodeAgent:
     def _invoke(
         self, prompt: str, cwd: Path, *, read_only: bool = False, model: Optional[str] = None,
         allowed_tools: Optional[str] = None, resume_session_id: Optional[str] = None,
+        max_turns: Optional[int] = None,
     ) -> dict:
         timeout = int(self.settings.code_agent_timeout_seconds or 900)
         # A full web build (in-container / local_subprocess) needs well beyond the legacy 900s that
@@ -200,6 +201,13 @@ class ClaudeCodeAgent:
         if read_only:
             # Reviews read + judge; they don't need the full edit-loop turn budget.
             _max_turns = min(_max_turns, int(getattr(self.settings, "code_agent_review_max_turns", 16) or 16))
+        if max_turns:
+            # Explicit per-invocation budget. A reviewer that exhausted its turns returns NO
+            # verdict, and a verdict-less review used to read as "the code failed review" — so
+            # the caller escalates the budget and re-runs the REVIEW rather than repairing code
+            # that was never actually judged.
+            _max_turns = int(max_turns)
+            timeout = max(timeout, min(3600, int(max_turns) * 30))
         cmd = [
             self._claude_bin(),
             "-p",
@@ -310,7 +318,7 @@ class ClaudeCodeAgent:
 
     def run_role(
         self, prompt: str, cwd: Path, *, read_only: bool = False, model: Optional[str] = None,
-        resume_session_id: Optional[str] = None,
+        resume_session_id: Optional[str] = None, max_turns: Optional[int] = None,
     ) -> dict:
         """Run a single role-scoped agent invocation against an existing workdir and
         return {summary, usage, cost_usd_micros, turns, model, session_id}. Used by the
@@ -324,7 +332,7 @@ class ClaudeCodeAgent:
         started = time.monotonic()
         try:
             data = self._invoke(prompt, cwd, read_only=read_only, model=model,
-                                resume_session_id=resume_session_id)
+                                resume_session_id=resume_session_id, max_turns=max_turns)
         except Exception as exc:
             failed_model = model or getattr(self.settings, "claude_cli_model", None) or ""
             record_llm_call(engine_name=self.engine, usage={"model": failed_model},

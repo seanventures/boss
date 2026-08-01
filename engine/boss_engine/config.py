@@ -671,6 +671,11 @@ class Settings(BaseSettings):
     # need 40 turns of exploration — a tighter cap cuts review latency a lot without losing
     # rigor (they read the diff + relevant files + judge).
     code_agent_review_max_turns: int = Field(default=16, alias="BOSS_CODE_AGENT_REVIEW_MAX_TURNS")
+    # How many times a check that DID NOT FINISH (turn cap/timeout/crash) is re-run with
+    # a doubled budget before the run ships with "not reviewed" recorded. Escalating the
+    # CHECK is the only coherent remedy for a check that never judged the code.
+    code_review_max_escalations: int = Field(
+        default=2, alias="BOSS_CODE_REVIEW_MAX_ESCALATIONS")
     # Hard wall-clock deadline for the whole review panel AND for a single read-only review
     # invocation — so a slow/rate-limited review (e.g. an OpenAI-gateway retry storm) can't
     # blow the review phase out to 20min. On deadline a check degrades to 'not_run' (security
