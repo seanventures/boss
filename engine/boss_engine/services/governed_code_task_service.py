@@ -927,6 +927,24 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
     # persisted — reuse it and skip the design phase + the gate.
     prior_state = run.get("state") or {}
     resume_design = prior_state.get("design") if prior_state.get("awaiting_plan_approval") else None
+    if resume_design is None:
+        # RESUME ACROSS ATTEMPTS. A repair re-ran standards+spec+plan+review_plan every time —
+        # four agent sessions (~10 min, ~$5 on the strong lane) re-deriving a plan for a task
+        # that had not changed. Measured: every retry re-ran 10/10 stages and inherited 0 of the
+        # parent's 42-44 state keys. NOTE: do NOT guard on `plan_ok` — it is computed as
+        # ("REVISE" not in summary), and the plan reviewer emits "PLAN: REVISE" as a soft
+        # suggestion even when it states the plan is sound, so plan_ok is false on EVERY run
+        # measured, including crun_12ae7cbf which shipped PR #60 clean. Guarding on it would
+        # silently disable resume. Inherit whenever a real plan exists; the repair feedback
+        # still drives what changes, and the reviewer still judges the result.
+        inherited = fctx.get("inherited_design")
+        if isinstance(inherited, dict) and (inherited.get("plan") or "").strip():
+            resume_design = inherited
+            with _transaction(engine) as c:
+                emit_event(c, project_id, "code_task.design_resumed", "boss",
+                           "code_task_run", run_id,
+                           {"from_run": fctx.get("parent_run_id"),
+                            "skipped_stages": ["standards", "spec", "plan", "review_plan"]})
 
     with _transaction(engine) as c:
         reservation = budget.reserve(

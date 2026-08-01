@@ -353,7 +353,15 @@ def retry_code_task(
                           # web_app_build, infer_risk_tier re-derives tier 2, and it runs the full
                           # design+write_tests+blocking-review pipeline (wrong for a scaffolded app,
                           # and loops on repair). Keep it a lean advisory web build on every attempt.
-                          **({"web_app_build": True} if fctx_prev.get("web_app_build") else {})},
+                          **({"web_app_build": True} if fctx_prev.get("web_app_build") else {}),
+                          # RESUME: hand the parent's approved design to the next attempt so it
+                          # skips standards+spec+plan+review_plan instead of re-deriving a plan
+                          # for a task that has not changed. Guarded on a real plan EXISTING,
+                          # not on `plan_ok` — that flag is a "REVISE" substring check and is
+                          # false even on runs that shipped clean, so it would disable resume.
+                          **({"inherited_design": state["design"]}
+                             if isinstance(state.get("design"), dict)
+                             and (state["design"].get("plan") or "").strip() else {})},
             jobs=jobs, profile=profile or spec.get("profile"), risk_tier=spec.get("risk_tier"),
             model_config=spec.get("model_config"), open_pr=spec.get("open_pr"),
             repair_retries=(repair_retries if isinstance(repair_retries, int)
