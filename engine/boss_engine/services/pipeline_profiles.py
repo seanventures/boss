@@ -56,6 +56,31 @@ _GREENFIELD_MARKERS = (
 )
 
 
+# Presentation-layer work: no new behaviour to specify, so a separate test-authoring pass buys
+# little and costs a whole cold-start session. Behaviour words below veto this.
+_TRIVIAL_MARKERS = (
+    "css", "styling", "stylesheet", "colour", "color", "font", "spacing", "padding",
+    "margin", "layout tweak", "copy change", "wording", "label", "typo", "rename",
+    "placeholder", "icon", "logo", "theme", "dark mode", "responsive",
+)
+# If any of these appear the change carries real behaviour and must NOT drop to tier 0,
+# however small it sounds.
+_BEHAVIOUR_MARKERS = (
+    "logic", "algorithm", "calculate", "score", "scoring", "validate", "validation",
+    "state", "persist", "storage", "api", "endpoint", "database", "query", "concurren",
+    "race", "async", "performance", "cache", "generate", "solver", "rule",
+)
+
+
+def _is_trivial_change(haystack: str, spec: dict) -> bool:
+    """Presentation-only edits to code that already exists — the one-session lane."""
+    if not _is_incremental_change(haystack, spec):
+        return False
+    if any(m in haystack for m in _BEHAVIOUR_MARKERS):
+        return False
+    return any(m in haystack for m in _TRIVIAL_MARKERS)
+
+
 def _is_incremental_change(haystack: str, spec: dict) -> bool:
     """True when the task modifies code that already exists (bounded blast radius).
 
@@ -195,7 +220,16 @@ def infer_risk_tier(spec: dict, profile: dict) -> int:
         # A change to code that ALREADY EXISTS is bounded by that code: the blast radius is
         # small, the reviewers have a working baseline to compare against, and the tests that
         # guard it are already written. A NEW build has no such floor, so it keeps tier 2.
-        tier = 1 if _is_incremental_change(haystack, spec) else 2
+        if _is_trivial_change(haystack, spec):
+            # One session: the implementer writes the code AND its tests, like a developer
+            # using a normal coding tool. Safe only because `existing_tests_intact` and the
+            # authoritative full-suite run are floors that hold at every tier — a trivial
+            # change still cannot weaken an existing test or ship a red suite.
+            tier = 0
+        elif _is_incremental_change(haystack, spec):
+            tier = 1
+        else:
+            tier = 2
     clamped = max(int(profile.get("tier_floor", 0)), min(int(profile.get("tier_cap", 3)), tier))
     # Safety override: a sensitive change never runs below standard rigor, even in a low-cost
     # profile — cost caps must not silently de-risk auth/payments/secrets/migrations/deploys.
