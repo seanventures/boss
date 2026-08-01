@@ -593,7 +593,7 @@ class GitHubAdapter:
                 "head": branch_name,
                 "base": default_branch,
                 "body": body,
-                "draft": True,
+                "draft": self.settings.open_pr_as_draft,
                 "maintainer_can_modify": False,
             },
         )

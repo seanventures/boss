@@ -481,6 +481,11 @@ class Settings(BaseSettings):
     enable_sandbox_merge: bool = Field(
         default=False, alias="BOSS_ENABLE_SANDBOX_MERGE"
     )
+    # PRs were opened as drafts, and GitHub REFUSES to merge a draft -- so even an approved
+    # merge gate could never land, and every governed PR piled up open forever. The merge gate
+    # Decision is the actual safety control, so default to ready-for-review; set this true to
+    # go back to drafts.
+    open_pr_as_draft: bool = Field(default=False, alias="BOSS_OPEN_PR_AS_DRAFT")
     enable_sandbox_deploy: bool = Field(
         default=False, alias="BOSS_ENABLE_SANDBOX_DEPLOY"
     )
