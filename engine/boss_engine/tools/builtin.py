@@ -290,6 +290,12 @@ def _register_write_tools(reg: ToolRegistry) -> None:
                 "acceptance_criteria": {"type": "array", "items": {"type": "string"}},
                 "test_commands": {"type": "array", "items": {"type": "string"}},
                 "task_id": {"type": "string", "description": "attach to an existing task"},
+                "repository": {
+                    "type": "string",
+                    "description": "which registered repo to build in (owner/name, repo "
+                                   "name, or binding id). Omit to use the project's "
+                                   "primary. See list_repositories.",
+                },
                 "base_branch": {"type": "string", "description": "branch to build on (default main)"},
                 "risk_tier": {"type": "integer", "minimum": 0, "maximum": 3},
                 "project_id": {"type": "string"},
@@ -307,7 +313,16 @@ def _register_write_tools(reg: ToolRegistry) -> None:
         finalize_ctx: dict = {}
         risk_tier = args.get("risk_tier")
         extended_from = None
+        rr = services_module("repo_registry")
         with ctx.begin() as c:
+            # Resolve the target repo through the project's registry instead of the single
+            # globally-configured repo. Falls back to the legacy settings when a project
+            # has no bindings yet, so existing single-repo setups are unaffected.
+            try:
+                target = rr.resolve_repository_target(
+                    c, ctx.settings, pid, selector=args.get("repository"))
+            except rr.RepositoryResolutionError as exc:
+                return {"ok": False, "error": str(exc)}
             # Build-on-existing: if this task already has a built app (a completed
             # code task with a PR), EXTEND that app's branch instead of a fresh
             # build on main. Mirrors intent_router._existing_app_for_task.
@@ -331,8 +346,8 @@ def _register_write_tools(reg: ToolRegistry) -> None:
                 instructions=instructions,
                 acceptance_criteria=args.get("acceptance_criteria") or [],
                 test_commands=args.get("test_commands") or [],
-                owner=ctx.settings.target_github_owner,
-                repo=ctx.settings.target_github_repo,
+                owner=target["owner"],
+                repo=target["repo"],
                 base_branch=base_branch,
                 finalize_ctx=finalize_ctx,
                 jobs=ctx.jobs,
@@ -342,6 +357,9 @@ def _register_write_tools(reg: ToolRegistry) -> None:
             "status": "queued",
             "run_id": run_id,
             "project_id": pid,
+            "repository": target["full_name"],
+            "repository_source": target["source"],
+            "binding_id": target["binding_id"],
             "base_branch": base_branch,
             "extended_existing_app": bool(extended_from),
             "extended_from_root": extended_from,
@@ -710,6 +728,82 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
             "total_cost_usd": round(sum(r["cost_usd"] for r in runs), 4),
             "runs": runs,
         }
+
+    @reg.tool(
+        "list_repositories",
+        "Every repository registered to this project, with the health of the connection "
+        "that owns it. Use before starting work to pick the right repo — BOSS is "
+        "multi-repo; do NOT assume one global default.",
+        _obj({"project_id": {"type": "string"}, "limit": _LIMIT}),
+    )
+    def list_repositories(ctx, *, project_id, actor, args):
+        rr = services_module("repo_registry")
+        pid = args.get("project_id") or project_id
+        with ctx.begin() as c:
+            repos = rr.list_repositories(c, pid, limit=int(args.get("limit") or 50))
+            try:
+                target = rr.resolve_repository_target(c, ctx.settings, pid)
+            except Exception as exc:  # no registry yet, or ambiguous — report, don't raise
+                target = {"error": str(exc)}
+        return {"project_id": pid, "count": len(repos), "repositories": repos,
+                "default_target": target}
+
+    @reg.tool(
+        "register_repository",
+        "Register a repository against an existing GitHub connection so BOSS can build "
+        "in it. Credentials come from the CONNECTION (a stored SecretRef) — never pass a "
+        "token here. Use list_github_connections to find connection_id.",
+        _obj(
+            {
+                "connection_id": {"type": "string"},
+                "repository": {"type": "string", "description": "owner/name"},
+                "role": {"type": "string", "enum": ["primary", "source", "upstream", "mirror"],
+                         "default": "source",
+                         "description": "primary = the project's default build target"},
+                "default_branch": {"type": "string"},
+                "project_id": {"type": "string"},
+            },
+            ["connection_id", "repository"],
+        ),
+        kind="write",
+    )
+    def register_repository(ctx, *, project_id, actor, args):
+        gc = services_module("github_connections")
+        svc = gc.GitHubConnectionService(ctx.settings)
+        pid = args.get("project_id") or project_id
+        try:
+            with ctx.begin() as c:
+                row = svc.create_repository_binding(
+                    c, project_id=pid, connection_id=args["connection_id"],
+                    repository=args["repository"], role=args.get("role") or "secondary",
+                    default_branch=args.get("default_branch"), metadata={}, actor=actor,
+                )
+        except Exception as exc:
+            return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+        return {"ok": True, "binding": _json_safe(dict(row))}
+
+    @reg.tool(
+        "list_github_connections",
+        "GitHub connections for this project: the credentialed accounts/installations "
+        "repositories are bound to, with status and any missing permissions. Secrets are "
+        "never returned — only the reference and its health.",
+        _obj({"project_id": {"type": "string"}, "limit": _LIMIT}),
+    )
+    def list_github_connections(ctx, *, project_id, actor, args):
+        pid = args.get("project_id") or project_id
+        with ctx.begin() as c:
+            rows = c.execute(
+                _text(
+                    "SELECT id, connection_label, auth_method, status, account_login, "
+                    "       app_id, installation_id, api_base_url, last_test_status, "
+                    "       last_tested_at, missing_permissions, created_at "
+                    "FROM github_connections WHERE project_id=:p "
+                    "ORDER BY created_at DESC LIMIT :lim"
+                ),
+                {"p": pid, "lim": int(args.get("limit") or 50)},
+            ).mappings().all()
+        return {"project_id": pid, "count": len(rows),
+                "connections": [_json_safe(dict(r)) for r in rows]}
 
     @reg.tool(
         "get_meeting",
