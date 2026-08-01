@@ -1161,6 +1161,21 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
                           work_branch=work_branch, token=token)
         root = sandbox.path
 
+        # REGRESSION FLOOR — applies at EVERY tier, costs no agent time.
+        # The gate set below tier 2 was only {code_written, written_tests_pass}: `nothing_broke`
+        # is computed inside the tier-2 review panel, so a cheaper tier silently shipped with no
+        # regression gate at all. Worse, at tier 0 the implementer authors the tests, so nothing
+        # stopped it from weakening or deleting the repo's EXISTING tests to turn the suite
+        # green. Rigor is a dial; not regressing what already works is not — it is a floor.
+        # Snapshot every pre-existing test file now and assert afterwards that none were
+        # modified or removed. Pure hashing: no model, no measurable time.
+        preexisting_tests = sorted(
+            str(p.relative_to(root)) for p in root.rglob("*")
+            if p.is_file() and _is_test_path(str(p.relative_to(root)))
+            and ".git/" not in str(p.relative_to(root))
+        )
+        preexisting_test_hashes = _hash_files(root, preexisting_tests)
+
         # Which steps run is set by the risk tier (the cost dial): tier 0 = one agent writes
         # code + tests; tier >=1 = a separate tester; tier >=2 = add a fresh-context code review.
         do_separate_tests = risk_tier >= 1
@@ -1740,10 +1755,19 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
         # (impl_files empty) — but the work branch still HAS that test-passing code. Treat a no-op
         # iteration on already-good code as "code present" so a CONVERGED run isn't false-failed.
         _is_repair_iteration = root_run != run_id
+        # Regression floor, evaluated at every tier (see the snapshot after provision).
+        _tests_now = _hash_files(root, preexisting_tests)
+        _weakened = [p for p in preexisting_tests
+                     if _tests_now.get(p) != preexisting_test_hashes.get(p)]
         gates = {
             "code_written": bool(impl_files) or (_is_repair_iteration and tests_passed),
             "written_tests_pass": tests_passed,
+            # An existing test that was edited or deleted is the one way a green suite can
+            # still mean "we broke something" — so this gate holds at tier 0 too.
+            "existing_tests_intact": not _weakened,
         }
+        if _weakened:
+            evidence["weakened_existing_tests"] = _weakened[:20]
         if do_separate_tests:
             gates["tests_written_first"] = bool(test_files)
             gates["coder_did_not_edit_tests"] = tests_untouched
