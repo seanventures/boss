@@ -43,6 +43,37 @@ def sensitive_markers_in(spec: dict) -> list[str]:
     return [m for m in SENSITIVE_MARKERS if m in haystack]
 
 
+# Phrases that say "modify what is already there" rather than "build something new". A change
+# bounded by existing code is inherently lower-risk than a greenfield build.
+_INCREMENTAL_MARKERS = (
+    "existing", "already", "current", "adjust", "tweak", "update the", "change the",
+    "modify", "rename", "fix ", "small", "surgical", "minor", "instead of",
+    "keep the", "preserve", "do not restructure", "don't restructure",
+)
+_GREENFIELD_MARKERS = (
+    "build a", "build an", "create a new", "from scratch", "new app", "new service",
+    "scaffold", "greenfield", "rewrite",
+)
+
+
+def _is_incremental_change(haystack: str, spec: dict) -> bool:
+    """True when the task modifies code that already exists (bounded blast radius).
+
+    Signals, in order of trust:
+      1. the run is explicitly extending an existing app (set by the caller/pipeline),
+      2. it builds on a branch other than the default (the prior work is already there),
+      3. the wording describes modifying existing behaviour and not a greenfield build.
+    """
+    if spec.get("web_app_build") or spec.get("extended_existing_app"):
+        return True
+    base = str(spec.get("base_branch", "") or "")
+    if base and base not in ("main", "master"):
+        return True
+    if any(m in haystack for m in _GREENFIELD_MARKERS):
+        return False
+    return any(m in haystack for m in _INCREMENTAL_MARKERS)
+
+
 def plan_gate_explanation(markers: list[str], *, plan_ok: bool) -> str:
     """A specific, plain-language explanation of WHY a plan needs human sign-off and WHAT to
     check — so the operator approves with a reason, not blind. Uses the actual matched markers
@@ -152,8 +183,19 @@ def infer_risk_tier(spec: dict, profile: dict) -> int:
     explicit = spec.get("risk_tier")
     if isinstance(explicit, int) and 0 <= explicit <= 3:
         tier = explicit
+    elif sensitive:
+        tier = 3
     else:
-        tier = 3 if sensitive else 2
+        # Rigor must track the SIZE of the change, not only its sensitivity. This used to be
+        # `tier = 2` for everything non-sensitive, so inference could never return below 2 and
+        # EVERY task — a one-line CSS tweak included — ran the full 10-session pipeline
+        # (design + write_tests + implement + a 4-check review panel, ~39 min). That is the
+        # single reason a small feature cost 49 minutes against ~3 for a standard coding tool.
+        #
+        # A change to code that ALREADY EXISTS is bounded by that code: the blast radius is
+        # small, the reviewers have a working baseline to compare against, and the tests that
+        # guard it are already written. A NEW build has no such floor, so it keeps tier 2.
+        tier = 1 if _is_incremental_change(haystack, spec) else 2
     clamped = max(int(profile.get("tier_floor", 0)), min(int(profile.get("tier_cap", 3)), tier))
     # Safety override: a sensitive change never runs below standard rigor, even in a low-cost
     # profile — cost caps must not silently de-risk auth/payments/secrets/migrations/deploys.
