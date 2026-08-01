@@ -5291,25 +5291,30 @@ def start_code_task_endpoint(payload: dict):
     if not project_id:
         raise HTTPException(status_code=422, detail="project_id is required.")
     from .services.code_task_service import start_code_task
-    with begin(engine) as c:
-        run_id = start_code_task(
-            c, project_id=project_id, task_id=payload.get("task_id"),
-            title=payload.get("title") or "Code task",
-            instructions=payload.get("instructions") or "",
-            acceptance_criteria=payload.get("acceptance_criteria") or [],
-            test_commands=payload.get("test_commands") or [],
-            owner=payload.get("owner") or settings.target_github_owner,
-            repo=payload.get("repo") or settings.target_github_repo,
-            base_branch=payload.get("base_branch") or "main",
-            finalize_ctx=payload.get("finalize_ctx") or {},
-            jobs=jobs,
-            profile=payload.get("profile"),
-            risk_tier=payload.get("risk_tier"),
-            model_config=payload.get("model_config"),
-            open_pr=payload.get("open_pr"),
-            repair_retries=payload.get("repair_retries"),
-            review_panel_size=payload.get("review_panel_size"),
-        )
+    try:
+        with begin(engine) as c:
+            run_id = start_code_task(
+                c, project_id=project_id, task_id=payload.get("task_id"),
+                title=payload.get("title") or "Code task",
+                instructions=payload.get("instructions") or "",
+                acceptance_criteria=payload.get("acceptance_criteria") or [],
+                test_commands=payload.get("test_commands") or [],
+                owner=payload.get("owner") or settings.target_github_owner,
+                repo=payload.get("repo") or settings.target_github_repo,
+                base_branch=payload.get("base_branch") or "main",
+                finalize_ctx=payload.get("finalize_ctx") or {},
+                jobs=jobs,
+                profile=payload.get("profile"),
+                risk_tier=payload.get("risk_tier"),
+                model_config=payload.get("model_config"),
+                open_pr=payload.get("open_pr"),
+                repair_retries=payload.get("repair_retries"),
+                review_panel_size=payload.get("review_panel_size"),
+            )
+    except ValueError as error:
+        # Preflight rejections (e.g. non-allowlisted test executables) are the CALLER's
+        # problem to fix, not a server fault — return the actionable message, not a 500.
+        raise HTTPException(status_code=422, detail=str(error)) from error
     return {"status": "queued", "run_id": run_id}
 
 
