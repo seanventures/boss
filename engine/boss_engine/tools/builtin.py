@@ -453,6 +453,289 @@ def _register_write_tools(reg: ToolRegistry) -> None:
 # ---------------------------------------------------------------------------
 # helpers
 # ---------------------------------------------------------------------------
+# ===========================================================================
+# GOVERNANCE / CONTROL TOOLS
+#
+# Without these an external agent (Copilot, Claude) can START governed work but
+# cannot FINISH it: BOSS's own flow is "meeting -> human PRD approval -> code
+# task", and approval lived only in the console. These close that loop and add
+# the operations an operator actually needs mid-flight -- decide, cancel, waive,
+# steer with feedback, and see cost/activity.
+#
+# `decide` is deliberately ONE tool with an action enum rather than five tools
+# (approve/reject/revise/delegate/execute): same power, a fifth of the schema
+# tokens every client pays on every request.
+# ===========================================================================
+_DECISION_ACTIONS = ("approve", "reject", "revise", "delegate", "execute")
+
+
+def _register_governance_tools(reg: ToolRegistry) -> None:
+    @reg.tool(
+        "list_decisions",
+        "Decisions waiting on a human: PRD approvals, plan gates and merge gates. "
+        "The answer to 'what is blocked on me?'. Pair with `decide` to unblock.",
+        _obj({
+            "status": {"type": "string", "enum": ["pending", "approved", "rejected", "all"],
+                       "default": "pending"},
+            "limit": _LIMIT,
+            "project_id": {"type": "string"},
+        }),
+    )
+    def list_decisions(ctx, *, project_id, actor, args):
+        pid = args.get("project_id") or project_id
+        status = args.get("status") or "pending"
+        limit = int(args.get("limit") or 25)
+        clause = "" if status == "all" else "AND status = :st"
+        with ctx.begin() as c:
+            rows = c.execute(
+                _text(
+                    "SELECT id, task_id, question, status, risk_tier, default_action, "
+                    "       approved_by, approved_at, resolution_note, deadline_at, created_at "
+                    f"FROM decisions WHERE project_id = :p {clause} "
+                    "ORDER BY created_at DESC LIMIT :lim"
+                ),
+                {"p": pid, "st": status, "lim": limit},
+            ).mappings().all()
+        return {"count": len(rows), "decisions": [_json_safe(dict(r)) for r in rows]}
+
+    @reg.tool(
+        "decide",
+        "Act on a decision (PRD approval, plan gate, merge gate): approve, reject, "
+        "revise, delegate or execute it. This is how governed work gets unblocked "
+        "from chat. `note` is REQUIRED and is recorded on the decision — if no human "
+        "actually reviewed it, say so in the note.",
+        _obj(
+            {
+                "decision_id": {"type": "string"},
+                "action": {"type": "string", "enum": list(_DECISION_ACTIONS)},
+                "note": {"type": "string", "description": "why — recorded as provenance"},
+                "actor": {"type": "string", "description": "who is deciding (default: caller)"},
+                "delegate_to": {"type": "string", "description": "for action=delegate"},
+            },
+            ["decision_id", "action", "note"],
+        ),
+        kind="write",
+    )
+    def decide(ctx, *, project_id, actor, args):
+        action = args["action"]
+        if action not in _DECISION_ACTIONS:
+            return {"ok": False, "error": f"unsupported action: {action}"}
+        who = args.get("actor") or actor
+        note = (args.get("note") or "").strip()
+        if not note:
+            return {"ok": False, "error": "note is required — it is the provenance record"}
+        dec_mod = services_module("decisions")
+        svc = dec_mod.DecisionService(ctx.settings)
+        try:
+            with ctx.begin() as c:
+                row = svc.transition(
+                    c, args["decision_id"], action=action, actor=who, note=note,
+                    delegate_to=args.get("delegate_to"),
+                )
+        except Exception as exc:  # surface engine errors as data, never a stack trace
+            return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+        return {"ok": True, "action": action, "actor": who, "decision": _json_safe(dict(row))}
+
+    @reg.tool(
+        "cancel_code_task",
+        "Stop a running/queued code-task run. Cancels the run AND its queued job "
+        "together — cancelling only one leaves a zombie that shows as running "
+        "forever with nothing driving it.",
+        _obj({"run_id": {"type": "string"}, "reason": {"type": "string"}}, ["run_id"]),
+        kind="write",
+    )
+    def cancel_code_task(ctx, *, project_id, actor, args):
+        run_id = args["run_id"]
+        reason = args.get("reason") or "cancelled via MCP"
+        from ..services.core import emit_event
+        with ctx.begin() as c:
+            run = c.execute(
+                _text("SELECT id, project_id, status FROM code_task_runs WHERE id=:id"),
+                {"id": run_id},
+            ).mappings().first()
+            if run is None:
+                return {"ok": False, "error": f"no code task run {run_id}"}
+            if run["status"] in ("completed", "failed", "cancelled"):
+                return {"ok": False, "error": f"run is already terminal: {run['status']}"}
+            c.execute(
+                _text("UPDATE code_task_runs SET status='cancelled', error=:e, updated_at=now() "
+                      "WHERE id=:id"),
+                {"id": run_id, "e": reason},
+            )
+            jobs = c.execute(
+                _text("SELECT id FROM jobs WHERE payload::text LIKE :pat "
+                      "AND status NOT IN ('succeeded','cancelled','deadlettered','failed')"),
+                {"pat": f"%{run_id}%"},
+            ).mappings().all()
+            for j in jobs:
+                c.execute(
+                    _text("UPDATE jobs SET status='cancelled', updated_at=now() WHERE id=:id"),
+                    {"id": j["id"]},
+                )
+            emit_event(c, run["project_id"], "code_task.cancelled", actor, "code_task_run",
+                       run_id, {"reason": reason, "jobs_cancelled": [j["id"] for j in jobs]})
+        return {"ok": True, "run_id": run_id, "jobs_cancelled": [j["id"] for j in jobs],
+                "reason": reason}
+
+    @reg.tool(
+        "waive_gates",
+        "Ship a blocked code task by waiving named failed gate(s): opens the PR from "
+        "the diff preserved at gate-failure time, with NO re-run. Gates you do not "
+        "waive still block. Use get_code_task first to see which gates failed.",
+        _obj(
+            {
+                "run_id": {"type": "string"},
+                "waive_gates": {"type": "array", "items": {"type": "string"}},
+                "reason": {"type": "string"},
+            },
+            ["run_id", "waive_gates"],
+        ),
+        kind="write",
+    )
+    def waive_gates(ctx, *, project_id, actor, args):
+        cts = services_module("code_task_service")
+        try:
+            result = cts.override_code_task(
+                ctx.engine, ctx.settings, ctx.jobs, args["run_id"],
+                waive_gates=args.get("waive_gates") or [],
+                actor=actor, reason=args.get("reason") or "waived via MCP",
+            )
+        except Exception as exc:
+            return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+        return {"ok": True, "result": _json_safe(result)}
+
+    @reg.tool(
+        "send_feedback",
+        "Give a running/finished code task human feedback ('the win banner is hidden') "
+        "so BOSS folds it into the work instead of you filing a new task.",
+        _obj(
+            {
+                "run_id": {"type": "string"},
+                "message": {"type": "string"},
+                "expected": {"type": "string", "description": "what you expected instead"},
+                "severity": {"type": "string", "enum": ["low", "normal", "high"],
+                             "default": "normal"},
+            },
+            ["run_id", "message"],
+        ),
+        kind="write",
+    )
+    def send_feedback(ctx, *, project_id, actor, args):
+        fa = services_module("feedback_agent")
+        try:
+            result = fa.submit_feedback(
+                ctx.engine, args["run_id"], message=args["message"],
+                expected=args.get("expected") or "",
+                severity=args.get("severity") or "normal",
+            )
+        except Exception as exc:
+            return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+        return {"ok": True, "feedback": _json_safe(result)}
+
+    @reg.tool(
+        "stop_preview",
+        "Stop a running app preview and free its port/container. The counterpart to "
+        "start_preview.",
+        _obj({"preview_id": {"type": "string"}}, ["preview_id"]),
+        kind="write",
+    )
+    def stop_preview(ctx, *, project_id, actor, args):
+        ps = services_module("preview_service")
+        try:
+            result = ps.stop_preview(ctx.engine, args["preview_id"], ctx.settings)
+        except Exception as exc:
+            return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+        return {"ok": True, "preview": _json_safe(result)}
+
+    @reg.tool(
+        "get_run_activity",
+        "Per-LLM-call activity for a code-task run: stage, model, tokens, cost, "
+        "latency, retries, turns and errors. The answer to 'WHY did this phase fail "
+        "or take so long / what did it cost?'.",
+        _obj({"run_id": {"type": "string"}, "limit": _LIMIT}, ["run_id"]),
+    )
+    def get_run_activity(ctx, *, project_id, actor, args):
+        limit = int(args.get("limit") or 100)
+        with ctx.begin() as c:
+            rows = c.execute(
+                _text(
+                    "SELECT stage, engine, model, total_tokens, cost_usd_micros, latency_ms, "
+                    "       retries, turns, ok, error, created_at "
+                    "FROM llm_calls WHERE code_task_run_id = :rid "
+                    "ORDER BY created_at, id LIMIT :lim"
+                ),
+                {"rid": args["run_id"], "lim": limit},
+            ).mappings().all()
+        calls = [_json_safe(dict(r)) for r in rows]
+        total = sum(int(r["cost_usd_micros"] or 0) for r in rows)
+        return {
+            "run_id": args["run_id"], "calls": len(calls),
+            "total_cost_usd": round(total / 1_000_000, 4),
+            "total_tokens": sum(int(r["total_tokens"] or 0) for r in rows),
+            "failed_calls": sum(1 for r in rows if not r["ok"]),
+            "activity": calls,
+        }
+
+    @reg.tool(
+        "get_costs",
+        "What BOSS has spent: total and per-run USD over a recent window, newest "
+        "first. Use before launching expensive work, or to explain a spend spike.",
+        _obj({"days": {"type": "integer", "minimum": 1, "maximum": 90, "default": 7},
+              "limit": _LIMIT, "project_id": {"type": "string"}}),
+    )
+    def get_costs(ctx, *, project_id, actor, args):
+        days = int(args.get("days") or 7)
+        limit = int(args.get("limit") or 25)
+        with ctx.begin() as c:
+            rows = c.execute(
+                _text(
+                    "SELECT l.code_task_run_id AS run_id, r.title, r.status, "
+                    "       sum(l.cost_usd_micros) AS micros, sum(l.total_tokens) AS tokens, "
+                    "       count(*) AS calls, max(l.created_at) AS last_call "
+                    "FROM llm_calls l LEFT JOIN code_task_runs r ON r.id = l.code_task_run_id "
+                    "WHERE l.created_at > now() - make_interval(days => :d) "
+                    "GROUP BY l.code_task_run_id, r.title, r.status "
+                    "ORDER BY max(l.created_at) DESC LIMIT :lim"
+                ),
+                {"d": days, "lim": limit},
+            ).mappings().all()
+        runs = []
+        for r in rows:
+            d = _json_safe(dict(r))
+            d["cost_usd"] = round(int(r["micros"] or 0) / 1_000_000, 4)
+            d.pop("micros", None)
+            runs.append(d)
+        return {
+            "window_days": days,
+            "total_cost_usd": round(sum(r["cost_usd"] for r in runs), 4),
+            "runs": runs,
+        }
+
+    @reg.tool(
+        "get_meeting",
+        "Full detail for one PRD meeting run (mrun_…): status, phase, directive, the "
+        "panel roles and the linked decision. Read this BEFORE approving its PRD.",
+        _obj({"meeting_id": {"type": "string"}}, ["meeting_id"]),
+    )
+    def get_meeting(ctx, *, project_id, actor, args):
+        with ctx.begin() as c:
+            row = c.execute(
+                _text("SELECT * FROM meeting_runs WHERE id=:id OR meeting_id=:id"),
+                {"id": args["meeting_id"]},
+            ).mappings().first()
+            if row is None:
+                return {"ok": False, "error": f"no meeting {args['meeting_id']}"}
+            dec = None
+            if row.get("decision_id"):
+                dec = c.execute(
+                    _text("SELECT id, question, status, approved_by, approved_at "
+                          "FROM decisions WHERE id=:d"),
+                    {"d": row["decision_id"]},
+                ).mappings().first()
+        return {"meeting": _json_safe(dict(row)),
+                "decision": _json_safe(dict(dec)) if dec else None}
+
+
 def _text(sql: str):
     from sqlalchemy import text
 
@@ -539,4 +822,5 @@ def build_default_registry() -> ToolRegistry:
     reg = ToolRegistry()
     _register_read_tools(reg)
     _register_write_tools(reg)
+    _register_governance_tools(reg)
     return reg

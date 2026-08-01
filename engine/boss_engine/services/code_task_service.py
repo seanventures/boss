@@ -109,6 +109,42 @@ _DEPLOYABILITY_NOTE = (
 )
 
 
+def _allowed_sandbox_commands(settings) -> set[str]:
+    return {
+        item.strip()
+        for item in (settings.sandbox_validation_allowed_commands or "").split(",")
+        if item.strip()
+    }
+
+
+def preflight_test_commands(settings, test_commands) -> list[str]:
+    """Return the test commands the sandbox WILL reject, before a run is created.
+
+    The sandbox enforces an executable allowlist but nothing ever told the caller (or the
+    coding agent) what is on it, so a command like `[ -f x ] && npm test` was accepted at
+    creation, ran the whole expensive pipeline, and only died at validation time. Catching
+    it here turns a multi-dollar failure into an instant, free, actionable error.
+    """
+    import shlex
+
+    allowed = _allowed_sandbox_commands(settings)
+    if not allowed:
+        return []
+    rejected: list[str] = []
+    for cmd in test_commands or []:
+        try:
+            parts = shlex.split(cmd) if isinstance(cmd, str) else list(cmd)
+        except ValueError:  # unbalanced quotes — let the sandbox be the judge
+            continue
+        if not parts:
+            continue
+        executable = parts[0]
+        candidate = executable[2:] if executable.startswith("./") else executable
+        if "/" in candidate or "\\" in candidate or candidate not in allowed:
+            rejected.append(executable)
+    return rejected
+
+
 def start_code_task(
     connection, *, project_id: str, task_id: Optional[str], title: str,
     instructions: str, acceptance_criteria: list[str], test_commands: list[str],
@@ -119,6 +155,18 @@ def start_code_task(
     substrate: Optional[str] = None, repo_host: Optional[str] = None,
 ) -> str:
     """Create the durable run row and enqueue the single `code.task` job."""
+    settings = getattr(jobs, "settings", None)
+    if settings is not None:
+        bad = preflight_test_commands(settings, test_commands)
+        if bad:
+            allowed = ", ".join(sorted(_allowed_sandbox_commands(settings)))
+            raise ValueError(
+                "test_commands use executables the sandbox will reject: "
+                + ", ".join(repr(b) for b in bad)
+                + ". Shell builtins and operators (`[`, `test`, `&&`, pipes) are NOT "
+                "available — give each test command as a single allowlisted executable "
+                "with arguments. Allowed: " + allowed
+            )
     run_id = make_id("crun")
     spec = {
         "instructions": instructions + _DEPLOYABILITY_NOTE,
@@ -126,6 +174,11 @@ def start_code_task(
         "test_commands": test_commands or [],
         "owner": owner, "repo": repo, "base_branch": base_branch,
     }
+    if settings is not None:
+        # Enforce-AND-inform: the sandbox allowlist used to be enforced silently, so the
+        # coding agent had to guess and kept authoring commands that were rejected at
+        # validation time. Carry it on the spec so the stage prompts can state it.
+        spec["allowed_test_executables"] = sorted(_allowed_sandbox_commands(settings))
     if substrate:  # per-run substrate override (retry fallback: microvm infra-failure -> local)
         spec["substrate"] = substrate
     if repo_host:  # BOSS-267: per-task SCM provider (github default; bitbucket, ...)
