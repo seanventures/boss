@@ -1370,8 +1370,12 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
                         if p.is_file() and _is_test_path(str(p.relative_to(root)))
                         and ".git/" not in str(p.relative_to(root)))
                     if existing:
-                        gap = (evidence.get("review_summary")
-                               or fctx.get("feedback_history", [{}])[-1].get("fix_note") or "")
+                        # NOTE: `evidence` is not bound this early in the pipeline — the
+                        # findings live in the iteration feedback carried on fctx/instructions.
+                        _hist = fctx.get("feedback_history") or [{}]
+                        gap = (_hist[-1].get("fix_note")
+                               or (instructions.split("=== ITERATION FEEDBACK", 1)[-1]
+                                   if "=== ITERATION FEEDBACK" in instructions else "")) or ""
                         prompt = (
                             "This is a REPAIR iteration. A working test suite ALREADY EXISTS in "
                             "this tree and currently passes:\n"
@@ -1492,8 +1496,10 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
             else:
                 _ev = evidence_text
                 if _cross_run_repair and not (_ev or "").strip():
-                    _ev = (evidence.get("review_summary")
-                           or fctx.get("feedback_history", [{}])[-1].get("fix_note")
+                    _hist = fctx.get("feedback_history") or [{}]
+                    _ev = (_hist[-1].get("fix_note")
+                           or (instructions.split("=== ITERATION FEEDBACK", 1)[-1]
+                               if "=== ITERATION FEEDBACK" in instructions else "")
                            or "(see the iteration feedback in the task instructions)")
                 impl_prompt = _repair_prompt(base_impl_prompt, _ev, max(1, attempt))
             if use_microvm:
@@ -1896,8 +1902,6 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
             # still mean "we broke something" — so this gate holds at tier 0 too.
             "existing_tests_intact": not _weakened,
         }
-        if _weakened:
-            evidence["weakened_existing_tests"] = _weakened[:20]
         if do_separate_tests:
             gates["tests_written_first"] = bool(test_files)
             gates["coder_did_not_edit_tests"] = tests_untouched
@@ -1927,6 +1931,10 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
         evidence = {
             "risk_tier": risk_tier,
             "profile": profile["name"],
+            # Named here (not written earlier) because `evidence` does not exist until this
+            # point — writing to it above was a latent crash that would have fired precisely
+            # when a run DID weaken an existing test, i.e. when the gate matters most.
+            **({"weakened_existing_tests": _weakened[:20]} if _weakened else {}),
             "steps_run": steps_run,
             "cost_usd_micros": cost,
             "stage_costs": {
