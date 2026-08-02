@@ -1359,6 +1359,30 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
                 forces the frontier model + a sharper prompt to recover a weak first pass."""
                 nonlocal cost
                 prompt = _qa_prompt(title, instructions, criteria, test_cmd, iac=iac_task)
+                # AUGMENT, DON'T RE-AUTHOR. On a repair the prior attempt's tests are ALREADY in
+                # the working tree (the retry clones the lineage branch), and the review names the
+                # exact gap — e.g. "the defects are all in app.js, which no test covers". Sending
+                # the from-scratch prompt made the retry re-derive a whole suite it already had:
+                # ~4.6 min and ~$1 to rewrite 240 passing tests instead of covering the one hole.
+                if root_run != run_id:
+                    existing = sorted(
+                        str(p.relative_to(root)) for p in root.rglob("*")
+                        if p.is_file() and _is_test_path(str(p.relative_to(root)))
+                        and ".git/" not in str(p.relative_to(root)))
+                    if existing:
+                        gap = (evidence.get("review_summary")
+                               or fctx.get("feedback_history", [{}])[-1].get("fix_note") or "")
+                        prompt = (
+                            "This is a REPAIR iteration. A working test suite ALREADY EXISTS in "
+                            "this tree and currently passes:\n"
+                            + "\n".join(f"  - {p}" for p in existing[:40])
+                            + "\n\nDO NOT rewrite or re-author these tests, and do not delete any "
+                            "of them. Your ONLY job is to CLOSE THE SPECIFIC COVERAGE GAP the "
+                            "reviewers identified, by ADDING focused tests (or extending an "
+                            "existing file where that is the natural home).\n\n"
+                            f"GAP TO CLOSE:\n{gap[:2000]}\n\n"
+                            f"TASK CONTEXT: {title}\n\nRun `{test_cmd}` and leave the whole suite "
+                            "green. Touch as few files as possible.")
                 if escalate:
                     prompt = (
                         "Your previous attempt produced NO recognizable test files. Author "
