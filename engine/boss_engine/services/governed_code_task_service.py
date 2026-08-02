@@ -112,33 +112,39 @@ def _hash_files(root: Path, paths: list[str]) -> dict[str, str]:
 
 # Markers that a check did not COMPLETE. A check that never finished produced no evidence
 # about the code, so "did not finish" must never be read as "the code is bad".
-_INCONCLUSIVE_MARKERS = (
-    "ran out of turns",
-    "partial attempt",
-    "resume to continue",
-    "exceeded",
-    "timed out",
-    "timeout",
-    "degraded",
-    "not_run",
+# EXACT phrases the ENGINE emits when a check could not complete. These must be engine
+# strings, never ordinary words: an earlier version matched loose tokens ("timeout",
+# "exceeded", "degraded"), so a reviewer writing "the fetch call has no timeout" had its
+# REAL finding classified as a harness fault and was never repaired — the precise defect
+# class this function exists to eliminate, reproduced inside it.
+_INCONCLUSIVE_PHRASES = (
+    "ran out of turns before finishing",
+    "partial attempt; resume to continue",
+    "review check(s) exceeded",
+    "could not acquire a",           # RateLimitAcquireTimeout
 )
 
 
 def check_is_inconclusive(summary: str, verdict: Optional[str] = None) -> bool:
     """True when a check produced NO usable judgement (turn cap, timeout, crash, skip).
 
-    This is the distinction the pipeline was missing. Every check used to be two-valued —
-    pass or fail — so a reviewer that exhausted its turn budget was recorded exactly like a
-    reviewer that read the diff and found a real defect. The remedy chosen for "fail" is to
-    repair the code, which cannot possibly fix a reviewer that never ran; the run then burned
-    a full pipeline (~$12, ~35 min) and arrived at the same non-answer.
+    Evidence of a real judgement WINS: if the check emitted structured findings, or a
+    definite verdict, it ran — whatever prose it used. Only then do we look for the
+    engine's own "did not finish" markers.
     """
-    text = (summary or "").strip().lower()
+    text = (summary or "").strip()
     if not text:
         return True
+    # Structured evidence => the check genuinely ran.
+    if _parse_findings(text):
+        return False
+    if (verdict or "").strip().lower() in {"survived", "refuted", "clean", "issues",
+                                           "drift", "consistent"}:
+        return False
     if verdict is not None and str(verdict).strip().lower() in {"not_run", "", "unknown"}:
         return True
-    return any(marker in text for marker in _INCONCLUSIVE_MARKERS)
+    low = text.lower()
+    return any(phrase in low for phrase in _INCONCLUSIVE_PHRASES)
 
 
 def classify_gate_faults(
