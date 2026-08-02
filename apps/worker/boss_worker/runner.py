@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from typing import Any
 
 from .config import WorkerSettings
@@ -915,8 +916,28 @@ def run_worker_cycle(client: ControlPlaneClient, settings: WorkerSettings) -> bo
     )
 
     def _renew_lease() -> None:
+        # The heartbeat proves the WORKER is alive, never that the JOB is progressing. A
+        # hung stage therefore kept its lease renewed indefinitely: nothing reclaimed it,
+        # nothing failed it, and the stall only ended when the process happened to die.
+        # Observed: a review check hung and the run showed a "164 min adversarial review"
+        # that was pure lease latency, not work.
+        #
+        # So renewal is BOUNDED. Past the ceiling we stop renewing; the lease then expires
+        # within one TTL and the reclaimer picks the job up (or fails it on max_attempts)
+        # instead of the run hanging open forever.
         interval = max(15, settings.lease_ttl_seconds // 2)
+        max_runtime = max(0, int(getattr(settings, "job_max_runtime_seconds", 5400) or 0))
+        started_at = time.monotonic()
         while not hb_stop.wait(interval):
+            elapsed = time.monotonic() - started_at
+            if max_runtime and elapsed > max_runtime:
+                LOGGER.error(
+                    "lease_renewal_stopped_runtime_exceeded worker_id=%s job_id=%s "
+                    "kind=%s elapsed_s=%d max_s=%d — job exceeded its runtime ceiling; "
+                    "letting the lease expire so it is reclaimed instead of hanging",
+                    settings.worker_id, job.id, job.kind, int(elapsed), max_runtime,
+                )
+                return
             try:
                 hb_client.heartbeat(
                     settings.worker_id, job.id, job.lease_token,
