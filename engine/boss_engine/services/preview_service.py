@@ -68,7 +68,7 @@ _PY_ENTRYPOINTS = ("server.py", "serve.py", "app.py", "wsgi.py", "main.py")
 _STATIC_DIRS = (".", "web", "public", "dist", "site", "static")
 
 
-def _detect_command(workdir: Path) -> Optional[list[str]]:
+def _detect_command(workdir: Path, changed: Optional[list[str]] = None) -> Optional[list[str]]:
     """Detect the repo's declared preview command before falling back to stack hints."""
     hint = workdir / "boss.preview.command"
     if hint.is_file() and hint.read_text(errors="ignore").strip():
@@ -119,9 +119,24 @@ def _detect_command(workdir: Path) -> Optional[list[str]]:
         for target in ("dev", "run"):
             if re.search(rf"(?m)^{target}\s*:", content):
                 return ["make", target]
+    # PREFER WHAT THIS TASK BUILT. Selection used to walk a fixed filename list over the whole
+    # repo, so a task that added `serve_nqueens.py` to a repo already containing the Sudoku
+    # `serve.py` previewed SUDOKU — serve.py sorts earlier and serve_nqueens.py was not on the
+    # list at all. The preview faithfully launched the wrong application (PR #62).
+    changed_py = [c for c in (changed or []) if c.endswith(".py")]
+    for cand in changed_py:
+        base = cand.rsplit("/", 1)[-1]
+        if base.startswith(("serve", "server", "app", "main", "wsgi")) and (workdir / cand).exists():
+            return ["python3", cand]
     for entry in _PY_ENTRYPOINTS:
         if (workdir / entry).exists():
             return ["python3", entry]
+    # Fall back to any entrypoint-shaped file the repo has (serve_nqueens.py, app_web.py, ...)
+    # before giving up — a fixed list can never enumerate real project naming.
+    for cand in sorted(workdir.glob("*.py")):
+        base = cand.name
+        if base.startswith(("serve", "server", "app", "main", "wsgi")):
+            return ["python3", base]
     # A plain static site still needs a SERVER -- ES modules refuse to load over file:// -- so a
     # bare index.html is a runnable app, not a library. Without this it fell through to the test
     # fallback and reported a passing test suite as though it were a preview.
@@ -334,7 +349,10 @@ def start_preview(engine, settings: Settings, run_id: str, *, ttl_minutes: int =
                 f"and the PR to review the code."),
         }
 
-    command = _detect_command(workdir)
+    # `impl_files` is what THIS task built — prefer its entrypoint over any
+    # pre-existing app already in the repo.
+    _changed = ((run.get('state') or {}).get('impl_files') or [])
+    command = _detect_command(workdir, _changed)
     if not command:
         # No web server, but a library still has a way to 'run it' — its tests. Prefer the test
         # command the pipeline already recorded on the run, else detect one from the repo.
@@ -632,7 +650,8 @@ def _respawn_process_preview(engine, settings: Settings, preview_id: str) -> Non
             capture_output=True, text=True, timeout=120)
         if clone.returncode != 0:
             return
-        command = _detect_command(workdir)
+        _changed = ((run.get('state') or {}).get('impl_files') or [])
+        command = _detect_command(workdir, _changed)
         if not command:
             return
         port_hint = _free_port()
