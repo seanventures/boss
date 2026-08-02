@@ -1480,8 +1480,22 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
                                "code_task_run", run_id,
                                {"step": "implement", "reason": "tests_not_passing_on_oss",
                                 "action": "retry_on_frontier", "attempt": attempt})
-            impl_prompt = (base_impl_prompt if attempt == 0
-                           else _repair_prompt(base_impl_prompt, evidence_text, attempt))
+            # `attempt` counts IN-RUN repair passes, so a CROSS-RUN retry starts at 0 and used to
+            # receive the full build prompt — "implement the task" — telling an agent whose working
+            # tree already contains a finished 2,300-line app to build it. The only hint otherwise
+            # was the iteration-feedback text buried in `instructions`. A repair must PATCH what is
+            # there, not re-derive it, so a cross-run retry is treated as a repair from its first
+            # pass, carrying the reviewers' findings as the concrete evidence to fix.
+            _cross_run_repair = (root_run != run_id) and attempt == 0
+            if attempt == 0 and not _cross_run_repair:
+                impl_prompt = base_impl_prompt
+            else:
+                _ev = evidence_text
+                if _cross_run_repair and not (_ev or "").strip():
+                    _ev = (evidence.get("review_summary")
+                           or fctx.get("feedback_history", [{}])[-1].get("fix_note")
+                           or "(see the iteration feedback in the task instructions)")
+                impl_prompt = _repair_prompt(base_impl_prompt, _ev, max(1, attempt))
             if use_microvm:
                 res2 = _guest_stage(
                     "implement", "implement" if do_separate_tests else "solo", impl_prompt,
