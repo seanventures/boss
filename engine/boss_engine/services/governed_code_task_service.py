@@ -1186,7 +1186,13 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
         # it is a pipeline doing less work — and it is not a result anyone can trust.
         # Verification is cheap because it is parallel; PLANNING is what is expensive. So the
         # panel now runs from tier 1, and only the design chain stays tier-2+.
-        do_review = risk_tier >= 1
+        # REVERTED to tier 2 (was >= 1). Moving the panel into the fast lane caused a
+        # 191-minute run: with BOSS_CODE_AGENT_MAX_CONCURRENCY=1 the "parallel" panel is
+        # serialized, and when one seat hung the deadline could not kill it —
+        # Future.cancel() returns False for an already-running future — so the job sat until
+        # its LEASE EXPIRED and re-ran as attempt 2. Restore tier 2 until hung checks are
+        # genuinely killable; then re-raise with real concurrency.
+        do_review = risk_tier >= 2
         # ADVISORY GATE: when True, failing quality checks are SURFACED but do NOT block the PR —
         # the build still ships a PR + preview and the user retries-to-improve. Quality feedback
         # without a dead-end (product decision: always produce a result on the first pass).
