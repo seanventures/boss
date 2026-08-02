@@ -2337,6 +2337,21 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
                                "code_task_run", run_id,
                                {"round": rounds_used + 1, "of": max_repair_rounds,
                                 "failing_gates": failing})
+                # COOPERATIVE CANCELLATION. Cancelling marks the run row and kills the queued
+                # JOB, but the pipeline already executing inside the worker keeps going — so a
+                # run cancelled 25 minutes earlier reached this point, spawned a repair child,
+                # and two runs burned tokens on the same lineage concurrently. Before spending
+                # money on a child, confirm this run is still meant to be alive.
+                with _transaction(engine) as c:
+                    _cur = c.execute(sql("SELECT status FROM code_task_runs WHERE id=:id"),
+                                     {"id": run_id}).scalar()
+                if _cur in ("cancelled", "failed"):
+                    with _transaction(engine) as c:
+                        emit_event(c, project_id, "code_task.repair_abandoned", "boss",
+                                   "code_task_run", run_id,
+                                   {"reason": f"run is {_cur}; not spawning a repair child",
+                                    "failing_gates": failing})
+                    return {"status": _cur, "done": True, "cancelled_before_repair": True}
                 from .code_task_service import retry_code_task
                 nxt = retry_code_task(
                     engine, settings, jobs, run_id,
