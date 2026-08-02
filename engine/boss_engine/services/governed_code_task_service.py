@@ -19,6 +19,8 @@ is the guidance, the model impersonates the role. See docs/product/GOVERNED_CODI
 """
 from __future__ import annotations
 
+import os
+
 import hashlib
 import json
 import re
@@ -167,6 +169,66 @@ def classify_gate_faults(
             inconclusive = False
         faults[gate] = "HARNESS" if inconclusive else "WORK"
     return faults
+
+
+def _kill_stray_review_processes(*roots) -> int:
+    """Terminate `claude` review subprocesses still running under the given sandbox roots.
+
+    The review deadline previously called Future.cancel(), which is a NO-OP for an
+    already-running future. The seat is a subprocess, so the only way to stop it is to
+    signal the process.
+
+    SAFETY: an earlier version matched any command line containing "claude" AND the path,
+    which matched the CHECKING PROCESS ITSELF and killed it. So we now require the
+    executable to be a claude binary, skip our own process tree, and require the sandbox
+    path to appear as a real path component — never a loose substring.
+    """
+    import signal
+    import subprocess as _sp
+
+    paths = [str(r).rstrip("/") for r in roots if r]
+    paths = [p for p in paths if p and p not in ("/", "/tmp")]
+    if not paths:
+        return 0
+    mine = {os.getpid(), os.getppid()}
+    killed = 0
+    try:
+        out = _sp.run(["ps", "-axo", "pid=,command="], capture_output=True, text=True,
+                      timeout=10).stdout
+    except Exception:  # noqa: BLE001 — best effort; never sink the run
+        return 0
+    for line in out.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        parts = line.split(None, 1)
+        if len(parts) != 2:
+            continue
+        try:
+            pid = int(parts[0])
+        except ValueError:
+            continue
+        if pid in mine:
+            continue
+        cmd = parts[1]
+        toks = cmd.split()
+        # SOME token must be a claude EXECUTABLE (argv[0] is the interpreter when the binary
+        # is a shim/wrapper, so checking argv[0] alone misses the real seat). Still far
+        # stricter than "the line mentions claude", which is what killed the caller.
+        if not any(os.path.basename(t) == "claude" for t in toks):
+            continue
+        if not any(cmd.startswith(p) or f" {p}/" in cmd or f" {p} " in cmd for p in paths):
+            continue
+        for sig in (signal.SIGTERM, signal.SIGKILL):
+            try:
+                os.kill(pid, sig)
+                killed += 1
+                break
+            except ProcessLookupError:
+                break
+            except Exception:  # noqa: BLE001
+                continue
+    return killed
 
 
 def resolve_gate_failure_action(
@@ -1689,8 +1751,19 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
                     with lock:
                         review_errors.append(
                             f"{len(not_done)} review check(s) exceeded {review_deadline}s — degraded")
+                    # Future.cancel() returns False for an ALREADY-RUNNING future — verified. So
+                    # this loop logged "degraded" while the hung check kept running, the job kept
+                    # renewing its lease, and the run stalled for over two hours before a reclaim.
+                    # A review seat is a `claude -p` SUBPROCESS: to actually stop it we must kill
+                    # the process, not cancel the future.
                     for f in not_done:
                         f.cancel()
+                    killed = _kill_stray_review_processes(root, review_root)
+                    with lock:
+                        review_errors.append(
+                            f"terminated {killed} stuck review process(es) past the deadline"
+                            if killed else
+                            "no stuck review process found to terminate (already exited)")
             finally:
                 pool.shutdown(wait=False)
             if review_errors:
@@ -2275,6 +2348,32 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
 
         with _transaction(engine) as c:
             _set_phase(c, run_id, "opening_pr")
+            # The budget reservation is taken for 45 minutes at run start. propose_pull_request
+            # BLOCKS when it has expired ("Missing active reservation for PR proposal"), so any
+            # run longer than 45 minutes could not open a PR at all — regardless of how good the
+            # code was. Observed on crun_9f8febe8: every quality gate resolved, the work was
+            # finished and PAID FOR, and the PR was refused purely because a stalled stage had
+            # pushed the run past the reservation window.
+            #
+            # Blocking here saves nothing: the spend has ALREADY happened. Refusing the PR only
+            # destroys the work the user paid for. So re-acquire a reservation and proceed.
+            try:
+                if not budget.assert_active_reservation(c, project_id, reservation_id):
+                    renewed = budget.reserve(
+                        c, project_id, category="code_task",
+                        amount_usd_micros=int(settings.code_task_budget_usd_micros),
+                        reason=f"re-reserve to open PR (original expired): {title[:48]}",
+                        expires_in_minutes=30, job_id=job_id, risk_tier=spec.get("risk_tier"))
+                    if renewed.get("status") == "reserved":
+                        reservation_id = renewed["reservation_id"]
+                        emit_event(c, project_id, "code_task.reservation_renewed", "boss",
+                                   "code_task_run", run_id,
+                                   {"reason": "original reservation expired before the PR step; "
+                                              "the spend already occurred, so the PR proceeds",
+                                    "reservation_id": reservation_id})
+            except Exception as exc:  # never let bookkeeping sink finished work
+                emit_event(c, project_id, "code_task.reservation_renew_failed", "boss",
+                           "code_task_run", run_id, {"error": f"{type(exc).__name__}: {exc}"[:200]})
             proposal = sf.propose_pull_request(
                 c, project_id, task_id, reservation_id=reservation_id,
                 dedupe_key=f"code:task:{run_id}", title=title,
