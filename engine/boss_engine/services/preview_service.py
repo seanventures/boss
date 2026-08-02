@@ -411,14 +411,29 @@ def start_preview(engine, settings: Settings, run_id: str, *, ttl_minutes: int =
             "build_substrate": build_substrate}
 
 
-def _generate_dockerfile(workdir: Path) -> int:
+def _generate_dockerfile(workdir: Path, changed: Optional[list[str]] = None) -> int:
     """Ensure the app has a Dockerfile; return the container port the app listens on.
     Generated images set HOST=0.0.0.0 + PORT so deploy-ready apps bind correctly for -p mapping."""
     existing = workdir / "Dockerfile"
     if existing.exists():
         m = re.search(r"EXPOSE\s+(\d{2,5})", existing.read_text(errors="ignore"))
         return int(m.group(1)) if m else 8000
-    py_entry = next((e for e in _PY_ENTRYPOINTS if (workdir / e).exists()), None)
+    # Prefer the entrypoint THIS task built. Sharing _PY_ENTRYPOINTS between the host and
+    # container paths was not enough: the preference logic lived only in _detect_command, so a
+    # docker-mode preview still picked the repo's pre-existing serve.py and launched Sudoku for
+    # an N-Queens build (PR #62). Both paths must make the SAME choice, not merely consult the
+    # same list.
+    py_entry = None
+    for cand in [c for c in (changed or []) if c.endswith(".py")]:
+        base = cand.rsplit("/", 1)[-1]
+        if base.startswith(("serve", "server", "app", "main", "wsgi")) and (workdir / cand).exists():
+            py_entry = cand
+            break
+    if py_entry is None:
+        py_entry = next((e for e in _PY_ENTRYPOINTS if (workdir / e).exists()), None)
+    if py_entry is None:
+        py_entry = next((c.name for c in sorted(workdir.glob("*.py"))
+                         if c.name.startswith(("serve", "server", "app", "main", "wsgi"))), None)
     if py_entry:
         port = 8000
         reqs = "COPY requirements.txt ./\nRUN pip install --no-cache-dir -r requirements.txt\n" \
@@ -487,7 +502,8 @@ def start_container_preview(engine, settings: Settings, run_id: str, *, ttl_minu
         return _fail(f"git clone failed: {(clone.stderr or '')[-300:]}")
 
     try:
-        container_port = _generate_dockerfile(workdir)
+        _changed_ep = ((run.get('state') or {}).get('impl_files') or [])
+        container_port = _generate_dockerfile(workdir, _changed_ep)
     except RuntimeError as exc:
         return _fail(str(exc))
 
