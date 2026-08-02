@@ -1411,6 +1411,22 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
                 return r, [fc.path for fc in sandbox.diff() if _is_test_path(fc.path)], None
 
             r1, test_files, test_changes = _attempt_write_tests(escalate=False)
+            # On a REPAIR the tree ALREADY holds a passing suite, so "wrote no new test files"
+            # is a legitimate outcome — the augment pass may judge coverage sufficient. Escalating
+            # there is actively harmful: it re-issues the FROM-SCRATCH prompt on the frontier
+            # model and re-authors a suite that already exists. Measured: augment pass 7 turns /
+            # 23s / $0.16, then the escalation spent 31 turns / 356s / $1.84 on opus — worse than
+            # the original from-scratch run it was meant to avoid. Only escalate when the tree has
+            # NO tests at all.
+            _repair_with_tests = (root_run != run_id) and bool(preexisting_tests)
+            if not test_files and _repair_with_tests:
+                test_files = list(preexisting_tests)
+                with _transaction(engine) as c:
+                    emit_event(c, project_id, "code_task.tests_reused", "boss",
+                               "code_task_run", run_id,
+                               {"step": "write_tests", "reason": "repair_augment_added_no_files",
+                                "existing_tests": len(preexisting_tests),
+                                "note": "the existing suite stands as the oracle; not re-authoring"})
             if not test_files:
                 # SELF-HEAL: don't hard-fail on a weak/empty first pass — escalate to a
                 # frontier model and retry once, visibly, before giving up.
