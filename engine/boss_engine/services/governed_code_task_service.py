@@ -2352,6 +2352,37 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
                                    {"reason": f"run is {_cur}; not spawning a repair child",
                                     "failing_gates": failing})
                     return {"status": _cur, "done": True, "cancelled_before_repair": True}
+                # PERSIST THE WORK BEFORE HANDING IT TO A REPAIR.
+                # The sandbox is ephemeral and the work branch was only ever pushed when a PR
+                # was opened. A run that goes to `repairing` never opens one, so its entire tree
+                # was DESTROYED at teardown — and retry_code_task's promise to the next attempt
+                # ("the previous attempt's code is ALREADY PRESENT in your working tree on
+                # branch X") was false. The child cloned a branch that did not exist, found
+                # nothing, and rebuilt from scratch. Proven on crun_bda12caa: it authored 2,320
+                # lines, opened no PR, no lineage branch exists on the remote, and its reviewer
+                # reported being handed "a different tree" with 158 tests instead of 240.
+                # Every "repair" in this program has therefore been a disguised rebuild.
+                try:
+                    _files = (list(accumulated.items()) if use_microvm
+                              else [(fc.path, fc.content) for fc in sandbox.diff()])
+                    if _files:
+                        sf.github.ensure_branch(work_branch)
+                        for _path, _content in _files:
+                            sf.github.upsert_file(
+                                work_branch, _path, _content,
+                                f"wip({run_id}): persist attempt for repair")
+                        with _transaction(engine) as c:
+                            emit_event(c, project_id, "code_task.work_persisted", "boss",
+                                       "code_task_run", run_id,
+                                       {"branch": work_branch, "files": len(_files),
+                                        "why": "so the repair patches this tree instead of "
+                                               "rebuilding it from nothing"})
+                except Exception as exc:  # never let persistence failure block the repair
+                    with _transaction(engine) as c:
+                        emit_event(c, project_id, "code_task.work_persist_failed", "boss",
+                                   "code_task_run", run_id,
+                                   {"branch": work_branch,
+                                    "error": f"{type(exc).__name__}: {exc}"[:200]})
                 from .code_task_service import retry_code_task
                 nxt = retry_code_task(
                     engine, settings, jobs, run_id,
