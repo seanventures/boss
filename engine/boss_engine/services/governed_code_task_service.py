@@ -2898,11 +2898,39 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
                 created_by_job_id=job_id, actual_usd_micros=cost)
 
         status = proposal.get("status")
+        # RETRY THE PR ITSELF. A transient GitHub error, an expired reservation, a network
+        # blip — none of these are reasons to hand the operator nothing after a run that
+        # PASSED its gates. Two runs blocked tonight on "PR not created: failed" having done
+        # all the work. The PR is the deliverable; opening it gets the same persistence as
+        # any other critical step.
+        for _pr_attempt in (2, 3):
+            if status in ("created", "succeeded"):
+                break
+            with _transaction(engine) as c:
+                emit_event(c, project_id, "code_task.pr_retry", "boss", "code_task_run", run_id,
+                           {"attempt": _pr_attempt, "prior_status": status})
+                try:
+                    proposal = sf.propose_pull_request(
+                        c, project_id, task_id, reservation_id=reservation_id,
+                        dedupe_key=f"code:task:{run_id}", title=title,
+                        branch_name=work_branch,
+                        summary=(f"Governed pipeline: tests by qa, impl by SE. "
+                                 f"QualityGate {qg_id}.\n\n{r2.get('summary','')}"),
+                        files=([FileChange(path=p, content=content)
+                                for p, content in accumulated.items()]
+                               if use_microvm else sandbox.diff()),
+                        created_by_job_id=job_id, actual_usd_micros=cost)
+                    status = proposal.get("status")
+                except Exception as exc:  # noqa: BLE001
+                    emit_event(c, project_id, "code_task.pr_retry_failed", "boss",
+                               "code_task_run", run_id,
+                               {"attempt": _pr_attempt, "error": f"{type(exc).__name__}: {exc}"[:200]})
         if status not in ("created", "succeeded"):
             with _transaction(engine) as c:
                 c.execute(sql("UPDATE code_task_runs SET status='blocked', phase='done', "
                                "decision_id=:d, error=:e, updated_at=now() WHERE id=:id"),
-                          {"d": proposal.get("decision_id"), "e": f"PR not created: {status}", "id": run_id})
+                          {"d": proposal.get("decision_id"),
+                           "e": f"PR not created after 3 attempts: {status}", "id": run_id})
             return {"status": "blocked", "done": True, "quality_gate_id": qg_id, **proposal}
 
         with _transaction(engine) as c:
@@ -2949,10 +2977,51 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
         reason = f"{reason} [substrate={execution_substrate}]"
         from .code_task_service import classify_pipeline_exception
         fclass, rcode = classify_pipeline_exception(reason)
+        # SHIP WHAT EXISTS, EVEN ON A FAILURE. Operator instruction, stated repeatedly:
+        # "never ever stop creating the PR unless it is some system failure ... we can always
+        # have a follow up fixes." A crashed run that already wrote code has a deliverable —
+        # handing back nothing but an error makes the work unreviewable AND unrecoverable.
+        # So: push whatever the sandbox holds and open a PR that says plainly it is partial.
+        # Best-effort; if it cannot be done we still fail cleanly with the original reason.
+        _partial_pr = None
+        try:
+            _n = _checkpoint("failure")
+            if _n:
+                with _transaction(engine) as c:
+                    _p = sf.propose_pull_request(
+                        c, project_id, task_id, reservation_id=None,
+                        dedupe_key=f"code:task:{run_id}", title=f"[partial] {title}",
+                        branch_name=work_branch,
+                        summary=("INCOMPLETE — this run did not finish.\n\n"
+                                 f"It stopped with: {reason}\n\n"
+                                 f"{_n} file(s) it had written are on this branch so the work is "
+                                 "not lost and can be reviewed or continued with a retry. The "
+                                 "quality gates did NOT run to completion — treat this as a "
+                                 "work-in-progress, not a reviewed change."),
+                        files=([FileChange(path=p, content=content)
+                                for p, content in accumulated.items()]
+                               if use_microvm else sandbox.diff()),
+                        created_by_job_id=job_id, actual_usd_micros=cost)
+                    if _p.get("status") in ("created", "succeeded"):
+                        _partial_pr = _p.get("pull_request_url") or _p.get("url")
+                        emit_event(c, project_id, "code_task.partial_pr_opened", "boss",
+                                   "code_task_run", run_id,
+                                   {"url": _partial_pr, "files": _n, "reason": reason[:200]})
+        except Exception as _pexc:  # noqa: BLE001 — a failed rescue must not mask the real error
+            with _transaction(engine) as c:
+                emit_event(c, project_id, "code_task.partial_pr_failed", "boss",
+                           "code_task_run", run_id,
+                           {"error": f"{type(_pexc).__name__}: {_pexc}"[:200]})
+
         with _transaction(engine) as c:
             _release(budget, c, project_id, reservation_id, f"governed code task error: {reason}", run_id=run_id)
             if guest_vm_ids:
                 _persist_sandbox_id(c, run_id, guest_vm_ids[-1])
+            if _partial_pr:
+                c.execute(sql("UPDATE code_task_runs SET pull_request_url=:u, updated_at=now() "
+                              "WHERE id=:id AND pull_request_url IS NULL"),
+                          {"u": _partial_pr, "id": run_id})
+                reason = f"{reason} — partial work shipped as {_partial_pr}"
             return _fail(c, run_id, project_id, reason,
                          failure_class=fclass, reason_code=rcode)
     finally:
