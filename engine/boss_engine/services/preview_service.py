@@ -1246,3 +1246,27 @@ def list_previews(
             "FROM app_previews WHERE project_id=:p ORDER BY created_at DESC LIMIT :l"),
             {"p": project_id, "l": int(limit)}).mappings().all()
     return [dict(r) for r in rows]
+
+
+def start_preview_for_run(engine, settings: Settings, run_id: str, *, ttl_minutes: int = 60) -> dict:
+    """Start a preview the same way the console's button does: try the substrates in order.
+
+    Exists so the pipeline's auto-preview and the API endpoint share ONE launch policy. The
+    endpoint used to own the ordering inline, and anything else calling a single start_* would
+    have silently used a different strategy — the same drift that made the container path pick
+    a different app from the host path.
+    """
+    attempts = (start_rootfs_preview, start_container_preview, start_preview)
+    last: dict = {"status": "failed", "error": "preview could not start"}
+    for fn in attempts:
+        try:
+            res = fn(engine, settings, run_id, ttl_minutes=ttl_minutes)
+        except (PreviewNotReady, AmbiguousAppError):
+            raise
+        except (ValueError, RuntimeError) as exc:
+            last = {"status": "failed", "error": str(exc)}
+            continue
+        if res.get("status") == "running":
+            return res
+        last = res
+    return last

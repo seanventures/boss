@@ -3034,6 +3034,41 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
                        {"pull_request_url": proposal.get("pull_request_url"),
                         "decision_id": proposal.get("decision_id"), "quality_gate_id": qg_id})
         plane_sync.on_event(engine, settings, run_id, "code_task.pr_opened")  # P2: comment the PR link
+
+        # AUTO-PREVIEW FOR APPS. Operator: previews matter for an APP — a service can be
+        # exercised by its tests or a container deploy in CI/CD instead. A browsable app whose
+        # PR just opened should already be running when the operator looks at it, rather than
+        # requiring a click and a ~1 minute build first.
+        #
+        # The distinction is made from what the run BUILT, not from the task's wording:
+        # resolve_app_entry returns "static"/"node" for something a browser can open, and "py"
+        # for a server-shaped entrypoint. Only the former is auto-previewed. Deliberately
+        # best-effort and AFTER the PR is recorded — a preview failure must never affect the
+        # delivery, and the operator can still press Run preview for anything skipped.
+        try:
+            if getattr(settings, "auto_preview_apps", True) and not fctx.get("is_followup"):
+                _built = [pth for pth in accumulated if not _is_test_path(pth)]
+                _is_browsable = any(
+                    pth.endswith((".html", ".jsx", ".tsx", ".vue", ".svelte")) for pth in _built)
+                if _is_browsable:
+                    from .preview_service import start_preview_for_run
+                    _pv = start_preview_for_run(engine, settings, run_id, ttl_minutes=120)
+                    with _transaction(engine) as c:
+                        emit_event(c, project_id, "code_task.auto_preview", "boss",
+                                   "code_task_run", run_id,
+                                   {"status": _pv.get("status"), "url": _pv.get("url"),
+                                    "preview_id": _pv.get("id")})
+                else:
+                    with _transaction(engine) as c:
+                        emit_event(c, project_id, "code_task.auto_preview_skipped", "boss",
+                                   "code_task_run", run_id,
+                                   {"why": "service/library build — no browsable entrypoint; "
+                                           "exercise it via tests or a container deploy in CI/CD"})
+        except Exception as _pvexc:  # noqa: BLE001 — never let a preview affect the PR
+            with _transaction(engine) as c:
+                emit_event(c, project_id, "code_task.auto_preview_failed", "boss",
+                           "code_task_run", run_id,
+                           {"error": f"{type(_pvexc).__name__}: {_pvexc}"[:200]})
         # DEFERRED FINDINGS → their own task on the shipped branch. After the PR exists, so a
         # bookkeeping failure can never cost the delivery; guarded so follow-ups don't recurse.
         followup_run_id = None
