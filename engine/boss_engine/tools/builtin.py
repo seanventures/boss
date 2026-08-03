@@ -379,18 +379,39 @@ def _register_write_tools(reg: ToolRegistry) -> None:
     @reg.tool(
         "retry_code_task",
         "Resume a failed/blocked code-task run as a new attempt in the same "
-        "lineage, carrying prior findings forward (optionally with a fix note).",
+        "lineage, carrying prior findings forward (optionally with a fix note). "
+        "Can also SWITCH THE PROFILE for the new attempt (e.g. profile='lean' to re-run "
+        "the same work faster). Prefer this over create_code_task whenever the work "
+        "already has a run: it reuses the branch, the existing code and the approved plan.",
         _obj(
-            {"run_id": {"type": "string"}, "fix_note": {"type": "string"}},
+            {
+                "run_id": {"type": "string"},
+                "fix_note": {"type": "string"},
+                "profile": {
+                    "type": "string",
+                    "enum": ["lean", "balanced", "strict", "vag"],
+                    "description": "Switch the cost/rigor dial for THIS attempt. 'lean' keeps "
+                                   "test-first discipline and the regression suite but convenes "
+                                   "no adversarial reviewer (~3 agent sessions instead of ~6). "
+                                   "Omit to keep the profile the previous attempt used. Retrying "
+                                   "is ALWAYS preferable to creating a new task for the same "
+                                   "work: a retry reuses the branch, the code already written, "
+                                   "and the approved plan; a new task rebuilds from scratch.",
+                },
+                "repair_retries": {"type": "integer", "minimum": 0, "maximum": 5},
+            },
             ["run_id"],
         ),
         kind="write",
     )
     def retry_code_task(ctx, *, project_id, actor, args):
         cts = services_module("code_task_service")
+        rr = args.get("repair_retries")
         result = cts.retry_code_task(
             ctx.engine, ctx.settings, ctx.jobs, args["run_id"],
             fix_note=(args.get("fix_note") or ""),
+            profile=(args.get("profile") or None),
+            repair_retries=(int(rr) if isinstance(rr, int) else None),
         )
         return {"status": "retried", "result": _json_safe(result)}
 

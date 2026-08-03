@@ -5532,7 +5532,19 @@ def retry_code_task_endpoint(run_id: str, payload: Optional[dict] = None):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
     from .services.code_task_service import retry_code_task
     try:
-        return retry_code_task(engine, settings, jobs, run_id, fix_note=(payload or {}).get("fix_note", ""))
+        p = payload or {}
+        rr = p.get("repair_retries")
+        # profile/repair_retries were accepted by retry_code_task() and DROPPED here, so a
+        # caller asking to "retry this in lean mode" silently got the project default. The
+        # console's Retry button, the MCP tool and this endpoint must all be able to move the
+        # cost/rigor dial, or the only way to change it is to abandon the lineage and create a
+        # new task — which rebuilds from scratch and loses the branch.
+        return retry_code_task(
+            engine, settings, jobs, run_id,
+            fix_note=p.get("fix_note", ""),
+            profile=(p.get("profile") or None),
+            repair_retries=(int(rr) if isinstance(rr, int) else None),
+        )
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
 
