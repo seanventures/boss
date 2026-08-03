@@ -593,7 +593,7 @@ function CodeTaskDetail({ run, previews = [], onBack }: { run: CodeTaskRun; prev
           {run.pull_request_url ? (
             <PreviewControls runId={run.id} livePreviews={livePreviews} />
           ) : (
-            <span className="detail">▶ Preview available once a PR is open (a run must reach a green gate, or be overridden).</span>
+            <span className="detail">▶ Preview available once a PR is open. Checks do not have to pass — a run ships its PR with any findings attached — so this appears as soon as the run produces a change.</span>
           )}
         </div>
         {/* Separate row: iterate on the same task with feedback */}
