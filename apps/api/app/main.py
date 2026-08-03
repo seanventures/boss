@@ -12544,6 +12544,7 @@ def execute_decision(
                 note=payload.note,
                 delegate_to=payload.delegate_to,
                 external_ref=payload.external_ref,
+                force=payload.force,
             )
         except DecisionNotFoundError as error:
             raise HTTPException(status_code=404, detail=str(error)) from error

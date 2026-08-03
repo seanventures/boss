@@ -263,9 +263,16 @@ class DecisionService:
         note: Optional[str],
         delegate_to: Optional[str] = None,
         external_ref: Optional[str] = None,
+        force: bool = False,
     ) -> dict:
         if action not in {"approve", "reject", "revise", "delegate", "execute"}:
             raise ValueError(f"Unsupported action: {action}")
+        if force and not (note or "").strip():
+            # A force merge overrides BOSS's own safety verdict. The reason is the ONLY
+            # record of why, so it is mandatory — an unexplained override is indistinguishable
+            # from a bug six months later.
+            raise ValueError(
+                "force requires a note: state why BOSS's merge gate is being overridden.")
 
         row = self.get_row(connection, decision_id, for_update=True)
         current_status = row["status"]
@@ -657,7 +664,23 @@ class DecisionService:
                 },
             )
         elif action == "review_pull_request":
-            ci_gate = self._pull_request_ci_gate(connection, row)
+            # OPERATOR FORCE MERGE. Automated merging stays conservative — it refuses when
+            # BOSS's own gate found a real problem. But the operator can still say "merge it
+            # anyway", and BOSS performs it so the action stays inside the governed path with
+            # a receipt, instead of the human reaching for `gh pr merge` outside the system.
+            # The override is recorded with WHO, WHY and exactly which verdict was overridden.
+            ci_gate = None if force else self._pull_request_ci_gate(connection, row)
+            if force:
+                _overridden = self._pull_request_ci_gate(connection, row)
+                emit_event(
+                    connection, row["project_id"], "decision.merge_forced", actor,
+                    "decision", row["id"],
+                    {"reason": (note or "").strip()[:500],
+                     "overridden_status": (_overridden or {}).get("status", "none"),
+                     "overridden_reason": (_overridden or {}).get("reason", ""),
+                     "pull_request_url": recommendation.get("pull_request_url"),
+                     "note": "operator override — BOSS's automated merge gate did not pass"},
+                )
             if ci_gate is not None:
                 self._create_merge_gate_block(
                     connection,
@@ -672,7 +695,7 @@ class DecisionService:
                     ci_validation_summary=ci_gate["validation_summary"],
                 )
                 return
-            if self.settings.enable_sandbox_merge:
+            if self.settings.enable_sandbox_merge or force:
                 self._queue_merge_job_from_review(
                     connection, row, actor, recommendation
                 )

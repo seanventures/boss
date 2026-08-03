@@ -2705,6 +2705,10 @@ class DecisionActionRequest(BaseModel):
     note: Optional[str] = None
     delegate_to: Optional[str] = None
     external_ref: Optional[str] = None
+    # Operator override for a merge gate BOSS declined. BOSS still performs the merge, so the
+    # action stays inside the governed path with a receipt instead of the human reaching for
+    # `gh pr merge` outside the system. `note` becomes mandatory and records why.
+    force: bool = False
 
 
 class DecisionDigestRequest(BaseModel):
