@@ -129,6 +129,12 @@ _PARALLEL_TOOLS_RULE = (
     "minutes.\n"
     "- Prefer Grep/Glob to locate code over opening files speculatively one by one.\n"
     "- Only serialize when a call genuinely depends on the previous result.\n"
+    # 40 of 110 turns in a measured run called NO tool at all — pure narration between
+    # actions, ~9.2s each, the single largest time bucket after the round trips themselves.
+    # The work is judged by the diff and by BOSS re-running the tests, never by the prose.
+    "- Do NOT narrate your plan between actions. BOSS judges the DIFF and re-runs the tests "
+    "itself; commentary costs a full round trip and is never read. Act, then summarise ONCE "
+    "at the end.\n"
 )
 
 
