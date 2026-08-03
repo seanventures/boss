@@ -39,6 +39,17 @@ _MARKER_HUMAN = {
 _BOSS_BOILERPLATE_STARTS = (
     "deployability (required for any network service)",
     "=== iteration feedback",
+    # Reviewer prose folded into a retry's instructions. The reviewers discuss the CODE, and
+    # their English is not a description of the task: on crun_b475cb21 a repair whose only
+    # failing gate was `tests_strong_enough` was escalated tier 1 -> 3 because a reviewer had
+    # written the words "auth" and "token" while explaining a finding. BOSS was classifying
+    # its OWN commentary about the task instead of the task.
+    "## what i verified",
+    "## consistency review",
+    "## security review",
+    "## code review",
+    "outcome of previous attempt:",
+    "findings (previous attempt)",
 )
 
 
@@ -52,13 +63,17 @@ def _task_haystack(spec: dict) -> str:
             str(spec.get("repo", "")),
         ]
     ).lower()
+    # TRUNCATE, don't snip. Everything from one of these markers onward is text BOSS wrote
+    # ABOUT the task (iteration feedback, reviewer prose), not the operator's request. Cutting
+    # only to the next blank line left multi-paragraph review commentary in the haystack, and
+    # a reviewer's use of "auth"/"token" then escalated a test-strengthening repair from tier
+    # 1 to tier 3.
+    cut = len(text)
     for marker in _BOSS_BOILERPLATE_STARTS:
         idx = text.find(marker)
-        while idx != -1:
-            end = text.find("\n\n", idx)
-            text = text[:idx] + (text[end:] if end != -1 else "")
-            idx = text.find(marker)
-    return text
+        if idx != -1:
+            cut = min(cut, idx)
+    return text[:cut]
 
 
 def _matches(marker: str, haystack: str) -> bool:
