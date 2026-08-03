@@ -370,6 +370,12 @@ def _repair_needs_write_tests(prior_failing_gates, *, prior_error: Optional[str]
     return any(g in _TEST_GATES for g in gates)
 
 
+class CodeTaskCancelled(Exception):
+    """The operator cancelled this run. Raised at a stage boundary so the pipeline unwinds
+    cleanly (releasing budget, retaining the sandbox) instead of running to completion on
+    work nobody wants."""
+
+
 # The full adversarial panel. A profile may enable a subset via `panel_checks`; `regression`
 # is the only seat that is not an LLM call (it executes the test suite).
 _ALL_PANEL_SEATS = ("review_code", "security_check", "regression", "consistency_check")
@@ -1175,8 +1181,21 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
         # measured, including crun_12ae7cbf which shipped PR #60 clean. Guarding on it would
         # silently disable resume. Inherit whenever a real plan exists; the repair feedback
         # still drives what changes, and the reviewer still judges the result.
+        # RE-ENTRY INTO THE SAME RUN. A lease reclaim (worker restart, crash, expired lease)
+        # re-executes the SAME code.task job from stage one — measured on crun_b4b6383d:
+        # three full passes, 15 agent sessions, $6.83, never finishing. The design this run
+        # already produced is persisted in its own state (see design_persisted), and nothing
+        # read it: resume only ever consulted a PARENT's design via inherited_design.
+        # A run must first ask what IT already did.
+        own = prior_state.get("design")
+        if isinstance(own, dict) and (own.get("plan") or "").strip():
+            resume_design = own
+            with _transaction(engine) as c:
+                emit_event(c, project_id, "code_task.design_reused_own", "boss",
+                           "code_task_run", run_id,
+                           {"why": "re-entry after lease reclaim; skipping the design chain"})
         inherited = fctx.get("inherited_design")
-        if isinstance(inherited, dict) and (inherited.get("plan") or "").strip():
+        if resume_design is None and isinstance(inherited, dict) and (inherited.get("plan") or "").strip():
             resume_design = inherited
             with _transaction(engine) as c:
                 emit_event(c, project_id, "code_task.design_resumed", "boss",
@@ -1380,6 +1399,20 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
             sf.github.upsert_file(work_branch, fc.path, fc.content, message)
             accumulated[fc.path] = fc.content
         guest_base = work_branch
+
+    def _abort_if_cancelled(where: str) -> None:
+        """Stop a run the operator cancelled. Cancellation was a DB update nobody read: one
+        cancelled run kept executing for 40 minutes and $6.73 afterwards, and cancelled runs
+        later overwrote their own status. Checked at stage boundaries so it costs one cheap
+        query per stage and never interrupts an agent mid-call."""
+        try:
+            with _transaction(engine) as c:
+                st = c.execute(sql("SELECT status FROM code_task_runs WHERE id=:id"),
+                               {"id": run_id}).scalar()
+        except Exception:  # noqa: BLE001 — never let the check itself break a run
+            return
+        if st == "cancelled":
+            raise CodeTaskCancelled(f"run cancelled by operator (detected at {where})")
 
     def _mark_stage_done(stage: str) -> None:
         """Record that a stage finished, so a resumed attempt can skip it.
@@ -1649,6 +1682,7 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
 
         if do_separate_tests:
             # STEP write tests (qa), tests only.
+            _abort_if_cancelled("write_tests")
             with _transaction(engine) as c:
                 _set_phase(c, run_id, "write_tests")
 
@@ -1771,6 +1805,7 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
         # executable check (the test command) and feeds the implementer the CONCRETE failure
         # (failing test output, a tamper notice, or "no implementation"). Retries can earn a
         # pass but never soften the gate. 0 retries == the pre-Phase-3 single pass.
+        _abort_if_cancelled("implement")
         with _transaction(engine) as c:
             _set_phase(c, run_id, "implement")
         base_impl_prompt = (_impl_prompt(title, instructions, test_files, test_cmd, criteria=criteria,
@@ -2969,6 +3004,18 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
                 "deferred_findings": deferred_findings,
                 "followup_run_id": followup_run_id, **proposal}
 
+    except CodeTaskCancelled as exc:
+        # Operator intent, not a failure: stop, keep the work on the branch, release budget.
+        _finish_vms(success=False)
+        try:
+            _checkpoint("cancelled")
+        except Exception:  # noqa: BLE001
+            pass
+        with _transaction(engine) as c:
+            _release(budget, c, project_id, reservation_id, "cancelled by operator", run_id=run_id)
+            emit_event(c, project_id, "code_task.cancel_honoured", "boss", "code_task_run",
+                       run_id, {"detail": str(exc)[:200]})
+        return {"status": "cancelled", "done": True, "reason": str(exc)}
     except Exception as exc:  # noqa: BLE001 — fail the run gracefully on any agent/model error
         _finish_vms(success=False)  # retain stage VMs for root-causing via the console
         # A blank reason makes every retry blind — always record at least the exception type
