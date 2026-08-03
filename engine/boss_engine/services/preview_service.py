@@ -262,12 +262,56 @@ def _discover_working_port(log_path: str, port_hint: int, timeout: float = 20.0)
     return None
 
 
+class PreviewNotReady(Exception):
+    """A preview was requested for a run that has not produced a reviewable change yet.
+
+    Deliberately NOT a RuntimeError: the API tries several preview substrates in turn and
+    treats RuntimeError as "this substrate failed, try the next one". Retrying three ways
+    cannot conjure a PR, so this must propagate on the first attempt instead of being
+    swallowed into a generic "preview could not start".
+    """
+
+    def __init__(self, run_id: str, status: str, phase: str) -> None:
+        self.run_id, self.status, self.phase = run_id, status, phase
+        super().__init__(
+            f"run {run_id} has not opened a pull request yet "
+            f"(status={status}, phase={phase}), so there is no completed change to preview"
+        )
+
+    def as_detail(self) -> dict:
+        return {
+            "error": "preview_unavailable_no_pr",
+            "message": ("This run has not opened a pull request yet, so there is no completed "
+                        "change to preview."),
+            "run_id": self.run_id, "run_status": self.status, "run_phase": self.phase,
+            "next_action": ("Wait for the run to finish. If it is blocked on a plan-approval "
+                            "decision, approve it; if it failed, retry the task."),
+        }
+
+
+def assert_previewable(run: dict, run_id: str) -> None:
+    """A preview is only meaningful once the work exists as a PR.
+
+    Enforced HERE, in the one place every caller already passes through, rather than in each
+    entrypoint. The console gated its button and the API gated its endpoint, but the MCP tool
+    called the service directly and bypassed both — the same "fix the host path, miss the
+    container path" mistake that once launched Sudoku as the preview for an N-Queens build.
+    Share the decision, not just the data.
+
+    Gated on the PR, deliberately not on gates passing: an advisory run legitimately opens a
+    PR with failing checks and IS previewable.
+    """
+    if not (run.get("pull_request_url") or ""):
+        raise PreviewNotReady(run_id, str(run.get("status") or "?"), str(run.get("phase") or "?"))
+
+
 def start_preview(engine, settings: Settings, run_id: str, *, ttl_minutes: int = 60) -> dict:
     """Clone the run's branch, launch the app, discover its port, register an expiring preview."""
     with begin(engine) as c:
         run = load_code_task_run(c, run_id)
     if run is None:
         raise ValueError(f"code task run not found: {run_id}")
+    assert_previewable(run, run_id)
     spec = run.get("spec") or {}
     owner = spec.get("owner") or settings.target_github_owner
     repo = spec.get("repo") or settings.target_github_repo
@@ -463,6 +507,7 @@ def start_container_preview(engine, settings: Settings, run_id: str, *, ttl_minu
         run = load_code_task_run(c, run_id)
     if run is None:
         raise ValueError(f"code task run not found: {run_id}")
+    assert_previewable(run, run_id)
     spec = run.get("spec") or {}
     owner = spec.get("owner") or settings.target_github_owner
     repo = spec.get("repo") or settings.target_github_repo
@@ -561,6 +606,7 @@ def start_rootfs_preview(
         run = load_code_task_run(c, run_id)
     if run is None:
         raise ValueError(f"code task run not found: {run_id}")
+    assert_previewable(run, run_id)
     fctx = run.get("finalize_ctx") or {}
     state = run.get("state") or {}
     build_substrate = fctx.get("execution_substrate") or state.get("execution_substrate")

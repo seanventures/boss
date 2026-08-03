@@ -390,9 +390,50 @@ def t_advisory_gate() -> None:
 
 
 # --------------------------------------------------------------------------- #
+# 10. PREVIEW PRECONDITION — one rule, every caller. The console hid its button
+#     and the API gated its endpoint, but the MCP tool called the service directly
+#     and bypassed both. Same shape as the bug that previewed Sudoku for an
+#     N-Queens build: the decision lived in one path, not in the shared one.
+# --------------------------------------------------------------------------- #
+def t_preview_precondition() -> None:
+    from boss_engine.services.preview_service import PreviewNotReady, assert_previewable
+
+    check_true("preview: run with a PR is previewable",
+               assert_previewable({"pull_request_url": "https://x/pull/1",
+                                   "status": "completed", "phase": "done"}, "r1") is None)
+
+    for label, run in [
+        ("no PR at all", {"status": "running", "phase": "implement"}),
+        ("PR url empty", {"pull_request_url": "", "status": "failed", "phase": "implement"}),
+        ("parked on plan gate",
+         {"pull_request_url": None, "status": "blocked", "phase": "awaiting_plan_approval"}),
+    ]:
+        try:
+            assert_previewable(run, "r1")
+            check(f"preview: blocked when {label}", "started", "PreviewNotReady")
+        except PreviewNotReady as exc:
+            d = exc.as_detail()
+            check(f"preview: blocked when {label}", d["error"], "preview_unavailable_no_pr")
+            check_true(f"preview: {label} reports the run's real status",
+                       bool(d["run_status"]) and bool(d["next_action"]))
+
+    # A failing gate must NOT block a preview — advisory runs ship a PR with findings and the
+    # whole point is being able to look at the result.
+    check_true("preview: allowed for a PR whose checks failed",
+               assert_previewable({"pull_request_url": "https://x/pull/2",
+                                   "status": "completed_with_dissent", "phase": "done"}, "r2")
+               is None)
+
+    # If this ever becomes a RuntimeError the API's substrate loop swallows it and reports a
+    # generic "preview could not start" after three pointless attempts.
+    check("preview: PreviewNotReady is not a RuntimeError",
+          issubclass(PreviewNotReady, RuntimeError), False)
+
+
+# --------------------------------------------------------------------------- #
 def main() -> int:
     for fn in (t_risk_tier, t_gate_action, t_inconclusive, t_preview_entrypoint,
-               t_regression_floor, t_context_scoping, t_preflight, t_rate_limiter, t_advisory_gate):
+               t_regression_floor, t_context_scoping, t_preflight, t_rate_limiter, t_advisory_gate, t_preview_precondition):
         try:
             fn()
         except Exception as exc:  # a crash in a decision fn is itself a failure

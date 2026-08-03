@@ -5645,33 +5645,12 @@ def start_preview_endpoint(run_id: str, payload: Optional[dict] = None):
     """Preview a built app from retained rootfs, Docker, or a managed host process."""
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
-    # A PREVIEW IS ONLY MEANINGFUL ONCE THE WORK EXISTS AS A PR. Before that the run may have
-    # died mid-implement, or be parked at a plan gate, and "Run preview" would either launch a
-    # half-built tree or fall back to whatever entrypoint it could find — which is how a preview
-    # for an N-Queens build once started the Sudoku app. The PR is the marker that a run
-    # produced a reviewable, complete change; gate on it rather than on run status, since an
-    # advisory run legitimately ships a PR with failing checks and IS previewable.
-    with begin(engine) as _c:
-        _run = _c.execute(
-            text("SELECT status, phase, pull_request_url FROM code_task_runs WHERE id=:r"),
-            {"r": run_id}).mappings().first()
-    if not _run:
-        raise HTTPException(status_code=404, detail=f"No such run: {run_id}")
-    if not _run["pull_request_url"]:
-        raise HTTPException(status_code=409, detail={
-            "error": "preview_unavailable_no_pr",
-            "message": ("This run has not opened a pull request yet, so there is no completed "
-                        "change to preview."),
-            "run_status": _run["status"], "run_phase": _run["phase"],
-            "next_action": ("Wait for the run to finish. If it is blocked on a plan-approval "
-                            "decision, approve it; if it failed, retry the task."),
-        })
-
     p = payload or {}
     mode = str(p.get("mode", "auto")).lower()
     ttl = int(p.get("ttl_minutes", 60))
     from .services.preview_service import (
-        start_preview, start_container_preview, start_rootfs_preview, stop_preview,
+        PreviewNotReady, start_preview, start_container_preview, start_rootfs_preview,
+        stop_preview,
     )
     # Replace (don't accumulate): stop any prior running preview for this run so there's one live
     # preview per task — a fresh "Run preview" regenerates it.
@@ -5698,6 +5677,10 @@ def start_preview_endpoint(run_id: str, payload: Optional[dict] = None):
     for fn in attempts:
         try:
             res = fn(engine, settings, run_id, ttl_minutes=ttl)
+        except PreviewNotReady as exc:
+            # No PR yet. Trying the other substrates cannot change that, so stop immediately
+            # rather than reporting a generic "preview could not start" after three attempts.
+            raise HTTPException(status_code=409, detail=exc.as_detail())
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc))
         except RuntimeError as exc:

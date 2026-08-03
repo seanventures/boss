@@ -464,7 +464,10 @@ def _register_write_tools(reg: ToolRegistry) -> None:
     @reg.tool(
         "start_preview",
         "Start (or replace) a live preview for a code-task run so the app can be "
-        "opened in a browser. Returns the preview record; the URL follows shortly.",
+        "opened in a browser. Returns the preview record; the URL follows shortly. "
+        "REQUIRES the run to have opened a pull request — a run still building, parked on "
+        "a plan-approval decision, or failed has no completed change to preview, and this "
+        "returns {preview: null, error: 'preview_unavailable_no_pr'} with the run's status.",
         _obj(
             {"run_id": {"type": "string"}, "ttl_minutes": {"type": "integer", "default": 60}},
             ["run_id"],
@@ -473,9 +476,16 @@ def _register_write_tools(reg: ToolRegistry) -> None:
     )
     def start_preview(ctx, *, project_id, actor, args):
         ps = services_module("preview_service")
-        rec = ps.start_preview(
-            ctx.engine, ctx.settings, args["run_id"], ttl_minutes=int(args.get("ttl_minutes") or 60)
-        )
+        try:
+            rec = ps.start_preview(
+                ctx.engine, ctx.settings, args["run_id"],
+                ttl_minutes=int(args.get("ttl_minutes") or 60),
+            )
+        except ps.PreviewNotReady as exc:
+            # Return the reason as DATA, not a raised tool error: the calling agent can act on
+            # "this run has no PR yet" (wait, approve the plan gate, retry) but can do nothing
+            # with a stack trace. Mirrors the console, which hides the button until a PR exists.
+            return {"preview": None, **exc.as_detail()}
         return {"preview": _json_safe(rec)}
 
 
