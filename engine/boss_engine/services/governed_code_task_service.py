@@ -99,6 +99,16 @@ def _is_test_path(path: str) -> bool:
     ))
 
 
+# A test declaration across the languages BOSS builds in: python (def test_/async def test_),
+# JS/TS (it(/test(/describe(), go (func TestX), java/kotlin (@Test).
+_TEST_DEF_RE = re.compile(
+    r"(?m)^\s*(?:async\s+)?def\s+test\w*\s*\(|"
+    r"^\s*(?:it|test|describe)\s*[.(]|"
+    r"^\s*func\s+Test\w*\s*\(|"
+    r"^\s*@Test\b"
+)
+
+
 def _hash_files(root: Path, paths: list[str]) -> dict[str, str]:
     out: dict[str, str] = {}
     for p in paths:
@@ -1242,7 +1252,14 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
             if p.is_file() and _is_test_path(str(p.relative_to(root)))
             and ".git/" not in str(p.relative_to(root))
         )
-        preexisting_test_hashes = _hash_files(root, preexisting_tests)
+        # Count the TESTS in each pre-existing file, not its bytes — see the floor below.
+        preexisting_test_counts: dict[str, int] = {}
+        for _p in preexisting_tests:
+            try:
+                preexisting_test_counts[_p] = len(
+                    _TEST_DEF_RE.findall((root / _p).read_text(errors="ignore")))
+            except OSError:
+                preexisting_test_counts[_p] = 0
 
         # Which steps run is set by the risk tier (the cost dial): tier 0 = one agent writes
         # code + tests; tier >=1 = a separate tester; tier >=2 = add a fresh-context code review.
@@ -1909,9 +1926,25 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
         # iteration on already-good code as "code present" so a CONVERGED run isn't false-failed.
         _is_repair_iteration = root_run != run_id
         # Regression floor, evaluated at every tier (see the snapshot after provision).
-        _tests_now = _hash_files(root, preexisting_tests)
-        _weakened = [p for p in preexisting_tests
-                     if _tests_now.get(p) != preexisting_test_hashes.get(p)]
+        # Compares TEST COUNT, not file hashes. Hash equality flagged every edit as
+        # "weakened", including strengthening ones: on PR #62 it blocked a change that
+        # renamed a misnamed test, kept its assertion, and ADDED a case for the gap it had
+        # never covered (test_streak 16 -> 17 tests, test_persistence 22 -> 24). Editing a
+        # test file is normal; LOSING coverage is the regression. A file that is deleted, or
+        # comes back with fewer tests than it had, is what must never pass silently.
+        _weakened: list[str] = []
+        for _p in preexisting_tests:
+            _fp = root / _p
+            if not _fp.exists():
+                _weakened.append(f"{_p} (deleted)")
+                continue
+            try:
+                _now_n = len(_TEST_DEF_RE.findall(_fp.read_text(errors="ignore")))
+            except OSError:
+                continue
+            _was_n = preexisting_test_counts.get(_p, 0)
+            if _now_n < _was_n:
+                _weakened.append(f"{_p} ({_was_n} -> {_now_n} tests)")
         gates = {
             "code_written": bool(impl_files) or (_is_repair_iteration and tests_passed),
             "written_tests_pass": tests_passed,
