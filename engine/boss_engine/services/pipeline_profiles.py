@@ -169,11 +169,16 @@ PROFILES: dict[str, dict] = {
         "label": "Balanced — the default for normal work",
         "tier_floor": 0,
         "tier_cap": 3,
+        # VAG economics with a floor of 0: the CHEAP lane builds, the FRONTIER lane VERIFIES.
+        # implement was on `strong` and it is by far the most expensive stage — measured on the
+        # same feature: opus 66 turns/877s/$6.22 (and 102 turns/$11.86 on a rebuild) vs sonnet
+        # 41 turns/656s/$3.98. The quality bar is held by the verifiers, which stay frontier:
+        # a cheap implementation still has to survive review_code, security and consistency.
         "model": {
             "default": "low_cost",
-            "implement": "strong",
             "review_code": "strong",
             "security_check": "strong",
+            "consistency_check": "strong",
         },
         "caching": True,
         "parallel_checks": True,
