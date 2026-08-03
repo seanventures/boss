@@ -313,7 +313,42 @@ _ALL_GATE_NAMES = _TEST_GATES | frozenset({
 })
 
 
-def _repair_needs_write_tests(prior_failing_gates) -> bool:
+# Errors that mean THE HARNESS died, not that the code was judged wanting: provider spend
+# caps, rate limits, timeouts, infrastructure. A retry after one of these must resume, not redo.
+# Deliberately EXACT phrases the engine itself writes, not loose tokens. A bare "timeout"
+# matched the sentence "review found a missing timeout on the fetch call", which would have
+# classified a genuine code finding as a platform death and skipped re-authoring the tests.
+# Same failure as the earlier inconclusive-check bug: reviewer prose is not a status code.
+_SYSTEM_FAILURE_MARKERS = (
+    "spend limit",
+    "usage limit",
+    "rate limit exceeded",
+    "quota exceeded",
+    "too many requests",
+    "timed out after",
+    "lease expired",
+    "budget reservation denied",
+    "connection refused",
+    "connection reset",
+    "infrastructure error",
+    "executable is not allowlisted",
+)
+
+
+def is_system_failure(error: Optional[str]) -> bool:
+    """Did the previous attempt die from a platform problem rather than a code verdict?
+
+    A spend-limit kill records NO failing gates, so resume logic that keys on gates falls back
+    to "re-run everything" — which is exactly the waste the operator is trying to avoid. The
+    code the attempt already wrote is on the branch (see _checkpoint), so the retry should keep
+    it and continue, not re-author it.
+    """
+    low = (error or "").lower()
+    return any(m in low for m in _SYSTEM_FAILURE_MARKERS)
+
+
+def _repair_needs_write_tests(prior_failing_gates, *, prior_error: Optional[str] = None,
+                              tests_on_branch: bool = False) -> bool:
     """Whether a repair must re-author tests, given what the parent attempt failed on.
 
     Unknown gates (an empty/missing list) return True — a retry with no recorded verdict gets
@@ -322,6 +357,10 @@ def _repair_needs_write_tests(prior_failing_gates) -> bool:
     """
     gates = [str(g) for g in (prior_failing_gates or [])]
     if not gates:
+        # No verdict was reached. If the harness died AND the branch already carries a suite,
+        # that suite is intact work — resume onto it instead of paying to re-author it.
+        if tests_on_branch and is_system_failure(prior_error):
+            return False
         return True
     # A gate name this build does not recognise gets the same treatment as no evidence. If a
     # gate is added later and nobody updates _TEST_GATES, the failure mode must be "did some
@@ -1342,6 +1381,68 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
             accumulated[fc.path] = fc.content
         guest_base = work_branch
 
+    def _mark_stage_done(stage: str) -> None:
+        """Record that a stage finished, so a resumed attempt can skip it.
+
+        Paired with _checkpoint: the checkpoint preserves the WORK, this preserves the
+        KNOWLEDGE of what is already done. Without both, a retry after a provider spend-limit
+        re-derives stages whose output is already sitting on the branch.
+        """
+        try:
+            with _transaction(engine) as c:
+                c.execute(sql(
+                    "UPDATE code_task_runs SET finalize_ctx="
+                    "COALESCE(finalize_ctx,'{}'::jsonb) || jsonb_build_object("
+                    "  'completed_stages', "
+                    "  COALESCE(finalize_ctx->'completed_stages','[]'::jsonb) || to_jsonb(:s::text)"
+                    "), updated_at=now() WHERE id=:id"),
+                    {"s": stage, "id": run_id})
+        except Exception:  # noqa: BLE001 — bookkeeping must never fail a run
+            pass
+
+    def _checkpoint(label: str) -> int:
+        """Push whatever the sandbox holds to the work branch. Best-effort, never fatal.
+
+        WHY THIS EXISTS. On the micro-VM substrate each stage commits its files (_commit_stage
+        above). On the LOCAL substrate nothing was pushed until the PR was opened, so the whole
+        run lived in an ephemeral temp dir: a provider spend-limit, a timeout, or a crash threw
+        away every completed stage. Measured: four runs died on "You've hit your monthly spend
+        limit" with no branch and no recorded files, and a retry then re-ran write_tests and
+        implement from nothing. `write_tests` alone is 16-26 turns and $1.45-$3.01.
+
+        Checkpointing after each stage means a failure costs the CURRENT stage, never the run.
+        """
+        if use_microvm:
+            return 0  # that path already commits per stage
+        try:
+            files = sandbox.diff()
+        except Exception:  # noqa: BLE001 — a dead sandbox must not mask the real failure
+            return 0
+        if not files:
+            return 0
+        try:
+            sf.github.ensure_branch(work_branch)
+            for fc in files:
+                sf.github.upsert_file(work_branch, fc.path, fc.content,
+                                      f"governed: checkpoint after {label} — {title[:50]}")
+                accumulated[fc.path] = fc.content
+            with _transaction(engine) as c:
+                c.execute(sql(
+                    "UPDATE code_task_runs SET finalize_ctx=COALESCE(finalize_ctx,'{}'::jsonb) "
+                    "|| jsonb_build_object('work_branch', CAST(:b AS text), "
+                    "'checkpointed_after', CAST(:s AS text)), updated_at=now() WHERE id=:id"),
+                    {"b": work_branch, "s": label, "id": run_id})
+                emit_event(c, project_id, "code_task.work_checkpointed", "boss",
+                           "code_task_run", run_id,
+                           {"after": label, "files": len(files), "branch": work_branch})
+            return len(files)
+        except Exception as exc:  # noqa: BLE001 — losing a checkpoint must not fail the run
+            with _transaction(engine) as c:
+                emit_event(c, project_id, "code_task.checkpoint_failed", "boss",
+                           "code_task_run", run_id,
+                           {"after": label, "error": f"{type(exc).__name__}: {exc}"[:200]})
+            return 0
+
     def _finish_vms(success: bool) -> None:
         """Hold successful stage VMs for a bounded rootfs-preview window; retain failed
         VMs for inspection. The sandbox service owns TTL reaping in both cases."""
@@ -1505,8 +1606,13 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
         # the tests are actually stale: if none of the test-related gates failed, the suite stood
         # up to the run and the repair's job is the CODE. Skipping is only safe when tests are
         # genuinely present on the branch — otherwise there is nothing to reuse.
+        _resume_done = set(fctx.get("resume_completed_stages") or [])
         if (do_separate_tests and root_run != run_id and preexisting_tests
-                and not _repair_needs_write_tests(fctx.get("prior_failing_gates"))):
+                and ("write_tests" in _resume_done
+                     or not _repair_needs_write_tests(
+                         fctx.get("prior_failing_gates"),
+                         prior_error=fctx.get("prior_error"),
+                         tests_on_branch=bool(preexisting_tests)))):
             do_separate_tests = False
             with _transaction(engine) as c:
                 emit_event(c, project_id, "code_task.tests_resumed", "boss",
@@ -1612,6 +1718,9 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
             if use_microvm:
                 # Commit ONLY test files — anything else the QA role wrote is discarded.
                 _commit_stage(test_changes or [], f"governed: tests-first (qa) — {title[:60]}")
+            else:
+                _checkpoint("write_tests")
+            _mark_stage_done("write_tests")
             if not test_files:
                 with _transaction(engine) as c:
                     emit_event(c, project_id, "code_task.step_exhausted", "boss",
@@ -1718,6 +1827,10 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
                 # VM re-clones the frozen tests + this attempt's committed impl from the branch.
                 _commit_stage(impl_changes, f"governed: implement (SE) — {title[:60]}"
                               + (f" [repair {attempt}]" if attempt else ""))
+                if not use_microvm:
+                    _checkpoint("implement" + (f"-repair{attempt}" if attempt else ""))
+                if not attempt:
+                    _mark_stage_done("implement")
                 impl_files = [p for p in accumulated if not _is_test_path(p)]
                 # Authoritative verification: the guest RUNNER (our code, in-VM) executed the
                 # test command after the agent stopped — that in-VM result is the verdict.

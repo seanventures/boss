@@ -244,6 +244,12 @@ def start_code_task(
     return run_id
 
 
+def _is_system_failure(error) -> bool:
+    """Thin re-export so the retry can classify without importing the whole pipeline."""
+    from .governed_code_task_service import is_system_failure
+    return is_system_failure(error)
+
+
 def _prior_failing_gates(fctx_prev: dict, state: dict) -> list[str]:
     """Which gates the previous attempt failed — from whichever path recorded them.
 
@@ -388,7 +394,20 @@ def retry_code_task(
                           # at the same tests. Carried as data so the child can skip stages
                           # instead of replaying the pipeline from the top.
                           **({"prior_failing_gates": _prior_failing_gates(fctx_prev, state)}
-                             if _prior_failing_gates(fctx_prev, state) else {})},
+                             if _prior_failing_gates(fctx_prev, state) else {}),
+                          # Carry the parent's error so the child can tell a PLATFORM death
+                          # (spend cap, timeout) from a code verdict. The former must resume
+                          # onto the checkpointed branch, not re-author what already exists.
+                          **({"prior_error": str(prev.get("error"))[:400]}
+                             if prev.get("error") else {}),
+                          # RESUME POINT. Which stages the dead attempt actually finished.
+                          # Carried ONLY when the harness died (spend cap, timeout, lease) —
+                          # after a real code verdict the stages must re-run, because their
+                          # output is what was judged wanting.
+                          **({"resume_completed_stages":
+                              list((fctx_prev.get("completed_stages") or []))}
+                             if (fctx_prev.get("completed_stages")
+                                 and _is_system_failure(prev.get("error"))) else {})},
             jobs=jobs, profile=profile or spec.get("profile"), risk_tier=spec.get("risk_tier"),
             model_config=spec.get("model_config"), open_pr=spec.get("open_pr"),
             repair_retries=(repair_retries if isinstance(repair_retries, int)

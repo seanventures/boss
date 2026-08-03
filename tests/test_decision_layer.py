@@ -620,10 +620,56 @@ def t_preview_app_choice(tmp=None) -> None:
 
 
 # --------------------------------------------------------------------------- #
+# 14. NEVER REDO WORK THE HARNESS THREW AWAY. Four runs died on "You've hit your
+#     monthly spend limit" with no branch and no recorded files: on the LOCAL
+#     substrate nothing was pushed until the PR opened, so a provider cap
+#     discarded every completed stage and the retry re-authored them. write_tests
+#     alone measured 17-67 turns and $1.11-$3.01.
+# --------------------------------------------------------------------------- #
+def t_resume_after_system_failure() -> None:
+    from boss_engine.services.governed_code_task_service import (
+        is_system_failure, _repair_needs_write_tests as need)
+
+    # Platform deaths — the code was never judged, so its work stands.
+    for err in ["claude code agent exited 1: success — You've hit your monthly spend limit",
+                "rate limit exceeded (429)", "job timed out after 3600s",
+                "Budget reservation denied: denied", "lease expired",
+                "connection refused"]:  # every phrase the engine actually writes
+        check_true(f"system failure detected: {err[:34]}", is_system_failure(err))
+
+    # A code verdict is NOT a system failure — those must still repair properly.
+    # Reviewer PROSE must never be read as a platform death — a finding that merely mentions
+    # "timeout" or "rate limit" is a judgement about the code, and skipping work over it would
+    # ship untested changes.
+    for err in ["QualityGate FAIL (qg_abc); failing: tests_strong_enough",
+                "review found a missing timeout on the fetch call",
+                "the client has no rate limiting and no quota handling",
+                "consider adding a connection retry", ""]:
+        check(f"not a system failure: {err[:34] or '(empty)'}", is_system_failure(err), False)
+
+    # THE POINT: a spend-limit death with tests already on the branch must NOT re-author them.
+    SPEND = "claude code agent exited 1: You've hit your monthly spend limit"
+    check("resume: spend-limit + tests on branch -> skip write_tests",
+          need([], prior_error=SPEND, tests_on_branch=True), False)
+    check("resume: spend-limit but NOTHING on the branch -> full pipeline",
+          need([], prior_error=SPEND, tests_on_branch=False), True)
+    check("resume: a real gate verdict still governs, even with a system-ish error",
+          need(["tests_strong_enough"], prior_error=SPEND, tests_on_branch=True), True)
+    check("resume: opinion-only gates still skip write_tests",
+          need(["code_review_passed"], prior_error=SPEND, tests_on_branch=True), False)
+
+    # Unchanged safety: no evidence at all -> do the work.
+    check("resume: no gates, no error -> full pipeline", need([], prior_error=None), True)
+    check("resume: unknown gate still forces the full pipeline",
+          need(["some_future_gate"], prior_error=SPEND, tests_on_branch=True), True)
+
+
+# --------------------------------------------------------------------------- #
 def main() -> int:
     for fn in (t_risk_tier, t_gate_action, t_inconclusive, t_preview_entrypoint,
                t_regression_floor, t_context_scoping, t_preflight, t_rate_limiter, t_advisory_gate, t_preview_precondition, t_repair_resume,
-               t_skipped_seat_semantics, t_preview_app_choice):
+               t_skipped_seat_semantics, t_preview_app_choice,
+               t_resume_after_system_failure):
         try:
             fn()
         except Exception as exc:  # a crash in a decision fn is itself a failure
