@@ -1030,6 +1030,12 @@ export type CodeTaskRun = {
     sandbox_task_ids?: string[];
     root_run_id?: string;
     attempt?: number;
+    /** Gates the run failed. Three paths record them under different keys: `failing_gates`
+     *  when parked for override, `advisory_failing_gates` when an advisory profile shipped
+     *  the PR with findings (the normal case), and dissent.unresolved_gates when repair
+     *  rounds were spent. The retry uses these to decide which stages are actually stale. */
+    failing_gates?: string[];
+    advisory_failing_gates?: string[];
   };
   reservation_id?: string | null;
   pull_request_url?: string | null;

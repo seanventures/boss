@@ -9,10 +9,40 @@ import {
   createCodeTaskAction,
   getCodeTaskActivityAction,
   startPreviewAction,
+  retryCodeTaskWithStateAction,
   submitCodeTaskFeedbackAction,
   overrideCodeTaskAction,
 } from "./actions";
 import { Markdown } from "./markdown";
+
+function RetryControls({ runId, failingGates = [] }: { runId: string; failingGates?: string[] }) {
+  const [state, action, pending] = useActionState(retryCodeTaskWithStateAction, null);
+  // Which stages the retry will SKIP, mirroring _repair_needs_write_tests on the server, so the
+  // operator knows this resumes rather than restarting. Kept in sync with _TEST_GATES.
+  const TEST_GATES = ["tests_strong_enough", "tests_written_first", "coder_did_not_edit_tests",
+                      "written_tests_pass", "existing_tests_intact"];
+  const reusesTests = failingGates.length > 0 && !failingGates.some((g) => TEST_GATES.includes(g));
+  return (
+    <span style={{ display: "inline-flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+      <form action={action} style={{ display: "inline-flex", gap: 8, alignItems: "center" }}>
+        <input type="hidden" name="run_id" value={runId} />
+        <button className="cap-btn" disabled={pending} title="Run this task again, resuming from where it failed">
+          {pending ? "Starting retry…" : "↻ Retry"}
+        </button>
+      </form>
+      <span className="detail">
+        Resumes on the same branch and reuses the approved plan
+        {reusesTests ? " and the existing test suite" : ""} — it does not rebuild from scratch.
+      </span>
+      {state?.runId ? (
+        <span className="cap-badge tone-blue">attempt {state.attempt ?? "?"} started · {state.runId}</span>
+      ) : null}
+      {state?.error ? (
+        <span className="detail" style={{ color: "#f85149" }}>{state.error}</span>
+      ) : null}
+    </span>
+  );
+}
 
 function OverrideControls({ runId }: { runId: string }) {
   const [state, action, pending] = useActionState(overrideCodeTaskAction, null);
@@ -596,6 +626,19 @@ function CodeTaskDetail({ run, previews = [], onBack }: { run: CodeTaskRun; prev
             <span className="detail">▶ Preview available once a PR is open. Checks do not have to pass — a run ships its PR with any findings attached — so this appears as soon as the run produces a change.</span>
           )}
         </div>
+        {/* Row: plain operator-triggered retry. Separate from the feedback flow below, which
+            asks an agent to diagnose and propose one — when the findings are already on screen
+            the operator just wants to run it again. */}
+        {run.status !== "running" && run.status !== "queued" ? (
+          <div className="ct-outcome" style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", marginTop: 8 }}>
+            <RetryControls
+              runId={run.id}
+              failingGates={(run.finalize_ctx?.advisory_failing_gates
+                ?? run.finalize_ctx?.failing_gates
+                ?? []) as string[]}
+            />
+          </div>
+        ) : null}
         {/* Separate row: iterate on the same task with feedback */}
         {(run.status === "completed" || run.status === "failed" || run.status === "blocked") ? (
           <div style={{ marginTop: 12, paddingTop: 12, borderTop: "1px solid rgba(255,255,255,0.09)" }}>

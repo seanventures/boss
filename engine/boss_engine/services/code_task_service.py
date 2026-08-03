@@ -244,6 +244,25 @@ def start_code_task(
     return run_id
 
 
+def _prior_failing_gates(fctx_prev: dict, state: dict) -> list[str]:
+    """Which gates the previous attempt failed — from whichever path recorded them.
+
+    Three different code paths write this under three different keys, and a retry that reads
+    only one of them silently falls back to "re-run everything":
+      - `failing_gates`           — a run parked at awaiting_gate_override
+      - `advisory_failing_gates`  — an advisory run that shipped its PR with findings (the
+                                    normal case now that lean/balanced never block)
+      - `dissent.unresolved_gates`— repair rounds spent, shipped with dissent recorded
+    """
+    for src in (fctx_prev.get("failing_gates"),
+                fctx_prev.get("advisory_failing_gates"),
+                (fctx_prev.get("dissent") or {}).get("unresolved_gates"),
+                (state.get("dissent") or {}).get("unresolved_gates")):
+        if isinstance(src, list) and src:
+            return [str(g) for g in src]
+    return []
+
+
 def retry_code_task(
     engine, settings: Settings, jobs, run_id: str, *, fix_note: str = "",
     profile: Optional[str] = None, repair_retries: Optional[int] = None,
@@ -361,7 +380,15 @@ def retry_code_task(
                           # false even on runs that shipped clean, so it would disable resume.
                           **({"inherited_design": state["design"]}
                              if isinstance(state.get("design"), dict)
-                             and (state["design"].get("plan") or "").strip() else {})},
+                             and (state["design"].get("plan") or "").strip() else {}),
+                          # RESUME FROM WHERE IT FAILED. Which gates failed says which stages
+                          # are actually stale: a run rejected for `code_review_passed` has a
+                          # perfectly good test suite sitting on the branch, and re-authoring it
+                          # costs a full agent session (measured: 24 turns / 8.6 min) to arrive
+                          # at the same tests. Carried as data so the child can skip stages
+                          # instead of replaying the pipeline from the top.
+                          **({"prior_failing_gates": _prior_failing_gates(fctx_prev, state)}
+                             if _prior_failing_gates(fctx_prev, state) else {})},
             jobs=jobs, profile=profile or spec.get("profile"), risk_tier=spec.get("risk_tier"),
             model_config=spec.get("model_config"), open_pr=spec.get("open_pr"),
             repair_retries=(repair_retries if isinstance(repair_retries, int)

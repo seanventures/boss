@@ -295,6 +295,42 @@ def _kill_stray_review_processes(*roots) -> int:
     return killed
 
 
+# Gates whose failure means the TEST SUITE is what needs work. Any of these and a repair must
+# re-run write_tests; none of them and the suite on the branch is sound, so the repair's job is
+# the code and re-authoring tests is pure cost.
+_TEST_GATES = frozenset({
+    "tests_strong_enough",     # the suite does not catch a one-line mutation
+    "tests_written_first",     # TDD order was violated
+    "coder_did_not_edit_tests",  # the coder moved the goalposts
+    "written_tests_pass",      # this run's own tests fail
+    "existing_tests_intact",   # pre-existing tests were weakened or deleted
+})
+
+
+# Every gate the pipeline can report. Used to detect a gate name this build does not know.
+_ALL_GATE_NAMES = _TEST_GATES | frozenset({
+    "code_written", "code_review_passed", "security_clean", "nothing_broke", "consistent",
+})
+
+
+def _repair_needs_write_tests(prior_failing_gates) -> bool:
+    """Whether a repair must re-author tests, given what the parent attempt failed on.
+
+    Unknown gates (an empty/missing list) return True — a retry with no recorded verdict gets
+    the full pipeline. Skipping work is only justified by positive evidence that it is
+    redundant, never by absence of evidence.
+    """
+    gates = [str(g) for g in (prior_failing_gates or [])]
+    if not gates:
+        return True
+    # A gate name this build does not recognise gets the same treatment as no evidence. If a
+    # gate is added later and nobody updates _TEST_GATES, the failure mode must be "did some
+    # redundant work", never "silently skipped the stage that would have caught it".
+    if any(g not in _ALL_GATE_NAMES for g in gates):
+        return True
+    return any(g in _TEST_GATES for g in gates)
+
+
 # The full adversarial panel. A profile may enable a subset via `panel_checks`; `regression`
 # is the only seat that is not an LLM call (it executes the test suite).
 _ALL_PANEL_SEATS = ("review_code", "security_check", "regression", "consistency_check")
@@ -1451,6 +1487,24 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
         r1 = {"cost_usd_micros": 0, "summary": "", "usage": {}, "model": None}
         test_files: list[str] = []
         tests_untouched = True
+
+        # RESUME FROM WHERE IT FAILED. A repair re-ran write_tests unconditionally, even when the
+        # parent failed purely on review opinion — 24 turns / 8.6 min / a full agent session to
+        # re-derive a suite already sitting on the branch. Which gates failed tells us whether
+        # the tests are actually stale: if none of the test-related gates failed, the suite stood
+        # up to the run and the repair's job is the CODE. Skipping is only safe when tests are
+        # genuinely present on the branch — otherwise there is nothing to reuse.
+        if (do_separate_tests and root_run != run_id and preexisting_tests
+                and not _repair_needs_write_tests(fctx.get("prior_failing_gates"))):
+            do_separate_tests = False
+            with _transaction(engine) as c:
+                emit_event(c, project_id, "code_task.tests_resumed", "boss",
+                           "code_task_run", run_id,
+                           {"skipped_stage": "write_tests",
+                            "prior_failing_gates": list(fctx.get("prior_failing_gates") or []),
+                            "existing_tests": len(preexisting_tests),
+                            "why": ("no test-related gate failed, so the existing suite is the "
+                                    "oracle for this repair")})
 
         if do_separate_tests:
             # STEP write tests (qa), tests only.

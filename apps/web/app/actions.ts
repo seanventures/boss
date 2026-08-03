@@ -2482,6 +2482,33 @@ export async function retryCodeTaskAction(formData: FormData): Promise<void> {
   revalidatePath("/");
 }
 
+/**
+ * Operator-triggered retry. Distinct from the feedback flow, which asks an agent to diagnose
+ * and PROPOSE a retry: this is the plain "run it again" the operator reaches for when the
+ * findings are already on screen and no clarification is needed.
+ *
+ * The new attempt resumes rather than restarting — it inherits the parent's approved design,
+ * works on the same branch (so the code is already in the tree), and skips re-authoring tests
+ * when no test-related gate failed. Returns state so the button can name the new run.
+ */
+export async function retryCodeTaskWithStateAction(
+  _prev: { runId?: string; attempt?: number; error?: string } | null,
+  formData: FormData,
+): Promise<{ runId?: string; attempt?: number; error?: string }> {
+  const runId = String(formData.get("run_id") ?? "").trim();
+  if (!runId) return { error: "missing run_id" };
+  try {
+    const res = await client.retryCodeTask(
+      runId,
+      String(formData.get("fix_note") ?? "").trim() || undefined,
+    );
+    revalidatePath("/");
+    return { runId: res?.run_id, attempt: res?.attempt };
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
 export type FeedbackActionResult = {
   thread_id?: string;
   status?: string;

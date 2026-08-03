@@ -431,9 +431,56 @@ def t_preview_precondition() -> None:
 
 
 # --------------------------------------------------------------------------- #
+# 11. RESUME-FROM-FAILURE. A repair re-ran write_tests unconditionally — a full
+#     agent session (24 turns / 8.6 min measured) to re-derive a suite already on
+#     the branch, even when the parent failed purely on review opinion. Which
+#     gates failed says which stages are stale.
+# --------------------------------------------------------------------------- #
+def t_repair_resume() -> None:
+    from boss_engine.services.governed_code_task_service import (
+        _ALL_GATE_NAMES, _TEST_GATES, _repair_needs_write_tests as need)
+    from boss_engine.services.code_task_service import _prior_failing_gates
+
+    # Opinion-only failures: the suite stood up, so reuse it.
+    for label, gates in [("review opinion", ["code_review_passed"]),
+                         ("security", ["security_clean"]),
+                         ("consistency", ["consistent"]),
+                         ("review + consistency", ["code_review_passed", "consistent"])]:
+        check(f"resume: {label} reuses the existing suite", need(gates), False)
+
+    # Anything implicating the tests must re-author them.
+    for gate in sorted(_TEST_GATES):
+        check(f"resume: {gate} re-runs write_tests", need([gate]), True)
+    check("resume: one test gate among opinions still re-runs write_tests",
+          need(["code_review_passed", "tests_strong_enough"]), True)
+
+    # SAFETY: skipping work needs positive evidence it is redundant. Absence of evidence,
+    # or a gate name this build does not know, must fall back to doing the work.
+    check("resume: no recorded gates -> full pipeline", need([]), True)
+    check("resume: None -> full pipeline", need(None), True)
+    check("resume: unknown gate name -> full pipeline", need(["some_future_gate"]), True)
+    check("resume: unknown mixed with known -> full pipeline",
+          need(["code_review_passed", "some_future_gate"]), True)
+    check_true("resume: every test gate is a known gate", _TEST_GATES <= _ALL_GATE_NAMES)
+
+    # The retry must find the parent's gates whichever path recorded them; missing one key
+    # silently degrades every retry to "re-run everything".
+    check("resume: reads failing_gates (override path)",
+          _prior_failing_gates({"failing_gates": ["consistent"]}, {}), ["consistent"])
+    check("resume: reads advisory_failing_gates (the normal path now)",
+          _prior_failing_gates({"advisory_failing_gates": ["code_review_passed"]}, {}),
+          ["code_review_passed"])
+    check("resume: reads dissent.unresolved_gates",
+          _prior_failing_gates({"dissent": {"unresolved_gates": ["security_clean"]}}, {}),
+          ["security_clean"])
+    check("resume: nothing recorded -> empty (and therefore full pipeline)",
+          _prior_failing_gates({}, {}), [])
+
+
+# --------------------------------------------------------------------------- #
 def main() -> int:
     for fn in (t_risk_tier, t_gate_action, t_inconclusive, t_preview_entrypoint,
-               t_regression_floor, t_context_scoping, t_preflight, t_rate_limiter, t_advisory_gate, t_preview_precondition):
+               t_regression_floor, t_context_scoping, t_preflight, t_rate_limiter, t_advisory_gate, t_preview_precondition, t_repair_resume):
         try:
             fn()
         except Exception as exc:  # a crash in a decision fn is itself a failure
