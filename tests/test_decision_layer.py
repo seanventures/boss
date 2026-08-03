@@ -658,6 +658,25 @@ def t_resume_after_system_failure() -> None:
     check("resume: opinion-only gates still skip write_tests",
           need(["code_review_passed"], prior_error=SPEND, tests_on_branch=True), False)
 
+    # THE REPO HAVING TESTS IS NOT EVIDENCE THIS TASK WROTE ANY. A fresh greenfield retry
+    # whose lineage branch never existed clones the base branch, which in a multi-app repo is
+    # full of OTHER apps' tests. Skipping on that shipped two apps straight to implement with
+    # no tests of their own.
+    def would_skip(resume_done, prior_gates, tests_in_repo):
+        lineage_wrote = bool("write_tests" in resume_done or prior_gates)
+        return bool(tests_in_repo) and lineage_wrote and (
+            "write_tests" in resume_done
+            or not need(prior_gates, prior_error=SPEND, tests_on_branch=bool(tests_in_repo)))
+
+    check("resume: repo tests alone do NOT skip write_tests",
+          would_skip(set(), [], 18), False)
+    check("resume: lineage that completed write_tests DOES skip",
+          would_skip({"write_tests"}, [], 18), True)
+    check("resume: a real gate verdict implies a suite exists -> may skip",
+          would_skip(set(), ["code_review_passed"], 18), True)
+    check("resume: no tests anywhere -> never skip",
+          would_skip({"write_tests"}, [], 0), False)
+
     # Unchanged safety: no evidence at all -> do the work.
     check("resume: no gates, no error -> full pipeline", need([], prior_error=None), True)
     check("resume: unknown gate still forces the full pipeline",

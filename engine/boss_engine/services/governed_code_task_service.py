@@ -1621,7 +1621,17 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
         # up to the run and the repair's job is the CODE. Skipping is only safe when tests are
         # genuinely present on the branch — otherwise there is nothing to reuse.
         _resume_done = set(fctx.get("resume_completed_stages") or [])
+        # `preexisting_tests` means THE REPO HAS TESTS — not that THIS LINEAGE wrote any.
+        # Skipping on it alone shipped a calculator and a stock tracker straight to implement
+        # with no tests of their own, because boss-sandbox's main branch happens to contain 18
+        # test files from unrelated apps. The lineage branch did not even exist, so the clone
+        # fell back to main and those files looked like "the suite for this task".
+        # Only the LINEAGE'S OWN record proves tests were authored for this work: it completed
+        # write_tests, or a real gate verdict was reached (which requires a suite to judge).
+        _lineage_wrote_tests = bool(
+            "write_tests" in _resume_done or fctx.get("prior_failing_gates"))
         if (do_separate_tests and root_run != run_id and preexisting_tests
+                and _lineage_wrote_tests
                 and ("write_tests" in _resume_done
                      or not _repair_needs_write_tests(
                          fctx.get("prior_failing_gates"),
