@@ -315,10 +315,71 @@ def t_rate_limiter() -> None:
     check_true("ratelimit: uncontended slot still works", True)
 
 
+
+# --------------------------------------------------------------------------- #
+# 9. LEAN / ADVISORY — "22 runs, 2 PRs". Runs recorded `PR not created: blocked`
+#    because the adversarial panel stayed unhappy and the gate withheld the PR.
+#    Lean's contract: tests are still written FIRST, the suite still runs, no LLM
+#    seat argues about the code, and nothing a reviewer says can withhold the
+#    deliverable. The two exemptions below are what stops that becoming "no gates".
+# --------------------------------------------------------------------------- #
+def t_advisory_gate() -> None:
+    from boss_engine.services.governed_code_task_service import (
+        _ALL_PANEL_SEATS, resolve_gate_failure_action)
+    from boss_engine.services.pipeline_profiles import PROFILES, infer_risk_tier
+
+    # --- opinions never withhold the PR ---
+    for gate in ("code_review_passed", "security_clean", "consistency",
+                 "tests_strong_enough"):
+        check(f"advisory: {gate} failing still ships",
+              resolve_gate_failure_action(failing=[gate], advisory_gate=True,
+                                          rounds_used=0, max_repair_rounds=2), "ship")
+
+    # --- facts still do. Advisory is not "no gates". ---
+    for gate in ("existing_tests_intact", "code_written"):
+        check(f"advisory: {gate} is NOT waived",
+              resolve_gate_failure_action(failing=[gate], advisory_gate=True,
+                                          rounds_used=0, max_repair_rounds=2), "repair")
+    check("advisory: regression mixed with opinions still repairs",
+          resolve_gate_failure_action(failing=["code_review_passed", "existing_tests_intact"],
+                                      advisory_gate=True, rounds_used=0, max_repair_rounds=2),
+          "repair")
+    check("advisory: exhausted regression repairs ship WITH dissent, never dead-end",
+          resolve_gate_failure_action(failing=["existing_tests_intact"], advisory_gate=True,
+                                      rounds_used=2, max_repair_rounds=2), "ship_with_dissent")
+
+    # --- lean's shape ---
+    lean = PROFILES["lean"]
+    check("lean: keeps test-first discipline (tier floor 1 -> separate tester)",
+          lean["tier_floor"] >= 1, True)
+    check("lean: no design chain / no plan-approval gate to park a batch",
+          lean["tier_cap"] < 2, True)
+    check("lean: convenes NO adversarial LLM seat",
+          [s for s in (lean.get("panel_checks") or _ALL_PANEL_SEATS) if s != "regression"], [])
+    check("lean: still runs the regression suite",
+          "regression" in (lean.get("panel_checks") or ()), True)
+    check("lean: is advisory", bool(lean.get("advisory_gate")), True)
+
+    # --- the escape hatch must not become a bypass ---
+    sens = infer_risk_tier({"title": "Login", "instructions": "Add auth and password reset."}, lean)
+    check("lean: sensitive work escapes the tier cap", sens >= 2, True)
+    seats = set(_ALL_PANEL_SEATS if sens >= 2
+                else (lean.get("panel_checks") or _ALL_PANEL_SEATS))
+    check("lean: sensitive work gets the FULL panel back", "security_check" in seats, True)
+    check("lean: sensitive work is no longer advisory",
+          bool(lean.get("advisory_gate")) and sens < 2, False)
+
+    # --- other profiles are untouched ---
+    for name in ("balanced", "strict"):
+        check(f"{name}: still blocking", bool(PROFILES[name].get("advisory_gate")), False)
+        check(f"{name}: still convenes the full panel",
+              PROFILES[name].get("panel_checks"), None)
+
+
 # --------------------------------------------------------------------------- #
 def main() -> int:
     for fn in (t_risk_tier, t_gate_action, t_inconclusive, t_preview_entrypoint,
-               t_regression_floor, t_context_scoping, t_preflight, t_rate_limiter):
+               t_regression_floor, t_context_scoping, t_preflight, t_rate_limiter, t_advisory_gate):
         try:
             fn()
         except Exception as exc:  # a crash in a decision fn is itself a failure

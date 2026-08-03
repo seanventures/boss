@@ -295,6 +295,16 @@ def _kill_stray_review_processes(*roots) -> int:
     return killed
 
 
+# The full adversarial panel. A profile may enable a subset via `panel_checks`; `regression`
+# is the only seat that is not an LLM call (it executes the test suite).
+_ALL_PANEL_SEATS = ("review_code", "security_check", "regression", "consistency_check")
+
+# Gates an ADVISORY profile still honours. Not opinions — a regression against tests that
+# passed before this change, and "the agent produced no code". Shipping either silently would
+# make advisory mode indistinguishable from having no gates at all.
+_ADVISORY_HARD_FLOOR = ("existing_tests_intact", "code_written")
+
+
 def resolve_gate_failure_action(
     *,
     failing: list[str],
@@ -324,8 +334,19 @@ def resolve_gate_failure_action(
     the call, while the program keeps moving. Set BOSS_CODE_GATE_NEVER_BLOCK=false for the old
     fail-closed behaviour.
     """
-    if not failing or advisory_gate:
+    if not failing:
         return "ship"
+    if advisory_gate:
+        # Advisory means a REVIEWER'S OPINION cannot withhold the PR. It does not mean
+        # "ignore the gates". Two failures are facts, not opinions, and still get the full
+        # repair treatment: the change broke tests that passed before it (a regression), or
+        # no code was produced at all (nothing to ship). Everything else — review_code,
+        # security_check, consistency_check, tests_strong_enough — is judgement, and gets
+        # surfaced on the PR instead of blocking it.
+        blocking = [g for g in failing if g in _ADVISORY_HARD_FLOOR]
+        if not blocking:
+            return "ship"
+        failing = blocking
     # A repair re-runs the CODING agent. That is only a coherent remedy when a check actually
     # judged the code and found it wanting. If every failing gate is a HARNESS fault — the
     # check ran out of turns, timed out, or was skipped — then nothing has been said about the
@@ -1330,7 +1351,16 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
         # ADVISORY GATE: when True, failing quality checks are SURFACED but do NOT block the PR —
         # the build still ships a PR + preview and the user retries-to-improve. Quality feedback
         # without a dead-end (product decision: always produce a result on the first pass).
-        advisory_gate = False
+        #
+        # This was hardcoded False and only ever turned on for web-app builds, so for every
+        # normal task an unhappy reviewer could withhold the deliverable outright. Measured
+        # over three days: 22 runs, 2 PRs, with runs recording "PR not created: blocked".
+        # A reviewer's opinion is INPUT to the operator, not a veto over shipping — so the
+        # profile now owns this choice, and `lean` sets it True. The panel still runs and
+        # every verdict is still recorded; it just cannot swallow the PR.
+        # ...and for the same reason, a lenient profile stops being lenient once `sensitive`
+        # has pushed the tier above its cap: at tier >= 2 the gates block again.
+        advisory_gate = bool(profile.get("advisory_gate", False)) and risk_tier < 2
 
         # WEB-APP BUILDS: a deterministic Vite/React/TS scaffold where `npm run build` (tsc + vite)
         # IS the test. The separate write_tests stage mis-generated Python unittest files for this
@@ -1342,7 +1372,7 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
         if is_web_app:
             do_separate_tests = False
             do_review = True
-            advisory_gate = risk_tier < 2
+            advisory_gate = advisory_gate or risk_tier < 2
 
         # DESIGN PHASE (tier >= 2): standards -> spec -> plan -> review plan, BEFORE any code.
         # Spec-driven: the refined spec + plan are fed into the downstream coding steps. (The human
@@ -1849,7 +1879,29 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
                     panel_cost["v"] += int(rr.get("cost_usd_micros") or 0)
                 panel["consistency"] = (rr, _parse_consistency(rr.get("summary", "")))
 
-            checks = review_checks + [_do_security, _do_full, _do_consistency]
+            # WHICH seats sit on the panel is a profile choice. The default is the full
+            # adversarial panel; `lean` narrows it to ["regression"] so a prototype run keeps
+            # test-first discipline and the "does it actually run" signal, without the three
+            # LLM seats that argue about the code. A dropped seat is recorded as not_run (see
+            # the setdefaults above) rather than silently passing — advisory mode then ships
+            # the PR with that stated plainly, instead of pretending the check was clean.
+            # A profile's leniency applies only INSIDE its own tier range. `sensitive` work
+            # (auth, secrets, payments) overrides the tier cap upward — and if the narrowed
+            # seat list survived that override, `lean` would become a way to ship credential
+            # handling with no security review at all. Above tier 1 the full panel is restored
+            # no matter what the profile asked for.
+            enabled_seats = set(
+                _ALL_PANEL_SEATS if risk_tier >= 2
+                else (profile.get("panel_checks") or _ALL_PANEL_SEATS))
+            checks = []
+            if "review_code" in enabled_seats:
+                checks += review_checks
+            if "security_check" in enabled_seats:
+                checks.append(_do_security)
+            if "regression" in enabled_seats:
+                checks.append(_do_full)
+            if "consistency_check" in enabled_seats:
+                checks.append(_do_consistency)
             # Panel checks are independent + read-only, so run them ALL in parallel rather
             # than in slow batches of code_agent_max_concurrency (which is tuned for the
             # general lane). A low general concurrency was serializing the panel into ~2-3

@@ -3780,3 +3780,13 @@ UPDATE llm_calls SET role = CASE
     WHEN stage = 'security_check' THEN 'security_reviewer'
     ELSE NULL END
 WHERE role IS NULL AND stage IS NOT NULL;
+
+-- Advisory gate (nullable on purpose). NULL means "use the preset's value", so adding this
+-- column cannot silently redefine a preset that predates it. Lean sets it true: the adversarial
+-- panel still runs and still records every verdict, but a reviewer's opinion cannot withhold
+-- the PR + preview. Regressions are exempt (_ADVISORY_HARD_FLOOR).
+ALTER TABLE pipeline_profiles ADD COLUMN IF NOT EXISTS advisory_gate BOOLEAN;
+-- Which adversarial seats sit on the panel (NULL -> the preset's list -> the full panel).
+-- `lean` narrows this to ["regression"]: tests are still written first and the suite still
+-- runs, but the three LLM seats that argue about the code are not convened.
+ALTER TABLE pipeline_profiles ADD COLUMN IF NOT EXISTS panel_checks JSONB;

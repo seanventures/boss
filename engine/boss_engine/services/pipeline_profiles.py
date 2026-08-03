@@ -173,12 +173,29 @@ def plan_gate_explanation(markers: list[str], *, plan_ok: bool) -> str:
 # the efficiency levers wired in Phase 2.
 PROFILES: dict[str, dict] = {
     "lean": {
-        "label": "Lean — lowest cost, for prototypes and throwaway work",
-        "tier_floor": 0,
+        "label": "Lean — prototyping speed: one pass, minimal review, always ships",
+        # Tier 1 both ends, so TESTS ARE STILL WRITTEN FIRST by a separate tester and the
+        # code is written to satisfy them. That is what makes the output usable at all —
+        # it is the adversarial opinion layer that is dropped here, not the discipline.
+        # No design chain and no plan-approval gate, so an unattended batch never parks.
+        # (The `sensitive` override still lifts real auth/secrets work to tier 2 — lean is
+        # for prototypes, not a way to sneak credentials past review.)
+        "tier_floor": 1,
         "tier_cap": 1,
         "model": {"default": "low_cost"},
         "caching": True,
         "parallel_checks": True,
+        # NO ADVERSARIAL REVIEW. review_code, security_check and consistency_check are the
+        # three LLM seats that argue about the code, and they are exactly what stalls a
+        # prototype run — they are all dropped. What remains is `regression`, which is not an
+        # LLM call at all: it just executes the suite, so it costs seconds and it is the one
+        # signal that says "this actually runs".
+        "panel_checks": ["regression"],
+        # THE POINT OF LEAN. Over three days, 22 runs produced 2 PRs; runs died with
+        # "PR not created: blocked" because the panel stayed unhappy and the gate refused to
+        # open a PR. Here the reviewer's verdict is recorded on the PR and never withholds it.
+        # Regressions are still exempt: see _ADVISORY_HARD_FLOOR.
+        "advisory_gate": True,
     },
     "balanced": {
         "label": "Balanced — the default for normal work",

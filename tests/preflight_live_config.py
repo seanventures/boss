@@ -88,6 +88,27 @@ def main() -> int:
          "instructions": "Update the existing N-Queens app; small."}, profile)
     ok("tier-1 work needs no plan approval", t1 < 2, f"tier {t1}")
 
+    # --- LEAN, as the LIVE system resolves it ------------------------------------------
+    # The lean row predates the advisory_gate/panel_checks columns, so a NULL cell must fall
+    # back to the preset. If this ever reports the full panel, lean is silently `balanced`
+    # again and every batch run can be withheld by a reviewer.
+    from boss_engine.services.governed_code_task_service import _ALL_PANEL_SEATS  # noqa: E402
+
+    with eng.begin() as c:
+        lean = resolve_for_run(c, PROJECT, "lean", s)
+    lean_seats = set(lean.get("panel_checks") or _ALL_PANEL_SEATS)
+    ok("lean is advisory (a reviewer cannot withhold the PR)", bool(lean.get("advisory_gate")))
+    ok("lean convenes no adversarial LLM seat",
+       not [x for x in lean_seats if x != "regression"], f"seats={sorted(lean_seats)}")
+    ok("lean still runs the regression suite", "regression" in lean_seats)
+    ok("lean still writes tests first", lean.get("tier_floor", 0) >= 1,
+       f"tier_floor={lean.get('tier_floor')}")
+    ok("lean never parks on a plan gate", lean.get("tier_cap", 3) < 2,
+       f"tier_cap={lean.get('tier_cap')}")
+    ok("lean sensitive work still gets security review",
+       infer_risk_tier({"title": "Login", "instructions": "Add auth and password reset."},
+                       lean) >= 2)
+
     # --- safety floors that must never be off ------------------------------------------
     ok("never_block is on (a gate failure ships with dissent)", bool(s.code_gate_never_block))
     ok("panel runs on small changes too", True, "do_review >= tier 1 (source-level)")
