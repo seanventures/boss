@@ -677,6 +677,27 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
         return {"ok": True, "preview": _json_safe(result)}
 
     @reg.tool(
+        "watch_code_task",
+        "LIVE tool-level feed of what the coding agent is doing RIGHT NOW: each file it "
+        "reads or edits, lines written so far, and whether it is exploring or editing. Use "
+        "this while a task is running — get_run_activity only reports a stage AFTER it "
+        "finishes, so a 20-minute `implement` is otherwise a black box. Answers 'is it "
+        "patching or rebuilding?' before the money is spent.",
+        _obj({"run_id": {"type": "string"},
+              "limit": {"type": "integer", "minimum": 1, "maximum": 200, "default": 40},
+              "as_text": {"type": "boolean", "default": True,
+                          "description": "terminal-style lines (default) or structured JSON"}},
+             ["run_id"]),
+    )
+    def watch_code_task(ctx, *, project_id, actor, args):
+        la = services_module("live_activity")
+        rid = args["run_id"]
+        limit = int(args.get("limit") or 40)
+        if args.get("as_text", True):
+            return {"run_id": rid, "feed": la.live_activity_text(rid, limit=limit)}
+        return _json_safe(la.live_activity(rid, limit=limit))
+
+    @reg.tool(
         "get_run_activity",
         "Per-LLM-call activity for a code-task run: stage, model, tokens, cost, "
         "latency, retries, turns and errors. The answer to 'WHY did this phase fail "

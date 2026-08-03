@@ -13,7 +13,7 @@ from urllib.parse import parse_qs
 
 from fastapi import FastAPI, HTTPException, Query, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.encoders import jsonable_encoder
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
 from sqlalchemy import text
 
 from boss_engine.ports import configure_engine_ports
@@ -5437,6 +5437,20 @@ def run_code_task_step_endpoint(payload: dict):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
     from .services.code_task_service import run_code_task
     return run_code_task(engine, settings, jobs, payload["run_id"])
+
+
+@app.get("/v1/code-tasks/{run_id}/live")
+def code_task_live_endpoint(run_id: str, limit: int = 40, fmt: str = "json"):
+    """LIVE tool-level activity for a running task — what the agent is doing right now.
+
+    /activity is per-LLM-call and only lands when a stage finishes. This reads the agent's
+    transcript as it is written, so a console pane (or an MCP client) can show a terminal
+    feed while `implement` is still going: which files it is touching, how many lines it has
+    written, and whether it is exploring or editing. Read-only; never affects the run."""
+    from .services.live_activity import live_activity, live_activity_text
+    if fmt == "text":
+        return PlainTextResponse(live_activity_text(run_id, limit=limit))
+    return live_activity(run_id, limit=limit)
 
 
 @app.get("/v1/code-tasks/{run_id}/activity")
