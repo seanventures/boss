@@ -187,6 +187,54 @@ def classify_gate_faults(
     return faults
 
 
+def take_pending_guidance(engine, run_id: str) -> list[dict]:
+    """Pop operator guidance queued for a RUNNING task, so the next stage can honour it.
+
+    Without this a run is fire-and-wait: the operator watches it head somewhere wrong for
+    twenty minutes and the only lever is cancel-and-restart, which throws away everything
+    done so far. Claude Code lets you redirect at turn 3; BOSS could not redirect at all.
+
+    Steering is applied at STAGE BOUNDARIES, not mid-turn — the agent is a subprocess we
+    cannot interrupt safely, and a stage boundary is a consistent point where the guidance
+    can be folded into the next prompt. Guidance is consumed exactly once (popped under the
+    same transaction that reads it) so it cannot be applied twice.
+    """
+    with _transaction(engine) as c:
+        row = c.execute(sql("SELECT finalize_ctx FROM code_task_runs WHERE id=:id"),
+                        {"id": run_id}).mappings().first()
+        if not row:
+            return []
+        fctx = row["finalize_ctx"] or {}
+        if isinstance(fctx, str):
+            try:
+                fctx = json.loads(fctx)
+            except Exception:  # noqa: BLE001
+                return []
+        pending = list(fctx.get("pending_guidance") or [])
+        if not pending:
+            return []
+        c.execute(sql(
+            "UPDATE code_task_runs SET finalize_ctx = "
+            "COALESCE(finalize_ctx,'{}'::jsonb) || jsonb_build_object("
+            "  'pending_guidance', '[]'::jsonb,"
+            "  'applied_guidance', COALESCE(finalize_ctx->'applied_guidance','[]'::jsonb) "
+            "                      || CAST(:g AS JSONB)), updated_at=now() WHERE id=:id"),
+            {"g": json.dumps(pending), "id": run_id})
+    return pending
+
+
+def _guidance_block(items: list[dict]) -> str:
+    if not items:
+        return ""
+    lines = "\n".join(f"- {i.get('text','')}".strip() for i in items if i.get("text"))
+    return (
+        "\n\n=== OPERATOR STEERING (issued while this task was running) ===\n"
+        "A human is watching this run and has redirected it. This OVERRIDES the earlier "
+        "instructions where they conflict. Apply it now, before continuing:\n"
+        f"{lines}\n"
+    )
+
+
 def _kill_stray_review_processes(*roots) -> int:
     """Terminate `claude` review subprocesses still running under the given sandbox roots.
 
@@ -1524,6 +1572,16 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
             # was the iteration-feedback text buried in `instructions`. A repair must PATCH what is
             # there, not re-derive it, so a cross-run retry is treated as a repair from its first
             # pass, carrying the reviewers' findings as the concrete evidence to fix.
+            # STAGE-BOUNDARY STEERING: fold in anything the operator sent while this run has
+            # been executing, so a wrong direction costs one stage instead of the whole run.
+            _steer = take_pending_guidance(engine, run_id)
+            if _steer:
+                base_impl_prompt = base_impl_prompt + _guidance_block(_steer)
+                with _transaction(engine) as c:
+                    emit_event(c, project_id, "code_task.steered", "operator",
+                               "code_task_run", run_id,
+                               {"stage": "implement", "count": len(_steer),
+                                "guidance": [i.get("text", "")[:200] for i in _steer]})
             _cross_run_repair = (root_run != run_id) and attempt == 0
             if attempt == 0 and not _cross_run_repair:
                 impl_prompt = base_impl_prompt

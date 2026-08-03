@@ -677,6 +677,43 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
         return {"ok": True, "preview": _json_safe(result)}
 
     @reg.tool(
+        "steer_code_task",
+        "Redirect a RUNNING task without killing it. The guidance is applied at the next "
+        "stage boundary and OVERRIDES the original instructions where they conflict. Use it "
+        "the moment watch_code_task shows the agent going the wrong way — otherwise the only "
+        "option is cancel-and-restart, which throws away everything done so far.",
+        _obj({"run_id": {"type": "string"},
+              "guidance": {"type": "string",
+                           "description": "what to do differently, in plain terms"}},
+             ["run_id", "guidance"]),
+        kind="write",
+    )
+    def steer_code_task(ctx, *, project_id, actor, args):
+        import json as _json
+        from datetime import datetime, timezone
+        guidance = (args.get("guidance") or "").strip()
+        if not guidance:
+            return {"ok": False, "error": "guidance is required"}
+        entry = {"text": guidance[:4000], "actor": actor,
+                 "at": datetime.now(timezone.utc).isoformat()}
+        with ctx.begin() as c:
+            row = c.execute(_text("SELECT status FROM code_task_runs WHERE id=:id"),
+                            {"id": args["run_id"]}).mappings().first()
+            if not row:
+                return {"ok": False, "error": f"no code task run {args['run_id']}"}
+            if row["status"] in ("completed", "failed", "cancelled"):
+                return {"ok": False,
+                        "error": f"run is {row['status']}; steering applies to running tasks"}
+            c.execute(_text(
+                "UPDATE code_task_runs SET finalize_ctx = COALESCE(finalize_ctx,'{}'::jsonb) "
+                "|| jsonb_build_object('pending_guidance', "
+                "COALESCE(finalize_ctx->'pending_guidance','[]'::jsonb) || CAST(:e AS JSONB)), "
+                "updated_at=now() WHERE id=:id"),
+                {"e": _json.dumps([entry]), "id": args["run_id"]})
+        return {"ok": True, "run_id": args["run_id"],
+                "applies": "at the next stage boundary"}
+
+    @reg.tool(
         "watch_code_task",
         "LIVE tool-level feed of what the coding agent is doing RIGHT NOW: each file it "
         "reads or edits, lines written so far, and whether it is exploring or editing. Use "

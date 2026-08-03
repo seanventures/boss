@@ -5439,6 +5439,40 @@ def run_code_task_step_endpoint(payload: dict):
     return run_code_task(engine, settings, jobs, payload["run_id"])
 
 
+@app.post("/v1/code-tasks/{run_id}/steer")
+def code_task_steer_endpoint(run_id: str, payload: dict):
+    """Redirect a RUNNING task. The guidance is applied at the next stage boundary.
+
+    Without this a run is fire-and-wait: you watch it head the wrong way and the only lever
+    is cancel-and-restart, discarding everything done so far. This turns a 25-minute wrong
+    answer into a one-stage correction."""
+    guidance = str((payload or {}).get("guidance") or "").strip()
+    if not guidance:
+        raise HTTPException(status_code=422, detail="guidance is required")
+    actor = str((payload or {}).get("actor") or "operator")
+    from datetime import datetime as _dt, timezone as _tz
+    entry = {"text": guidance[:4000], "actor": actor,
+             "at": _dt.now(_tz.utc).isoformat()}
+    with begin(engine) as connection:
+        row = connection.execute(
+            text("SELECT status FROM code_task_runs WHERE id=:id"), {"id": run_id}
+        ).mappings().first()
+        if not row:
+            raise HTTPException(status_code=404, detail=f"no code task run {run_id}")
+        if row["status"] in ("completed", "failed", "cancelled"):
+            raise HTTPException(
+                status_code=409,
+                detail=f"run is {row['status']}; steering only applies to a running task")
+        connection.execute(
+            text("UPDATE code_task_runs SET finalize_ctx = COALESCE(finalize_ctx,'{}'::jsonb) "
+                 "|| jsonb_build_object('pending_guidance', "
+                 "COALESCE(finalize_ctx->'pending_guidance','[]'::jsonb) || CAST(:e AS JSONB)), "
+                 "updated_at=now() WHERE id=:id"),
+            {"e": json.dumps([entry]), "id": run_id})
+    return {"status": "queued", "run_id": run_id,
+            "applies": "at the next stage boundary", "guidance": guidance[:200]}
+
+
 @app.get("/v1/code-tasks/{run_id}/live")
 def code_task_live_endpoint(run_id: str, limit: int = 40, fmt: str = "json"):
     """LIVE tool-level activity for a running task — what the agent is doing right now.
