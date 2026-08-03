@@ -167,8 +167,12 @@ def _scope_to_task_app(entries: list[dict], files: list[str], task: str) -> tupl
         return entries, files          # nothing to disambiguate
 
     # Name fragments of the OTHER apps, so their files can be spotted inside shared dirs.
+    # The shared dirs THEMSELVES must be excluded: `tests` is in `tops` and unmatched, so
+    # including it made every path under tests/ look like a sibling app's file and dropped
+    # the named app's own tests (tests/test_nqueens_board.py) from an N-Queens task.
+    _shared = {"tests", "test", "spec", "docs", "doc", "scripts"}
     other_tokens = {re.sub(r"[^a-z0-9]+", "", t.lower()).replace("core", "").replace("web", "")
-                    for t in (tops - matched)}
+                    for t in (tops - matched - _shared)}
     other_tokens = {t for t in other_tokens if len(t) > 3}
 
     def keep(rel: str) -> bool:
