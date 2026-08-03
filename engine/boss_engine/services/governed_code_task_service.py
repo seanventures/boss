@@ -2136,6 +2136,27 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
             deferred_findings = _deferred
             gates["code_review_passed"] = _rev_pass
             gates["security_clean"] = sec_verdict == "clean"
+            # A SEAT THE PROFILE DID NOT CONVENE IS NOT A FAILED CHECK.
+            # Removing a reviewer from the panel while leaving its gate expecting a verdict
+            # made that gate FAIL ("not_run" != "clean"), and a failing gate is exactly what
+            # the in-run convergence loop below tries to fix — by running the very reviewer
+            # the profile had disabled, one at a time instead of in parallel. So `lean` ran
+            # the full adversarial review anyway, slower. Measured on crun_9b8e732b:
+            # review_code 11 turns/$0.66 + security_check 10 turns/$0.56 on a run whose
+            # panel was ["regression"].
+            # Mark them satisfied-because-not-applicable, and record WHY in the evidence so
+            # the PR still says plainly that no reviewer looked at this.
+            skipped_seats: dict[str, str] = {}
+            for _seat, _gate in (("review_code", "code_review_passed"),
+                                 ("security_check", "security_clean"),
+                                 ("consistency_check", "consistent")):
+                if _seat not in enabled_seats:
+                    gates[_gate] = True
+                    # NB: `evidence` is not bound until further down, so collect here and
+                    # merge below. Reading it here would NameError exactly when a profile
+                    # skips a seat — i.e. on every lean run.
+                    skipped_seats[_seat] = (
+                        f"not convened: profile '{profile.get('name')}' does not include this seat")
             if mutation_caught is not None:
                 gates["tests_strong_enough"] = mutation_caught
             if regressions_ok is not None:
@@ -2221,6 +2242,11 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
             "security_summary": r4.get("summary", "")[:4000],
             "consistency_summary": r6.get("summary", "")[:1500],
         }
+        if skipped_seats:
+            # Record NOT-RUN seats on the run. `lean` marking these gates satisfied must never
+            # read as "a reviewer approved this" — the PR has to say plainly that none looked.
+            evidence.update({f"{k}_skipped": v for k, v in skipped_seats.items()})
+
         with _transaction(engine) as c:
             c.execute(sql("UPDATE code_task_runs SET state=CAST(:s AS JSONB), "
                            "usage=jsonb_build_object('cost_usd_micros', CAST(:cost AS bigint), "

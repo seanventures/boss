@@ -483,9 +483,117 @@ def t_repair_resume() -> None:
 
 
 # --------------------------------------------------------------------------- #
+# 12. A SKIPPED SEAT IS NOT A FAILED CHECK. Removing reviewers from lean's panel
+#     left their gates expecting verdicts; "not_run" != "clean" so the gate FAILED,
+#     and a failing gate is what the in-run convergence loop repairs — by running
+#     the reviewer the profile had disabled. lean ran the full adversarial review
+#     anyway, sequentially. Measured on crun_9b8e732b: review_code 11 turns/$0.66
+#     + security_check 10 turns/$0.56 on a run whose panel was ["regression"].
+# --------------------------------------------------------------------------- #
+def t_skipped_seat_semantics() -> None:
+    from boss_engine.services.governed_code_task_service import _ALL_PANEL_SEATS
+
+    def gates_for(enabled_seats, sec_verdict="not_run", cons_verdict="not_run",
+                  rev_pass=False):
+        """Mirror of the production gate assignment + the skipped-seat override."""
+        gates = {"code_review_passed": rev_pass,
+                 "security_clean": sec_verdict == "clean",
+                 "consistent": cons_verdict != "drift"}
+        skipped = {}
+        for seat, gate in (("review_code", "code_review_passed"),
+                           ("security_check", "security_clean"),
+                           ("consistency_check", "consistent")):
+            if seat not in enabled_seats:
+                gates[gate] = True
+                skipped[seat] = "not convened"
+        return gates, skipped
+
+    lean_seats = {"regression"}
+    g, skipped = gates_for(lean_seats)
+    failing = [k for k, v in g.items() if not v]
+    check("lean: a skipped seat leaves NO failing gate", failing, [])
+    check("lean: convergence cannot re-run the disabled reviewer",
+          "code_review_passed" in failing, False)
+    check("lean: all three skips are recorded as not-run", sorted(skipped),
+          ["consistency_check", "review_code", "security_check"])
+
+    # The old behaviour, asserted so the regression is impossible to reintroduce silently.
+    g_old = {"code_review_passed": False, "security_clean": ("not_run" == "clean"),
+             "consistent": True}
+    check("regression guard: without the override the gates DID fail",
+          sorted(k for k, v in g_old.items() if not v),
+          ["code_review_passed", "security_clean"])
+
+    # A convened seat still gets a real verdict — the override must not mask genuine failures.
+    g2, sk2 = gates_for(set(_ALL_PANEL_SEATS), sec_verdict="vulnerable", rev_pass=False)
+    check("balanced: a convened seat's FAILURE is preserved",
+          sorted(k for k, v in g2.items() if not v),
+          ["code_review_passed", "security_clean"])
+    check("balanced: nothing is marked skipped", sk2, {})
+
+    # Partial profiles: only the disabled seat is neutralised.
+    g3, sk3 = gates_for({"review_code", "regression"}, rev_pass=False)
+    check("partial profile: the CONVENED reviewer can still fail",
+          g3["code_review_passed"], False)
+    check("partial profile: the skipped security seat does not fail",
+          g3["security_clean"], True)
+
+
+# --------------------------------------------------------------------------- #
+# 13. WHICH APP DOES THE PREVIEW LAUNCH? Third time on the same defect, so the
+#     decision now lives in ONE function both paths call.
+#       PR #62        host path preferred the task's entrypoint; container path
+#                     did not -> previewed Sudoku for an N-Queens build.
+#       crun_9b8e732b both paths preferred a changed .py, neither applied the same
+#                     rule to STATIC dirs; "." sorts first -> Sudoku again.
+#                     And the file list was ONE ATTEMPT's delta, so a repair that
+#                     touched only README+levels.py hid the web-nqueens/ app.
+# --------------------------------------------------------------------------- #
+def t_preview_app_choice(tmp=None) -> None:
+    import tempfile
+    from pathlib import Path
+    from boss_engine.services.preview_service import resolve_app_entry, _detect_command
+
+    root = Path(tempfile.mkdtemp())
+    # A repo that already contains one app at the root, like boss-sandbox.
+    (root / "serve.py").write_text("# pre-existing Sudoku server")
+    (root / "index.html").write_text("<title>Sudoku</title>")
+    (root / "web-nqueens").mkdir()
+    (root / "web-nqueens" / "index.html").write_text("<title>Queen Quest</title>")
+
+    built = ["nqueens_core/levels.py", "web-nqueens/app.js", "web-nqueens/index.html"]
+    check("preview: picks the STATIC app this task built",
+          resolve_app_entry(root, built), ("static", "web-nqueens"))
+    check("preview: host path agrees",
+          _detect_command(root, built)[-1].endswith("web-nqueens"), True)
+
+    # The regression that shipped: a repair's delta hides the app.
+    # A repair touched only README + a core module. Whatever this resolves to, it is NOT the
+    # app the task built — which is precisely why the caller must pass the LINEAGE's files.
+    # (Here "README.md" -> dir "." -> the root index.html, i.e. Sudoku. The route varies; the
+    # wrongness does not.)
+    repair_delta = ["README.md", "nqueens_core/levels.py"]
+    check("preview: an attempt-only file list does NOT find the app "
+          "(hence lineage_impl_files)",
+          resolve_app_entry(root, repair_delta)[1] == "web-nqueens", False)
+
+    # A changed .py entrypoint still outranks everything.
+    (root / "serve_nqueens.py").write_text("# built by this task")
+    check("preview: a changed entrypoint wins",
+          resolve_app_entry(root, ["serve_nqueens.py"] + built), ("py", "serve_nqueens.py"))
+
+    # No signal at all -> repo convention, never a crash.
+    check("preview: no changed files -> repo convention",
+          resolve_app_entry(root, None), ("py", "serve.py"))
+    check("preview: empty tree -> no choice, no exception",
+          resolve_app_entry(Path(tempfile.mkdtemp()), []), ("", ""))
+
+
+# --------------------------------------------------------------------------- #
 def main() -> int:
     for fn in (t_risk_tier, t_gate_action, t_inconclusive, t_preview_entrypoint,
-               t_regression_floor, t_context_scoping, t_preflight, t_rate_limiter, t_advisory_gate, t_preview_precondition, t_repair_resume):
+               t_regression_floor, t_context_scoping, t_preflight, t_rate_limiter, t_advisory_gate, t_preview_precondition, t_repair_resume,
+               t_skipped_seat_semantics, t_preview_app_choice):
         try:
             fn()
         except Exception as exc:  # a crash in a decision fn is itself a failure

@@ -68,6 +68,95 @@ _PY_ENTRYPOINTS = ("server.py", "serve.py", "app.py", "wsgi.py", "main.py")
 _STATIC_DIRS = (".", "web", "public", "dist", "site", "static")
 
 
+
+def lineage_impl_files(engine, run: dict) -> list[str]:
+    """Every implementation file THIS TASK'S LINEAGE has written, newest attempt first.
+
+    `state.impl_files` is per-ATTEMPT. On a repair it holds only the touched-up files — for
+    crun_9b8e732b that was ["README.md", "nqueens_core/levels.py"], with no trace of the
+    web-nqueens/ app the task exists to build. resolve_app_entry then finds no index.html
+    among them and falls back to the repo-wide serve.py, so the preview served SUDOKU for an
+    N-Queens task. Again.
+
+    The branch holds the whole lineage's work, so the file list must too. (Deriving it with
+    `git diff base...HEAD` is not an option: the preview clones --depth 1 --branch X, so the
+    base ref does not exist in that workdir.)
+    """
+    root = (run.get("finalize_ctx") or {}).get("root_run_id") or run.get("id")
+    if not root:
+        return list((run.get("state") or {}).get("impl_files") or [])
+    with begin(engine) as c:
+        rows = c.execute(
+            text("""
+                SELECT state->'impl_files' AS f
+                FROM code_task_runs
+                WHERE COALESCE(finalize_ctx->>'root_run_id', id) = :root
+                ORDER BY created_at DESC
+            """),
+            {"root": root},
+        ).mappings().all()
+    out: list[str] = []
+    for r in rows:
+        for path in (r["f"] or []):
+            if isinstance(path, str) and path not in out:
+                out.append(path)
+    return out
+
+
+def _changed_dirs(changed: Optional[list[str]]) -> list[str]:
+    """Directories this task touched, in the order they appear in the diff."""
+    out: list[str] = []
+    for c in changed or []:
+        d = c.rsplit("/", 1)[0] if "/" in c else "."
+        if d not in out:
+            out.append(d)
+    return out
+
+
+def resolve_app_entry(workdir: Path, changed: Optional[list[str]] = None) -> tuple[str, str]:
+    """THE single decision about which app a preview launches: ("py"|"static"|"node"|"", value).
+
+    Both the host path (_detect_command) and the container path (_generate_dockerfile) call
+    THIS. They previously each carried their own copy of the preference logic, and the copies
+    drifted twice:
+
+      PR #62  — the host path learned to prefer the entrypoint the task built; the container
+                path did not, and previewed Sudoku for an N-Queens build.
+      crun_9b8e732b — both paths then preferred a CHANGED .py entrypoint, but neither applied
+                the same preference to STATIC dirs. _STATIC_DIRS tries "." first, and a task
+                that built `web-nqueens/index.html` in a repo whose root already held the
+                Sudoku app previewed Sudoku again — this time via the repo-wide serve.py.
+
+    Hence one function. "What this task built" outranks "what the repo happens to contain",
+    for every stack, and there is exactly one place to change that rule.
+    """
+    touched = _changed_dirs(changed)
+
+    # 1. An entrypoint THIS task wrote.
+    for cand in [c for c in (changed or []) if c.endswith(".py")]:
+        base = cand.rsplit("/", 1)[-1]
+        if base.startswith(("serve", "server", "app", "main", "wsgi")) and (workdir / cand).exists():
+            return ("py", cand)
+    # 2. A static app THIS task built. Ranked ABOVE the repo-wide python fallback: a task that
+    #    ships web-nqueens/index.html means that app, not whatever serve.py predates it.
+    for d in touched:
+        if (workdir / d / "index.html").is_file():
+            return ("static", d)
+    # 3. Repo conventions, only once the task's own output is exhausted.
+    for entry in _PY_ENTRYPOINTS:
+        if (workdir / entry).exists():
+            return ("py", entry)
+    for cand in sorted(workdir.glob("*.py")):
+        if cand.name.startswith(("serve", "server", "app", "main", "wsgi")):
+            return ("py", cand.name)
+    for rel in _STATIC_DIRS:
+        if (workdir / rel / "index.html").is_file():
+            return ("static", rel)
+    if (workdir / "package.json").exists():
+        return ("node", ".")
+    return ("", "")
+
+
 def _detect_command(workdir: Path, changed: Optional[list[str]] = None) -> Optional[list[str]]:
     """Detect the repo's declared preview command before falling back to stack hints."""
     hint = workdir / "boss.preview.command"
@@ -123,27 +212,15 @@ def _detect_command(workdir: Path, changed: Optional[list[str]] = None) -> Optio
     # repo, so a task that added `serve_nqueens.py` to a repo already containing the Sudoku
     # `serve.py` previewed SUDOKU — serve.py sorts earlier and serve_nqueens.py was not on the
     # list at all. The preview faithfully launched the wrong application (PR #62).
-    changed_py = [c for c in (changed or []) if c.endswith(".py")]
-    for cand in changed_py:
-        base = cand.rsplit("/", 1)[-1]
-        if base.startswith(("serve", "server", "app", "main", "wsgi")) and (workdir / cand).exists():
-            return ["python3", cand]
-    for entry in _PY_ENTRYPOINTS:
-        if (workdir / entry).exists():
-            return ["python3", entry]
-    # Fall back to any entrypoint-shaped file the repo has (serve_nqueens.py, app_web.py, ...)
-    # before giving up — a fixed list can never enumerate real project naming.
-    for cand in sorted(workdir.glob("*.py")):
-        base = cand.name
-        if base.startswith(("serve", "server", "app", "main", "wsgi")):
-            return ["python3", base]
-    # A plain static site still needs a SERVER -- ES modules refuse to load over file:// -- so a
-    # bare index.html is a runnable app, not a library. Without this it fell through to the test
-    # fallback and reported a passing test suite as though it were a preview.
-    for rel in _STATIC_DIRS:
-        if (workdir / rel / "index.html").is_file():
-            return ["sh", "-lc",
-                    f'python3 -m http.server "$PORT" --bind 0.0.0.0 --directory {rel}']
+    # ONE decision, shared with the container path (see resolve_app_entry).
+    kind, value = resolve_app_entry(workdir, changed)
+    if kind == "py":
+        return ["python3", value]
+    if kind == "static":
+        # A static site still needs a SERVER — ES modules refuse to load over file:// — so a
+        # bare index.html is a runnable app, not a library.
+        return ["sh", "-lc",
+                f'python3 -m http.server "$PORT" --bind 0.0.0.0 --directory {value}']
     return None
 
 
@@ -395,7 +472,7 @@ def start_preview(engine, settings: Settings, run_id: str, *, ttl_minutes: int =
 
     # `impl_files` is what THIS task built — prefer its entrypoint over any
     # pre-existing app already in the repo.
-    _changed = ((run.get('state') or {}).get('impl_files') or [])
+    _changed = lineage_impl_files(engine, run)
     command = _detect_command(workdir, _changed)
     if not command:
         # No web server, but a library still has a way to 'run it' — its tests. Prefer the test
@@ -467,17 +544,18 @@ def _generate_dockerfile(workdir: Path, changed: Optional[list[str]] = None) -> 
     # docker-mode preview still picked the repo's pre-existing serve.py and launched Sudoku for
     # an N-Queens build (PR #62). Both paths must make the SAME choice, not merely consult the
     # same list.
-    py_entry = None
-    for cand in [c for c in (changed or []) if c.endswith(".py")]:
-        base = cand.rsplit("/", 1)[-1]
-        if base.startswith(("serve", "server", "app", "main", "wsgi")) and (workdir / cand).exists():
-            py_entry = cand
-            break
-    if py_entry is None:
-        py_entry = next((e for e in _PY_ENTRYPOINTS if (workdir / e).exists()), None)
-    if py_entry is None:
-        py_entry = next((c.name for c in sorted(workdir.glob("*.py"))
-                         if c.name.startswith(("serve", "server", "app", "main", "wsgi"))), None)
+    kind, value = resolve_app_entry(workdir, changed)
+    if kind == "static":
+        # Serve the static app THIS task built. Without this branch the container path fell
+        # through to the repo-wide python entrypoint and launched the wrong application.
+        port = 8000
+        existing.write_text(
+            "FROM python:3.11-slim\nWORKDIR /app\nCOPY . .\n"
+            f"ENV HOST=0.0.0.0 PORT={port}\nEXPOSE {port}\n"
+            f'CMD ["python3", "-m", "http.server", "{port}", "--bind", "0.0.0.0", '
+            f'"--directory", "{value}"]\n')
+        return port
+    py_entry = value if kind == "py" else None
     if py_entry:
         port = 8000
         reqs = "COPY requirements.txt ./\nRUN pip install --no-cache-dir -r requirements.txt\n" \
@@ -547,7 +625,7 @@ def start_container_preview(engine, settings: Settings, run_id: str, *, ttl_minu
         return _fail(f"git clone failed: {(clone.stderr or '')[-300:]}")
 
     try:
-        _changed_ep = ((run.get('state') or {}).get('impl_files') or [])
+        _changed_ep = lineage_impl_files(engine, run)
         container_port = _generate_dockerfile(workdir, _changed_ep)
     except RuntimeError as exc:
         return _fail(str(exc))
@@ -712,7 +790,7 @@ def _respawn_process_preview(engine, settings: Settings, preview_id: str) -> Non
             capture_output=True, text=True, timeout=120)
         if clone.returncode != 0:
             return
-        _changed = ((run.get('state') or {}).get('impl_files') or [])
+        _changed = lineage_impl_files(engine, run)
         command = _detect_command(workdir, _changed)
         if not command:
             return
