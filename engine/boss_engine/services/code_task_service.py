@@ -256,8 +256,8 @@ def _prior_failing_gates(fctx_prev: dict, state: dict) -> list[str]:
     """
     for src in (fctx_prev.get("failing_gates"),
                 fctx_prev.get("advisory_failing_gates"),
-                (fctx_prev.get("dissent") or {}).get("unresolved_gates"),
-                (state.get("dissent") or {}).get("unresolved_gates")):
+                (fctx_prev.get("unresolved_dissent") or {}).get("unresolved_gates"),
+                (state.get("unresolved_dissent") or {}).get("unresolved_gates")):
         if isinstance(src, list) and src:
             return [str(g) for g in src]
     return []

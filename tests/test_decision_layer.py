@@ -470,9 +470,14 @@ def t_repair_resume() -> None:
     check("resume: reads advisory_failing_gates (the normal path now)",
           _prior_failing_gates({"advisory_failing_gates": ["code_review_passed"]}, {}),
           ["code_review_passed"])
-    check("resume: reads dissent.unresolved_gates",
-          _prior_failing_gates({"dissent": {"unresolved_gates": ["security_clean"]}}, {}),
+    # KEY NAME MATTERS: the pipeline writes `unresolved_dissent`, not `dissent`. This test
+    # originally asserted the key I had assumed, so it passed against a dict I invented while
+    # the real column never matched — the retry silently recovered nothing.
+    check("resume: reads unresolved_dissent.unresolved_gates (the key actually written)",
+          _prior_failing_gates({"unresolved_dissent": {"unresolved_gates": ["security_clean"]}}, {}),
           ["security_clean"])
+    check("resume: the WRONG key recovers nothing (guards the assumption)",
+          _prior_failing_gates({"dissent": {"unresolved_gates": ["security_clean"]}}, {}), [])
     check("resume: nothing recorded -> empty (and therefore full pipeline)",
           _prior_failing_gates({}, {}), [])
 

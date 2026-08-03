@@ -2601,9 +2601,16 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
                         "UPDATE code_task_runs SET status='repairing', phase='done', error=:e, "
                         "finalize_ctx=COALESCE(finalize_ctx, '{}'::jsonb) || jsonb_build_object("
                         "  'review_repair_next_run', CAST(:nx AS text), "
-                        "  'review_repair_round', CAST(:rd AS int)), updated_at=now() WHERE id=:id"),
+                        "  'review_repair_round', CAST(:rd AS int), "
+                        # THE GATES, AS DATA. They were written into the error STRING only
+                        # ("...(gates: ['existing_tests_intact', ...])"), so a later retry asking
+                        # "which stages are actually stale?" found nothing structured and fell
+                        # back to replaying the whole pipeline. Every path that ends a run on
+                        # failing gates must record them in a key a machine can read.
+                        "  'failing_gates', CAST(:fg AS JSONB)), updated_at=now() WHERE id=:id"),
                         {"e": f"Auto review-repair round {rounds_used + 1} (gates: {failing}); "
                               f"iterating autonomously in {nxt.get('run_id')}.",
+                         "fg": json.dumps(list(failing)),
                          "nx": nxt.get("run_id"), "rd": rounds_used + 1, "id": run_id})
                 return {"status": "repairing", "done": True, "review_repair": True,
                         "next_run_id": nxt.get("run_id"), "round": rounds_used + 1,
