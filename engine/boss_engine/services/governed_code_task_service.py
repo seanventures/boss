@@ -1563,6 +1563,20 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
             design = {"standards": d1.get("summary", ""), "spec": d2.get("summary", ""),
                       "plan": d3.get("summary", ""), "plan_review": d4.get("summary", ""),
                       "plan_ok": plan_ok}
+            # PERSIST THE PLAN THE MOMENT IT EXISTS.
+            # `state` was only written when a run FINISHED, so a mid-run death lost the design
+            # along with everything else — both spend-limit failures recorded an EMPTY state, and
+            # their retries re-ran standards+spec+plan+review_plan to re-derive a plan for a task
+            # that had not changed (~3.5 min and ~$0.90 each, every time). The resume path reads
+            # state.design, so it has to be there before the thing that might kill us.
+            with _transaction(engine) as c:
+                c.execute(sql(
+                    "UPDATE code_task_runs SET state=COALESCE(state,'{}'::jsonb) "
+                    "|| jsonb_build_object('design', CAST(:d AS JSONB)), updated_at=now() "
+                    "WHERE id=:id"), {"d": json.dumps(design), "id": run_id})
+                emit_event(c, project_id, "code_task.design_persisted", "boss",
+                           "code_task_run", run_id, {"plan_chars": len(design.get("plan") or "")})
+            _mark_stage_done("design")
             # FAIL FAST: if the design reviewer says this isn't a coding task for this repo (a
             # research/PRD/spec deliverable, or an unrelated repo) it was mis-routed into codegen.
             # Stop NOW — in one design pass — instead of authoring tests + a whole codebase and only
@@ -1829,6 +1843,19 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
                               + (f" [repair {attempt}]" if attempt else ""))
                 if not use_microvm:
                     _checkpoint("implement" + (f"-repair{attempt}" if attempt else ""))
+                # Same reason as the design above: state was only written at the END, so a
+                # spend-limit kill lost the record of WHICH files this task built — which is
+                # exactly what the preview resolver needs to pick the right app.
+                try:
+                    with _transaction(engine) as c:
+                        c.execute(sql(
+                            "UPDATE code_task_runs SET state=COALESCE(state,'{}'::jsonb) "
+                            "|| jsonb_build_object('impl_files', CAST(:f AS JSONB)), "
+                            "updated_at=now() WHERE id=:id"),
+                            {"f": json.dumps([p for p in accumulated
+                                              if not _is_test_path(p)]), "id": run_id})
+                except Exception:  # noqa: BLE001 — bookkeeping never fails a run
+                    pass
                 if not attempt:
                     _mark_stage_done("implement")
                 impl_files = [p for p in accumulated if not _is_test_path(p)]
