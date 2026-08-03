@@ -1414,6 +1414,56 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
         if st == "cancelled":
             raise CodeTaskCancelled(f"run cancelled by operator (detected at {where})")
 
+    def _rescue_pr(reason: str) -> Optional[str]:
+        """Open a [partial] PR for whatever this run built. Safe to call from ANY exit.
+
+        THE DELIVERABLE IS THE PR. This was first written inline in the `except Exception`
+        handler, which covered crashes and nothing else — five other exits (no_test_files,
+        not_a_code_task, budget denied, gate override, PR-step exhausted) `return` directly
+        and skipped it entirely, so a run could still hand the operator an error string while
+        its code sat in a sandbox about to be deleted.
+
+        Idempotent: propose_pull_request dedupes on code:task:<run_id>, so calling it here and
+        again later cannot open two PRs. Returns the url or None; never raises.
+        """
+        try:
+            n = _checkpoint("exit")
+            if not n:
+                return None
+            with _transaction(engine) as c:
+                pr = sf.propose_pull_request(
+                    c, project_id, task_id, reservation_id=None,
+                    dedupe_key=f"code:task:{run_id}", title=f"[partial] {title}",
+                    branch_name=work_branch,
+                    summary=("INCOMPLETE — this run did not finish.\n\n"
+                             f"It stopped because: {reason}\n\n"
+                             f"The {n} file(s) it had written are on this branch, so the work is "
+                             "not lost and can be reviewed or continued with a retry. The quality "
+                             "gates did NOT run to completion — treat this as work-in-progress, "
+                             "not a reviewed change."),
+                    files=([FileChange(path=p, content=content)
+                            for p, content in accumulated.items()]
+                           if use_microvm else sandbox.diff()),
+                    created_by_job_id=job_id, actual_usd_micros=cost)
+                if pr.get("status") in ("created", "succeeded"):
+                    url = pr.get("pull_request_url") or pr.get("url")
+                    c.execute(sql("UPDATE code_task_runs SET pull_request_url=:u, updated_at=now() "
+                                  "WHERE id=:id AND pull_request_url IS NULL"),
+                              {"u": url, "id": run_id})
+                    emit_event(c, project_id, "code_task.partial_pr_opened", "boss",
+                               "code_task_run", run_id,
+                               {"url": url, "files": n, "reason": reason[:200]})
+                    return url
+        except Exception as exc:  # noqa: BLE001 — a failed rescue must never mask the real exit
+            try:
+                with _transaction(engine) as c:
+                    emit_event(c, project_id, "code_task.partial_pr_failed", "boss",
+                               "code_task_run", run_id,
+                               {"error": f"{type(exc).__name__}: {exc}"[:200]})
+            except Exception:  # noqa: BLE001
+                pass
+        return None
+
     def _mark_stage_done(stage: str) -> None:
         """Record that a stage finished, so a resumed attempt can skip it.
 
@@ -1618,6 +1668,7 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
                 _finish_vms(success=False)
                 reason_line = next((ln.strip() for ln in design["plan_review"].splitlines()
                                     if "NOT_A_CODE_TASK" in ln.upper()), "")
+                _rescue_pr("the design review judged this not a coding task for this repo")
                 with _transaction(engine) as c:
                     _release(budget, c, project_id, reservation_id,
                              "not a coding task — mis-routed into the code pipeline", run_id=run_id)
@@ -1786,6 +1837,8 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
                                {"step": "write_tests",
                                 "reason": "no_test_files_after_escalation"})
                     _release(budget, c, project_id, reservation_id, "no independent tests authored", run_id=run_id)
+                _rescue_pr("the test author produced no test files")
+                with _transaction(engine) as c:
                     return _fail(
                         c, run_id, project_id,
                         "Test author produced no test files even after escalating to a frontier "
@@ -2856,6 +2909,7 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
                         {"e": f"QualityGate FAIL ({qg_id}); failing gates: {failing}. "
                               f"A human can waive these + open the PR via /override.",
                          "fc": json.dumps(ctx), "id": run_id})
+                _rescue_pr("quality gate blocked and never_block is disabled")
                 return {"status": "blocked", "done": True, "awaiting_gate_override": True,
                         "quality_gate_id": qg_id, "failing_gates": failing}
 
@@ -2961,11 +3015,14 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
                                "code_task_run", run_id,
                                {"attempt": _pr_attempt, "error": f"{type(exc).__name__}: {exc}"[:200]})
         if status not in ("created", "succeeded"):
+            rescued = _rescue_pr(f"the pull-request step failed 3 times ({status})")
             with _transaction(engine) as c:
                 c.execute(sql("UPDATE code_task_runs SET status='blocked', phase='done', "
                                "decision_id=:d, error=:e, updated_at=now() WHERE id=:id"),
                           {"d": proposal.get("decision_id"),
-                           "e": f"PR not created after 3 attempts: {status}", "id": run_id})
+                           "e": (f"PR not created after 3 attempts: {status}"
+                                 + (f" — partial work shipped as {rescued}" if rescued else "")),
+                           "id": run_id})
             return {"status": "blocked", "done": True, "quality_gate_id": qg_id, **proposal}
 
         with _transaction(engine) as c:
@@ -3024,41 +3081,9 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
         reason = f"{reason} [substrate={execution_substrate}]"
         from .code_task_service import classify_pipeline_exception
         fclass, rcode = classify_pipeline_exception(reason)
-        # SHIP WHAT EXISTS, EVEN ON A FAILURE. Operator instruction, stated repeatedly:
-        # "never ever stop creating the PR unless it is some system failure ... we can always
-        # have a follow up fixes." A crashed run that already wrote code has a deliverable —
-        # handing back nothing but an error makes the work unreviewable AND unrecoverable.
-        # So: push whatever the sandbox holds and open a PR that says plainly it is partial.
-        # Best-effort; if it cannot be done we still fail cleanly with the original reason.
-        _partial_pr = None
-        try:
-            _n = _checkpoint("failure")
-            if _n:
-                with _transaction(engine) as c:
-                    _p = sf.propose_pull_request(
-                        c, project_id, task_id, reservation_id=None,
-                        dedupe_key=f"code:task:{run_id}", title=f"[partial] {title}",
-                        branch_name=work_branch,
-                        summary=("INCOMPLETE — this run did not finish.\n\n"
-                                 f"It stopped with: {reason}\n\n"
-                                 f"{_n} file(s) it had written are on this branch so the work is "
-                                 "not lost and can be reviewed or continued with a retry. The "
-                                 "quality gates did NOT run to completion — treat this as a "
-                                 "work-in-progress, not a reviewed change."),
-                        files=([FileChange(path=p, content=content)
-                                for p, content in accumulated.items()]
-                               if use_microvm else sandbox.diff()),
-                        created_by_job_id=job_id, actual_usd_micros=cost)
-                    if _p.get("status") in ("created", "succeeded"):
-                        _partial_pr = _p.get("pull_request_url") or _p.get("url")
-                        emit_event(c, project_id, "code_task.partial_pr_opened", "boss",
-                                   "code_task_run", run_id,
-                                   {"url": _partial_pr, "files": _n, "reason": reason[:200]})
-        except Exception as _pexc:  # noqa: BLE001 — a failed rescue must not mask the real error
-            with _transaction(engine) as c:
-                emit_event(c, project_id, "code_task.partial_pr_failed", "boss",
-                           "code_task_run", run_id,
-                           {"error": f"{type(_pexc).__name__}: {_pexc}"[:200]})
+        # SHIP WHAT EXISTS, EVEN ON A FAILURE — same helper every other exit uses, so the
+        # rule lives in exactly one place and cannot drift between paths again.
+        _partial_pr = _rescue_pr(reason)
 
         with _transaction(engine) as c:
             _release(budget, c, project_id, reservation_id, f"governed code task error: {reason}", run_id=run_id)
