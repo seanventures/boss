@@ -113,6 +113,24 @@ class CodeAgentResult:
         }
 
 
+# Appended to EVERY agent invocation. Measured across four runs, the agent issued exactly
+# 1.00 tool calls per turn — 65, 114, 59 and 51 turns, never once batching. Each turn is a
+# full model round trip (~8-12s), so reading 19 files cost 19 round trips and ~8 minutes of
+# pure latency. Interactive Claude Code reads the same repo in 2-3 minutes because it fires
+# several reads in ONE turn. Nothing in BOSS ever asked for that, and headless `claude -p`
+# defaults to one-at-a-time. This is the single largest latency item in the pipeline and it
+# costs nothing to fix: the calls are independent, so issuing them together is free.
+_PARALLEL_TOOLS_RULE = (
+    "\n\nTOOL EFFICIENCY (important):\n"
+    "- When you need several INDEPENDENT pieces of information, issue those tool calls "
+    "TOGETHER IN ONE TURN — e.g. read 5 files in a single turn, not 5 turns. Every turn is a "
+    "network round trip; batching independent reads is the difference between seconds and "
+    "minutes.\n"
+    "- Prefer Grep/Glob to locate code over opening files speculatively one by one.\n"
+    "- Only serialize when a call genuinely depends on the previous result.\n"
+)
+
+
 def _pack(cwd: Path, *, task: str = "", limit: int = 120) -> str:
     # IaC authoring (spec 05 §3.2 / T4): .tf/.tfvars/.hcl are context. APP-5 (#95): frontend exts
     # added so the design system is visible, and selection is retrieval-driven (pin the design
@@ -286,7 +304,9 @@ class ClaudeCodeAgent:
             cmd += ["--model", model]
         # `--` ends option parsing: a prompt that BEGINS with a dash (e.g. a
         # "--- SECTION ---" header) must never be read as a CLI option.
-        cmd += ["--", prompt]
+        # Single choke point: every stage (build AND review) goes through _invoke, so the
+        # batching rule is applied uniformly here rather than in each prompt builder.
+        cmd += ["--", prompt + _PARALLEL_TOOLS_RULE]
         last_error = ""
         for attempt in range(3):
             try:
