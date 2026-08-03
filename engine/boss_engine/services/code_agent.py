@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import json
+import re
 from pathlib import Path
 import subprocess
 import time
@@ -131,6 +132,60 @@ _PARALLEL_TOOLS_RULE = (
 )
 
 
+_SHARED_ROOT_HINTS = ("readme", "package.json", "pyproject", "requirements", "makefile",
+                      "docker", ".gitignore", "conftest", "setup.cfg", "tsconfig")
+
+
+def _scope_to_task_app(entries: list[dict], files: list[str], task: str) -> tuple[list[dict], list[str]]:
+    """Restrict context to the app the task is ABOUT, when the repo holds several.
+
+    boss-sandbox now carries two applications. For "Expand N-Queens app to support 1-10
+    queens" the packer offered 26 N-Queens files AND 18 Sudoku ones, so ~40% of the agent's
+    context was an application it had no business reading — and it spent 8 minutes and 30
+    exploration calls orienting. Generic term-overlap scores sudoku_core/profile.py about as
+    highly as nqueens_core/profile.py.
+
+    When task words match top-level directories, keep those directories (plus genuinely
+    shared root files) and drop the sibling apps. If nothing matches, change nothing.
+    """
+    words = {w for w in re.split(r"[^a-z0-9]+", (task or "").lower()) if len(w) > 3}
+    if not words:
+        return entries, files
+    tops = {f.split("/", 1)[0] for f in files if "/" in f}
+    matched = {
+        top for top in tops
+        for w in words
+        if w in re.sub(r"[^a-z0-9]+", "", top.lower()) or re.sub(r"[^a-z0-9]+", "", top.lower()) in w
+    }
+    if not matched or matched == tops:
+        return entries, files          # nothing to disambiguate
+
+    # Name fragments of the OTHER apps, so their files can be spotted inside shared dirs.
+    other_tokens = {re.sub(r"[^a-z0-9]+", "", t.lower()).replace("core", "").replace("web", "")
+                    for t in (tops - matched)}
+    other_tokens = {t for t in other_tokens if len(t) > 3}
+
+    def keep(rel: str) -> bool:
+        low = rel.lower()
+        top = rel.split("/", 1)[0]
+        if "/" not in rel:             # root-level file
+            return True
+        if top in matched:
+            return True
+        if any(h in low for h in _SHARED_ROOT_HINTS):
+            return True
+        if top in ("tests", "test", "spec", "docs"):
+            # Shared test/doc dirs hold BOTH apps' files (tests/test_nqueens_*.py next to
+            # tests/test_streak.py), so keeping the whole directory re-imports the sibling app
+            # through the back door. Drop the ones clearly named for another app.
+            return not any(tok in low for tok in other_tokens)
+        return top not in tops
+
+    kept_entries = [e for e in entries if keep(e["rel"])]
+    kept_files = [f for f in files if keep(f)]
+    return (kept_entries or entries), (kept_files or files)
+
+
 def _pack(cwd: Path, *, task: str = "", limit: int = 120) -> str:
     # IaC authoring (spec 05 §3.2 / T4): .tf/.tfvars/.hcl are context. APP-5 (#95): frontend exts
     # added so the design system is visible, and selection is retrieval-driven (pin the design
@@ -157,6 +212,9 @@ def _pack(cwd: Path, *, task: str = "", limit: int = 120) -> str:
     # Pin the design-system source of truth (when the repo has one) so a UI task always sees the
     # tokens + component kit; Terraform core stays pinned too. The 40/20KB caps are gone as the
     # selection mechanism — max_files/max_bytes are a large safety ceiling.
+    # Scope to the app the task names BEFORE ranking, so a sibling application cannot
+    # consume half the context budget.
+    entries, files = _scope_to_task_app(entries, files, task)
     ui = any(repo_retriever.is_design_file(e["rel"]) for e in entries)
     selection = repo_retriever.select_files(entries, task, ui=ui, pin=_is_core_tf_file,
                                              max_files=limit)
