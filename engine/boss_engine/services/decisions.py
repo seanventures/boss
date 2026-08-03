@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 import re
 import threading
 from typing import Any, Optional
@@ -842,10 +844,81 @@ class DecisionService:
              "mode": "decomposed_build"},
         )
 
+    def _boss_own_verdict(
+        self, connection: Connection, row: dict[str, Any], recommendation: dict[str, Any]
+    ) -> Optional[dict[str, Any]]:
+        """BOSS's OWN quality gate for the PR's run — the authoritative evidence.
+
+        BOSS runs the test suite itself; that is a stronger signal than an external CI
+        service, and it was never consulted here. The merge gate asked GitHub first and,
+        when GitHub answered 403, blocked citing "ci_validation_incomplete" while holding
+        far more damning evidence of its own: on PR #62 the run had already recorded
+        existing_tests_intact=FAILED with the two pre-existing Sudoku test files it had
+        edited. The operator saw a CI plumbing error instead of "this change weakens your
+        tests".
+        """
+        branch = str(recommendation.get("branch_name") or "")
+        root = branch.rsplit("/", 1)[-1] if branch.startswith("boss/code/") else ""
+        if not root:
+            return None
+        gate = connection.execute(
+            text(
+                """
+                SELECT q.gates_passed, q.gates_failed, q.code_task_run_id
+                FROM quality_gates q
+                JOIN code_task_runs r ON r.id = q.code_task_run_id
+                WHERE q.project_id = :p
+                  AND COALESCE(r.finalize_ctx->>'root_run_id', r.id) = :root
+                ORDER BY q.created_at DESC
+                LIMIT 1
+                """
+            ),
+            {"p": row["project_id"], "root": root},
+        ).mappings().first()
+        if not gate:
+            return None
+        failed = gate["gates_failed"] or []
+        if isinstance(failed, str):
+            try:
+                failed = json.loads(failed)
+            except Exception:  # noqa: BLE001
+                failed = []
+        passed = gate["gates_passed"] or []
+        if isinstance(passed, str):
+            try:
+                passed = json.loads(passed)
+            except Exception:  # noqa: BLE001
+                passed = []
+        return {"passed": list(passed), "failed": list(failed),
+                "run_id": gate["code_task_run_id"]}
+
     def _pull_request_ci_gate(
         self, connection: Connection, row: dict[str, Any]
     ) -> Optional[dict[str, str]]:
         recommendation = row["recommendation"] or {}
+
+        # (1) BOSS'S OWN VERDICT FIRST. BOSS runs the suite itself; that outranks an external
+        # CI signal and was previously never consulted here.
+        own = self._boss_own_verdict(connection, row, recommendation)
+        if own:
+            # (3) HARD STOP: a change that edited or deleted PRE-EXISTING tests must never be
+            # auto-merged. A green suite proves nothing if the guard tests were weakened, and
+            # a merge into main is irreversible. never-block means "ship the PR and record the
+            # dissent" -- which already happened -- NOT "merge damage into main".
+            if "existing_tests_intact" in own["failed"]:
+                return {
+                    "status": "blocked_weakened_existing_tests",
+                    "reason": ("This change modified or deleted PRE-EXISTING test files, so a "
+                               "passing suite does not prove nothing broke. BOSS will not "
+                               "auto-merge it."),
+                    "next_action": ("Restore the original test files (or justify each edit) and "
+                                    "re-run; the PR stays open in the meantime."),
+                    "event_reason": "weakened_existing_tests",
+                    "validation_status": "failed",
+                    "validation_summary": ("BOSS gate existing_tests_intact FAILED for run "
+                                           f"{own['run_id']}."),
+                }
+
         artifact_id = recommendation.get("test_report_artifact_id")
         if not isinstance(artifact_id, str) or not artifact_id:
             return {
@@ -894,6 +967,34 @@ class DecisionService:
                 "event_reason": "ci_validation_failed",
                 "validation_status": validation_status,
                 "validation_summary": validation_summary,
+            }
+        # (2) "COULD NOT OBTAIN" IS NOT "FAILED". A 403 on check-runs, or a repo with no CI at
+        # all, is absence of evidence -- not evidence against. Blocking on it makes merging
+        # impossible for any repo without CI (boss-sandbox has no .github/workflows) while BOSS
+        # has already run the authoritative suite itself. Fall back to BOSS's own gate: if its
+        # tests passed and it did not weaken the existing ones, proceed and record WHY. An
+        # explicit CI failure (handled above) still blocks.
+        if validation_status in ("unavailable", "missing", "incomplete") and own:
+            _blocking = {"written_tests_pass", "nothing_broke", "existing_tests_intact"}
+            _bad = sorted(_blocking.intersection(own["failed"]))
+            if not _bad:
+                emit_event(
+                    connection, row["project_id"], "decision.ci_evidence_substituted",
+                    "boss", "decision", row["id"],
+                    {"external_status": validation_status,
+                     "external_summary": validation_summary[:300],
+                     "boss_gates_passed": own["passed"],
+                     "reason": "external CI evidence unobtainable; BOSS ran the suite itself"},
+                )
+                return None
+            return {
+                "status": "blocked_boss_validation_failed",
+                "reason": ("External CI evidence was unavailable AND BOSS's own checks did not "
+                           f"pass: {_bad}."),
+                "next_action": "Fix the failing BOSS gates and re-run before merge approval.",
+                "event_reason": "boss_validation_failed",
+                "validation_status": "failed",
+                "validation_summary": f"BOSS gates failed: {_bad}",
             }
         return {
             "status": "blocked_ci_validation_incomplete",
