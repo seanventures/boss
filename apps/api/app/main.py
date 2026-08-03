@@ -5661,8 +5661,8 @@ def start_preview_endpoint(run_id: str, payload: Optional[dict] = None):
     mode = str(p.get("mode", "auto")).lower()
     ttl = int(p.get("ttl_minutes", 60))
     from .services.preview_service import (
-        PreviewNotReady, start_preview, start_container_preview, start_rootfs_preview,
-        stop_preview,
+        AmbiguousAppError, PreviewNotReady, start_preview, start_container_preview,
+        start_rootfs_preview, stop_preview,
     )
     # Replace (don't accumulate): stop any prior running preview for this run so there's one live
     # preview per task — a fresh "Run preview" regenerates it.
@@ -5689,6 +5689,16 @@ def start_preview_endpoint(run_id: str, payload: Optional[dict] = None):
     for fn in attempts:
         try:
             res = fn(engine, settings, run_id, ttl_minutes=ttl)
+        except AmbiguousAppError as exc:
+            # Refusing on purpose. Trying the next substrate would guess the same way, so stop
+            # and tell the operator WHICH apps were found and how to disambiguate.
+            raise HTTPException(status_code=409, detail={
+                "error": "preview_ambiguous_app",
+                "message": str(exc),
+                "candidates": exc.candidates,
+                "next_action": ("Retry the task so it records the files it built, or add a "
+                                "boss.preview.command file naming the entrypoint."),
+            })
         except PreviewNotReady as exc:
             # No PR yet. Trying the other substrates cannot change that, so stop immediately
             # rather than reporting a generic "preview could not start" after three attempts.

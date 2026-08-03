@@ -502,6 +502,9 @@ def _register_write_tools(reg: ToolRegistry) -> None:
                 ctx.engine, ctx.settings, args["run_id"],
                 ttl_minutes=int(args.get("ttl_minutes") or 60),
             )
+        except ps.AmbiguousAppError as exc:
+            return {"preview": None, "error": "preview_ambiguous_app",
+                    "message": str(exc), "candidates": exc.candidates}
         except ps.PreviewNotReady as exc:
             # Return the reason as DATA, not a raised tool error: the calling agent can act on
             # "this run has no PR yet" (wait, approve the plan gate, retry) but can do nothing

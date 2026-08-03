@@ -207,7 +207,15 @@ def t_preview_entrypoint() -> None:
     check("preview: no regression when serve.py IS the change",
           _detect_command(root, ["serve.py"]), ["python3", "serve.py"])
     # And with no knowledge of the change, the fixed list still resolves something runnable.
-    check_true("preview: falls back to a known entrypoint", bool(_detect_command(root, [])))
+    # WAS: "falls back to a known entrypoint" with no signal from the task. That fallback is
+    # the bug — this tree holds three runnable apps, and picking one of them showed an operator
+    # an application their task never touched. With no signal, refuse.
+    from boss_engine.services.preview_service import AmbiguousAppError as _Amb
+    try:
+        _detect_command(root, [])
+        check("preview: multi-app repo + no signal must refuse", "guessed", "raised")
+    except _Amb:
+        check_true("preview: multi-app repo + no signal must refuse", True)
 
     # A static-only app is a runnable app, not a library.
     st = pathlib.Path(tempfile.mkdtemp()) / "static"
@@ -568,6 +576,24 @@ def t_preview_app_choice(tmp=None) -> None:
           _detect_command(root, built)[-1].endswith("web-nqueens"), True)
 
     # The regression that shipped: a repair's delta hides the app.
+    # AMBIGUITY MUST REFUSE, NOT GUESS. Operator framing: "if both are from different
+    # customers it will be insanely bad experience." Showing someone an application their
+    # task never touched — possibly another tenant's — is strictly worse than showing
+    # nothing, so a repo with several runnable apps and no signal from the task raises.
+    from boss_engine.services.preview_service import AmbiguousAppError
+    try:
+        got = resolve_app_entry(root, ["nqueens_core/levels.py"])
+        check("preview: refuses to guess between multiple apps", f"returned {got}", "raised")
+    except AmbiguousAppError as exc:
+        check("preview: refuses to guess between multiple apps", len(exc.candidates) >= 2, True)
+        check_true("preview: the refusal names the candidates", bool(exc.candidates))
+
+    # A single-app repo is unambiguous — refusing there would break every normal project.
+    import tempfile as _tf
+    solo = Path(_tf.mkdtemp()); (solo / "serve.py").write_text("# only app")
+    check("preview: a single-app repo still resolves without a signal",
+          resolve_app_entry(solo, ["docs/readme.md"]), ("py", "serve.py"))
+
     # A repair touched only README + a core module. Whatever this resolves to, it is NOT the
     # app the task built — which is precisely why the caller must pass the LINEAGE's files.
     # (Here "README.md" -> dir "." -> the root index.html, i.e. Sudoku. The route varies; the
@@ -582,9 +608,13 @@ def t_preview_app_choice(tmp=None) -> None:
     check("preview: a changed entrypoint wins",
           resolve_app_entry(root, ["serve_nqueens.py"] + built), ("py", "serve_nqueens.py"))
 
-    # No signal at all -> repo convention, never a crash.
-    check("preview: no changed files -> repo convention",
-          resolve_app_entry(root, None), ("py", "serve.py"))
+    # No signal at all, in a repo with several apps -> refuse. This assertion used to expect
+    # a repo-convention guess; that guess is the defect.
+    try:
+        resolve_app_entry(root, None)
+        check("preview: no signal + multi-app repo refuses", "returned", "raised")
+    except AmbiguousAppError:
+        check_true("preview: no signal + multi-app repo refuses", True)
     check("preview: empty tree -> no choice, no exception",
           resolve_app_entry(Path(tempfile.mkdtemp()), []), ("", ""))
 

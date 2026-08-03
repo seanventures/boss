@@ -763,6 +763,7 @@ def _test_amend_prompt(criteria, ruling_target: str, rationale: str) -> str:
 def _spawn_deferred_findings_task(
     engine, settings, jobs, *, project_id, task_id, spec, base_branch,
     findings: list[dict], parent_run_id: str, parent_title: str,
+    parent_root: Optional[str] = None,
 ):
     """Queue sub-threshold review findings as their own code task on the shipped branch.
 
@@ -793,7 +794,17 @@ def _spawn_deferred_findings_task(
             base_branch=base_branch,
             # Recursion guard: a follow-up never spawns its own follow-up, so a reviewer that
             # always emits one NIT can't generate an unbounded chain of tasks (and spend).
-            finalize_ctx={"deferred_from_run": parent_run_id, "is_followup": True},
+            #
+            # LINEAGE. A follow-up fixes findings ON TOP OF the shipped branch, so it belongs to
+            # the same lineage as the run it came from — it is not new work. Spawning it as its
+            # own root left root_run_id NULL, and everything keyed on lineage then saw a task
+            # with one file to its name: its preview could not tell which app it belonged to and
+            # fell back to whatever the repo contained (it showed Sudoku for an N-Queens
+            # follow-up), and it cloned the base branch instead of the branch holding the code
+            # it was sent to fix. Carrying the root fixes both at the source.
+            finalize_ctx={"deferred_from_run": parent_run_id, "is_followup": True,
+                          "root_run_id": parent_root or parent_run_id,
+                          "parent_run_id": parent_run_id},
             jobs=jobs, profile=spec.get("profile"),
         )
 
@@ -2763,7 +2774,8 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
                 followup_run_id = _spawn_deferred_findings_task(
                     engine, settings, jobs, project_id=project_id, task_id=task_id,
                     spec=spec, base_branch=work_branch, findings=deferred_findings,
-                    parent_run_id=run_id, parent_title=title)
+                    parent_run_id=run_id, parent_title=title,
+                    parent_root=(fctx.get("root_run_id") or run_id))
                 with _transaction(engine) as c:
                     emit_event(c, project_id, "code_task.deferred_findings_task", "boss",
                                "code_task_run", run_id,

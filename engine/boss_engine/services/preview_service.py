@@ -69,6 +69,24 @@ _STATIC_DIRS = (".", "web", "public", "dist", "site", "static")
 
 
 
+class AmbiguousAppError(RuntimeError):
+    """The repo holds several runnable apps and this task gave no signal which one is its own.
+
+    Raised rather than guessed. The previous behaviour returned the first convention match,
+    which showed an operator an application their task never touched — and in a repo shared
+    across customers, another tenant's app entirely.
+    """
+
+    def __init__(self, candidates: list[str]) -> None:
+        self.candidates = candidates
+        super().__init__(
+            "cannot tell which app this task built: the repository contains "
+            f"{len(candidates)} runnable apps ({', '.join(candidates)}) and the run recorded "
+            "no implementation files identifying one. Refusing to preview an arbitrary app. "
+            "Retry the task so it records what it built, or add a boss.preview.command file."
+        )
+
+
 def lineage_impl_files(engine, run: dict) -> list[str]:
     """Every implementation file THIS TASK'S LINEAGE has written, newest attempt first.
 
@@ -82,7 +100,23 @@ def lineage_impl_files(engine, run: dict) -> list[str]:
     `git diff base...HEAD` is not an option: the preview clones --depth 1 --branch X, so the
     base ref does not exist in that workdir.)
     """
-    root = (run.get("finalize_ctx") or {}).get("root_run_id") or run.get("id")
+    fctx = run.get("finalize_ctx") or {}
+    root = fctx.get("root_run_id")
+    if not root and fctx.get("deferred_from_run"):
+        # A deferred-findings FOLLOW-UP is spawned as its own root, so its file list is only the
+        # findings it fixed — for crun_022620a9 that was ["nqueens_core/levels.py"], with no app
+        # in it at all. It builds on the SAME branch as the run it came from, so its preview must
+        # inherit that run's lineage. Resolved here rather than by writing root_run_id on the
+        # follow-up, which would make the pipeline treat it as a retry and change its stages.
+        with begin(engine) as c:
+            parent = c.execute(
+                text("SELECT COALESCE(finalize_ctx->>'root_run_id', id) AS r "
+                     "FROM code_task_runs WHERE id=:i"),
+                {"i": fctx["deferred_from_run"]},
+            ).mappings().first()
+        if parent:
+            root = parent["r"]
+    root = root or run.get("id")
     if not root:
         return list((run.get("state") or {}).get("impl_files") or [])
     with begin(engine) as c:
@@ -91,6 +125,9 @@ def lineage_impl_files(engine, run: dict) -> list[str]:
                 SELECT state->'impl_files' AS f
                 FROM code_task_runs
                 WHERE COALESCE(finalize_ctx->>'root_run_id', id) = :root
+                   OR finalize_ctx->>'deferred_from_run' IN (
+                        SELECT id FROM code_task_runs
+                        WHERE COALESCE(finalize_ctx->>'root_run_id', id) = :root)
                 ORDER BY created_at DESC
             """),
             {"root": root},
@@ -142,18 +179,32 @@ def resolve_app_entry(workdir: Path, changed: Optional[list[str]] = None) -> tup
     for d in touched:
         if (workdir / d / "index.html").is_file():
             return ("static", d)
-    # 3. Repo conventions, only once the task's own output is exhausted.
+    # 3. Repo conventions — but ONLY when the repo is unambiguous.
+    #
+    # FAIL CLOSED ON AMBIGUITY. This used to walk the conventions and return the first hit, so
+    # a task whose own output revealed no app previewed whatever the repo happened to contain.
+    # A deferred-findings follow-up touching only nqueens_core/levels.py showed the operator
+    # the SUDOKU app sitting at the repo root. In a repo holding one customer's work that is a
+    # confusing preview; in a repo holding several it is showing someone another tenant's
+    # application. Serving the wrong app is strictly worse than serving nothing, so when the
+    # repo offers more than one candidate and the task gives no signal, we refuse and say why.
+    candidates: list[tuple[str, str]] = []
     for entry in _PY_ENTRYPOINTS:
         if (workdir / entry).exists():
-            return ("py", entry)
+            candidates.append(("py", entry))
     for cand in sorted(workdir.glob("*.py")):
         if cand.name.startswith(("serve", "server", "app", "main", "wsgi")):
-            return ("py", cand.name)
+            if ("py", cand.name) not in candidates:
+                candidates.append(("py", cand.name))
     for rel in _STATIC_DIRS:
         if (workdir / rel / "index.html").is_file():
-            return ("static", rel)
-    if (workdir / "package.json").exists():
-        return ("node", ".")
+            candidates.append(("static", rel))
+    if not candidates and (workdir / "package.json").exists():
+        candidates.append(("node", "."))
+    if len(candidates) == 1:
+        return candidates[0]
+    if candidates:
+        raise AmbiguousAppError([f"{k}:{v}" for k, v in candidates])
     return ("", "")
 
 
