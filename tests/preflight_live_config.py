@@ -109,6 +109,11 @@ def main() -> int:
        infer_risk_tier({"title": "Login", "instructions": "Add auth and password reset."},
                        lean) >= 2)
 
+    # BALANCED: runs the whole panel, captures every verdict, and still always ships a PR.
+    ok("balanced convenes the full adversarial panel", profile.get("panel_checks") is None,
+       f"panel_checks={profile.get('panel_checks')}")
+    ok("balanced NEVER withholds the PR (advisory)", bool(profile.get("advisory_gate")))
+
     # --- safety floors that must never be off ------------------------------------------
     ok("never_block is on (a gate failure ships with dissent)", bool(s.code_gate_never_block))
     ok("panel runs on small changes too", True, "do_review >= tier 1 (source-level)")

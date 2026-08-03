@@ -324,56 +324,69 @@ def t_rate_limiter() -> None:
 #    deliverable. The two exemptions below are what stops that becoming "no gates".
 # --------------------------------------------------------------------------- #
 def t_advisory_gate() -> None:
+    """The contract, in the operator's words:
+         lean     — do not run adversarial review, do not review the PR
+         balanced — run it and CAPTURE the outcome, but always raise the PR, never blocked
+       So the profiles differ in whether reviews RUN, never in whether the PR happens.
+    """
     from boss_engine.services.governed_code_task_service import (
-        _ALL_PANEL_SEATS, resolve_gate_failure_action)
+        _ADVISORY_HARD_FLOOR, _ALL_PANEL_SEATS, resolve_gate_failure_action)
     from boss_engine.services.pipeline_profiles import PROFILES, infer_risk_tier
 
-    # --- opinions never withhold the PR ---
+    # --- NOTHING a check decides can withhold the PR ---------------------------------
     for gate in ("code_review_passed", "security_clean", "consistency",
-                 "tests_strong_enough"):
-        check(f"advisory: {gate} failing still ships",
+                 "tests_strong_enough", "existing_tests_intact", "nothing_broke",
+                 "written_tests_pass", "tests_written_first"):
+        check(f"advisory: {gate} failing still raises the PR",
               resolve_gate_failure_action(failing=[gate], advisory_gate=True,
                                           rounds_used=0, max_repair_rounds=2), "ship")
-
-    # --- facts still do. Advisory is not "no gates". ---
-    for gate in ("existing_tests_intact", "code_written"):
-        check(f"advisory: {gate} is NOT waived",
-              resolve_gate_failure_action(failing=[gate], advisory_gate=True,
-                                          rounds_used=0, max_repair_rounds=2), "repair")
-    check("advisory: regression mixed with opinions still repairs",
-          resolve_gate_failure_action(failing=["code_review_passed", "existing_tests_intact"],
-                                      advisory_gate=True, rounds_used=0, max_repair_rounds=2),
-          "repair")
-    check("advisory: exhausted regression repairs ship WITH dissent, never dead-end",
+    check("advisory: every gate failing at once still raises the PR",
+          resolve_gate_failure_action(
+              failing=["code_review_passed", "security_clean", "consistency",
+                       "existing_tests_intact", "tests_strong_enough"],
+              advisory_gate=True, rounds_used=0, max_repair_rounds=2), "ship")
+    check("advisory: no repair round delays the PR",
           resolve_gate_failure_action(failing=["existing_tests_intact"], advisory_gate=True,
-                                      rounds_used=2, max_repair_rounds=2), "ship_with_dissent")
+                                      rounds_used=0, max_repair_rounds=2) != "repair", True)
 
-    # --- lean's shape ---
+    # --- the one exception: there is no code, so there is no PR to raise -------------
+    check("advisory floor is ONLY 'nothing was built'", tuple(_ADVISORY_HARD_FLOOR),
+          ("code_written",))
+    check("advisory: no code written cannot ship",
+          resolve_gate_failure_action(failing=["code_written"], advisory_gate=True,
+                                      rounds_used=0, max_repair_rounds=2), "repair")
+
+    # --- lean: does not convene the adversarial panel at all -------------------------
     lean = PROFILES["lean"]
-    check("lean: keeps test-first discipline (tier floor 1 -> separate tester)",
-          lean["tier_floor"] >= 1, True)
-    check("lean: no design chain / no plan-approval gate to park a batch",
-          lean["tier_cap"] < 2, True)
-    check("lean: convenes NO adversarial LLM seat",
+    check("lean: no adversarial LLM seat",
           [s for s in (lean.get("panel_checks") or _ALL_PANEL_SEATS) if s != "regression"], [])
-    check("lean: still runs the regression suite",
-          "regression" in (lean.get("panel_checks") or ()), True)
-    check("lean: is advisory", bool(lean.get("advisory_gate")), True)
+    check("lean: still writes tests first", lean["tier_floor"] >= 1, True)
+    check("lean: still runs the suite", "regression" in (lean.get("panel_checks") or ()), True)
+    check("lean: never parks on a plan gate", lean["tier_cap"] < 2, True)
+    check("lean: advisory", bool(lean.get("advisory_gate")), True)
 
-    # --- the escape hatch must not become a bypass ---
-    sens = infer_risk_tier({"title": "Login", "instructions": "Add auth and password reset."}, lean)
+    # --- balanced: RUNS the panel, captures it, still always ships -------------------
+    bal = PROFILES["balanced"]
+    check("balanced: convenes the FULL adversarial panel", bal.get("panel_checks"), None)
+    check("balanced: advisory — findings never withhold the PR",
+          bool(bal.get("advisory_gate")), True)
+
+    # --- sensitive work: MORE review, still not a withheld PR ------------------------
+    sens = infer_risk_tier({"title": "Login", "instructions": "Add auth and password reset."},
+                           lean)
     check("lean: sensitive work escapes the tier cap", sens >= 2, True)
     seats = set(_ALL_PANEL_SEATS if sens >= 2
                 else (lean.get("panel_checks") or _ALL_PANEL_SEATS))
-    check("lean: sensitive work gets the FULL panel back", "security_check" in seats, True)
-    check("lean: sensitive work is no longer advisory",
-          bool(lean.get("advisory_gate")) and sens < 2, False)
+    check("lean: sensitive work gets the security seat back", "security_check" in seats, True)
+    check("sensitive work still raises its PR (merge gate protects main, not the PR)",
+          resolve_gate_failure_action(failing=["security_clean"], advisory_gate=True,
+                                      rounds_used=0, max_repair_rounds=2), "ship")
 
-    # --- other profiles are untouched ---
-    for name in ("balanced", "strict"):
-        check(f"{name}: still blocking", bool(PROFILES[name].get("advisory_gate")), False)
-        check(f"{name}: still convenes the full panel",
-              PROFILES[name].get("panel_checks"), None)
+    # --- strict stays blocking: the profile that exists to say no --------------------
+    check("strict: still blocking", bool(PROFILES["strict"].get("advisory_gate")), False)
+    check("strict: a failing gate still repairs",
+          resolve_gate_failure_action(failing=["code_review_passed"], advisory_gate=False,
+                                      rounds_used=0, max_repair_rounds=2), "repair")
 
 
 # --------------------------------------------------------------------------- #

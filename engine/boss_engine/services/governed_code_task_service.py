@@ -299,10 +299,15 @@ def _kill_stray_review_processes(*roots) -> int:
 # is the only seat that is not an LLM call (it executes the test suite).
 _ALL_PANEL_SEATS = ("review_code", "security_check", "regression", "consistency_check")
 
-# Gates an ADVISORY profile still honours. Not opinions — a regression against tests that
-# passed before this change, and "the agent produced no code". Shipping either silently would
-# make advisory mode indistinguishable from having no gates at all.
-_ADVISORY_HARD_FLOOR = ("existing_tests_intact", "code_written")
+# The ONLY thing that stops an advisory profile opening a PR: there is no code to open one
+# with. That is not a gate exercising judgement, it is the absence of a deliverable.
+#
+# `existing_tests_intact` used to sit here too, and it was wrong. RAISING a pull request is
+# not a risk — it is a diff on a branch that a human reads. MERGING is the irreversible act,
+# and that is where the weakened-tests verdict already blocks (_pull_request_ci_gate's
+# blocked_weakened_existing_tests hard stop). Holding the PR back as well meant the operator
+# got nothing to look at, which is how "22 runs, 2 PRs" happened. Findings ride ON the PR.
+_ADVISORY_HARD_FLOOR = ("code_written",)
 
 
 def resolve_gate_failure_action(
@@ -1358,9 +1363,11 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
         # A reviewer's opinion is INPUT to the operator, not a veto over shipping — so the
         # profile now owns this choice, and `lean` sets it True. The panel still runs and
         # every verdict is still recorded; it just cannot swallow the PR.
-        # ...and for the same reason, a lenient profile stops being lenient once `sensitive`
-        # has pushed the tier above its cap: at tier >= 2 the gates block again.
-        advisory_gate = bool(profile.get("advisory_gate", False)) and risk_tier < 2
+        # NOT clamped by tier. Sensitive work gets MORE review (the seat list below is
+        # restored to the full panel), never a withheld PR — the two are independent. What
+        # protects main on a sensitive change is the merge gate, not refusing to show the
+        # operator the diff.
+        advisory_gate = bool(profile.get("advisory_gate", False))
 
         # WEB-APP BUILDS: a deterministic Vite/React/TS scaffold where `npm run build` (tsc + vite)
         # IS the test. The separate write_tests stage mis-generated Python unittest files for this
