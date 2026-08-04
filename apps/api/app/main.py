@@ -5436,7 +5436,8 @@ def run_code_task_step_endpoint(payload: dict):
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
     from .services.code_task_service import run_code_task
-    return run_code_task(engine, settings, jobs, payload["run_id"])
+    return run_code_task(engine, settings, jobs, payload["run_id"],
+                         fencing_token=payload.get("fencing_token"))
 
 
 @app.post("/v1/code-tasks/{run_id}/steer")

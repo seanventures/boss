@@ -697,7 +697,8 @@ def _fail(
 # --------------------------------------------------------------------------- #
 #  The job handler                                                            #
 # --------------------------------------------------------------------------- #
-def run_code_task(engine, settings: Settings, jobs, run_id: str) -> dict:
+def run_code_task(engine, settings: Settings, jobs, run_id: str,
+                  *, fencing_token: Optional[str] = None) -> dict:
     """Execute one full code-task attempt. Safe to re-run after a crash."""
     with _transaction(engine) as c:
         run = load_code_task_run(c, run_id)
@@ -746,7 +747,8 @@ def run_code_task(engine, settings: Settings, jobs, run_id: str) -> dict:
                     {"lr": json.dumps(lane_routing), "id": run_id},
                 )
         from .governed_code_task_service import run_governed_code_task
-        result = run_governed_code_task(engine, settings, jobs, run_id)
+        result = run_governed_code_task(engine, settings, jobs, run_id,
+                                        fencing_token=fencing_token)
         # Autonomous decomposition chain: when a decomposed build task lands successfully, start
         # the NEXT task in the plan (as a continuation on the shared branch) so BOSS delivers the
         # whole product itself, scaffold -> features -> wire-up, without a human between steps.

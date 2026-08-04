@@ -697,13 +697,19 @@ def t_duplicate_execution_guard() -> None:
 
     check_true("guard: pipeline reads the job's current lease owner",
                "def _lease_owner_now" in src)
-    check_true("guard: it is checked at stage boundaries, not only on heartbeat",
-               "lease reassigned to" in src)
-    check_true("guard: a reassigned lease aborts this execution",
-               "abandoning this duplicate execution" in src)
-    # Unknown ownership must NEVER abort a legitimate run — a DB blip would otherwise kill work.
-    check_true("guard: unknown owner does not false-abort",
-               "never false-abort" in src)
+    # Superseded by real fencing: ownership is enforced by the WRITE, not by a string
+    # comparison at a boundary. The boundary check remains as a fast-fail.
+    check_true("guard: the pipeline claims the run for this execution",
+               "claim_run(c, run_id, _fence)" in src)
+    check_true("guard: ownership is asserted at stage boundaries",
+               "assert_owner(c, run_id, _fence, where)" in src)
+    check_true("guard: terminal writes go through the fence + state machine",
+               "_fenced_status(" in src)
+    check_true("guard: a fenced executor unwinds instead of continuing",
+               "except RunFenced as exc:" in src)
+    from boss_engine.services import run_fencing as rf
+    check_true("guard: unknown ownership does not false-abort",
+               rf.is_owner.__doc__ and "never abort legitimate work" in rf.is_owner.__doc__)
 
     from apps.worker.boss_worker import runner as r
     rsrc = inspect.getsource(r)

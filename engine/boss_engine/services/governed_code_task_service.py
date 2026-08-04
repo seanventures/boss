@@ -1120,9 +1120,16 @@ def _block_for_plan_approval(engine, budget, *, run_id, project_id, task_id, res
 # --------------------------------------------------------------------------- #
 #  The governed job handler                                                   #
 # --------------------------------------------------------------------------- #
-def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dict:
+def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
+                           *, fencing_token: Optional[str] = None) -> dict:
+    from .run_fencing import RunFenced, assert_owner, claim_run, hash_token
+    _fence = hash_token(fencing_token)
     with _transaction(engine) as c:
         run = load_code_task_run(c, run_id)
+        if run is not None and _fence:
+            # Unconditional by design: the control plane already decided who holds the lease,
+            # so by the time we execute we ARE the owner and any prior executor is stale.
+            claim_run(c, run_id, _fence)
     if run is None:
         return {"status": "not_found", "done": True}
     if run["status"] != "running" or run["pull_request_url"]:
@@ -1410,6 +1417,17 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
         except Exception:  # noqa: BLE001
             return _lease_owner_at_start["v"]  # unknown -> assume unchanged, never false-abort
 
+    def _fenced_status(status: str, extra_set: str = "", params: Optional[dict] = None) -> bool:
+        """Set the run's status under BOTH the fence and the state machine.
+
+        Returns False when the transition is refused because the run is already terminal —
+        which means another execution finished it, and this one must not overwrite that.
+        Raises RunFenced (-> CodeTaskCancelled) when this execution has been fenced.
+        """
+        from .run_fencing import guarded_status
+        with _transaction(engine) as c:
+            return guarded_status(c, run_id, _fence, status, extra_set, params)
+
     def _abort_if_cancelled(where: str) -> None:
         """Stop a run the operator cancelled. Cancellation was a DB update nobody read: one
         cancelled run kept executing for 40 minutes and $6.73 afterwards, and cancelled runs
@@ -1429,14 +1447,14 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
         # stages — two write_tests completed 29 seconds apart, 6 agent processes on one task,
         # 87 minutes with no implementation. The worker-side 409 check catches this only when
         # a heartbeat happens to fire; checking at every stage boundary makes it structural.
-        if _lease_owner_at_start["v"] is None:
-            _lease_owner_at_start["v"] = _lease_owner_now()
-        else:
-            owner = _lease_owner_now()
-            if owner is not None and owner != _lease_owner_at_start["v"]:
-                raise CodeTaskCancelled(
-                    f"lease reassigned to {owner!r} (was {_lease_owner_at_start['v']!r}); "
-                    f"abandoning this duplicate execution at {where}")
+        # Fencing is the authority now: if another execution has claimed this run, stop.
+        # The stage-boundary check is belt-and-braces — the guarded writes below would reject
+        # us anyway, but failing fast here avoids paying for a whole stage first.
+        try:
+            with _transaction(engine) as c:
+                assert_owner(c, run_id, _fence, where)
+        except RunFenced as exc:
+            raise CodeTaskCancelled(str(exc)) from exc
 
     def _rescue_pr(reason: str) -> Optional[str]:
         """Open a [partial] PR for whatever this run built. Safe to call from ANY exit.
@@ -3058,10 +3076,16 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
             return {"status": "blocked", "done": True, "quality_gate_id": qg_id, **proposal}
 
         with _transaction(engine) as c:
-            c.execute(sql("UPDATE code_task_runs SET status='completed', phase='done', "
-                           "pull_request_url=:u, pull_request_number=:n, decision_id=:d, updated_at=now() WHERE id=:id"),
-                      {"u": proposal.get("pull_request_url"), "n": proposal.get("pull_request_number"),
-                       "d": proposal.get("decision_id"), "id": run_id})
+            _ok = _fenced_status(
+                "completed",
+                "phase='done', pull_request_url=:u, pull_request_number=:n, decision_id=:d",
+                {"u": proposal.get("pull_request_url"),
+                 "n": proposal.get("pull_request_number"),
+                 "d": proposal.get("decision_id")})
+            if not _ok:
+                # Another execution already finished this run. Do not overwrite its verdict.
+                emit_event(c, project_id, "code_task.terminal_write_refused", "boss",
+                           "code_task_run", run_id, {"attempted": "completed"})
             emit_event(c, project_id, "code_task.pr_opened", "boss", "code_task_run", run_id,
                        {"pull_request_url": proposal.get("pull_request_url"),
                         "decision_id": proposal.get("decision_id"), "quality_gate_id": qg_id})
@@ -3079,7 +3103,23 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
         # delivery, and the operator can still press Run preview for anything skipped.
         try:
             if getattr(settings, "auto_preview_apps", True) and not fctx.get("is_followup"):
-                _built = [pth for pth in accumulated if not _is_test_path(pth)]
+                # Ask the SAME source the preview resolver uses, not a different one.
+                # This first read `accumulated`, which on the local substrate holds only what
+                # _checkpoint pushed — test files — so a stock trading app with
+                # web-stock/index.html was classified a service and never previewed. Its
+                # state.impl_files had the html all along. One source of truth about "what did
+                # this task build", or the two answers drift. Again.
+                from .preview_service import lineage_impl_files as _lineage_files
+                try:
+                    with _transaction(engine) as _c:
+                        _row = _c.execute(sql(
+                            "SELECT state, finalize_ctx, id FROM code_task_runs WHERE id=:i"),
+                            {"i": run_id}).mappings().first()
+                    _built = _lineage_files(engine, dict(_row)) if _row else []
+                except Exception:  # noqa: BLE001
+                    _built = []
+                if not _built:
+                    _built = [pth for pth in accumulated if not _is_test_path(pth)]
                 _is_browsable = any(
                     pth.endswith((".html", ".jsx", ".tsx", ".vue", ".svelte")) for pth in _built)
                 if _is_browsable:

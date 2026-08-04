@@ -3790,3 +3790,12 @@ ALTER TABLE pipeline_profiles ADD COLUMN IF NOT EXISTS advisory_gate BOOLEAN;
 -- `lean` narrows this to ["regression"]: tests are still written first and the suite still
 -- runs, but the three LLM seats that argue about the code are not convened.
 ALTER TABLE pipeline_profiles ADD COLUMN IF NOT EXISTS panel_checks JSONB;
+
+-- FENCING FOR RUN EXECUTION. A job lease only means something if the holder stops when it
+-- loses it. Nothing enforced that, so a reclaimed job ran in two workers at once and both
+-- wrote this table (phase moved backwards; stages re-ran; 89 min and $4.44 for no code).
+-- owner_token is the sha256 of the executing worker's lease token: a reclaiming worker
+-- overwrites it and thereby fences the previous executor, whose writes then match 0 rows.
+-- state_version makes contention visible after the fact — it jumps in bursts under a race.
+ALTER TABLE code_task_runs ADD COLUMN IF NOT EXISTS owner_token TEXT;
+ALTER TABLE code_task_runs ADD COLUMN IF NOT EXISTS state_version INTEGER NOT NULL DEFAULT 0;

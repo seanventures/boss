@@ -698,7 +698,12 @@ def execute_job(job: LeasedJob, client: ControlPlaneClient) -> dict[str, Any]:
             raise RuntimeError(result.get("error") or "Meeting step failed.")
         return result
     if job.kind == "code.task":
-        result = client.run_code_task({"run_id": job.payload["run_id"]})
+        # Send the lease token so the pipeline can FENCE its writes: a worker whose lease
+        # was reclaimed must not be able to mutate the run any more. Without this the
+        # pipeline has no way to know which execution it is.
+        result = client.run_code_task({"run_id": job.payload["run_id"],
+                                       "fencing_token": job.lease_token,
+                                       "job_id": job.id})
         if result.get("status") == "failed":
             raise RuntimeError(result.get("error") or "Code task failed.")
         return result
