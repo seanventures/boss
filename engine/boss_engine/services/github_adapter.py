@@ -599,6 +599,28 @@ class GitHubAdapter:
         )
         return PullRequestResult(url=response["html_url"], number=response["number"])
 
+    def update_pull_request_branch(self, pull_request_number: int) -> bool:
+        """Merge the base branch INTO the PR's head branch (GitHub's "Update branch").
+
+        This is the cheap half of conflict recovery. When several PRs branch from the same
+        base and one merges, the others go CONFLICTING and GitHub answers the merge endpoint
+        with 405 — even when the drift is trivial and git could reconcile it unattended.
+        Measured: merging PR #66 immediately made #67 and #68 unmergeable, and BOSS recorded
+        `pull_request_merge_failed` and stopped, so only the first of any batch could ever land.
+
+        Returns True when GitHub accepted the update (the branch now contains the base), False
+        when it refused — which means a REAL conflict that needs an agent, not a retry.
+        """
+        try:
+            self._request(
+                "PUT",
+                f"/repos/{self.repository_full_name}/pulls/{pull_request_number}/update-branch",
+                {},
+            )
+            return True
+        except Exception:  # noqa: BLE001 — a refusal is information, not an error to raise
+            return False
+
     def merge_pull_request(
         self, pull_request_number: int, commit_title: str
     ) -> PullRequestMergeResult:

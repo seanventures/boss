@@ -1973,8 +1973,45 @@ class SoftwareFactoryService:
                 "message": str(error),
             }
         except Exception as error:
+            # CONFLICT RECOVERY, TIER 1: the base branch moved under us.
+            # When a batch of PRs share a base and one merges, the rest go CONFLICTING and
+            # GitHub answers this endpoint with 405 Method Not Allowed. Recording the failure
+            # and stopping meant only the FIRST PR of any batch could ever land — exactly what
+            # happened to PRs #67 and #68 the moment #66 merged.
+            # Ask GitHub to merge the base INTO the head branch and try once more. That
+            # resolves ordinary drift unattended; a genuine textual conflict is refused, and
+            # falls through to the failure path below where an agent is needed.
+            _msg = str(error)
+            if ("405" in _msg or "not mergeable" in _msg.lower()) and hasattr(
+                    self.github, "update_pull_request_branch"):
+                try:
+                    if self.github.update_pull_request_branch(pull_request_number):
+                        self.events.emit(
+                            connection, project_id,
+                            "software_factory.pull_request_branch_updated",
+                            "release_manager", "receipt", merge_receipt["id"],
+                            {"pull_request_url": pull_request_url,
+                             "why": "base branch had moved; merged base into head and retrying"},
+                        )
+                        merge = self.github.merge_pull_request(pull_request_number, title)
+                        self.receipts.mark_succeeded(
+                            connection, merge_receipt["id"],
+                            {"merged_sha": merge.sha, "recovered": "branch_updated"})
+                        self.events.emit(
+                            connection, project_id,
+                            "software_factory.pull_request_merged", "release_manager",
+                            "receipt", merge_receipt["id"],
+                            {"merged_sha": merge.sha, "receipt_id": merge_receipt["id"],
+                             "pull_request_url": pull_request_url,
+                             "recovered_from": "stale_base"})
+                        return {"status": "merged", "merged_sha": merge.sha,
+                                "pull_request_url": pull_request_url,
+                                "recovered_from": "stale_base"}
+                except Exception as retry_error:  # noqa: BLE001
+                    _msg = f"{_msg} | retry after branch update: {retry_error}"
+
             self.receipts.mark_failed(
-                connection, merge_receipt["id"], {"message": str(error)}
+                connection, merge_receipt["id"], {"message": _msg}
             )
             self.events.emit(
                 connection,
@@ -1983,7 +2020,11 @@ class SoftwareFactoryService:
                 "release_manager",
                 "receipt",
                 merge_receipt["id"],
-                {"message": str(error), "pull_request_url": pull_request_url},
+                {"message": _msg, "pull_request_url": pull_request_url,
+                 # TIER 2 lives with the caller: a real conflict needs an agent to resolve it,
+                 # which is a coding task, not a git call. Flagged so the caller can route it.
+                 "needs_conflict_resolution": ("405" in _msg
+                                               or "conflict" in _msg.lower())},
             )
             return {
                 "status": "failed",

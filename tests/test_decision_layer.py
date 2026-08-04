@@ -725,11 +725,48 @@ def t_duplicate_execution_guard() -> None:
 
 
 # --------------------------------------------------------------------------- #
+# 16. MERGE CONFLICT RECOVERY. Approving six decisions merged exactly ONE PR:
+#     #66 landed, and #67/#68 went CONFLICTING the instant main moved, so GitHub
+#     answered the merge endpoint with 405 and BOSS recorded the failure and
+#     stopped. With any batch of PRs off one base, only the first could ever land.
+# --------------------------------------------------------------------------- #
+def t_merge_conflict_recovery() -> None:
+    import inspect
+    from boss_engine.services import software_factory as sf
+    from boss_engine.services import github_adapter as ga
+
+    check_true("adapter can merge the base INTO a stale head branch",
+               hasattr(ga.GitHubAdapter, "update_pull_request_branch"))
+    doc = (ga.GitHubAdapter.update_pull_request_branch.__doc__ or "")
+    check_true("a refusal is reported, not raised (a real conflict is information)",
+               "Returns True" in doc and "False" in doc)
+
+    src = inspect.getsource(sf)
+    check_true("a 405 triggers recovery rather than a bare failure",
+               '"405" in _msg' in src)
+    check_true("recovery updates the branch and retries the merge ONCE",
+               "update_pull_request_branch(pull_request_number)" in src
+               and "merge_pull_request(pull_request_number, title)" in src)
+    check_true("a recovered merge is recorded as such, not silently",
+               "recovered_from" in src and "stale_base" in src)
+    check_true("a retry that also fails keeps the ORIGINAL error for diagnosis",
+               "retry after branch update" in src)
+    check_true("a genuine conflict is flagged for an agent (tier 2), not retried forever",
+               "needs_conflict_resolution" in src)
+
+    # The recovery must be strictly bounded: one update, one retry. An unbounded loop against
+    # a moving base is how a merge storm starts.
+    check("recovery retries exactly once",
+          src.count("update_pull_request_branch(pull_request_number)"), 1)
+
+
+# --------------------------------------------------------------------------- #
 def main() -> int:
     for fn in (t_risk_tier, t_gate_action, t_inconclusive, t_preview_entrypoint,
                t_regression_floor, t_context_scoping, t_preflight, t_rate_limiter, t_advisory_gate, t_preview_precondition, t_repair_resume,
                t_skipped_seat_semantics, t_preview_app_choice,
-               t_resume_after_system_failure, t_duplicate_execution_guard):
+               t_resume_after_system_failure, t_duplicate_execution_guard,
+               t_merge_conflict_recovery):
         try:
             fn()
         except Exception as exc:  # a crash in a decision fn is itself a failure
