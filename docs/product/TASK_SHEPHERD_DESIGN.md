@@ -306,6 +306,39 @@ panel should make that impossible to miss.
   frontier model only when a hypothesis is rejected twice, and record that escalation as a
   cost line.
 
+
+### 9.2 One shepherd per task, one coordinator per project
+
+**Decided.** A shepherd instance owns exactly one task; a single coordinator per project owns
+what is shared between them.
+
+The argument is from this session, not from theory. When PR #66 merged, #67 and #68 went
+CONFLICTING in the same instant. A per-task shepherd cannot see that: each would hit 405,
+each would correctly decide "rebase", and three agents would rewrite the same shared branch
+against a base that keeps moving. Three correct local decisions, one incoherent global
+outcome — the identical shape as two executions writing one run before fencing existed.
+
+Shared mutable state needs a single owner. Independent work does not.
+
+| | Task Shepherd (per task) | Coordinator (per project) |
+|---|---|---|
+| owns | diagnosis, remedy selection, its ledger + budget | merge ordering, cross-task interference, global budget, concurrency slots |
+| reasons about | one task's evidence | relationships between tasks |
+| may | choose and execute a remedy | sequence, defer or block a shepherd's action |
+| may not | see other tasks | diagnose a failure |
+
+For #66/#67/#68 the coordinator's ruling is: merge #66, hold the others, and on success tell
+their shepherds the base moved. Each shepherd then rebases with full local context.
+
+**A shepherd is not a process.** It is event-driven and stateless: woken by a task event,
+reads state from BOSS, reasons, acts, exits. A per-task daemon would inherit the exact
+failure class that cost this session three separate times — MCP servers serving three-day-old
+tool lists, workers holding pre-fix code. Stateless invocation also means a crashed shepherd
+resumes by re-reading, and two cannot corrupt a task.
+
+The coordinator is likewise stateless and holds a short advisory lease while arbitrating, so
+two coordinators cannot both sequence merges. Fenced by the same mechanism as run execution.
+
 ### 9.1 New tables
 
 ```sql
@@ -316,6 +349,8 @@ shepherd_reasoning   id, task_id, step_no, observe, hypothesis, confidence, chec
                      actual_cost, actual_outcome, created_at
 shepherd_escalations id, task_id, question, options(jsonb), evidence(jsonb),
                      status, answered_by, answered_at
+coordinator_rulings  id, project_id, subject(jsonb: task ids), ruling, rationale,
+                     created_at        -- why a shepherd was told to wait
 ```
 
 `shepherd_reasoning` carrying both predicted *and* actual is what makes the console's
