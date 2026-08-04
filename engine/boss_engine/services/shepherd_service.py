@@ -132,7 +132,16 @@ def check_hypothesis(sig: dict[str, Any], failure_class: int) -> tuple[bool, str
         return False, ("NOT corroborated: no PR was ever opened, so a stale BASE cannot be "
                        "the problem")
 
+    # completed_stages only began being recorded on 2026-08-04. For a run that predates it the
+    # field is empty because nothing was WRITING it, not because nothing happened — treating
+    # that as evidence refutes correct classifications on every historical run. Absence of
+    # instrumentation is not absence of the event.
+    _instrumented = bool(sig.get("completed_stages")) or bool(sig.get("checkpointed"))
+
     if failure_class == PR_STEP_FAILED:
+        if not _instrumented:
+            return True, ("classification stands on the error text; this run predates stage "
+                          "instrumentation, so the absence of completed_stages proves nothing")
         # Inverted on the first pass: "PR not created" means the step ran and FAILED, so the
         # absence of a PR is exactly what this class predicts. Asking for a PR as corroboration
         # would refute the hypothesis with its own definition.
@@ -145,6 +154,9 @@ def check_hypothesis(sig: dict[str, Any], failure_class: int) -> tuple[bool, str
                        "could have reached the PR step")
 
     if failure_class == NO_CODE:
+        if not _instrumented:
+            return False, ("cannot corroborate: this run predates stage instrumentation, so "
+                           "'nothing was built' cannot be distinguished from 'not recorded'")
         if not sig.get("completed_stages"):
             return True, "corroborated: no stage completed, consistent with nothing being built"
         return False, (f"NOT corroborated: {len(sig['completed_stages'])} stage(s) completed, "
