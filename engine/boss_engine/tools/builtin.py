@@ -377,12 +377,47 @@ def _register_write_tools(reg: ToolRegistry) -> None:
         }
 
     @reg.tool(
+        "extend_code_task",
+        "Build ON TOP OF an app a previous code task already produced — new features, real "
+        "API integration, auth, anything additive. USE THIS whenever the work continues an "
+        "existing app, INCLUDING when that task COMPLETED successfully. It reuses the same "
+        "branch, the code already written and the open PR, so the agent edits the real app "
+        "instead of starting again. "
+        "Do NOT use create_code_task for this: a new task branches from the default branch, "
+        "and an earlier app whose PR is still open does not exist there — the agent finds "
+        "nothing to build on and writes a SECOND, parallel app. Use list_code_tasks to find "
+        "the run whose app you mean.",
+        _obj(
+            {
+                "run_id": {"type": "string",
+                           "description": "the run whose app to extend (crun_...)"},
+                "instructions": {"type": "string",
+                                 "description": "what to add or change, in plain language"},
+                "profile": {"type": "string", "enum": ["lean", "balanced", "strict", "vag"]},
+            },
+            ["run_id", "instructions"],
+        ),
+        kind="write",
+    )
+    def extend_code_task(ctx, *, project_id, actor, args):
+        cts = services_module("code_task_service")
+        result = cts.retry_code_task(
+            ctx.engine, ctx.settings, ctx.jobs, args["run_id"],
+            fix_note=(args.get("instructions") or ""),
+            profile=(args.get("profile") or None),
+        )
+        return {"status": "extending", "result": _json_safe(result),
+                "note": ("continues the existing lineage: same branch, same PR, "
+                         "the previous app is already in the working tree")}
+
+    @reg.tool(
         "retry_code_task",
-        "Resume a failed/blocked code-task run as a new attempt in the same "
+        "Re-run a code-task run that FAILED or is BLOCKED, as a new attempt in the same "
         "lineage, carrying prior findings forward (optionally with a fix note). "
         "Can also SWITCH THE PROFILE for the new attempt (e.g. profile='lean' to re-run "
         "the same work faster). Prefer this over create_code_task whenever the work "
-        "already has a run: it reuses the branch, the existing code and the approved plan.",
+        "already has a run: it reuses the branch, the existing code and the approved plan. "
+        "To ADD to an app that completed successfully, use extend_code_task instead.",
         _obj(
             {
                 "run_id": {"type": "string"},
