@@ -299,7 +299,11 @@ class ShepherdState:
     used_remedies: set[tuple[int, str]] = field(default_factory=set)
     # (failure_class, remedy_id) -> how many times this pair was followed by the SAME failure
     attempt_history: list[tuple[int, str, str]] = field(default_factory=list)
-    elapsed_minutes: float = 0.0
+    # How long THIS SHEPHERD has been working the task — not how old the run is.
+    # First run against real data stopped every proposal with "deadline" because run age was
+    # passed here: a failure from yesterday is not a shepherd that has been trying for a day,
+    # it is a shepherd that has not started. The deadline bounds effort, not staleness.
+    shepherd_minutes: float = 0.0
     deadline_minutes: float = 240.0
 
     @property
@@ -327,7 +331,7 @@ def next_step(state: ShepherdState, failure_class: int, *, succeeded: bool = Fal
     if succeeded:
         return Verdict("stop", None, "the task reached its terminal condition", "success")
 
-    if state.elapsed_minutes >= state.deadline_minutes:
+    if state.shepherd_minutes >= state.deadline_minutes:
         return Verdict("stop", None,
                        f"wall-clock deadline reached ({state.deadline_minutes:.0f} min)",
                        "deadline")

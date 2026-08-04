@@ -1,6 +1,6 @@
 # Task Shepherd — an internal AI developer that finishes what BOSS starts
 
-**Status:** design, pre-implementation
+**Status:** Phase 0 complete · Phase 1 (read-only) complete · Phase 2 not started
 **Author:** drafted from the 2026-08-03/04 dogfood session
 **Audience:** operator (CEO), engine maintainers
 
@@ -391,9 +391,31 @@ calibration view possible, and what turns "is it intelligent?" into a measurable
 
 ## 11. Implementation plan
 
+**Phase 0 — instrumentation. ✅ DONE.** Four tables, the bounded core (`task_shepherd.py`), and a replay proving 10/12 of the session's real failures classify and 10 are auto-recoverable — $50.85 of $66.65 salvageable.
+
 **Phase 0 — instrumentation (½ day).** Tables + reasoning records written by the *existing*
 retry paths. No autonomy. Produces a corpus of real classifications and costs, and makes the
 console buildable and reviewable before anything acts on its own.
+
+**Phase 1 — read-only shepherd. ✅ DONE.** `shepherd_service.py`. Observes, hypothesises,
+CHECKS, classifies, proposes — executes nothing. Verified against the session's own failures:
+8 proposals, each with a measured cost and a corroboration verdict.
+
+Two design bugs were caught by running it against real data, before a penny was spent:
+
+- *the deadline measured RUN AGE.* Every day-old failure stopped instantly as "past
+  deadline", when the shepherd had not started. A deadline bounds the shepherd's effort, not
+  the task's staleness. Now `shepherd_minutes`, measured from its first reasoning step.
+- *the PR_STEP_FAILED check refuted itself.* It asked for a PR as corroboration that the PR
+  step had failed — the absence of a PR is precisely what that class predicts.
+
+Both are the kind of error unit tests cannot find, because both were written into the tests
+and the code by the same mistaken assumption. This is the argument for Phase 1 existing at
+all.
+
+**Behaviour observed:** a corroborated hypothesis produces a costed proposal; an
+uncorroborated one escalates rather than spending. The shepherd will not put money behind a
+diagnosis it could not confirm.
 
 **Phase 1 — read-only shepherd (1 day).** Observes, hypothesises, classifies, proposes a
 remedy — and **executes nothing**. Every proposal lands in the escalation inbox as

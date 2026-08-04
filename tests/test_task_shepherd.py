@@ -156,7 +156,7 @@ def t_stops_on_success_and_deadline() -> None:
     s = ShepherdState("crun_x", budget_usd=25.0)
     check("a succeeded task is never acted on again",
           next_step(s, SPEND_CAP, succeeded=True).stopped_because, "success")
-    s2 = ShepherdState("crun_x", budget_usd=25.0, elapsed_minutes=241, deadline_minutes=240)
+    s2 = ShepherdState("crun_x", budget_usd=25.0, shepherd_minutes=241, deadline_minutes=240)
     check("a wait-and-resume remedy cannot idle forever",
           next_step(s2, SPEND_CAP).stopped_because, "deadline")
 
