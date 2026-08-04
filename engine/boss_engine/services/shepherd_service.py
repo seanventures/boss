@@ -327,3 +327,143 @@ def sweep(engine, settings: Settings, project_id: str, *, limit: int = 20) -> li
         if res.get("class") != NOT_A_FAILURE:
             out.append(res)
     return out
+
+
+# --------------------------------------------------------------------------- #
+# Phase 2 — bounded autonomy
+# --------------------------------------------------------------------------- #
+# Only classes whose remedy is unambiguous AND whose failure is unmistakably the platform's
+# fault. Everything else still escalates, however confident the shepherd feels. This list is
+# the blast radius: it should grow only when calibration data justifies it (Phase 3), never
+# because a remedy "usually works".
+from .task_shepherd import (  # noqa: E402
+    INFRASTRUCTURE as _INFRA, PR_STEP_FAILED as _PRSTEP, SPEND_CAP as _SPEND,
+    TURN_CAP as _TURN,
+)
+
+AUTONOMOUS_CLASSES = frozenset({_SPEND, _TURN, _INFRA, _PRSTEP})
+
+
+def act(engine, settings: Settings, jobs, run_id: str, *,
+        actor: str = "shepherd", dry_run: bool = False) -> dict[str, Any]:
+    """Propose, and then ACT only if every bound permits it.
+
+    The refusals below are ordered cheapest-to-check first, and each one is a real incident:
+
+      not autonomous      the class needs a human (approval, unknown, conflicts)
+      not corroborated    the check failed — never spend on an unconfirmed diagnosis
+      needs confirmation  the spend is large relative to this project's budget
+      stop verdict        loop, budget, ledger or deadline already said no
+
+    An executed remedy writes its ACTUAL cost and outcome back, which is what makes Phase 3
+    calibration possible: a shepherd that cannot be measured cannot be trusted with more.
+    """
+    from ..db import begin
+
+    p = propose(engine, settings, run_id)
+    if p.get("error"):
+        return p
+
+    refusal = None
+    if p["class"] not in AUTONOMOUS_CLASSES:
+        refusal = f"class {p['class']} ({p['class_name']}) is not in the autonomous set"
+    elif not p["confirmed"]:
+        refusal = "the hypothesis was not corroborated; not spending on an unconfirmed diagnosis"
+    elif p["needs_confirmation"]:
+        refusal = "the estimated spend is large relative to this project's budget"
+    elif p["verdict"] != "act":
+        refusal = f"bounded: {p['stopped_because']}"
+    elif not p["remedy"]:
+        refusal = "no actionable remedy"
+
+    if refusal or dry_run:
+        p["acted"] = False
+        p["refused_because"] = refusal or "dry_run"
+        return p
+
+    from .task_shepherd import REMEDIES
+    remedy = next((r for r in REMEDIES[p["class"]] if r.id == p["remedy"]), None)
+    before = _spent(engine, run_id)
+    outcome, new_run = "error", None
+    try:
+        from .code_task_service import retry_code_task
+        note = (f"Task Shepherd: {p['class_name']}. {p['check']} "
+                f"Applying remedy {remedy.id!r}: {remedy.describe}.")
+        if remedy.action in ("retry_code_task", "extend_code_task"):
+            res = retry_code_task(engine, settings, jobs, run_id, fix_note=note,
+                                  profile=("lean" if remedy.id == "reissue_lean" else None))
+            new_run = res.get("run_id")
+            outcome = "started"
+        else:
+            outcome = "no_action"
+    except Exception as exc:  # noqa: BLE001 — a failed remedy is data, not a crash
+        outcome = f"failed: {type(exc).__name__}: {exc}"[:200]
+
+    with begin(engine) as c:
+        c.execute(
+            sql("UPDATE shepherd_ledger SET status='used', used_at=now(), outcome=:o, "
+                "cost_usd_micros=:cu WHERE task_ref=:t AND failure_class=:fc AND remedy_id=:rm"),
+            {"o": outcome, "cu": int(max(0.0, _spent(engine, run_id) - before) * 1e6),
+             "t": run_id, "fc": p["class"], "rm": p["remedy"]})
+        c.execute(
+            sql("UPDATE shepherd_reasoning SET actual_outcome=:o WHERE task_ref=:t "
+                "AND step_no=:n"), {"o": outcome, "t": run_id, "n": p["step"]})
+        emit_event(c, p.get("project_id") or _project_of(engine, run_id), "shepherd.acted",
+                   actor, "code_task_run", run_id,
+                   {"remedy": p["remedy"], "class": p["class"], "outcome": outcome,
+                    "successor_run": new_run, "predicted_usd": p["estimated_cost_usd"]})
+    p.update({"acted": True, "outcome": outcome, "successor_run": new_run})
+    return p
+
+
+def _spent(engine, run_id: str) -> float:
+    from ..db import begin
+    with begin(engine) as c:
+        v = c.execute(sql("SELECT COALESCE(SUM(cost_usd_micros),0)/1e6 FROM llm_calls "
+                          "WHERE code_task_run_id=:i"), {"i": run_id}).scalar()
+    return float(v or 0.0)
+
+
+def _project_of(engine, run_id: str) -> str:
+    from ..db import begin
+    with begin(engine) as c:
+        return c.execute(sql("SELECT project_id FROM code_task_runs WHERE id=:i"),
+                         {"i": run_id}).scalar() or ""
+
+
+# --------------------------------------------------------------------------- #
+# Phase 3 — calibration. "Is it actually reasoning?" as a measurable question.
+# --------------------------------------------------------------------------- #
+def calibration(connection, project_id: str) -> dict[str, Any]:
+    """Predicted vs actual, per remedy. The console's honesty panel.
+
+    A shepherd that consistently under-estimates is not reasoning, it is pattern-matching with
+    a confident tone — and under-estimating is the direction that starts work it cannot
+    finish. Surfacing the ratio makes that impossible to hide behind a total.
+    """
+    rows = connection.execute(
+        sql("""
+            SELECT r.remedy_chosen AS remedy, r.failure_class,
+                   count(*) AS n,
+                   avg(r.predicted_cost_usd_micros)/1e6 AS predicted_usd,
+                   avg(l.cost_usd_micros)/1e6 AS actual_usd,
+                   count(*) FILTER (WHERE l.outcome = 'started') AS applied,
+                   count(*) FILTER (WHERE r.check_confirmed) AS corroborated
+            FROM shepherd_reasoning r
+            LEFT JOIN shepherd_ledger l
+                   ON l.task_ref = r.task_ref AND l.remedy_id = r.remedy_chosen
+            WHERE r.project_id = :p AND r.remedy_chosen IS NOT NULL
+            GROUP BY 1, 2 ORDER BY 3 DESC
+        """), {"p": project_id}).mappings().all()
+    out = []
+    for r in rows:
+        pred = float(r["predicted_usd"] or 0)
+        actual = float(r["actual_usd"] or 0)
+        out.append({
+            "remedy": r["remedy"], "failure_class": int(r["failure_class"] or 0),
+            "n": int(r["n"]), "predicted_usd": round(pred, 2),
+            "actual_usd": round(actual, 2),
+            "ratio": round(actual / pred, 2) if pred else None,
+            "corroborated_pct": round(100.0 * int(r["corroborated"]) / int(r["n"]), 0),
+        })
+    return {"project_id": project_id, "remedies": out}

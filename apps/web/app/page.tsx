@@ -126,6 +126,7 @@ import { fetchMeetingRooms } from "../lib/meeting-rooms";
 import { MeetingsHome } from "./meeting-room-ui";
 import { fetchCodeTasksFeed, fetchPreviews } from "../lib/code-tasks";
 import { CodeTasksHome } from "./code-tasks-ui";
+import { ShepherdConsole } from "./shepherd-ui";
 import { fetchReliabilityFeed } from "../lib/reliability";
 import { fetchCostInsights, fetchLlmSpend } from "../lib/budget-status";
 import { CostInsightsCard, LlmSpendCard, BudgetThresholdsCard } from "./cost-governance-ui";
@@ -6195,6 +6196,16 @@ export default async function HomePage({ searchParams }: HomePageProps) {
           <div className="stack-grid" style={{ marginTop: 14 }}>
             <MeetingConsensusCard projectId={activeProjectId} actor={activeActorId} />
           </div>
+        </section>
+
+        <section className="panel-stack" data-area="shepherd" aria-label="Task Shepherd">
+          <div className="section-head">
+            <div>
+              <span className="eyebrow">Task Shepherd</span>
+              <h2>An internal AI developer that owns a task until it ships — or asks you one clear question.</h2>
+            </div>
+          </div>
+          <ShepherdConsole />
         </section>
 
         <section className="panel-stack" data-area="code_tasks" aria-label="Code tasks">

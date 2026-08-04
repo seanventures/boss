@@ -5525,6 +5525,89 @@ def code_task_activity_endpoint(run_id: str):
     return {"run_id": run_id, "calls": calls}
 
 
+@app.get("/v1/shepherd/overview")
+def shepherd_overview_endpoint(project_id: str, limit: int = 40):
+    """Everything the Task Shepherd console renders: reasoning, ledger, escalations, spend.
+
+    One endpoint on purpose — the console's whole point is showing HOW it is thinking, and
+    that story is incoherent if the timeline, the ledger and the money arrive separately and
+    can disagree with each other.
+    """
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    from .services.shepherd_service import calibration
+    from .services.task_shepherd import CLASS_NAMES
+    with begin(engine) as c:
+        reasoning = [dict(r) for r in c.execute(text(
+            "SELECT id, task_ref, step_no, observe, signals, hypothesis, confidence, "
+            "check_result, check_confirmed, failure_class, remedy_chosen, rationale, "
+            "predicted_cost_usd_micros, predicted_outcome, actual_cost_usd_micros, "
+            "actual_outcome, stopped_because, created_at "
+            "FROM shepherd_reasoning WHERE project_id=:p "
+            "ORDER BY created_at DESC LIMIT :l"), {"p": project_id, "l": limit}).mappings()]
+        ledger = [dict(r) for r in c.execute(text(
+            "SELECT task_ref, failure_class, remedy_id, status, used_at, "
+            "cost_usd_micros, outcome FROM shepherd_ledger WHERE project_id=:p "
+            "ORDER BY created_at DESC LIMIT 200"), {"p": project_id}).mappings()]
+        escalations = [dict(r) for r in c.execute(text(
+            "SELECT id, task_ref, question, options, evidence, status, created_at "
+            "FROM shepherd_escalations WHERE project_id=:p AND status='open' "
+            "ORDER BY created_at DESC LIMIT 50"), {"p": project_id}).mappings()]
+        spend = dict(c.execute(text(
+            "SELECT COALESCE(SUM(CASE WHEN r.pull_request_url IS NOT NULL "
+            "         THEN c.usd ELSE 0 END),0) AS productive, "
+            "       COALESCE(SUM(CASE WHEN r.pull_request_url IS NULL "
+            "         THEN c.usd ELSE 0 END),0) AS unproductive "
+            "FROM code_task_runs r JOIN LATERAL ("
+            "  SELECT COALESCE(SUM(cost_usd_micros),0)/1e6 AS usd FROM llm_calls "
+            "  WHERE code_task_run_id=r.id) c ON true "
+            "WHERE r.project_id=:p AND r.created_at > now() - interval '7 days'"),
+            {"p": project_id}).mappings().first() or {})
+        cal = calibration(c, project_id)
+    return {
+        "project_id": project_id,
+        "class_names": {str(k): v for k, v in CLASS_NAMES.items()},
+        "reasoning": reasoning, "ledger": ledger, "escalations": escalations,
+        "spend": {k: round(float(v or 0), 2) for k, v in spend.items()},
+        "calibration": cal["remedies"],
+    }
+
+
+@app.post("/v1/shepherd/propose")
+def shepherd_propose_endpoint(payload: dict):
+    """Run one reasoning step against a run. Read-only: proposes, never acts."""
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    from .services.shepherd_service import propose
+    return propose(engine, settings, payload["run_id"])
+
+
+@app.post("/v1/shepherd/sweep")
+def shepherd_sweep_endpoint(payload: dict):
+    """Propose for every run that ended without a PR and has no open escalation."""
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    from .services.shepherd_service import sweep
+    return {"proposals": sweep(engine, settings, payload["project_id"],
+                               limit=int(payload.get("limit") or 20))}
+
+
+@app.post("/v1/shepherd/escalations/{escalation_id}/answer")
+def shepherd_answer_endpoint(escalation_id: str, payload: dict):
+    """Answer a shepherd's question. The answer is provenance, not just a state change."""
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    with begin(engine) as c:
+        n = c.execute(text(
+            "UPDATE shepherd_escalations SET status='answered', answer=:a, "
+            "answered_by=:by, answered_at=now() WHERE id=:id AND status='open'"),
+            {"a": str(payload.get("answer") or ""), "by": str(payload.get("actor") or "operator"),
+             "id": escalation_id}).rowcount
+    if not n:
+        raise HTTPException(status_code=404, detail="no open escalation with that id")
+    return {"ok": True, "escalation_id": escalation_id}
+
+
 @app.post("/v1/code-tasks/{run_id}/retry")
 def retry_code_task_endpoint(run_id: str, payload: Optional[dict] = None):
     """Resume a failed/blocked code task as a new attempt in the same lineage, carrying its prior

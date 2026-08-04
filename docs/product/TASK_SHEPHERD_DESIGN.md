@@ -1,6 +1,6 @@
 # Task Shepherd — an internal AI developer that finishes what BOSS starts
 
-**Status:** Phase 0 complete · Phase 1 (read-only) complete · Phase 2 not started
+**Status:** Phases 0–3 implemented · console live at `?area=shepherd` · awaiting operator review
 **Author:** drafted from the 2026-08-03/04 dogfood session
 **Audience:** operator (CEO), engine maintainers
 
@@ -422,6 +422,21 @@ remedy — and **executes nothing**. Every proposal lands in the escalation inbo
 "I would do X, because Y, costing ~$Z". The operator approves or rejects. This is the phase
 where the reasoning is judged, and it is also a real product on its own: it is what a CEO
 needs even if it never gains autonomy.
+
+**Phase 2 — bounded autonomy. ✅ DONE.** `act()` in `shepherd_service.py`. Executes only
+classes 1/2/9/11 (spend cap, turn cap, infrastructure, PR step) and refuses everything else.
+Four ordered refusals, each a real incident: not-autonomous, not-corroborated, needs-
+confirmation, bounded-verdict. Dry run over the session's failures: **acts on 3, refuses 5,
+every refusal to a human.** Executed remedies write ACTUAL cost and outcome back, which is
+what makes Phase 3 possible.
+
+**Phase 3 — calibration. ✅ DONE.** `calibration()` returns per-remedy predicted-vs-actual,
+sample size and corroboration rate, rendered in the console.
+
+**Console. ✅ DONE.** `apps/web/app/shepherd-ui.tsx`, area `shepherd`. Leads with spend (the
+number that got away from us), then the escalation inbox, then the reasoning timeline, the
+ledger and calibration. A card is one argument, and CHECK is given the same visual weight as
+the conclusion.
 
 **Phase 2 — bounded autonomy (1 day).** Executes only the classes with an unambiguous remedy
 and a low cost ceiling: #1 spend cap, #2 turn cap, #3 stale base, #7 no code. Everything else
