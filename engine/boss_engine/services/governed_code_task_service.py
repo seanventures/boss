@@ -1998,6 +1998,13 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             if attempt == 0 and not _cross_run_repair:
                 impl_prompt = base_impl_prompt
                 _iref = getattr(sandbox, "integration_ref", None)
+                # Emit it either way, so the next failure is diagnosable instead of guessable.
+                with _transaction(engine) as c:
+                    emit_event(c, project_id, "code_task.integration_ref", "boss",
+                               "code_task_run", run_id,
+                               {"ref": _iref,
+                                "error": getattr(sandbox, "integration_fetch_error", None),
+                                "available": bool(_iref)})
                 if _iref:
                     impl_prompt = impl_prompt + (
                         f"\n\n=== INTEGRATION BRANCH AVAILABLE ===\n"

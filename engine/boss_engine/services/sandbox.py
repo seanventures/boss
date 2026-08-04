@@ -136,6 +136,7 @@ class EphemeralSandbox:
         # Fetching it costs one shallow fetch and gives the agent something to actually merge.
         # Best-effort: a repo without the branch, or no network for it, proceeds as before.
         self.integration_ref = None
+        self.integration_fetch_error = None
         integration = (getattr(self.settings, "sandbox_integration_branch", None)
                        or "main")
         if base_branch != integration:
@@ -144,8 +145,15 @@ class EphemeralSandbox:
                            f"{integration}:refs/remotes/origin/{integration}"],
                           redact=token)
                 self.integration_ref = f"origin/{integration}"
-            except Exception:  # noqa: BLE001 — never fail provisioning over this
+                self.integration_fetch_error = None
+            except Exception as exc:  # noqa: BLE001 — never fail provisioning over this
                 self.integration_ref = None
+                # RECORD THE FAILURE. The first version swallowed this silently, so when a
+                # consolidation produced one app instead of two there was no way to tell
+                # whether the fetch had happened, the agent had ignored it, or the prompt was
+                # wrong — three very different fixes, and no evidence to choose between them.
+                # A best-effort step still has to say whether it succeeded.
+                self.integration_fetch_error = f"{type(exc).__name__}: {exc}"[:200]
 
         self.work_branch = work_branch or f"boss/{self.task_id}"
         # A feedback-iteration clones its own accumulated branch (base_branch == work_branch),
