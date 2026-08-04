@@ -2057,6 +2057,26 @@ class SoftwareFactoryService:
             "pull_request_url": pull_request_url,
             "branch_name": branch_name,
         }
+
+        # THE SEAM: a merged PR becomes a deployment.
+        # BOSS already had the whole delivery apparatus — plan_deployment_run, the rollout
+        # engine, promotion, telemetry connectors, nine tables — and every table was empty
+        # because nothing ever observed a merge. This is the one line that was missing.
+        # Best-effort and non-fatal by construction: the PR has ALREADY merged by the time we
+        # get here, and an exception would turn shipped work into a failure report.
+        try:
+            from .delivery_pipeline import on_pull_request_merged
+
+            _run_id = ""
+            if branch_name and branch_name.startswith("boss/code/"):
+                _run_id = branch_name.rsplit("/", 1)[-1]
+            result["delivery"] = on_pull_request_merged(
+                connection.engine if hasattr(connection, "engine") else None,
+                self.settings, project_id=project_id, run_id=_run_id,
+                repo=self.settings.target_github_repo, commit_ref=merge.sha,
+                decision_id=None, actor="release_manager")
+        except Exception:  # noqa: BLE001 — delivery must never un-ship a merge
+            pass
         follow_on_decision_id = self._mark_merge_completed(
             connection,
             project_id,
