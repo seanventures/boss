@@ -2373,6 +2373,20 @@ export async function createCodeTaskAction(formData: FormData): Promise<void> {
  * server action for exactly this reason — worth matching rather than adding CORS
  * to the API just for one panel.
  */
+export async function getDeliveryPipelineAction(projectId?: string): Promise<any> {
+  const pid = projectId || PROJECT_ID;
+  try {
+    const res = await fetch(
+      `${API_URL}/v1/delivery/pipeline?project_id=${encodeURIComponent(pid)}&limit=25`,
+      { headers: authHeaders(), cache: "no-store" },
+    );
+    if (!res.ok) return { error: `pipeline ${res.status}` };
+    return await res.json();
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
 export async function getShepherdOverviewAction(projectId?: string): Promise<any> {
   const pid = projectId || PROJECT_ID;
   try {

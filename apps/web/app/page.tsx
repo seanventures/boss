@@ -127,7 +127,8 @@ import { MeetingsHome } from "./meeting-room-ui";
 import { fetchCodeTasksFeed, fetchPreviews } from "../lib/code-tasks";
 import { CodeTasksHome } from "./code-tasks-ui";
 import { ShepherdConsole } from "./shepherd-ui";
-import { getShepherdOverviewAction } from "./actions";
+import { DeliveryPipeline } from "./delivery-ui";
+import { getShepherdOverviewAction, getDeliveryPipelineAction } from "./actions";
 import { fetchReliabilityFeed } from "../lib/reliability";
 import { fetchCostInsights, fetchLlmSpend } from "../lib/budget-status";
 import { CostInsightsCard, LlmSpendCard, BudgetThresholdsCard } from "./cost-governance-ui";
@@ -501,6 +502,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
   // Fetched here so the Task Shepherd panel arrives WITH the page. Never fatal: a failure
   // yields null and the panel says so, rather than the whole console failing to render.
   const shepherdOverview = await getShepherdOverviewAction().catch(() => null);
+  const deliveryPipeline = await getDeliveryPipelineAction().catch(() => null);
   const resolvedSearchParams = searchParams ? await searchParams : undefined;
   const requestedProjectId =
     getParam(resolvedSearchParams?.project_id) ?? PROJECT_ID;
@@ -6200,6 +6202,16 @@ export default async function HomePage({ searchParams }: HomePageProps) {
           <div className="stack-grid" style={{ marginTop: 14 }}>
             <MeetingConsensusCard projectId={activeProjectId} actor={activeActorId} />
           </div>
+        </section>
+
+        <section className="panel-stack" data-area="delivery" aria-label="CI/CD">
+          <div className="section-head">
+            <div>
+              <span className="eyebrow">CI/CD</span>
+              <h2>From a merged PR to a running deployment — and where it stopped.</h2>
+            </div>
+          </div>
+          <DeliveryPipeline initial={deliveryPipeline} />
         </section>
 
         <section className="panel-stack" data-area="shepherd" aria-label="Task Shepherd">

@@ -51,6 +51,7 @@ type AreaId =
   | "meetings"
   | "code_tasks"
   | "shepherd"
+  | "delivery"
   | "reliability"
   | "reports"
   | "budget"
@@ -95,6 +96,7 @@ const ICONS = {
   meetings: UsersThree,
   code_tasks: Code,
   shepherd: Code,
+  delivery: Code,
   reliability: Heartbeat,
   discovery: MagnifyingGlass,
   sandboxes: TerminalWindow,
@@ -115,6 +117,7 @@ const AREAS: AreaDef[] = [
   { id: "discovery", label: "Discovery", sub: "Research a signal — cited dossier & candidate outcomes", group: "Run", icon: ICONS.discovery },
   { id: "meetings", label: "Meetings", sub: "Cross-functional agent panels — debate to a PRD", group: "Run", icon: ICONS.meetings },
   { id: "code_tasks", label: "Code Tasks", sub: "Agent edits code in a sandbox — tested, gated PRs", group: "Run", icon: ICONS.code_tasks },
+  { id: "delivery", label: "CI/CD", sub: "Code task to PR to deployment, and where it stopped", group: "Run", icon: ICONS.delivery },
   { id: "shepherd", label: "Task Shepherd", sub: "How the shepherd is reasoning about stuck work", group: "Run", icon: ICONS.shepherd },
   { id: "reliability", label: "Reliability", sub: "AI SRE — incidents, root cause, governed fixes, learning", group: "Run", icon: ICONS.reliability },
   { id: "reports", label: "Evidence", sub: "Throughput, receipts, cost, and agent scorecards", group: "Run", icon: ICONS.reports },

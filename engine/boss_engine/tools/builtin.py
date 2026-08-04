@@ -405,6 +405,7 @@ def _register_write_tools(reg: ToolRegistry) -> None:
             ctx.engine, ctx.settings, ctx.jobs, args["run_id"],
             fix_note=(args.get("instructions") or ""),
             profile=(args.get("profile") or None),
+            allow_test_retirement=bool(args.get("allow_test_retirement")),
         )
         return {"status": "extending", "result": _json_safe(result),
                 "note": ("continues the existing lineage: same branch, same PR, "
@@ -434,6 +435,16 @@ def _register_write_tools(reg: ToolRegistry) -> None:
                                    "and the approved plan; a new task rebuilds from scratch.",
                 },
                 "repair_retries": {"type": "integer", "minimum": 0, "maximum": 5},
+                "allow_test_retirement": {
+                    "type": "boolean",
+                    "description": "Permit REMOVING existing tests that this change makes "
+                                   "obsolete — e.g. consolidating two apps, where tests "
+                                   "asserting the retired app still exists cannot pass. Every "
+                                   "removal is recorded on the PR for a human to reverse. "
+                                   "Without this, such a change is impossible rather than "
+                                   "merely gated: the agent cannot satisfy contradictory "
+                                   "tests and will fail repeatedly.",
+                },
             },
             ["run_id"],
         ),

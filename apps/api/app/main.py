@@ -5525,6 +5525,21 @@ def code_task_activity_endpoint(run_id: str):
     return {"run_id": run_id, "calls": calls}
 
 
+@app.get("/v1/delivery/pipeline")
+def delivery_pipeline_endpoint(project_id: str, limit: int = 25):
+    """Code task -> PR -> deployment -> health, assembled in ONE query pass.
+
+    One endpoint on purpose: a CI/CD view whose stages arrive separately can show a merged PR
+    next to a stale deployment status and quietly mislead. The delivery story has to be
+    internally consistent or it is worse than no view.
+    """
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    from .services.delivery_pipeline import pipeline_view
+    with begin(engine) as c:
+        return pipeline_view(c, project_id, limit=limit)
+
+
 @app.get("/v1/shepherd/overview")
 def shepherd_overview_endpoint(project_id: str, limit: int = 40):
     """Everything the Task Shepherd console renders: reasoning, ledger, escalations, spend.

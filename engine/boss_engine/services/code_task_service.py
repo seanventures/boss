@@ -272,6 +272,7 @@ def _prior_failing_gates(fctx_prev: dict, state: dict) -> list[str]:
 def retry_code_task(
     engine, settings: Settings, jobs, run_id: str, *, fix_note: str = "",
     profile: Optional[str] = None, repair_retries: Optional[int] = None,
+    allow_test_retirement: bool = False,
 ) -> dict:
     """Resume a failed/blocked code task as a NEW attempt in the same lineage — carrying the prior
     attempt's findings forward as explicit feedback so the agent fixes the identified issues instead
@@ -447,6 +448,12 @@ def retry_code_task(
                             else spec.get("repair_retries")),
             substrate=substrate_override,
         )
+        if allow_test_retirement:
+            # Declared on the RUN's spec so the gate can read it. Kept out of start_code_task's
+            # signature: this is an exception a caller asks for, not a property of every task.
+            c.execute(sql("UPDATE code_task_runs SET spec = COALESCE(spec,'{}'::jsonb) "
+                          "|| jsonb_build_object('allow_test_retirement', true) WHERE id=:i"),
+                      {"i": new_id})
     return {"status": "queued", "run_id": new_id, "attempt": attempt,
             "parent_run_id": run_id, "root_run_id": root}
 

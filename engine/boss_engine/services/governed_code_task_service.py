@@ -2463,6 +2463,9 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         # never covered (test_streak 16 -> 17 tests, test_persistence 22 -> 24). Editing a
         # test file is normal; LOSING coverage is the regression. A file that is deleted, or
         # comes back with fewer tests than it had, is what must never pass silently.
+        # Declared by the task (create/extend/retry may set it) — never inferred, so an agent
+        # cannot grant itself permission by deciding a deletion was reasonable.
+        _retirement_allowed = bool(spec.get("allow_test_retirement"))
         _weakened: list[str] = []
         for _p in preexisting_tests:
             _fp = root / _p
@@ -2481,8 +2484,36 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             "written_tests_pass": tests_passed,
             # An existing test that was edited or deleted is the one way a green suite can
             # still mean "we broke something" — so this gate holds at tier 0 too.
-            "existing_tests_intact": not _weakened,
+            # TEST RETIREMENT. A blanket ban on removing tests makes some correct changes
+            # IMPOSSIBLE, not merely gated. Consolidating two stock apps required deleting
+            # four tests that existed only to assert the app being retired was still present:
+            # main's suite asserted `web-stocks/` EXISTS while this branch's consolidation
+            # guard asserted it must NOT. Both were "existing tests", so every attempt was
+            # trapped — delete and main's tests fail, keep and the guard fails. Five attempts
+            # and ~$40 went into a task that was unsatisfiable under the gate's own rules, and
+            # a human ultimately deleted the tests by hand.
+            #
+            # So retirement becomes a DECLARED, JUSTIFIED act rather than a forbidden one:
+            # a task may set allow_test_retirement, and every removal is then recorded with
+            # the reason and surfaced on the PR for a human to reverse. The gate still fails
+            # for UNdeclared removals — an agent quietly deleting an inconvenient test is the
+            # thing this guard exists to catch, and that is unchanged.
+            "existing_tests_intact": (not _weakened) or _retirement_allowed,
+            # recorded below whether allowed or not, so the PR always states what went
         }
+
+        if _weakened and _retirement_allowed:
+            with _transaction(engine) as c:
+                c.execute(sql(
+                    "UPDATE code_task_runs SET finalize_ctx="
+                    "COALESCE(finalize_ctx,'{}'::jsonb) || jsonb_build_object("
+                    "'retired_tests', CAST(:r AS JSONB)), updated_at=now() WHERE id=:id"),
+                    {"r": json.dumps(_weakened), "id": run_id})
+                emit_event(c, project_id, "code_task.tests_retired", "boss",
+                           "code_task_run", run_id,
+                           {"retired": _weakened,
+                            "declared_by": "task spec (allow_test_retirement)",
+                            "note": "surfaced on the PR so a human can reverse it"})
         if do_separate_tests:
             gates["tests_written_first"] = bool(test_files)
             gates["coder_did_not_edit_tests"] = tests_untouched
