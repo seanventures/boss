@@ -1122,7 +1122,7 @@ def _block_for_plan_approval(engine, budget, *, run_id, project_id, task_id, res
 # --------------------------------------------------------------------------- #
 def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                            *, fencing_token: Optional[str] = None) -> dict:
-    from .run_fencing import RunFenced, assert_owner, claim_run, hash_token
+    from .run_fencing import RunFenced, assert_owner, claim_run, hash_token  # noqa: F401
     _fence = hash_token(fencing_token)
     with _transaction(engine) as c:
         run = load_code_task_run(c, run_id)
@@ -3214,6 +3214,22 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 "deferred_findings": deferred_findings,
                 "followup_run_id": followup_run_id, **proposal}
 
+    except RunFenced as exc:
+        # THE LOSER OF A RACE MUST NOT BURY THE WINNER.
+        # A fenced executor no longer owns this run — another execution does, and may still be
+        # working successfully. Falling through to the generic handler marked the whole run
+        # FAILED on crun_ccfc0212 even though its work was checkpointed and a sibling was
+        # mid-flight. Exit quietly, touch nothing: every write we could attempt would be
+        # rejected anyway, and the owner is responsible for the run's outcome.
+        _finish_vms(success=False)
+        try:
+            with _transaction(engine) as c:
+                emit_event(c, project_id, "code_task.fenced_exit", "boss", "code_task_run",
+                           run_id, {"detail": str(exc)[:200],
+                                    "note": "duplicate execution stood down; owner continues"})
+        except Exception:  # noqa: BLE001
+            pass
+        return {"status": "superseded", "done": True, "reason": str(exc)}
     except CodeTaskCancelled as exc:
         # Operator intent, not a failure: stop, keep the work on the branch, release budget.
         _finish_vms(success=False)
