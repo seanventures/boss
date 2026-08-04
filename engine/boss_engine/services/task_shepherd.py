@@ -21,6 +21,8 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
+from ..ports import sql as _sql
+
 # --------------------------------------------------------------------------- #
 # Failure classes
 # --------------------------------------------------------------------------- #
@@ -36,6 +38,8 @@ NO_CODE = 7
 DUPLICATE_EXECUTION = 8
 INFRASTRUCTURE = 9
 UNKNOWN = 10
+PR_STEP_FAILED = 11
+NOT_A_FAILURE = 12
 
 CLASS_NAMES = {
     SPEND_CAP: "provider spend/rate cap",
@@ -48,6 +52,8 @@ CLASS_NAMES = {
     DUPLICATE_EXECUTION: "duplicate execution",
     INFRASTRUCTURE: "infrastructure",
     UNKNOWN: "unknown",
+    PR_STEP_FAILED: "pull-request step failed",
+    NOT_A_FAILURE: "not a failure",
 }
 
 # Exact phrases the engine itself writes. Deliberately NOT loose tokens: a bare "timeout"
@@ -72,20 +78,37 @@ _SIGNATURES: list[tuple[int, tuple[str, ...]]] = [
                       # reaching outside its own sandbox; it is a platform fault, never the
                       # task's, and re-running the task unchanged is the correct remedy.
                       "exited 143", "error_during_execution")),
-    # The run did all the work and the PR step itself failed. Distinct from a stale base:
-    # there is nothing to rebase, the call simply did not succeed. Two runs ended here.
-    (STALE_BASE, ("pr not created",)),
+    # The run did all the work and the PR CALL failed. Emphatically NOT a stale base: the
+    # branch is mergeable and there is nothing to rebase. Prescribing a rebase here would send
+    # an agent to resolve conflicts that do not exist. Two runs ended here.
+    (PR_STEP_FAILED, ("pr not created",)),
+    # Terminal states that are not failures at all. An auto-repair round is BOSS narrating its
+    # own progress, and an operator note is an operator note. Escalating these as problems is
+    # how a shepherd trains its operator to ignore it.
+    (NOT_A_FAILURE, ("auto review-repair round", "lineage abandoned",
+                     "cancelled by operator", "cancelled:")),
 ]
 
 
 def classify(error: Optional[str], *, gates_failed: Optional[list[str]] = None,
-             has_pr: bool = False) -> int:
+             has_pr: bool = False, recorded_class: Optional[int] = None) -> int:
     """Map observed evidence onto a failure class.
 
-    Order matters: the most specific and most actionable signatures win. UNKNOWN is a real
-    answer, not a fallback for "probably infra" — every expensive mistake of the session came
-    from treating an unclassified failure as a familiar one.
+    `recorded_class` is what the PIPELINE decided at failure time and wins outright. That
+    matters: the pipeline holds the live exception, the substrate, and the stage, while this
+    function gets a string that may have been truncated or reformatted on the way here. String
+    matching is the FALLBACK, for rows written before the pipeline recorded a class.
+
+    This ordering exists because the first cut of this module built a second, independent
+    taxonomy alongside the one BOSS already recorded — the same "two copies of one decision"
+    defect that produced the preview-path and repo-tests bugs in the same session. One
+    decision, computed where the evidence is richest, read everywhere else.
+
+    UNKNOWN is a real answer, not a fallback for "probably infra". Every expensive mistake of
+    that session came from treating an unclassified failure as a familiar one.
     """
+    if recorded_class is not None and recorded_class in CLASS_NAMES:
+        return recorded_class
     text = (error or "").lower()
     if gates_failed and has_pr:
         # The PR shipped with findings attached; the follow-up task already exists. There is
@@ -104,7 +127,13 @@ def classify(error: Optional[str], *, gates_failed: Optional[list[str]] = None,
 class Remedy:
     id: str
     describe: str
-    est_cost_usd: float
+    # COLD-START PRIOR ONLY — never a fixed price.
+    # These numbers came from one operator's 13-run local sample. An enterprise repo, a
+    # different model tier, or a larger codebase moves them by an order of magnitude, and a
+    # shepherd that budgets against this constant would refuse affordable work or start work
+    # it cannot finish. estimate_cost() replaces it with that PROJECT's measured history as
+    # soon as any exists; this value is only what to assume before the first observation.
+    prior_cost_usd: float
     # An action the shepherd may take, or None when the remedy IS escalation.
     action: Optional[str] = None
     # True when the engine already handles this without a shepherd. Kept in the table so the
@@ -166,7 +195,96 @@ REMEDIES: dict[int, tuple[Remedy, ...]] = {
         ESCALATE,
     ),
     UNKNOWN: (ESCALATE,),
+    PR_STEP_FAILED: (
+        # The engine already retries the PR call three times before giving up, so a fourth
+        # attempt from here would be the retry loop this design exists to avoid.
+        Remedy("pr_retry", "the engine retries the PR call 3x", 0.0, None, automatic=True),
+        Remedy("reissue_pr", "re-issue the task; the branch and its work are intact", 3.0,
+               "retry_code_task"),
+        ESCALATE,
+    ),
+    # Nothing to remedy. Recorded so the shepherd stays quiet rather than escalating noise.
+    NOT_A_FAILURE: (
+        Remedy("no_action", "not a failure; no remedy needed", 0.0, None, automatic=True),
+    ),
 }
+
+
+
+
+# --------------------------------------------------------------------------- #
+# Cost estimation — measured, not assumed
+# --------------------------------------------------------------------------- #
+def estimate_cost(connection, project_id: str, remedy: "Remedy",
+                  failure_class: int, *, percentile: float = 0.75) -> float:
+    """What this remedy actually costs IN THIS PROJECT, from its own history.
+
+    A prior baked into the code is a guess about someone else's repository. Cost per run
+    varies with codebase size, model tier, profile and task shape — the same remedy measured
+    between $0.88 and $12.47 within a single evening on one repo. So the estimate comes from
+    that project's `llm_calls`, and the constant is only the cold start.
+
+    Uses a high percentile rather than the mean on purpose: the shepherd must not start work
+    it cannot finish, so it should budget for a bad case, not a typical one. Under-estimating
+    is the expensive direction.
+    """
+    try:
+        row = connection.execute(
+            _sql(
+                """
+                SELECT percentile_cont(:pct) WITHIN GROUP (ORDER BY per_run) AS est,
+                       count(*) AS n
+                FROM (
+                    SELECT l.code_task_run_id, SUM(l.cost_usd_micros)/1e6 AS per_run
+                    FROM llm_calls l
+                    JOIN code_task_runs r ON r.id = l.code_task_run_id
+                    WHERE r.project_id = :p
+                      AND l.created_at > now() - interval '30 days'
+                    GROUP BY 1
+                ) s
+                """
+            ),
+            {"p": project_id, "pct": percentile},
+        ).mappings().first()
+    except Exception:  # noqa: BLE001 — an estimate must never break the shepherd
+        return remedy.prior_cost_usd
+    if not row or not row["n"] or row["est"] is None:
+        return remedy.prior_cost_usd
+    measured = float(row["est"])
+    # A remedy that resumes from a checkpoint skips the design chain and the test authoring,
+    # so it costs a fraction of a full run. Scale the measured run cost by the remedy's prior
+    # relative to a full run's prior rather than inventing a second set of constants.
+    full_run_prior = 6.0
+    scale = remedy.prior_cost_usd / full_run_prior if full_run_prior else 1.0
+    return round(max(0.0, measured * scale), 2)
+
+
+def task_budget(connection, project_id: str, *, default_usd: float = 25.0) -> float:
+    """The budget a shepherd may spend on one task, from the project's OWN policy.
+
+    Not a constant. `budget_policies` already carries per-project daily and monthly caps that
+    differ by orders of magnitude between a dogfood project and an enterprise one; a shepherd
+    that assumed $25 would be uselessly timid for the latter and reckless for a trial.
+
+    Derived as a fraction of the daily cap so a single task cannot consume the day.
+    """
+    try:
+        row = connection.execute(
+            _sql(
+                "SELECT daily_cap_usd_micros FROM budget_policies "
+                "WHERE scope_type='project' AND scope_id=:p "
+                "ORDER BY created_at DESC LIMIT 1"
+            ),
+            {"p": project_id},
+        ).mappings().first()
+    except Exception:  # noqa: BLE001
+        return default_usd
+    if not row or not row["daily_cap_usd_micros"]:
+        return default_usd
+    daily = float(row["daily_cap_usd_micros"]) / 1e6
+    # At most a tenth of the day's allowance on any one task, and never below the default —
+    # a tiny cap should slow a task down, not make every remedy unaffordable.
+    return max(default_usd, round(daily * 0.10, 2))
 
 
 # --------------------------------------------------------------------------- #
@@ -238,9 +356,9 @@ def next_step(state: ShepherdState, failure_class: int, *, succeeded: bool = Fal
         if remedy is ESCALATE or remedy.action is None:
             return Verdict("stop", ESCALATE,
                            "no automated remedy remains for this class", "human")
-        if remedy.est_cost_usd > state.remaining_usd:
+        if remedy.prior_cost_usd > state.remaining_usd:
             return Verdict("stop", None,
-                           f"next remedy needs ${remedy.est_cost_usd:.2f} but only "
+                           f"next remedy needs ${remedy.prior_cost_usd:.2f} but only "
                            f"${state.remaining_usd:.2f} remains; not starting what it "
                            "cannot finish", "budget")
         return Verdict("act", remedy, remedy.describe)
@@ -257,11 +375,12 @@ def needs_operator_confirmation(remedy: Remedy, state: ShepherdState,
     """
     if state.budget_usd <= 0:
         return True
-    return remedy.est_cost_usd > threshold * state.budget_usd
+    return remedy.prior_cost_usd > threshold * state.budget_usd
 
 
 def escalation(task_ref: str, failure_class: int, evidence: dict[str, Any],
-               options: Optional[list[dict[str, Any]]] = None) -> dict[str, Any]:
+               options: Optional[list[dict[str, Any]]] = None,
+               costs: Optional[dict[str, float]] = None) -> dict[str, Any]:
     """Build a decision-shaped question.
 
     Never a log dump. During the session the operator was repeatedly handed "here are five
@@ -269,8 +388,17 @@ def escalation(task_ref: str, failure_class: int, evidence: dict[str, Any],
     Each option states what it costs.
     """
     remedies = REMEDIES.get(failure_class, (ESCALATE,))
+    # Each option states its cost, and whether that cost was MEASURED for this project or is
+    # only the cold-start prior. Quoting a constant to an operator as though it were a
+    # measurement is how a shepherd loses their trust the first time an enterprise repo costs
+    # ten times the number it printed.
     auto = [
-        {"label": r.describe, "action": r.action, "est_cost_usd": r.est_cost_usd}
+        {
+            "label": r.describe,
+            "action": r.action,
+            "est_cost_usd": (costs or {}).get(r.id, r.prior_cost_usd),
+            "estimate_source": "measured" if (costs or {}).get(r.id) is not None else "prior",
+        }
         for r in remedies if r.action and not r.automatic
     ]
     return {
@@ -278,6 +406,6 @@ def escalation(task_ref: str, failure_class: int, evidence: dict[str, Any],
         "failure_class": failure_class,
         "question": f"{CLASS_NAMES.get(failure_class, 'unknown')} — how should this proceed?",
         "options": options or (auto + [{"label": "I'll handle it", "action": None,
-                                        "est_cost_usd": 0.0}]),
+                                        "est_cost_usd": 0.0, "estimate_source": "n/a"}]),
         "evidence": evidence,
     }

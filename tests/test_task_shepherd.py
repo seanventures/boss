@@ -78,7 +78,7 @@ def t_never_loops() -> None:
     check("first failure: a remedy is chosen", v1.action, "act")
     s.used_remedies.add((SPEND_CAP, v1.remedy.id))
     s.attempt_history.append((SPEND_CAP, v1.remedy.id, "spend limit"))
-    s.spent_usd += v1.remedy.est_cost_usd
+    s.spent_usd += v1.remedy.prior_cost_usd
 
     # Same remedy, same failure, a second time -> stop. This is the bound the session lacked.
     s.attempt_history.append((SPEND_CAP, v1.remedy.id, "spend limit"))
@@ -112,7 +112,7 @@ def t_never_overspends() -> None:
           v2.stopped_because, "human")
 
     # A large single spend asks first, even when affordable.
-    big = [r for r in REMEDIES[TURN_CAP] if r.est_cost_usd >= 6.0][0]
+    big = [r for r in REMEDIES[TURN_CAP] if r.prior_cost_usd >= 6.0][0]
     check("a remedy over 40% of budget asks the operator first",
           needs_operator_confirmation(big, ShepherdState("crun_x", budget_usd=10.0)), True)
     check("a modest remedy does not",
@@ -169,11 +169,19 @@ def t_escalation_is_a_question() -> None:
     check_true("it carries the evidence", e["evidence"]["pr"] == 67)
     check_true("every option is concrete", all("label" in o for o in e["options"]))
     check_true("every option states its cost", all("est_cost_usd" in o for o in e["options"]))
+    check_true("and says whether that cost is measured or only a cold-start prior",
+               all("estimate_source" in o for o in e["options"]))
     check_true("there is always an 'I'll handle it' option",
                any(o["action"] is None for o in e["options"]))
     check_true("the automated option is offered with its price",
                any(o["action"] == "extend_code_task" and o["est_cost_usd"] > 0
                    for o in e["options"]))
+    # Measured estimates must override the prior — an enterprise repo's real cost can be an
+    # order of magnitude off a constant derived from one small sample.
+    e2 = escalation("crun_x", MERGE_CONFLICT, {}, costs={"resolve_via_agent": 47.50})
+    opt = [o for o in e2["options"] if o["action"] == "extend_code_task"][0]
+    check("a measured estimate replaces the prior", opt["est_cost_usd"], 47.50)
+    check("and is labelled as measured", opt["estimate_source"], "measured")
 
 
 # --------------------------------------------------------------------------- #
@@ -197,7 +205,7 @@ def t_bounded_by_construction() -> None:
         if v.action == "stop":
             break
         s.used_remedies.add((NO_CODE, v.remedy.id))
-        s.spent_usd += v.remedy.est_cost_usd
+        s.spent_usd += v.remedy.prior_cost_usd
         steps += 1
     check_true("a class always terminates, regardless of budget", steps < 50,
                f"terminated after {steps} remedies")

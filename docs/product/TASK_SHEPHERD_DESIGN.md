@@ -146,7 +146,25 @@ before each remedy:
     if p_success < 0.25 and cheaper alternatives remain -> reorder
 ```
 
-Real numbers available from day one, measured this session:
+**The numbers below are a COLD-START PRIOR, not a price list.** They came from one
+operator's 13-run local sample. An enterprise repository, a different model tier or a larger
+codebase moves them by an order of magnitude — the same remedy measured between $0.88 and
+$12.47 within a single evening on one repo. A shepherd that budgeted against a constant would
+be uselessly timid on a large project and reckless on a trial.
+
+So both inputs are read from the project, not from the code:
+
+- `estimate_cost()` takes the **75th percentile of that project's own `llm_calls`** over 30
+  days, scaled by the remedy's share of a full run. A high percentile, not the mean, because
+  under-estimating is the expensive direction: the shepherd must not start what it cannot
+  finish.
+- `task_budget()` derives from the project's **`budget_policies` daily cap** (10% of it, so
+  one task cannot consume the day), never below a floor. `boss-dogfood` resolves to $10,000
+  per task; a community trial resolves to the floor.
+- Every escalation option carries `estimate_source: measured | prior`, so the operator is
+  never quoted a constant as though it were a measurement.
+
+The priors below are only what to assume before the first observation exists:
 
 - a full governed run: **~$6.50** (median of 4 completed)
 - a retry that resumes from checkpoint: **~$3** (design + tests skipped)
