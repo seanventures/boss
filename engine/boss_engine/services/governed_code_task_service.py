@@ -1997,9 +1997,13 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                         f"`{_iref}` is fetched in this repo and holds work merged since this "
                         "branch was cut. If your task refers to code you cannot find, it is "
                         f"probably there: inspect it with `git show {_iref}:<path>` or "
-                        f"`git diff HEAD..{_iref} --stat`, and merge it in with "
-                        f"`git merge {_iref}` if the task asks you to combine or reconcile "
-                        "work. Resolve any conflicts yourself and keep BOTH sides' "
+                        f"`git diff HEAD..{_iref} --stat`.\n"
+                        "TO BRING IT IN, DO NOT COMMIT. BOSS detects your work as UNCOMMITTED "
+                        "changes in the tree (`git add -A; git diff --cached`), so anything you "
+                        "commit yourself becomes INVISIBLE to it and is dropped from the PR. "
+                        f"Use `git merge --no-commit --no-ff {_iref}` (leaves changes staged), "
+                        f"or `git checkout {_iref} -- <paths>` for specific files. Resolve any "
+                        "conflicts, leave everything staged/uncommitted, and keep BOTH sides' "
                         "functionality unless told otherwise.")
             else:
                 _ev = evidence_text
