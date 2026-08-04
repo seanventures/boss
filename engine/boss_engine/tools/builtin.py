@@ -1018,7 +1018,12 @@ def _existing_app_branch(conn, project_id: str, task_id: str) -> tuple:
 
 
 def _slim_run(r: dict) -> dict:
-    keys = ("id", "status", "phase", "title", "pr_url", "created_at", "task_id")
+    # "pr_url" is not a key on a run — the column is pull_request_url. So the PR link this
+    # tool's own description promises ("with status, phase, title and PR link") was ALWAYS
+    # dropped, and an agent asked to act on a PR could not find one. Include both: the real
+    # key, plus the short alias callers may already expect.
+    keys = ("id", "status", "phase", "title", "pull_request_url", "pull_request_number",
+            "created_at", "task_id")
     out = {k: r.get(k) for k in keys if k in r}
     return _json_safe(out)
 
