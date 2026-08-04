@@ -1424,8 +1424,30 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         phase moving BACKWARDS (implement -> write_tests) while two executions raced. A fenced
         executor's phase write now affects 0 rows and raises instead of rewriting history.
         """
+        # Fence the write AND keep everything _set_phase did. My first version wrote only
+        # `phase = :ph` and silently dropped phase_timings/phase_started_at, so the console's
+        # per-step timings — the operator's main way of seeing where a task spends its time —
+        # went blank on every run after the fencing change. A guard that quietly removes
+        # behaviour is a regression wearing a safety jacket.
         from .run_fencing import guarded_update
-        guarded_update(c, run_id, _fence, "phase = :ph", {"ph": name}, where=f"phase->{name}")
+        guarded_update(
+            c, run_id, _fence,
+            """phase = :ph,
+               finalize_ctx = COALESCE(finalize_ctx, '{}'::jsonb)
+                 || jsonb_build_object('phase_started_at', to_jsonb(now()))
+                 || CASE
+                      WHEN finalize_ctx ? 'phase_started_at' AND phase IS NOT NULL THEN
+                        jsonb_build_object(
+                          'phase_timings',
+                          COALESCE(finalize_ctx->'phase_timings', '[]'::jsonb)
+                          || jsonb_build_array(jsonb_build_object(
+                               'phase', phase,
+                               'ms', GREATEST(0, EXTRACT(EPOCH FROM (
+                                      now() - (finalize_ctx->>'phase_started_at')::timestamptz
+                                    )) * 1000)::bigint)))
+                      ELSE '{}'::jsonb
+                    END""",
+            {"ph": name}, where=f"phase->{name}")
 
     def _fenced_status(status: str, extra_set: str = "", params: Optional[dict] = None) -> bool:
         """Set the run's status under BOTH the fence and the state machine.
