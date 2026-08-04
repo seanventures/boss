@@ -1417,6 +1417,16 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         except Exception:  # noqa: BLE001
             return _lease_owner_at_start["v"]  # unknown -> assume unchanged, never false-abort
 
+    def _phase(c, name: str) -> None:
+        """Set the run's phase under the fence.
+
+        `_set_phase` wrote unguarded from every stage, which is why the console showed the
+        phase moving BACKWARDS (implement -> write_tests) while two executions raced. A fenced
+        executor's phase write now affects 0 rows and raises instead of rewriting history.
+        """
+        from .run_fencing import guarded_update
+        guarded_update(c, run_id, _fence, "phase = :ph", {"ph": name}, where=f"phase->{name}")
+
     def _fenced_status(status: str, extra_set: str = "", params: Optional[dict] = None) -> bool:
         """Set the run's status under BOTH the fence and the state machine.
 
@@ -1581,7 +1591,7 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
     try:
         sandbox = provider.acquire(task_id=run_id, tenant_id=project_id)
         with _transaction(engine) as c:
-            _set_phase(c, run_id, "provisioning")
+            _phase(c, "provisioning")
         sandbox.provision(owner, repo, base_branch=base_branch,
                           work_branch=work_branch, token=token)
         root = sandbox.path
@@ -1666,7 +1676,7 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                             f"\n\nTECHNICAL PLAN:\n{design.get('plan', '')}")
         elif do_design:
             with _transaction(engine) as c:
-                _set_phase(c, run_id, "design")
+                _phase(c, "design")
             set_llm_context(stage="standards")
             a, m = _route("standards")
             d1 = a.run_role(_standards_prompt(), root, read_only=True, model=m)
@@ -1785,7 +1795,7 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             # STEP write tests (qa), tests only.
             _abort_if_cancelled("write_tests")
             with _transaction(engine) as c:
-                _set_phase(c, run_id, "write_tests")
+                _phase(c, "write_tests")
 
             def _attempt_write_tests(escalate: bool):
                 """One QA/write-tests pass → (r1, test_files, test_changes|None). escalate
@@ -1910,7 +1920,7 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         # pass but never soften the gate. 0 retries == the pre-Phase-3 single pass.
         _abort_if_cancelled("implement")
         with _transaction(engine) as c:
-            _set_phase(c, run_id, "implement")
+            _phase(c, "implement")
         base_impl_prompt = (_impl_prompt(title, instructions, test_files, test_cmd, criteria=criteria,
                                          iac=iac_task, ui=ui_task)
                             if do_separate_tests
@@ -2010,7 +2020,7 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 # Authoritative verification: the guest RUNNER (our code, in-VM) executed the
                 # test command after the agent stopped — that in-VM result is the verdict.
                 with _transaction(engine) as c:
-                    _set_phase(c, run_id, "run_tests")
+                    _phase(c, "run_tests")
                 tests_passed = bool(res2.tests_passed)
                 test_exit_code = res2.tests[0].exit_code if res2.tests else None
                 fail_output = (res2.tests[0].stdout if res2.tests else "") or ""
@@ -2076,7 +2086,7 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 impl_files = [fc.path for fc in sandbox.diff() if not _is_test_path(fc.path)]
                 # Authoritative verification — BOSS runs the tests itself.
                 with _transaction(engine) as c:
-                    _set_phase(c, run_id, "run_tests")
+                    _phase(c, "run_tests")
                 test_result = sandbox.run(test_cmd)
                 tests_passed = bool(test_result.ok)
                 test_exit_code = test_result.exit_code
@@ -2140,7 +2150,7 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         panel_parallel = False
         if do_review:
             with _transaction(engine) as c:
-                _set_phase(c, run_id, "review_panel")
+                _phase(c, "review_panel")
             panel: dict = {}
             panel_cost = {"v": 0}
             lock = threading.Lock()
@@ -2349,7 +2359,7 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             # micro-VM substrate the mutation runs in ITS OWN VM against the committed
             # work branch and its diff is simply never committed — nothing to restore.
             with _transaction(engine) as c:
-                _set_phase(c, run_id, "check_tests")
+                _phase(c, "check_tests")
             if use_microvm:
                 if impl_files:
                     res5 = _guest_stage("check_tests", "check_tests",
@@ -2386,7 +2396,7 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         iac_result = None
         if detect_iac_files(changed_files):
             with _transaction(engine) as c:
-                _set_phase(c, run_id, "iac_verify")
+                _phase(c, "iac_verify")
             iac_result = _run_iac_lane(settings, files=changed_files,
                                        workdir=None if use_microvm else root)
 
@@ -2588,7 +2598,7 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                         _tr = sandbox.run(test_cmd)
                         if not _tr.ok:
                             with _transaction(engine) as c:
-                                _set_phase(c, run_id, "test_arbitration")
+                                _phase(c, "test_arbitration")
                             set_llm_context(db_engine=engine, project_id=project_id,
                                             run_id=run_id, stage="review_code")
                             a_arb, m_arb = _route("review_code")
@@ -2612,7 +2622,7 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                                 # ONLY the test-author lane may touch the oracle — never the
                                 # implementer's session, so `coder_did_not_edit_tests` keeps meaning.
                                 with _transaction(engine) as c:
-                                    _set_phase(c, run_id, "write_tests")
+                                    _phase(c, "write_tests")
                                 set_llm_context(db_engine=engine, project_id=project_id,
                                                 run_id=run_id, stage="write_tests")
                                 a_ta, m_ta = _route("write_tests")
@@ -2636,7 +2646,7 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                         emit_event(c, project_id, "code_task.inrun_convergence_round", "boss",
                                    "code_task_run", run_id,
                                    {"round": round_i, "of": inrun_max, "failing_gates": failing})
-                        _set_phase(c, run_id, "implement")
+                        _phase(c, "implement")
                     # A TEST_WRONG round amends only the oracle — there is nothing for the
                     # implementer to do, and resuming it with an empty brief invites churn.
                     if finding_bits:
@@ -2670,7 +2680,7 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                                   if not _is_test_path(fc.path)] or impl_files
                     if "code_review_passed" in failing:
                         with _transaction(engine) as c:
-                            _set_phase(c, run_id, "review_code")
+                            _phase(c, "review_code")
                         set_llm_context(db_engine=engine, project_id=project_id,
                                         run_id=run_id, stage="review_code")
                         rr = review_agent.run_role(
@@ -2688,7 +2698,7 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                         gates["code_review_passed"] = _rev_pass
                     if "consistent" in failing:
                         with _transaction(engine) as c:
-                            _set_phase(c, run_id, "consistency_check")
+                            _phase(c, "consistency_check")
                         set_llm_context(db_engine=engine, project_id=project_id,
                                         run_id=run_id, stage="consistency_check")
                         rc2 = consistency_agent.run_role(
@@ -2771,7 +2781,7 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                         if gate != "code_review_passed":
                             continue
                         with _transaction(engine) as c:
-                            _set_phase(c, run_id, "review_code")
+                            _phase(c, "review_code")
                         set_llm_context(db_engine=engine, project_id=project_id,
                                         run_id=run_id, stage="review_code")
                         rr = review_agent.run_role(
@@ -2922,21 +2932,19 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                               "'tests_strong_enough' failed, STRENGTHEN the tests so a one-line "
                               "mutation to the logic is caught."))
                 with _transaction(engine) as c:
-                    c.execute(sql(
-                        "UPDATE code_task_runs SET status='repairing', phase='done', error=:e, "
-                        "finalize_ctx=COALESCE(finalize_ctx, '{}'::jsonb) || jsonb_build_object("
-                        "  'review_repair_next_run', CAST(:nx AS text), "
-                        "  'review_repair_round', CAST(:rd AS int), "
-                        # THE GATES, AS DATA. They were written into the error STRING only
-                        # ("...(gates: ['existing_tests_intact', ...])"), so a later retry asking
-                        # "which stages are actually stale?" found nothing structured and fell
-                        # back to replaying the whole pipeline. Every path that ends a run on
-                        # failing gates must record them in a key a machine can read.
-                        "  'failing_gates', CAST(:fg AS JSONB)), updated_at=now() WHERE id=:id"),
-                        {"e": f"Auto review-repair round {rounds_used + 1} (gates: {failing}); "
-                              f"iterating autonomously in {nxt.get('run_id')}.",
-                         "fg": json.dumps(list(failing)),
-                         "nx": nxt.get("run_id"), "rd": rounds_used + 1, "id": run_id})
+                    # Fenced: a stale execution must not be able to declare a repair round.
+                    if not _fenced_status(
+                            "repairing",
+                            "phase='done', error=:e, finalize_ctx=COALESCE(finalize_ctx,'{}'::jsonb) "
+                            "|| jsonb_build_object('review_repair_next_run', CAST(:nx AS text), "
+                            "'review_repair_round', CAST(:rd AS int), "
+                            "'failing_gates', CAST(:fg AS JSONB))",
+                            {"e": f"Auto review-repair round {rounds_used + 1} (gates: {failing}); "
+                                  f"iterating autonomously in {nxt.get('run_id')}.",
+                             "fg": json.dumps(list(failing)),
+                             "nx": nxt.get("run_id"), "rd": rounds_used + 1}):
+                        emit_event(c, project_id, "code_task.terminal_write_refused", "boss",
+                                   "code_task_run", run_id, {"attempted": "repairing"})
                 return {"status": "repairing", "done": True, "review_repair": True,
                         "next_run_id": nxt.get("run_id"), "round": rounds_used + 1,
                         "failing_gates": failing}
@@ -2987,8 +2995,9 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                      if _nonfinal_slice else "gate passed; PR suppressed (open_pr=false)"),
                     run_id=run_id,
                 )
-                c.execute(sql("UPDATE code_task_runs SET status='completed', phase='done', "
-                               "updated_at=now() WHERE id=:id"), {"id": run_id})
+                if not _fenced_status("completed", "phase='done'"):
+                    emit_event(c, project_id, "code_task.terminal_write_refused", "boss",
+                               "code_task_run", run_id, {"attempted": "completed_no_pr"})
                 emit_event(c, project_id, "code_task.completed_no_pr", "boss",
                            "code_task_run", run_id,
                            {"quality_gate_id": qg_id,
@@ -2999,7 +3008,7 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     "pr_suppressed": True, "decomposition_nonfinal": _nonfinal_slice}
 
         with _transaction(engine) as c:
-            _set_phase(c, run_id, "opening_pr")
+            _phase(c, "opening_pr")
             # The budget reservation is taken for 45 minutes at run start. propose_pull_request
             # BLOCKS when it has expired ("Missing active reservation for PR proposal"), so any
             # run longer than 45 minutes could not open a PR at all — regardless of how good the
