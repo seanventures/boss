@@ -1968,6 +1968,17 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             _cross_run_repair = (root_run != run_id) and attempt == 0
             if attempt == 0 and not _cross_run_repair:
                 impl_prompt = base_impl_prompt
+                _iref = getattr(sandbox, "integration_ref", None)
+                if _iref:
+                    impl_prompt = impl_prompt + (
+                        f"\n\n=== INTEGRATION BRANCH AVAILABLE ===\n"
+                        f"`{_iref}` is fetched in this repo and holds work merged since this "
+                        "branch was cut. If your task refers to code you cannot find, it is "
+                        f"probably there: inspect it with `git show {_iref}:<path>` or "
+                        f"`git diff HEAD..{_iref} --stat`, and merge it in with "
+                        f"`git merge {_iref}` if the task asks you to combine or reconcile "
+                        "work. Resolve any conflicts yourself and keep BOTH sides' "
+                        "functionality unless told otherwise.")
             else:
                 _ev = evidence_text
                 if _cross_run_repair and not (_ev or "").strip():

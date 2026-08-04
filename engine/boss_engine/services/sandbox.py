@@ -127,6 +127,26 @@ class EphemeralSandbox:
         self._write_local_excludes()
         self.base_sha = self._git(["rev-parse", "HEAD"]).strip()
 
+        # FETCH THE INTEGRATION BRANCH so an agent can reconcile against it.
+        # A lineage branch is cloned --depth 1 --branch X, so the agent's world is that branch
+        # and nothing else. Asked to merge two apps where one lives on the integration branch,
+        # it saw one app and correctly left one app — twice, for $20, because the instruction
+        # named a directory that was not in its working tree. GitHub's update-branch declines
+        # when there is a real conflict, so tier 1 cannot help either.
+        # Fetching it costs one shallow fetch and gives the agent something to actually merge.
+        # Best-effort: a repo without the branch, or no network for it, proceeds as before.
+        self.integration_ref = None
+        integration = (getattr(self.settings, "sandbox_integration_branch", None)
+                       or "main")
+        if base_branch != integration:
+            try:
+                self._git(["fetch", "--depth", str(depth), "origin",
+                           f"{integration}:refs/remotes/origin/{integration}"],
+                          redact=token)
+                self.integration_ref = f"origin/{integration}"
+            except Exception:  # noqa: BLE001 — never fail provisioning over this
+                self.integration_ref = None
+
         self.work_branch = work_branch or f"boss/{self.task_id}"
         # A feedback-iteration clones its own accumulated branch (base_branch == work_branch),
         # so it is already checked out — `checkout -b` would fail on an existing branch. In
