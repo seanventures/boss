@@ -323,6 +323,51 @@ class MemberDirectoryService:
             payload["project_id"] = project_id
         return payload
 
+    def _mirror_to_org(self, connection: Connection, *, project_id: str, member_id: str,
+                       display_name: str, member_type: str, role_keys: list[str],
+                       permissions: list[str], actor: str) -> None:
+        """Write the same member at ORG scope, which is what decision approval reads.
+
+        Best-effort by construction: a project whose org cannot be resolved still gets its
+        project-scoped member. Failing member creation over a mirror would be worse than the
+        divergence it prevents.
+        """
+        try:
+            # Use the EXISTING resolver, not a hand-rolled query. There is no projects.org_id
+            # column — the link is projects -> workspaces -> orgs — and the first version of
+            # this mirror invented one, which would have silently written nothing and left the
+            # very hole it was added to close. Same lesson as the rest of today: reuse the
+            # decision that already exists rather than writing a second one.
+            org_id = self.org_id_for_project(connection, project_id)
+            if not org_id:
+                return
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO org_members (
+                        id, org_id, member_id, display_name, member_type, role_keys,
+                        permissions, status, created_by
+                    ) VALUES (
+                        :id, :org_id, :member_id, :display_name, :member_type,
+                        CAST(:role_keys AS JSONB), CAST(:permissions AS JSONB), 'active', :by
+                    )
+                    ON CONFLICT (id) DO UPDATE
+                    SET display_name = EXCLUDED.display_name,
+                        member_type = EXCLUDED.member_type,
+                        role_keys = EXCLUDED.role_keys,
+                        permissions = EXCLUDED.permissions,
+                        status = 'active',
+                        updated_at = now()
+                    """
+                ),
+                {"id": f"om_{org_id}_{member_id}", "org_id": org_id, "member_id": member_id,
+                 "display_name": display_name, "member_type": member_type,
+                 "role_keys": json.dumps(role_keys),
+                 "permissions": json.dumps(permissions), "by": actor},
+            )
+        except Exception:  # noqa: BLE001 — never fail member creation over the mirror
+            pass
+
     def upsert_member(
         self,
         connection: Connection,
@@ -395,6 +440,17 @@ class MemberDirectoryService:
                     "created_by": actor,
                 },
             )
+            # MIRROR INTO ORG SCOPE. The decision-approval path reads org_members, and nothing
+            # ever wrote to it — the table was EMPTY, so every approval failed with
+            # ProjectMemberNotFoundError, including `ceo`. It reads like an access-control
+            # decision, which is why it looked like a permissions problem rather than an
+            # unpopulated table. One member creation must populate both scopes, or they diverge
+            # again the moment anyone adds a member.
+            self._mirror_to_org(
+                connection, project_id=project_id, member_id=normalized_member_id,
+                display_name=normalized_display_name, member_type=normalized_type,
+                role_keys=normalized_roles, permissions=normalized_permissions, actor=actor)
+
             install_status = "updated" if existing else "created"
             if emit_install_event:
                 emit_event(
