@@ -943,12 +943,27 @@ def run_worker_cycle(client: ControlPlaneClient, settings: WorkerSettings) -> bo
                     settings.worker_id, job.id, job.lease_token,
                     settings.lease_ttl_seconds,
                 )
-            except Exception:  # noqa: BLE001 — a transient heartbeat failure must not kill the job
+            except Exception as exc:  # noqa: BLE001
+                # A 409 is NOT transient: the control plane is telling us this lease now belongs
+                # to somebody else, because ours expired and another worker reclaimed the job.
+                # Swallowing it left BOTH workers executing the same run — measured on
+                # job_2fbe88e6 (attempt 3/3): worker-local kept running and heartbeating into
+                # 409s while worker-local-3 owned the lease, both writing phases, so the run's
+                # phase moved backwards and stages re-ran. Stop renewing and signal the job.
+                if "409" in str(exc) or "Conflict" in str(exc):
+                    LOGGER.error(
+                        "lease_lost worker_id=%s job_id=%s — another worker owns this lease; "
+                        "abandoning our execution to avoid duplicate concurrent work",
+                        settings.worker_id, job.id,
+                    )
+                    lease_lost.set()
+                    return
                 LOGGER.warning(
                     "heartbeat_renew_failed worker_id=%s job_id=%s",
                     settings.worker_id, job.id,
                 )
 
+    lease_lost = threading.Event()
     hb_thread = threading.Thread(target=_renew_lease, name=f"lease-hb-{job.id}", daemon=True)
     hb_thread.start()
 

@@ -1400,6 +1400,16 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
             accumulated[fc.path] = fc.content
         guest_base = work_branch
 
+    _lease_owner_at_start: dict[str, Optional[str]] = {"v": None}
+
+    def _lease_owner_now() -> Optional[str]:
+        try:
+            with _transaction(engine) as c:
+                return c.execute(sql(
+                    "SELECT lease_owner FROM jobs WHERE id=:j"), {"j": job_id}).scalar()
+        except Exception:  # noqa: BLE001
+            return _lease_owner_at_start["v"]  # unknown -> assume unchanged, never false-abort
+
     def _abort_if_cancelled(where: str) -> None:
         """Stop a run the operator cancelled. Cancellation was a DB update nobody read: one
         cancelled run kept executing for 40 minutes and $6.73 afterwards, and cancelled runs
@@ -1413,6 +1423,20 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
             return
         if st == "cancelled":
             raise CodeTaskCancelled(f"run cancelled by operator (detected at {where})")
+        # DUPLICATE-EXECUTION GUARD. If another worker has taken this job's lease, THIS
+        # execution is a duplicate and must stop. Measured on job_2fbe88e6: a lease expired,
+        # a second worker reclaimed it, the first kept running, and both executed the same
+        # stages — two write_tests completed 29 seconds apart, 6 agent processes on one task,
+        # 87 minutes with no implementation. The worker-side 409 check catches this only when
+        # a heartbeat happens to fire; checking at every stage boundary makes it structural.
+        if _lease_owner_at_start["v"] is None:
+            _lease_owner_at_start["v"] = _lease_owner_now()
+        else:
+            owner = _lease_owner_now()
+            if owner is not None and owner != _lease_owner_at_start["v"]:
+                raise CodeTaskCancelled(
+                    f"lease reassigned to {owner!r} (was {_lease_owner_at_start['v']!r}); "
+                    f"abandoning this duplicate execution at {where}")
 
     def _rescue_pr(reason: str) -> Optional[str]:
         """Open a [partial] PR for whatever this run built. Safe to call from ANY exit.
@@ -1704,7 +1728,13 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
         # the tests are actually stale: if none of the test-related gates failed, the suite stood
         # up to the run and the repair's job is the CODE. Skipping is only safe when tests are
         # genuinely present on the branch — otherwise there is nothing to reuse.
+        # A run re-entered by lease reclaim must honour ITS OWN completed_stages, not only a
+        # parent's. Reusing the design on re-entry (design_reused_own) was half the fix:
+        # crun_c867b12a was re-entered twice, correctly skipped the design chain both times,
+        # and then re-ran write_tests both times because completed_stages was consulted only
+        # for retries. A stage this run already finished is finished.
         _resume_done = set(fctx.get("resume_completed_stages") or [])
+        _resume_done |= {str(s) for s in (fctx.get("completed_stages") or [])}
         # `preexisting_tests` means THE REPO HAS TESTS — not that THIS LINEAGE wrote any.
         # Skipping on it alone shipped a calculator and a stock tracker straight to implement
         # with no tests of their own, because boss-sandbox's main branch happens to contain 18
@@ -1714,8 +1744,10 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str) -> dic
         # write_tests, or a real gate verdict was reached (which requires a suite to judge).
         _lineage_wrote_tests = bool(
             "write_tests" in _resume_done or fctx.get("prior_failing_gates"))
-        if (do_separate_tests and root_run != run_id and preexisting_tests
-                and _lineage_wrote_tests
+        # This run finishing write_tests is direct evidence — it does not need a lineage.
+        _own_tests_done = "write_tests" in {str(s) for s in (fctx.get("completed_stages") or [])}
+        if (do_separate_tests and (_own_tests_done or (root_run != run_id and preexisting_tests))
+                and (_own_tests_done or _lineage_wrote_tests)
                 and ("write_tests" in _resume_done
                      or not _repair_needs_write_tests(
                          fctx.get("prior_failing_gates"),

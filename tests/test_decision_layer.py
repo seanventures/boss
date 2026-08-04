@@ -684,11 +684,46 @@ def t_resume_after_system_failure() -> None:
 
 
 # --------------------------------------------------------------------------- #
+# 15. DUPLICATE EXECUTION. job_2fbe88e6: a lease expired, a second worker
+#     reclaimed the job, and the FIRST kept running. Both executed the same
+#     stages — two write_tests finished 29 seconds apart, 6 agent processes on
+#     one task, 87 minutes and not one line of implementation. Losing a lease
+#     has to stop the loser.
+# --------------------------------------------------------------------------- #
+def t_duplicate_execution_guard() -> None:
+    import inspect
+    from boss_engine.services import governed_code_task_service as g
+    src = inspect.getsource(g)
+
+    check_true("guard: pipeline reads the job's current lease owner",
+               "def _lease_owner_now" in src)
+    check_true("guard: it is checked at stage boundaries, not only on heartbeat",
+               "lease reassigned to" in src)
+    check_true("guard: a reassigned lease aborts this execution",
+               "abandoning this duplicate execution" in src)
+    # Unknown ownership must NEVER abort a legitimate run — a DB blip would otherwise kill work.
+    check_true("guard: unknown owner does not false-abort",
+               "never false-abort" in src)
+
+    from apps.worker.boss_worker import runner as r
+    rsrc = inspect.getsource(r)
+    check_true("worker: a 409 heartbeat is treated as lease LOSS, not a transient error",
+               "lease_lost" in rsrc)
+    check_true("worker: it stops renewing and abandons the job",
+               "abandoning our execution to avoid duplicate concurrent work" in rsrc)
+
+    # The reason this was missed for so long, encoded so it cannot regress.
+    check("worker: heartbeat failures are no longer ALL swallowed as transient",
+          "except Exception:  # noqa: BLE001 — a transient heartbeat failure must not kill the job"
+          in rsrc, False)
+
+
+# --------------------------------------------------------------------------- #
 def main() -> int:
     for fn in (t_risk_tier, t_gate_action, t_inconclusive, t_preview_entrypoint,
                t_regression_floor, t_context_scoping, t_preflight, t_rate_limiter, t_advisory_gate, t_preview_precondition, t_repair_resume,
                t_skipped_seat_semantics, t_preview_app_choice,
-               t_resume_after_system_failure):
+               t_resume_after_system_failure, t_duplicate_execution_guard):
         try:
             fn()
         except Exception as exc:  # a crash in a decision fn is itself a failure
