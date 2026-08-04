@@ -3799,3 +3799,85 @@ ALTER TABLE pipeline_profiles ADD COLUMN IF NOT EXISTS panel_checks JSONB;
 -- state_version makes contention visible after the fact — it jumps in bursts under a race.
 ALTER TABLE code_task_runs ADD COLUMN IF NOT EXISTS owner_token TEXT;
 ALTER TABLE code_task_runs ADD COLUMN IF NOT EXISTS state_version INTEGER NOT NULL DEFAULT 0;
+
+-- ===========================================================================
+-- TASK SHEPHERD (docs/product/TASK_SHEPHERD_DESIGN.md)
+-- An internal AI developer that owns a task from "asked for" to "merged, or a
+-- human has been asked one clear question". Grounded in the 2026-08-03/04
+-- session where 58% of spend ($38.37 of $66.65) went to runs producing nothing,
+-- all of it operational rather than coding failure.
+-- ===========================================================================
+
+-- What has been tried for a task, and what remains. THIS is what bounds the
+-- shepherd: a remedy may be used once per task, so termination is a property of
+-- the ledger rather than of the model's judgement.
+CREATE TABLE IF NOT EXISTS shepherd_ledger (
+  id             TEXT PRIMARY KEY,
+  project_id     TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  task_ref       TEXT NOT NULL,              -- crun_... the shepherd is shepherding
+  failure_class  INTEGER NOT NULL,
+  remedy_id      TEXT NOT NULL,
+  status         TEXT NOT NULL DEFAULT 'available',  -- available|used|blocked
+  used_at        TIMESTAMPTZ,
+  cost_usd_micros BIGINT NOT NULL DEFAULT 0,
+  outcome        TEXT,
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (task_ref, failure_class, remedy_id)
+);
+CREATE INDEX IF NOT EXISTS idx_shepherd_ledger_task ON shepherd_ledger(task_ref, status);
+
+-- The reasoning itself — the primary artifact, and what the console renders.
+-- predicted_* and actual_* are both stored so "is it actually reasoning?" is a
+-- measurable question (calibration) rather than an impression.
+CREATE TABLE IF NOT EXISTS shepherd_reasoning (
+  id                TEXT PRIMARY KEY,
+  project_id        TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  task_ref          TEXT NOT NULL,
+  step_no           INTEGER NOT NULL,
+  observe           TEXT NOT NULL,
+  signals           JSONB NOT NULL DEFAULT '[]'::jsonb,
+  hypothesis        TEXT,
+  confidence        NUMERIC(3,2),
+  check_result      TEXT,                    -- a hypothesis must be CHECKED, not asserted
+  check_confirmed   BOOLEAN,
+  failure_class     INTEGER,
+  remedy_chosen     TEXT,
+  rationale         TEXT,
+  predicted_cost_usd_micros BIGINT,
+  predicted_outcome TEXT,
+  actual_cost_usd_micros    BIGINT,
+  actual_outcome    TEXT,
+  stopped_because   TEXT,                    -- success|ledger|loop|budget|human|deadline
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (task_ref, step_no)
+);
+CREATE INDEX IF NOT EXISTS idx_shepherd_reasoning_task ON shepherd_reasoning(task_ref, step_no);
+
+-- One decision-shaped question for a human. Never a log dump: options are
+-- concrete and each carries its cost.
+CREATE TABLE IF NOT EXISTS shepherd_escalations (
+  id           TEXT PRIMARY KEY,
+  project_id   TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  task_ref     TEXT NOT NULL,
+  question     TEXT NOT NULL,
+  options      JSONB NOT NULL DEFAULT '[]'::jsonb,
+  evidence     JSONB NOT NULL DEFAULT '{}'::jsonb,
+  status       TEXT NOT NULL DEFAULT 'open',   -- open|answered|withdrawn
+  answered_by  TEXT,
+  answer       TEXT,
+  answered_at  TIMESTAMPTZ,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_shepherd_escalations_open ON shepherd_escalations(project_id, status);
+
+-- Why a shepherd was told to wait. Cross-task interference is the coordinator's
+-- job: merging PR #66 made #67 and #68 CONFLICTING instantly, which no per-task
+-- shepherd could have seen.
+CREATE TABLE IF NOT EXISTS coordinator_rulings (
+  id          TEXT PRIMARY KEY,
+  project_id  TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  subject     JSONB NOT NULL DEFAULT '[]'::jsonb,   -- task refs the ruling covers
+  ruling      TEXT NOT NULL,                        -- proceed|hold|sequence|block
+  rationale   TEXT NOT NULL,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
