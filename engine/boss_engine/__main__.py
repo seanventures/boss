@@ -23,6 +23,34 @@ import sys
 DEFAULT_PROJECT = os.environ.get("BOSS_PROJECT_ID", "boss-dogfood")
 
 
+def _postgres_ports(ctx):
+    """Postgres-backed ports for a CLI/MCP process, mirroring what the API builds at startup.
+
+    Falls back to the OSS defaults for a community edition, which is exactly what
+    apps/api/app/bootstrap_ports.build_ports does — the two must agree, or the same tool
+    behaves differently depending on which process invoked it.
+    """
+    from .ports import EnginePorts
+
+    edition = str(getattr(ctx.settings, "boss_edition", "community")).strip().lower()
+    if edition not in ("enterprise", "enterprise_plus", "ent"):
+        return EnginePorts.oss_defaults(ctx.settings)
+    try:
+        from apps.api.app.adapters_enterprise import (
+            PostgresBudgetPort, PostgresDecisionSink, PostgresEntitlementPort,
+            PostgresEventSink, PostgresPersistence,
+        )
+    except Exception:  # noqa: BLE001 — the engine must not hard-depend on the api package
+        return EnginePorts.oss_defaults(ctx.settings)
+    return EnginePorts(
+        budget=PostgresBudgetPort(ctx.settings),
+        entitlement=PostgresEntitlementPort(ctx.settings),
+        persistence=PostgresPersistence(ctx.engine),
+        events=PostgresEventSink(),
+        decisions=PostgresDecisionSink(),
+    )
+
+
 def _ctx():
     from .context import EngineContext
 
@@ -31,11 +59,19 @@ def _ctx():
     # DATABASE_URL is configured we deliberately install the OSS default ports
     # (in-memory persistence, no-op budget, allow-all entitlements) instead of
     # letting port consumers pick them up as a silent per-service fallback.
-    if not os.environ.get("DATABASE_URL"):
-        from .ports import EnginePorts, configure_engine_ports, get_engine_ports
+    # Ports must be configured on BOTH paths. This guard previously fired only when
+    # DATABASE_URL was ABSENT, so the real path — an MCP server against Postgres — ran with
+    # no ports at all, and every tool routing through code_task_service died with
+    # "engine ports are not configured". That is why extend_code_task and retry_code_task
+    # had never worked from MCP: they were reachable, listed, and structurally unable to run.
+    from .ports import EnginePorts, configure_engine_ports, get_engine_ports
 
-        if get_engine_ports() is None:
+    if get_engine_ports() is None:
+        if os.environ.get("DATABASE_URL"):
+            configure_engine_ports(_postgres_ports(ctx))
+        else:
             configure_engine_ports(EnginePorts.oss_defaults(ctx.settings))
+    if not os.environ.get("DATABASE_URL"):
         print(
             "boss-engine: DATABASE_URL is not set — running with the standalone "
             "OSS ports (in-memory persistence, no-op budget). DB-backed tools "

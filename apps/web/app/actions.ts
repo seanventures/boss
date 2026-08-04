@@ -2363,6 +2363,62 @@ export async function createCodeTaskAction(formData: FormData): Promise<void> {
 
 // Per-stage model-call activity for a code task (the internal detail behind each phase).
 // Returns [] on any failure so the activity panel degrades gracefully in the UI.
+
+/**
+ * Task Shepherd console data, fetched SERVER-side.
+ *
+ * The first cut fetched from the browser and rendered nothing: the API sends no
+ * CORS headers, so a cross-origin call from localhost:3001 to the api on :8000 is
+ * blocked before it is made. Every other panel in this console goes through a
+ * server action for exactly this reason — worth matching rather than adding CORS
+ * to the API just for one panel.
+ */
+export async function getShepherdOverviewAction(projectId?: string): Promise<any> {
+  const pid = projectId || PROJECT_ID;
+  try {
+    const res = await fetch(
+      `${API_URL}/v1/shepherd/overview?project_id=${encodeURIComponent(pid)}&limit=40`,
+      { headers: authHeaders(), cache: "no-store" },
+    );
+    if (!res.ok) return { error: `overview ${res.status}` };
+    return await res.json();
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+export async function shepherdSweepAction(projectId?: string): Promise<any> {
+  const pid = projectId || PROJECT_ID;
+  try {
+    const res = await fetch(`${API_URL}/v1/shepherd/sweep`, {
+      method: "POST",
+      headers: { ...authHeaders(), "content-type": "application/json" },
+      body: JSON.stringify({ project_id: pid, limit: 20 }),
+    });
+    revalidatePath("/");
+    return await res.json();
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+export async function shepherdAnswerAction(escalationId: string, answer: string): Promise<any> {
+  try {
+    const res = await fetch(
+      `${API_URL}/v1/shepherd/escalations/${encodeURIComponent(escalationId)}/answer`,
+      {
+        method: "POST",
+        headers: { ...authHeaders(), "content-type": "application/json" },
+        body: JSON.stringify({ answer, actor: "operator" }),
+      },
+    );
+    revalidatePath("/");
+    return await res.json();
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
 export async function getCodeTaskActivityAction(runId: string): Promise<LlmCallRow[]> {
   try {
     const res = await client.getCodeTaskActivity(runId);

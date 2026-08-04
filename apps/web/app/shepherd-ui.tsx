@@ -18,8 +18,9 @@ import { useEffect, useState } from "react";
  *     pattern-matching with a confident tone, not reasoning.
  */
 
-const API = process.env.NEXT_PUBLIC_BOSS_API_URL ?? "";
-const PROJECT = process.env.NEXT_PUBLIC_BOSS_PROJECT_ID ?? "boss-dogfood";
+import {
+  getShepherdOverviewAction, shepherdAnswerAction, shepherdSweepAction,
+} from "./actions";
 
 type Reasoning = {
   id: string; task_ref: string; step_no: number; observe: string;
@@ -53,20 +54,22 @@ type Overview = {
 const usd = (micros: number | null | undefined) =>
   micros == null ? "—" : `$${(micros / 1e6).toFixed(2)}`;
 
-export function ShepherdConsole() {
-  const [data, setData] = useState<Overview | null>(null);
+export function ShepherdConsole({ initial }: { initial?: Overview | null }) {
+  // Server-rendered on first paint. The first version relied entirely on a browser fetch and
+  // showed "Loading shepherd…" forever if anything about that call failed — including a CORS
+  // block that is invisible outside the browser. Data arrives with the page; the client only
+  // refreshes it.
+  const [data, setData] = useState<Overview | null>(initial ?? null);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
+  // Through a SERVER ACTION, not a browser fetch: the api sends no CORS headers, so a
+  // cross-origin call from the console is blocked before it leaves. Every other panel here
+  // does the same.
   const load = async () => {
-    try {
-      const r = await fetch(`${API}/v1/shepherd/overview?project_id=${PROJECT}&limit=40`);
-      if (!r.ok) throw new Error(`overview ${r.status}`);
-      setData(await r.json());
-      setErr(null);
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
-    }
+    const d = await getShepherdOverviewAction();
+    if (d?.error) setErr(String(d.error));
+    else { setData(d as Overview); setErr(null); }
   };
   useEffect(() => {
     load();
@@ -76,20 +79,11 @@ export function ShepherdConsole() {
 
   const sweep = async () => {
     setBusy(true);
-    try {
-      await fetch(`${API}/v1/shepherd/sweep`, {
-        method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify({ project_id: PROJECT, limit: 20 }),
-      });
-      await load();
-    } finally { setBusy(false); }
+    try { await shepherdSweepAction(); await load(); } finally { setBusy(false); }
   };
 
   const answer = async (id: string, choice: string) => {
-    await fetch(`${API}/v1/shepherd/escalations/${encodeURIComponent(id)}/answer`, {
-      method: "POST", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ answer: choice, actor: "operator" }),
-    });
+    await shepherdAnswerAction(id, choice);
     await load();
   };
 

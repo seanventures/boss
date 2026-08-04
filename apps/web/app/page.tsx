@@ -127,6 +127,7 @@ import { MeetingsHome } from "./meeting-room-ui";
 import { fetchCodeTasksFeed, fetchPreviews } from "../lib/code-tasks";
 import { CodeTasksHome } from "./code-tasks-ui";
 import { ShepherdConsole } from "./shepherd-ui";
+import { getShepherdOverviewAction } from "./actions";
 import { fetchReliabilityFeed } from "../lib/reliability";
 import { fetchCostInsights, fetchLlmSpend } from "../lib/budget-status";
 import { CostInsightsCard, LlmSpendCard, BudgetThresholdsCard } from "./cost-governance-ui";
@@ -497,6 +498,9 @@ function getParam(value: string | string[] | undefined): string | undefined {
 }
 
 export default async function HomePage({ searchParams }: HomePageProps) {
+  // Fetched here so the Task Shepherd panel arrives WITH the page. Never fatal: a failure
+  // yields null and the panel says so, rather than the whole console failing to render.
+  const shepherdOverview = await getShepherdOverviewAction().catch(() => null);
   const resolvedSearchParams = searchParams ? await searchParams : undefined;
   const requestedProjectId =
     getParam(resolvedSearchParams?.project_id) ?? PROJECT_ID;
@@ -6205,7 +6209,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               <h2>An internal AI developer that owns a task until it ships — or asks you one clear question.</h2>
             </div>
           </div>
-          <ShepherdConsole />
+          <ShepherdConsole initial={shepherdOverview} />
         </section>
 
         <section className="panel-stack" data-area="code_tasks" aria-label="Code tasks">
