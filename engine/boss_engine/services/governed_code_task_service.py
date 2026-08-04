@@ -1471,8 +1471,15 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                                {"id": run_id}).scalar()
         except Exception:  # noqa: BLE001 — never let the check itself break a run
             return
-        if st == "cancelled":
-            raise CodeTaskCancelled(f"run cancelled by operator (detected at {where})")
+        # ANY terminal status stops this executor, not just `cancelled`.
+        # crun_ccfc0212 was marked FAILED with its job deadlettered, and kept working: it
+        # spent a further $5.63 across review_code, write_tests and a $4.01 implement,
+        # delivering to a run that had already ended. Cancellation was covered and fencing was
+        # covered; "the run is finished and I am still going" was not — the same half-covered
+        # shape as the PR rescue being wired only to crashes.
+        if st in ("cancelled", "failed", "completed", "superseded"):
+            raise CodeTaskCancelled(
+                f"run is already terminal ({st}); stopping this executor at {where}")
         # DUPLICATE-EXECUTION GUARD. If another worker has taken this job's lease, THIS
         # execution is a duplicate and must stop. Measured on job_2fbe88e6: a lease expired,
         # a second worker reclaimed it, the first kept running, and both executed the same
