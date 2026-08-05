@@ -5535,7 +5535,11 @@ def delivery_execute_endpoint(deployment_run_id: str):
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
     from .services.delivery_pipeline import execute_deployment
-    return execute_deployment(engine, settings, deployment_run_id)
+    result = execute_deployment(engine, settings, deployment_run_id)
+    if result.get("status") == "not_found":
+        raise HTTPException(status_code=404,
+                            detail=f"no deployment run {deployment_run_id}")
+    return result
 
 
 @app.post("/v1/delivery/deployments/{deployment_run_id}/redeploy")
@@ -5550,9 +5554,16 @@ def delivery_redeploy_endpoint(deployment_run_id: str, payload: Optional[dict] =
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
     p = payload or {}
     from .services.delivery_pipeline import redeploy
-    return redeploy(engine, settings, deployment_run_id,
-                    commit_ref=(p.get("commit_ref") or None),
-                    actor=str(p.get("actor") or "operator"))
+    result = redeploy(engine, settings, deployment_run_id,
+                      commit_ref=(p.get("commit_ref") or None),
+                      actor=str(p.get("actor") or "operator"))
+    # A missing deployment is a 404, not a 200 carrying the word "not_found". A caller that
+    # checks the status code — which is most of them — would otherwise read a typo'd id as a
+    # successful redeploy.
+    if result.get("status") == "not_found":
+        raise HTTPException(status_code=404, detail=result.get("reason")
+                            or f"no deployment run {deployment_run_id}")
+    return result
 
 
 @app.get("/v1/delivery/targets/{target_id}/preflight")
