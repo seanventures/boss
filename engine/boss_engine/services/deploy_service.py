@@ -219,12 +219,46 @@ def _build_dist(settings: Settings, owner: str, repo: str, branch: str) -> Path:
     work = Path(tempfile.mkdtemp(prefix="boss-deploy-"))
     subprocess.run(["git", "clone", "--depth", "1", "--branch", branch, url, str(work)],
                    capture_output=True, text=True, timeout=180, check=True)
-    env = {**os.environ, "HOME": str(work), "npm_config_cache": str(work / ".npm"),
-           "npm_config_fund": "false", "npm_config_audit": "false"}
-    subprocess.run(["sh", "-lc", "npm ci --no-audit --no-fund && npm run build"],
-                   cwd=str(work), env=env, capture_output=True, text=True, timeout=900, check=True)
-    if not (work / "dist").is_dir():
-        raise RuntimeError("build did not produce ./dist")
+    # NOT EVERY APP HAS A BUILD. This ran `npm ci && npm run build` unconditionally and failed
+    # on the first real deployment: the stock app is deliberately no-build vanilla JS, with a
+    # package.json but no build script. Assuming a Node pipeline turns "nothing to build" into
+    # a deploy failure for exactly the simplest apps.
+    import json as _json
+
+    pkg = work / "package.json"
+    has_build = False
+    if pkg.is_file():
+        try:
+            has_build = bool((_json.loads(pkg.read_text()).get("scripts") or {}).get("build"))
+        except Exception:  # noqa: BLE001 — an unreadable package.json is "no build"
+            has_build = False
+
+    if has_build:
+        env = {**os.environ, "HOME": str(work), "npm_config_cache": str(work / ".npm"),
+               "npm_config_fund": "false", "npm_config_audit": "false"}
+        subprocess.run(["sh", "-lc", "npm ci --no-audit --no-fund && npm run build"],
+                       cwd=str(work), env=env, capture_output=True, text=True,
+                       timeout=900, check=True)
+        if not (work / "dist").is_dir():
+            raise RuntimeError("build script ran but did not produce ./dist")
+        return work
+
+    # No build step: the servable tree IS the source. Find the directory holding index.html —
+    # the same "prefer what this task built" question the preview resolver answers, so use its
+    # answer rather than inventing a second one.
+    if (work / "dist").is_dir():
+        return work
+    static_dir = None
+    for cand in sorted(work.glob("*/index.html")):
+        static_dir = cand.parent
+        break
+    if static_dir is None and (work / "index.html").is_file():
+        static_dir = work
+    if static_dir is None:
+        raise RuntimeError(
+            "no build script and no index.html found — nothing servable to deploy")
+    dist = work / "dist"
+    shutil.copytree(static_dir, dist)
     return work
 
 

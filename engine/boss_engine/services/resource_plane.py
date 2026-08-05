@@ -4304,11 +4304,22 @@ class ResourcePlaneService:
         commit_ref: Optional[str],
     ) -> Optional[dict[str, Any]]:
         target_kind = target["target_kind"].lower().replace("-", "_")
-        if target_kind in {"local", "local_process", "local_runner"}:
+        # `provider_account_id` identifies a CLOUD PROVIDER ACCOUNT — an AWS/GCP/Azure identity
+        # whose API this deployment will call. A host reached over SSH is not that: its
+        # credential is a key, declared in the target's secret_refs and checked by the
+        # connector's validate() before anything is attempted. Demanding a provider account
+        # for it blocked a target that was fully credentialed and ready, with an error naming
+        # a concept that does not apply.
+        #
+        # Kept narrow deliberately: cloud kinds still require an account, because there the
+        # account IS the credential and the quota boundary.
+        if target_kind in {"local", "local_process", "local_runner", "ssh", "container"}:
             return None
         provider_account_id = target["provider_account_id"]
         if not provider_account_id:
-            raise ValueError("Provider deployment targets require provider_account_id.")
+            raise ValueError(
+                f"Cloud deployment targets require provider_account_id "
+                f"(target_kind={target_kind!r}).")
         account = self.get_provider_account(
             connection,
             target["project_id"],
