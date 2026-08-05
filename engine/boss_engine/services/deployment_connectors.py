@@ -34,7 +34,7 @@ class DeploymentConnector(Protocol):
     def validate(self, target: dict, settings: Settings) -> list[str]: ...
     def plan(self, engine, settings: Settings, target: dict, run_id: str) -> dict: ...
     def apply(self, engine, settings: Settings, target: dict, run_id: str,
-              plan: dict) -> dict: ...
+              plan: dict, ref: Optional[str] = None) -> dict: ...
     def observe(self, target: dict, settings: Settings) -> dict: ...
     def rollback(self, engine, settings: Settings, target: dict,
                  to: dict) -> dict: ...
@@ -198,9 +198,14 @@ class SSHContainerConnector:
 
     # -- apply ------------------------------------------------------------------
     def apply(self, engine, settings: Settings, target: dict, run_id: str,
-              plan: dict) -> dict:
+              plan: dict, ref: Optional[str] = None) -> dict:
         """Place the artifact. Refuses if validate() is unhappy — a plan built on a broken
-        target is not worth executing, and finding out mid-transfer is worse."""
+        target is not worth executing, and finding out mid-transfer is worse.
+
+        `ref` is the commit the DEPLOYMENT asked for and outranks the code task's branch. The
+        two disagree as soon as the PR merges, and deploying the branch while recording the ref
+        made the console report a build that was not the one running.
+        """
         problems = self.validate(target, settings)
         if problems:
             return {"status": "blocked", "problems": problems}
@@ -209,7 +214,7 @@ class SSHContainerConnector:
 
         user, host, port = _split_ref(target.get("target_ref", ""))
         result = deploy_ssh(engine, settings, run_id, host=host, user=user, ssh_port=port,
-                            app_port=_app_port(target), name=target.get("app_name"))
+                            app_port=_app_port(target), name=target.get("app_name"), ref=ref)
         result["connector"] = self.kind
         return result
 

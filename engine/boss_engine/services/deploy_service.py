@@ -218,6 +218,16 @@ def _transfer_shell_cmd(*, work: Path, key_path: str, host: str, user: str, ssh_
     )
 
 
+def _head_sha(work: Path) -> Optional[str]:
+    """The commit actually checked out in the build tree, short form."""
+    try:
+        out = subprocess.run(["git", "-C", str(work), "rev-parse", "--short", "HEAD"],
+                             capture_output=True, text=True, timeout=30)
+        return (out.stdout or "").strip() or None
+    except Exception:  # noqa: BLE001 — an unknown SHA must not fail a deploy
+        return None
+
+
 def _rm_rf_cmd(path: str) -> str:
     """Remove a path that MAY contain root-owned files, from an unprivileged shell.
 
@@ -309,7 +319,8 @@ def _resolve_repo_branch(run: dict, settings: Settings) -> tuple[str, str, str]:
 
 
 def _build_dist(settings: Settings, owner: str, repo: str, branch: str,
-                changed: Optional[list[str]] = None) -> tuple[Path, str, str]:
+                changed: Optional[list[str]] = None,
+                ref: Optional[str] = None) -> tuple[Path, str, str]:
     """Prepare the deployable payload for a run's branch.
 
     Returns (root, mode, entry) where `root` always contains a `dist/` directory to transfer:
@@ -325,8 +336,43 @@ def _build_dist(settings: Settings, owner: str, repo: str, branch: str,
     url = clone_url_for(getattr(settings, "target_repo_host", "github") or "github",
                         owner, repo, token or "")
     work = Path(tempfile.mkdtemp(prefix="boss-deploy-"))
-    subprocess.run(["git", "clone", "--depth", "1", "--branch", branch, url, str(work)],
-                   capture_output=True, text=True, timeout=180, check=True)
+    if ref:
+        # An explicit ref WINS over the code task's branch. Those disagree the moment the PR
+        # merges: the branch is frozen at what the task built, while the deployment is asking
+        # for a merged commit. Cloning the branch while RECORDING commit_ref meant the console
+        # reported a build that was not the one running — a lie in exactly the field an
+        # operator uses to answer "which version is live".
+        #
+        # init+fetch rather than clone --branch because a ref may be a SHA, which
+        # `clone --branch` cannot take.
+        subprocess.run(["git", "init", "-q", str(work)], capture_output=True, text=True,
+                       timeout=60, check=True)
+        subprocess.run(["git", "-C", str(work), "remote", "add", "origin", url],
+                       capture_output=True, text=True, timeout=60, check=True)
+
+        # Fetching the ref directly is the cheap path and works for a branch, a tag or a FULL
+        # sha. It does NOT work for an abbreviated sha — the server cannot resolve one — and
+        # commit_ref is routinely stored short (`f07021e`), so this failed on the first real
+        # use. Falling back to a shallow history of the default branch lets git resolve the
+        # short sha LOCALLY, where abbreviations are meaningful.
+        direct = subprocess.run(["git", "-C", str(work), "fetch", "--depth", "1", "origin", ref],
+                                capture_output=True, text=True, timeout=180)
+        if direct.returncode == 0:
+            subprocess.run(["git", "-C", str(work), "checkout", "-q", "FETCH_HEAD"],
+                           capture_output=True, text=True, timeout=60, check=True)
+        else:
+            subprocess.run(["git", "-C", str(work), "fetch", "--depth", "200", "origin"],
+                           capture_output=True, text=True, timeout=300, check=True)
+            checked = subprocess.run(["git", "-C", str(work), "checkout", "-q", ref],
+                                     capture_output=True, text=True, timeout=60)
+            if checked.returncode != 0:
+                raise RuntimeError(
+                    f"cannot deploy ref {ref!r}: not fetchable directly and not found in the "
+                    f"last 200 commits of {owner}/{repo}. "
+                    f"{(checked.stderr or direct.stderr or '').strip()[:200]}")
+    else:
+        subprocess.run(["git", "clone", "--depth", "1", "--branch", branch, url, str(work)],
+                       capture_output=True, text=True, timeout=180, check=True)
     # NOT EVERY APP HAS A BUILD. This ran `npm ci && npm run build` unconditionally and failed
     # on the first real deployment: the stock app is deliberately no-build vanilla JS, with a
     # package.json but no build script. Assuming a Node pipeline turns "nothing to build" into
@@ -402,7 +448,8 @@ def _build_dist(settings: Settings, owner: str, repo: str, branch: str,
 
 
 def deploy_ssh(engine, settings: Settings, run_id: str, *, host: str, user: str = "root",
-               ssh_port: int = 22, app_port: int = 8080, name: Optional[str] = None) -> dict:
+               ssh_port: int = 22, app_port: int = 8080, name: Optional[str] = None,
+               ref: Optional[str] = None) -> dict:
     """Actuate the deploy plan on a real host: build dist -> transfer -> nginx -> health-gate.
     On transfer/docker/health failure after staging, ROLL BACK to the previous build (Phase 3).
     Gated behind the outward-action flag + an SSH key; NEVER touches a host otherwise."""
@@ -431,7 +478,11 @@ def deploy_ssh(engine, settings: Settings, run_id: str, *, host: str, user: str 
         from .preview_service import lineage_impl_files
 
         work, mode, entry = _build_dist(settings, owner, repo, branch,          # 1 build
-                                        changed=lineage_impl_files(engine, run))
+                                        changed=lineage_impl_files(engine, run), ref=ref)
+        # The SHA that is actually on disk, not the ref that was asked for. Reporting the
+        # request rather than the result is how commit_ref came to name a build that was
+        # never running.
+        deployed_sha = _head_sha(work) or (ref or branch)
         ct = _ssh(key_path, host, user, ssh_port, "docker version --format '{{.Server.Version}}'")
         if ct.returncode != 0:                                                  # 2 connection test
             raise RuntimeError(f"host unreachable or docker missing: {(ct.stderr or '')[:900]}")
@@ -480,7 +531,8 @@ def deploy_ssh(engine, settings: Settings, run_id: str, *, host: str, user: str 
         with begin(engine) as c:
             emit_event(c, project_id, "deploy.succeeded", "boss", "code_task_run", run_id,
                        {"app": app, "host": host, "url": url, "health": code})
-        return {"status": "deployed", "app": app, "host": host, "url": url, "health": code}
+        return {"status": "deployed", "app": app, "host": host, "url": url, "health": code,
+                "deployed_sha": deployed_sha}
     except Exception:
         # Best-effort restore if we mutated the host and then crashed before an explicit rollback.
         if needs_rollback and not rolled_back:

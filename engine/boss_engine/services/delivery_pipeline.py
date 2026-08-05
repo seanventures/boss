@@ -278,7 +278,9 @@ def execute_deployment(engine, settings: Settings, deployment_run_id: str, *,
                        deployment_run_id, {"connector": conn.kind,
                                            "domains": target.get("domains")})
 
-        applied = conn.apply(engine, settings, target, run_id, plan)
+        # The deployment's own commit_ref is what we promised to ship, so it is what gets
+        # built — not whatever the code task's branch happens to point at now.
+        applied = conn.apply(engine, settings, target, run_id, plan, ref=row.get("commit_ref"))
         health = conn.observe(target, settings)
         # The VERDICT is health, not the apply result.
         ok = bool(health.get("healthy"))
@@ -286,11 +288,15 @@ def execute_deployment(engine, settings: Settings, deployment_run_id: str, *,
         reason = None if ok else json.dumps(health)[:400]
 
         with begin(engine) as c:
+            # Record the SHA that was actually checked out. Storing the REQUESTED ref is how
+            # this field came to name a build that was never running.
             c.execute(sql("UPDATE deployment_runs SET status=:s, finished_at=now(), "
                           "health_check_results=CAST(:h AS JSONB), failure_reason=:r, "
+                          "commit_ref=COALESCE(:sha, commit_ref), "
                           "updated_at=now() WHERE id=:i"),
                       {"s": status, "h": json.dumps(health, default=str),
-                       "r": reason, "i": deployment_run_id})
+                       "r": reason, "i": deployment_run_id,
+                       "sha": (applied or {}).get("deployed_sha")})
             emit_event(c, project_id, f"delivery.{status}", actor, "deployment_run",
                        deployment_run_id,
                        {"healthy": ok, "applied": applied.get("status"),
