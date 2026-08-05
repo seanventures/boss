@@ -2387,6 +2387,41 @@ export async function getDeliveryPipelineAction(projectId?: string): Promise<any
   }
 }
 
+/** Retry THIS deployment run (same row) — for one that failed or was blocked. */
+export async function executeDeploymentAction(deploymentRunId: string): Promise<any> {
+  try {
+    const res = await fetch(
+      `${API_URL}/v1/delivery/deployments/${encodeURIComponent(deploymentRunId)}/execute`,
+      { method: "POST", headers: authHeaders(), cache: "no-store" },
+    );
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) return { error: body?.detail || `execute ${res.status}` };
+    return body;
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+/** Ship the same target again as a NEW run, preserving the previous run's history. */
+export async function redeployAction(deploymentRunId: string): Promise<any> {
+  try {
+    const res = await fetch(
+      `${API_URL}/v1/delivery/deployments/${encodeURIComponent(deploymentRunId)}/redeploy`,
+      {
+        method: "POST",
+        headers: { ...authHeaders(), "Content-Type": "application/json" },
+        body: JSON.stringify({ actor: "operator" }),
+        cache: "no-store",
+      },
+    );
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) return { error: body?.detail || `redeploy ${res.status}` };
+    return body;
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
 export async function getShepherdOverviewAction(projectId?: string): Promise<any> {
   const pid = projectId || PROJECT_ID;
   try {

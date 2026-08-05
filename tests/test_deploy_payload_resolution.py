@@ -142,8 +142,47 @@ def test_run_command_matches_the_mode() -> None:
               "external connectivity" in cmd and "docker rm -f" in cmd)
 
 
+def test_second_deploy_can_replace_what_the_first_one_left() -> None:
+    """A container writes into its bind mount as ROOT; the deploy user then cannot delete it.
+
+    The first deploy succeeded and the second died on
+    `rm: cannot remove '.../__pycache__/*.pyc': Permission denied`, stranding the app on its
+    first release. Two independent guards, because either alone is insufficient: stop creating
+    the files, AND be able to remove files we did not create (a SQLite file still appears).
+    """
+    rm = ds._rm_rf_cmd("/opt/boss-apps/stock-app/dist")
+    check("cheap path first", rm.startswith("rm -rf /opt/boss-apps/stock-app/dist"))
+    check("falls back to a ROOT container when something survives",
+          "docker run --rm" in rm and "alpine" in rm,
+          "an unprivileged rm cannot delete root-owned files; there must be a fallback")
+    check("fallback targets the mounted path, not the host path",
+          "/_x/dist" in rm)
+    check("never fails the deploy on cleanup", rm.rstrip().endswith("true"))
+
+    py = ds._docker_run_cmd("a", 3004, "/opt/boss-apps/a", "py", "s.py")
+    check("container does not write bytecode into the mount",
+          "-e PYTHONDONTWRITEBYTECODE=1" in py,
+          "root-owned __pycache__ is what broke the second deploy")
+    check("a persistent data mount exists outside the replaced tree",
+          "/opt/boss-apps/a/data:/data" in py and "-e DATA_DIR=/data" in py,
+          "without it, app state lives in the tree every deploy destroys")
+
+    # The destructive steps must ALL use the root-capable removal, not just the one that
+    # happened to fail first. A guard applied to one path is not a guard.
+    src = open("engine/boss_engine/services/deploy_service.py").read()
+    transfer = ds._transfer_shell_cmd(
+        work=Path("/tmp/w"), key_path="/tmp/k", host="h", user="u", ssh_port=22,
+        remote="/opt/boss-apps/a")
+    check("the transfer's replace is root-capable", "docker run --rm" in transfer)
+    check("the transfer creates the persistent data dir", "/data" in transfer)
+    check("rollback also uses the root-capable removal",
+          src.count("_rm_rf_cmd(remote") >= 3,
+          "transfer, rollback and staging must all use it")
+
+
 if __name__ == "__main__":
     for fn in (test_python_app_deploys_as_runtime_not_static,
+               test_second_deploy_can_replace_what_the_first_one_left,
                test_static_app_picks_the_one_this_task_built,
                test_ambiguous_repo_fails_closed,
                test_run_command_matches_the_mode):

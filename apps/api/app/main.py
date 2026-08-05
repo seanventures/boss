@@ -5538,6 +5538,23 @@ def delivery_execute_endpoint(deployment_run_id: str):
     return execute_deployment(engine, settings, deployment_run_id)
 
 
+@app.post("/v1/delivery/deployments/{deployment_run_id}/redeploy")
+def delivery_redeploy_endpoint(deployment_run_id: str, payload: Optional[dict] = None):
+    """Ship the same target again as a NEW deployment run.
+
+    Separate from /execute on purpose. /execute retries THIS run; /redeploy records a new one, so
+    "what is running and since when" stays answerable instead of being overwritten by its own
+    replacement.
+    """
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    p = payload or {}
+    from .services.delivery_pipeline import redeploy
+    return redeploy(engine, settings, deployment_run_id,
+                    commit_ref=(p.get("commit_ref") or None),
+                    actor=str(p.get("actor") or "operator"))
+
+
 @app.get("/v1/delivery/targets/{target_id}/preflight")
 def delivery_preflight_endpoint(target_id: str, project_id: str):
     """Is this target deployable right now, and if not exactly what is missing?

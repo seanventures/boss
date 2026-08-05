@@ -206,12 +206,35 @@ def _transfer_shell_cmd(*, work: Path, key_path: str, host: str, user: str, ssh_
     dest = shlex.quote(f"{user}@{host}")
     # remote is derived from sanitized _app_name; still quote for defense in depth.
     remote_q = shlex.quote(remote)
-    remote_cmd = f"rm -rf {remote_q}/dist && mkdir -p {remote_q} && tar xzf - -C {remote_q}"
+    # The tree being replaced may hold root-owned files written by the previous container.
+    # `data` is created by the deploy user so the container inherits a directory it can write
+    # without docker creating a root-owned one; it is never removed, which is the point of it.
+    remote_cmd = (f"{_rm_rf_cmd(remote + '/dist')} && mkdir -p {remote_q} {remote_q}/data && "
+                  f"tar xzf - -C {remote_q}")
     return (
         f"tar czf - -C {shlex.quote(str(work))} dist | ssh -i {shlex.quote(key_path)} "
         f"-o StrictHostKeyChecking=no -o BatchMode=yes -p {int(ssh_port)} {dest} "
         f"{shlex.quote(remote_cmd)}"
     )
+
+
+def _rm_rf_cmd(path: str) -> str:
+    """Remove a path that MAY contain root-owned files, from an unprivileged shell.
+
+    A container writes into its bind mount as root — `__pycache__`, a SQLite file, logs. The
+    deploy user then cannot delete them, so the NEXT deploy dies on `rm: Permission denied` and
+    the app is stuck on its first release forever. First deploy works, second fails: the same
+    shape as the key-deletion bug, and just as invisible until someone deploys twice.
+
+    Plain rm first because it is instant and covers the common case; a root container only when
+    something survived. Docker is already a hard requirement of this connector, so this borrows
+    a capability we know is present rather than adding sudo to the deploy user.
+    """
+    q = shlex.quote(path)
+    return (f"rm -rf {q} 2>/dev/null; "
+            f"[ -e {q} ] && docker run --rm -v {shlex.quote(os.path.dirname(path))}:/_x "
+            f"alpine:3 rm -rf {shlex.quote('/_x/' + os.path.basename(path))} >/dev/null 2>&1; "
+            f"true")
 
 
 def _docker_run_cmd(app: str, app_port: int, remote: str, mode: str = "static",
@@ -231,8 +254,16 @@ def _docker_run_cmd(app: str, app_port: int, remote: str, mode: str = "static",
     if mode == "py":
         # Mounted read-WRITE: the app keeps a SQLite file beside its source, and a read-only
         # mount turns every write into a 500 that a "/" health check would never see.
+        #
+        # PYTHONDONTWRITEBYTECODE stops the container littering root-owned __pycache__ into that
+        # mount. Without it the next deploy cannot delete the tree it must replace.
+        #
+        # DATA_DIR is a SEPARATE mount that deploys never touch, so an app can keep state that
+        # survives a release. Anything written under /app is replaced by the next deployment —
+        # which is correct for code and destructive for data.
         run = (f"docker run -d --name {app_q} --restart unless-stopped -p {int(app_port)}:80 "
-               f"-v {remote_q}/dist:/app -w /app -e PORT=80 -e HOST=0.0.0.0 "
+               f"-v {remote_q}/dist:/app -v {remote_q}/data:/data -w /app "
+               f"-e PORT=80 -e HOST=0.0.0.0 -e DATA_DIR=/data -e PYTHONDONTWRITEBYTECODE=1 "
                f"python:3.12-slim python {shlex.quote(entry)}")
     else:
         run = (f"docker run -d --name {app_q} --restart unless-stopped -p {int(app_port)}:80 "
@@ -261,7 +292,7 @@ def _rollback_remote(key_path: str, host: str, user: str, ssh_port: int, *, remo
     return _ssh(
         key_path, host, user, ssh_port,
         f"if [ -d {remote_q}/dist.prev ]; then "
-        f"rm -rf {remote_q}/dist && mv {remote_q}/dist.prev {remote_q}/dist; fi; "
+        f"{_rm_rf_cmd(remote + '/dist')} && mv {remote_q}/dist.prev {remote_q}/dist; fi; "
         f"if docker inspect {app_q} >/dev/null 2>&1; then docker restart {app_q}; "
         f"else {_docker_run_cmd(app, app_port, remote, mode, entry)}; fi || true",
         timeout=180,
@@ -406,7 +437,7 @@ def deploy_ssh(engine, settings: Settings, run_id: str, *, host: str, user: str 
             raise RuntimeError(f"host unreachable or docker missing: {(ct.stderr or '')[:900]}")
         _ssh(key_path, host, user, ssh_port,                                    # 3 stage previous
              f"mkdir -p {shlex.quote(remote)} && "
-             f"([ -d {shlex.quote(remote)}/dist ] && rm -rf {shlex.quote(remote)}/dist.prev && "
+             f"([ -d {shlex.quote(remote)}/dist ] && {_rm_rf_cmd(remote + '/dist.prev')} && "
              f"cp -a {shlex.quote(remote)}/dist {shlex.quote(remote)}/dist.prev || true)")
         needs_rollback = True  # host may have dist wiped / container replaced from here on
         tar = subprocess.run(                                                   # 4 transfer (tar|ssh)

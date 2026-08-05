@@ -128,6 +128,51 @@ def on_pull_request_merged(engine, settings: Settings, *, project_id: str, run_i
     return result
 
 
+def redeploy(engine, settings: Settings, deployment_run_id: str, *,
+             commit_ref: Optional[str] = None, actor: str = "operator") -> dict[str, Any]:
+    """Ship the same target again, as a NEW deployment_run.
+
+    Deliberately not a re-execution of the existing row. An operator asking "what is running and
+    since when" is asking about a history, and rewriting one row in place destroys exactly that:
+    the previous deployment's start, finish and health verdict would be overwritten by its
+    replacement. A redeploy is a new event, so it gets a new record.
+
+    `commit_ref` defaults to whatever the prior run shipped, which makes the common case — "put
+    that back" / "run it again" — a button with no arguments.
+    """
+    from ..db import begin
+
+    with begin(engine) as c:
+        prior = c.execute(sql("SELECT * FROM deployment_runs WHERE id = :i"),
+                          {"i": deployment_run_id}).mappings().first()
+        if not prior:
+            return {"status": "not_found", "deployment_run_id": deployment_run_id}
+
+        from .resource_plane import ResourcePlaneService
+
+        packet = dict(prior["release_packet"] or {})
+        # Keep the lineage explicit: a redeploy that cannot say what it came from is just an
+        # unexplained second row.
+        packet.update({"source": "redeploy", "redeploy_of": deployment_run_id})
+        planned = ResourcePlaneService(settings).plan_deployment_run(
+            c,
+            project_id=prior["project_id"],
+            deployment_target_id=prior["deployment_target_id"],
+            commit_ref=commit_ref or prior["commit_ref"],
+            release_packet=packet,
+            expected_cost_usd_micros=0,
+            reservation_id=None,
+            actor=actor,
+        )
+        new_id = planned.get("deployment_run_id") or planned.get("id")
+        emit_event(c, prior["project_id"], "delivery.redeploy_requested", actor,
+                   "deployment_run", new_id,
+                   {"redeploy_of": deployment_run_id,
+                    "commit_ref": commit_ref or prior["commit_ref"]})
+
+    return execute_deployment(engine, settings, new_id, actor=actor)
+
+
 def pipeline_view(connection, project_id: str, *, limit: int = 25) -> dict[str, Any]:
     """One query pass for the console: code task -> PR -> deployment -> rollout -> health.
 
@@ -141,10 +186,14 @@ def pipeline_view(connection, project_id: str, *, limit: int = 25) -> dict[str, 
                    d.id AS deployment_run_id, d.status AS deploy_status,
                    d.environment, d.app_name, d.target_kind, d.commit_ref,
                    d.started_at, d.finished_at, d.failure_reason,
-                   d.health_check_results
+                   d.health_check_results,
+                   -- Where the thing actually IS. Without it the console can say a deployment
+                   -- succeeded but not where to click, which is the state the operator hit.
+                   t.domains AS target_domains
             FROM code_task_runs r
             LEFT JOIN deployment_runs d
                    ON (d.release_packet->>'code_task_run_id') = r.id
+            LEFT JOIN deployment_targets t ON t.id = d.deployment_target_id
             WHERE r.project_id = :p AND r.pull_request_url IS NOT NULL
             ORDER BY r.updated_at DESC LIMIT :l
         """), {"p": project_id, "l": limit}).mappings().all()
