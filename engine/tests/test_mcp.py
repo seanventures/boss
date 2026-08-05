@@ -59,6 +59,35 @@ def test_catalog_only_context_hides_write_tools():
     assert {tool["name"] for tool in srv._tools()} == {"read_x"}
 
 
+def test_tools_call_strips_project_id_override():
+    """Session project_id is authoritative — args.project_id must not win."""
+    seen: dict = {}
+
+    def _capture(ctx, *, project_id, actor, args):
+        seen["project_id"] = project_id
+        seen["args"] = dict(args)
+        return {"ok": True}
+
+    reg = ToolRegistry()
+    reg.register(ToolSpec(
+        "write_x", "w",
+        {"type": "object", "properties": {"project_id": {"type": "string"}}},
+        _capture, kind="write",
+    ))
+    srv = MCPServer(ctx=None, project_id="session-project", registry=reg)
+    resp = srv.handle({
+        "jsonrpc": "2.0", "id": 5, "method": "tools/call",
+        "params": {
+            "name": "write_x",
+            "arguments": {"project_id": "other-tenant", "title": "x"},
+        },
+    })
+    assert resp["result"]["isError"] is False
+    assert seen["project_id"] == "session-project"
+    assert "project_id" not in seen["args"]
+    assert seen["args"]["title"] == "x"
+
+
 def test_stdio_roundtrip():
     srv = MCPServer(ctx=None, project_id="p", registry=_stub_registry())
     stdin = io.StringIO(

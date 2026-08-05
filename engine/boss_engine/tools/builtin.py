@@ -16,7 +16,7 @@ import re
 from typing import Any
 
 from .._compat import services_module
-from .registry import ToolRegistry
+from .registry import ToolRegistry, ToolSpec
 
 
 # ---------------------------------------------------------------------------
@@ -99,7 +99,10 @@ def _register_read_tools(reg: ToolRegistry) -> None:
         run_id = args["run_id"]
         with ctx.begin() as c:
             row = c.execute(
-                _text("SELECT * FROM code_task_runs WHERE id=:id"), {"id": run_id}
+                _text(
+                    "SELECT * FROM code_task_runs WHERE id=:id AND project_id=:p"
+                ),
+                {"id": run_id, "p": project_id},
             ).mappings().first()
         if not row:
             return {"ok": False, "error": f"no code task run {run_id}"}
@@ -226,8 +229,10 @@ def _register_read_tools(reg: ToolRegistry) -> None:
                 rows = c.execute(
                     _text(
                         "SELECT id,run_id,sandbox_task_id,status FROM app_previews "
-                        "WHERE sandbox_task_id IS NOT NULL AND status='running'"
-                    )
+                        "WHERE project_id=:p AND sandbox_task_id IS NOT NULL "
+                        "AND status='running'"
+                    ),
+                    {"p": project_id},
                 ).mappings().all()
             held = [_json_safe(dict(h)) for h in rows]
         except Exception as exc:
@@ -451,10 +456,14 @@ def _register_write_tools(reg: ToolRegistry) -> None:
         kind="write",
     )
     def retry_code_task(ctx, *, project_id, actor, args):
+        run_id = args["run_id"]
+        with ctx.begin() as c:
+            if _code_task_in_project(c, run_id, project_id) is None:
+                return {"ok": False, "error": f"no code task run {run_id}"}
         cts = services_module("code_task_service")
         rr = args.get("repair_retries")
         result = cts.retry_code_task(
-            ctx.engine, ctx.settings, ctx.jobs, args["run_id"],
+            ctx.engine, ctx.settings, ctx.jobs, run_id,
             fix_note=(args.get("fix_note") or ""),
             profile=(args.get("profile") or None),
             repair_retries=(int(rr) if isinstance(rr, int) else None),
@@ -542,10 +551,14 @@ def _register_write_tools(reg: ToolRegistry) -> None:
         kind="write",
     )
     def start_preview(ctx, *, project_id, actor, args):
+        run_id = args["run_id"]
+        with ctx.begin() as c:
+            if _code_task_in_project(c, run_id, project_id) is None:
+                return {"ok": False, "error": f"no code task run {run_id}"}
         ps = services_module("preview_service")
         try:
             rec = ps.start_preview(
-                ctx.engine, ctx.settings, args["run_id"],
+                ctx.engine, ctx.settings, run_id,
                 ttl_minutes=int(args.get("ttl_minutes") or 60),
             )
         except ps.AmbiguousAppError as exc:
@@ -618,7 +631,6 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
                 "decision_id": {"type": "string"},
                 "action": {"type": "string", "enum": list(_DECISION_ACTIONS)},
                 "note": {"type": "string", "description": "why — recorded as provenance"},
-                "actor": {"type": "string", "description": "who is deciding (default: caller)"},
                 "delegate_to": {"type": "string", "description": "for action=delegate"},
             },
             ["decision_id", "action", "note"],
@@ -629,16 +641,20 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
         action = args["action"]
         if action not in _DECISION_ACTIONS:
             return {"ok": False, "error": f"unsupported action: {action}"}
-        who = args.get("actor") or actor
+        # Session actor is authoritative — never honor a model-supplied actor.
+        who = actor
         note = (args.get("note") or "").strip()
         if not note:
             return {"ok": False, "error": "note is required — it is the provenance record"}
+        decision_id = args["decision_id"]
         dec_mod = services_module("decisions")
         svc = dec_mod.DecisionService(ctx.settings)
         try:
             with ctx.begin() as c:
+                if _decision_in_project(c, decision_id, project_id) is None:
+                    return {"ok": False, "error": f"no decision {decision_id}"}
                 row = svc.transition(
-                    c, args["decision_id"], action=action, actor=who, note=note,
+                    c, decision_id, action=action, actor=who, note=note,
                     delegate_to=args.get("delegate_to"),
                 )
         except Exception as exc:  # surface engine errors as data, never a stack trace
@@ -658,30 +674,28 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
         reason = args.get("reason") or "cancelled via MCP"
         from ..services.core import emit_event
         with ctx.begin() as c:
-            run = c.execute(
-                _text("SELECT id, project_id, status FROM code_task_runs WHERE id=:id"),
-                {"id": run_id},
-            ).mappings().first()
+            run = _code_task_in_project(c, run_id, project_id)
             if run is None:
                 return {"ok": False, "error": f"no code task run {run_id}"}
             if run["status"] in ("completed", "failed", "cancelled"):
                 return {"ok": False, "error": f"run is already terminal: {run['status']}"}
             c.execute(
                 _text("UPDATE code_task_runs SET status='cancelled', error=:e, updated_at=now() "
-                      "WHERE id=:id"),
-                {"id": run_id, "e": reason},
+                      "WHERE id=:id AND project_id=:p"),
+                {"id": run_id, "e": reason, "p": project_id},
             )
             jobs = c.execute(
-                _text("SELECT id FROM jobs WHERE payload::text LIKE :pat "
+                _text("SELECT id FROM jobs WHERE project_id=:p AND payload::text LIKE :pat "
                       "AND status NOT IN ('succeeded','cancelled','deadlettered','failed')"),
-                {"pat": f"%{run_id}%"},
+                {"p": project_id, "pat": f"%{run_id}%"},
             ).mappings().all()
             for j in jobs:
                 c.execute(
-                    _text("UPDATE jobs SET status='cancelled', updated_at=now() WHERE id=:id"),
-                    {"id": j["id"]},
+                    _text("UPDATE jobs SET status='cancelled', updated_at=now() "
+                          "WHERE id=:id AND project_id=:p"),
+                    {"id": j["id"], "p": project_id},
                 )
-            emit_event(c, run["project_id"], "code_task.cancelled", actor, "code_task_run",
+            emit_event(c, project_id, "code_task.cancelled", actor, "code_task_run",
                        run_id, {"reason": reason, "jobs_cancelled": [j["id"] for j in jobs]})
         return {"ok": True, "run_id": run_id, "jobs_cancelled": [j["id"] for j in jobs],
                 "reason": reason}
@@ -702,10 +716,14 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
         kind="write",
     )
     def waive_gates(ctx, *, project_id, actor, args):
+        run_id = args["run_id"]
+        with ctx.begin() as c:
+            if _code_task_in_project(c, run_id, project_id) is None:
+                return {"ok": False, "error": f"no code task run {run_id}"}
         cts = services_module("code_task_service")
         try:
             result = cts.override_code_task(
-                ctx.engine, ctx.settings, ctx.jobs, args["run_id"],
+                ctx.engine, ctx.settings, ctx.jobs, run_id,
                 waive_gates=args.get("waive_gates") or [],
                 actor=actor, reason=args.get("reason") or "waived via MCP",
             )
@@ -730,10 +748,14 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
         kind="write",
     )
     def send_feedback(ctx, *, project_id, actor, args):
+        run_id = args["run_id"]
+        with ctx.begin() as c:
+            if _code_task_in_project(c, run_id, project_id) is None:
+                return {"ok": False, "error": f"no code task run {run_id}"}
         fa = services_module("feedback_agent")
         try:
             result = fa.submit_feedback(
-                ctx.engine, args["run_id"], message=args["message"],
+                ctx.engine, run_id, message=args["message"],
                 expected=args.get("expected") or "",
                 severity=args.get("severity") or "normal",
             )
@@ -749,9 +771,13 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
         kind="write",
     )
     def stop_preview(ctx, *, project_id, actor, args):
+        preview_id = args["preview_id"]
+        with ctx.begin() as c:
+            if _preview_in_project(c, preview_id, project_id) is None:
+                return {"ok": False, "error": f"no preview {preview_id}"}
         ps = services_module("preview_service")
         try:
-            result = ps.stop_preview(ctx.engine, args["preview_id"], ctx.settings)
+            result = ps.stop_preview(ctx.engine, preview_id, ctx.settings)
         except Exception as exc:
             return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
         return {"ok": True, "preview": _json_safe(result)}
@@ -774,13 +800,15 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
         guidance = (args.get("guidance") or "").strip()
         if not guidance:
             return {"ok": False, "error": "guidance is required"}
+        run_id = args["run_id"]
         entry = {"text": guidance[:4000], "actor": actor,
                  "at": datetime.now(timezone.utc).isoformat()}
         with ctx.begin() as c:
-            row = c.execute(_text("SELECT status FROM code_task_runs WHERE id=:id"),
-                            {"id": args["run_id"]}).mappings().first()
+            # Session project fence — without this, project A can redirect project B's
+            # running agent (OPERATOR STEERING overrides the original prompt).
+            row = _code_task_in_project(c, run_id, project_id)
             if not row:
-                return {"ok": False, "error": f"no code task run {args['run_id']}"}
+                return {"ok": False, "error": f"no code task run {run_id}"}
             if row["status"] in ("completed", "failed", "cancelled"):
                 return {"ok": False,
                         "error": f"run is {row['status']}; steering applies to running tasks"}
@@ -788,9 +816,9 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
                 "UPDATE code_task_runs SET finalize_ctx = COALESCE(finalize_ctx,'{}'::jsonb) "
                 "|| jsonb_build_object('pending_guidance', "
                 "COALESCE(finalize_ctx->'pending_guidance','[]'::jsonb) || CAST(:e AS JSONB)), "
-                "updated_at=now() WHERE id=:id"),
-                {"e": _json.dumps([entry]), "id": args["run_id"]})
-        return {"ok": True, "run_id": args["run_id"],
+                "updated_at=now() WHERE id=:id AND project_id=:p"),
+                {"e": _json.dumps([entry]), "id": run_id, "p": project_id})
+        return {"ok": True, "run_id": run_id,
                 "applies": "at the next stage boundary"}
 
     @reg.tool(
@@ -807,8 +835,11 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
              ["run_id"]),
     )
     def watch_code_task(ctx, *, project_id, actor, args):
-        la = services_module("live_activity")
         rid = args["run_id"]
+        with ctx.begin() as c:
+            if _code_task_in_project(c, rid, project_id) is None:
+                return {"ok": False, "error": f"no code task run {rid}"}
+        la = services_module("live_activity")
         limit = int(args.get("limit") or 40)
         if args.get("as_text", True):
             return {"run_id": rid, "feed": la.live_activity_text(rid, limit=limit)}
@@ -822,21 +853,24 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
         _obj({"run_id": {"type": "string"}, "limit": _LIMIT}, ["run_id"]),
     )
     def get_run_activity(ctx, *, project_id, actor, args):
+        run_id = args["run_id"]
         limit = int(args.get("limit") or 100)
         with ctx.begin() as c:
+            if _code_task_in_project(c, run_id, project_id) is None:
+                return {"ok": False, "error": f"no code task run {run_id}"}
             rows = c.execute(
                 _text(
                     "SELECT stage, engine, model, total_tokens, cost_usd_micros, latency_ms, "
                     "       retries, turns, ok, error, created_at "
-                    "FROM llm_calls WHERE code_task_run_id = :rid "
+                    "FROM llm_calls WHERE code_task_run_id = :rid AND project_id = :p "
                     "ORDER BY created_at, id LIMIT :lim"
                 ),
-                {"rid": args["run_id"], "lim": limit},
+                {"rid": run_id, "p": project_id, "lim": limit},
             ).mappings().all()
         calls = [_json_safe(dict(r)) for r in rows]
         total = sum(int(r["cost_usd_micros"] or 0) for r in rows)
         return {
-            "run_id": args["run_id"], "calls": len(calls),
+            "run_id": run_id, "calls": len(calls),
             "total_cost_usd": round(total / 1_000_000, 4),
             "total_tokens": sum(int(r["total_tokens"] or 0) for r in rows),
             "failed_calls": sum(1 for r in rows if not r["ok"]),
@@ -851,6 +885,11 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
               "limit": _LIMIT, "project_id": {"type": "string"}}),
     )
     def get_costs(ctx, *, project_id, actor, args):
+        # Session project is the fence. args.project_id is stripped by MCP HTTP and
+        # the discuss-path pin; never fall back to a model-supplied override here
+        # because the previous query had NO project filter at all and leaked every
+        # tenant's spend ledger.
+        pid = project_id
         days = int(args.get("days") or 7)
         limit = int(args.get("limit") or 25)
         with ctx.begin() as c:
@@ -860,11 +899,12 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
                     "       sum(l.cost_usd_micros) AS micros, sum(l.total_tokens) AS tokens, "
                     "       count(*) AS calls, max(l.created_at) AS last_call "
                     "FROM llm_calls l LEFT JOIN code_task_runs r ON r.id = l.code_task_run_id "
-                    "WHERE l.created_at > now() - make_interval(days => :d) "
+                    "WHERE l.project_id = :p "
+                    "  AND l.created_at > now() - make_interval(days => :d) "
                     "GROUP BY l.code_task_run_id, r.title, r.status "
                     "ORDER BY max(l.created_at) DESC LIMIT :lim"
                 ),
-                {"d": days, "lim": limit},
+                {"p": pid, "d": days, "lim": limit},
             ).mappings().all()
         runs = []
         for r in rows:
@@ -873,6 +913,7 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
             d.pop("micros", None)
             runs.append(d)
         return {
+            "project_id": pid,
             "window_days": days,
             "total_cost_usd": round(sum(r["cost_usd"] for r in runs), 4),
             "runs": runs,
@@ -982,8 +1023,11 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
     def get_meeting(ctx, *, project_id, actor, args):
         with ctx.begin() as c:
             row = c.execute(
-                _text("SELECT * FROM meeting_runs WHERE id=:id OR meeting_id=:id"),
-                {"id": args["meeting_id"]},
+                _text(
+                    "SELECT * FROM meeting_runs "
+                    "WHERE project_id=:p AND (id=:id OR meeting_id=:id)"
+                ),
+                {"id": args["meeting_id"], "p": project_id},
             ).mappings().first()
             if row is None:
                 return {"ok": False, "error": f"no meeting {args['meeting_id']}"}
@@ -991,8 +1035,8 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
             if row.get("decision_id"):
                 dec = c.execute(
                     _text("SELECT id, question, status, approved_by, approved_at "
-                          "FROM decisions WHERE id=:d"),
-                    {"d": row["decision_id"]},
+                          "FROM decisions WHERE id=:d AND project_id=:p"),
+                    {"d": row["decision_id"], "p": project_id},
                 ).mappings().first()
         return {"meeting": _json_safe(dict(row)),
                 "decision": _json_safe(dict(dec)) if dec else None}
@@ -1002,6 +1046,41 @@ def _text(sql: str):
     from sqlalchemy import text
 
     return text(sql)
+
+
+def _code_task_in_project(connection, run_id: str, project_id: str):
+    """Load a code-task run only when it belongs to the session project.
+
+    Governance mutators historically keyed only on run_id, so an MCP/agent
+    session bound to project A could cancel, waive, retry, or preview a run
+    from project B. Session project_id is the tenant fence.
+    """
+    return connection.execute(
+        _text(
+            "SELECT id, project_id, status FROM code_task_runs "
+            "WHERE id=:id AND project_id=:p"
+        ),
+        {"id": run_id, "p": project_id},
+    ).mappings().first()
+
+
+def _preview_in_project(connection, preview_id: str, project_id: str):
+    """Load a preview only when it belongs to the session project."""
+    return connection.execute(
+        _text(
+            "SELECT id, project_id, status FROM app_previews "
+            "WHERE id=:id AND project_id=:p"
+        ),
+        {"id": preview_id, "p": project_id},
+    ).mappings().first()
+
+
+def _decision_in_project(connection, decision_id: str, project_id: str):
+    """Load a decision only when it belongs to the session project."""
+    return connection.execute(
+        _text("SELECT id, project_id, status FROM decisions WHERE id=:id AND project_id=:p"),
+        {"id": decision_id, "p": project_id},
+    ).mappings().first()
 
 
 def _existing_app_branch(conn, project_id: str, task_id: str) -> tuple:
@@ -1084,10 +1163,60 @@ def _http_probe(url: str) -> tuple[bool, str]:
 # ---------------------------------------------------------------------------
 # assembly
 # ---------------------------------------------------------------------------
+# Unrestricted SQL is fine for a trusted local MCP/CLI operator; it is NOT safe
+# on the multi-tenant chat discuss path where the model chooses the query.
+_DISCUSS_EXCLUDED_READ_TOOLS = frozenset({"query_db"})
+
+
 def build_default_registry() -> ToolRegistry:
     """The full BOSS engine tool set (read + write)."""
     reg = ToolRegistry()
     _register_read_tools(reg)
     _register_write_tools(reg)
     _register_governance_tools(reg)
+    return reg
+
+
+def build_discuss_read_registry() -> ToolRegistry:
+    """Project-pinned read tools for IntentRouter's tool-grounded discuss path.
+
+    Excludes ``query_db`` (arbitrary SELECT across the whole DB) and strips
+    ``project_id`` from schemas/args so the model cannot override into another
+    tenant after the API already authorized a single project.
+    """
+    source = build_default_registry()
+    reg = ToolRegistry()
+    for spec in source.specs(kind="read"):
+        if spec.name in _DISCUSS_EXCLUDED_READ_TOOLS:
+            continue
+        properties = dict((spec.parameters or {}).get("properties") or {})
+        properties.pop("project_id", None)
+        parameters = {**(spec.parameters or {}), "properties": properties}
+        required = [
+            item
+            for item in list((spec.parameters or {}).get("required") or [])
+            if item != "project_id"
+        ]
+        if "required" in parameters:
+            parameters["required"] = required
+
+        def _pin(inner: Any = spec.handler) -> Any:
+            def handler(ctx, *, project_id, actor, args):
+                safe_args = dict(args or {})
+                safe_args.pop("project_id", None)
+                return inner(
+                    ctx, project_id=project_id, actor=actor, args=safe_args
+                )
+
+            return handler
+
+        reg.register(
+            ToolSpec(
+                name=spec.name,
+                description=spec.description,
+                parameters=parameters,
+                handler=_pin(),
+                kind="read",
+            )
+        )
     return reg

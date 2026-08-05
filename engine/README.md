@@ -45,8 +45,10 @@ python -m boss_engine --project boss-dogfood status
 python -m boss_engine call list_code_tasks --args '{"limit":5}'
 python -m boss_engine ask "how many tasks are running right now?"
 python -m boss_engine chat --allow-writes          # interactive agent
-python -m boss_engine serve-mcp                     # MCP over stdio (default)
-python -m boss_engine serve-mcp --http --port 8791  # MCP over HTTP + Mission Control
+python -m boss_engine serve-mcp                     # MCP over stdio (default; writes OK)
+python -m boss_engine serve-mcp --http --port 8791  # HTTP + Mission Control (read-only)
+# HTTP has no auth — write tools require an explicit opt-in:
+# python -m boss_engine serve-mcp --http --allow-writes --host 127.0.0.1
 ```
 
 A fresh database MUST be bootstrapped first — `bootstrap` creates the schema
@@ -79,7 +81,7 @@ docker run --rm --network boss -e DATABASE_URL=$DB boss-engine bootstrap
 docker run --rm --network boss -e DATABASE_URL=$DB boss-engine status
 docker run -i  --rm --network boss -e DATABASE_URL=$DB boss-engine serve-mcp   # stdio
 docker run -d  --name boss-mcp --network boss -p 8791:8791 -e DATABASE_URL=$DB \
-  boss-engine serve-mcp --http --host 0.0.0.0                                  # HTTP
+  boss-engine serve-mcp --http --host 0.0.0.0                                  # HTTP (read-only)
 ```
 
 ### Mission Control (community, read-only)
@@ -87,8 +89,10 @@ docker run -d  --name boss-mcp --network boss -p 8791:8791 -e DATABASE_URL=$DB \
 `serve-mcp --http` also serves a zero-dependency, read-only **Mission Control**
 page at `http://host:8791/` — project status, running work, code tasks,
 previews, discovery and meetings, rendered straight from the engine's read
-tools over the same `/mcp` JSON-RPC endpoint. It is a snapshot viewer by
-design; approvals and multi-user operation live in the commercial console.
+tools over the same `/mcp` JSON-RPC endpoint. HTTP mode defaults to
+**read-only** (no transport auth); write tools stay on stdio MCP or require
+`--allow-writes` on loopback. It is a snapshot viewer by design; approvals and
+multi-user operation live in the commercial console.
 
 ### Local / open models (Ollama, vLLM, any OpenAI-compatible endpoint)
 

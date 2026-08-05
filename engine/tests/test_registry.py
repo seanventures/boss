@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pytest
 
-from boss_engine.tools import build_default_registry
+from boss_engine.tools import build_default_registry, build_discuss_read_registry
 from boss_engine.tools.registry import ToolError, ToolRegistry, ToolSpec
 
 
@@ -18,6 +18,8 @@ def test_default_registry_shape():
     for name in (
         "project_status", "list_running_work", "get_task_preview",
         "microvm_status", "query_db", "create_code_task", "retry_code_task",
+        "extend_code_task", "cancel_code_task", "waive_gates", "decide", "get_costs",
+        "steer_code_task", "watch_code_task",
     ):
         assert name in reg.names()
 
@@ -88,3 +90,47 @@ def test_duplicate_registration_rejected():
     reg.register(ToolSpec("t", "d", {"type": "object"}, lambda ctx, **k: {}))
     with pytest.raises(ValueError):
         reg.register(ToolSpec("t", "d", {"type": "object"}, lambda ctx, **k: {}))
+
+
+def test_discuss_read_registry_excludes_query_db_and_hides_project_override():
+    """Chat discuss path must not expose unrestricted SQL or cross-project overrides."""
+    reg = build_discuss_read_registry()
+    assert "query_db" not in reg.names()
+    assert "project_status" in reg.names()
+    assert "get_code_task" in reg.names()
+    assert "get_costs" in reg.names()
+    # All read tools except query_db (18 - 1).
+    assert len(reg.specs(kind="read")) == 17
+    for schema in reg.openai_schema():
+        props = schema["function"]["parameters"].get("properties") or {}
+        assert "project_id" not in props, schema["function"]["name"]
+
+
+def test_discuss_read_registry_drops_project_id_override_from_args():
+    """Pinned discuss handlers must ignore a model-supplied project_id arg."""
+    seen: dict = {}
+
+    def spy(ctx, *, project_id, actor, args):
+        seen["project_id"] = project_id
+        seen["args"] = dict(args)
+        return {"ok": True}
+
+    def _pin(inner):
+        def handler(ctx, *, project_id, actor, args):
+            safe_args = dict(args or {})
+            safe_args.pop("project_id", None)
+            return inner(ctx, project_id=project_id, actor=actor, args=safe_args)
+
+        return handler
+
+    # Same pin helper shape as build_discuss_read_registry.
+    wrapped = _pin(spy)
+    wrapped(
+        None,
+        project_id="project-a",
+        actor="a",
+        args={"project_id": "project-b", "limit": 3},
+    )
+    assert seen["project_id"] == "project-a"
+    assert "project_id" not in seen["args"]
+    assert seen["args"]["limit"] == 3

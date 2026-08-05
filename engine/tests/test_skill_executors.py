@@ -5,6 +5,7 @@ import pytest
 
 from boss_engine.services.skill_executors import (
     SkillExecutorConfigurationError,
+    _model_generate_code_dedupe_key,
     _split_patch_and_test_plan,
     registered_executor_ids,
     resolve_executor,
@@ -40,3 +41,18 @@ def test_split_patch_and_test_plan():
 def test_split_tolerates_missing_sections():
     patch, plan = _split_patch_and_test_plan("no fences here")
     assert patch == "" and plan == ""
+
+
+def test_generate_code_dedupe_includes_constraints():
+    """Same task/repo under different constraints must not collide."""
+    base = dict(
+        project_id="p1",
+        task_spec="add login",
+        repo_context="app/main.py",
+    )
+    ts = _model_generate_code_dedupe_key(**base, constraints=["TypeScript"])
+    py = _model_generate_code_dedupe_key(**base, constraints=["Python"])
+    same = _model_generate_code_dedupe_key(**base, constraints=["TypeScript"])
+    assert ts != py
+    assert ts == same
+    assert ts.startswith("model.generate_code:")

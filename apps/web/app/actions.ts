@@ -2805,7 +2805,11 @@ export async function deleteMeetingRoleAction(formData: FormData): Promise<void>
 export async function retryCodeTaskAction(formData: FormData): Promise<void> {
   const runId = String(formData.get("run_id") ?? "").trim();
   if (!runId) return;
-  await client.retryCodeTask(runId, String(formData.get("fix_note") ?? "").trim() || undefined);
+  await client.retryCodeTask(
+    runId,
+    String(formData.get("fix_note") ?? "").trim() || undefined,
+    getActor(formData),
+  );
   revalidatePath("/");
 }
 
@@ -2828,6 +2832,7 @@ export async function retryCodeTaskWithStateAction(
     const res = await client.retryCodeTask(
       runId,
       String(formData.get("fix_note") ?? "").trim() || undefined,
+      getActor(formData),
     );
     revalidatePath("/");
     return { runId: res?.run_id, attempt: res?.attempt };
@@ -2894,7 +2899,7 @@ export async function startPreviewAction(
   const runId = String(formData.get("run_id") ?? "").trim();
   if (!runId) return { error: "missing run_id" };
   try {
-    const res = await client.startPreview(runId);
+    const res = await client.startPreview(runId, 60, getActor(formData));
     revalidatePath("/");
     // Return the api-routed proxy URL — the preview's own 127.0.0.1 port isn't reachable from the
     // browser on a remote box, so the api reverse-proxies to it. Works locally too.
@@ -2923,7 +2928,7 @@ export async function overrideCodeTaskAction(
   const reason = String(formData.get("reason") ?? "").trim();
   if (!runId) return { error: "missing run_id" };
   try {
-    const res = await client.overrideCodeTask(runId, ["*"], reason);
+    const res = await client.overrideCodeTask(runId, ["*"], reason, getActor(formData));
     revalidatePath("/");
     if (res.pull_request_url) return { url: res.pull_request_url };
     return { error: "override did not open a PR" };

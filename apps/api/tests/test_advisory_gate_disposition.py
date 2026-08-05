@@ -65,6 +65,23 @@ def test_no_pr_run_still_blocks_rather_than_shipping_nothing():
     ) == "block"
 
 
+def test_nonfinal_decomposition_slice_must_pass_open_pr_false():
+    """Non-final slices suppress the PR and advance the chain on completed_no_pr.
+
+    The call site must pass open_pr=False into resolve_gate_failure_action for those
+    slices — otherwise ship_with_dissent marks broken work completed and the next slice
+    builds on unresolved security/test failures with no follow-up task.
+    """
+    assert resolve_gate_failure_action(
+        failing=["security_clean", "written_tests_pass"],
+        advisory_gate=False,
+        rounds_used=2,
+        max_repair_rounds=2,
+        open_pr=False,  # call site: not _can_ship_pr for non-final slices
+        never_block=True,
+    ) == "block"
+
+
 def test_empty_failing_ships():
     assert resolve_gate_failure_action(
         failing=[],

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 
+from sqlalchemy import text
+
 from apps.api.app.config import get_settings
 from apps.api.app.services import agent_loop
 from apps.api.app.services.entitlements import EntitlementBrokerService
@@ -297,3 +299,77 @@ def test_agent_loop_defers_high_risk_skill_to_blocking_decision(engine, monkeypa
     assert run["pending"]["kind"] == "skill"
     assert run["pending"]["skill_id"] == "deployment.run.plan"
     assert run["pending"]["caller"] == "deployment_manager"
+
+
+def test_resume_agent_run_requires_approved_decision(engine, monkeypatch):
+    """Concrete trigger: agent defers a high-risk skill → Decision stays pending →
+    POST /v1/agent-runs/{id}/resume (or direct resume_agent_run) must NOT execute the
+    tool. Only an approved Decision unlocks resume — otherwise the approval gate is
+    a no-op for anyone who knows the run_id."""
+    settings = get_settings().model_copy(
+        update={
+            "boss_edition": "enterprise_self_hosted",
+            "agent_autonomous_risk_max": 1,
+        }
+    )
+    adapter = CallingAdapter(
+        "skill_deployment_run_plan",
+        {
+            "deployment_target_id": "target_test",
+            "release_packet_artifact_id": "artifact_test",
+            "environment": "staging",
+        },
+    )
+    monkeypatch.setattr(agent_loop, "make_chat_adapter", lambda _settings: adapter)
+    monkeypatch.setattr(
+        agent_loop,
+        "list_mcp_servers",
+        lambda *_args, **_kwargs: [],
+    )
+    invocations: list[dict] = []
+
+    def fake_invoke(self, connection, project_id, skill_id, *args, **kwargs):
+        invocations.append({"skill_id": skill_id, "project_id": project_id})
+        return {"status": "ok", "skill_id": skill_id, "mock": True}
+
+    monkeypatch.setattr(agent_loop.SkillRuntimeService, "invoke", fake_invoke)
+
+    with engine.begin() as connection:
+        suspended = agent_loop.run_agent_loop(
+            connection,
+            settings,
+            settings.default_project_id,
+            "system",
+            "Plan the deployment",
+            max_steps=1,
+            finalize_ctx={
+                "job_kind": "agent.deployment_manager.deployment_review",
+                "module_id": "deployment_manager_v1",
+            },
+        )
+        run_id = suspended["run_id"]
+        decision_id = suspended["decision_id"]
+
+        denied = agent_loop.resume_agent_run(connection, settings, run_id)
+        assert denied["status"] == "denied"
+        assert denied["decision_id"] == decision_id
+        assert "not approved" in denied["reason"]
+        assert invocations == []
+
+        still = agent_loop.load_agent_run(connection, run_id)
+        assert still["status"] == "awaiting_approval"
+        assert still["pending"]["skill_id"] == "deployment.run.plan"
+
+        connection.execute(
+            text(
+                "UPDATE decisions SET status = 'approved', approved_by = 'ceo', "
+                "approved_at = now() WHERE id = :id"
+            ),
+            {"id": decision_id},
+        )
+        # After approval, resume continues the agent loop; CallingAdapter's second
+        # create_chat_completion returns a final "done" so the run can complete.
+        resumed = agent_loop.resume_agent_run(connection, settings, run_id)
+
+    assert any(item["skill_id"] == "deployment.run.plan" for item in invocations)
+    assert resumed.get("status") in {"completed", "suspended", "running"}
