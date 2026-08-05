@@ -2085,6 +2085,32 @@ CREATE INDEX IF NOT EXISTS idx_deployment_runs_project
   ON deployment_runs(project_id, status, created_at DESC);
 ALTER TABLE deployment_runs ADD COLUMN IF NOT EXISTS decision_id TEXT REFERENCES decisions(id);
 
+-- Health of what BOSS has DEPLOYED, sampled over time.
+--
+-- deployment_runs records the ACT of deploying; it says nothing about whether the thing is
+-- still serving ten minutes later. A run that finished "succeeded" stays succeeded forever
+-- even as the app falls over, so "is it healthy" could only ever be answered as "it deployed
+-- fine", which is a different question. These samples are the missing one.
+--
+-- One row per probe, deliberately raw: uptime, latency percentiles and incidents are all
+-- derived from this, so a new metric never needs a new table or a backfill.
+CREATE TABLE IF NOT EXISTS deployment_health_samples (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  deployment_target_id TEXT NOT NULL REFERENCES deployment_targets(id),
+  checked_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  ok BOOLEAN NOT NULL,
+  status_code INTEGER,
+  latency_ms INTEGER,
+  error TEXT,
+  observed_version TEXT
+);
+-- The read is always "recent samples for this target", newest first.
+CREATE INDEX IF NOT EXISTS idx_health_samples_target
+  ON deployment_health_samples(deployment_target_id, checked_at DESC);
+CREATE INDEX IF NOT EXISTS idx_health_samples_project
+  ON deployment_health_samples(project_id, checked_at DESC);
+
 -- Generalized customer-app rollout state reuses the existing deployment_rollouts
 -- ledger while linking each new rollout to its ProviderOps DeploymentRun.
 ALTER TABLE deployment_rollouts

@@ -880,6 +880,31 @@ def execute_job(job: LeasedJob, client: ControlPlaneClient) -> dict[str, Any]:
     raise ValueError(f"Unsupported job kind: {job.kind}")
 
 
+def _sweep_deployment_health() -> None:
+    """Sample the health of deployed apps while there is no job to run.
+
+    The idle branch is where this belongs: the worker is about to sleep anyway, and health is a
+    background concern that must never compete with real work. `sweep` itself is due-gated, so
+    running it every idle cycle costs one cheap query per target rather than a probe.
+
+    Swallows everything. A monitoring sweep that can raise would turn "the health graph is
+    stale" into "the worker crash-loops", which is a strictly worse failure than the one it
+    exists to detect.
+    """
+    try:
+        from boss_engine.config import get_settings
+        from boss_engine.db import get_engine
+        from boss_engine.services.deployment_health import sweep
+
+        engine_settings = get_settings()
+        result = sweep(get_engine(engine_settings), engine_settings)
+        if result.get("probed"):
+            LOGGER.info("health_sweep probed=%s failed=%s",
+                        result["probed"], result.get("failed"))
+    except Exception:  # noqa: BLE001
+        LOGGER.debug("health_sweep_skipped", exc_info=True)
+
+
 def run_worker_cycle(client: ControlPlaneClient, settings: WorkerSettings) -> bool:
     job = client.poll(
         settings.worker_id,
@@ -888,6 +913,7 @@ def run_worker_cycle(client: ControlPlaneClient, settings: WorkerSettings) -> bo
     )
     if not job:
         LOGGER.info("worker_idle worker_id=%s", settings.worker_id)
+        _sweep_deployment_health()
         return False
 
     LOGGER.info(

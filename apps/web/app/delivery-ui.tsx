@@ -112,7 +112,144 @@ function DeployActions({ stage }: { stage: Stage }) {
   );
 }
 
-export function DeliveryPipeline({ initial }: { initial?: Pipeline | null }) {
+type HealthTarget = {
+  target_id: string; app_name: string; environment: string; url: string | null;
+  status: "up" | "degraded" | "down" | "unknown"; status_since: string | null;
+  uptime_24h: number | null; uptime_7d: number | null;
+  avg_ms: number | null; p95_ms: number | null;
+  last_checked: string | null; last_latency_ms: number | null; last_error: string | null;
+  sample_count: number;
+  series: { at: string; ok: boolean; ms: number | null }[];
+  incidents: { started_at: string; ended_at: string | null; duration_seconds: number | null; error: string | null }[];
+  deployed_commit: string | null; deployed_at: string | null; deployment_run_id: string | null;
+};
+export type Health = {
+  project_id: string; targets: HealthTarget[];
+  summary: { up: number; degraded: number; down: number; unknown: number; overall: string; total: number };
+  error?: string;
+};
+
+const HEALTH_TONE: Record<string, string> = {
+  up: "#3fb950", degraded: "#d29922", down: "#f85149", unknown: "#8b949e",
+};
+
+/** Latency over time as inline SVG. Failures are drawn, not dropped — a gap in a line reads
+ *  as "no data", which is the opposite of what a failed probe means. */
+function HealthGraph({ series }: { series: HealthTarget["series"] }) {
+  const W = 260, H = 40;
+  if (!series.length) return <span className="detail" style={{ fontSize: 11 }}>no samples yet</span>;
+  const oks = series.filter((p) => p.ok && p.ms != null).map((p) => p.ms as number);
+  const max = Math.max(1, ...oks);
+  const dx = series.length > 1 ? W / (series.length - 1) : W;
+
+  const line = series
+    .map((p, i) => (p.ok && p.ms != null ? `${i === 0 ? "M" : "L"}${(i * dx).toFixed(1)},${(H - (p.ms / max) * (H - 6) - 3).toFixed(1)}` : null))
+    .filter(Boolean).join(" ");
+
+  return (
+    <svg width={W} height={H} role="img" aria-label="latency history"
+         style={{ display: "block", overflow: "visible" }}>
+      {line && <path d={line} fill="none" stroke="#3fb950" strokeWidth="1.5" opacity={0.9} />}
+      {series.map((p, i) => !p.ok && (
+        <rect key={i} x={Math.max(0, i * dx - 1)} y={0} width={2} height={H} fill="#f85149" opacity={0.85} />
+      ))}
+    </svg>
+  );
+}
+
+export function DeploymentHealth({ health }: { health?: Health | null }) {
+  if (!health) return null;
+  if (health.error) {
+    return <div className="detail" style={{ color: "#f85149" }}>Health: {health.error}</div>;
+  }
+  const { summary, targets } = health;
+
+  return (
+    <section className="ct-block">
+      <div className="ct-block-title">
+        Health of deployed apps{" "}
+        <span style={{ color: HEALTH_TONE[summary.overall], fontSize: 12 }}>
+          ● {summary.overall}
+        </span>
+        <span className="detail" style={{ fontSize: 12, marginLeft: 8 }}>
+          {summary.up} up · {summary.degraded} degraded · {summary.down} down
+          {summary.unknown ? ` · ${summary.unknown} unknown` : ""}
+        </span>
+      </div>
+
+      {targets.length === 0 && (
+        <div className="detail">
+          Nothing deployed yet. Once BOSS deploys an app, its health is sampled automatically.
+        </div>
+      )}
+
+      <div style={{ display: "grid", gap: 12 }}>
+        {targets.map((t) => (
+          <div key={t.target_id} style={{
+            border: "1px solid rgba(255,255,255,.09)", borderRadius: 8, padding: 12,
+            display: "flex", gap: 18, flexWrap: "wrap", alignItems: "flex-start",
+          }}>
+            <div style={{ minWidth: 200, display: "grid", gap: 4 }}>
+              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                <span style={{ color: HEALTH_TONE[t.status], fontWeight: 600 }}>● {t.status}</span>
+                <strong style={{ fontSize: 13 }}>{t.app_name}</strong>
+                <span className="cap-badge tone-blue">{t.environment}</span>
+              </div>
+              {t.url && (
+                <a href={`http://${t.url}/`} target="_blank" rel="noreferrer"
+                   style={{ fontSize: 12, fontFamily: "monospace" }}>{t.url} ↗</a>
+              )}
+              <span className="detail" style={{ fontSize: 11 }}>
+                {t.status_since ? `${t.status} for ${since(t.status_since)}` : "never probed"}
+              </span>
+            </div>
+
+            <div style={{ display: "flex", gap: 16, flexWrap: "wrap", fontSize: 12 }}>
+              {/* null uptime is "no data", never 0% — an unprobed target has not had an outage. */}
+              <Fact label="uptime 24h" value={t.uptime_24h == null ? "no data" : `${t.uptime_24h}%`} />
+              <Fact label="uptime 7d" value={t.uptime_7d == null ? "no data" : `${t.uptime_7d}%`} />
+              <Fact label="latency" value={t.last_latency_ms == null ? "—" : `${t.last_latency_ms}ms`} />
+              <Fact label="p95" value={t.p95_ms == null ? "—" : `${t.p95_ms}ms`} />
+              <Fact label="build" value={t.deployed_commit ? t.deployed_commit.slice(0, 12) : "—"} mono />
+              <Fact label="deployed" value={t.deployed_at ? `${since(t.deployed_at)} ago` : "—"} />
+              <Fact label="checked" value={t.last_checked ? `${since(t.last_checked)} ago` : "—"} />
+            </div>
+
+            <div style={{ display: "grid", gap: 3 }}>
+              <span style={{ opacity: .55, fontSize: 11, fontFamily: "monospace" }}>
+                latency · {t.sample_count} samples
+              </span>
+              <HealthGraph series={t.series} />
+            </div>
+
+            {t.last_error && (
+              <div className="detail" style={{ color: "#f85149", fontSize: 12, width: "100%" }}>
+                {t.last_error}
+              </div>
+            )}
+
+            {t.incidents.length > 0 && (
+              <div style={{ width: "100%", fontSize: 12 }}>
+                <span style={{ opacity: .55, fontFamily: "monospace", fontSize: 11 }}>incidents</span>
+                {t.incidents.map((i, n) => (
+                  <div key={n} className="detail" style={{ fontSize: 12 }}>
+                    {new Date(i.started_at).toLocaleString()} ·{" "}
+                    {i.ended_at
+                      ? `recovered after ${Math.max(1, Math.round((i.duration_seconds ?? 0) / 60))}m`
+                      : "ONGOING"}
+                    {i.error ? ` — ${i.error}` : ""}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+export function DeliveryPipeline({ initial, health }: { initial?: Pipeline | null; health?: Health | null }) {
   const data = initial;
 
   if (!data) return <div className="detail">Loading delivery pipeline…</div>;
@@ -122,6 +259,9 @@ export function DeliveryPipeline({ initial }: { initial?: Pipeline | null }) {
 
   return (
     <div style={{ display: "grid", gap: 18 }}>
+      {/* Health first: "is it working right now" outranks "did the deploy succeed". */}
+      <DeploymentHealth health={health} />
+
       {/* ---- targets: where anything could go at all ---- */}
       <section className="ct-block">
         <div className="ct-block-title">Deployment targets</div>

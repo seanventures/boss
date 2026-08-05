@@ -5542,6 +5542,33 @@ def delivery_execute_endpoint(deployment_run_id: str):
     return result
 
 
+@app.get("/v1/delivery/health")
+def delivery_health_endpoint(project_id: str):
+    """Health of everything BOSS has deployed for this project.
+
+    Distinct from the deployment's own status: a run that finished 'succeeded' says the deploy
+    worked, not that the app is still serving. This answers the second question.
+    """
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    from .services.deployment_health import health_view
+    with begin(engine) as connection:
+        return health_view(connection, project_id)
+
+
+@app.post("/v1/delivery/health/sweep")
+def delivery_health_sweep_endpoint(project_id: Optional[str] = None):
+    """Probe due targets now instead of waiting for the worker's idle sweep.
+
+    Exists so an operator looking at a stale graph can refresh it, and so the first sample
+    after registering a target does not require waiting out an interval.
+    """
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    from .services.deployment_health import sweep
+    return sweep(engine, settings, project_id=project_id)
+
+
 @app.post("/v1/delivery/deployments/{deployment_run_id}/redeploy")
 def delivery_redeploy_endpoint(deployment_run_id: str, payload: Optional[dict] = None):
     """Ship the same target again as a NEW deployment run.

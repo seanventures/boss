@@ -2387,6 +2387,21 @@ export async function getDeliveryPipelineAction(projectId?: string): Promise<any
   }
 }
 
+/** Health of everything BOSS has deployed — distinct from whether the deploy succeeded. */
+export async function getDeploymentHealthAction(projectId?: string): Promise<any> {
+  const pid = projectId || PROJECT_ID;
+  try {
+    const res = await fetch(
+      `${API_URL}/v1/delivery/health?project_id=${encodeURIComponent(pid)}`,
+      { headers: authHeaders(), cache: "no-store" },
+    );
+    if (!res.ok) return { error: `health ${res.status}` };
+    return await res.json();
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
 /** Retry THIS deployment run (same row) — for one that failed or was blocked. */
 export async function executeDeploymentAction(deploymentRunId: string): Promise<any> {
   try {
