@@ -1952,6 +1952,7 @@ class SoftwareFactoryService:
                 "merged_sha": result.get("merged_sha"),
             }
 
+        recovered_from_stale_base = False
         try:
             merge = self.github.merge_pull_request(pull_request_number, title)
         except IntegrationConfigurationError as error:
@@ -1981,7 +1982,13 @@ class SoftwareFactoryService:
             # Ask GitHub to merge the base INTO the head branch and try once more. That
             # resolves ordinary drift unattended; a genuine textual conflict is refused, and
             # falls through to the failure path below where an agent is needed.
+            #
+            # On a successful retry we MUST fall through to the same completion path as a
+            # clean merge (artifact, _mark_merge_completed, mark_succeeded arity). An early
+            # return after GitHub already merged left BOSS recording failure / skipping
+            # deploy follow-on — merge succeeded on GitHub, BOSS said it failed.
             _msg = str(error)
+            merge = None
             if ("405" in _msg or "not mergeable" in _msg.lower()) and hasattr(
                     self.github, "update_pull_request_branch"):
                 try:
@@ -1994,43 +2001,33 @@ class SoftwareFactoryService:
                              "why": "base branch had moved; merged base into head and retrying"},
                         )
                         merge = self.github.merge_pull_request(pull_request_number, title)
-                        self.receipts.mark_succeeded(
-                            connection, merge_receipt["id"],
-                            {"merged_sha": merge.sha, "recovered": "branch_updated"})
-                        self.events.emit(
-                            connection, project_id,
-                            "software_factory.pull_request_merged", "release_manager",
-                            "receipt", merge_receipt["id"],
-                            {"merged_sha": merge.sha, "receipt_id": merge_receipt["id"],
-                             "pull_request_url": pull_request_url,
-                             "recovered_from": "stale_base"})
-                        return {"status": "merged", "merged_sha": merge.sha,
-                                "pull_request_url": pull_request_url,
-                                "recovered_from": "stale_base"}
+                        recovered_from_stale_base = True
                 except Exception as retry_error:  # noqa: BLE001
                     _msg = f"{_msg} | retry after branch update: {retry_error}"
+                    merge = None
 
-            self.receipts.mark_failed(
-                connection, merge_receipt["id"], {"message": _msg}
-            )
-            self.events.emit(
-                connection,
-                project_id,
-                "software_factory.pull_request_merge_failed",
-                "release_manager",
-                "receipt",
-                merge_receipt["id"],
-                {"message": _msg, "pull_request_url": pull_request_url,
-                 # TIER 2 lives with the caller: a real conflict needs an agent to resolve it,
-                 # which is a coding task, not a git call. Flagged so the caller can route it.
-                 "needs_conflict_resolution": ("405" in _msg
-                                               or "conflict" in _msg.lower())},
-            )
-            return {
-                "status": "failed",
-                "receipt_id": merge_receipt["id"],
-                "message": str(error),
-            }
+            if merge is None:
+                self.receipts.mark_failed(
+                    connection, merge_receipt["id"], {"message": _msg}
+                )
+                self.events.emit(
+                    connection,
+                    project_id,
+                    "software_factory.pull_request_merge_failed",
+                    "release_manager",
+                    "receipt",
+                    merge_receipt["id"],
+                    {"message": _msg, "pull_request_url": pull_request_url,
+                     # TIER 2 lives with the caller: a real conflict needs an agent to resolve it,
+                     # which is a coding task, not a git call. Flagged so the caller can route it.
+                     "needs_conflict_resolution": ("405" in _msg
+                                                   or "conflict" in _msg.lower())},
+                )
+                return {
+                    "status": "failed",
+                    "receipt_id": merge_receipt["id"],
+                    "message": str(error),
+                }
 
         artifact_id = create_artifact(
             connection,
@@ -2048,6 +2045,7 @@ class SoftwareFactoryService:
                 "merged": merge.merged,
                 "message": merge.message,
                 "merge_method": self.settings.sandbox_merge_method,
+                **({"recovered_from": "stale_base"} if recovered_from_stale_base else {}),
             },
             created_by_job_id=created_by_job_id,
         )
@@ -2057,6 +2055,8 @@ class SoftwareFactoryService:
             "pull_request_url": pull_request_url,
             "branch_name": branch_name,
         }
+        if recovered_from_stale_base:
+            result["recovered_from"] = "stale_base"
 
         # THE SEAM: a merged PR becomes a deployment.
         # BOSS already had the whole delivery apparatus — plan_deployment_run, the rollout
@@ -2107,9 +2107,10 @@ class SoftwareFactoryService:
                 "receipt_id": merge_receipt["id"],
                 "pull_request_url": pull_request_url,
                 "merged_sha": merge.sha,
+                **({"recovered_from": "stale_base"} if recovered_from_stale_base else {}),
             },
         )
-        return {
+        out = {
             "status": "created",
             "artifact_id": artifact_id,
             "receipt_id": merge_receipt["id"],
@@ -2119,6 +2120,9 @@ class SoftwareFactoryService:
             "branch_name": branch_name,
             "merged_sha": merge.sha,
         }
+        if recovered_from_stale_base:
+            out["recovered_from"] = "stale_base"
+        return out
 
     def create_deployment(
         self,

@@ -472,3 +472,77 @@ def test_preview_start_and_stop_require_task_create_actor(client, engine):
         json={"actor": "not_a_member"},
     )
     assert stop_stranger.status_code == 403, stop_stranger.text
+
+
+def test_project_member_upsert_does_not_escalate_to_org_scope(client, engine):
+    """Project upsert must not mint org-wide privileges usable on sibling projects.
+
+    f51f19a mirrored every project member (with ON CONFLICT DO UPDATE) into org_members.
+    require_member falls back to org scope, so member_manage on Project A could grant
+    decision_resolve/ceo on Project B without an org-members API call.
+    """
+    project_a = get_settings().default_project_id
+    project_b = "boss-member-escalation-victim"
+    attacker = "project_scoped_attacker"
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                """
+                INSERT INTO projects (id, workspace_id, name, slug)
+                VALUES (:id, 'ws_boss', 'Member escalation victim', :id)
+                ON CONFLICT (id) DO NOTHING
+                """
+            ),
+            {"id": project_b},
+        )
+        connection.execute(
+            text("DELETE FROM org_members WHERE member_id = :m"),
+            {"m": attacker},
+        )
+        connection.execute(
+            text("DELETE FROM project_members WHERE member_id = :m"),
+            {"m": attacker},
+        )
+
+    created = client.post(
+        "/v1/members",
+        json={
+            "project_id": project_a,
+            "member_id": attacker,
+            "display_name": "Project Scoped Attacker",
+            "member_type": "human",
+            "role_keys": ["ceo"],
+            "permissions": [
+                "decision_resolve",
+                "member_manage",
+                "task_create",
+                "command_submit",
+            ],
+            "actor": "ceo",
+        },
+    )
+    assert created.status_code == 201, created.text
+
+    with engine.begin() as connection:
+        org_row = connection.execute(
+            text(
+                "SELECT permissions, role_keys FROM org_members "
+                "WHERE member_id = :m AND status = 'active'"
+            ),
+            {"m": attacker},
+        ).mappings().first()
+    assert org_row is None, (
+        "project collaborator must not appear in org_members; "
+        f"got role_keys={org_row and org_row['role_keys']}"
+    )
+
+    # Sibling project must not authorize the attacker via org fallback.
+    denied = client.post(
+        "/v1/commands/propose",
+        json={
+            "project_id": project_b,
+            "command": "Should be denied — no org-wide grant from project upsert.",
+            "actor": attacker,
+        },
+    )
+    assert denied.status_code in (401, 403), denied.text

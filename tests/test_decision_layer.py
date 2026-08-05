@@ -753,6 +753,14 @@ def t_merge_conflict_recovery() -> None:
                "retry after branch update" in src)
     check_true("a genuine conflict is flagged for an agent (tier 2), not retried forever",
                "needs_conflict_resolution" in src)
+    # Successful recovery must use the same completion path as a clean merge. The first
+    # version called mark_succeeded with the wrong arity (dict as provider_ref, no result),
+    # TypeError'd after GitHub had already merged, then mark_failed — BOSS said failed
+    # while GitHub said merged, and deploy follow-on never fired.
+    check_true("recovered merge falls through to the normal completion path",
+               "recovered_from_stale_base" in src)
+    check_true("recovery does not early-return a bare merged status",
+               'return {"status": "merged"' not in src)
 
     # The recovery must be strictly bounded: one update, one retry. An unbounded loop against
     # a moving base is how a merge storm starts.
