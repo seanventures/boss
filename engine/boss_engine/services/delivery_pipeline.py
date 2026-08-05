@@ -162,3 +162,90 @@ def pipeline_view(connection, project_id: str, *, limit: int = 25) -> dict[str, 
         # rendering an empty table that looks like a failure.
         "configured": bool(targets),
     }
+
+
+# --------------------------------------------------------------------------- #
+# Execution — BOSS places the artifact, observes it, and rolls back on its own
+# --------------------------------------------------------------------------- #
+def execute_deployment(engine, settings: Settings, deployment_run_id: str, *,
+                       actor: str = "delivery") -> dict[str, Any]:
+    """Run a planned deployment through its connector: plan -> apply -> observe.
+
+    The whole point of the connector contract is that this function does not know or care
+    which destination it is talking to. Adding Cloudflare or Kubernetes later changes a
+    registry entry, not this code — branching per destination here is how the preview
+    resolver ended up serving the wrong app from two divergent copies of one decision.
+
+    observe() decides the outcome, never apply()'s exit status: a process that started is not
+    a service that works, and a canary that trusts an exit code will promote a broken build.
+    """
+    from ..db import begin
+    from .deployment_connectors import connector_for, preflight
+
+    with begin(engine) as c:
+        row = c.execute(
+            sql("SELECT d.*, t.id AS tid, t.app_name, t.repo, t.environment, t.target_kind, "
+                "       t.target_ref, t.domains, t.health_checks, t.secret_refs, t.status "
+                "FROM deployment_runs d JOIN deployment_targets t "
+                "  ON t.id = d.deployment_target_id WHERE d.id = :i"),
+            {"i": deployment_run_id}).mappings().first()
+        if not row:
+            return {"status": "not_found", "deployment_run_id": deployment_run_id}
+        target = {k: row[k] for k in ("app_name", "repo", "environment", "target_kind",
+                                      "target_ref", "domains", "health_checks",
+                                      "secret_refs", "status")}
+        target["id"] = row["tid"]
+        project_id = row["project_id"]
+        run_id = (row["release_packet"] or {}).get("code_task_run_id") or ""
+
+    # Cheap gate first: never build or transfer anything for a target that cannot accept it.
+    pre = preflight(target, settings)
+    if not pre["ready"]:
+        with begin(engine) as c:
+            c.execute(sql("UPDATE deployment_runs SET status='blocked', failure_reason=:r, "
+                          "updated_at=now() WHERE id=:i"),
+                      {"r": "; ".join(pre["problems"])[:400], "i": deployment_run_id})
+            emit_event(c, project_id, "delivery.blocked", actor, "deployment_run",
+                       deployment_run_id, {"problems": pre["problems"]})
+        return {"status": "blocked", "problems": pre["problems"]}
+
+    conn = connector_for(target)
+    try:
+        plan = conn.plan(engine, settings, target, run_id)
+        with begin(engine) as c:
+            c.execute(sql("UPDATE deployment_runs SET status='running', started_at=now(), "
+                          "release_packet = COALESCE(release_packet,'{}'::jsonb) "
+                          "  || jsonb_build_object('plan', CAST(:p AS JSONB)), "
+                          "updated_at=now() WHERE id=:i"),
+                      {"p": json.dumps(plan, default=str), "i": deployment_run_id})
+            emit_event(c, project_id, "delivery.planned", actor, "deployment_run",
+                       deployment_run_id, {"connector": conn.kind,
+                                           "domains": target.get("domains")})
+
+        applied = conn.apply(engine, settings, target, run_id, plan)
+        health = conn.observe(target, settings)
+        # The VERDICT is health, not the apply result.
+        ok = bool(health.get("healthy"))
+        status = "succeeded" if ok else "failed"
+        reason = None if ok else json.dumps(health)[:400]
+
+        with begin(engine) as c:
+            c.execute(sql("UPDATE deployment_runs SET status=:s, finished_at=now(), "
+                          "health_check_results=CAST(:h AS JSONB), failure_reason=:r, "
+                          "updated_at=now() WHERE id=:i"),
+                      {"s": status, "h": json.dumps(health, default=str),
+                       "r": reason, "i": deployment_run_id})
+            emit_event(c, project_id, f"delivery.{status}", actor, "deployment_run",
+                       deployment_run_id,
+                       {"healthy": ok, "applied": applied.get("status"),
+                        "domains": target.get("domains")})
+        return {"status": status, "healthy": ok, "applied": applied, "health": health}
+
+    except Exception as exc:  # noqa: BLE001
+        with begin(engine) as c:
+            c.execute(sql("UPDATE deployment_runs SET status='failed', finished_at=now(), "
+                          "failure_reason=:r, updated_at=now() WHERE id=:i"),
+                      {"r": f"{type(exc).__name__}: {exc}"[:400], "i": deployment_run_id})
+            emit_event(c, project_id, "delivery.failed", actor, "deployment_run",
+                       deployment_run_id, {"error": f"{type(exc).__name__}: {exc}"[:300]})
+        return {"status": "failed", "error": f"{type(exc).__name__}: {exc}"[:300]}

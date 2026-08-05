@@ -5525,6 +5525,37 @@ def code_task_activity_endpoint(run_id: str):
     return {"run_id": run_id, "calls": calls}
 
 
+@app.post("/v1/delivery/deployments/{deployment_run_id}/execute")
+def delivery_execute_endpoint(deployment_run_id: str):
+    """Tell BOSS to carry out a planned deployment: plan -> apply -> observe.
+
+    The operator supplies the destination and a credential reference; BOSS does the work. This
+    endpoint is the trigger, not the doer — nothing here knows which connector will run.
+    """
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    from .services.delivery_pipeline import execute_deployment
+    return execute_deployment(engine, settings, deployment_run_id)
+
+
+@app.get("/v1/delivery/targets/{target_id}/preflight")
+def delivery_preflight_endpoint(target_id: str, project_id: str):
+    """Is this target deployable right now, and if not exactly what is missing?
+
+    Cheap and read-only, so an operator never has to run a deployment to discover a
+    credential is absent — which is how provider_account_id was found the first time.
+    """
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    from .services.deployment_connectors import preflight
+    with begin(engine) as c:
+        row = c.execute(text("SELECT * FROM deployment_targets WHERE id=:i AND project_id=:p"),
+                        {"i": target_id, "p": project_id}).mappings().first()
+    if not row:
+        raise HTTPException(status_code=404, detail="no such deployment target")
+    return preflight(dict(row), settings)
+
+
 @app.get("/v1/delivery/pipeline")
 def delivery_pipeline_endpoint(project_id: str, limit: int = 25):
     """Code task -> PR -> deployment -> health, assembled in ONE query pass.
