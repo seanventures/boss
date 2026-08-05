@@ -1,7 +1,7 @@
 # Deployment connectors — one pipeline, many destinations
 
-**Status:** design; SSH/container connector registered and ready, others not built
-**Written:** 2026-08-05
+**Status:** SSH/container connector **built and proven in production**; others not built
+**Written:** 2026-08-05 · **First real deployment:** 2026-08-05
 
 ---
 
@@ -59,9 +59,20 @@ Four properties are non-negotiable, each because its absence has already cost so
 
 ## 3. Connectors
 
+A connector also chooses **how the payload runs**, because that is not a property of the
+destination but of the app:
+
+- **static** — a servable file tree, run under stock `nginx:alpine`.
+- **py** — the app source, run under `python:3.12-slim` with `PORT`/`HOST` injected.
+
+Both ship a directory called `dist`, so staging, rollback and cleanup stay one implementation
+and only the container command varies. The mode is not configured; it is **derived from the app**
+by `preview_service.resolve_app_entry` — the same resolver the preview uses, so a deployment and
+a preview of the same commit can never disagree about which app they are showing.
+
 | kind | artifact | credential | health | rollback | status |
 |---|---|---|---|---|---|
-| **ssh / container** | image or dist tarball | SSH key (file ref) | HTTP check on the domain | previous image tag / release dir | **target registered, connector next** |
+| **ssh / container** | dist tree (static) or source (py) | SSH key (file ref) | HTTP check on the domain | previous release dir | **built; live deployment proven** |
 | **cloudflare** | static bundle | API token | URL 200 + hash match | previous deployment id | designed |
 | **kubernetes** | image + manifests/helm | kubeconfig | rollout status + readiness | `helm rollback` / previous revision | designed |
 | **terraform** | plan/apply of HCL | cloud creds | provider state + outputs | prior state file | designed |
@@ -92,11 +103,22 @@ Per-connector references follow the same shape: `CLOUDFLARE_API_TOKEN`,
 
 ```
 stock-app   ssh://ubuntu@3.94.66.139   staging   active
-domain      stocks.local.sean.network
-secret_ref  BOSS_SSH_HOST_PRIVATE_KEY_FILE
-health      GET / expect 200
-requires    container_runtime: docker
+domain      3.94.66.139:3004
+secret_ref  BOSS_SSH_HOST_PRIVATE_KEY_FILE  (-> ~/.config/boss/deploy_key)
+health      GET / expect 200, scheme http
+requires    container_runtime: docker, app_port: 3004
 ```
+
+Three of those fields were wrong on the first attempt, each in a way worth keeping:
+
+- **The domain pointed somewhere else.** `stocks.local.sean.network` resolves to `100.71.187.10`
+  — a different host entirely. BOSS would have deployed to AWS and health-checked goldeneye,
+  and a 200 from the unrelated box would have reported the deployment green.
+- **The port was a guess.** With no `app_port` declared, the connector defaulted to 8080, which
+  another service already held. A default is a guess about someone else's machine.
+- **The scheme was assumed.** `observe()` hardcoded `https://`; a staging box reached by IP has
+  no TLS. `scheme` is now explicit rather than inferred from the shape of the domain, because an
+  inferred rule is invisible until it is wrong.
 
 **BOSS owns the deployment.** The operator supplies the target and the credential reference;
 BOSS plans, applies, observes and rolls back. Nothing about this design has a human running a
@@ -130,6 +152,40 @@ reviewable change rather than a config toggle.
 
 Steps 3–5 stay unbuilt until step 2 works. Nine empty deployment tables are what happens when
 that order is reversed.
+
+**Steps 1–3 are done.** The stock app is live on the AWS host, deployed by BOSS, serving its UI
+and its `/api/*` routes from one container; `POST /api/register` returns 201 and
+`GET /api/quote/AAPL` returns a price.
+
+## 7a. What the first real deployment taught
+
+Seven distinct defects sat between "target registered" and "app serving". None were visible
+from reading the code; each needed the deployment to actually run. Recorded because they are a
+class, not a list:
+
+1. **Cleanup deleted the operator's private key.** `_ssh_key_file` returns a referenced key or
+   a temp file BOSS made, and cleanup unlinked whichever it got. Every deploy destroyed its own
+   credential, and the failure appeared on the NEXT run — which is why the missing
+   `kaappu-demo.pem` had no obvious cause. *Cleanup must follow ownership, never the value.*
+   Pinned by `tests/test_deploy_key_ownership.py`, which fails against the old code.
+2. **A hand-maintained column list stranded a feature.** `execute_deployment` built its target
+   from a fixed key list that omitted `required_resources`, so the declared port never reached
+   the connector and it silently fell back to 8080. Same defect as `_row_to_profile` dropping
+   profile columns. *A projection that must be extended per consumer will eventually not be.*
+3. **A precondition was checked against a different path than the deploy wrote.** Preflight
+   tested `/opt/boss-apps`; apply wrote `/opt/boss-apps/stock-app`, which was root-owned. Now
+   one `REMOTE_BASE` constant and a probe of the actual app directory.
+4. **Preconditions the host could answer were discovered by attempting the deployment.** A
+   missing directory surfaced only after a build and a transfer. `validate()` now asks the host.
+5. **A race read as a busy port.** `docker rm -f` returns before the endpoint is torn down, so
+   the immediate `run` failed on "external connectivity" with nothing holding the port.
+6. **Truncated errors hid the answer.** The message was cut at 200 chars — one character before
+   the port number that explained everything. Twice in this codebase now.
+7. **The wrong app deployed, and health said green.** The build picked the first `*/index.html`
+   alphabetically in a repo holding three apps, shipping SUDOKU to a stock-app target. A 200
+   from the wrong app is still a 200: **health checks verify liveness, never identity.** Only
+   choosing correctly can do that, which is why the resolver is shared with preview and fails
+   closed on ambiguity.
 
 ## 8. What is deliberately not designed yet
 

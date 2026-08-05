@@ -182,19 +182,26 @@ def execute_deployment(engine, settings: Settings, deployment_run_id: str, *,
     from ..db import begin
     from .deployment_connectors import connector_for, preflight
 
+    # Two plain reads instead of a join with a hand-listed projection. The projection version
+    # silently dropped `required_resources`, so the connector never saw the target's declared
+    # app_port and fell back to 8080 — a port already taken on that host. The deployment failed
+    # with "address already in use" for a port nobody had configured, which is the least
+    # debuggable shape a bug can take.
+    #
+    # A column list that must be extended every time a consumer reads a new field is a standing
+    # invitation to that failure (the same defect as `_row_to_profile` dropping new profile
+    # columns). Passing the row through means adding a column can never again strand a feature.
     with begin(engine) as c:
-        row = c.execute(
-            sql("SELECT d.*, t.id AS tid, t.app_name, t.repo, t.environment, t.target_kind, "
-                "       t.target_ref, t.domains, t.health_checks, t.secret_refs, t.status "
-                "FROM deployment_runs d JOIN deployment_targets t "
-                "  ON t.id = d.deployment_target_id WHERE d.id = :i"),
-            {"i": deployment_run_id}).mappings().first()
+        row = c.execute(sql("SELECT * FROM deployment_runs WHERE id = :i"),
+                        {"i": deployment_run_id}).mappings().first()
         if not row:
             return {"status": "not_found", "deployment_run_id": deployment_run_id}
-        target = {k: row[k] for k in ("app_name", "repo", "environment", "target_kind",
-                                      "target_ref", "domains", "health_checks",
-                                      "secret_refs", "status")}
-        target["id"] = row["tid"]
+        trow = c.execute(sql("SELECT * FROM deployment_targets WHERE id = :t"),
+                         {"t": row["deployment_target_id"]}).mappings().first()
+        if not trow:
+            return {"status": "not_found", "reason": "deployment_target missing",
+                    "deployment_run_id": deployment_run_id}
+        target = dict(trow)
         project_id = row["project_id"]
         run_id = (row["release_packet"] or {}).get("code_task_run_id") or ""
 

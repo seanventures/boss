@@ -40,6 +40,34 @@ class DeploymentConnector(Protocol):
                  to: dict) -> dict: ...
 
 
+def _app_port(target: dict, default: int = 8080) -> int:
+    """The host port the app is published on, declared by the target.
+
+    A default of 8080 is a guess about someone else's machine. The first real target already
+    had 8080 occupied by an unrelated service, so `docker run -p 8080:80` would have failed
+    after the build and transfer were paid for. A target that shares a host with anything else
+    must be able to SAY which port is its own.
+    """
+    for res in target.get("required_resources") or []:
+        if isinstance(res, dict) and res.get("kind") == "app_port":
+            try:
+                return int(res.get("name") or res.get("value") or default)
+            except (TypeError, ValueError):
+                break
+    return default
+
+
+def _health_url(domain: str, check: dict) -> str:
+    """Where observe() looks. `scheme` is explicit, never inferred from the shape of a domain.
+
+    Inferring it (e.g. "has a port, so http") is the kind of rule that is invisible until it is
+    wrong. A staging box reached by IP is plain http; a real domain is https; the target says
+    which rather than the code guessing.
+    """
+    scheme = str(check.get("scheme") or "https").lower()
+    return f"{scheme}://{domain}{check.get('path', '/')}"
+
+
 def _split_ref(target_ref: str) -> tuple[str, str, int]:
     """`user@host:port` in any of its shorter forms -> (user, host, port)."""
     ref = (target_ref or "").strip()
@@ -99,6 +127,61 @@ class SSHContainerConnector:
             problems.append("target has no domain, so health cannot be observed")
         if not (target.get("health_checks") or []):
             problems.append("target declares no health_checks; observe() would have no verdict")
+
+        # Local checks passed; now ask the HOST whether it can actually receive a deployment.
+        # Skipped when anything above already failed, so a broken config costs no round trip.
+        if not problems:
+            problems.extend(self._host_problems(target, settings))
+        return problems
+
+    # Prerequisites that only the destination can answer. These were discovered the expensive
+    # way: the first real deployment built the app, transferred it, and only then failed on
+    # `mkdir /opt/boss-apps: Permission denied`. A precondition the host can be ASKED about
+    # must not be discovered by attempting the deployment.
+    def _host_problems(self, target: dict, settings: Settings) -> list[str]:
+        from .deploy_service import REMOTE_BASE, _app_name, _ssh, _ssh_key_file
+
+        user, host, port = _split_ref(target.get("target_ref", ""))
+        # The directory apply() actually writes, derived the SAME way apply() derives it. A
+        # preflight that checks the parent while the deploy writes the child is a check that
+        # passes and a deploy that fails — which is exactly what happened here: /opt/boss-apps
+        # was writable, /opt/boss-apps/stock-app was root-owned from an earlier attempt.
+        app_dir = f"{REMOTE_BASE}/{_app_name(target.get('repo') or '', target.get('app_name'))}"
+        try:
+            key = _ssh_key_file(settings)
+        except Exception as exc:  # noqa: BLE001 — surfaced as a problem, never a crash
+            return [f"ssh key unusable: {exc}"]
+
+        # One round trip answers everything: reachability, the deploy dir, and the runtime.
+        # An absent app dir is fine — apply() creates it. An existing one BOSS cannot write is
+        # not, so "missing" and "unwritable" must not collapse into the same answer.
+        probe = (f"test -w {REMOTE_BASE} && echo BASE_OK || echo BASE_NO; "
+                 f"{{ test ! -e {app_dir} || test -w {app_dir}; }} && echo APP_OK || echo APP_NO; "
+                 f"command -v docker >/dev/null && echo DOCKER_OK || echo DOCKER_NO")
+        try:
+            res = _ssh(key, host, user, port, probe, timeout=25)
+        except Exception as exc:  # noqa: BLE001
+            return [f"host {host} unreachable over ssh: {type(exc).__name__}: {exc}"[:200]]
+
+        if res.returncode != 0:
+            return [f"ssh to {user}@{host} failed: "
+                    f"{(res.stderr or res.stdout or '').strip()[:200]}"]
+
+        out = res.stdout or ""
+        problems: list[str] = []
+        if "BASE_OK" not in out:
+            # Actionable on purpose: an operator should not have to read our source to learn
+            # what to grant. This is host provisioning, like installing docker — the operator
+            # prepares the destination, BOSS performs the deployment.
+            problems.append(
+                f"{REMOTE_BASE} is not writable by {user} on {host}; prepare the host once: "
+                f"sudo mkdir -p {REMOTE_BASE} && sudo chown {user} {REMOTE_BASE}")
+        if "APP_NO" in out:
+            problems.append(
+                f"{app_dir} exists on {host} but is not writable by {user}; "
+                f"fix once: sudo chown -R {user} {app_dir}")
+        if "DOCKER_OK" not in out:
+            problems.append(f"docker is not on PATH for {user}@{host}")
         return problems
 
     # -- plan -------------------------------------------------------------------
@@ -126,7 +209,7 @@ class SSHContainerConnector:
 
         user, host, port = _split_ref(target.get("target_ref", ""))
         result = deploy_ssh(engine, settings, run_id, host=host, user=user, ssh_port=port,
-                            name=target.get("app_name"))
+                            app_port=_app_port(target), name=target.get("app_name"))
         result["connector"] = self.kind
         return result
 
@@ -148,7 +231,7 @@ class SSHContainerConnector:
             if check.get("kind") != "http":
                 results.append({"check": check, "skipped": "unsupported kind"})
                 continue
-            url = f"https://{domains[0]}{check.get('path', '/')}"
+            url = _health_url(domains[0], check)
             expect = int(check.get("expect", 200))
             try:
                 req = urllib.request.Request(url, method="GET")

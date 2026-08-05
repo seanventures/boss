@@ -199,6 +199,15 @@ def resolve_app_entry(workdir: Path, changed: Optional[list[str]] = None) -> tup
     for rel in _STATIC_DIRS:
         if (workdir / rel / "index.html").is_file():
             candidates.append(("static", rel))
+    # Any OTHER top-level directory holding an index.html is a candidate too. Counting only the
+    # convention names made a multi-app repo look unambiguous: boss-sandbox holds web/ (Sudoku),
+    # web-stock/ and web-nqueens/, but only "web" is a convention, so a task with no signal got
+    # a confident answer of SUDOKU rather than the refusal this function promises. Ambiguity has
+    # to be measured against what the repo actually contains.
+    for cand in sorted(workdir.glob("*/index.html")):
+        rel = cand.parent.name
+        if ("static", rel) not in candidates:
+            candidates.append(("static", rel))
     if not candidates and (workdir / "package.json").exists():
         candidates.append(("node", "."))
     if len(candidates) == 1:
