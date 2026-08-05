@@ -155,6 +155,10 @@ class Settings(BaseSettings):
     ssh_host_deploy_allowed: bool = Field(
         default=False, alias="BOSS_SSH_HOST_DEPLOY_ALLOWED"
     )
+    # Path to the key, preferred over pasting material into config. Keeps the secret on
+    # disk at 0600 instead of in a process environment.
+    ssh_host_private_key_file: Optional[str] = Field(
+        default=None, alias="BOSS_SSH_HOST_PRIVATE_KEY_FILE")
     ssh_host_private_key: Optional[str] = Field(
         default=None, alias="BOSS_SSH_HOST_PRIVATE_KEY"
     )

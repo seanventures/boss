@@ -133,9 +133,26 @@ def render_plan_markdown(plan: dict) -> str:
 
 # --- Phase 2 (actuate) + Phase 3 (health-gate + rollback) --------------------------------------
 def _ssh_key_file(settings: Settings) -> str:
+    # Prefer a PATH to the key over the key material in an env var. A private key pasted into
+    # configuration ends up in process listings, crash dumps and, sooner or later, a commit.
+    # A file reference keeps the secret on disk at 0600 and lets the operator manage it with
+    # normal key hygiene; the material form stays supported for containerised deployments
+    # where mounting a file is awkward.
+    key_path = (getattr(settings, "ssh_host_private_key_file", "") or "").strip()
+    if key_path:
+        expanded = os.path.expanduser(key_path)
+        if not os.path.isfile(expanded):
+            raise RuntimeError(
+                f"BOSS_SSH_HOST_PRIVATE_KEY_FILE points at {key_path!r}, which does not exist")
+        if (os.stat(expanded).st_mode & 0o077):
+            raise RuntimeError(
+                f"{key_path} is group/world readable; ssh will refuse it. chmod 600 it.")
+        return expanded
     key = (getattr(settings, "ssh_host_private_key", "") or "").strip()
     if not key:
-        raise RuntimeError("BOSS_SSH_HOST_PRIVATE_KEY is not set (SecretRef required to reach the host)")
+        raise RuntimeError(
+            "No SSH key configured: set BOSS_SSH_HOST_PRIVATE_KEY_FILE (path, preferred) "
+            "or BOSS_SSH_HOST_PRIVATE_KEY (material)")
     fd, path = tempfile.mkstemp(suffix=".pem")
     with os.fdopen(fd, "w") as h:
         h.write(key if key.endswith("\n") else key + "\n")
