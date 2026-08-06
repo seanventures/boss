@@ -350,10 +350,19 @@ export function OnboardWizard({ secrets }: { secrets: Secret[] }) {
           </div>
           <div>
             <button style={btn} disabled={pending} onClick={check}>Run preflight</button>
-            <button style={{ ...btn, marginLeft: 8 }}
-                    disabled={pending || !preflight?.ready}
-                    title={preflight?.ready ? "" : "preflight must be clean first"}
-                    onClick={() => setStep(4)}>
+            <button style={{ ...btn, marginLeft: 8, opacity: preflight?.ready ? 1 : 0.65 }}
+                    disabled={pending}
+                    onClick={() => {
+                      // Same rule as Destroy: the click explains itself. A disabled button
+                      // that only speaks through a tooltip reads as a broken one.
+                      if (!preflight?.ready) {
+                        say(preflight
+                          ? "preflight still reports problems — fix those first"
+                          : "run preflight first");
+                        return;
+                      }
+                      setStep(4);
+                    }}>
               Continue →
             </button>
           </div>
@@ -401,6 +410,14 @@ function TeardownControls({ target }: { target: { id: string; app_name: string }
   const [msg, setMsg] = useState<string | null>(null);
 
   const run = (mode: "stop" | "destroy") => start(async () => {
+    // Validate on CLICK rather than by disabling the button. A disabled control that explains
+    // itself only in a tooltip is indistinguishable from a broken one: the click does nothing
+    // and says nothing, which is exactly how this read the first time someone used it.
+    if (mode === "destroy" && confirm !== target.app_name) {
+      setMsg(`type “${target.app_name}” in the box to confirm — this is deliberate friction, `
+             + `because removing the wrong app is not undoable`);
+      return;
+    }
     setMsg(mode === "stop" ? "stopping…" : "removing…");
     const out = await teardownTargetAction(target.id, {
       stop_only: mode === "stop",
@@ -432,9 +449,11 @@ function TeardownControls({ target }: { target: { id: string; app_name: string }
                onChange={(e) => setWithData(e.target.checked)} />
         also delete data
       </label>
-      <button style={{ ...btn, borderColor: "rgba(248,81,73,.5)", color: "#f85149" }}
-              disabled={pending || confirm !== target.app_name}
-              title={confirm === target.app_name ? "" : "type the app name to enable"}
+      {/* Deliberately NOT disabled: the click is what surfaces the reason. Only `pending`
+          blocks it, so a second click cannot fire a second teardown. */}
+      <button style={{ ...btn, borderColor: "rgba(248,81,73,.5)", color: "#f85149",
+                       opacity: confirm === target.app_name ? 1 : 0.65 }}
+              disabled={pending}
               onClick={() => run("destroy")}>
         {withData ? "Destroy + data" : "Destroy"}
       </button>
