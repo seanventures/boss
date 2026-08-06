@@ -16,7 +16,7 @@
  *     this is meant to remove.
  */
 
-import { useState, useTransition } from "react";
+import { useEffect, useState, useTransition } from "react";
 
 import {
   bindSecretAction, bootstrapTargetAction, createTargetAction, deployTargetAction,
@@ -43,6 +43,44 @@ const input: React.CSSProperties = {
   fontSize: 12, padding: "5px 8px", borderRadius: 6, background: "rgba(255,255,255,.04)",
   border: "1px solid rgba(255,255,255,.14)", color: "inherit", minWidth: 150,
 };
+
+/**
+ * "Still working" — a spinner plus an elapsed-seconds counter.
+ *
+ * A deploy or teardown is several SSH round trips and can run 10-30 seconds. Silence for that
+ * long is indistinguishable from a hang, which is what "the console froze" actually means: not
+ * that the browser locked up, but that nothing said whether anything was happening.
+ *
+ * The seconds matter more than the spinner. A spinner alone proves the animation is running; a
+ * rising count proves the REQUEST is still alive, and lets someone judge "slow" against "stuck"
+ * without opening devtools.
+ *
+ * Animated with SVG SMIL rather than CSS keyframes deliberately: this console applies a
+ * per-area CSS allow-list, so a new keyframe would need registering in three places and would
+ * silently do nothing until it was. Self-contained markup cannot be defeated that way.
+ */
+function Working({ label }: { label: string }) {
+  const [secs, setSecs] = useState(0);
+  useEffect(() => {
+    const t = setInterval(() => setSecs((s) => s + 1), 1000);
+    return () => clearInterval(t);
+  }, []);
+  return (
+    <span style={{ display: "inline-flex", gap: 7, alignItems: "center", fontSize: 12 }}
+          role="status" aria-live="polite">
+      <svg width="13" height="13" viewBox="0 0 40 40" aria-hidden="true">
+        <circle cx="20" cy="20" r="16" fill="none" stroke="currentColor" strokeWidth="5"
+                opacity="0.18" />
+        <path d="M20 4 a16 16 0 0 1 16 16" fill="none" stroke="currentColor" strokeWidth="5"
+              strokeLinecap="round">
+          <animateTransform attributeName="transform" type="rotate" from="0 20 20"
+                            to="360 20 20" dur="0.9s" repeatCount="indefinite" />
+        </path>
+      </svg>
+      <span>{label}… {secs}s</span>
+    </span>
+  );
+}
 
 function Field({ label, ...rest }: { label: string } & React.InputHTMLAttributes<HTMLInputElement>) {
   return (
@@ -185,6 +223,7 @@ export function OnboardWizard({ secrets }: { secrets: Secret[] }) {
   const [pending, start] = useTransition();
   const [step, setStep] = useState(1);
   const [log, setLog] = useState<string[]>([]);
+  const [busy, setBusy] = useState<string | null>(null);
   const [targetId, setTargetId] = useState<string | null>(null);
   const [preflight, setPreflight] = useState<{ ready: boolean; problems: string[] } | null>(null);
 
@@ -197,6 +236,8 @@ export function OnboardWizard({ secrets }: { secrets: Secret[] }) {
   const say = (line: string) => setLog((l) => [...l, line]);
 
   const create = () => start(async () => {
+    setBusy("Creating target");
+    try {
     say("registering target…");
     const out = await createTargetAction({
       app_name: form.app_name, repo: form.repo, environment: form.environment,
@@ -213,9 +254,12 @@ export function OnboardWizard({ secrets }: { secrets: Secret[] }) {
       say(bound?.error ? `binding failed: ${bound.error}` : "credential bound");
     }
     setStep(2);
+    } finally { setBusy(null); }
   });
 
   const bootstrap = () => start(async () => {
+    setBusy("Preparing host");
+    try {
     if (!targetId) return;
     say("preparing the host…");
     const out = await bootstrapTargetAction(targetId, true);
@@ -224,15 +268,19 @@ export function OnboardWizard({ secrets }: { secrets: Secret[] }) {
     (out.problems || []).forEach((p: string) => say(`✗ ${p}`));
     if (out.applied_port) say(`port ${out.applied_port} written to the target`);
     setStep(3);
+    } finally { setBusy(null); }
   });
 
   const check = () => start(async () => {
+    setBusy("Running preflight");
+    try {
     if (!targetId) return;
     say("preflight…");
     const out = await preflightTargetAction(targetId);
     setPreflight(out);
     (out.problems || []).forEach((p: string) => say(`✗ ${p}`));
     if (out.ready) say("✓ ready to deploy");
+    } finally { setBusy(null); }
   });
 
   const finish = () => start(async () => {
@@ -387,6 +435,8 @@ export function OnboardWizard({ secrets }: { secrets: Secret[] }) {
         </div>
       )}
 
+      {busy && <div style={{ marginTop: 10 }}><Working label={busy} /></div>}
+
       {log.length > 0 && (
         <pre style={{ marginTop: 12, fontSize: 11, background: "rgba(255,255,255,.04)",
                       padding: 10, borderRadius: 6, maxHeight: 200, overflow: "auto" }}>
@@ -408,6 +458,9 @@ function TeardownControls({ target }: { target: { id: string; app_name: string }
   const [confirm, setConfirm] = useState("");
   const [withData, setWithData] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
+  // Which action is in flight, so the indicator says "Destroying" rather than a generic
+  // "working" that could mean either verb.
+  const [busy, setBusy] = useState<string | null>(null);
 
   const run = (mode: "stop" | "destroy") => start(async () => {
     // Validate on CLICK rather than by disabling the button. A disabled control that explains
@@ -418,12 +471,20 @@ function TeardownControls({ target }: { target: { id: string; app_name: string }
              + `because removing the wrong app is not undoable`);
       return;
     }
-    setMsg(mode === "stop" ? "stopping…" : "removing…");
-    const out = await teardownTargetAction(target.id, {
-      stop_only: mode === "stop",
-      include_data: mode === "destroy" && withData,
-      confirm: mode === "stop" ? undefined : confirm,
-    });
+    setMsg(null);
+    setBusy(mode === "stop" ? "Stopping" : (withData ? "Destroying + data" : "Destroying"));
+    // finally, not a trailing call: an indicator that never stops asserts work is happening
+    // when it is not, which is a worse lie than showing nothing.
+    let out: any;
+    try {
+      out = await teardownTargetAction(target.id, {
+        stop_only: mode === "stop",
+        include_data: mode === "destroy" && withData,
+        confirm: mode === "stop" ? undefined : confirm,
+      });
+    } finally {
+      setBusy(null);
+    }
     if (out?.error) { setMsg(`failed: ${typeof out.error === "string" ? out.error : JSON.stringify(out.error).slice(0, 160)}`); return; }
     const freed = out.reclaimed_kb ? `${(out.reclaimed_kb / 1024).toFixed(1)} MB reclaimed` : "";
     setMsg(`${(out.removed || []).join("; ")}${freed ? ` — ${freed}` : ""}`
@@ -441,6 +502,7 @@ function TeardownControls({ target }: { target: { id: string; app_name: string }
               title="Stop the container; files and data stay, so a redeploy brings it back">
         Stop
       </button>
+      {busy && <Working label={busy} />}
       <input style={{ ...input, minWidth: 130 }} value={confirm}
              placeholder={`type ${target.app_name}`}
              onChange={(e) => setConfirm(e.target.value)} />
@@ -457,7 +519,7 @@ function TeardownControls({ target }: { target: { id: string; app_name: string }
               onClick={() => run("destroy")}>
         {withData ? "Destroy + data" : "Destroy"}
       </button>
-      <button style={btn} onClick={() => setOpen(false)}>Cancel</button>
+      <button style={btn} disabled={pending} onClick={() => setOpen(false)}>Cancel</button>
       {msg && <span className="detail" style={{ fontSize: 12 }}>{msg}</span>}
     </span>
   );
@@ -470,6 +532,7 @@ export function TargetControls({ target }: {
   const [pending, start] = useTransition();
   const [state, setState] = useState({ auto: !!target.auto_deploy, paused: !!target.paused });
   const [msg, setMsg] = useState<string | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
   const [ref, setRef] = useState("");
 
   // A retired target cannot be deployed — the API refuses with 409 — so deploy controls would
@@ -486,21 +549,25 @@ export function TargetControls({ target }: {
         <button style={btn} disabled={pending}
                 title="Reactivate, re-prepare the host, and deploy again"
                 onClick={() => start(async () => {
-                  setMsg("restoring…");
-                  const back = await reactivateTargetAction(target.id);
+                  setMsg(null); setBusy("Restoring");
+                  let back: any, boot: any;
+                  try {
+                  back = await reactivateTargetAction(target.id);
                   if (back?.error) { setMsg(`failed: ${back.error}`); return; }
                   // The host directories went with the destroy, so they have to be recreated
                   // before anything can be transferred into them.
-                  const boot = await bootstrapTargetAction(target.id, false);
+                  boot = await bootstrapTargetAction(target.id, false);
                   if (boot?.error || boot?.problems?.length) {
                     setMsg(`restored, but the host needs attention: `
                            + `${boot?.error || boot.problems.join("; ")}`);
                     return;
                   }
                   setMsg("restored and host prepared — press Deploy to ship it again");
+                  } finally { setBusy(null); }
                 })}>
           Restore
         </button>
+        {busy && <Working label={busy} />}
         {msg && <span className="detail" style={{ fontSize: 12 }}>{msg}</span>}
       </span>
     );
@@ -530,13 +597,17 @@ export function TargetControls({ target }: {
              onChange={(e) => setRef(e.target.value)} />
       <button style={btn} disabled={pending}
               onClick={() => start(async () => {
-                setMsg("deploying…");
-                const out = await deployTargetAction(target.id, ref);
+                setMsg(null); setBusy("Deploying");
+                let out: any;
+                try {
+                  out = await deployTargetAction(target.id, ref);
+                } finally { setBusy(null); }
                 setMsg(out?.error ? `failed: ${out.error}`
                   : `${out.status}${out.healthy === false ? " (unhealthy)" : ""}`);
               })}>
         Deploy
       </button>
+      {busy && <Working label={busy} />}
       <TeardownControls target={target} />
       {msg && <span className="detail">{msg}</span>}
     </div>
