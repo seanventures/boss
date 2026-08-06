@@ -117,7 +117,10 @@ function DeployActions({ stage }: { stage: Stage }) {
 
 type HealthTarget = {
   target_id: string; app_name: string; environment: string; url: string | null;
-  status: "up" | "degraded" | "down" | "unknown"; status_since: string | null;
+  // `not_deployed` is a registered destination with nothing shipped to it — a distinct
+  // state from "unknown" (probed, no data) and from "down".
+  status: "up" | "degraded" | "down" | "unknown" | "not_deployed";
+  status_since: string | null;
   uptime_24h: number | null; uptime_7d: number | null;
   avg_ms: number | null; p95_ms: number | null;
   last_checked: string | null; last_latency_ms: number | null; last_error: string | null;
@@ -128,7 +131,8 @@ type HealthTarget = {
 };
 export type Health = {
   project_id: string; targets: HealthTarget[];
-  summary: { up: number; degraded: number; down: number; unknown: number; overall: string; total: number };
+  summary: { up: number; degraded: number; down: number; unknown: number;
+             not_deployed?: number; overall: string; total: number };
   error?: string;
 };
 
@@ -180,7 +184,7 @@ export function DeploymentHealth({ health }: { health?: Health | null }) {
         <span className="detail" style={{ fontSize: 12, marginLeft: 8 }}>
           {summary.up} up · {summary.degraded} degraded · {summary.down} down
           {summary.unknown ? ` · ${summary.unknown} unknown` : ""}
-          {(summary as any).not_deployed ? ` · ${(summary as any).not_deployed} never deployed` : ""}
+          {summary.not_deployed ? ` · ${summary.not_deployed} never deployed` : ""}
         </span>
       </div>
 

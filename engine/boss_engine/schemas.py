@@ -5577,7 +5577,15 @@ class DeploymentRunSummary(BaseModel):
     commit_ref: Optional[str] = None
     status: str
     release_packet: dict[str, Any]
-    health_check_results: list[dict[str, Any]]
+    # Either shape, because both are in the table. Older rows hold a LIST of check results;
+    # rows written by the connector hold the observe() verdict — {"healthy": bool, "checks":
+    # [...]} — which carries the overall answer alongside the individual probes.
+    #
+    # Declared narrowly as `list`, this 500'd the endpoint the moment the connector wrote its
+    # first real deployment. That is the third response model today describing a shape its
+    # writer had stopped producing: the schema and the writer are edited in different files, and
+    # nothing fails until something reads it.
+    health_check_results: Union[list[dict[str, Any]], dict[str, Any]]
     rollback_plan: list[str]
     release_receipt_ids: list[dict[str, Any]]
     created_by: str

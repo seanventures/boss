@@ -83,6 +83,20 @@ function Working({ label }: { label: string }) {
   );
 }
 
+/**
+ * Which required fields are empty. Used INSTEAD of disabling a button.
+ *
+ * A control disabled for missing input is indistinguishable from a broken one: the click does
+ * nothing and says nothing, and the operator is left guessing which box matters. This shipped
+ * three times in this console — Destroy, the wizard's Continue, and Create target — and each
+ * was reported as "nothing happens". Disabling now means only "a request is in flight".
+ */
+function missingFields(required: Record<string, unknown>): string[] {
+  return Object.entries(required)
+    .filter(([, v]) => v === undefined || v === null || String(v).trim() === "")
+    .map(([k]) => k);
+}
+
 function Field({ label, ...rest }: { label: string } & React.InputHTMLAttributes<HTMLInputElement>) {
   return (
     <label style={{ display: "grid", gap: 3 }}>
@@ -107,6 +121,8 @@ export function SecretsPanel({ initial }: { initial?: SecretsView | null }) {
   const secrets = initial?.secrets ?? [];
 
   const upload = () => start(async () => {
+    const gaps = missingFields({ name, value });
+    if (gaps.length) { setMsg(`fill in: ${gaps.join(", ")}`); return; }
     setMsg("uploading…"); setPublicKey(null);
     const out = await putSecretAction({ name, value, secret_kind: kind, backend });
     // The value is cleared immediately: it has been written through, and keeping it in a form
@@ -116,6 +132,8 @@ export function SecretsPanel({ initial }: { initial?: SecretsView | null }) {
   });
 
   const keygen = () => start(async () => {
+    const gaps = missingFields({ name });
+    if (gaps.length) { setMsg(`fill in: ${gaps.join(", ")}`); return; }
     setMsg("generating…"); setPublicKey(null);
     const out = await generateKeypairAction({ name, backend });
     if (out?.error) { setMsg(`failed: ${out.error}`); return; }
@@ -154,8 +172,8 @@ export function SecretsPanel({ initial }: { initial?: SecretsView | null }) {
         <Field label="value (write-only)" type="password" value={value}
                placeholder="paste — never shown again"
                onChange={(e) => setValue(e.target.value)} />
-        <button style={btn} disabled={pending || !name || !value} onClick={upload}>Upload</button>
-        <button style={btn} disabled={pending || !name} onClick={keygen}
+        <button style={btn} disabled={pending} onClick={upload}>Upload</button>
+        <button style={btn} disabled={pending} onClick={keygen}
                 title="BOSS generates the pair, keeps the private half, and shows you the public one">
           Generate keypair
         </button>
@@ -267,10 +285,14 @@ export function MonitoringPanel({ initial, hostTargetId }: {
       </div>
 
       <div style={{ ...box, display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
-        <button style={btn} disabled={pending || !hostTargetId}
-                title={hostTargetId ? "Regenerate the config from the registry and deploy"
-                                    : "needs an active target to borrow a host and credential"}
+        <button style={btn} disabled={pending}
+                title="Regenerate the config from the registry and deploy"
                 onClick={() => start(async () => {
+                  if (!hostTargetId) {
+                    setMsg("no active deployment target — the stack borrows a host and "
+                           + "credential from one, so onboard an app first");
+                    return;
+                  }
                   setMsg(null); setBusy("Deploying stack");
                   let out: any;
                   try { out = await deployObservabilityAction(hostTargetId!); }
@@ -347,6 +369,10 @@ export function OnboardWizard({ secrets }: { secrets: Secret[] }) {
   const say = (line: string) => setLog((l) => [...l, line]);
 
   const create = () => start(async () => {
+    const gaps = missingFields({
+      "app name": form.app_name, repo: form.repo, "host (user@host)": form.target_ref,
+    });
+    if (gaps.length) { say(`fill in: ${gaps.join(", ")}`); return; }
     setBusy("Creating target");
     try {
     say("registering target…");
@@ -482,8 +508,7 @@ export function OnboardWizard({ secrets }: { secrets: Secret[] }) {
             because anything that could would already need access to the host.
           </div>
           <div>
-            <button style={btn} disabled={pending || !form.app_name || !form.repo || !form.target_ref}
-                    onClick={create}>Create target →</button>
+            <button style={btn} disabled={pending} onClick={create}>Create target →</button>
             <button style={{ ...btn, marginLeft: 8 }} onClick={() => setOpen(false)}>Cancel</button>
           </div>
         </div>

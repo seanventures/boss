@@ -5585,6 +5585,23 @@ def create_deployment_target_endpoint(payload: dict):
 
     target_id = payload.get("id") or make_id("deptgt")
     with begin(engine) as connection:
+        # deployment_targets is UNIQUE (project_id, app_name, environment). Onboarding a name
+        # that already exists — including one that was RETIRED rather than deleted — otherwise
+        # surfaced as a 500, which tells an operator nothing about the one field they need to
+        # change. A retired duplicate is the likely case, so the message says how to bring it
+        # back instead of implying the name is unusable.
+        clash = connection.execute(
+            text("SELECT id, status FROM deployment_targets "
+                 "WHERE project_id=:p AND app_name=:a AND environment=:e"),
+            {"p": payload["project_id"], "a": payload["app_name"],
+             "e": payload["environment"]}).mappings().first()
+        if clash:
+            raise HTTPException(status_code=409, detail=(
+                f"{payload['app_name']} is already registered for {payload['environment']} "
+                f"(target {clash['id']}, status {clash['status']})."
+                + (" Restore it instead of onboarding a second one."
+                   if clash["status"] != "active" else "")))
+
         connection.execute(text("""
             INSERT INTO deployment_targets
               (id, project_id, app_name, repo, environment, target_kind, target_ref,
