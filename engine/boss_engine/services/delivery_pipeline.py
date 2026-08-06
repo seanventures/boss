@@ -292,6 +292,20 @@ def execute_deployment(engine, settings: Settings, deployment_run_id: str, *,
         project_id = row["project_id"]
         run_id = (row["release_packet"] or {}).get("code_task_run_id") or ""
 
+    if not run_id:
+        # Fail here, with a sentence, rather than 300 lines later with
+        # "code task run not found: " — an error naming an empty string tells the reader
+        # nothing about which decision was missing.
+        with begin(engine) as c:
+            c.execute(sql("UPDATE deployment_runs SET status='blocked', failure_reason=:r, "
+                          "updated_at=now() WHERE id=:i"),
+                      {"r": "no code_task_run_id: nothing to build from", "i": deployment_run_id})
+            emit_event(c, project_id, "delivery.blocked", actor, "deployment_run",
+                       deployment_run_id, {"why": "no code_task_run_id in release_packet"})
+        return {"status": "blocked", "deployment_run_id": deployment_run_id,
+                "problems": ["this deployment names no code task run, so there is no build to "
+                             "ship — deploy from a merged PR, or pass code_task_run_id"]}
+
     # Cheap gate first: never build or transfer anything for a target that cannot accept it.
     # The connection lets preflight RESOLVE the target's bound credential rather than assume
     # a global one — otherwise a per-target secret is checked at deploy time, which is the

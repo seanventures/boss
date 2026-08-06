@@ -43,6 +43,17 @@ DOWN_AFTER_CONSECUTIVE_FAILURES = 3
 # the degradation worth catching early.
 DEGRADED_LATENCY_MS = 2000
 
+# "This target has something running on it." A target is a DESTINATION; it becomes a service
+# only once a deployment has succeeded. Probing, scraping or reporting health for one that has
+# never been deployed describes an empty slot as a broken app.
+#
+# Defined once and imported by everything that needs it — the sweep, the health view and the
+# observability scrape config all have to agree, and three copies of this predicate would be
+# three chances to disagree.
+DEPLOYED_PREDICATE = (
+    "EXISTS (SELECT 1 FROM deployment_runs d "
+    "        WHERE d.deployment_target_id = {alias}.id AND d.status = 'succeeded')")
+
 
 # --------------------------------------------------------------------------- #
 # Pure: metrics over samples. Clock passed in; no I/O.
@@ -207,8 +218,9 @@ def sweep(engine, settings: Settings, *, project_id: Optional[str] = None,
     probed, skipped, failed = 0, 0, 0
     try:
         with begin(engine) as c:
-            q = ("SELECT * FROM deployment_targets WHERE status = 'active'"
-                 + (" AND project_id = :p" if project_id else ""))
+            q = ("SELECT * FROM deployment_targets t WHERE t.status = 'active'"
+                 " AND " + DEPLOYED_PREDICATE.format(alias="t")
+                 + (" AND t.project_id = :p" if project_id else ""))
             targets = [dict(r) for r in c.execute(
                 sql(q), ({"p": project_id} if project_id else {})).mappings().all()]
 
@@ -274,10 +286,16 @@ def health_view(connection, project_id: str, *, now: Optional[datetime] = None,
                 "ORDER BY finished_at DESC NULLS LAST LIMIT 1"),
             {"t": t["id"]}).mappings().first()
 
+        # A target with no successful deployment is a DESTINATION, not a service. Reporting it
+        # as "unknown" alongside running apps invites the reasonable question "why is this being
+        # monitored when nothing was ever deployed to it?" — the honest answer is a distinct
+        # state, not a shrug.
+        status = "not_deployed" if not dep else verdict(samples)
+
         out.append({
             "target_id": t["id"], "app_name": t["app_name"], "environment": t["environment"],
             "url": (t["domains"] or [None])[0],
-            "status": verdict(samples),
+            "status": status,
             "status_since": began.isoformat() if began else None,
             "uptime_24h": uptime_pct(samples, since=now - timedelta(hours=24)),
             "uptime_7d": uptime_pct(samples, since=now - timedelta(days=7)),
@@ -299,8 +317,10 @@ def health_view(connection, project_id: str, *, now: Optional[datetime] = None,
         })
 
     counts = {k: sum(1 for o in out if o["status"] == k)
-              for k in ("up", "degraded", "down", "unknown")}
+              for k in ("up", "degraded", "down", "unknown", "not_deployed")}
+    # not_deployed is deliberately NOT a health problem: an empty slot is not an outage, and
+    # letting it colour the rollup would make onboarding a target look like breaking something.
     worst = ("down" if counts["down"] else "degraded" if counts["degraded"]
-             else "up" if counts["up"] else "unknown")
+             else "up" if counts["up"] else "unknown" if counts["unknown"] else "not_deployed")
     return {"project_id": project_id, "targets": out, "summary": {**counts, "overall": worst,
                                                                   "total": len(out)}}

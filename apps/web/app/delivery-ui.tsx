@@ -134,7 +134,10 @@ export type Health = {
 
 const HEALTH_TONE: Record<string, string> = {
   up: "#3fb950", degraded: "#d29922", down: "#f85149", unknown: "#8b949e",
+  // An empty slot, not an outage — grey like "unknown" but it says something different.
+  not_deployed: "#8b949e",
 };
+const HEALTH_LABEL: Record<string, string> = { not_deployed: "never deployed" };
 
 /** Latency over time as inline SVG. Failures are drawn, not dropped — a gap in a line reads
  *  as "no data", which is the opposite of what a failed probe means. */
@@ -177,6 +180,7 @@ export function DeploymentHealth({ health }: { health?: Health | null }) {
         <span className="detail" style={{ fontSize: 12, marginLeft: 8 }}>
           {summary.up} up · {summary.degraded} degraded · {summary.down} down
           {summary.unknown ? ` · ${summary.unknown} unknown` : ""}
+          {(summary as any).not_deployed ? ` · ${(summary as any).not_deployed} never deployed` : ""}
         </span>
       </div>
 
@@ -194,7 +198,9 @@ export function DeploymentHealth({ health }: { health?: Health | null }) {
           }}>
             <div style={{ minWidth: 200, display: "grid", gap: 4 }}>
               <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                <span style={{ color: HEALTH_TONE[t.status], fontWeight: 600 }}>● {t.status}</span>
+                <span style={{ color: HEALTH_TONE[t.status], fontWeight: 600 }}>
+                  ● {HEALTH_LABEL[t.status] ?? t.status}
+                </span>
                 <strong style={{ fontSize: 13 }}>{t.app_name}</strong>
                 <span className="cap-badge tone-blue">{t.environment}</span>
               </div>
@@ -203,7 +209,9 @@ export function DeploymentHealth({ health }: { health?: Health | null }) {
                    style={{ fontSize: 12, fontFamily: "monospace" }}>{t.url} ↗</a>
               )}
               <span className="detail" style={{ fontSize: 11 }}>
-                {t.status_since ? `${t.status} for ${since(t.status_since)}` : "never probed"}
+                {t.status === "not_deployed"
+                  ? "registered as a destination; nothing has been deployed here yet"
+                  : t.status_since ? `${t.status} for ${since(t.status_since)}` : "never probed"}
               </span>
             </div>
 

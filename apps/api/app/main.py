@@ -5978,12 +5978,51 @@ def delivery_deploy_endpoint(payload: dict):
         if target["status"] != "active":
             raise HTTPException(status_code=409,
                                 detail=f"target is {target['status']}, not active")
+
+        # A deployment needs SOMETHING TO BUILD. `deploy_ssh` resolves the repo, branch and
+        # file lineage from a code task run, so a manual deploy has to say which one — either
+        # explicitly, or by inheriting the one the target last shipped.
+        #
+        # Without this the run was planned with an empty code_task_run_id and died at execution
+        # with "code task run not found:", which is what the console's Deploy button did for
+        # every target. Planning was tested; executing was not.
+        source_run = payload.get("code_task_run_id")
+        if not source_run:
+            prior = connection.execute(
+                text("SELECT release_packet FROM deployment_runs "
+                     "WHERE deployment_target_id = :t AND status = 'succeeded' "
+                     "ORDER BY finished_at DESC NULLS LAST LIMIT 1"),
+                {"t": target_id}).mappings().first()
+            source_run = ((prior or {}).get("release_packet") or {}).get("code_task_run_id")
+        if not source_run:
+            # Actionable rather than a raw ValueError from three layers down.
+            raise HTTPException(status_code=422, detail=(
+                f"{target['app_name']} has never been deployed, so there is no build to ship. "
+                f"Deploy it from a merged PR (auto-deploy or the code task's deployment), or "
+                f"pass code_task_run_id explicitly."))
+
+        # DEFAULT TO THE REPO'S DEFAULT BRANCH, not the source run's branch.
+        #
+        # Without a ref, the deploy falls back to cloning the code task's work branch — which is
+        # FROZEN at whatever that task built, while main has moved on. Pressing Deploy therefore
+        # shipped a stale build and silently ROLLED BACK the live app: the stock app lost its
+        # day-trading API to a deploy whose only intent was "ship this again".
+        #
+        # The base branch is read from the source run's own spec rather than assumed, because
+        # "main" is a guess about someone else's repository.
+        ref = payload.get("ref") or payload.get("commit_ref")
+        if not ref:
+            spec_row = connection.execute(
+                text("SELECT spec FROM code_task_runs WHERE id = :i"),
+                {"i": source_run}).mappings().first()
+            ref = ((spec_row or {}).get("spec") or {}).get("base_branch") or "main"
+
         planned = ResourcePlaneService(settings).plan_deployment_run(
             connection,
             project_id=target["project_id"], deployment_target_id=target_id,
-            commit_ref=payload.get("ref") or payload.get("commit_ref"),
+            commit_ref=ref,
             release_packet={"source": "manual_deploy", "repo": target["repo"],
-                            "requested_by": actor},
+                            "requested_by": actor, "code_task_run_id": source_run},
             expected_cost_usd_micros=0, reservation_id=None, actor=actor)
         run_id = planned.get("deployment_run_id") or planned.get("id")
         connection.execute(text("UPDATE deployment_runs SET trigger='manual' WHERE id=:i"),

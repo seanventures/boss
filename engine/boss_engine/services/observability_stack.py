@@ -31,6 +31,7 @@ from typing import Any, Optional
 from ..config import Settings
 from ..ports import sql
 from .core import emit_event, make_id
+from .deployment_health import DEPLOYED_PREDICATE as _DEPLOYED
 
 # Where the stack lives on the host — beside the apps, not inside any of them.
 STACK_DIR = "/opt/boss-observability"
@@ -47,17 +48,24 @@ SCRAPE_INTERVAL_SECONDS = 60
 
 
 def scrape_targets(connection, project_id: Optional[str] = None) -> list[dict[str, Any]]:
-    """Every active deployment target, as something to scrape.
+    """Every DEPLOYED app, as something to scrape.
 
     Derived rather than configured: an app that BOSS deploys is an app BOSS monitors, and a port
     changed through the console changes the scrape with it.
+
+    A target that has never been deployed successfully is excluded, because a target is a
+    DESTINATION and not a service. Scraping one produces `up=0` and a dashboard for something
+    that has never existed — which reads as a broken app rather than an empty slot, and is
+    exactly how a registered-but-never-deployed demo target ended up presented as a monitored
+    service.
     """
     rows = connection.execute(
-        sql("SELECT id, project_id, app_name, environment, repo, target_ref, domains, "
-            "       required_resources "
-            "FROM deployment_targets WHERE status = 'active'"
-            + (" AND project_id = :p" if project_id else "")
-            + " ORDER BY app_name"),
+        sql("SELECT t.id, t.project_id, t.app_name, t.environment, t.repo, t.target_ref, "
+            "       t.domains, t.required_resources "
+            "FROM deployment_targets t "
+            "WHERE t.status = 'active' AND " + _DEPLOYED.format(alias="t") + " "
+            + (" AND t.project_id = :p" if project_id else "")
+            + " ORDER BY t.app_name"),
         ({"p": project_id} if project_id else {})).mappings().all()
 
     out = []
@@ -426,6 +434,12 @@ def deploy_stack(engine, settings: Settings, *, project_id: str, host_target_id:
             f"  sudo -n mkdir -p {STACK_DIR} && sudo -n chown {user} {STACK_DIR} "
             f"    || {{ echo 'NEED_SUDO {STACK_DIR}' >&2; exit 90; }}; fi",
             f"mkdir -p {STACK_DIR}/grafana/datasources {STACK_DIR}/grafana/dashboards/boss",
+            # Dashboards are FULLY generated, so the directory is cleared before rewriting.
+            # Writing without removing leaves a dashboard for an app that is no longer
+            # monitored — which is how a target that had never been deployed kept its dashboard
+            # after being dropped from the scrape config. Generated config must be regenerated,
+            # not merged.
+            f"rm -f {STACK_DIR}/grafana/dashboards/boss/*.json",
         ]
         for i, (path, content) in enumerate(files.items()):
             # Index-based and alphanumeric: a marker derived from the filename produced

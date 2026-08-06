@@ -343,10 +343,11 @@ def _resolve_repo_branch(run: dict, settings: Settings) -> tuple[str, str, str]:
 
 def _build_dist(settings: Settings, owner: str, repo: str, branch: str,
                 changed: Optional[list[str]] = None,
-                ref: Optional[str] = None) -> tuple[Path, str, str]:
+                ref: Optional[str] = None) -> tuple[Path, str, str, Optional[str]]:
     """Prepare the deployable payload for a run's branch.
 
-    Returns (root, mode, entry) where `root` always contains a `dist/` directory to transfer:
+    Returns (root, mode, entry, sha) where `root` always contains a `dist/` directory to
+    transfer, and `sha` is the commit ACTUALLY checked out:
 
       mode "static" — dist/ is a servable file tree, run under nginx.
       mode "py"     — dist/ is the app source, run under python; `entry` is the server script.
@@ -396,6 +397,10 @@ def _build_dist(settings: Settings, owner: str, repo: str, branch: str,
     else:
         subprocess.run(["git", "clone", "--depth", "1", "--branch", branch, url, str(work)],
                        capture_output=True, text=True, timeout=180, check=True)
+    # Read here, where the clone definitely still has its .git directory. Every return path
+    # below carries this value out, so no caller has to know which ones discard the clone.
+    sha = _head_sha(work)
+
     # NOT EVERY APP HAS A BUILD. This ran `npm ci && npm run build` unconditionally and failed
     # on the first real deployment: the stock app is deliberately no-build vanilla JS, with a
     # package.json but no build script. Assuming a Node pipeline turns "nothing to build" into
@@ -418,7 +423,7 @@ def _build_dist(settings: Settings, owner: str, repo: str, branch: str,
                        timeout=900, check=True)
         if not (work / "dist").is_dir():
             raise RuntimeError("build script ran but did not produce ./dist")
-        return (work, "static", "")
+        return (work, "static", "", sha)
 
     # No build step: the servable tree IS the source, and WHICH tree is the question the preview
     # resolver already answers. The previous code said it used that answer and then implemented
@@ -449,7 +454,11 @@ def _build_dist(settings: Settings, owner: str, repo: str, branch: str,
         shutil.copytree(work, payload / "dist",
                         ignore=shutil.ignore_patterns(".git", "node_modules", "__pycache__"))
         shutil.rmtree(work, ignore_errors=True)
-        return (payload, "py", value)
+        # `sha` was read BEFORE the clone was discarded. Reading it afterwards found no .git and
+        # fell back to the branch NAME, so a py-mode deployment recorded
+        # "boss/code/crun_..." as its build — the same dishonesty in this field that the
+        # commit-ref fix removed, reintroduced by copying the payload out of the clone.
+        return (payload, "py", value, sha)
 
     if kind == "static":
         static_dir = work / value
@@ -464,10 +473,10 @@ def _build_dist(settings: Settings, owner: str, repo: str, branch: str,
         raise RuntimeError(
             "no build script and no index.html found — nothing servable to deploy")
     if static_dir == work / "dist":
-        return (work, "static", "")
+        return (work, "static", "", sha)
     dist = work / "dist"
     shutil.copytree(static_dir, dist)
-    return (work, "static", "")
+    return (work, "static", "", sha)
 
 
 def deploy_ssh(engine, settings: Settings, run_id: str, *, host: str, user: str = "root",
@@ -502,12 +511,12 @@ def deploy_ssh(engine, settings: Settings, run_id: str, *, host: str, user: str 
         # the expensive way; the deploy path must use the same source or it will diverge again.
         from .preview_service import lineage_impl_files
 
-        work, mode, entry = _build_dist(settings, owner, repo, branch,          # 1 build
-                                        changed=lineage_impl_files(engine, run), ref=ref)
-        # The SHA that is actually on disk, not the ref that was asked for. Reporting the
-        # request rather than the result is how commit_ref came to name a build that was
-        # never running.
-        deployed_sha = _head_sha(work) or (ref or branch)
+        work, mode, entry, sha = _build_dist(settings, owner, repo, branch,     # 1 build
+                                             changed=lineage_impl_files(engine, run), ref=ref)
+        # The SHA that was actually checked out, captured inside _build_dist while the clone
+        # still existed. Reporting the request rather than the result is how commit_ref came to
+        # name a build that was never running.
+        deployed_sha = sha or ref or branch
         ct = _ssh(key_path, host, user, ssh_port, "docker version --format '{{.Server.Version}}'")
         if ct.returncode != 0:                                                  # 2 connection test
             raise RuntimeError(f"host unreachable or docker missing: {(ct.stderr or '')[:900]}")

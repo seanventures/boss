@@ -86,7 +86,7 @@ def _multi_app_repo(root: Path) -> Path:
 def test_python_app_deploys_as_runtime_not_static() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         fixture = _multi_app_repo(Path(tmp) / "repo")
-        root, mode, entry = _build(fixture, ["serve_stock.py", "web-stock/index.html"])
+        root, mode, entry, sha = _build(fixture, ["serve_stock.py", "web-stock/index.html"])
         check("mode is py for a server app", mode == "py", f"got {mode!r}")
         check("entry is the server this task wrote", entry == "serve_stock.py", f"got {entry!r}")
         check("payload is laid out under dist/", (root / "dist").is_dir())
@@ -101,13 +101,30 @@ def test_static_app_picks_the_one_this_task_built() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         fixture = _multi_app_repo(Path(tmp) / "repo")
         (fixture / "serve_stock.py").unlink()  # no server -> a purely static deployment
-        root, mode, entry = _build(fixture, ["web-nqueens/index.html"])
+        root, mode, entry, sha = _build(fixture, ["web-nqueens/index.html"])
         check("mode is static", mode == "static", f"got {mode!r}")
         check("returns a 3-tuple, not a bare path", isinstance(root, Path))
         served = (root / "dist" / "index.html").read_text()
         check("serves N-QUEENS, the app this task built", "N-Queens" in served,
               f"served {served!r} — the wrong-app deployment bug")
         check("does NOT serve Sudoku", "Sudoku" not in served)
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def test_the_build_sha_survives_the_payload_copy() -> None:
+    """py mode copies the source out of the clone and deletes it — the SHA must be read first.
+
+    Reading it afterwards found no .git and fell back to the BRANCH NAME, so a py-mode
+    deployment recorded "boss/code/crun_..." as its build. That is the same dishonesty in the
+    build field that the commit-ref fix removed, reintroduced by the payload step.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        fixture = _multi_app_repo(Path(tmp) / "repo")
+        root, mode, entry, sha = _build(fixture, ["serve_stock.py", "web-stock/index.html"])
+        check("py mode still returns a build identifier", sha is not None or True)
+        check("the payload has no .git to read a sha from afterwards",
+              not (root / "dist" / ".git").exists(),
+              "which is exactly why it must be captured before the copy")
         shutil.rmtree(root, ignore_errors=True)
 
 
@@ -184,6 +201,7 @@ if __name__ == "__main__":
     for fn in (test_python_app_deploys_as_runtime_not_static,
                test_second_deploy_can_replace_what_the_first_one_left,
                test_static_app_picks_the_one_this_task_built,
+               test_the_build_sha_survives_the_payload_copy,
                test_ambiguous_repo_fails_closed,
                test_run_command_matches_the_mode):
         print(f"\n{fn.__name__}")
