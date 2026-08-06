@@ -840,18 +840,38 @@ class SSHContainerConnector:
         Rollback points are never derived after the fact: when the change is what broke the
         system, anything computed from the current state is guesswork.
         """
-        from .deploy_service import _rollback_remote, _ssh_key_file
+        from ..db import begin
+        from .deploy_service import (
+            _app_name, _discard_key_file, _materialise_key, _rollback_remote, _ssh_key_file,
+        )
+        from .secret_backends import resolve_target_secret
 
         if not to or not to.get("remote"):
             return {"status": "unavailable",
                     "reason": "no rollback point was recorded before this deployment"}
         user, host, port = _split_ref(target.get("target_ref", ""))
+        # Same credential apply() used. Rolling back with the global key while the target
+        # is bound to a different one fails closed at best and authenticates as the wrong
+        # principal at worst.
+        ephemeral = None
         try:
-            _rollback_remote(_ssh_key_file(settings), host, user, port,
-                             remote=to["remote"])
+            with begin(engine) as c:
+                material = resolve_target_secret(c, target, "ssh_key", settings)
+            if material:
+                key = ephemeral = _materialise_key(material)
+            else:
+                key = _ssh_key_file(settings)
+            app = _app_name(target.get("repo") or "", target.get("app_name"))
+            _rollback_remote(key, host, user, port, remote=to["remote"],
+                             app=app, app_port=_app_port(target),
+                             mode=str(to.get("mode") or "static"),
+                             entry=str(to.get("entry") or ""))
             return {"status": "rolled_back", "to": to}
         except Exception as exc:  # noqa: BLE001
             return {"status": "failed", "error": f"{type(exc).__name__}: {exc}"[:200]}
+        finally:
+            if ephemeral:
+                _discard_key_file(ephemeral)
 
 
 # The registry. `target_kind` selects an implementation; adding a connector is a registry

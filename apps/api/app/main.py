@@ -5542,7 +5542,7 @@ def code_task_activity_endpoint(run_id: str):
 
 
 @app.post("/v1/delivery/deployments/{deployment_run_id}/execute")
-def delivery_execute_endpoint(deployment_run_id: str):
+def delivery_execute_endpoint(deployment_run_id: str, payload: Optional[dict] = None):
     """Tell BOSS to carry out a planned deployment: plan -> apply -> observe.
 
     The operator supplies the destination and a credential reference; BOSS does the work. This
@@ -5550,17 +5550,24 @@ def delivery_execute_endpoint(deployment_run_id: str):
     """
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
-    # Existence is checked HERE so an unknown id is still a 404. Once the run is known to exist
-    # the work goes to the background, like every other way of starting a deployment — the
-    # retry button should not be the one control that hangs the browser for a minute.
+    p = payload or {}
+    actor = str(p.get("actor") or "").strip()
+    if not actor:
+        raise HTTPException(status_code=422, detail="actor is required")
     with begin(engine) as connection:
-        known = connection.execute(
-            text("SELECT 1 FROM deployment_runs WHERE id = :i"),
-            {"i": deployment_run_id}).first()
-    if not known:
-        raise HTTPException(status_code=404,
-                            detail=f"no deployment run {deployment_run_id}")
-    return _start_deployment_in_background(deployment_run_id, "operator", trigger="retry")
+        run_row = connection.execute(
+            text("SELECT project_id FROM deployment_runs WHERE id = :i"),
+            {"i": deployment_run_id},
+        ).mappings().first()
+        if not run_row:
+            raise HTTPException(status_code=404,
+                                detail=f"no deployment run {deployment_run_id}")
+        # Execute places artifacts on a real host. Knowing a deployment_run_id must not be
+        # enough to push arbitrary commits to another tenant's staging box.
+        require_project_actor(
+            connection, run_row["project_id"], actor, "providerops_manage"
+        )
+    return _start_deployment_in_background(deployment_run_id, actor, trigger="retry")
 
 
 # --------------------------------------------------------------------------- #
@@ -6424,6 +6431,20 @@ def delivery_redeploy_endpoint(deployment_run_id: str, payload: Optional[dict] =
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
     p = payload or {}
+    actor = str(p.get("actor") or "").strip()
+    if not actor:
+        raise HTTPException(status_code=422, detail="actor is required")
+    with begin(engine) as connection:
+        run_row = connection.execute(
+            text("SELECT project_id FROM deployment_runs WHERE id = :i"),
+            {"i": deployment_run_id},
+        ).mappings().first()
+        if not run_row:
+            raise HTTPException(status_code=404, detail=p.get("reason")
+                                or f"no deployment run {deployment_run_id}")
+        require_project_actor(
+            connection, run_row["project_id"], actor, "providerops_manage"
+        )
     from .services.delivery_pipeline import redeploy
     actor = str(p.get("actor") or "operator")
     # Planned here, executed off-request — same contract as Deploy, so the console watches one

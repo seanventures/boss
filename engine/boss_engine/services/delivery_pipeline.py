@@ -413,8 +413,27 @@ def execute_deployment(engine, settings: Settings, deployment_run_id: str, *,
                                  ref=row.get("commit_ref"))
             h.log(json.dumps({k: v for k, v in (applied or {}).items()
                               if k not in ("plan",)}, default=str)[:2000])
-            if (applied or {}).get("status") == "blocked":
-                raise RuntimeError("; ".join(applied.get("problems") or ["blocked"]))
+            applied_status = str((applied or {}).get("status") or "")
+            # A rollback can leave the previous release healthy. It must never make this
+            # deployment look successful when its requested commit was not left live.
+            if applied_status != "deployed":
+                status = "blocked" if applied_status == "blocked" else "failed"
+                reason = (
+                    "; ".join((applied or {}).get("problems") or [])[:400]
+                    or (applied or {}).get("detail")
+                    or (applied or {}).get("error")
+                    or f"apply status={applied_status or 'unknown'}"
+                )[:400]
+                h.failed(reason)
+                total_ms = rec.finish()
+                with begin(engine) as c:
+                    c.execute(sql("UPDATE deployment_runs SET status=:s, finished_at=now(), "
+                                  "duration_ms=:d, failure_reason=:r, updated_at=now() WHERE id=:i"),
+                              {"s": status, "d": total_ms, "r": reason, "i": deployment_run_id})
+                    emit_event(c, project_id, f"delivery.{status}", actor, "deployment_run",
+                               deployment_run_id,
+                               {"applied": applied_status, "domains": target.get("domains")})
+                return {"status": status, "applied": applied, "healthy": False}
 
         with rec.step("observe", label="Health check") as h:
             health = conn.observe(target, settings)
@@ -425,7 +444,7 @@ def execute_deployment(engine, settings: Settings, deployment_run_id: str, *,
                 h.failed(first.get("error")
                          or f"{first.get('url', 'target')} returned {first.get('status')}, "
                             f"expected {first.get('expected')}")
-        # The VERDICT is health, not the apply result.
+        # The verdict after a successful placement is health, not the apply result alone.
         ok = bool(health.get("healthy"))
         status = "succeeded" if ok else "failed"
         reason = None if ok else json.dumps(health)[:400]

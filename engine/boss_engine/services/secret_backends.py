@@ -258,15 +258,45 @@ def resolve_target_secret(connection, target: dict, name: str,
                           settings: Settings) -> Optional[str]:
     """The material bound to `name` on this target, or None when nothing is bound.
 
-    Accepts both binding shapes so existing targets keep working while the console migrates:
+    Accepts the binding shapes that actually exist in the wild:
 
         {"name": "ssh_key", "secret_ref_id": "sref_..."}   preferred — a managed reference
         {"name": "ssh_key", "ref": "BOSS_SSH_..._FILE"}    legacy — an env var naming a path
+        "sref_..." / "env:BOSS_SSH_..._FILE"               API create_deployment_target shape
+                                                          (list[str] via _normalize_string_list)
 
-    Returning None (rather than raising) is how a target with no binding falls back to the
-    global setting, which is what keeps today's live deployments working while the model moves.
+    The API historically stored secret_refs as bare strings. Phase 1's resolver only understood
+    dicts, so a target onboarded through POST /v1/deployments with ``["sref_…"]`` silently fell
+    through to the global SSH key — wrong-secret for every host that thought it was bound.
+    Returning None (rather than raising) is reserved for "no binding at all", which is what
+    keeps un-migrated targets falling back to the global setting.
     """
     for binding in target.get("secret_refs") or []:
+        if isinstance(binding, str):
+            token = binding.strip()
+            if not token:
+                continue
+            # Bare strings have no `name` field. For the SSH connector (one required secret)
+            # the list is the binding for that secret; ignore only when the caller asked for
+            # something else so we do not invent a second meaning later.
+            if name != "ssh_key":
+                continue
+            if token.startswith("env:"):
+                path = os.environ.get(token[4:])
+                if path:
+                    return FileBackend().get(path)
+                raise SecretUnavailable(
+                    f"legacy env binding {token!r} is set on the target but the variable "
+                    f"is unset — refusing to fall back to a different credential")
+            if token.startswith("sref_") or token.startswith("secret_"):
+                return resolve_secret_ref(connection, token, settings)
+            # Otherwise treat as an env var naming a key file (historical BOSS_SSH_*_FILE).
+            path = os.environ.get(token)
+            if path:
+                return FileBackend().get(path)
+            raise SecretUnavailable(
+                f"string binding {token!r} on the target is neither a secret_ref id nor a "
+                f"set env var — refusing to fall back to a different credential")
         if not isinstance(binding, dict) or binding.get("name") != name:
             continue
         ref_id = binding.get("secret_ref_id")
@@ -275,12 +305,13 @@ def resolve_target_secret(connection, target: dict, name: str,
         legacy = binding.get("ref")
         if legacy:
             # A legacy ref names an ENV VAR whose value is a path (that is what the existing
-            # targets mean by BOSS_SSH_HOST_PRIVATE_KEY_FILE). Resolve the indirection, but do
-            # not invent a meaning when the variable is absent — fall through to the global.
+            # targets mean by BOSS_SSH_HOST_PRIVATE_KEY_FILE). A binding that cannot resolve
+            # must not silently become a different key.
             path = os.environ.get(legacy)
             if path:
                 return FileBackend().get(path)
-            return None
+            raise SecretUnavailable(
+                f"legacy ref {legacy!r} is bound but unset — refusing global fallback")
     return None
 
 
