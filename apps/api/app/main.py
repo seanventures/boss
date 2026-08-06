@@ -5653,6 +5653,70 @@ def retire_deployment_target_endpoint(target_id: str):
     return {"target_id": target_id, "status": "retired"}
 
 
+@app.post("/v1/deployment-targets/{target_id}/teardown")
+def teardown_deployment_target_endpoint(target_id: str, payload: dict):
+    """Remove a deployed app from its host and report the space reclaimed.
+
+    Three levels, because "remove the app" means different things at different moments:
+      stop_only=true      container goes, files stay — reversible by a redeploy
+      (default)           container + release directories; DATA SURVIVES
+      include_data=true   also the data directory — the only irreversible one
+
+    Requires `confirm` to equal the app name. A destructive action reached by a single click is
+    a destructive action taken by accident, and the operator naming the app is the cheapest
+    possible proof they meant this one.
+    """
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    from .services.core import emit_event
+    from .services.deployment_connectors import connector_for
+
+    include_data = bool(payload.get("include_data"))
+    stop_only = bool(payload.get("stop_only"))
+    actor = str(payload.get("actor") or "operator")
+
+    with begin(engine) as connection:
+        row = connection.execute(text("SELECT * FROM deployment_targets WHERE id=:i"),
+                                 {"i": target_id}).mappings().first()
+        if not row:
+            raise HTTPException(status_code=404, detail="no such deployment target")
+        target = dict(row)
+
+        if not stop_only and payload.get("confirm") != target["app_name"]:
+            raise HTTPException(
+                status_code=428,
+                detail=(f"confirm must equal the app name {target['app_name']!r} to remove it"
+                        f"{' INCLUDING ITS DATA' if include_data else ''}"))
+
+        conn = connector_for(target)
+        if conn is None:
+            raise HTTPException(status_code=422, detail="no connector for this target_kind")
+
+        report = conn.destroy(target, settings, connection,
+                              include_data=include_data, stop_only=stop_only)
+
+        # Recorded whether or not it succeeded: a teardown that was refused is exactly the
+        # event someone will go looking for later.
+        emit_event(connection, target["project_id"],
+                   "delivery.torn_down" if report.get("ok") else "delivery.teardown_refused",
+                   actor, "deployment_target", target_id,
+                   {"removed": report.get("removed"), "refused": report.get("refused"),
+                    "include_data": include_data, "stop_only": stop_only,
+                    "reclaimed_kb": report.get("reclaimed_kb")})
+
+        # A destroyed app is not a deployable one. Retiring the target stops auto-deploy from
+        # quietly resurrecting it on the next merge.
+        if report.get("ok") and not stop_only:
+            connection.execute(
+                text("UPDATE deployment_targets SET status='retired', auto_deploy=false, "
+                     "updated_at=now() WHERE id=:i"), {"i": target_id})
+            report["target_status"] = "retired"
+
+    if report.get("refused"):
+        raise HTTPException(status_code=409, detail=report)
+    return report
+
+
 @app.post("/v1/deployment-targets/{target_id}/bootstrap")
 def bootstrap_deployment_target_endpoint(target_id: str, payload: Optional[dict] = None):
     """Have BOSS prepare the host: deploy directory, docker check, and a free port.

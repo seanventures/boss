@@ -242,6 +242,13 @@ def _head_sha(work: Path) -> Optional[str]:
         return None
 
 
+# Stamped on every container BOSS starts so a later teardown can PROVE what it is about to
+# remove is ours. Without it, destroy would have to infer ownership from a name — and a name
+# collision on a shared host (this one also runs unrelated production services) would mean
+# deleting somebody else's container.
+_OWNERSHIP_LABELS = "--label boss.managed=true --label boss.app={app}"
+
+
 def _rm_rf_cmd(path: str) -> str:
     """Remove a path that MAY contain root-owned files, from an unprivileged shell.
 
@@ -286,11 +293,13 @@ def _docker_run_cmd(app: str, app_port: int, remote: str, mode: str = "static",
         # survives a release. Anything written under /app is replaced by the next deployment —
         # which is correct for code and destructive for data.
         run = (f"docker run -d --name {app_q} --restart unless-stopped -p {int(app_port)}:80 "
+               f"{_OWNERSHIP_LABELS.format(app=app_q)} "
                f"-v {remote_q}/dist:/app -v {remote_q}/data:/data -w /app "
                f"-e PORT=80 -e HOST=0.0.0.0 -e DATA_DIR=/data -e PYTHONDONTWRITEBYTECODE=1 "
                f"python:3.12-slim python {shlex.quote(entry)}")
     else:
         run = (f"docker run -d --name {app_q} --restart unless-stopped -p {int(app_port)}:80 "
+               f"{_OWNERSHIP_LABELS.format(app=app_q)} "
                f"-v {remote_q}/dist:/usr/share/nginx/html:ro nginx:alpine")
     return (
         f"for i in 1 2 3 4 5 6; do "

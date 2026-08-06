@@ -42,6 +42,8 @@ class DeploymentConnector(Protocol):
     def validate(self, target: dict, settings: Settings, connection=None) -> list[str]: ...
     def bootstrap(self, target: dict, settings: Settings,
                   connection=None) -> dict[str, Any]: ...
+    def destroy(self, target: dict, settings: Settings, connection=None, *,
+                include_data: bool = False, stop_only: bool = False) -> dict[str, Any]: ...
     def plan(self, engine, settings: Settings, target: dict, run_id: str) -> dict: ...
     def apply(self, engine, settings: Settings, target: dict, run_id: str,
               plan: dict, ref: Optional[str] = None) -> dict: ...
@@ -356,6 +358,114 @@ class SSHContainerConnector:
         return {"ok": not problems, "problems": problems, "changed": changed,
                 "app_dir": app_dir, "suggested_port": chosen,
                 "ports_in_use": sorted(taken)[:40]}
+
+    # -- teardown ---------------------------------------------------------------
+    def destroy(self, target: dict, settings: Settings, connection=None, *,
+                include_data: bool = False, stop_only: bool = False) -> dict[str, Any]:
+        """Remove a deployed app from its host, and report the space reclaimed.
+
+        Three levels, because "remove the app" means different things at different moments:
+
+          stop_only          the container goes, the files stay. Reversible by a redeploy, and
+                             the right answer for "take it offline for now".
+          destroy            container + release directories (dist, dist.prev). The app is gone;
+                             its DATA survives.
+          include_data       also the data directory. This is the only irreversible one, so it
+                             is never implied — a caller has to ask for it by name.
+
+        OWNERSHIP IS VERIFIED BEFORE ANYTHING IS REMOVED. This host also runs unrelated
+        production services, and a teardown that trusted a name would delete somebody else's
+        container the first time two apps were called the same thing. A container qualifies only
+        if it carries BOSS's label or mounts this app's directory; a path qualifies only if it
+        sits under REMOTE_BASE. Anything else is reported as a refusal, not removed.
+        """
+        from .deploy_service import (REMOTE_BASE, _app_name, _discard_key_file,
+                                     _materialise_key, _rm_rf_cmd, _ssh, _ssh_key_file)
+        from .secret_backends import SecretUnavailable, resolve_target_secret
+
+        user, host, port = _split_ref(target.get("target_ref", ""))
+        app = _app_name(target.get("repo") or "", target.get("app_name"))
+        remote = f"{REMOTE_BASE}/{app}"
+
+        # Belt and braces: `app` is already sanitised by _app_name, but this is the one code
+        # path that deletes, so the guard is worth stating rather than assuming.
+        if not app or "/" in app or ".." in app:
+            return {"ok": False, "removed": [], "refused": [f"unsafe app name {app!r}"]}
+
+        ephemeral = None
+        try:
+            material = (resolve_target_secret(connection, target, "ssh_key", settings)
+                        if connection is not None else None)
+            key = ephemeral = _materialise_key(material) if material else _ssh_key_file(settings)
+        except (SecretUnavailable, Exception) as exc:  # noqa: BLE001
+            return {"ok": False, "removed": [], "refused": [f"ssh key unusable: {exc}"]}
+
+        app_q = shlex.quote(app)
+        remote_q = shlex.quote(remote)
+        try:
+            # Establish ownership and measure BEFORE touching anything, so the report can say
+            # what was reclaimed and the refusal path costs nothing.
+            probe = (
+                f"echo OWNER=$(docker inspect -f '{{{{index .Config.Labels \"boss.app\"}}}}' "
+                f"  {app_q} 2>/dev/null); "
+                f"echo MOUNTED=$(docker inspect -f '{{{{range .Mounts}}}}{{{{.Source}}}} {{{{end}}}}' "
+                f"  {app_q} 2>/dev/null | grep -c {remote_q} || true); "
+                f"echo EXISTS=$(docker inspect {app_q} >/dev/null 2>&1 && echo yes || echo no); "
+                f"echo SIZE=$(du -sk {remote_q} 2>/dev/null | cut -f1); "
+                f"echo DATASIZE=$(du -sk {remote_q}/data 2>/dev/null | cut -f1)")
+            pre = _ssh(key, host, user, port, probe, timeout=30)
+            if pre.returncode != 0:
+                return {"ok": False, "removed": [],
+                        "refused": [f"ssh to {user}@{host} failed: "
+                                    f"{(pre.stderr or '').strip()[:200]}"]}
+
+            info = dict(line.split("=", 1) for line in (pre.stdout or "").splitlines()
+                        if "=" in line)
+            exists = info.get("EXISTS") == "yes"
+            owned = info.get("OWNER") == app or info.get("MOUNTED", "0").strip() not in ("", "0")
+            size_kb = int(info.get("SIZE") or 0)
+            data_kb = int(info.get("DATASIZE") or 0)
+
+            if exists and not owned:
+                # The decisive refusal: a container with the right name that BOSS did not
+                # deploy. Removing it would be destroying a stranger's service.
+                return {"ok": False, "removed": [],
+                        "refused": [f"a container named {app} exists on {host} but is not "
+                                    f"BOSS-managed (no boss.app label, and it does not mount "
+                                    f"{remote}); refusing to remove it"]}
+
+            steps = [f"docker rm -f {app_q} >/dev/null 2>&1 || true"]
+            removed = [f"container {app}"] if exists else []
+            reclaimed_kb = 0
+
+            if not stop_only:
+                # Only ever paths UNDER this app's directory, never the directory of another.
+                steps.append(_rm_rf_cmd(f"{remote}/dist"))
+                steps.append(_rm_rf_cmd(f"{remote}/dist.prev"))
+                removed.append(f"{remote}/dist (+dist.prev)")
+                reclaimed_kb = max(0, size_kb - data_kb)
+                if include_data:
+                    steps.append(_rm_rf_cmd(f"{remote}/data"))
+                    steps.append(_rm_rf_cmd(remote))
+                    removed.append(f"{remote} including data")
+                    reclaimed_kb = size_kb
+
+            res = _ssh(key, host, user, port, "; ".join(steps), timeout=120)
+            after = _ssh(key, host, user, port,
+                         f"df -Pk / | tail -1 | awk '{{print $4}}'", timeout=20)
+        finally:
+            if ephemeral:
+                _discard_key_file(ephemeral)
+
+        return {
+            "ok": res.returncode == 0,
+            "app": app, "host": host, "stop_only": stop_only, "data_removed": include_data,
+            "removed": removed, "refused": [],
+            "reclaimed_kb": reclaimed_kb,
+            "data_kept_kb": 0 if include_data else data_kb,
+            "host_free_kb": int((after.stdout or "0").strip() or 0),
+            "detail": (res.stderr or "").strip()[:300] or None,
+        }
 
     # -- plan -------------------------------------------------------------------
     def plan(self, engine, settings: Settings, target: dict, run_id: str) -> dict:

@@ -2473,6 +2473,14 @@ export async function deployTargetAction(targetId: string, ref?: string,
                 actor: "operator" });
 }
 
+/** Remove a deployed app. `stop_only` is reversible; destroy needs the app name typed. */
+export async function teardownTargetAction(targetId: string, input: {
+  stop_only?: boolean; include_data?: boolean; confirm?: string;
+}): Promise<any> {
+  return post(`/v1/deployment-targets/${encodeURIComponent(targetId)}/teardown`,
+              { actor: "operator", ...input });
+}
+
 /** Health of everything BOSS has deployed — distinct from whether the deploy succeeded. */
 export async function getDeploymentHealthAction(projectId?: string): Promise<any> {
   const pid = projectId || PROJECT_ID;

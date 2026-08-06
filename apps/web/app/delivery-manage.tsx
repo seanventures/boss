@@ -21,7 +21,7 @@ import { useState, useTransition } from "react";
 import {
   bindSecretAction, bootstrapTargetAction, createTargetAction, deployTargetAction,
   generateKeypairAction, preflightTargetAction, putSecretAction, setAutoDeployAction,
-  verifySecretAction,
+  teardownTargetAction, verifySecretAction,
 } from "./actions";
 
 type Secret = {
@@ -390,6 +390,59 @@ export function OnboardWizard({ secrets }: { secrets: Secret[] }) {
 // --------------------------------------------------------------------------- //
 // Per-target trigger controls
 // --------------------------------------------------------------------------- //
+/** Removing an app. Kept behind a disclosure and a typed name, because a destructive action
+ *  reachable by one click is a destructive action taken by accident. */
+function TeardownControls({ target }: { target: { id: string; app_name: string } }) {
+  const [open, setOpen] = useState(false);
+  const [pending, start] = useTransition();
+  const [confirm, setConfirm] = useState("");
+  const [withData, setWithData] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+
+  const run = (mode: "stop" | "destroy") => start(async () => {
+    setMsg(mode === "stop" ? "stopping…" : "removing…");
+    const out = await teardownTargetAction(target.id, {
+      stop_only: mode === "stop",
+      include_data: mode === "destroy" && withData,
+      confirm: mode === "stop" ? undefined : confirm,
+    });
+    if (out?.error) { setMsg(`failed: ${typeof out.error === "string" ? out.error : JSON.stringify(out.error).slice(0, 160)}`); return; }
+    const freed = out.reclaimed_kb ? `${(out.reclaimed_kb / 1024).toFixed(1)} MB reclaimed` : "";
+    setMsg(`${(out.removed || []).join("; ")}${freed ? ` — ${freed}` : ""}`
+      + (out.data_kept_kb ? ` (data kept: ${(out.data_kept_kb / 1024).toFixed(1)} MB)` : ""));
+    setConfirm("");
+  });
+
+  if (!open) {
+    return <button style={{ ...btn, borderColor: "rgba(248,81,73,.4)" }}
+                   onClick={() => setOpen(true)}>Remove…</button>;
+  }
+  return (
+    <span style={{ display: "inline-flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+      <button style={btn} disabled={pending} onClick={() => run("stop")}
+              title="Stop the container; files and data stay, so a redeploy brings it back">
+        Stop
+      </button>
+      <input style={{ ...input, minWidth: 130 }} value={confirm}
+             placeholder={`type ${target.app_name}`}
+             onChange={(e) => setConfirm(e.target.value)} />
+      <label style={{ display: "flex", gap: 5, alignItems: "center", fontSize: 12 }}>
+        <input type="checkbox" checked={withData}
+               onChange={(e) => setWithData(e.target.checked)} />
+        also delete data
+      </label>
+      <button style={{ ...btn, borderColor: "rgba(248,81,73,.5)", color: "#f85149" }}
+              disabled={pending || confirm !== target.app_name}
+              title={confirm === target.app_name ? "" : "type the app name to enable"}
+              onClick={() => run("destroy")}>
+        {withData ? "Destroy + data" : "Destroy"}
+      </button>
+      <button style={btn} onClick={() => setOpen(false)}>Cancel</button>
+      {msg && <span className="detail" style={{ fontSize: 12 }}>{msg}</span>}
+    </span>
+  );
+}
+
 export function TargetControls({ target }: {
   target: { id: string; app_name: string; auto_deploy?: boolean; paused?: boolean };
 }) {
@@ -429,6 +482,7 @@ export function TargetControls({ target }: {
               })}>
         Deploy
       </button>
+      <TeardownControls target={target} />
       {msg && <span className="detail">{msg}</span>}
     </div>
   );
