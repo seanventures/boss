@@ -5545,6 +5545,19 @@ def delivery_execute_endpoint(deployment_run_id: str):
 # --------------------------------------------------------------------------- #
 # Deployment targets — onboarding an app without hand-written SQL
 # --------------------------------------------------------------------------- #
+@app.get("/v1/deployment-targets", response_model=DeploymentTargetListResponse)
+def list_deployment_targets_alias(project_id: str, limit: int = 50,
+                                  offset: int = 0) -> DeploymentTargetListResponse:
+    """List targets at the same path as create/update/delete.
+
+    The original list has always been `/v1/deployments`, and the CRUD added here sits on
+    `/v1/deployment-targets` — so the same resource answered on one path for reads and another
+    for writes. Delegates rather than reimplements: two list queries would be two chances to
+    filter differently.
+    """
+    return list_deployment_targets(project_id=project_id, limit=limit, offset=offset)
+
+
 @app.post("/v1/deployment-targets", status_code=201)
 def create_deployment_target_endpoint(payload: dict):
     """Register where an app is deployed. This is the whole of onboarding.
