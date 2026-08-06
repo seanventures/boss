@@ -191,8 +191,38 @@ def test_materialised_key_is_owned_and_cleaned_up() -> None:
             os.unlink(path)
 
 
+def test_a_named_secret_never_lands_in_the_working_directory() -> None:
+    """A generated key once landed in the git repository. Never again.
+
+    `ref_key_for()` produces an env-var-style NAME. The file backend passed it straight to
+    `open()`, so the key was written relative to the process's cwd — for the API, the repo. A
+    private key one `git add -A` from being committed is a real incident, not a tidiness issue.
+    """
+    resolved = sb.FileBackend()._resolve("BOSS_DEPTGT_X_SSH_KEY")
+    check("a bare name resolves under the secrets dir",
+          resolved.startswith(sb.SECRETS_DIR), resolved)
+    check("a bare name NEVER resolves into the working directory",
+          not resolved.startswith(os.getcwd()), resolved)
+    check("an absolute path is still honoured",
+          sb.FileBackend()._resolve("/tmp/operator.pem") == "/tmp/operator.pem")
+    check("a traversal attempt cannot escape the secrets dir",
+          sb.FileBackend()._resolve("../../etc/passwd").startswith(sb.SECRETS_DIR),
+          sb.FileBackend()._resolve("../../etc/passwd"))
+
+
+def test_generated_private_key_is_not_left_on_the_boss_host() -> None:
+    """generate_keypair writes to a backend and must leave nothing behind in its temp dir."""
+    import glob
+
+    leftovers = glob.glob("/tmp/boss-keygen-*") + glob.glob(
+        os.path.join(tempfile.gettempdir(), "boss-keygen-*"))
+    check("no keygen scratch directories survive", not leftovers, str(leftovers[:3]))
+
+
 if __name__ == "__main__":
     for fn in (test_two_targets_resolve_different_keys,
+               test_a_named_secret_never_lands_in_the_working_directory,
+               test_generated_private_key_is_not_left_on_the_boss_host,
                test_unbound_target_falls_back_so_live_deploys_keep_working,
                test_revoked_secret_is_refused,
                test_world_readable_key_is_refused,

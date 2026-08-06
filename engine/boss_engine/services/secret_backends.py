@@ -73,8 +73,22 @@ class EnvBackend:
         return {"ok": True, "kind": self.kind, "writable": False}
 
 
+# Where the file backend puts a secret that was given a NAME rather than a path.
+# 0700, outside any repo, and never the working directory.
+SECRETS_DIR = os.path.expanduser(
+    os.environ.get("BOSS_SECRETS_DIR", "~/.config/boss/secrets"))
+
+
 class FileBackend:
-    """A 0600 file on the BOSS host. `key` is the path.
+    """A 0600 file on the BOSS host.
+
+    `key` may be an absolute/`~` path (an operator-managed key that BOSS only references) or a
+    bare NAME, which resolves under SECRETS_DIR.
+
+    A bare name used to be passed to `open()` unchanged, so a generated key landed in the
+    process's working directory — which, for the API, is the git repository. A private key one
+    `git add -A` away from being committed is a real incident, and the fix is that a name can
+    never resolve relative to wherever the process happens to be running.
 
     Refuses a group- or world-readable file for the same reason ssh does: a private key anyone
     on the box can read is not a private key.
@@ -82,8 +96,15 @@ class FileBackend:
 
     kind = "file"
 
+    @staticmethod
+    def _resolve(key: str) -> str:
+        expanded = os.path.expanduser(key or "")
+        if os.path.isabs(expanded):
+            return expanded
+        return os.path.join(SECRETS_DIR, os.path.basename(expanded))
+
     def get(self, key: str) -> str:
-        path = os.path.expanduser(key)
+        path = self._resolve(key)
         if not os.path.isfile(path):
             raise SecretUnavailable(f"{key} does not exist")
         if os.stat(path).st_mode & 0o077:
@@ -92,7 +113,8 @@ class FileBackend:
             return handle.read()
 
     def put(self, key: str, value: str) -> None:
-        path = os.path.expanduser(key)
+        path = self._resolve(key)
+        os.makedirs(os.path.dirname(path) or ".", mode=0o700, exist_ok=True)
         fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         with os.fdopen(fd, "w") as handle:
             handle.write(value if value.endswith("\n") else value + "\n")
@@ -102,7 +124,7 @@ class FileBackend:
 
     def delete(self, key: str) -> None:
         try:
-            os.unlink(os.path.expanduser(key))
+            os.unlink(self._resolve(key))
         except FileNotFoundError:
             pass
 
