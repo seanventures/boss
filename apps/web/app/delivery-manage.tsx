@@ -20,7 +20,8 @@ import { useState, useTransition } from "react";
 
 import {
   bindSecretAction, bootstrapTargetAction, createTargetAction, deployTargetAction,
-  generateKeypairAction, preflightTargetAction, putSecretAction, setAutoDeployAction,
+  generateKeypairAction, preflightTargetAction, putSecretAction, reactivateTargetAction,
+  setAutoDeployAction,
   teardownTargetAction, verifySecretAction,
 } from "./actions";
 
@@ -444,12 +445,47 @@ function TeardownControls({ target }: { target: { id: string; app_name: string }
 }
 
 export function TargetControls({ target }: {
-  target: { id: string; app_name: string; auto_deploy?: boolean; paused?: boolean };
+  target: { id: string; app_name: string; status?: string;
+            auto_deploy?: boolean; paused?: boolean };
 }) {
   const [pending, start] = useTransition();
   const [state, setState] = useState({ auto: !!target.auto_deploy, paused: !!target.paused });
   const [msg, setMsg] = useState<string | null>(null);
   const [ref, setRef] = useState("");
+
+  // A retired target cannot be deployed — the API refuses with 409 — so deploy controls would
+  // only fail. But it is NOT gone: destroy retires rather than deletes, so the credential
+  // binding, port, domain and health check all survive. Bringing it back is one click, not a
+  // second trip through onboarding, and telling someone to re-enter what BOSS already knows is
+  // how a "safe" delete becomes one nobody dares use.
+  if (target.status && target.status !== "active") {
+    return (
+      <span style={{ display: "inline-flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+        <span className="detail" style={{ fontSize: 12 }}>
+          {target.status} — its configuration is kept
+        </span>
+        <button style={btn} disabled={pending}
+                title="Reactivate, re-prepare the host, and deploy again"
+                onClick={() => start(async () => {
+                  setMsg("restoring…");
+                  const back = await reactivateTargetAction(target.id);
+                  if (back?.error) { setMsg(`failed: ${back.error}`); return; }
+                  // The host directories went with the destroy, so they have to be recreated
+                  // before anything can be transferred into them.
+                  const boot = await bootstrapTargetAction(target.id, false);
+                  if (boot?.error || boot?.problems?.length) {
+                    setMsg(`restored, but the host needs attention: `
+                           + `${boot?.error || boot.problems.join("; ")}`);
+                    return;
+                  }
+                  setMsg("restored and host prepared — press Deploy to ship it again");
+                })}>
+          Restore
+        </button>
+        {msg && <span className="detail" style={{ fontSize: 12 }}>{msg}</span>}
+      </span>
+    );
+  }
 
   const toggle = (patch: { auto_deploy?: boolean; paused?: boolean }) => start(async () => {
     const out = await setAutoDeployAction(target.id, patch);
