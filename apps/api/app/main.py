@@ -5606,9 +5606,11 @@ def delivery_preflight_endpoint(target_id: str, project_id: str):
     with begin(engine) as c:
         row = c.execute(text("SELECT * FROM deployment_targets WHERE id=:i AND project_id=:p"),
                         {"i": target_id, "p": project_id}).mappings().first()
-    if not row:
-        raise HTTPException(status_code=404, detail="no such deployment target")
-    return preflight(dict(row), settings)
+        if not row:
+            raise HTTPException(status_code=404, detail="no such deployment target")
+        # Same connection: preflight resolves the target's bound credential through it, so the
+        # operator sees a credential problem here rather than in the middle of a deployment.
+        return preflight(dict(row), settings, c)
 
 
 @app.get("/v1/delivery/pipeline")

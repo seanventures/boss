@@ -162,6 +162,20 @@ def _discard_key_file(path: str) -> None:
         _EPHEMERAL_KEY_FILES.discard(path)
 
 
+def _materialise_key(material: str) -> str:
+    """Write resolved key material to a 0600 temp file that BOSS owns and will delete.
+
+    Registered as ephemeral for the same reason the env-material path is: cleanup must follow
+    OWNERSHIP. This file is ours, so it goes; a referenced key file never does.
+    """
+    fd, path = tempfile.mkstemp(suffix=".pem")
+    with os.fdopen(fd, "w") as handle:
+        handle.write(material if material.endswith("\n") else material + "\n")
+    os.chmod(path, 0o600)
+    _EPHEMERAL_KEY_FILES.add(path)
+    return path
+
+
 def _ssh_key_file(settings: Settings) -> str:
     # Prefer a PATH to the key over the key material in an env var. A private key pasted into
     # configuration ends up in process listings, crash dumps and, sooner or later, a commit.
@@ -449,7 +463,7 @@ def _build_dist(settings: Settings, owner: str, repo: str, branch: str,
 
 def deploy_ssh(engine, settings: Settings, run_id: str, *, host: str, user: str = "root",
                ssh_port: int = 22, app_port: int = 8080, name: Optional[str] = None,
-               ref: Optional[str] = None) -> dict:
+               ref: Optional[str] = None, key_material: Optional[str] = None) -> dict:
     """Actuate the deploy plan on a real host: build dist -> transfer -> nginx -> health-gate.
     On transfer/docker/health failure after staging, ROLL BACK to the previous build (Phase 3).
     Gated behind the outward-action flag + an SSH key; NEVER touches a host otherwise."""
@@ -464,7 +478,9 @@ def deploy_ssh(engine, settings: Settings, run_id: str, *, host: str, user: str 
     project_id = run["project_id"]
     app = _app_name(repo, name)
     remote = f"{REMOTE_BASE}/{app}"
-    key_path = _ssh_key_file(settings)
+    # Material resolved for THIS target wins over the global setting. Passing it in rather
+    # than re-resolving here keeps "which credential" a single decision made by the connector.
+    key_path = _materialise_key(key_material) if key_material else _ssh_key_file(settings)
     work: Optional[Path] = None
     # Bound before the try: the rollback paths below read them, and a build that raises would
     # otherwise turn a deploy failure into a NameError that hides it.

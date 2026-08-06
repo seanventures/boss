@@ -255,7 +255,11 @@ def execute_deployment(engine, settings: Settings, deployment_run_id: str, *,
         run_id = (row["release_packet"] or {}).get("code_task_run_id") or ""
 
     # Cheap gate first: never build or transfer anything for a target that cannot accept it.
-    pre = preflight(target, settings)
+    # The connection lets preflight RESOLVE the target's bound credential rather than assume
+    # a global one — otherwise a per-target secret is checked at deploy time, which is the
+    # expensive place to discover it is missing.
+    with begin(engine) as c:
+        pre = preflight(target, settings, c)
     if not pre["ready"]:
         with begin(engine) as c:
             c.execute(sql("UPDATE deployment_runs SET status='blocked', failure_reason=:r, "

@@ -28,10 +28,17 @@ from typing import Any, Optional, Protocol
 from ..config import Settings
 
 
+# What a connector needs before it can place anything. Machine-readable rather than prose in a
+# design doc, so `validate()` can check bindings generically instead of each connector
+# hard-coding a look at two global settings — which is what made every SSH target share one key.
+SecretRequirement = dict[str, Any]  # {"name", "kind", "required", "purpose"}
+
+
 class DeploymentConnector(Protocol):
     kind: str
 
-    def validate(self, target: dict, settings: Settings) -> list[str]: ...
+    def required_secrets(self) -> list[SecretRequirement]: ...
+    def validate(self, target: dict, settings: Settings, connection=None) -> list[str]: ...
     def plan(self, engine, settings: Settings, target: dict, run_id: str) -> dict: ...
     def apply(self, engine, settings: Settings, target: dict, run_id: str,
               plan: dict, ref: Optional[str] = None) -> dict: ...
@@ -92,8 +99,57 @@ class SSHContainerConnector:
 
     kind = "ssh"
 
+    def required_secrets(self) -> list[SecretRequirement]:
+        return [{"name": "ssh_key", "kind": "ssh_private_key", "required": True,
+                 "purpose": "authenticate to the host as the deploy user"}]
+
+    def _credential_problems(self, target: dict, settings: Settings,
+                             connection=None) -> list[str]:
+        """Can this target's declared secrets actually be obtained?
+
+        Resolution order, deliberately explicit:
+          1. the target's own binding (a managed secret_ref, or a legacy env-var indirection)
+          2. the global BOSS_SSH_HOST_PRIVATE_KEY_FILE / _KEY, so targets predating per-target
+             credentials keep deploying while the console migrates them
+
+        Reported as problems rather than raised, because the whole point of validate() is that a
+        missing credential costs a query instead of a build and a transfer.
+        """
+        from .secret_backends import SecretUnavailable, resolve_target_secret
+
+        for req in self.required_secrets():
+            name = req["name"]
+            if connection is not None:
+                try:
+                    if resolve_target_secret(connection, target, name, settings):
+                        continue
+                except SecretUnavailable as exc:
+                    return [f"secret {name!r} is bound but unusable: {exc}"]
+            elif any(isinstance(b, dict) and b.get("name") == name
+                     for b in (target.get("secret_refs") or [])):
+                # No connection to resolve with; a binding exists, so defer to deploy time
+                # rather than reporting a problem we cannot actually check.
+                continue
+
+            if not req.get("required", True):
+                continue
+
+            key_path = (getattr(settings, "ssh_host_private_key_file", "") or "").strip()
+            key_material = (getattr(settings, "ssh_host_private_key", "") or "").strip()
+            if key_path:
+                expanded = os.path.expanduser(key_path)
+                if not os.path.isfile(expanded):
+                    return [f"ssh key file {key_path} does not exist"]
+                if os.stat(expanded).st_mode & 0o077:
+                    return [f"ssh key {key_path} is group/world readable; ssh will refuse it"]
+            elif not key_material:
+                return [f"no {name} bound to this target and no global ssh key configured "
+                        f"(bind a secret to the target, or set "
+                        f"BOSS_SSH_HOST_PRIVATE_KEY_FILE)"]
+        return []
+
     # -- validate ---------------------------------------------------------------
-    def validate(self, target: dict, settings: Settings) -> list[str]:
+    def validate(self, target: dict, settings: Settings, connection=None) -> list[str]:
         """Everything that would make apply() fail, found up front and for free.
 
         This exists because `provider_account_id` surfaced only at execution time during the
@@ -107,17 +163,10 @@ class SSHContainerConnector:
         if not user:
             problems.append("target_ref has no user")
 
-        key_path = (getattr(settings, "ssh_host_private_key_file", "") or "").strip()
-        key_material = (getattr(settings, "ssh_host_private_key", "") or "").strip()
-        if key_path:
-            expanded = os.path.expanduser(key_path)
-            if not os.path.isfile(expanded):
-                problems.append(f"ssh key file {key_path} does not exist")
-            elif os.stat(expanded).st_mode & 0o077:
-                problems.append(f"ssh key {key_path} is group/world readable; ssh will refuse it")
-        elif not key_material:
-            problems.append(
-                "no ssh key configured (BOSS_SSH_HOST_PRIVATE_KEY_FILE or _KEY)")
+        # The credential THIS target is bound to, resolved from its backend. Checking a global
+        # setting instead is what forced every SSH target to share one key; a binding that is
+        # recorded but never resolved is not a binding.
+        problems.extend(self._credential_problems(target, settings, connection))
 
         if not bool(getattr(settings, "ssh_host_deploy_allowed", False)):
             problems.append(
@@ -131,26 +180,50 @@ class SSHContainerConnector:
         # Local checks passed; now ask the HOST whether it can actually receive a deployment.
         # Skipped when anything above already failed, so a broken config costs no round trip.
         if not problems:
-            problems.extend(self._host_problems(target, settings))
+            problems.extend(self._host_problems(target, settings, connection))
         return problems
 
     # Prerequisites that only the destination can answer. These were discovered the expensive
     # way: the first real deployment built the app, transferred it, and only then failed on
     # `mkdir /opt/boss-apps: Permission denied`. A precondition the host can be ASKED about
     # must not be discovered by attempting the deployment.
-    def _host_problems(self, target: dict, settings: Settings) -> list[str]:
-        from .deploy_service import REMOTE_BASE, _app_name, _ssh, _ssh_key_file
+    def _host_problems(self, target: dict, settings: Settings,
+                       connection=None) -> list[str]:
+        from .deploy_service import REMOTE_BASE, _app_name, _ssh_key_file
 
-        user, host, port = _split_ref(target.get("target_ref", ""))
         # The directory apply() actually writes, derived the SAME way apply() derives it. A
         # preflight that checks the parent while the deploy writes the child is a check that
         # passes and a deploy that fails — which is exactly what happened here: /opt/boss-apps
         # was writable, /opt/boss-apps/stock-app was root-owned from an earlier attempt.
         app_dir = f"{REMOTE_BASE}/{_app_name(target.get('repo') or '', target.get('app_name'))}"
+
+        # Probe with the credential this target will ACTUALLY deploy with. Probing with the
+        # global key while deploying with a bound one would make preflight a test of the wrong
+        # thing — green here, refused by the host later.
+        from .deploy_service import _discard_key_file, _materialise_key
+        from .secret_backends import SecretUnavailable, resolve_target_secret
+
+        ephemeral = None
         try:
-            key = _ssh_key_file(settings)
-        except Exception as exc:  # noqa: BLE001 — surfaced as a problem, never a crash
+            material = (resolve_target_secret(connection, target, "ssh_key", settings)
+                        if connection is not None else None)
+            if material:
+                key = ephemeral = _materialise_key(material)
+            else:
+                key = _ssh_key_file(settings)
+        except (SecretUnavailable, Exception) as exc:  # noqa: BLE001 — a problem, never a crash
             return [f"ssh key unusable: {exc}"]
+
+        try:
+            return self._probe_host(key, target, app_dir)
+        finally:
+            if ephemeral:
+                _discard_key_file(ephemeral)
+
+    def _probe_host(self, key: str, target: dict, app_dir: str) -> list[str]:
+        from .deploy_service import REMOTE_BASE, _ssh
+
+        user, host, port = _split_ref(target.get("target_ref", ""))
 
         # One round trip answers everything: reachability, the deploy dir, and the runtime.
         # An absent app dir is fine — apply() creates it. An existing one BOSS cannot write is
@@ -206,15 +279,26 @@ class SSHContainerConnector:
         two disagree as soon as the PR merges, and deploying the branch while recording the ref
         made the console report a build that was not the one running.
         """
-        problems = self.validate(target, settings)
+        from ..db import begin
+
+        with begin(engine) as c:
+            problems = self.validate(target, settings, c)
         if problems:
             return {"status": "blocked", "problems": problems}
+
+        # Resolved at the moment of use and handed straight to the deploy; never
+        # stored, logged, or written into the run record.
+        from .secret_backends import resolve_target_secret
+
+        with begin(engine) as c:
+            key_material = resolve_target_secret(c, target, "ssh_key", settings)
 
         from .deploy_service import deploy_ssh
 
         user, host, port = _split_ref(target.get("target_ref", ""))
         result = deploy_ssh(engine, settings, run_id, host=host, user=user, ssh_port=port,
-                            app_port=_app_port(target), name=target.get("app_name"), ref=ref)
+                            app_port=_app_port(target), name=target.get("app_name"), ref=ref,
+                            key_material=key_material)
         result["connector"] = self.kind
         return result
 
@@ -292,7 +376,7 @@ def supported_kinds() -> list[str]:
     return sorted(_CONNECTORS)
 
 
-def preflight(target: dict, settings: Settings) -> dict[str, Any]:
+def preflight(target: dict, settings: Settings, connection=None) -> dict[str, Any]:
     """Is this target deployable right now? Cheap, read-only, and safe to call from a console.
 
     Returns `ready` plus the concrete list of what is missing — an operator should never have
@@ -303,5 +387,6 @@ def preflight(target: dict, settings: Settings) -> dict[str, Any]:
         return {"ready": False,
                 "problems": [f"no connector for target_kind "
                              f"{target.get('target_kind')!r}; have {supported_kinds()}"]}
-    problems = conn.validate(target, settings)
-    return {"ready": not problems, "problems": problems, "connector": conn.kind}
+    problems = conn.validate(target, settings, connection)
+    return {"ready": not problems, "problems": problems, "connector": conn.kind,
+            "required_secrets": conn.required_secrets()}
