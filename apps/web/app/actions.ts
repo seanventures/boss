@@ -2614,7 +2614,13 @@ export async function executeDeploymentAction(deploymentRunId: string): Promise<
   try {
     const res = await fetch(
       `${API_URL}/v1/delivery/deployments/${encodeURIComponent(deploymentRunId)}/execute`,
-      { method: "POST", headers: authHeaders(), cache: "no-store" },
+      {
+        method: "POST",
+        headers: { ...authHeaders(), "Content-Type": "application/json" },
+        // Same console principal as other mutating actions — required by the API.
+        body: JSON.stringify({ actor: "executive_console" }),
+        cache: "no-store",
+      },
     );
     const body = await res.json().catch(() => ({}));
     if (!res.ok) return { error: body?.detail || `execute ${res.status}` };
@@ -2632,7 +2638,7 @@ export async function redeployAction(deploymentRunId: string): Promise<any> {
       {
         method: "POST",
         headers: { ...authHeaders(), "Content-Type": "application/json" },
-        body: JSON.stringify({ actor: "operator" }),
+        body: JSON.stringify({ actor: "executive_console" }),
         cache: "no-store",
       },
     );
